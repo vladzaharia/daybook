@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>Daybook</string>
+<key>CFBundleDisplayName</key><string>Daybook</string>
+<key>CFBundleIdentifier</key><string>local.daybook.app</string>
+<key>CFBundleExecutable</key><string>Daybook</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSBluetoothAlwaysUsageDescription</key><string>Daybook connects to your Soundcore Work recorder to show device status and import recordings you choose.</string>
+<key>NSMicrophoneUsageDescription</key><string>Daybook records your voice during meetings you choose to capture. Audio is processed locally and can sync through iCloud when you enable it.</string>
+<key>NSAudioCaptureUsageDescription</key><string>Daybook records meeting audio from your Mac so both sides of a conversation can be transcribed locally.</string>
+<key>NSScreenCaptureUsageDescription</key><string>Daybook uses macOS system audio capture for online meetings. No screen video is saved.</string>
+<key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+<key>CFBundleIconFile</key><string>Daybook.icns</string>
+</dict></plist>

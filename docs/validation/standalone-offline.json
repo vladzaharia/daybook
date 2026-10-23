@@ -1,0 +1,61 @@
+{
+  "duration" : 19.748707482993197,
+  "elapsedSeconds" : 12.566625952720642,
+  "embeddingCount" : 1,
+  "embeddingModelID" : "fluid-community1-embedding-df2625ac79a7ac6b",
+  "message" : "Embedded transcription, speaker detection, and structured summarization passed.",
+  "rawSummary" : "{\n  \"kind\": \"general\",\n  \"title\": \"Project Planning Meeting Summary\",\n  \"overview\": \"The team discussed the upcoming prototype release for their Daybook application, focusing on the main blocker of testing speaker detection and assigning tasks for the onboarding checklist.\",\n  \"sections\": [\n    {\n      \"heading\": \"Goal and Constraints\",\n      \"body\": \"The goal is to ship the prototype by Friday. The main constraint is the ongoing issue with testing speaker detection.\"\n    },\n    {\n      \"heading\": \"Options Considered\",\n      \"body\": \"No other options were discussed for resolving the speaker detection issue.\"\n    },\n    {\n      \"heading\": \"Agreed Plan\",\n      \"body\": \"Alex will write the onboarding checklist. The team will review the results of the speaker detection testing next Monday.\"\n    },\n    {\n      \"heading\": \"Dependencies and Risks\",\n      \"body\": \"The prototype release is dependent on resolving the speaker detection issue. The risk is that the testing may not be completed by the deadline.\"\n    },\n    {\n      \"heading\": \"Next Checkpoints\",\n      \"body\": \"The team will review the results of the speaker detection testing next Monday.\"\n    }\n  ],\n  \"actionItems\": [\n    {\"text\": \"Write the onboarding checklist\", \"owner\": \"Alex\"},\n    {\"text\": \"Review the results of the speaker detection testing\", \"owner\": null}\n  ],\n  \"terms\": [\"Daybook\", \"speaker detection\"]\n}\n\nAction verification:\n```json\n{\n  \"actions\": [\n    {\n      \"text\": \"write the onboarding checklist\",\n      \"owner\": \"Alex\",\n      \"evidence\": \"Alex will write the onboarding checklist.\"\n    }\n  ]\n}\n```",
+  "recognizedSegments" : 1,
+  "speakerCount" : 1,
+  "speakerModel" : "speaker-community-1",
+  "speakerQuality" : "balanced",
+  "speakerTurns" : 1,
+  "started" : "2026-10-23T08:57:05Z",
+  "success" : true,
+  "summary" : {
+    "actionItems" : [
+      {
+        "completed" : false,
+        "id" : "82D06083-2F06-47FD-A0F5-D085C9D4EA3D",
+        "owner" : "Alex",
+        "text" : "write the onboarding checklist"
+      }
+    ],
+    "createdAt" : "2026-10-23T08:57:15Z",
+    "kind" : "general",
+    "modelID" : "qwen-7b",
+    "overview" : "The team discussed the upcoming prototype release for their Daybook application, focusing on the main blocker of testing speaker detection and assigning tasks for the onboarding checklist.",
+    "sections" : [
+      {
+        "body" : "The goal is to ship the prototype by Friday. The main constraint is the ongoing issue with testing speaker detection.",
+        "heading" : "Goal and Constraints",
+        "id" : "66778783-16E1-4E09-BD84-8D82DA24D51D"
+      },
+      {
+        "body" : "No other options were discussed for resolving the speaker detection issue.",
+        "heading" : "Options Considered",
+        "id" : "40B3F71B-22BD-4E30-8F83-42566AE9AB11"
+      },
+      {
+        "body" : "Alex will write the onboarding checklist. The team will review the results of the speaker detection testing next Monday.",
+        "heading" : "Agreed Plan",
+        "id" : "E82CEC4E-CF77-4E14-A999-04B11772D77E"
+      },
+      {
+        "body" : "The prototype release is dependent on resolving the speaker detection issue. The risk is that the testing may not be completed by the deadline.",
+        "heading" : "Dependencies and Risks",
+        "id" : "1550268D-4273-468D-9353-A577042F5540"
+      },
+      {
+        "body" : "The team will review the results of the speaker detection testing next Monday.",
+        "heading" : "Next Checkpoints",
+        "id" : "4088CD92-9E3D-445A-B7B9-BF913743F01D"
+      }
+    ],
+    "title" : "Project Planning Meeting Summary"
+  },
+  "transcript" : "[0.0s] Welcome to the Project Planning Meeting. Our application is called Daybook. We agreed to ship the prototype on Friday. Alex will write the onboarding checklist. The audio capture is working. Our main blocker is testing speaker detection. We will review the results next Monday. Thank you for joining this meeting.",
+  "warnings" : [
+
+  ]
+}
