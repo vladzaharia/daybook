@@ -68,6 +68,14 @@ public enum NoteTimeline {
         return Array(previous.prefix(prefix)) + middle + Array(previous.suffix(suffix))
     }
 
+    /// The recording time of each nonempty paragraph of `text`, in order, for display.
+    /// Saved anchors are matched to paragraphs by their text, the same way `reconcile` pairs them,
+    /// so a paragraph the anchors don't know about (or an anchor whose paragraph is gone) costs only
+    /// that paragraph its time, never every other paragraph. Nil means no time.
+    public static func paragraphTimes(anchors: [TimedNote]?, text: String) -> [TimeInterval?] {
+        reconcile(previous: anchors ?? [], text: text, captureTime: nil).map(\.time)
+    }
+
     private static func normalized(_ value: String) -> String {
         value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
@@ -134,5 +142,14 @@ public enum NoteTimeline {
             }
         }
         return mapping
+    }
+}
+
+extension Meeting {
+    /// Each nonempty paragraph's recording time, in order; nil for a paragraph written outside a
+    /// recording or one no saved anchor matches. Paragraphs are separated by any newline character
+    /// and blank ones are skipped, so callers must split the notes the same way.
+    public func paragraphTimes() -> [TimeInterval?] {
+        NoteTimeline.paragraphTimes(anchors: timedNotes, text: notes)
     }
 }

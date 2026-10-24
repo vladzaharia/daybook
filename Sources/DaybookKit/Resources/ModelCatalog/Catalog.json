@@ -1,0 +1,269 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "catalogVersion": "2026.10.24",
+  "presets": [
+    {
+      "id": "quick",
+      "speakerQuality": "fast",
+      "roles": {
+        "transcription": [
+          "parakeet/ultra",
+          "whisper/base"
+        ],
+        "diarization": [
+          "community-1/offline"
+        ],
+        "speakerEmbedding": [
+          "community-1/offline"
+        ],
+        "summarization": [
+          "gemma-4/e4b-4bit",
+          "gemma-4/e2b-4bit",
+          "gemma-4/12b-4bit",
+          "qwen3.5/4b-4bit",
+          "qwen3.5/9b-4bit",
+          "qwen2.5/1.5b-4bit",
+          "qwen2.5/3b-4bit",
+          "qwen2.5/7b-4bit"
+        ],
+        "smallTasks": [
+          "apple-foundation-models/system"
+        ]
+      },
+      "tiers": {
+        "compact": {
+          "summarization": [
+            "gemma-4/e2b-4bit",
+            "gemma-4/e4b-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen2.5/1.5b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/7b-4bit"
+          ]
+        },
+        "large": {
+          "summarization": [
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit",
+            "gemma-4/12b-4bit",
+            "gemma-4/26b-a4b-qat-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen3.5/9b-4bit",
+            "qwen2.5/1.5b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/7b-4bit"
+          ]
+        },
+        "workstation": {
+          "summarization": [
+            "gemma-4/12b-4bit",
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit",
+            "gemma-4/26b-a4b-qat-4bit",
+            "qwen3.5/9b-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen2.5/7b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/1.5b-4bit"
+          ]
+        }
+      }
+    },
+    {
+      "id": "balanced",
+      "speakerQuality": "balanced",
+      "roles": {
+        "transcription": [
+          "parakeet/ultra",
+          "whisper/small",
+          "whisper/base"
+        ],
+        "diarization": [
+          "nemotron-3-diarization/offline",
+          "community-1/offline"
+        ],
+        "speakerEmbedding": [
+          "community-1/offline"
+        ],
+        "summarization": [
+          "gemma-4/12b-4bit",
+          "gemma-4/e4b-4bit",
+          "gemma-4/e2b-4bit",
+          "qwen3.5/9b-4bit",
+          "qwen3.5/4b-4bit",
+          "qwen2.5/7b-4bit",
+          "qwen2.5/3b-4bit",
+          "qwen2.5/1.5b-4bit"
+        ],
+        "smallTasks": [
+          "apple-foundation-models/system"
+        ]
+      },
+      "tiers": {
+        "compact": {
+          "summarization": [
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/1.5b-4bit",
+            "qwen2.5/7b-4bit"
+          ]
+        },
+        "large": {
+          "summarization": [
+            "gemma-4/26b-a4b-qat-4bit",
+            "gemma-4/12b-4bit",
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit",
+            "qwen3.6/35b-a3b-4bit",
+            "qwen3.5/9b-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen2.5/7b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/1.5b-4bit"
+          ]
+        },
+        "workstation": {
+          "summarization": [
+            "gemma-4/26b-a4b-qat-4bit",
+            "gemma-4/31b-8bit",
+            "gemma-4/12b-4bit",
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit",
+            "qwen3.6/35b-a3b-4bit",
+            "qwen3.5/9b-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen2.5/7b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/1.5b-4bit"
+          ]
+        }
+      }
+    },
+    {
+      "id": "detailed",
+      "speakerQuality": "accurate",
+      "roles": {
+        "transcription": [
+          "parakeet/ultra",
+          "whisper/large-v3-turbo",
+          "whisper/small",
+          "whisper/base"
+        ],
+        "diarization": [
+          "nemotron-3-diarization/offline",
+          "community-1/offline"
+        ],
+        "speakerEmbedding": [
+          "community-1/offline"
+        ],
+        "summarization": [
+          "gemma-4/12b-4bit",
+          "gemma-4/e4b-4bit",
+          "gemma-4/e2b-4bit",
+          "qwen3.5/9b-4bit",
+          "qwen3.5/4b-4bit",
+          "qwen2.5/7b-4bit",
+          "qwen2.5/3b-4bit",
+          "qwen2.5/1.5b-4bit"
+        ],
+        "smallTasks": [
+          "apple-foundation-models/system"
+        ]
+      },
+      "tiers": {
+        "compact": {
+          "summarization": [
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen2.5/7b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/1.5b-4bit"
+          ]
+        },
+        "large": {
+          "summarization": [
+            "gemma-4/26b-a4b-qat-4bit",
+            "gemma-4/12b-4bit",
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit",
+            "qwen3.6/35b-a3b-4bit",
+            "qwen3.5/9b-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen2.5/7b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/1.5b-4bit"
+          ]
+        },
+        "workstation": {
+          "summarization": [
+            "gemma-4/31b-8bit",
+            "gemma-4/26b-a4b-qat-4bit",
+            "gemma-4/12b-4bit",
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit",
+            "qwen3.6/35b-a3b-4bit",
+            "qwen3.5/9b-4bit",
+            "qwen3.5/4b-4bit",
+            "qwen2.5/7b-4bit",
+            "qwen2.5/3b-4bit",
+            "qwen2.5/1.5b-4bit"
+          ]
+        }
+      }
+    }
+  ],
+  "recommendedPreset": {
+    "default": "balanced",
+    "tiers": {
+      "compact": "quick"
+    }
+  },
+  "initialSelection": {
+    "roles": {
+      "transcription": [
+        "parakeet/ultra",
+        "whisper/base"
+      ],
+      "diarization": [
+        "community-1/offline"
+      ],
+      "speakerEmbedding": [
+        "community-1/offline"
+      ],
+      "summarization": [
+        "gemma-4/12b-4bit",
+        "gemma-4/e4b-4bit",
+        "gemma-4/e2b-4bit"
+      ],
+      "smallTasks": [
+        "apple-foundation-models/system"
+      ]
+    },
+    "tiers": {
+      "compact": {
+        "summarization": [
+          "gemma-4/e2b-4bit",
+          "gemma-4/e4b-4bit"
+        ]
+      },
+      "large": {
+        "summarization": [
+          "gemma-4/26b-a4b-qat-4bit",
+          "gemma-4/12b-4bit",
+          "gemma-4/e4b-4bit"
+        ]
+      },
+      "workstation": {
+        "summarization": [
+          "gemma-4/26b-a4b-qat-4bit",
+          "gemma-4/12b-4bit",
+          "gemma-4/e4b-4bit"
+        ]
+      }
+    }
+  }
+}

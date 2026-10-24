@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "nemotron-3-diarization",
+      "name": "Nemotron 3 Diarization",
+      "maker": "NVIDIA",
+      "engine": "nemotronDiarizer",
+      "roles": [
+        "diarization"
+      ],
+      "summary": "Tells up to eight speakers apart.",
+      "homepage": "https://huggingface.co/nvidia/Nemotron-3-Diarization",
+      "license": {
+        "id": "OpenMDW-1.1",
+        "name": "OpenMDW License 1.1",
+        "url": "https://openmdw.ai/license/1-1/",
+        "allowsCommercialUse": true,
+        "attribution": "Nemotron 3 Diarization by NVIDIA Corporation (nvidia/Nemotron-3-Diarization), licensed under the OpenMDW License Agreement, version 1.1 (https://openmdw.ai/license/1-1/); the agreement's full text is in Daybook's third-party notices. Converted to Core ML by Fluid Inference (FluidInference/nemotron-3-diarization-coreml), under the same license."
+      },
+      "variants": [
+        {
+          "id": "offline",
+          "name": "Nemotron 3 Speaker Detection",
+          "detail": "Recommended. Up to 8 speakers.",
+          "homepage": "https://huggingface.co/FluidInference/nemotron-3-diarization-coreml",
+          "releaseDate": "2026-09-23",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "maxSpeakers": 8,
+            "expectedSpeakerCount": false,
+            "streaming": false
+          },
+          "engineOptions": {
+            "preset": "offline"
+          },
+          "revisions": [
+            {
+              "id": "25a90f97f254428d4b30374b76af9c74fdee8327",
+              "releaseDate": "2026-09-25",
+              "summary": "Add config.json",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/nemotron-3-diarization-coreml",
+                  "revision": "25a90f97f254428d4b30374b76af9c74fdee8327",
+                  "include": [
+                    "monolithic/v2/Nemotron3Diarizer_offline.mlmodelc/*",
+                    "learnable_sil_emb.bin"
+                  ],
+                  "files": [
+                    {
+                      "path": "learnable_sil_emb.bin",
+                      "size": 2048,
+                      "sha256": "d4417b3c0eabdf7c47032fac2b5b5a7ee83d819a6ddda8fd8eaf74e2b5cc4ac7"
+                    },
+                    {
+                      "path": "monolithic/v2/Nemotron3Diarizer_offline.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "491594df92282a4f2cef65e96d236e210a5c4627063e37e822ec858aaaad416d"
+                    },
+                    {
+                      "path": "monolithic/v2/Nemotron3Diarizer_offline.mlmodelc/coremldata.bin",
+                      "size": 758,
+                      "sha256": "8b790c919c65744648c17290a26d3371e0e55db655310e7f8445080757b0bf08"
+                    },
+                    {
+                      "path": "monolithic/v2/Nemotron3Diarizer_offline.mlmodelc/model.mil",
+                      "size": 505274,
+                      "gitOID": "2f649fd4fc3c1bc613ab4c80c63b24f33681d309"
+                    },
+                    {
+                      "path": "monolithic/v2/Nemotron3Diarizer_offline.mlmodelc/weights/weight.bin",
+                      "size": 198654080,
+                      "sha256": "bab76e5f190d0e4a4e174e7fcb1e9beea58c6b2be56e665e2cac8fba6d10f7f1"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "compact",
+          "name": "Nemotron 3 · Compact",
+          "detail": "Smaller download. Up to 8 speakers.",
+          "homepage": "https://huggingface.co/FluidInference/nemotron-3-diarization-coreml",
+          "releaseDate": "2026-09-23",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "maxSpeakers": 8,
+            "expectedSpeakerCount": false,
+            "streaming": false
+          },
+          "engineOptions": {
+            "preset": "c128-split-w8a8"
+          },
+          "revisions": [
+            {
+              "id": "25a90f97f254428d4b30374b76af9c74fdee8327",
+              "releaseDate": "2026-09-25",
+              "summary": "Add config.json",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/nemotron-3-diarization-coreml",
+                  "revision": "25a90f97f254428d4b30374b76af9c74fdee8327",
+                  "include": [
+                    "split/Nemotron3Diarizer_c128_split_w8a8.mlmodelc/*",
+                    "learnable_sil_emb.bin",
+                    "pre_encode_proj_t.bin"
+                  ],
+                  "files": [
+                    {
+                      "path": "learnable_sil_emb.bin",
+                      "size": 2048,
+                      "sha256": "d4417b3c0eabdf7c47032fac2b5b5a7ee83d819a6ddda8fd8eaf74e2b5cc4ac7"
+                    },
+                    {
+                      "path": "pre_encode_proj_t.bin",
+                      "size": 2097152,
+                      "sha256": "eb15b89e7af9813331a7d8db02e83e30bf97463d272c748e72086bafd4e81c60"
+                    },
+                    {
+                      "path": "split/Nemotron3Diarizer_c128_split_w8a8.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "9522ac23edf90deb9bc4d3ef97ca435a90df499d346c4806351784b5a8decb60"
+                    },
+                    {
+                      "path": "split/Nemotron3Diarizer_c128_split_w8a8.mlmodelc/coremldata.bin",
+                      "size": 605,
+                      "sha256": "777c6c6240baef5973b99b6984e9bb3a1f6a4812de28d3c65317be8911491421"
+                    },
+                    {
+                      "path": "split/Nemotron3Diarizer_c128_split_w8a8.mlmodelc/model.mil",
+                      "size": 759134,
+                      "gitOID": "d7325998b1af8b074618901b351238bd92d23de3"
+                    },
+                    {
+                      "path": "split/Nemotron3Diarizer_c128_split_w8a8.mlmodelc/weights/weight.bin",
+                      "size": 99249792,
+                      "sha256": "9a4c5de6ba011560713206b76c357d99ee596d1f1a58c66368b82834f9e12f95"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

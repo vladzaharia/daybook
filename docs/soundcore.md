@@ -1,6 +1,6 @@
 # Soundcore Work integration
 
-Research checked 2026-10-23. Daybook supports original-audio import and an experimental direct Bluetooth implementation. Device firmware compatibility has not been verified. Daybook does not silently use Soundcore’s transcription service.
+Research checked 2026-10-23. Soundcore Work is a device in Daybook's [device framework](devices.md) with two methods: **directly over Bluetooth** (primary and recommended; see [direct Soundcore](direct-soundcore.md)) and **from the Soundcore app** through a watched export folder (the fallback that works with every firmware). Physical-hardware validation of the Bluetooth method is still pending. Daybook does not use Soundcore’s cloud or transcription service.
 
 ## What the vendor documents
 
@@ -13,7 +13,9 @@ Research checked 2026-10-23. Daybook supports original-audio import and an exper
 | Cloud processing | The product page says vendor transcription sends audio to the cloud. Daybook's import workflow needs only the exported audio; its models run on the Mac. Vendor app configuration remains separate from Daybook. |
 | Public vendor SDK | No public Anker-supported Work recording-download SDK or authenticated recording/highlight API was found in the reviewed official material. This is a research finding, not proof that a private partner interface cannot exist. |
 
-## Supported workflow
+## The export-folder workflow
+
+This is the fallback method; with Bluetooth set up, recordings arrive without the phone.
 
 1. Record on Soundcore Work, then transfer the recording into the Soundcore phone app.
 2. Export the audio file. Transfer it to a local Mac folder, for example through AirDrop or a locally managed transfer.
@@ -21,7 +23,7 @@ Research checked 2026-10-23. Daybook supports original-audio import and an exper
 4. Daybook copies the original bytes into its local library and computes a SHA-256 digest. Reimporting identical bytes into the same meeting reuses the stored track.
 5. Transcribe and synthesize with downloaded local models. Original recordings and each transcription run remain available.
 
-For an incoming-folder workflow, the application's folder monitor can call the same `MeetingStore.importAudio` API after confirming a file has finished copying. A file appearing in the folder must create a new meeting unless the user explicitly attaches it to another meeting. Import time is not evidence that two recordings describe the same conversation. The core import API does not itself run a folder monitor.
+Daybook watches the chosen folder (`ImportFolderWatcher`) and imports a file once it's unchanged across two scans, through the same `MeetingStore.importAudio` API, recording the device identity on the track. A file appearing in the folder creates a new conversation unless the person explicitly attaches it to another one. Import time is not evidence that two recordings describe the same conversation. Files in the folder are never moved, renamed, or deleted.
 
 ## Highlights sidecar
 
@@ -49,11 +51,11 @@ When a wearable has no verified offset, `TranscriptFusion` requires at least thr
 
 A recording with insufficient anchors is marked unaligned and excluded from the unified transcript. Its original transcript remains accessible. The user can establish a verified offset to include it. Overlapping passages that disagree are retained separately. This initial algorithm is conservative and can miss duplicates when two engines choose very different segment boundaries; acoustic alignment remains a future improvement. Optional same-model speaker embeddings now support configurable cross-source matching within a meeting.
 
-## Direct-device feasibility
+## Direct Bluetooth
 
-The community [Soundcore Manager repository](https://github.com/tacshi/Soundcore/blob/main/README.md) reports a reverse-engineered D3200 BLE protocol, offline recording access, and Wi-Fi SoftAP export, including macOS support. Its [protocol notes](https://github.com/tacshi/Soundcore/blob/main/PROTOCOL.md) are a potential research input. This is not a vendor SDK and has not been validated against this user’s device or firmware. Daybook implements protocol facts in original Swift code; the community implementation is not bundled.
+The community [Soundcore Manager repository](https://github.com/tacshi/Soundcore/blob/main/README.md) reports a reverse-engineered D3200 BLE protocol, offline recording access, and Wi-Fi SoftAP export. Its [protocol notes](https://github.com/tacshi/Soundcore/blob/main/PROTOCOL.md) are the research input for Daybook's own implementation; the community code is not bundled. It is not a vendor SDK.
 
-The experimental adapter and its tests are described in [direct Soundcore](direct-soundcore.md). Physical acceptance must validate read-only discovery, firmware/version compatibility, authenticated pairing, encrypted transfer, resumable download integrity, and timestamp extraction against test recordings. Device binding changes, deletion, reset, and firmware commands should not be part of the ordinary import path. Review licensing before reusing community implementation code. This remains a separate hardware-validation milestone.
+The direct method, its connection state machine, integrity checks, and tests are described in [direct Soundcore](direct-soundcore.md). It only reads: device binding changes, deletion, reset, and firmware commands are not part of it. Physical acceptance must still validate discovery, firmware compatibility, encrypted transfer integrity, throughput, and timestamp extraction against test recordings on a real recorder.
 
 ## Local persistence boundary
 

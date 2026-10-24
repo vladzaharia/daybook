@@ -2,11 +2,11 @@ import AVFoundation
 import Foundation
 
 /// Reads a finalized capture or salvages a staged recording after a process exit.
-/// Call only for directories that no active RecordingController is writing.
+/// Call only for directories that no active RecordingController is writing. Clock anchors in the
+/// track sidecars survive, so a recovered recording still gets drift correction and echo removal.
 enum CaptureRecovery {
     static func recover(in directory: URL) throws -> CaptureResult? {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let decoder = CaptureJSON.decoder()
         let resultURL = directory.appendingPathComponent("capture-result.json")
         if FileManager.default.fileExists(atPath: resultURL.path) {
             var result = try decoder.decode(CaptureResult.self, from: Data(contentsOf: resultURL))
@@ -15,6 +15,11 @@ enum CaptureRecovery {
                 var track = track
                 track.url = directory.appendingPathComponent(track.role.rawValue + ".caf")
                 return track
+            }
+            result.derivedTracks = result.derivedTracks?.compactMap { derived in
+                var derived = derived
+                derived.url = directory.appendingPathComponent(derived.url.lastPathComponent)
+                return FileManager.default.fileExists(atPath: derived.url.path) ? derived : nil
             }
             return result
         }

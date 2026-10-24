@@ -21,12 +21,12 @@ Current delivery: a runnable Developer ID signed preview, installed locally, wit
 3. Capture: separate microphone and system tracks, automatic start/end detection, right-side notes panel, and crash recovery.
 4. Multi-source synthesis: attach wearable audio to an existing meeting, align repeated speech, deduplicate agreed spans, preserve provenance and unmatched source transcripts.
 5. Organization and sync: folders, tags, twelve editable templates, immutable iCloud Drive journal, source blobs, causal conflict merging, deletion tombstones, and local recovery.
-6. Quality and direct hardware: independently selectable models, configurable speaker effort and matching, explicit reprocessing modes, and experimental Soundcore BLE.
+6. Quality and direct hardware: independently selectable models, configurable speaker effort and matching, explicit reprocessing modes, and direct Soundcore Work over Bluetooth through a hardware-agnostic device layer (direct, files, and account methods per device).
 7. Release validation: build and test on Apple silicon; package a runnable app; exercise inference with generated speech; document hardware and permission checks requiring live recordings.
 
 ## Follow-on work requiring evidence or external access
 
-- Direct Soundcore synchronization: experimental original Swift BLE adapter and codec/protocol fixtures are implemented. Physical firmware, complete marker extraction, Wi-Fi, and MFi acceptance remain separate from tested file export.
+- Direct Soundcore synchronization: Bluetooth is the recommended connection, with files as the fallback ([devices.md](devices.md)). It is verified against a simulated recorder and protocol fixtures; physical-firmware validation, complete marker extraction, Wi-Fi, and MFi acceptance are still pending.
 - Longitudinal speaker identity: a user-controlled voice enrollment flow and evaluation set before making persistent identity claims.
 - Distribution: a Developer ID and notarization credentials are needed for a broadly distributed trusted release. An ad-hoc signed local app can be built without those credentials.
 - Real-call acceptance: Zoom, Meet, Teams, muted microphones, headphones, device changes, sleep/wake, long sessions, overlapping voices, and partial recordings need recordings on actual devices.

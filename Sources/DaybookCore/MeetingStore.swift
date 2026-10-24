@@ -5,13 +5,13 @@ public enum LibraryError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unsafePath(let path): return "The library rejected an unsafe file path: \(path)"
-        case .corruptMeeting(let id): return "Meeting \(id.uuidString) has no readable metadata or recovery copy. Its recordings remain on disk."
-        case .unsupportedSchema(let version): return "This library uses newer metadata version \(version). Update Daybook before opening it."
-        case .invalidAudio(let name): return "\(name) is not a readable, nonempty recording file."
+        case .corruptMeeting: return "A conversation couldn’t be read. Its recordings are still in the library folder."
+        case .unsupportedSchema: return "This library was made by a newer Daybook. Update Daybook to open it."
+        case .invalidAudio(let name): return "\(name) has no readable audio."
         case .invalidHighlight: return "Highlight timestamps must be finite, nonnegative seconds."
         case .invalidTranscript: return "Transcript timestamps must be finite, ordered, nonnegative seconds."
-        case .trashedMeeting(let id): return "Meeting \(id.uuidString) is in Daybook's local Trash. Restore it before editing."
-        case .missingMeeting(let id): return "Meeting \(id.uuidString) was not found in the local library."
+        case .trashedMeeting: return "This conversation is in the Trash. Restore it to edit it."
+        case .missingMeeting: return "This conversation isn’t in the library."
         case .unsupportedHighlightSchema(let version): return "Highlight sidecar version \(version) is not supported. This version of Daybook reads version 1."
         case .invalidHighlightSidecar: return "The JSON sidecar is not a Daybook highlights file. It must contain a highlights array with time in seconds and text for each marker."
         }
@@ -82,7 +82,7 @@ public actor MeetingStore {
                 try fm.copyItem(at: primary, to: damaged)
             }
             try LocalFiles.atomicWrite(bytes, to: primary)
-            warnings.append("Recovered \(meeting.title) from the previous saved metadata; original audio is unchanged.")
+            warnings.append("Recovered “\(meeting.title)” from its last saved copy.")
             return meeting
         }
         throw LibraryError.corruptMeeting(id)
@@ -174,7 +174,8 @@ public actor MeetingStore {
     /// Import is explicit: callers choose a new meeting or an existing one. Dates never imply linking.
     /// Original bytes are copied, hashed, and retained; source files are never moved or modified.
     public func importAudio(from sourceURL: URL, into meeting: Meeting, source: AudioSource = .imported,
-                            sidecarURL: URL? = nil, offset: TimeInterval? = nil) throws -> Meeting {
+                            sidecarURL: URL? = nil, offset: TimeInterval? = nil,
+                            device: DeviceRecordingIdentity? = nil) throws -> Meeting {
         let resource = try sourceURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         guard resource.isRegularFile == true, (resource.fileSize ?? 0) > 0 else { throw LibraryError.invalidAudio(sourceURL.lastPathComponent) }
         if let offset, !offset.isFinite { throw LibraryError.invalidTranscript }
@@ -206,6 +207,10 @@ public actor MeetingStore {
         let track: RecordingTrack
         if let duplicate = verifiedTrack(withDigest: hash, in: result) {
             track = duplicate
+            // The same bytes arriving from a recorder teach the library where they came from.
+            if let device, duplicate.device == nil, let index = result.tracks.firstIndex(where: { $0.id == duplicate.id }) {
+                result.tracks[index].device = device
+            }
         } else {
             let id = UUID()
             let ext = sourceURL.pathExtension.lowercased().filter { $0.isLetter || $0.isNumber }.prefix(12)
@@ -214,7 +219,7 @@ public actor MeetingStore {
             let destination = try LocalFiles.relativeURL(relativePath, in: directory)
             try fm.moveItem(at: staged, to: destination)
             track = RecordingTrack(id: id, source: source, relativePath: relativePath,
-                                   fileName: sourceURL.lastPathComponent, offset: offset, sha256: hash)
+                                   fileName: sourceURL.lastPathComponent, offset: offset, sha256: hash, device: device)
             result.tracks.append(track)
         }
         if let sidecar {

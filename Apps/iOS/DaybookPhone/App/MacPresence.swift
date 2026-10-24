@@ -1,0 +1,156 @@
+import DaybookKit
+import DaybookLink
+import Foundation
+
+/// Whether a Mac that transcribes is around, for "Waiting for your Mac · last seen 2 h ago"
+/// (docs/iphone.md, "Processing on the Mac"). `PhoneAppModel.macPresence` combines the local link
+/// (a paired Mac connected now) with sync presence (`Devices/` records in the library). The phone
+/// never fakes it: with no Mac seen, it says so.
+///
+/// For the reading UI: show `waitingLine()` under a conversation whose `ProcessingStatus` is
+/// `.requested(.device)`, and `summary` in Settings. Both are complete sentences.
+enum MacPresence: Equatable, Sendable {
+    /// Sync hasn't connected or listed the library's devices yet.
+    case checking
+    /// Sync can't run (no iCloud, signed out, unsigned build). The reason, in a sentence.
+    case unavailable(String)
+    /// A paired Mac that processes is connected over the local link right now.
+    case connected(name: String)
+    /// A Mac that processes last synced at `lastSeen`, by its presence record.
+    case seen(name: String, lastSeen: Date)
+    /// A Mac running an older Daybook (no presence records) syncs this library; when isn't known.
+    case olderMac
+    /// No Mac has synced this library yet.
+    case noMac
+
+    /// A Mac seen within this long reads as present ("Waiting for Studio Mac") rather than "last seen".
+    static let recentlySeen: TimeInterval = 15 * 60
+
+    /// Combines the link (live) with sync presence (`KnownSyncDevice`s from `knownDevices()`).
+    static func resolve(connectedMac: String?, devices: [KnownSyncDevice], syncAvailable: Bool,
+                        syncReason: String?, devicesListed: Bool) -> MacPresence {
+        if let connectedMac { return .connected(name: connectedMac) }
+        if let reason = syncReason, !syncAvailable { return .unavailable(reason) }
+        guard devicesListed else { return .checking }
+        if let mac = devices.latestProcessor, let seen = mac.lastSeen {
+            return .seen(name: mac.displayName ?? "your Mac", lastSeen: seen)
+        }
+        return devices.hasPeersWithoutPresence ? .olderMac : .noMac
+    }
+
+    var macName: String? {
+        switch self {
+        case .connected(let name), .seen(let name, _): return name
+        default: return nil
+        }
+    }
+
+    /// Whether a request can expect a Mac soon.
+    var isMacAround: Bool {
+        switch self {
+        case .connected: return true
+        case .seen(_, let date): return Date().timeIntervalSince(date) < Self.recentlySeen
+        default: return false
+        }
+    }
+
+    /// The line under a conversation that waits for a Mac: "Waiting for your Mac · last seen 2 h ago".
+    func waitingLine(now: Date = Date()) -> String {
+        switch self {
+        case .checking: return "Waiting for your Mac"
+        case .unavailable: return "Waiting for iCloud"
+        case .connected(let name): return "Waiting for \(name)"
+        case .seen(let name, let date):
+            let age = now.timeIntervalSince(date)
+            if age < Self.recentlySeen { return "Waiting for \(name)" }
+            return "Waiting for your Mac · last seen \(Self.age(age))"
+        case .olderMac: return "Waiting for your Mac"
+        case .noMac: return "No Mac has synced this library yet"
+        }
+    }
+
+    /// One sentence for Settings.
+    func summary(now: Date = Date()) -> String {
+        switch self {
+        case .checking: return "Looking for your Mac…"
+        case .unavailable(let reason): return reason
+        case .connected(let name): return "\(name) is connected."
+        case .seen(let name, let date):
+            let age = now.timeIntervalSince(date)
+            return age < Self.recentlySeen ? "\(name) synced just now." : "\(name) last synced \(Self.age(age))."
+        case .olderMac: return "A Mac with an earlier Daybook syncs this library."
+        case .noMac: return "No Mac has synced this library yet. Open Daybook on your Mac."
+        }
+    }
+
+    /// "2 h ago", "3 min ago", "yesterday", "4 days ago".
+    static func age(_ seconds: TimeInterval) -> String {
+        let s = max(0, seconds)
+        switch s {
+        case ..<60: return "just now"
+        case ..<3_600: return "\(Int(s / 60)) min ago"
+        case ..<86_400: return "\(Int(s / 3_600)) h ago"
+        case ..<172_800: return "yesterday"
+        default: return "\(Int(s / 86_400)) days ago"
+        }
+    }
+}
+
+/// A Mac's live progress on one conversation, from the local link (`processing.progress`). Finer and
+/// faster than the coarse progress a claim carries through sync; when both exist, show this one.
+///
+/// For the reading UI: `model.liveProgress[meeting.id]?.line` gives "Transcribing on Studio Mac · 40%".
+/// Entries go away when the Mac finishes (sync then brings the result) or after `staleAfter` without word.
+struct LiveProgress: Equatable, Sendable {
+    var meetingID: UUID
+    var phase: LinkProcessingProgress.Phase
+    /// 0...1 within the phase, when the Mac reports one.
+    var fraction: Double?
+    var macName: String
+    /// The Mac's own words (failures in particular).
+    var detail: String?
+    var receivedAt: Date
+
+    static let staleAfter: TimeInterval = 120
+
+    init(_ progress: LinkProcessingProgress, receivedAt: Date = Date()) {
+        meetingID = progress.meetingID
+        phase = progress.phase
+        fraction = progress.fraction.map { min(1, max(0, $0)) }
+        macName = progress.macName
+        detail = progress.detail
+        self.receivedAt = receivedAt
+    }
+
+    var isFinished: Bool { phase == .finished || phase == .failed }
+
+    /// The verb for the phase: "Transcribing", "Summarizing".
+    var activity: String {
+        switch phase {
+        case .queued: return "Waiting"
+        case .aligning: return "Lining up recordings"
+        case .transcribing: return "Transcribing"
+        case .identifyingSpeakers: return "Identifying speakers"
+        case .summarizing: return "Summarizing"
+        case .paused: return "Paused"
+        case .waitingForModels: return "Waiting for models"
+        case .finished: return "Finished"
+        case .failed: return "Couldn't finish"
+        default: return "Working"
+        }
+    }
+
+    /// "Transcribing on Studio Mac · 40%".
+    var line: String {
+        switch phase {
+        case .queued: return detail.map { "In line on \(macName) · \($0)" } ?? "In line on \(macName)"
+        case .waitingForModels: return "Waiting for models on \(macName)"
+        case .paused: return "Paused on \(macName)"
+        case .finished: return "Finished on \(macName)"
+        case .failed: return detail.map { "\(macName) couldn't finish: \($0)" } ?? "\(macName) couldn't finish"
+        default:
+            let percent = fraction.map { " · \(Int(($0 * 100).rounded(.down)))%" } ?? ""
+            return "\(activity) on \(macName)\(percent)"
+        }
+    }
+}

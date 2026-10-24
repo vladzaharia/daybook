@@ -1,0 +1,202 @@
+# Daybook for iPhone
+
+A full Daybook app for iPhone. Everything the Mac app does, except running the models. Recording, notes, bookmarks, the library, reading, playback, editing, organizing, devices, templates, vocabulary, sync, and settings all work on the phone. Transcription, speaker identification, and summaries run on a Mac and sync back.
+
+**Recorded but not processed is a normal, complete state.** A conversation recorded on the phone is immediately useful: you can play it, take timed notes, bookmark it, title it, file it, and search its notes. It says where it stands ("Not transcribed yet"), never that something is broken. The architecture keeps on-device processing possible later without restructuring.
+
+Designed first for **iPhone Duo** (book-style foldable, iOS 27.1+): closed it's a pocket recorder, open it's a two-page notebook. Every other iPhone gets the closed layout, or the open one at regular width.
+
+## Scope
+
+Everything below is in v1:
+
+- **Record.**
+  - Microphone recording, background-safe, interruption-safe, compressed (AAC).
+  - Notes with recording times and bookmarks, exactly as on the Mac (`TimedNotes`, highlights).
+  - Start, stop, and bookmark from the Lock Screen, Dynamic Island / Live Activity, Control Center, the Action button, and Siri (App Intents).
+  - **Live captions while recording.** Tentative, on-device captions from the Speech framework's `SpeechTranscriber` (volatile results), shown like closed captions. They prove the audio pipeline is working and give something to read until the Mac's transcript arrives, and they are never the transcript: phone-local (`<library>/LiveCaptions/<id>.json`, never synced), never fused, summarized, or used as evidence, and hidden once the official transcript exists. If the language isn't available, the app says so and recording is unaffected.
+- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select.
+- **Reading.**
+  - The summary page: lede, next steps, sections, your notes, bookmarks, colophon.
+  - The transcript: speakers, times, tap to play.
+  - Audio playback that downloads on demand.
+  - Version History, with restore.
+- **Editing that syncs.**
+  - Notes, title, next steps, speaker names, and transcript passage corrections.
+  - Folders, tags, Work/Personal placement, the template choice, and bookmarks during playback.
+- **Processing requests.** Transcribe, Summarize Again, a template change, Identify Speakers Again, and Transcribe Everything Again are all available. On the phone they become requests a Mac carries out (see below).
+- **Templates and vocabulary.** Browse and edit them; they sync as library metadata.
+- **Devices.**
+  - Soundcore Work over Bluetooth from the phone, which is usually the device in your pocket.
+  - Other recorders through Files.
+- **Multipoint.** When the Mac records, the phone can record too, and the reverse. Recordings join one conversation through the existing multipoint pipeline.
+- **Settings.** Sync folder, devices, recording, Mac pairing, appearance and text size.
+- **Export.** Markdown and audio through the share sheet.
+
+**Not possible on iOS, by design**
+- Recording another app's call audio. iOS has no per-app or system audio capture, so on a call the phone records its own microphone only. The Mac records the call.
+- Recording cellular calls. Third-party apps can't. Importing iOS call recordings (saved to Notes) through the share sheet is a later addition.
+
+## Processing on the Mac
+
+A conversation's processing state comes from its data and is shown the same way on both platforms (`ProcessingStatus` in DaybookKit):
+
+| State | Meaning | Phone shows |
+|---|---|---|
+| **Recorded** | Audio with no transcript yet; no request yet | "Not transcribed yet". Everything except transcript and summary works |
+| **Requested** | A `ProcessingRequest` is in the library, waiting | "Waiting for your Mac" (with "Last seen 2 h ago" when no Mac has checked in recently) |
+| **Processing** | A Mac claimed it | "Transcribing on <Mac name> · 40%" (live over the local link; coarse over sync) |
+| **Done** | Transcript and summary present | Normal page |
+| **Couldn't finish** | The Mac reported a failure | The Mac's reason and Try Again (which writes a new request) |
+
+- **Requests travel in the library.** A `ProcessingRequest` (meeting, mode, template, requested by, when) is synced metadata, like an edit. Recording on the phone requests **Transcribe** automatically.
+- **Requests run on a Mac.**
+  - A Mac with models claims a request, records the claim (so two Macs don't both run it), runs it through its normal queue (pause, cancel, missing models), and writes the result and its status back.
+  - Stale claims expire, and the claim survives the Mac going to sleep.
+- **On a Mac nothing changes.** New audio that arrives through sync is processed as it is today; requests only make the phone's intent explicit and visible.
+- **The phone never fakes progress.** If no Mac is paired or has been seen, the state says so plainly.
+
+### On the Mac
+
+The queue is `AppState`'s (`AppState+Requests.swift`); each change to a request is one of `ProcessingRequest`'s pure functions, saved like an edit.
+
+- **Pick up.** After every sync pass, every finished job, a model download, a phone's nudge, and at launch, the Mac queues each open request it may take (unclaimed, its own, or with an expired claim), when **Transcribe synced recordings on this Mac** is on and it has the models that request needs. Otherwise the request stays unclaimed. One job per conversation: a job already queued or running for it (new audio that arrived with it, say) carries the request, and finishes it.
+- **Claim when it starts.** The claim (10-minute lease) is taken when the job starts, not while it waits, so the phone reads "Waiting for your Mac" until work begins and a Mac busy with a long job leaves the request to another. A request another device holds is never run; its job is dropped.
+- **Heartbeat.** While the job runs, the claim is renewed with its stage and fraction at every change of stage and every minute. Sync passes keep running while a request runs (they wait for local work, as before), so the heartbeat and coarse progress reach the phone; the conversation being processed is protected from a remote deletion or status, as a recording is.
+- **Finish.** The request is completed, or failed with the Mac's reason, which `ProcessingStatus` shows on both devices. Any other open request the work satisfied is completed too, so statuses agree everywhere.
+- **Pause, Cancel, models.** Pause and Cancel give the claim back (the lease ends now) and keep the conversation paused on this Mac, so it isn't claimed again at the next pass; Resume claims it again. Missing models leave it unclaimed.
+- **Two Macs.** If both claim before either has synced, the merge keeps the newest claim on both. The Mac that sees it lost stops its job at that pass, without pausing it or touching the request, and the other finishes it. Until then both work, for at most one sync round.
+- **Stale claims.** A claim whose lease ran out (a Mac that vanished) is claimable, and claiming it starts a strictly newer claim that wins every merge. Claims are never cleared outright (`expireStaleClaims` isn't used): the merge keeps the newest claim, so a cleared one would come back from the other copies at every pass.
+- **Sleep and quitting.** A Mac that sleeps keeps its claim and renews it on waking, unless another Mac took it over meanwhile (then it stops). Quitting cancels processing, which gives claims back; they're published at the next launch's first pass, or simply expire if the Mac never returns. A Mac that crashes mid-claim runs its own claims again at launch.
+- **No requests for its own work.** The Mac's own captures, imports, and menu commands write no requests: its queue is live on the Mac, phones see it over the link, and a request per job would double every job's sync traffic. It only completes requests its work satisfied.
+- **Presence.** The sync controller publishes `SyncReplicaConfiguration.mac(displayName:canProcess:)`. `canProcess` is true when the models automatic processing needs are installed and the Mac transcribes synced recordings; it's updated whenever models are installed or removed, or those choices change, and the link's capabilities follow.
+- **Status lines.** The list and conversation page read `ProcessingStatus`; while the Mac carries out another device's request they add "Requested from Alex's iPhone".
+- **Live progress.** While any conversation is processed, connected phones get `processing.progress` at every change of phase (queued, aligning, transcribing, identifying speakers, summarizing, then finished, paused, failed, or waiting for models) and as the fraction moves. A `processing.nudge` makes the Mac sync at once.
+
+## Architecture
+
+```text
+DaybookCore         (macOS + iOS)  models, storage, sync journal, fusion, alignment, echo DSP
+DaybookKit          (macOS + iOS)  LibraryController: library state, edits + revisions, search,
+                                   sync controller, recording ingest, ProcessingStatus,
+                                   ProcessingRequest queue, ProcessingEngine seam
+DaybookDevices      (macOS + iOS)  device framework, Soundcore (BLE, protocol, crypto, Opus)
+DaybookLink         (macOS + iOS)  Mac <-> iPhone local-network channel: pairing, control, status
+DaybookCaptions     (macOS + iOS)  the one live-caption engine (Speech framework's SpeechTranscriber):
+                                   iPhone recordings, the Mac's You/Call capture, and hardware live
+                                   audio (Soundcore live listening). Depends on Apple frameworks only.
+DaybookIntelligence (macOS now)    WhisperKit, FluidAudio, MLX: the Mac's ProcessingEngine.
+                                   Kept free of AppKit so an iOS build can link it later.
+Daybook             (macOS app)    AppKit/SwiftUI app, capture, Mac UI
+Apps/iOS            (Xcode, via XcodeGen)
+  DaybookPhone          iPhone app (SwiftUI)
+  DaybookPhoneWidgets   Live Activity, Control Center controls, widgets
+```
+
+- **Processing seam.**
+  - `ProcessingEngine` (in DaybookKit) takes a meeting and its transcribable tracks and returns transcripts, speakers, and a summary. The Mac's pipeline implements it with DaybookIntelligence.
+  - The phone registers none, so its requests wait for a Mac.
+  - Turning on on-device processing later means linking DaybookIntelligence into the iOS app and registering an engine; the request queue and statuses already describe local work. Smaller models, memory limits, and iOS 26 background continued-processing tasks are tuning, not restructuring.
+- **Sync through Daybook's iCloud container.**
+  - Both apps use one ubiquity container, `iCloud.local.daybook` (configurable through `DAYBOOK_ICLOUD_CONTAINER`). The journal lives at `<container>/Documents/Daybook`, read through `DaybookICloudContainerIdentifier`. There's no folder to pick: signing into iCloud is all it takes.
+  - The container is hidden from the Files app.
+  - The journal format is unchanged (`docs/icloud-sync.md`).
+  - Macs that synced through a chosen folder move to the container once. The journal is content-addressed, so the copy is safe and idempotent. The old folder is left untouched.
+  - The phone uses an **on-demand audio** policy: meetings, transcripts, and summaries apply immediately; audio blobs download only for playback, and can be evicted.
+  - Phone recordings upload as blobs like any other source.
+  - Requires signed builds with the iCloud capability on both apps (same team, same container). Unsigned development builds and tests keep the folder transport, which is never offered as the product setup.
+- **Local link.**
+  - When both are on the same network, DaybookLink (Network.framework, Bonjour, TLS with a pre-shared key from pairing) carries what iCloud is too slow for: start and stop for multipoint, live recording state, bookmarks, and live processing progress.
+  - Without it, everything still works through sync, just later.
+- **One live-caption engine.** Every live caption, whatever the source, goes through `DaybookCaptions`:
+  - the phone's microphone;
+  - the Mac's microphone and call audio, captioned separately as You and Call, with lines the microphone only heard from the speakers suppressed;
+  - any recorder that streams live audio: Soundcore live listening, which replaced chunked WhisperKit previews (docs/devices.md, "Listen Live captions").
+  Captions are always tentative feedback, never the transcript. Final transcription stays with the Mac's models.
+- **The phone is a device to the Mac.** "Daybook on iPhone" is a `DeviceKind` with two methods: *direct* (DaybookLink, with record control) and *files* (sync). The existing multipoint coordinator, matcher, aligner, and fusion treat its recordings like any other source.
+- **One Bluetooth owner per recorder.** A Soundcore is managed by the phone or by a Mac, never both at once. Ownership is a synced device setting; the other side shows "Managed by iPhone" and gets the recordings through sync. **Use on This iPhone** / **Use on This Mac** move it in one tap, in seconds over the local link and through sync otherwise ([devices.md](devices.md), "Handing a recorder over").
+
+## iPhone Duo
+
+Confirmed in the iOS 27.1 SDK: SwiftUI `onHingeChange { old, new in }` gives `DeviceHinge` (status `.closed`, `.partiallyOpen`, `.fullyOpen`, and `angle`). UIKit has `UIHingeInteraction`. Measure both displays in the iPhone Duo simulator before fixing layout constants.
+
+| Posture | What the app becomes |
+|---|---|
+| **Closed** (outer 5.4") | *Pocket recorder.* One-handed. A large Record control at the thumb, the recorder's status, and recent conversations. Reading is one column. |
+| **Open flat** (inner 7.6") | *Notebook.* Two pages split at the crease, never across it. Library, then conversation. In a conversation, the summary is on the left and the transcript on the right, linked: tapping a next step or bookmark scrolls the transcript to its evidence, and playback follows on the right. While recording: notes on the left; levels, bookmarks, and the live timeline on the right. |
+| **Partly open on a table** while recording | *Table mode*, in landscape (flex mode): the phone is turned a quarter, hinge horizontal, the bottom half flat and the top half standing. The top half shows live captions in large type with the elapsed time and level, readable from across the table. The bottom half has large Bookmark and Stop targets. Dimmed between interactions to save battery. |
+| **Folding or unfolding** | Context carries over: unfold while reading a summary and the transcript opens beside it; fold mid-recording and the pocket recorder takes over without interrupting anything. |
+
+Accessibility: Dynamic Type, VoiceOver order across both pages, Reduce Motion for posture transitions, and everything reachable with one hand when closed.
+
+### Measured
+
+Measured in the iPhone Duo simulator (iOS 27.1, 24A94425; model iPhone19,4) with the phone app's `--log-geometry` probe, which records the window, safe area, screen, and hinge on every change. Both displays are @3x and 460 ppi.
+
+| Posture | Display | Points (window) | Pixels | Safe area (top, left, bottom, right) | Size classes |
+|---|---|---|---|---|---|
+| **Closed** | Cover, 5.4" (screen ID 1) | 466 × 678, portrait | 1398 × 2034 | 0, 0, 34, 84 | compact width, regular height |
+| **Partly open** (about 99°) | Inner, 7.6" (screen ID 3) | 951 × 669, landscape | 2853 × 2007 as shown (a 2007 × 2853 panel mounted at 270°) | 0, 0, 34, 84 | regular, regular |
+| **Open flat** (180°) | Inner | 951 × 669, landscape | the same | 0, 0, 34, 84 | regular, regular |
+
+- **The status bar is a column on the right edge** in both displays, beside the sensor bar. That's the 84 pt right inset; there is no top inset. The home indicator takes the bottom 34 pt.
+- **The crease** runs down the inner display's middle, at x = 475.5 pt of the 951 pt window, *not* at the middle of the safe area (433.5 pt). Two pages split at the crease are 475.5 pt (left) and 475.5 − 84 = 391.5 pt of safe area (right). The system adds no inset for the fold, so the app has to keep content off it.
+- **Corners:** the cover's spine side (left) is nearly square (8 pt radius) and its outer side round (59 pt); the inner display is 55 pt all round.
+- **Partly open and open flat have identical geometry.** Only the hinge status and angle differ, so layouts key off the posture, not the window size.
+- **The app moves between displays live**, without relaunching: the window becomes 951 × 669 or 466 × 678 and the scene's screen changes. For a moment during the move the safe area reads top 82, right 0 before it settles, and `UIHingeInteraction` reports no hinge (`hinge == nil`); `DevicePosture` keeps the last posture through that gap.
+- **Hinge reports:** angle 0–180° (`UIHinge.angle` in radians, π when flat), about 20 reports per fold. `.fullyOpen` from about 175°. The switch between `closed` and `partiallyOpen` (and between displays) happens partway through a fold and isn't at a fixed angle: one sweep from closed went `partiallyOpen` at 23° and closed again at 49° on the way back; others held `closed` past 100° when opened in steps, or `partiallyOpen` down to about 70° when closed from flat. Key layouts off the status, not the angle. SwiftUI's `onHingeChange` reports every change but not the posture at launch; `UIHingeInteraction` reports both, so `HingeObserver` uses the two together.
+- **The simulator boots closed:** the cover is lit and the inner display is black. With the device open, the cover is black.
+
+**Folding the simulator.** This Xcode (27.1, 27A9275) has no Simulator.app and `simctl` has no hinge command. Xcode's DeviceHub app has a hinge slider for this device, unverified with CoreSimulator devices. What works from the command line is SpringBoard's private display tool service, through `Apps/iOS/Tools/duo-fold/duo-fold.sh <udid> closed|book|open|<0.0–1.0>`, which spawns a small entitled helper inside the simulator. It's private SPI, simulator-only, and may break with any runtime update. Screenshots: `xcrun simctl io <udid> screenshot --display=1` (cover) or `--display=3` (inner); the display not in use is black, and images follow the interface orientation.
+
+## Status sheet
+
+A persistent status surface on the library screens, like Maps or Find My: the recorder, your Mac,
+and sync at a glance, expanding to manage them (`DaybookPhone/Status/`). The words come from
+`StatusSheetModel`, plain values from plain inputs, so tests read what each state says.
+
+| Detent | What it shows |
+|---|---|
+| **Compact** | Record, Import, and Search at the thumb; then one line each: the recorder ("Connected · 80% · 2 new", "Recording · 80%", "Importing 1 of 3", "Managed by Studio Mac", a handoff under way), your Mac ("Transcribing · 40%" with the gradient line, "Connected · 2 waiting", "Last seen 2 h ago"), and iCloud ("Up to date", "Syncing 3 changes"). Tapping a line goes to medium |
+| **Medium** | Live listening captions while a recorder streams, first (`DeviceSession.liveCaptions`, tentative); every recorder with its handoff (Use on This iPhone / Use on Studio Mac, progress, Take Over Anyway); the Mac's presence and queue: running with progress, waiting oldest first with "Requested from this iPhone", failures |
+| **Large** | Management: connect, Import N New, Record on Soundcore / Pause, Listen Live; recordings waiting on the recorder; the recorder's space and this iPhone's downloaded audio; paired Macs and Pair a Mac…. Links open the full screens (the device page, a Mac, Storage) inside the sheet rather than copies of them |
+
+**Per posture, and why:**
+
+- **Closed, and every other iPhone (18 Pro): a system sheet.** `.sheet` with `.presentationDetents([compact, .medium, .large])` (compact is a `CustomPresentationDetent` that grows with Dynamic Type, at most 55% of the screen), `.presentationBackgroundInteraction(.enabled(upThrough: .medium))` so the list stays usable, `.interactiveDismissDisabled()`, and the system's Liquid Glass sheet with nothing painted over it.
+- **Record moves into the sheet.** The compact sheet sits exactly where `RecordStartButton` was; two stacked bottom layers would hide one or push Record up out of reach. One thumb surface holds what records and what it's doing, and Record stays one tap away, as before. The library's foot then keeps only the mini player, just above the sheet (`\.statusSheetInset`).
+- **The sheet steps aside** for a conversation (pushed), search (the keyboard), selection (its bar), and the Trash, and comes back compact. Other sheets and alerts (Settings, Move, Tags) open above it.
+- **Open (notebook): a panel on the right page.** A system sheet at regular width becomes a centred card across both pages and the crease, and can't be anchored to one page. So the status is a glass panel at the foot of the right page (crease at 475.5 pt: it starts `creaseClearance` past it and ends at the 84 pt status column), where the right thumb is. Compact, the conversation preview scrolls clear of it; medium covers the lower half of the preview; large takes the page as an inspector column, the preview hidden until it collapses. Record stays at the foot of the left page, so the panel doesn't repeat it. While a conversation is open across both pages (the reading spread), the panel isn't shown at all.
+- **Partly open, in the library:** the same as open. The geometry is identical (docs: Measured) and the phone is held like a book; table mode is for recording only.
+- **While recording: hidden.** `RecordingSurface` replaces the library and already shows the recorder's essentials (clock, level, bookmarks, captions); during a call there's one thing on screen (docs/interface.md, principle 1), and table mode needs the whole display. The sheet returns, compact, when the recording is filed.
+
+Accessibility: each line is one element ("Soundcore Work, Connected · 80%") with "Shows more"; the
+sheet's grabber cycles detents for VoiceOver, and the panel's handle and container have Expand and
+Collapse actions; the compact detent grows with Dynamic Type and its content scrolls at medium and
+large; Reduce Motion drops the content and panel animations.
+
+## Design language
+
+Same system as the Mac (`docs/interface.md`): paper, the Ink scale, Electric Teal, neon used sparingly (mint means playing, the gradient is brand and progress only, amber means bookmarks, red means recording). Use Liquid Glass for controls (iOS 26) and native navigation. Use New York for titles and SF for everything else.
+
+## Phases and ownership
+
+1. **Foundations, in parallel.**
+   - *Kits*: DaybookKit (including `ProcessingStatus`, `ProcessingRequest`, and the engine seam), DaybookDevices, and the Mac adopting them.
+   - *Sync*: the on-demand audio replica.
+   - *Link*: DaybookLink.
+   - *iOS shell*: the XcodeGen project, the recorder, Live Activity, controls, and App Intents.
+2. **Features, in parallel.**
+   - *iPhone library and reading*: the library, the page, the transcript, playback, editing, search, Version History, and Duo two-page layouts.
+   - *iPhone recording, devices, and settings*: the recording screens (pocket, notebook, and table postures), Soundcore on iPhone (background BLE, state restoration), the sync folder, pairing, templates, and vocabulary.
+   - *Mac integration*: the request queue and claims, iPhone as a device, pairing UI, multipoint with the phone, status to the phone, and Bluetooth ownership.
+   - *Signing and iCloud container*: both apps get the iCloud capability. The Mac app moves to Xcode-managed signing (an XcodeGen project alongside the iPhone app, with a Developer ID provisioning profile), and Macs on folder sync migrate to the container once. Registering identifiers and the container on the Apple Developer account is done only with the owner's approval.
+3. **Integration and design review** on iPhone Duo and iPhone 18 Pro simulators, plus the Mac.
+
+## Verification
+
+- `swift test` stays green for the Mac and core, with tests for the kits, the request queue and claims, the sync replica policy, and the link (loopback).
+- iOS: `xcodebuild test` on the iPhone Duo simulator for kit and app logic. Screenshots with `xcrun simctl io <device> screenshot` in both postures and appearances.
+- Still needs a real iPhone Duo and Mac: hinge transitions, background recording across calls and interruptions, Live Activity, Bluetooth with a real Soundcore in the background, local-network pairing, iCloud on-demand downloads, battery and thermals.
+
+Signing: set `DAYBOOK_TEAM_ID` for device builds. Bundle IDs are `local.daybook.app` (Mac), `local.daybook.phone`, and `local.daybook.phone.widgets`, with app group `group.local.daybook.phone` and iCloud container `iCloud.local.daybook`.

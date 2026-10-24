@@ -119,7 +119,8 @@ final class MeetingMonitor: ObservableObject {
     @Published private(set) var isMonitoring = false
     @Published private(set) var isMeetingActive = false
     @Published private(set) var activeCandidate: MeetingCandidate?
-    @Published private(set) var statusText = "Automatic recording is off"
+    @Published private(set) var statusText = "Off"
+    private static let listening = "Listening for calls"
     var rules = MeetingAppRule.defaults
     var onMeetingStarted: ((MeetingCandidate) -> Void)?
     var onMeetingEnded: (() -> Void)?
@@ -129,7 +130,7 @@ final class MeetingMonitor: ObservableObject {
     func startMonitoring() {
         guard !isMonitoring else { return }
         isMonitoring = true
-        statusText = "Watching for an active meeting"
+        statusText = Self.listening
         sample()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.sample() }
@@ -143,20 +144,20 @@ final class MeetingMonitor: ObservableObject {
         isMonitoring = false
         isMeetingActive = false
         activeCandidate = nil
-        statusText = "Automatic recording is off"
+        statusText = "Off"
     }
 
     func suppressCurrentMeeting() {
         machine.suppressCurrentMeeting()
         isMeetingActive = false
-        statusText = "Automatic recording paused until this meeting ends"
+        statusText = "Paused until this call ends."
     }
 
     private func sample() {
         guard isMonitoring else { return }
         guard CGPreflightScreenCaptureAccess() else {
             endOnDetectionFailure()
-            statusText = "Allow Screen & System Audio Recording to detect meeting windows"
+            statusText = "Needs Screen & System Audio Recording permission."
             return
         }
         do {
@@ -168,28 +169,28 @@ final class MeetingMonitor: ObservableObject {
                 activeCandidate = candidates.first(where: \.canStart)
             }
             if machine.suppressedBundleID != nil {
-                statusText = "Automatic recording paused until this meeting ends"
+                statusText = "Paused until this call ends."
             } else if let activeCandidate {
-                statusText = isMeetingActive ? "Meeting detected in \(activeCandidate.appName)" : "Checking \(activeCandidate.appName) meeting activity"
+                statusText = isMeetingActive ? "Recording a \(activeCandidate.callName)." : "Checking whether the \(activeCandidate.callName) has started…"
             } else {
-                statusText = "Watching for an active meeting"
+                statusText = Self.listening
             }
             switch event {
             case .started(let candidate):
                 activeCandidate = candidate
                 isMeetingActive = true
-                statusText = "Meeting detected in \(candidate.appName)"
+                statusText = "Recording a \(candidate.callName)."
                 onMeetingStarted?(candidate)
             case .ended:
                 isMeetingActive = false
                 activeCandidate = nil
-                statusText = "Meeting ended"
+                statusText = "The call ended, so recording stopped."
                 onMeetingEnded?()
             case nil: break
             }
         } catch {
             endOnDetectionFailure()
-            statusText = "Meeting detection unavailable: \(error.localizedDescription)"
+            statusText = "Can’t check for calls right now."
         }
     }
 
@@ -199,6 +200,46 @@ final class MeetingMonitor: ObservableObject {
         isMeetingActive = false
         activeCandidate = nil
         if wasActive { onMeetingEnded?() }
+    }
+}
+
+/// Picks the call app to record on its own when a recording starts without a detected meeting.
+/// Uses Core Audio activity only (no window titles), which needs no permission.
+enum CallAppResolver {
+    struct Activity: Equatable {
+        var bundleID: String
+        var input: Bool
+        var output: Bool
+    }
+
+    static func activeCallApp(rules: [MeetingAppRule]) -> CallAppTarget? {
+        guard let activity = try? MeetingActivityReader.audioActivity() else { return nil }
+        return choose(rules: rules, activity: activity.map { Activity(bundleID: $0.bundleID, input: $0.input, output: $0.output) })
+    }
+
+    /// A native app using the microphone wins, then a native app playing audio, then a browser
+    /// using the microphone. A browser that is only playing audio is not assumed to be a call.
+    static func choose(rules: [MeetingAppRule], activity: [Activity]) -> CallAppTarget? {
+        var ranked: [(rank: Int, order: Int, rule: MeetingAppRule)] = []
+        for (order, rule) in rules.enumerated() {
+            let target = CallAppTarget(bundleID: rule.bundleID, displayName: rule.displayName, isBrowser: rule.isBrowser)
+            let processes = activity.filter { target.owns(bundleID: $0.bundleID) }
+            let input = processes.contains(where: \.input), output = processes.contains(where: \.output)
+            let rank: Int?
+            if rule.isBrowser { rank = input ? 2 : nil }
+            else { rank = input ? 0 : (output ? 1 : nil) }
+            if let rank { ranked.append((rank, order, rule)) }
+        }
+        guard let best = ranked.min(by: { ($0.rank, $0.order) < ($1.rank, $1.order) }) else { return nil }
+        return CallAppTarget(bundleID: best.rule.bundleID, displayName: best.rule.displayName, isBrowser: best.rule.isBrowser)
+    }
+}
+
+private extension MeetingCandidate {
+    /// How status lines name the call: "Zoom call", "Slack huddle", "call in Chrome".
+    var callName: String {
+        if isBrowser { return "call in \(appName)" }
+        return appName == "Slack" ? "Slack huddle" : "\(appName) call"
     }
 }
 
@@ -241,7 +282,7 @@ private enum MeetingActivityReader {
         AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
     }
 
-    private static func audioActivity() throws -> [AudioActivity] {
+    static func audioActivity() throws -> [AudioActivity] {
         var property = address(kAudioHardwarePropertyProcessObjectList)
         var size: UInt32 = 0
         var status = AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &property, 0, nil, &size)

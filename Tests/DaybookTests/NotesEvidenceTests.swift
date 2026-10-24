@@ -1,4 +1,5 @@
 import DaybookCore
+@testable import DaybookKit
 import XCTest
 @testable import Daybook
 

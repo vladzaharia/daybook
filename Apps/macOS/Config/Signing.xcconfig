@@ -1,0 +1,41 @@
+// Signing and iCloud for Daybook on the Mac.
+//
+// Signed builds use automatic signing with the team from DAYBOOK_TEAM_ID. Set it in the environment
+// when building from the command line (scripts/build-app.sh), or in Signing.local.xcconfig next to this
+// file (ignored by git) when building from Xcode, which doesn't see shell variables:
+//
+//     DAYBOOK_TEAM_ID = ABCDE12345
+//     DAYBOOK_ICLOUD_CONTAINER = iCloud.local.daybook
+//
+// DAYBOOK_SIGNING picks how the app is signed:
+//
+//     signed    Apple Development (Debug) or Developer ID via export (Release), with a provisioning
+//               profile that carries the iCloud container. Needs a team, and profiles that already exist
+//               or -allowProvisioningUpdates once (see README.md, "First-time provisioning").
+//     local     ad hoc ("Sign to Run Locally"), no team, no profile, no iCloud entitlements. The app runs
+//               and reports that this build can't use iCloud. For development without an account.
+//
+// scripts/build-app.sh chooses `local` itself when no team is configured (or with --ad-hoc).
+DAYBOOK_SIGNING = signed
+
+DAYBOOK_ROOT = $(SRCROOT)/../..
+
+// The iCloud container sync uses: the entitlements and Info.plist's DaybookICloudContainerIdentifier.
+// The iPhone app (Apps/iOS) uses the same one.
+DAYBOOK_ICLOUD_CONTAINER = iCloud.local.daybook
+
+DAYBOOK_CODE_SIGN_STYLE_signed = Automatic
+DAYBOOK_CODE_SIGN_STYLE_local = Manual
+DAYBOOK_CODE_SIGN_IDENTITY_signed = Apple Development
+DAYBOOK_CODE_SIGN_IDENTITY_local = -
+DAYBOOK_DEVELOPMENT_TEAM_signed = $(DAYBOOK_TEAM_ID)
+DAYBOOK_DEVELOPMENT_TEAM_local =
+DAYBOOK_ENTITLEMENTS_signed = $(DAYBOOK_ROOT)/Resources/Daybook.entitlements
+DAYBOOK_ENTITLEMENTS_local = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
+
+CODE_SIGN_STYLE = $(DAYBOOK_CODE_SIGN_STYLE_$(DAYBOOK_SIGNING))
+CODE_SIGN_IDENTITY = $(DAYBOOK_CODE_SIGN_IDENTITY_$(DAYBOOK_SIGNING))
+DEVELOPMENT_TEAM = $(DAYBOOK_DEVELOPMENT_TEAM_$(DAYBOOK_SIGNING))
+CODE_SIGN_ENTITLEMENTS = $(DAYBOOK_ENTITLEMENTS_$(DAYBOOK_SIGNING))
+
+#include? "Signing.local.xcconfig"

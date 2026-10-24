@@ -1,4 +1,5 @@
 import AppKit
+import DaybookCore
 import SwiftUI
 
 @main
@@ -8,50 +9,257 @@ enum DaybookEntry {
             let code = await SmokeTest.run(arguments: CommandLine.arguments)
             Darwin.exit(code)
         }
+        if CommandLine.arguments.contains("--evaluate") {
+            let code = await SpeechEvaluation.run(arguments: CommandLine.arguments)
+            Darwin.exit(code)
+        }
         DaybookApp.main()
     }
 }
 
+/// `--library <path>` opens a separate library with its own preferences, for demos and UI checks
+/// that must not touch the everyday library.
+enum LaunchOptions {
+    static let libraryURL: URL? = value(after: "--library").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
+    static let defaults: UserDefaults = libraryURL == nil ? .standard : UserDefaults(suiteName: "local.daybook.app.alternate-library") ?? .standard
+    static func value(after flag: String) -> String? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
+        return arguments[index + 1]
+    }
+}
+
+enum WindowID {
+    static let library = "library"
+    static let vocabulary = "vocabulary"
+    static let templates = "templates"
+    static let welcome = "welcome"
+}
+
 struct DaybookApp: App {
     @NSApplicationDelegateAdaptor(DaybookDelegate.self) private var delegate
-    @StateObject private var state = AppState()
+    @StateObject private var state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults)
+    @AppStorage("showsMenuBarExtra", store: LaunchOptions.defaults) private var showsMenuBarExtra = true
+    @AppStorage("onboardingCompleted", store: LaunchOptions.defaults) private var onboardingCompleted = false
+
     var body: some Scene {
-        WindowGroup("Daybook") {
+        Window("Daybook", id: WindowID.library) {
             LibraryView(state: state)
-                .frame(minWidth: 1000, minHeight: 650)
+                .defaultAppStorage(LaunchOptions.defaults)
+                .frame(minWidth: 720, minHeight: 480)
                 .task {
                     delegate.state = state
                     await state.initialize()
                 }
+                .debugLaunchActions(state: state)
         }
         .defaultSize(width: 1280, height: 820)
-        .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("New conversation") { state.newMeeting() }.keyboardShortcut("n")
-                Button("Import recording…") { state.chooseImport() }.keyboardShortcut("o")
-                Button(state.isRecording ? "Stop recording" : "Start recording") {
-                    Task { if state.isRecording { await state.stopRecording() } else { await state.startRecording() } }
-                }.keyboardShortcut("r", modifiers: [.command, .shift])
+        .commands { DaybookCommands(state: state) }
+
+        Window("Welcome to Daybook", id: WindowID.welcome) { WelcomeWindow(state: state).defaultAppStorage(LaunchOptions.defaults) }
+            .windowStyle(.hiddenTitleBar)
+            .windowResizability(.contentSize)
+            .restorationBehavior(.disabled)
+            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil ? .suppressed : .presented)
+
+        Window("Vocabulary", id: WindowID.vocabulary) { GlossaryView(state: state).defaultAppStorage(LaunchOptions.defaults) }
+            .defaultSize(width: 640, height: 440)
+            .windowResizability(.contentMinSize)
+        Window("Summary Templates", id: WindowID.templates) { TemplatesView(state: state).defaultAppStorage(LaunchOptions.defaults) }
+            .defaultSize(width: 780, height: 560)
+            .windowResizability(.contentMinSize)
+
+        Settings { SettingsView(state: state).defaultAppStorage(LaunchOptions.defaults) }
+            .windowResizability(.contentSize)
+
+        MenuBarExtra(isInserted: $showsMenuBarExtra) {
+            MenuBarView(state: state).defaultAppStorage(LaunchOptions.defaults)
+        } label: {
+            // A symbol only: a ticking text label makes the status item re-layout every second.
+            // The menu's first line shows the elapsed time.
+            Image(systemName: state.isRecording ? "record.circle.fill" : "waveform")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(state.isRecording ? Color.red : Color.primary)
+                .accessibilityLabel(state.isRecording ? "Daybook, recording" : "Daybook")
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+/// The menu bar. Every toolbar and context-menu action has a home here; items that don't apply
+/// are disabled, never hidden.
+struct DaybookCommands: Commands {
+    @ObservedObject var state: AppState
+    @Environment(\.openWindow) private var openWindow
+
+    private var meeting: Meeting? { state.place.isDevice ? nil : state.selectedMeeting }
+    private var locked: Bool {
+        guard let meeting else { return true }
+        return state.recordingID == meeting.id || state.processingID == meeting.id || state.isStartingRecording || state.isStoppingRecording
+    }
+
+    var body: some Commands {
+        // The standard About panel, crediting the models (their licenses and required attributions).
+        CommandGroup(replacing: .appInfo) {
+            Button("About Daybook") { AboutPanel.show(catalog: state.modelCatalog) }
+        }
+        CommandGroup(replacing: .newItem) {
+            Button("New Conversation") { state.place = state.place.isDevice ? .section(.all) : state.place; state.newMeeting(); openWindow(id: WindowID.library) }
+                .keyboardShortcut("n")
+            Button("New Folder") { state.requestNewFolder() }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            Divider()
+            Button(state.isRecording ? "Stop Recording" : "Start Recording") {
+                Task { if state.isRecording { await state.stopRecording() } else { await state.startRecording() } }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(!state.isReady || state.isStartingRecording || state.isStoppingRecording)
+            Button("Import Audio…") { state.chooseImport() }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+            DeviceFileMenuItems(state: state)
+            Button("Add Recording to Conversation…") { if let id = meeting?.id { state.chooseImport(attachTo: id) } }
+                .disabled(locked)
+        }
+        CommandGroup(after: .saveItem) {
+            Menu("Export") {
+                Button("Markdown…") { if let id = meeting?.id { state.export(id) } }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                Button("Full Data (JSON)…") { if let id = meeting?.id { state.export(id, json: true) } }
+            }
+            .disabled(meeting == nil)
+            Button("Show in Finder") { if let id = meeting?.id { state.showInFinder(id) } }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .disabled(meeting == nil)
+            Divider()
+            Button("Move to Trash…") { state.trashRequestID = meeting?.id }
+                .disabled(locked)
+        }
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Button("Copy Summary") { if let meeting { state.copySummary(meeting.id) } }
+                .disabled(meeting?.summary == nil)
+        }
+        CommandGroup(after: .textEditing) {
+            Button("Search Conversations") { state.focusSearch() }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+        }
+        SidebarCommands()
+        InspectorCommands()
+        ToolbarCommands()
+        CommandGroup(before: .sidebar) {
+            Button("Summary") { state.pageMode = .summary }
+                .keyboardShortcut("1")
+                .disabled(meeting == nil)
+            Button("Transcript") { state.pageMode = .transcript }
+                .keyboardShortcut("2")
+                .disabled(meeting?.unifiedTranscript.isEmpty != false)
+            Divider()
+            Button("Make Text Bigger") { state.readingScale = ReadingScale.bigger(state.readingScale) }
+                .keyboardShortcut("+")
+            Button("Make Text Smaller") { state.readingScale = ReadingScale.smaller(state.readingScale) }
+                .keyboardShortcut("-")
+            Button("Actual Size") { state.readingScale = 1 }
+                .keyboardShortcut("0")
+            Divider()
+        }
+        CommandGroup(before: .windowList) {
+            // The panel isn't in the window list (it floats over calls), so it has its own item: the
+            // recording, else the selected conversation, else its home.
+            Button("Floating Notes") { state.showFloatingNotes(focus: state.recordingID ?? meeting?.id) }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+            Divider()
+        }
+        CommandMenu("Conversation") {
+            if let meeting, state.processingID == meeting.id {
+                Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
+            } else if let meeting, state.pausedIDs.contains(meeting.id) {
+                Button("Resume Transcription") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
+            } else {
+                Button("Transcribe Now") { if let meeting { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
+                    .disabled(meeting?.hasUntranscribedAudio != true || locked || state.queuedIDs.contains(meeting?.id ?? UUID()))
+            }
+            Divider()
+            ForEach([ProcessingRequest.Mode.summaryOnly, .speakerRefresh, .newAudio, .fullRetranscription]) { mode in
+                Button(mode.title) { if let id = meeting?.id { state.enqueue(id, mode: mode) } }
+                    .disabled(meeting?.tracks.isEmpty != false || locked || state.queuedIDs.contains(meeting?.id ?? UUID()))
+            }
+            Menu("Template") {
+                if let meeting { TemplateMenuItems(state: state, meetingID: meeting.id) }
+            }
+            .disabled(meeting == nil)
+            Divider()
+            Button("Add Bookmark") { if let id = state.recordingID { state.addHighlight(id) } }
+                .keyboardShortcut("d")
+                .disabled(state.recordingID == nil)
+            Button("Adjust Timing…") { state.activeSheet = .adjustTiming(nil) }
+                .disabled(meeting.map { $0.tracks.count < 2 } ?? true)
+            Button("Review Earlier Corrections…") { state.activeSheet = .reviewCorrections }
+                .disabled(meeting?.correctionTransferIssues?.isEmpty != false)
+            Divider()
+            Menu("Move to Folder") {
+                if let meeting { FolderMenuItems(state: state, meetingIDs: [meeting.id]) }
+            }
+            .disabled(meeting == nil)
+            Button(meeting?.effectivePlacement == .personal ? "Move to Work" : "Move to Personal") {
+                if let meeting { state.setPlacement([meeting.id], meeting.effectivePlacement == .personal ? .work : .personal) }
+            }
+            .disabled(meeting == nil)
+            Divider()
+            Button("Version History…") { state.activeSheet = .versionHistory }
+                .disabled(meeting?.revisions.isEmpty != false)
+        }
+        CommandMenu("Controls") {
+            Button("Play / Pause") { state.playback.toggle() }
+                .disabled(meeting?.tracks.isEmpty != false || state.isRecording)
+            Button("Jump Back 15 Seconds") { state.playback.skip(-15) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+            Button("Jump Forward 15 Seconds") { state.playback.skip(15) }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+        }
+        CommandGroup(replacing: .help) {
+            Button("Show Welcome") { openWindow(id: WindowID.welcome) }
+        }
+    }
+}
+
+/// Template choices for a conversation, shared by the colophon, inspector, and Conversation menu.
+struct TemplateMenuItems: View {
+    @ObservedObject var state: AppState
+    let meetingID: UUID
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Picker("Template", selection: state.templateSelection(for: meetingID)) {
+            Text(automaticTitle).tag("auto")
+            Divider()
+            ForEach(state.templates.filter(\.isBuiltIn)) { template in Text(template.name).tag(template.id) }
+            let custom = state.templates.filter { !$0.isBuiltIn }
+            if !custom.isEmpty {
+                Divider()
+                ForEach(custom) { template in Text(template.name).tag(template.id) }
             }
         }
-        Settings { PreferencesView(state: state).frame(width: 720, height: 650) }
-        MenuBarExtra {
-            VStack(alignment: .leading, spacing: 14) {
-                Label("Daybook", systemImage: "waveform").font(.headline)
-                if state.isRecording, let start = state.recordingStartedAt {
-                    Label { Text(start, style: .timer).monospacedDigit() } icon: { Circle().fill(.red).frame(width: 8, height: 8) }
-                    Button("Show meeting notes") { if let id = state.recordingID { state.showNotes(for: id) } }
-                    Button("Stop recording", role: .destructive) { Task { await state.stopRecording() } }
-                } else {
-                    Text(state.monitor.statusText).font(.caption).foregroundStyle(.secondary)
-                    Button("Record a conversation") { Task { await state.startRecording() } }.disabled(!state.isReady || state.isStartingRecording)
-                }
-                Divider()
-                Button("Open Daybook") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first { $0.title == "Daybook" }?.makeKeyAndOrderFront(nil) }
-                Button("Quit Daybook") { NSApp.terminate(nil) }
-            }.padding(18).frame(width: 260)
-        } label: { Image(systemName: state.isRecording ? "record.circle.fill" : "waveform").symbolRenderingMode(.palette).foregroundStyle(state.isRecording ? .red : .primary) }
-        .menuBarExtraStyle(.window)
+        .pickerStyle(.inline)
+        Divider()
+        Button("Edit Templates…") { openWindow(id: WindowID.templates) }
+    }
+    private var automaticTitle: String {
+        guard let kind = state.meetings.first(where: { $0.id == meetingID })?.summary?.kind, kind != .auto else { return "Automatic" }
+        return "Automatic (looks like \(kind.looksLike))"
+    }
+}
+
+/// Folder choices for one or more conversations.
+struct FolderMenuItems: View {
+    @ObservedObject var state: AppState
+    let meetingIDs: [UUID]
+    var body: some View {
+        Button("None") { state.moveToFolder(meetingIDs, nil) }
+        if !state.folders.isEmpty { Divider() }
+        ForEach(state.folders) { folder in
+            Button(folder.name) { state.moveToFolder(meetingIDs, folder.id) }
+        }
+        Divider()
+        Button("New Folder…") { state.requestNewFolder(moving: meetingIDs) }
     }
 }
 
@@ -63,12 +271,155 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
         guard !terminating, let state else { return .terminateNow }
         terminating = true
         Task {
+            // Cancelling gives back requests this Mac held, so another Mac can take them over once
+            // this one syncs again, or when their lease runs out if it never does.
             state.cancelDownload(); state.cancelProcessing()
             if state.isRecording || state.isStartingRecording { await state.stopRecording() }
             await state.flush()
+            await state.phoneLink.shutDown()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        switch LaunchOptions.value(after: "--appearance") {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: break
+        }
+        // `--snapshot <dir>` renders each visible window to PNG from inside the app, then exits.
+        // It works while the screen is locked, when screen capture can't.
+        if let directory = LaunchOptions.value(after: "--snapshot") {
+            let delay = Double(LaunchOptions.value(after: "--snapshot-delay") ?? "") ?? 4
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                WindowSnapshot.write(to: URL(fileURLWithPath: directory, isDirectory: true))
+                Darwin.exit(0)
+            }
+        }
+        #endif
+    }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        guard let state else { return nil }
+        let menu = NSMenu()
+        menu.addItem(DockMenuItem(state.isRecording ? "Stop Recording" : "Start Recording") {
+            Task { if state.isRecording { await state.stopRecording() } else { await state.startRecording() } }
+        })
+        if let id = state.recordingID {
+            menu.addItem(DockMenuItem("Add Bookmark") { state.addHighlight(id) })
+        }
+        menu.addItem(DockMenuItem("Show Floating Notes") { state.showFloatingNotes(focus: state.recordingID) })
+        menu.addItem(DockMenuItem("Import Audio…") { state.chooseImport() })
+        return menu
+    }
+}
+
+private final class DockMenuItem: NSMenuItem {
+    private let handler: @MainActor () -> Void
+    init(_ title: String, handler: @escaping @MainActor () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+    required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    @objc private func run() { MainActor.assumeIsolated { handler() } }
+}
+
+#if DEBUG
+/// Debug-only launch arguments that open a specific surface, so every screen can be captured
+/// without clicking: `--place work|personal|all|device|device:<name>|folder:<name>`, `--select <title>`,
+/// `--page transcript`, `--inspector`, `--open-settings <pane>`, `--open-window <id>`,
+/// `--show-notes`, `--show-setup`, `--simulate-recording <title> [--demo-captions]`.
+private struct DebugLaunchActions: ViewModifier {
+    @ObservedObject var state: AppState
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
+    @State private var applied = false
+    func body(content: Content) -> some View {
+        content.onChange(of: state.isReady) { _, ready in
+            guard ready, !applied else { return }
+            applied = true
+            if let place = LaunchOptions.value(after: "--place") {
+                switch place {
+                case "work": state.place = .section(.work)
+                case "personal": state.place = .section(.personal)
+                case "device": state.place = state.devices.sessions.first.map { .device($0.id) } ?? .section(.all)
+                default:
+                    if place.hasPrefix("device:"), let device = state.devices.sessions.first(where: { $0.device.name == place.dropFirst(7) }) { state.place = .device(device.id) }
+                    else if place.hasPrefix("folder:"), let folder = state.folders.first(where: { $0.name == place.dropFirst(7) }) { state.place = .folder(folder.id) }
+                    else { state.place = .section(.all) }
+                }
+            }
+            if let title = LaunchOptions.value(after: "--select") { state.selectedID = state.meetings.first { $0.title == title }?.id }
+            if LaunchOptions.value(after: "--page") == "transcript" { state.pageMode = .transcript }
+            if CommandLine.arguments.contains("--inspector") { LaunchOptions.defaults.set(true, forKey: "isInspectorPresented") }
+            if let pane = LaunchOptions.value(after: "--open-settings") {
+                LaunchOptions.defaults.set(pane, forKey: "settingsPane")
+                openSettings()
+            }
+            if let id = LaunchOptions.value(after: "--open-window") { openWindow(id: id) }
+            if CommandLine.arguments.contains("--show-notes") { state.showFloatingNotes(focus: state.selectedID) }
+            if CommandLine.arguments.contains("--show-setup") { state.requestAddDevice() }
+            DeviceDemo.apply(to: state)
+            PhoneDemo.apply(to: state)
+            FloatingNotesDemo.apply(to: state)
+            if let query = LaunchOptions.value(after: "--search") { state.search = query }
+            switch LaunchOptions.value(after: "--sheet") {
+            case "history": state.activeSheet = .versionHistory
+            case "timing": state.activeSheet = .adjustTiming(nil)
+            case "corrections": state.activeSheet = .reviewCorrections
+            default: break
+            }
+            // Fakes the recording state without touching the microphone, for screenshots. A title the
+            // library doesn't have yet becomes a new conversation; `--demo-captions` scripts captions.
+            if let title = LaunchOptions.value(after: "--simulate-recording") {
+                let id = state.meetings.first(where: { $0.title == title })?.id ?? state.newMeeting(title: title)
+                state.selectedID = id
+                state.recordingID = id
+                state.recordingStartedAt = Date().addingTimeInterval(-761)
+                state.update(id) { $0.status = .recording }
+                if DemoCaptions.isRequested { state.startDemoCaptions(id) }
+                if !CommandLine.arguments.contains("--no-panel") { state.showNotes(for: id) }
+            }
+            // Plays silently, so the player can be seen without sound.
+            if CommandLine.arguments.contains("--play-muted"), let meeting = state.selectedMeeting, let track = meeting.tracks.first {
+                Task {
+                    guard let url = await state.audioURL(for: track, meetingID: meeting.id) else { return }
+                    state.playback.play(url: url, at: 9, trackID: track.id, meetingID: meeting.id)
+                    state.playback.mute()
+                }
+            }
+        }
+    }
+}
+
+@MainActor
+enum WindowSnapshot {
+    static func write(to directory: URL) {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let listing = NSApp.windows.map { "\($0.title.isEmpty ? "untitled" : $0.title) visible=\($0.isVisible) \(Int($0.frame.width))x\(Int($0.frame.height))" }
+        try? listing.joined(separator: "\n").write(to: directory.appendingPathComponent("windows.txt"), atomically: true, encoding: .utf8)
+        for (index, window) in NSApp.windows.enumerated() where window.isVisible && window.frame.width > 50 {
+            guard let view = window.contentView?.superview ?? window.contentView else { continue }
+            let bounds = view.bounds
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else { continue }
+            view.cacheDisplay(in: bounds, to: rep)
+            let name = (window.title.isEmpty ? "window-\(index)" : window.title).replacingOccurrences(of: "/", with: "-")
+            try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("\(name).png"))
+        }
+    }
+}
+#endif
+
+extension View {
+    func debugLaunchActions(state: AppState) -> some View {
+        #if DEBUG
+        modifier(DebugLaunchActions(state: state))
+        #else
+        self
+        #endif
+    }
 }

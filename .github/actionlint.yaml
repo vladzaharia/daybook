@@ -1,0 +1,6 @@
+# actionlint 1.7.12 predates the `xcode-27` label. It is GitHub-hosted (the Xcode 27 runner image,
+# actions/runner-images#14404), not self-hosted: actionlint's only way to accept an extra label is
+# this list. Drop the entry once actionlint knows the label. Never add a self-hosted runner here.
+self-hosted-runner:
+  labels:
+    - xcode-27

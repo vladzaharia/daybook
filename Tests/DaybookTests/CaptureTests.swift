@@ -158,6 +158,9 @@ final class PCMTrackWriterTests: XCTestCase {
         let track = try XCTUnwrap(outcome.track)
         XCTAssertNil(outcome.error)
         XCTAssertEqual(track.duration, 0.4, accuracy: 1.0 / 48_000)
+        // The padded gap starts a new clock segment.
+        XCTAssertEqual(track.clockAnchors?.last?.resync, true)
+        XCTAssertEqual(track.clockAnchors?.last?.frame, 14_400)
         let file = try AVAudioFile(forReading: track.url)
         let read = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))!
         try file.read(into: read)
@@ -166,19 +169,48 @@ final class PCMTrackWriterTests: XCTestCase {
         XCTAssertEqual(read.floatChannelData![0][16_000], 0.25, accuracy: 0.0001)
     }
 
-    func testFormatChangePreservesPartialRecording() async throws {
+    /// A device switch (for example AirPods changing profile) no longer ends the recording: the new
+    /// format is converted to the file's, and the clock restarts with a resync anchor.
+    func testFormatChangeIsConvertedAndRecordingContinues() async throws {
         let directory = try temporaryDirectory()
         let manifest = CaptureSessionManifest(id: UUID(), startedAt: Date(), hostTimeSeconds: 50, includeSystemAudio: false)
-        let failure = expectation(description: "format change reported")
-        let writer = PCMTrackWriter(role: .microphone, directory: directory, manifest: manifest) { _ in failure.fulfill() }
+        let writer = PCMTrackWriter(role: .microphone, directory: directory, manifest: manifest) { XCTFail($0.localizedDescription) }
         writer.append(audio(), hostTimeSeconds: 50)
-        writer.append(audio(rate: 44_100), hostTimeSeconds: 50.1)
+        writer.append(audio(frames: 4_410, rate: 44_100), hostTimeSeconds: 50.1)
+        writer.append(audio(frames: 4_410, rate: 44_100), hostTimeSeconds: 50.2)
         let outcome = await writer.finish()
-        await fulfillment(of: [failure], timeout: 2)
         let track = try XCTUnwrap(outcome.track)
-        XCTAssertNotNil(outcome.error)
-        XCTAssertEqual(track.frameCount, 4_800)
-        XCTAssertEqual(try AVAudioFile(forReading: track.url).length, 4_800)
+        XCTAssertNil(outcome.error)
+        XCTAssertEqual(track.sampleRate, 48_000)
+        // Two 0.1 s buffers at 44.1 kHz become 9 600 frames at 48 kHz once the converter is drained.
+        XCTAssertEqual(Double(track.frameCount), 14_400, accuracy: 2)
+        XCTAssertEqual(try AVAudioFile(forReading: track.url).length, track.frameCount)
+        XCTAssertTrue(track.clockAnchors?.contains { $0.resync == true } == true)
+        XCTAssertFalse(track.notes?.isEmpty ?? true)
+    }
+
+    /// A device clock 900 ppm fast accumulates more than 100 ms of drift over two minutes. The old
+    /// cumulative check stopped the recording; drift must neither stop it nor insert silence.
+    func testSlowClockDriftNeitherStopsRecordingNorInsertsSilence() async throws {
+        for drift in [900e-6, -900e-6] {
+            let directory = try temporaryDirectory()
+            let manifest = CaptureSessionManifest(id: UUID(), startedAt: Date(), hostTimeSeconds: 10, includeSystemAudio: false)
+            let writer = PCMTrackWriter(role: .systemAudio, directory: directory, manifest: manifest) { XCTFail($0.localizedDescription) }
+            let buffers = 1_300
+            for index in 0..<buffers {
+                writer.append(audio(frames: 800, rate: 8_000), hostTimeSeconds: 10 + Double(index) * 0.1 / (1 + drift))
+                if index % 100 == 99 { await writer.waitUntilWritten() }
+            }
+            let outcome = await writer.finish()
+            let track = try XCTUnwrap(outcome.track)
+            XCTAssertNil(outcome.error)
+            XCTAssertEqual(track.frameCount, Int64(buffers * 800))
+            let anchors = try XCTUnwrap(track.clockAnchors)
+            // About one anchor per second of host time.
+            XCTAssertTrue((115...132).contains(anchors.count), "\(anchors.count) anchors")
+            XCTAssertFalse(anchors.contains { $0.resync == true })
+            XCTAssertEqual(track.clock.driftPPM, drift * 1e6, accuracy: 5)
+        }
     }
 
     func testAudioBufferCopyOwnsItsSamples() {

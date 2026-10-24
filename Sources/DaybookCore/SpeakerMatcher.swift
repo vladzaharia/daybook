@@ -113,3 +113,58 @@ public enum SpeakerMatcher {
         !vector.isEmpty && vector.allSatisfy(\.isFinite) && vector.contains { $0 != 0 }
     }
 }
+
+/// Speech two recordings both captured: `weight` words that one recording labelled
+/// `sourceSpeakerID` while the meeting already attributes them to `targetSpeakerID`.
+public struct SpeakerCooccurrence: Equatable, Sendable {
+    public var sourceSpeakerID: String
+    public var targetSpeakerID: String
+    public var weight: Double
+    public init(sourceSpeakerID: String, targetSpeakerID: String, weight: Double) {
+        self.sourceSpeakerID = sourceSpeakerID; self.targetSpeakerID = targetSpeakerID; self.weight = weight
+    }
+}
+
+extension SpeakerMatcher {
+    /// Maps one recording's speaker labels onto existing speakers from shared speech rather than
+    /// voice embeddings, which don't transfer well between a laptop microphone and a room recorder.
+    /// A label matches when one speaker accounts for at least `minimumShare` of its shared words
+    /// and there are at least `minimumWeight` of them. If several labels from the recording claim
+    /// the same speaker, only the one with clearly the most shared words keeps it.
+    /// `similarity` reports the share; `runnerUpSimilarity` the next speaker's share.
+    public static func matchByCooccurrence(_ observations: [SpeakerCooccurrence], minimumShare: Double = 0.7,
+                                           minimumWeight: Double = 6) -> [SpeakerMatch] {
+        let configuration = SpeakerMatchingConfiguration(minimumSimilarity: minimumShare, minimumMargin: 0)
+        let grouped = Dictionary(grouping: observations.filter { $0.weight.isFinite && $0.weight > 0 }, by: \.sourceSpeakerID)
+        var results = grouped.keys.sorted().map { source -> SpeakerMatch in
+            var totals: [String: Double] = [:]
+            for observation in grouped[source]! { totals[observation.targetSpeakerID, default: 0] += observation.weight }
+            let total = totals.values.reduce(0, +)
+            let ranked = totals.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            let best = ranked[0]
+            var match = SpeakerMatch(sourceSpeakerID: source, candidateSpeakerID: best.key, similarity: best.value / total,
+                                     runnerUpSimilarity: ranked.dropFirst().first.map { $0.value / total }, status: .matched,
+                                     reason: "Matched because both recordings heard the same words from this speaker.",
+                                     configuration: configuration, createdAt: Date(timeIntervalSince1970: 0))
+            if total < minimumWeight || best.value / total < minimumShare {
+                match.status = .belowThreshold
+                match.reason = "Too little shared speech, or it was split between speakers."
+            } else {
+                match.targetSpeakerID = best.key
+            }
+            return match
+        }
+        let weights = Dictionary(grouped.map { ($0.key, $0.value.reduce(0) { $0 + $1.weight }) }, uniquingKeysWith: +)
+        for target in Set(results.compactMap(\.targetSpeakerID)) {
+            let contenders = results.indices.filter { results[$0].targetSpeakerID == target }
+                .sorted { (weights[results[$0].sourceSpeakerID] ?? 0) > (weights[results[$1].sourceSpeakerID] ?? 0) }
+            guard contenders.count > 1 else { continue }
+            let clear = (weights[results[contenders[0]].sourceSpeakerID] ?? 0) >= 2 * (weights[results[contenders[1]].sourceSpeakerID] ?? 0)
+            for index in contenders.dropFirst(clear ? 1 : 0) {
+                results[index].targetSpeakerID = nil; results[index].status = .conflictingAssignment
+                results[index].reason = "Another speaker label from this recording shares speech with that speaker. Keep these labels separate for review."
+            }
+        }
+        return results
+    }
+}

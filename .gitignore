@@ -5,3 +5,12 @@ dist/
 .DS_Store
 *.xcuserstate
 .local/
+
+# iPhone app: the Xcode project is generated from Apps/iOS/project.yml (scripts/build-ios.sh).
+Apps/iOS/Daybook.xcodeproj/
+Apps/iOS/Config/Signing.local.xcconfig
+xcuserdata/
+
+# Mac app: the Xcode project is generated from Apps/macOS/project.yml (scripts/build-app.sh).
+Apps/macOS/DaybookMac.xcodeproj/
+Apps/macOS/Config/Signing.local.xcconfig

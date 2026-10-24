@@ -1,7 +1,9 @@
 import Foundation
 
 public struct TrackAlignment: Codable, Equatable, Identifiable, Sendable {
-    public enum Method: String, Codable, Sendable { case reference, provided, anchors, unaligned }
+    /// `audio`: measured from the recordings' sound. `timestamps`: placed only by wall-clock start
+    /// times, the weakest evidence. Older libraries only contain the first four.
+    public enum Method: String, Codable, Sendable { case reference, provided, anchors, unaligned, audio, timestamps }
     public var id: UUID { trackID }
     public var trackID: UUID
     public var method: Method
@@ -10,91 +12,64 @@ public struct TrackAlignment: Codable, Equatable, Identifiable, Sendable {
     public var matchedAnchors: Int
     public var residual: TimeInterval?
     public var explanation: String
+    /// How sure the timing is (0–1), when the method measures it.
+    public var confidence: Double?
+    /// The recording the timing was measured against, when not the timeline itself.
+    public var referenceTrackID: UUID?
     public init(trackID: UUID, method: Method, offset: TimeInterval = 0, rate: Double = 1,
-                matchedAnchors: Int = 0, residual: TimeInterval? = nil, explanation: String = "") {
+                matchedAnchors: Int = 0, residual: TimeInterval? = nil, explanation: String = "",
+                confidence: Double? = nil, referenceTrackID: UUID? = nil) {
         self.trackID = trackID; self.method = method; self.offset = offset; self.rate = rate
         self.matchedAnchors = matchedAnchors; self.residual = residual; self.explanation = explanation
+        self.confidence = confidence; self.referenceTrackID = referenceTrackID
     }
+    /// Clock drift against the meeting timeline in parts per million.
+    public var driftPPM: Double { (rate - 1) * 1_000_000 }
 }
 
 public struct FusionResult: Sendable {
     public var segments: [TranscriptSegment]
     public var alignments: [TrackAlignment]
+    /// What fusion did per source; stored on the meeting by `Meeting.applyFusion`.
+    public var summary: FusionSummary? = nil
+    /// Speakers fusion introduced (the person recording); `applyFusion` adds those not yet present.
+    public var addedSpeakers: [Speaker] = []
     public var unalignedTrackIDs: [UUID] { alignments.filter { $0.method == .unaligned }.map(\.trackID) }
 }
 
-/// Conservative text-anchor alignment. Raw transcripts are never mutated or discarded.
+/// Places every recording's transcript on one meeting timeline and fuses them into a single
+/// transcript. Raw transcripts are never mutated or discarded.
 /// Clock transforms use meetingTime = trackTime * rate + offset.
+///
+/// Timing, per recording, in order of preference: an offset known from capture or set by the
+/// person (`provided`); an audio alignment measured against an already placed recording
+/// (`audio`); distinct shared phrases (`anchors`); wall-clock start times (`timestamps`).
+/// Otherwise the recording stays out of the unified transcript (`unaligned`).
+///
+/// Wording: words from all placed recordings are aligned in time and text (a word transition
+/// network, as in ROVER) and voted on, weighted by each source's role for that speech, its
+/// signal-to-noise ratio, and recognition confidence. Speech heard by several recordings appears
+/// once; provenance lists every recording and which words each supported. See `docs/alignment.md`.
 public enum TranscriptFusion {
     public static func fuse(_ transcripts: [TrackTranscript], tracks: [RecordingTrack] = []) -> FusionResult {
-        // Keep the initial usable source as the timeline origin when attaching another recording.
-        // Replacing a source's model run must not change that source's position in the meeting.
-        var sourceOrder: [UUID] = []
-        for transcript in transcripts where !sourceOrder.contains(transcript.trackID) { sourceOrder.append(transcript.trackID) }
-        let grouped = Dictionary(grouping: transcripts, by: \.trackID)
-        let latest = sourceOrder.compactMap { id in grouped[id]?.max { $0.createdAt < $1.createdAt } }
-        func explicitOffset(_ transcript: TrackTranscript) -> TimeInterval? {
-            let value = transcript.knownOffset ?? tracks.first(where: { $0.id == transcript.trackID })?.offset
-            return value?.isFinite == true ? value : nil
-        }
-        let ordered = latest.filter { !valid($0.segments).isEmpty } + latest.filter { valid($0.segments).isEmpty }
-        guard let reference = ordered.first else { return FusionResult(segments: [], alignments: []) }
-        let referenceOffset = explicitOffset(reference) ?? 0
-        let referenceSegments = valid(reference.segments)
-        var combined = referenceSegments.map { transformed($0, offset: referenceOffset, rate: 1) }
-        var alignments = [TrackAlignment(trackID: reference.trackID, method: .reference,
-                                        offset: referenceOffset, explanation: "Reference recording for the meeting timeline.")]
-        for transcript in ordered.dropFirst() {
-            let segments = valid(transcript.segments)
-            let alignment: TrackAlignment
-            if let offset = explicitOffset(transcript) {
-                alignment = TrackAlignment(trackID: transcript.trackID, method: .provided, offset: offset,
-                                           explanation: "Timing established by recording capture or manual alignment. Short replies and differing wording remain separate.")
-            } else {
-                alignment = estimate(segments, reference: referenceSegments, trackID: transcript.trackID, referenceOffset: referenceOffset)
-            }
-            alignments.append(alignment)
-            guard alignment.method != .unaligned else { continue }
-            for segment in segments {
-                let candidate = transformed(segment, offset: alignment.offset, rate: alignment.rate)
-                let candidateWords = tokens(candidate.text)
-                // Similar words elsewhere in a meeting are distinct utterances. Both time and text must agree.
-                let match = combined.indices.filter { index in
-                    let existing = combined[index]
-                    guard !existing.provenance.contains(where: { $0.trackID == segment.trackID }) else { return false }
-                    let overlap = min(existing.end, candidate.end) - max(existing.start, candidate.start)
-                    let shorterDuration = max(0.1, min(existing.end - existing.start, candidate.end - candidate.start))
-                    guard candidateWords.count >= 4, overlap / shorterDuration >= 0.45,
-                          abs(existing.start - candidate.start) <= 2.0 else { return false }
-                    // Short acknowledgments can be different people replying at nearly the same time.
-                    // Lexical differences (especially negation or an extra clause) are evidence, even
-                    // when an ASR confidence estimate favors one version. Keep those passages intact.
-                    return tokens(existing.text) == candidateWords
-                }.min { abs(combined[$0].start - candidate.start) < abs(combined[$1].start - candidate.start) }
-                if let index = match {
-                    let old = combined[index]
-                    var preferred = (candidate.confidence ?? 0.5) > (old.confidence ?? 0.5) ? candidate : old
-                    preferred.provenance = old.provenance + candidate.provenance
-                    combined[index] = preferred
-                } else { combined.append(candidate) }
-            }
-        }
-        combined.sort { $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start }
-        return FusionResult(segments: combined, alignments: alignments)
+        fuse(transcripts, tracks: tracks, inputs: FusionInputs())
     }
 
-    private static func valid(_ segments: [TranscriptSegment]) -> [TranscriptSegment] {
+    /// Fusion with audio alignments, signal quality, start dates, and speakers.
+    public static func fuse(_ transcripts: [TrackTranscript], tracks: [RecordingTrack], inputs: FusionInputs) -> FusionResult {
+        MultiSourceFusion(transcripts: transcripts, tracks: tracks, inputs: inputs).run()
+    }
+
+    /// Fuses everything a meeting stores: transcripts, tracks, measured audio alignments, speakers,
+    /// and renamed speakers. Apply the result with `Meeting.applyFusion`.
+    public static func fuse(meeting: Meeting, signalQuality: [UUID: SignalQualityProfile] = [:],
+                            recordingStartDates: [UUID: Date] = [:], options: FusionOptions = .init()) -> FusionResult {
+        fuse(meeting.transcripts, tracks: meeting.tracks,
+             inputs: FusionInputs(meeting: meeting, signalQuality: signalQuality, recordingStartDates: recordingStartDates, options: options))
+    }
+
+    static func valid(_ segments: [TranscriptSegment]) -> [TranscriptSegment] {
         segments.filter { $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end >= $0.start && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    }
-
-    private static func transformed(_ segment: TranscriptSegment, offset: Double, rate: Double) -> TranscriptSegment {
-        var copy = segment
-        copy.start = segment.start * rate + offset; copy.end = segment.end * rate + offset
-        if copy.provenance.isEmpty {
-            copy.provenance = [SegmentProvenance(trackID: segment.trackID, segmentID: segment.id, start: segment.start,
-                                                 end: segment.end, text: segment.text, confidence: segment.confidence)]
-        }
-        return copy
     }
 
     private struct Anchor { var source: Double; var reference: Double }
@@ -110,8 +85,10 @@ public enum TranscriptFusion {
             qualifies = words.count >= 4 && words.joined(separator: " ").count >= 20
         }
     }
-    private static func estimate(_ source: [TranscriptSegment], reference: [TranscriptSegment], trackID: UUID,
-                                 referenceOffset: Double) -> TrackAlignment {
+    /// Text-anchor timing of `source` against `reference` segments whose times are already on the
+    /// meeting timeline less `referenceOffset`.
+    static func estimate(_ source: [TranscriptSegment], reference: [TranscriptSegment], trackID: UUID,
+                         referenceOffset: Double) -> TrackAlignment {
         let failure = TrackAlignment(trackID: trackID, method: .unaligned,
                                      explanation: "Insufficient consistent shared phrases. Original transcript retained separately; set a verified time offset to combine it.")
         let candidates = reference.map(AnchorText.init).filter(\.qualifies)
@@ -168,7 +145,7 @@ public enum TranscriptFusion {
                               explanation: "Aligned using \(fit.inliers.count) distinct shared phrases; clock drift estimated from their timestamps. Short replies and differing wording remain separate.")
     }
 
-    private static func tokens(_ text: String) -> [String] {
+    static func tokens(_ text: String) -> [String] {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
     }

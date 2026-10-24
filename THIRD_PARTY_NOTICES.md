@@ -4,13 +4,91 @@ Daybook links native open-source libraries. Package.resolved records the exact d
 
 | Library | Purpose | License / source |
 | --- | --- | --- |
-| WhisperKit 0.18.0 | In-process Core ML speech recognition | MIT · https://github.com/argmaxinc/WhisperKit |
-| FluidAudio 0.17.7 | In-process speaker diarization | Apache-2.0 · https://github.com/FluidInference/FluidAudio |
-| MLX Swift / MLX Swift LM | In-process Metal language-model inference | MIT · https://github.com/ml-explore/mlx-swift and https://github.com/ml-explore/mlx-swift-lm |
-| Swift Transformers | Local tokenizers and explicit model downloads | Apache-2.0 · https://github.com/huggingface/swift-transformers |
+| argmax-oss-swift 1.1.1 (WhisperKit) | In-process Core ML speech recognition | MIT · https://github.com/argmaxinc/argmax-oss-swift |
+| FluidAudio 0.17.7 | In-process speech recognition (Parakeet) and speaker diarization | Apache-2.0 · https://github.com/FluidInference/FluidAudio |
+| MLX Swift 0.32.3 / MLX Swift LM 3.32.3 | In-process Metal language-model inference and constrained (guided) generation | MIT · https://github.com/ml-explore/mlx-swift and https://github.com/ml-explore/mlx-swift-lm |
+| XGrammar 0.1.30 (vendored in MLX Swift LM) | JSON-schema constrained decoding | Apache-2.0 · https://github.com/mlc-ai/xgrammar |
+| Swift Transformers 1.1.6 | Language-model tokenizers and explicit model downloads | Apache-2.0 · https://github.com/huggingface/swift-transformers |
 | Swift Jinja | Chat prompt formatting | Apache-2.0 · https://github.com/huggingface/swift-jinja |
 | Swift Numerics, Collections, Argument Parser | Supporting Swift components | Apache-2.0 with Swift exception · https://github.com/apple |
 
-Model weights are downloaded separately, not bundled in the app. Their licenses are separate from library licenses. Model repository/revision details are in the catalog and installed model manifests. Qwen 2.5 1.5B and 7B are Apache-2.0; the 3B variant uses the Qwen Research license. Consult the corresponding model card before redistribution or commercial use. Whisper model weights are MIT. The diarization model repository carries Apache-2.0 metadata; its upstream components have their own model cards. No right to redistribute an unreviewed model is implied by the application code.
+Apple's Foundation Models framework is part of macOS and iOS and is not bundled. Daybook uses it on the device only, under Apple's acceptable use requirements: https://developer.apple.com/apple-intelligence/acceptable-use-requirements-for-the-foundation-models-framework/
 
-Daybook is an independent application, unaffiliated with Anker, Soundcore, Granola, Apple, Argmax, FluidInference, or model publishers.
+## Model notices
+
+**Parakeet Ultra and Parakeet Redux** (speech recognition). Parakeet Ultra and Parakeet Redux by Moondream (https://huggingface.co/moondream/parakeet-ultra, https://huggingface.co/moondream/parakeet-redux), post-trained from NVIDIA's parakeet-tdt-0.6b-v3 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), all licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/). Changes: converted to Core ML by FluidInference (https://huggingface.co/FluidInference/parakeet-ultra-coreml, https://huggingface.co/FluidInference/parakeet-redux-coreml), with an int8 (Ultra) or ternary (Redux) encoder and the v3 preprocessor and vocabulary; Daybook merges the model's sub-word timings into words. The weights are provided as is, without warranties.
+
+**Nemotron 3 Diarization** (speaker detection). Nemotron 3 Diarization by NVIDIA Corporation (https://huggingface.co/nvidia/Nemotron-3-Diarization), converted to Core ML by Fluid Inference (https://huggingface.co/FluidInference/nemotron-3-diarization-coreml), both under the OpenMDW License Agreement, version 1.1 (OpenMDW-1.1, https://openmdw.ai/license/1-1/). The Hugging Face repositories ship no license file, so the agreement's full text follows.
+
+```text
+OpenMDW License Agreement, version 1.1 (OpenMDW-1.1)
+
+By exercising rights granted to you under this agreement, you accept and agree
+to its terms.
+
+As used in this agreement, "Model Materials" means the materials provided to
+you under this agreement, consisting of: (1) one or more machine learning
+models (including architecture and parameters); and (2) all related artifacts
+(including associated data, documentation and software) that are provided to
+you hereunder.
+
+Subject to your compliance with this agreement, permission is hereby granted,
+free of charge, to deal in the Model Materials without restriction, including
+under all copyright, patent, database, and trade secret rights included or
+embodied therein.
+
+If you distribute any portion of the Model Materials, you shall retain in your
+distribution (1) a copy of this agreement, and (2) all copyright notices and
+other notices of origin included in the Model Materials that are applicable to
+your distribution.
+
+If you file, maintain, or voluntarily participate in a lawsuit against any
+person or entity asserting that the Model Materials directly or indirectly
+infringe any patent or copyright, then all rights and grants made to you
+hereunder are terminated, unless that lawsuit was in response to a
+corresponding lawsuit first brought against you.
+
+This agreement does not impose any restrictions or obligations with respect to
+any use, modification, or sharing of any outputs generated by using the Model
+Materials.
+
+THE MODEL MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, NONINFRINGEMENT, ACCURACY, OR THE
+ABSENCE OF LATENT OR OTHER DEFECTS OR ERRORS, WHETHER OR NOT DISCOVERABLE, ALL
+TO THE GREATEST EXTENT PERMISSIBLE UNDER APPLICABLE LAW.
+
+YOU ARE SOLELY RESPONSIBLE FOR (1) CLEARING RIGHTS OF OTHER PERSONS THAT MAY
+APPLY TO THE MODEL MATERIALS OR ANY USE THEREOF, INCLUDING WITHOUT LIMITATION
+ANY PERSON'S COPYRIGHTS OR OTHER RIGHTS INCLUDED OR EMBODIED IN THE MODEL
+MATERIALS; (2) OBTAINING ANY NECESSARY CONSENTS, PERMISSIONS OR OTHER RIGHTS
+REQUIRED FOR ANY USE OF THE MODEL MATERIALS; OR (3) PERFORMING ANY DUE
+DILIGENCE OR UNDERTAKING ANY OTHER INVESTIGATIONS INTO THE MODEL MATERIALS OR
+ANYTHING INCORPORATED OR EMBODIED THEREIN.
+
+IN NO EVENT SHALL THE PROVIDERS OF THE MODEL MATERIALS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE MODEL MATERIALS, THE
+USE THEREOF OR OTHER DEALINGS THEREIN.
+```
+
+## Notices carried with vendored code
+
+**argmax-oss-swift.** Portions of Argmax OSS (Sources/ArgmaxCore/External) are derived from swift-transformers, Copyright 2022 Hugging Face SAS, modified by Argmax, Inc., and licensed under the Apache License, Version 2.0.
+
+**XGrammar.** XGrammar, Copyright (c) 2024 by XGrammar Contributors. Licensed under the Apache License, Version 2.0. It includes DLPack (Copyright (c) 2017 by Contributors, Apache License 2.0) and picojson, whose license follows.
+
+**picojson.** Copyright 2009-2010 Cybozu Labs, Inc. Copyright 2011-2014 Kazuho Oku. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Models
+
+Model weights are downloaded separately, not bundled in the app. Their licenses are separate from library licenses, and each catalog entry declares its own (About Daybook and Settings › Models › Acknowledgements on the Mac, Settings › About › Acknowledgements on the iPhone list them). Model repository/revision details are in the catalog and installed model manifests. Gemma 4 (Google DeepMind), Qwen 3.5 and 3.6, and Qwen 2.5 1.5B and 7B are Apache-2.0; Qwen 2.5 3B uses the Qwen Research License and is labelled non-commercial. Consult the corresponding model card before redistribution or commercial use. Whisper model weights are MIT. Parakeet Ultra and Redux and Community-1 are CC BY 4.0, Nemotron 3 Diarization is OpenMDW-1.1, and Sortformer 2.1 is under the NVIDIA Open Model License (see Model notices above). Apple Foundation Models is part of macOS and isn't downloaded. No right to redistribute an unreviewed model is implied by the application code.
+
+Daybook is an independent application, unaffiliated with Anker, Soundcore, Granola, Apple, Argmax, FluidInference, Google, Alibaba, or model publishers.

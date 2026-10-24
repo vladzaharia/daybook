@@ -3,17 +3,22 @@
 <plist version="1.0"><dict>
 <key>CFBundleName</key><string>Daybook</string>
 <key>CFBundleDisplayName</key><string>Daybook</string>
-<key>CFBundleIdentifier</key><string>local.daybook.app</string>
-<key>CFBundleExecutable</key><string>Daybook</string>
+<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>LSMinimumSystemVersion</key><string>15.0</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+<key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSBluetoothAlwaysUsageDescription</key><string>Daybook connects to your Soundcore Work recorder to show device status and import recordings you choose.</string>
-<key>NSMicrophoneUsageDescription</key><string>Daybook records your voice during meetings you choose to capture. Audio is processed locally and can sync through iCloud when you enable it.</string>
-<key>NSAudioCaptureUsageDescription</key><string>Daybook records meeting audio from your Mac so both sides of a conversation can be transcribed locally.</string>
-<key>NSScreenCaptureUsageDescription</key><string>Daybook uses macOS system audio capture for online meetings. No screen video is saved.</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>Daybook connects to your Soundcore Work to import its recordings.</string>
+<key>NSMicrophoneUsageDescription</key><string>Daybook records your voice in the conversations you record.</string>
+<key>NSAudioCaptureUsageDescription</key><string>Daybook records call audio so both sides of a conversation are transcribed.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>Daybook shows live captions while it records.</string>
+<key>NSScreenCaptureUsageDescription</key><string>Daybook records call audio. No screen video is saved.</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 <key>CFBundleIconFile</key><string>Daybook.icns</string>
+<key>NSAccentColorName</key><string>AccentColor</string>
+<key>NSLocalNetworkUsageDescription</key><string>Daybook finds your iPhone on this network to record together.</string>
+<key>NSBonjourServices</key><array><string>_daybook-link._tcp</string></array>
+<key>DaybookICloudContainerIdentifier</key><string>$(DAYBOOK_ICLOUD_CONTAINER)</string>
 </dict></plist>

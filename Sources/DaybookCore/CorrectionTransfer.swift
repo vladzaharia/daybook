@@ -40,6 +40,17 @@ enum CorrectionTransfer {
                 let candidate = segments[index]
                 return identities.contains(candidate.id) || !identities.isDisjoint(with: candidate.provenance.map(\.segmentID))
             }
+            if exact.count > 1 {
+                // A fused passage keeps the identity of its first source's segment, while another
+                // recording's segment can be cited by several passages. Prefer the passage with the
+                // corrected identity, then one whose cited source times clearly overlap the most.
+                let sameID = exact.filter { segments[$0].id == original.id }
+                if sameID.count == 1 { return Proposal(original: original, candidates: sameID, reviewCandidates: exact) }
+                let scored = exact.map { ($0, sharedSourceTime(original.provenance, segments[$0].provenance)) }.sorted { $0.1 > $1.1 }
+                if scored[0].1 > 0, scored[0].1 >= 2 * scored[1].1 {
+                    return Proposal(original: original, candidates: [scored[0].0], reviewCandidates: exact)
+                }
+            }
             if !exact.isEmpty { return Proposal(original: original, candidates: exact, reviewCandidates: exact) }
             let timed = segments.indices.filter { index in
                 let candidateSources = segments[index].provenance.isEmpty ? [provenance(segments[index])] : segments[index].provenance
@@ -79,6 +90,13 @@ enum CorrectionTransfer {
             output[target].text = proposal.original.text
         }
         return Result(segments: output, issues: issues)
+    }
+
+    /// Seconds of the same source segments that both passages cite.
+    private static func sharedSourceTime(_ old: [SegmentProvenance], _ new: [SegmentProvenance]) -> Double {
+        old.reduce(0) { total, a in
+            total + new.filter { $0.segmentID == a.segmentID }.reduce(0) { $0 + max(0, min(a.end, $1.end) - max(a.start, $1.start)) }
+        }
     }
 
     private static func provenance(_ segment: TranscriptSegment) -> SegmentProvenance {

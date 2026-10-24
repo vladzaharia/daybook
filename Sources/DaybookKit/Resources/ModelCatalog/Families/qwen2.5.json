@@ -1,0 +1,297 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "qwen2.5",
+      "name": "Qwen 2.5",
+      "maker": "Qwen team, Alibaba Cloud",
+      "engine": "mlxLanguage",
+      "roles": [
+        "summarization"
+      ],
+      "summary": "Writes summaries and notes.",
+      "homepage": "https://huggingface.co/collections/Qwen/qwen25",
+      "license": {
+        "id": "Apache-2.0",
+        "name": "Apache License 2.0",
+        "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/LICENSE",
+        "allowsCommercialUse": true,
+        "attribution": "Qwen2.5 Instruct by the Qwen team, Alibaba Cloud, under the Apache License 2.0. MLX 4-bit conversions by mlx-community."
+      },
+      "variants": [
+        {
+          "id": "1.5b-4bit",
+          "name": "Qwen 2.5 · 1.5B",
+          "detail": "Fast. Check details and who said what.",
+          "releaseDate": "2024-09-17",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "contextLength": 32768,
+            "structuredOutput": false,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "qwen2"
+          },
+          "supersededBy": "gemma-4/e2b-4bit",
+          "homepage": "https://huggingface.co/mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+          "revisions": [
+            {
+              "id": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
+              "releaseDate": "2024-09-18",
+              "summary": "Upload folder using huggingface_hub (#1)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+                  "revision": "8b403126fc14f14cfc99bb4cfa72ecbc129ea677",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "added_tokens.json",
+                      "size": 605,
+                      "gitOID": "482ced4679301bf287ebb310bdd1790eb4514232"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 784,
+                      "gitOID": "d2741b5d6d48fa6f2ada841a2d6deb8a20137e5f"
+                    },
+                    {
+                      "path": "model.safetensors",
+                      "size": 868628559,
+                      "sha256": "0979f33d1bc58afcf696d13f57977644e7b11a6f0eec3e631d8e9463d18c0717"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 51569,
+                      "gitOID": "87eb58d416654c6c0ef987be30f6981a3176ffae"
+                    },
+                    {
+                      "path": "special_tokens_map.json",
+                      "size": 613,
+                      "gitOID": "ac23c0aaa2434523c494330aeb79c58395378103"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 7031673,
+                      "gitOID": "d24314ef7f0afd1b678c2e24c767e19f24f86b0e"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 7308,
+                      "gitOID": "482ccbc1096b0e9400e86e33f189681c2aebdab9"
+                    },
+                    {
+                      "path": "vocab.json",
+                      "size": 2776833,
+                      "gitOID": "4783fe10ac3adce15ac8f358ef5462739852c569"
+                    }
+                  ]
+                }
+              ],
+              "legacy": {
+                "ids": [
+                  "qwen-1.5b"
+                ],
+                "artifactPaths": {
+                  "model": "models/mlx-community/Qwen2.5-1.5B-Instruct-4bit"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "3b-4bit",
+          "name": "Qwen 2.5 · 3B",
+          "detail": "Balanced quality and speed.",
+          "releaseDate": "2024-09-17",
+          "recommendedMemoryGB": 16,
+          "capabilities": {
+            "contextLength": 32768,
+            "structuredOutput": false,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "qwen2"
+          },
+          "supersededBy": "gemma-4/e4b-4bit",
+          "homepage": "https://huggingface.co/mlx-community/Qwen2.5-3B-Instruct-4bit",
+          "revisions": [
+            {
+              "id": "4f83f8f146fdf28b512a06562b671d7af4fab457",
+              "releaseDate": "2024-09-18",
+              "summary": "Upload folder using huggingface_hub (#1)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/Qwen2.5-3B-Instruct-4bit",
+                  "revision": "4f83f8f146fdf28b512a06562b671d7af4fab457",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "added_tokens.json",
+                      "size": 605,
+                      "gitOID": "482ced4679301bf287ebb310bdd1790eb4514232"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 785,
+                      "gitOID": "52de1c37b6e5c5f74d43973c65779cea39b4b7a7"
+                    },
+                    {
+                      "path": "model.safetensors",
+                      "size": 1736293090,
+                      "sha256": "f212cf6fb9923281a09c135e05d43a052ee5ef7121f5b1dc0b0fb2de80f97cfd"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 66290,
+                      "gitOID": "89782d927f12268bc0b4df90e22cb686a017fb22"
+                    },
+                    {
+                      "path": "special_tokens_map.json",
+                      "size": 613,
+                      "gitOID": "ac23c0aaa2434523c494330aeb79c58395378103"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 7031673,
+                      "gitOID": "d24314ef7f0afd1b678c2e24c767e19f24f86b0e"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 7308,
+                      "gitOID": "482ccbc1096b0e9400e86e33f189681c2aebdab9"
+                    },
+                    {
+                      "path": "vocab.json",
+                      "size": 2776833,
+                      "gitOID": "4783fe10ac3adce15ac8f358ef5462739852c569"
+                    }
+                  ]
+                }
+              ],
+              "legacy": {
+                "ids": [
+                  "qwen-3b"
+                ],
+                "artifactPaths": {
+                  "model": "models/mlx-community/Qwen2.5-3B-Instruct-4bit"
+                }
+              }
+            }
+          ],
+          "license": {
+            "id": "Qwen-Research",
+            "name": "Qwen Research License",
+            "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/LICENSE",
+            "allowsCommercialUse": false,
+            "attribution": "Qwen2.5-3B-Instruct by the Qwen team, Alibaba Cloud, under the Qwen Research License Agreement, which permits research and non-commercial use only. MLX 4-bit conversion by mlx-community."
+          }
+        },
+        {
+          "id": "7b-4bit",
+          "name": "Qwen 2.5 · 7B",
+          "detail": "Best for nuanced conversations.",
+          "releaseDate": "2024-09-16",
+          "recommendedMemoryGB": 16,
+          "capabilities": {
+            "contextLength": 32768,
+            "structuredOutput": false,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "qwen2"
+          },
+          "supersededBy": "gemma-4/12b-4bit",
+          "homepage": "https://huggingface.co/mlx-community/Qwen2.5-7B-Instruct-4bit",
+          "revisions": [
+            {
+              "id": "c26a38f6a37d0a51b4e9a1eb3026530fa35d9fed",
+              "releaseDate": "2024-11-06",
+              "summary": "Update tokenizer_config.json to match Qwen/Qwen2.5-7B-Instruct (#2)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/Qwen2.5-7B-Instruct-4bit",
+                  "revision": "c26a38f6a37d0a51b4e9a1eb3026530fa35d9fed",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "added_tokens.json",
+                      "size": 605,
+                      "gitOID": "482ced4679301bf287ebb310bdd1790eb4514232"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 787,
+                      "gitOID": "f9dd0a512675c68d5d8d18f7e44d9f29141af60d"
+                    },
+                    {
+                      "path": "model.safetensors",
+                      "size": 4284346255,
+                      "sha256": "86110f368236b53cf4c2336f991a85703b17bcc60bb75f292b4002ec0219f071"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 51711,
+                      "gitOID": "669ba50dd3bc0e1ed5f31cd939a54d5dd37c3c85"
+                    },
+                    {
+                      "path": "special_tokens_map.json",
+                      "size": 613,
+                      "gitOID": "ac23c0aaa2434523c494330aeb79c58395378103"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 7031673,
+                      "gitOID": "d24314ef7f0afd1b678c2e24c767e19f24f86b0e"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 7280,
+                      "gitOID": "816372d7ae55ff163ebec9e9d2286c6b462539be"
+                    },
+                    {
+                      "path": "vocab.json",
+                      "size": 2776833,
+                      "gitOID": "4783fe10ac3adce15ac8f358ef5462739852c569"
+                    }
+                  ]
+                }
+              ],
+              "legacy": {
+                "ids": [
+                  "qwen-7b"
+                ],
+                "artifactPaths": {
+                  "model": "models/mlx-community/Qwen2.5-7B-Instruct-4bit"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

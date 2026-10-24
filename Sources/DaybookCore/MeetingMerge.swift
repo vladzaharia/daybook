@@ -43,6 +43,7 @@ public enum MeetingMerge {
         result.notes = notes.text; result.timedNotes = notes.anchors
         result.folderID = choose("folder", local.folderID, remote.folderID, base.map(\.folderID))
         result.templateID = choose("template", local.templateID, remote.templateID, base.map(\.templateID))
+        result.placement = choose("placement", local.placement, remote.placement, base.map(\.placement))
         if local.tags != nil || remote.tags != nil {
             let old = Set(base?.tags ?? []), a = Set(local.tags ?? []), b = Set(remote.tags ?? [])
             let removed = old.subtracting(a).union(old.subtracting(b))
@@ -54,12 +55,29 @@ public enum MeetingMerge {
         result.highlights = items("highlight", local.highlights, remote.highlights, base?.highlights ?? [])
         result.speakerMatches = items("speaker-match", local.speakerMatches ?? [], remote.speakerMatches ?? [], base?.speakerMatches ?? [])
         if result.speakerMatches?.isEmpty == true { result.speakerMatches = nil }
+        // A multipoint link made on one Mac lets the recorder's recording join on another.
+        if local.companions != nil || remote.companions != nil {
+            result.companions = items("companion", local.companions ?? [], remote.companions ?? [], base?.companions ?? [])
+        }
+        if local.sourceSuggestions != nil || remote.sourceSuggestions != nil {
+            result.sourceSuggestions = choose("source-suggestions", local.sourceSuggestions, remote.sourceSuggestions, base.map(\.sourceSuggestions))
+        }
+        // Audio alignments are measurements, not edits: keep every pair, newest measurement wins.
+        var measured: [TrackAudioAlignment] = []
+        for record in (local.audioAlignments ?? []) + (remote.audioAlignments ?? []) {
+            if let index = measured.firstIndex(where: { $0.id == record.id }) {
+                let current = measured[index]
+                if (record.algorithmVersion, record.measuredAt) > (current.algorithmVersion, current.measuredAt) { measured[index] = record }
+            } else { measured.append(record) }
+        }
+        result.audioAlignments = measured.isEmpty ? nil : measured
         // These are one derived view. Mixing a transcript with another run's clock transform
         // would change playback/highlight timing, and its review candidates would be invalid.
         let view = choose("transcript-view", MergedTranscriptView(local), MergedTranscriptView(remote), base.map(MergedTranscriptView.init))
         result.unifiedTranscript = view.segments
         result.alignmentReports = view.alignments
         result.correctionTransferIssues = view.correctionIssues
+        result.fusionSummary = view.fusionSummary
         result.summary = choose("summary", local.summary, remote.summary, base.map(\.summary))
         // Completion is a separate user decision from generated prose; exact task+owner identity survives.
         if var summary = result.summary {
@@ -72,6 +90,9 @@ public enum MeetingMerge {
             }
             result.summary = summary
         }
+        // Requests aren't edits: every device's requests survive, a finished outcome is final, and
+        // the newest claim wins, so two Macs never both keep one.
+        result.processingRequests = ProcessingRequest.merged(local.processingRequests, remote.processingRequests)
         result.status = choose("status", local.status, remote.status, base?.status)
         result.errorMessage = choose("processing-message", local.errorMessage, remote.errorMessage, base.map(\.errorMessage))
         var revisions: [UUID: MeetingRevision] = [:]
@@ -89,9 +110,10 @@ private struct MergedTranscriptView: Codable, Equatable {
     var segments: [TranscriptSegment]
     var alignments: [TrackAlignment]
     var correctionIssues: [CorrectionTransferIssue]?
+    var fusionSummary: FusionSummary?
     init(_ meeting: Meeting) {
         segments = meeting.unifiedTranscript; alignments = meeting.alignmentReports
-        correctionIssues = meeting.correctionTransferIssues
+        correctionIssues = meeting.correctionTransferIssues; fusionSummary = meeting.fusionSummary
     }
 }
 private struct MergedNotes: Codable, Equatable {

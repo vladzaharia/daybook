@@ -17,6 +17,11 @@ public enum MeetingKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Where a conversation shows in the library when the person overrides the automatic choice.
+public enum LibraryPlacement: String, Codable, CaseIterable, Sendable {
+    case work, personal
+}
+
 public enum MeetingStatus: String, Codable, Sendable {
     case draft, recording, imported, transcribing, summarizing, ready, failed
 }
@@ -43,11 +48,57 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// Start time on the common meeting timeline. Nil requires transcript alignment.
     public var offset: TimeInterval?
     public var sha256: String
+    /// Where the recording came from when a recorder (a "device") supplied it, kept so the library
+    /// knows what it already imported. Derived from the library, so it survives sync and works on
+    /// another Mac. All optional: libraries written before devices existed decode unchanged.
+    /// The device kind, such as `soundcore.work`.
+    public var deviceKind: String?
+    /// The recorder's serial number, when it reports one.
+    public var deviceSerial: String?
+    /// The recording's stable ID on the recorder or in its export folder.
+    public var deviceRecordingID: String?
+    /// Set on a track Daybook made from another one (for example, the microphone with the call's
+    /// echo removed). The original is always kept; a derived track is transcribed in its place.
+    public var derivedFrom: UUID?
+    /// What produced a derived track, such as `echo-cancelled`. Nil for originals.
+    public var processing: String?
+    /// When the recording started by its own clock (this Mac's, or the recorder's), when known.
+    public var startedAt: Date?
+    /// Where the recording sits on the conversation's timeline and how that was found. Nil for
+    /// recordings placed the way they were before multipoint recording (capture offset or transcript).
+    public var alignment: SourceAlignment?
+    /// How Daybook captured this track (capture path, measured clock rate, echo removal). Nil for imports.
+    public var capture: TrackCaptureDetails?
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
                 fileName: String, createdAt: Date = Date(), duration: TimeInterval? = nil,
-                offset: TimeInterval? = nil, sha256: String = "") {
+                offset: TimeInterval? = nil, sha256: String = "", device: DeviceRecordingIdentity? = nil,
+                derivedFrom: UUID? = nil, processing: String? = nil, startedAt: Date? = nil,
+                alignment: SourceAlignment? = nil) {
         self.id = id; self.source = source; self.relativePath = relativePath; self.fileName = fileName
         self.createdAt = createdAt; self.duration = duration; self.offset = offset; self.sha256 = sha256
+        self.deviceKind = device?.kind; self.deviceSerial = device?.serial; self.deviceRecordingID = device?.recordingID
+        self.derivedFrom = derivedFrom; self.processing = processing
+        self.startedAt = startedAt; self.alignment = alignment
+    }
+
+    /// The recorder identity, when the track came from one.
+    public var device: DeviceRecordingIdentity? {
+        get {
+            guard let deviceKind, let deviceRecordingID else { return nil }
+            return DeviceRecordingIdentity(kind: deviceKind, serial: deviceSerial, recordingID: deviceRecordingID)
+        }
+        set { deviceKind = newValue?.kind; deviceSerial = newValue?.serial; deviceRecordingID = newValue?.recordingID }
+    }
+}
+
+/// One recording on one recorder: the device kind (`soundcore.work`), the recorder's serial number
+/// when known, and the recording's stable ID there.
+public struct DeviceRecordingIdentity: Codable, Hashable, Sendable {
+    public var kind: String
+    public var serial: String?
+    public var recordingID: String
+    public init(kind: String, serial: String? = nil, recordingID: String) {
+        self.kind = kind; self.serial = serial; self.recordingID = recordingID
     }
 }
 
@@ -58,10 +109,13 @@ public struct SegmentProvenance: Codable, Equatable, Sendable {
     public var end: TimeInterval
     public var text: String
     public var confidence: Double?
+    /// Positions (in the unified passage's whitespace-separated words, as fused) of the words this
+    /// source supplied or agreed with. Nil when the passage is this source's own wording.
+    public var wordIndices: [Int]?
     public init(trackID: UUID, segmentID: UUID, start: TimeInterval, end: TimeInterval,
-                text: String, confidence: Double? = nil) {
+                text: String, confidence: Double? = nil, wordIndices: [Int]? = nil) {
         self.trackID = trackID; self.segmentID = segmentID; self.start = start; self.end = end
-        self.text = text; self.confidence = confidence
+        self.text = text; self.confidence = confidence; self.wordIndices = wordIndices
     }
 }
 
@@ -87,8 +141,23 @@ public struct ProcessingSettings: Codable, Equatable, Sendable {
     public var modelID: String
     public var parameters: [String: String]
     public var createdAt: Date
-    public init(modelID: String, parameters: [String: String] = [:], createdAt: Date = Date()) {
-        self.modelID = modelID; self.parameters = parameters; self.createdAt = createdAt
+    /// Exactly which model produced the result: family, variant, revision, and engine version
+    /// (docs/models.md). Nil for results made before the model system recorded it; those name their
+    /// model through `modelID`, which the catalog's migration table still resolves.
+    public var model: ModelProvenance?
+    public init(modelID: String, parameters: [String: String] = [:], createdAt: Date = Date(), model: ModelProvenance? = nil) {
+        self.modelID = modelID; self.parameters = parameters; self.createdAt = createdAt; self.model = model
+    }
+
+    private enum CodingKeys: String, CodingKey { case modelID, parameters, createdAt, model }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        modelID = try values.decode(String.self, forKey: .modelID)
+        parameters = try values.decode([String: String].self, forKey: .parameters)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        // Provenance a newer Daybook wrote differently is dropped, never a reason to reject the meeting.
+        model = (try? values.decodeIfPresent(ModelProvenance.self, forKey: .model)) ?? nil
     }
 }
 
@@ -209,6 +278,9 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var folderID: UUID?
     public var tags: [String]?
     public var templateID: String?
+    /// Nil follows the detected kind; set when the person moves the conversation to Work or Personal.
+    /// It never changes the kind or the template.
+    public var placement: LibraryPlacement?
     public var tracks: [RecordingTrack]
     /// Original model output remains intact when the unified transcript is corrected.
     public var transcripts: [TrackTranscript]
@@ -222,6 +294,17 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var errorMessage: String?
     public var correctionTransferIssues: [CorrectionTransferIssue]?
     public var speakerMatches: [SpeakerMatch]?
+    /// Recorders asked to record alongside this Mac (multipoint); their recordings join this conversation.
+    public var companions: [CompanionRecording]?
+    /// Recordings in this conversation that may belong with another one, waiting for the person.
+    public var sourceSuggestions: [SourceSuggestion]?
+    /// Audio alignments measured between this meeting's recordings, reused by fusion.
+    public var audioAlignments: [TrackAudioAlignment]?
+    /// What the latest fusion did: sources, their timing, and how many words each contributed.
+    public var fusionSummary: FusionSummary?
+    /// Processing asked for on one device for another to carry out (the iPhone asks, a Mac runs it).
+    /// Nil until the first request; merged by ID across devices (`ProcessingRequest.merged`).
+    public var processingRequests: [ProcessingRequest]?
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
                 updatedAt: Date = Date(), kind: MeetingKind = .auto, notes: String = "",
                 tracks: [RecordingTrack] = [], transcripts: [TrackTranscript] = [],
@@ -230,11 +313,11 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
                 highlights: [Highlight] = [], speakers: [Speaker] = [], status: MeetingStatus = .draft,
                 errorMessage: String? = nil, correctionTransferIssues: [CorrectionTransferIssue]? = nil,
                 speakerMatches: [SpeakerMatch]? = nil, timedNotes: [TimedNote]? = nil,
-                folderID: UUID? = nil, tags: [String]? = nil, templateID: String? = nil) {
+                folderID: UUID? = nil, tags: [String]? = nil, templateID: String? = nil, placement: LibraryPlacement? = nil) {
         self.schemaVersion = 1; self.id = id; self.title = title; self.date = date; self.updatedAt = updatedAt
         self.kind = kind; self.notes = notes; self.tracks = tracks; self.transcripts = transcripts
         self.timedNotes = timedNotes
-        self.folderID = folderID; self.tags = tags; self.templateID = templateID
+        self.folderID = folderID; self.tags = tags; self.templateID = templateID; self.placement = placement
         self.unifiedTranscript = unifiedTranscript; self.alignmentReports = alignmentReports
         self.summary = summary; self.revisions = revisions; self.highlights = highlights
         self.speakers = speakers; self.status = status; self.errorMessage = errorMessage
@@ -275,6 +358,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         unifiedTranscript = transferred.segments
         correctionTransferIssues = transferred.issues.isEmpty ? nil : transferred.issues
         alignmentReports = result.alignments; updatedAt = Date()
+        fusionSummary = result.summary
+        speakers += result.addedSpeakers.filter { added in !speakers.contains { $0.id == added.id } }
         return transferred.issues
     }
     /// Explicit review either applies the saved correction to a chosen passage or dismisses transfer.
