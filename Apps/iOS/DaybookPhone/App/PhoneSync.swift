@@ -110,10 +110,18 @@ final class PhoneSync {
             connection = .unavailable(reason)
         case .available:
             // The controller attaches the container itself: main's `restore()` is container-first on
-            // iOS (account check, `<container>/Documents/Daybook`), using the replica set at launch.
-            if controller.folder == nil { controller.restore() }
+            // iOS (account check, `<container>/Documents/Daybook`), using the replica set at launch. The
+            // lookup runs in the background, so wait for it before deciding; on first launch it takes a
+            // moment, and reading `folder` straight away reported iCloud as unavailable.
+            if controller.folder == nil {
+                connection = .checking
+                controller.restore()
+                await controller.waitForContainer()
+            }
             if let folder = controller.folder {
                 connection = .connected(folder)
+            } else if case .containerUnavailable(let reason) = controller.iCloud {
+                connection = .unavailable(reason)
             } else {
                 connection = .unavailable("iCloud isn't available for Daybook right now. Try again in a moment.")
             }

@@ -104,8 +104,9 @@ struct MacDetailScreen: View {
     }
 }
 
-/// Pair with a Mac: choose it, type the six digits it shows. The code proves you can see the Mac's
-/// screen; nothing else is needed (docs/link.md, "Pairing").
+/// Pair with a Mac: choose it, then type the six digits it shows. The code proves you can see the Mac's
+/// screen; nothing else is needed (docs/link.md, "Pairing"). No Mac is chosen for you, and the code
+/// boxes appear only once one is, so a code always goes to the Mac that shows it.
 struct PairingSheet: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -138,7 +139,9 @@ struct PairingSheet: View {
                             .foregroundStyle(PhoneStyle.accent)
                     } else {
                         macList
-                        codeEntry
+                        if let mac = selectedMac {
+                            codeEntry(for: mac)
+                        }
                         if let error {
                             Label(error, systemImage: "exclamationmark.triangle")
                                 .font(.subheadline)
@@ -164,20 +167,30 @@ struct PairingSheet: View {
             }
             .task {
                 await model.link.startBrowsing()
-                if selection == nil { selection = model.link.candidates.first(where: \.isPairing)?.id ?? model.link.candidates.first?.id }
-                if model.options.openSettings == "pairing" { code = "482 9"; codeFocused = false }
+                // Screenshots: a chosen Mac with a code half typed.
+                if model.options.openSettings == "pairing" {
+                    selection = model.link.candidates.first?.id
+                    try? await Task.sleep(for: .milliseconds(100))   // after choosing clears the code
+                    code = "482 9"; codeFocused = false
+                }
             }
             .onDisappear { Task { await model.link.stopBrowsing() } }
             .onChange(of: model.link.candidates) { _, candidates in
-                if selection == nil || !candidates.contains(where: { $0.id == selection }) {
-                    selection = candidates.first(where: \.isPairing)?.id ?? candidates.first?.id
-                }
+                // The chosen Mac left the network: choose again.
+                if let selection, !candidates.contains(where: { $0.id == selection }) { self.selection = nil }
+            }
+            .onChange(of: selection) { _, chosen in
+                // A code belongs to one Mac; choosing another starts over, ready to type.
+                code = ""
+                error = nil
+                codeFocused = chosen != nil
             }
         }
     }
 
     private var digits: String { code.filter(\.isNumber) }
-    private var canPair: Bool { digits.count == 6 && selection != nil && !pairing }
+    private var selectedMac: PhoneLink.PairingCandidate? { selection.flatMap { id in model.link.candidates.first { $0.id == id } } }
+    private var canPair: Bool { digits.count == 6 && selectedMac != nil && !pairing }
 
     private var macList: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -220,9 +233,9 @@ struct PairingSheet: View {
         }
     }
 
-    private var codeEntry: some View {
+    private func codeEntry(for mac: PhoneLink.PairingCandidate) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Code")
+            Text("Code on \(mac.name)")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(PhoneStyle.Ink.meta)
                 .textCase(.uppercase)
@@ -264,7 +277,7 @@ struct PairingSheet: View {
     }
 
     private func pair() async {
-        guard let selection, let mac = model.link.candidates.first(where: { $0.id == selection }) else { return }
+        guard let mac = selectedMac else { return }
         pairing = true
         defer { pairing = false }
         do {

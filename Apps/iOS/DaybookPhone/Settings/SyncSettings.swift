@@ -117,7 +117,9 @@ struct LibraryDevicesScreen: View {
     }
 
     private func name(_ device: KnownSyncDevice) -> String {
-        device.displayName ?? (device.deviceClass == nil ? "A Mac with an earlier Daybook" : "Unnamed device")
+        // A device known only from the journal hasn't written a presence record: an earlier Daybook, or
+        // one that hasn't finished its first sync. It can't be told which, or what kind of device it is.
+        device.displayName ?? (device.deviceClass == nil ? "A device that hasn't checked in" : "Unnamed device")
     }
 
     private func detail(_ device: KnownSyncDevice, now: Date) -> String {

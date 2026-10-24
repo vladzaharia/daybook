@@ -13,7 +13,7 @@ Foundation, Network, CryptoKit and Security.
 | Piece | Choice |
 | --- | --- |
 | Discovery | Bonjour `_daybook-link._tcp`. The Mac advertises; the phone browses. The TXT record carries salted tags of the library and Mac IDs |
-| Pairing | The Mac shows a six-digit code; the person types it on the phone. Passkey-entry exchange over P-256 ECDH (below) |
+| Pairing | The Mac shows a six-digit code; the person chooses that Mac on the phone, then types the code (the code boxes appear only once a Mac is chosen, so a code never goes to the wrong one). Passkey-entry exchange over P-256 ECDH (below) |
 | Transport | TLS 1.2, `TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256`, with the pairing key as PSK; session authentication bound to the TLS session |
 | Framing | `NWProtocolFramer`: 4-byte big-endian length, then one JSON message (max 256 KiB) |
 | Messages | `{"v": version, "type": "...", "body": {...}}`; unknown types and fields are ignored |

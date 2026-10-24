@@ -130,6 +130,26 @@ final class LibrarySyncContainerTests: XCTestCase {
         try await wait("reconnection") { relaunched.iCloud == .connected }
     }
 
+    func testWaitForContainerReturnsOnceTheBackgroundLookupHasConnected() async throws {
+        // A slow container lookup, as on a phone's first launch.
+        let account = account!
+        let slow = SyncContainerEnvironment(containerIdentifier: "iCloud.test.daybook", hasEntitlement: { _ in true },
+                                            accountIdentity: { account.identity }, accountSignedIn: { account.signedIn },
+                                            resolveContainer: { _ in Thread.sleep(forTimeInterval: 0.3); return account.container },
+                                            retryInterval: .milliseconds(20))
+        let sync = controller(slow)
+        sync.replica = .phone(displayName: "Test iPhone")
+        sync.restore()
+        XCTAssertNil(sync.folder, "The lookup runs in the background, so the folder isn't known yet")
+        await sync.waitForContainer()
+        XCTAssertEqual(sync.iCloud, .connected)
+        XCTAssertEqual(sync.folder?.standardizedFileURL, journal.standardizedFileURL)
+        // Presence is written on attach, before any full pass, so other devices see this one at once.
+        try await wait("the presence record") {
+            ((try? fm.contentsOfDirectory(atPath: journal.appendingPathComponent("Devices").path)) ?? []).contains { $0.hasSuffix(".json") }
+        }
+    }
+
     func testSignedOutAndICloudDriveOffAreReportedPlainly() async throws {
         account.identity = nil
         account.signedIn = false
