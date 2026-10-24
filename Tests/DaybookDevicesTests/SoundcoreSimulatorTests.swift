@@ -404,6 +404,10 @@ final class SoundcoreSimulatorTests: XCTestCase {
         let transport = SimulatedSoundcoreTransport(device: device)
         var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
         environment.soundcoreTransport = { transport }
+        // Connected on its own, the recorder is let go after `automaticIdleRelease`; keep it long enough
+        // that a slow machine still has it connected when the library loads.
+        var timing = self.timing
+        timing.automaticIdleRelease = .seconds(10)
         environment.soundcoreTiming = timing
         var configured = ConfiguredDevice(id: "early", kind: SoundcoreWorkIntegration().kind)
         configured.automaticImportsSince = .distantPast
