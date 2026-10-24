@@ -212,7 +212,7 @@ git push origin v1.4.0
 Then approve the run: Actions › Release › Review deployments › `release` › Approve. One approval covers both the iPhone and Mac jobs.
 
 - The tag's message opens the GitHub Release notes and What to Test, followed by the commits since the previous tag.
-- The iPhone build appears in TestFlight, in `DAYBOOK_TESTFLIGHT_GROUP`, once processed.
+- The iPhone build appears in TestFlight, in `DAYBOOK_TESTFLIGHT_GROUP`, once processed. "Daybook Internal" is an internal group with access to every build, so each build reaches it by itself; `asc-testflight.sh` only adds builds to groups without that access (App Store Connect refuses it otherwise: 422 "Builds cannot be assigned to this internal group").
 - The Mac ZIP (and DMG), with `SHA256SUMS.txt`, are attached to the release.
 
 A tag such as `v1.4.0-rc.1` releases marketing version 1.4.0 and marks the GitHub Release as a prerelease.

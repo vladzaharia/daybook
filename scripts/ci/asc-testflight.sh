@@ -163,7 +163,7 @@ fi
 
 # 4. Beta group.
 if [[ -n "$group" ]]; then
-    request GET "/v1/betaGroups?filter%5Bapp%5D=$app_id&filter%5Bname%5D=$(uri "$group")&fields%5BbetaGroups%5D=name,isInternalGroup&limit=50"
+    request GET "/v1/betaGroups?filter%5Bapp%5D=$app_id&filter%5Bname%5D=$(uri "$group")&fields%5BbetaGroups%5D=name,isInternalGroup,hasAccessToAllBuilds&limit=50"
     expect 200
     group_id=$(printf '%s' "$response_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].id // empty')
     if [[ -z "$group_id" ]]; then
@@ -172,10 +172,17 @@ if [[ -n "$group" ]]; then
         fail "no beta group named '$group' for $bundle_id. Groups: ${known:-none}"
     fi
     internal=$(printf '%s' "$response_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].attributes.isInternalGroup')
-    body=$(jq -cn --arg build "$build_id" '{data: [{type: "builds", id: $build}]}')
-    request POST "/v1/betaGroups/$group_id/relationships/builds" "$body"
-    expect 204
-    note "added the build to '$group' (internal: $internal)"
+    every_build=$(printf '%s' "$response_body" | jq -r --arg g "$group" '[.data[] | select(.attributes.name == $g)][0].attributes.hasAccessToAllBuilds // false')
+    if [[ "$internal" == "true" && "$every_build" == "true" ]]; then
+        # An internal group with access to all builds gets each one by itself; App Store Connect
+        # refuses to add a build to it (422 "Builds cannot be assigned to this internal group").
+        note "'$group' is an internal group that gets every build; nothing to add"
+    else
+        body=$(jq -cn --arg build "$build_id" '{data: [{type: "builds", id: $build}]}')
+        request POST "/v1/betaGroups/$group_id/relationships/builds" "$body"
+        expect 204
+        note "added the build to '$group' (internal: $internal)"
+    fi
     if [[ "$internal" != "true" ]]; then
         body=$(jq -cn --arg build "$build_id" \
             '{data: {type: "betaAppReviewSubmissions", relationships: {build: {data: {type: "builds", id: $build}}}}}')
