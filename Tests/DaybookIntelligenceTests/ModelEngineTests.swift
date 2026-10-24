@@ -145,7 +145,11 @@ final class ModelEngineTests: XCTestCase {
             let engine = registry.engine(model.engine)
             XCTAssertNotNil(engine, model.key)
             XCTAssertTrue(Set(model.roles).isSubset(of: engine?.descriptor.roles ?? []), model.key)
-            XCTAssertEqual(model.availability(engines: registry.descriptors, appVersion: ModelVersion("0.1.0"), platform: .macOS), .available, model.key)
+            let availability = model.availability(engines: registry.descriptors, appVersion: ModelVersion("0.1.0"), platform: .macOS)
+            if case .unavailableOnDevice = availability, model.isSystemModel {
+                continue // Apple Intelligence is off or absent on this Mac (CI runners): a device state, not a catalog error.
+            }
+            XCTAssertEqual(availability, .available, model.key)
         }
     }
 

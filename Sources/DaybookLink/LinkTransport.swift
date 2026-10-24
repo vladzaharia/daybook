@@ -139,6 +139,10 @@ final class LinkChannel: @unchecked Sendable {
     var onViabilityLost: (() -> Void)?
     private(set) var isReady = false
     private(set) var isClosed = false
+    /// Set while a last frame is on its way. Until the peer closes (or a second passes), frames that
+    /// still arrive are read and dropped: closing with unread data makes the kernel reset the
+    /// connection, and a reset can discard the last frame before the peer reads it.
+    private var isClosing = false
     private let clock: LinkClock
     /// A started channel keeps itself alive until it ends, like the connection it wraps.
     private var keepAlive: LinkChannel?
@@ -159,7 +163,7 @@ final class LinkChannel: @unchecked Sendable {
     var remoteDescription: String { "\(connection.endpoint)" }
 
     func send(_ frame: Data) {
-        guard !isClosed else { return }
+        guard !isClosed, !isClosing else { return }
         let message = NWProtocolFramer.Message(definition: LinkFramer.definition)
         let context = NWConnection.ContentContext(identifier: "frame", metadata: [message])
         connection.send(content: frame, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
@@ -168,14 +172,16 @@ final class LinkChannel: @unchecked Sendable {
         })
     }
 
-    /// Sends a last frame (goodbye, refusal) and closes once it's written.
+    /// Sends a last frame (goodbye, refusal) and closes once the peer, having read it, closes too.
     func close(after frame: Data? = nil) {
-        guard !isClosed else { return }
+        guard !isClosed, !isClosing else { return }
         guard let frame, isReady else { end(.local); return }
+        isClosing = true
+        onFrame = nil
         let message = NWProtocolFramer.Message(definition: LinkFramer.definition)
         let context = NWConnection.ContentContext(identifier: "frame", metadata: [message])
-        connection.send(content: frame, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] _ in
-            self?.end(.local)
+        connection.send(content: frame, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
+            if error != nil { self?.end(.local) }
         })
         // Don't let a stalled peer keep a closing connection alive.
         queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.end(.local) }
@@ -198,7 +204,7 @@ final class LinkChannel: @unchecked Sendable {
             receive()
             onReady?()
         case .waiting(let error), .failed(let error):
-            end(Self.end(for: error))
+            end(isClosing ? .local : Self.end(for: error))
         case .cancelled:
             end(.local)
         default:
@@ -219,9 +225,9 @@ final class LinkChannel: @unchecked Sendable {
                 self.onFrame?(content, receivedAt)
             }
             if let error {
-                self.end(Self.end(for: error))
+                self.end(self.isClosing ? .local : Self.end(for: error))
             } else if content == nil, isComplete {
-                self.end(.peerClosed)
+                self.end(self.isClosing ? .local : .peerClosed)
             } else if !self.isClosed {
                 self.receive()
             }

@@ -170,6 +170,8 @@ can copy the tags, but it can't complete TLS without the key.
 | `unpair`, `goodbye` | | both | |
 | `pair.*` | begin, accept, refuse, commit, reveal, confirm, fail | pairing only | |
 
+**Closing.** A side that ends a connection sends its last frame (`goodbye`, `unpair`, a refusal, or the final pairing reply), then keeps reading and dropping frames until the other side closes, or for at most a second, and only then closes. Closing with unread data makes the kernel reset the connection, and a reset can discard the last frame before the other side reads it: the other side then sees a lost connection instead of a goodbye, or never learns it was unpaired (`LinkChannel.close(after:)`).
+
 **Compatibility rules.**
 - Within a version, only optional fields and new types are added. Receivers ignore unknown types,
   unknown fields, and known types whose body they can't read (counted, not fatal).
