@@ -1,8 +1,9 @@
+import Foundation
+
 #if DEBUG
 import AVFoundation
 import AudioToolbox
 import CryptoKit
-import Foundation
 
 /// A Soundcore Work that speaks the documented protocol from generated fixtures: status, the paged
 /// recording list, the key exchange, encrypted Opus transfers, live audio, and record control. It
@@ -460,7 +461,10 @@ public final class SimulatedSoundcoreTransport: SoundcoreTransport {
     }
 }
 
-/// A link that does nothing: demos never scan, connect, or ask for Bluetooth permission.
+#endif
+
+/// A link that does nothing: demos and test hosts never scan, connect, or ask for Bluetooth
+/// permission. Outside DEBUG because the iPhone's test host uses it in any configuration.
 @MainActor
 public final class InertSoundcoreTransport: SoundcoreTransport {
     public init() {}
@@ -474,4 +478,3 @@ public final class InertSoundcoreTransport: SoundcoreTransport {
     public func disconnect(_ id: UUID) {}
     public func send(_ packet: Data) throws { throw SoundcoreError.disconnected }
 }
-#endif
