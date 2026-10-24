@@ -243,6 +243,16 @@ jobs:
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
         run: scripts/ci/secrets.sh setup
+      # With the .p12, export signs manually with its identity and the Developer ID profile, because a
+      # team key can't use cloud-managed Developer ID signing (docs/release.md).
+      - name: Install the Developer ID profile
+        run: |
+          if [[ -n "${DAYBOOK_SIGNING_KEYCHAIN:-}" ]]; then
+            uuid=$(scripts/ci/asc-profile.sh --bundle-id local.daybook.app --type MAC_APP_DIRECT --keychain "$DAYBOOK_SIGNING_KEYCHAIN")
+            echo "DAYBOOK_DEVELOPER_ID_PROFILE=$uuid" >> "$GITHUB_ENV"
+          else
+            echo "No Developer ID keychain: the export uses cloud-managed signing."
+          fi
       - name: Archive and export with Developer ID
         run: scripts/build-app.sh --marketing-version "$VERSION" --build-number "$BUILD"
       - name: Notarize, staple, and package

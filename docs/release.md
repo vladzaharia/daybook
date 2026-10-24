@@ -94,7 +94,7 @@ Apple ties each capability to the role of a **team** key, created under App Stor
 
 **Use an Admin key.** It's the only team role that can do all of the iPhone path. The key is powerful, so it lives only in the approval-gated `release` environment. Revoke it in App Store Connect if it ever leaks, and generate a new one.
 
-**Developer ID is the uncertain case.** Apple restricts Developer ID certificates to the Account Holder. An Admin *user* can use the cloud-managed Developer ID certificate only after the Account Holder grants access in Users and Access. A team key has no such setting. Expect the Mac export to fail with a cloud signing permission error, or "No signing certificate 'Developer ID Application' found". The fallback below covers that case.
+**Developer ID needs the fallback.** Apple restricts Developer ID certificates to the Account Holder. An Admin *user* can use the cloud-managed Developer ID certificate only after the Account Holder grants access in Users and Access; a team key has no such setting. Confirmed on the first release run (2026-10-24): with the Admin key alone, the Mac export fails with "Cloud signing permission error" and "No profiles for 'local.daybook.app' were found". The fallback below covers it. Cloud-managed Apple Distribution, which the iPhone uses, does work with the Admin key.
 
 ### Fallback: a Developer ID .p12
 
@@ -112,7 +112,12 @@ If cloud-managed Developer ID signing isn't permitted for the key, give the Mac 
 4. It adds Apple's Developer ID G2 intermediate (downloaded, SHA-256 pinned), because macOS ships only the older intermediate.
 5. It checks that a Developer ID Application identity is present.
 
-Xcode's automatic export prefers a local identity over a cloud one, so the export signs with this certificate. The API key still supplies the Developer ID profile. With a local identity, `package-mac.sh` can also sign, notarize, and staple a **DMG**; cloud signing only works inside `-exportArchive`, so a cloud-signed release ships the ZIP alone. The cleanup step deletes the keychain and restores the keychain search list.
+Automatic export doesn't work even then: with a team key it still asks for cloud-managed Developer ID signing and fails before it looks for the profile. So the Mac job signs manually:
+
+1. **Install the Developer ID profile** runs `scripts/ci/asc-profile.sh`. It downloads the newest active, **manually managed** Developer ID (`MAC_APP_DIRECT`) profile for `local.daybook.app` through the API, checks that the profile contains the certificate of the keychain's Developer ID identity, installs it, and sets `DAYBOOK_DEVELOPER_ID_PROFILE` to its UUID. It only reads. Xcode refuses its own managed profiles ("Mac Team Direct Provisioning Profile: …") for a manual export, so the team has a separate one, **"Daybook Developer ID"**, created once through the API on 2026-10-24 with the Developer ID Application (G2) certificate; it expires with that certificate in 2031.
+2. `build-app.sh` sees `DAYBOOK_DEVELOPER_ID_PROFILE` and exports with `signingStyle` manual, the "Developer ID Application" certificate, and that profile, leaving the API key out of the export. The archive step still uses the key for development signing.
+
+If the certificate is replaced, step 1 fails with that message: create a new manually managed Developer ID profile for `local.daybook.app` with the new certificate (Certificates, Identifiers & Profiles, or `POST /v1/profiles` with the Admin key), and export the new certificate's `.p12`. With a local identity, `package-mac.sh` can also sign, notarize, and staple a **DMG**; cloud signing only works inside `-exportArchive`, so a cloud-signed release ships the ZIP alone. The cleanup step deletes the keychain and restores the keychain search list.
 
 The iPhone app doesn't need a fallback: cloud-managed Apple Distribution is available to an Admin key.
 
@@ -258,6 +263,8 @@ xcrun stapler validate /Applications/Daybook.app
 | CI is slow after a dependency or Xcode change | The cache key changed. The first push to `main` saves a new cache. |
 | Archive: "No signing certificate 'iOS Development' found" or "No Account for Team" | The API key isn't being used or lacks the role. Check the three `ASC_*` secrets and that the key is a **team** key with **Admin** access. |
 | Mac export: cloud signing permission error, or no "Developer ID Application" certificate | Cloud-managed Developer ID isn't available to the key. Add the [.p12 fallback](#fallback-a-developer-id-p12). |
+| `secrets.sh`: "the .p12 has no valid Developer ID Application identity" | The `.p12` lacks the certificate or the key. Export from Keychain Access › My Certificates, selecting the **certificate** row (not the key); the file is about 3 KB. |
+| Upload rejected: "you need to include all of the … orientations to support iPad multitasking" | The app was built for iPad too. Every target in `Apps/iOS/project.yml` keeps `TARGETED_DEVICE_FAMILY: "1"` (XcodeGen's presets set "1,2"); `check-ios-archive.sh` checks `UIDeviceFamily`. |
 | "requires a provisioning profile with the iCloud feature", or the container can't be assigned | Mac provisioning hasn't been done (One-time setup, step 1). |
 | `package-mac.sh`: lacks the `iCloud.local.daybook` entitlement | The export signed without the Developer ID profile. Same fix as above. |
 | Notarization `Invalid` | `package-mac.sh` prints Apple's log; it names each file and the problem (unsigned code, missing hardened runtime, no secure timestamp). |

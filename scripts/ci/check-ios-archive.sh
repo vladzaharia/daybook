@@ -10,6 +10,8 @@
 #     docs/release.md). Without the key, TestFlight holds every build at "Missing Compliance".
 #   - the app has no app icon (no CFBundleIcons in Info.plist). App Store Connect rejects such an
 #     upload (ITMS-90713 / ITMS-90022).
+#   - the app runs on iPad (UIDeviceFamily isn't [1]). Daybook is iPhone only, and an iPad app must
+#     list all four orientations for multitasking or App Store Connect rejects the upload.
 #   - CFBundleShortVersionString or CFBundleVersion of the app or any extension differs from
 #     --version / --build (an extension must match its app).
 #   - a bundle identifier isn't the expected one (local.daybook.phone, local.daybook.phone.widgets).
@@ -50,6 +52,13 @@ elif [[ -z "$encryption_type" ]]; then
     problem "Info.plist has no ITSAppUsesNonExemptEncryption. TestFlight would hold the build for the export compliance question. The owner's answer is false: keep ITSAppUsesNonExemptEncryption: false in Apps/iOS/project.yml (docs/release.md, Export compliance)."
 else
     problem "ITSAppUsesNonExemptEncryption is $encryption ($encryption_type), not the boolean false the owner decided on. Changing that answer needs encryption documentation in App Store Connect first (docs/release.md)."
+fi
+
+families="$(plutil -extract UIDeviceFamily json -o - "$info" 2>/dev/null || true)"
+if [[ "$families" == "[1]" ]]; then
+    ok "UIDeviceFamily = [1] (iPhone only)"
+else
+    problem "UIDeviceFamily is ${families:-missing}, not [1]. An app that runs on iPad must list all four orientations for multitasking, and App Store Connect rejects the upload otherwise. Keep TARGETED_DEVICE_FAMILY: \"1\" on every target in Apps/iOS/project.yml (XcodeGen's presets set \"1,2\")."
 fi
 
 if [[ -n "$(plist_type "$info" CFBundleIcons)" || -n "$(plist_type "$info" CFBundleIconFiles)" ]]; then
