@@ -221,24 +221,28 @@ expect_fail "rejects a missing key" "$ci/setup-github.sh" --asc-key "$work/none.
 
 # --- build-ios.sh upload retry, with a stand-in xcodebuild --------------------------------------------
 echo "build-ios.sh upload retry"
-mkdir -p "$work/xcbin" "$work/upload.xcarchive"
-cat > "$work/xcbin/xcodebuild" <<'STUB'
+if macos; then
+    mkdir -p "$work/xcbin" "$work/upload.xcarchive"
+    cat > "$work/xcbin/xcodebuild" <<'STUB'
 #!/bin/bash
 n=$(( $(cat "$STUB_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_COUNT"
 if [[ "$STUB_MODE" == network && $n -lt 3 ]]; then echo "error: exportArchive The request timed out."; exit 70; fi
 if [[ "$STUB_MODE" == rejected ]]; then echo "error: exportArchive Invalid bundle."; exit 70; fi
 echo "** EXPORT SUCCEEDED **"
 STUB
-chmod +x "$work/xcbin/xcodebuild"
-upload() {
-    rm -f "$work/stub-count"
-    PATH="$work/xcbin:$PATH" STUB_MODE="$1" STUB_COUNT="$work/stub-count" DAYBOOK_UPLOAD_RETRY_DELAY=0 \
-        DAYBOOK_TEAM_ID=48H7CLBV8Y "$ci/../build-ios.sh" --export upload --archive-path "$work/upload.xcarchive" >/dev/null 2>&1
-}
-expect_ok "an upload that times out twice succeeds on the third try" upload network
-expect_eq "it tried three times" 3 "$(cat "$work/stub-count")"
-expect_fail "a rejected upload fails" upload rejected
-expect_eq "without retrying" 1 "$(cat "$work/stub-count")"
+    chmod +x "$work/xcbin/xcodebuild"
+    upload() {
+        rm -f "$work/stub-count"
+        PATH="$work/xcbin:$PATH" STUB_MODE="$1" STUB_COUNT="$work/stub-count" DAYBOOK_UPLOAD_RETRY_DELAY=0 \
+            DAYBOOK_TEAM_ID=48H7CLBV8Y "$ci/../build-ios.sh" --export upload --archive-path "$work/upload.xcarchive" >/dev/null 2>&1
+    }
+    expect_ok "an upload that times out twice succeeds on the third try" upload network
+    expect_eq "it tried three times" 3 "$(cat "$work/stub-count")"
+    expect_fail "a rejected upload fails" upload rejected
+    expect_eq "without retrying" 1 "$(cat "$work/stub-count")"
+else
+    echo "  skip  build-ios.sh upload retry (macOS only)"
+fi
 
 echo
 echo "$passed passed, $failed failed"
