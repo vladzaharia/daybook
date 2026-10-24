@@ -34,6 +34,11 @@
 #                             device registration), so Xcode's cloud-managed signing supplies the
 #                             Developer ID certificate and profile; a Developer ID identity already in a
 #                             keychain is used instead when there is one.
+#   DAYBOOK_DEVELOPER_ID_PROFILE
+#                             UUID of an installed Developer ID profile for local.daybook.app
+#                             (scripts/ci/asc-profile.sh). The export then signs manually with the
+#                             keychain's Developer ID Application identity and that profile, and doesn't
+#                             ask for cloud signing, which a team API key can't use for Developer ID.
 set -euo pipefail
 
 script_path="${0:A}"
@@ -141,14 +146,26 @@ else
         /bin/rm -f "${export_options:?}"
         plutil -create xml1 "$export_options"
         plutil -insert method -string developer-id "$export_options"
-        plutil -insert signingStyle -string automatic "$export_options"
         plutil -insert teamID -string "$team" "$export_options"
         plutil -insert destination -string export "$export_options"
         # Outside the App Store, an app with iCloud containers must name the container environment;
         # a release uses Production.
         plutil -insert iCloudContainerEnvironment -string Production "$export_options"
+        export_provisioning=("${provisioning[@]}")
+        if [[ -n "${DAYBOOK_DEVELOPER_ID_PROFILE:-}" ]]; then
+            # Manual: the Developer ID identity in a keychain and the profile scripts/ci/asc-profile.sh
+            # installed. With a team API key, automatic export insists on cloud-managed Developer ID
+            # signing, which only the Account Holder may use, so the key stays out of the export.
+            plutil -insert signingStyle -string manual "$export_options"
+            plutil -insert signingCertificate -string "Developer ID Application" "$export_options"
+            plutil -insert provisioningProfiles -dictionary "$export_options"
+            plutil -insert "provisioningProfiles.local\\.daybook\\.app" -string "$DAYBOOK_DEVELOPER_ID_PROFILE" "$export_options"
+            export_provisioning=()
+        else
+            plutil -insert signingStyle -string automatic "$export_options"
+        fi
         xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
-            -exportOptionsPlist "$export_options" "${provisioning[@]}"
+            -exportOptionsPlist "$export_options" "${export_provisioning[@]}"
         built="$export_dir/Daybook.app"
     else
         built="$archive/Products/Applications/Daybook.app"

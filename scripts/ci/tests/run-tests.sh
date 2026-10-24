@@ -159,7 +159,7 @@ expect_eq "first release, text" "Changes:
 echo "check-ios-archive.sh"
 if macos; then
     make_archive() {
-        # make_archive DIR ENCRYPTION(true|false|none) ICON(yes|no) WIDGET_BUILD
+        # make_archive DIR ENCRYPTION(true|false|none) ICON(yes|no) WIDGET_BUILD [DEVICE_FAMILY JSON]
         local app="$1/Products/Applications/DaybookPhone.app"
         mkdir -p "$app/PlugIns/DaybookPhoneWidgets.appex"
         plutil -create xml1 "$app/Info.plist"
@@ -168,6 +168,7 @@ if macos; then
         plutil -insert CFBundleVersion -string 1057 "$app/Info.plist"
         [[ "$2" != none ]] && plutil -insert ITSAppUsesNonExemptEncryption -bool "$2" "$app/Info.plist"
         [[ "$3" == yes ]] && plutil -insert CFBundleIcons -json '{"CFBundlePrimaryIcon":{"CFBundleIconName":"AppIcon"}}' "$app/Info.plist"
+        plutil -insert UIDeviceFamily -json "${5:-[1]}" "$app/Info.plist"
         local widget="$app/PlugIns/DaybookPhoneWidgets.appex/Info.plist"
         plutil -create xml1 "$widget"
         plutil -insert CFBundleIdentifier -string local.daybook.phone.widgets "$widget"
@@ -186,6 +187,8 @@ if macos; then
     make_archive "$work/skew.xcarchive" false yes 1056
     expect_fail "an extension build number mismatch fails" "$ci/check-ios-archive.sh" "$work/skew.xcarchive" --build 1057
     expect_fail "a version mismatch fails" "$ci/check-ios-archive.sh" "$work/good.xcarchive" --version 1.5.0
+    make_archive "$work/ipad.xcarchive" false yes 1057 '[1,2]'
+    expect_fail "an archive that also runs on iPad fails" "$ci/check-ios-archive.sh" "$work/ipad.xcarchive"
 else
     echo "  skip  check-ios-archive.sh (macOS only)"
 fi
