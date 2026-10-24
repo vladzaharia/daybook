@@ -47,7 +47,7 @@ enum RecordingCommandError: Error, CustomLocalizedStringResourceConvertible {
 
 struct StartRecordingIntent: AudioRecordingIntent {
     static let title: LocalizedStringResource = "Start Recording"
-    static let description = IntentDescription("Records a conversation with the iPhone's microphone.")
+    static let description = IntentDescription("Records a conversation with the microphone.")
 
     @MainActor
     func perform() async throws -> some IntentResult {

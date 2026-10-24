@@ -159,7 +159,7 @@ expect_eq "first release, text" "Changes:
 echo "check-ios-archive.sh"
 if macos; then
     make_archive() {
-        # make_archive DIR ENCRYPTION(true|false|none) ICON(yes|no) WIDGET_BUILD [DEVICE_FAMILY JSON]
+        # make_archive DIR ENCRYPTION(true|false|none) ICON(yes|no) WIDGET_BUILD [DEVICE_FAMILY JSON] [INTENT DESCRIPTION]
         local app="$1/Products/Applications/DaybookPhone.app"
         mkdir -p "$app/PlugIns/DaybookPhoneWidgets.appex"
         plutil -create xml1 "$app/Info.plist"
@@ -169,6 +169,11 @@ if macos; then
         [[ "$2" != none ]] && plutil -insert ITSAppUsesNonExemptEncryption -bool "$2" "$app/Info.plist"
         [[ "$3" == yes ]] && plutil -insert CFBundleIcons -json '{"CFBundlePrimaryIcon":{"CFBundleIconName":"AppIcon"}}' "$app/Info.plist"
         plutil -insert UIDeviceFamily -json "${5:-[1]}" "$app/Info.plist"
+        # App Intent metadata as Xcode writes it: people-facing strings under "key", and Apple's own
+        # protocol identifiers, which the check must ignore.
+        mkdir -p "$app/Metadata.appintents"
+        printf '{"actions":{"StartRecordingIntent":{"descriptionMetadata":{"descriptionText":{"key":"%s"}},"systemProtocols":["com.apple.link.systemProtocol.AudioRecording"]}}}' \
+            "${6:-Records a conversation with the microphone.}" > "$app/Metadata.appintents/extract.actionsdata"
         local widget="$app/PlugIns/DaybookPhoneWidgets.appex/Info.plist"
         plutil -create xml1 "$widget"
         plutil -insert CFBundleIdentifier -string local.daybook.phone.widgets "$widget"
@@ -189,6 +194,8 @@ if macos; then
     expect_fail "a version mismatch fails" "$ci/check-ios-archive.sh" "$work/good.xcarchive" --version 1.5.0
     make_archive "$work/ipad.xcarchive" false yes 1057 '[1,2]'
     expect_fail "an archive that also runs on iPad fails" "$ci/check-ios-archive.sh" "$work/ipad.xcarchive"
+    make_archive "$work/intent.xcarchive" false yes 1057 '[1]' "Records a conversation with the iPhone's microphone."
+    expect_fail "an App Intent naming the iPhone fails" "$ci/check-ios-archive.sh" "$work/intent.xcarchive"
 else
     echo "  skip  check-ios-archive.sh (macOS only)"
 fi
