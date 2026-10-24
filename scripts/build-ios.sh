@@ -193,9 +193,23 @@ if [[ "$MODE" == export ]]; then
     plutil -insert uploadSymbols -bool YES "$OPTIONS"
     # The pipeline sets the version and build number; App Store Connect must not change them.
     plutil -insert manageAppVersionAndBuildNumber -bool NO "$OPTIONS"
-    rm -rf "${EXPORT_PATH:?}"
-    xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" -exportPath "$EXPORT_PATH" \
-        -exportOptionsPlist "$OPTIONS" ${AUTH[@]+"${AUTH[@]}"}
+    # An upload that fails on the network (a timeout, a dropped or refused connection) is tried again,
+    # up to three times; anything else, such as Apple rejecting the build, fails at once. The wait
+    # between tries is 30 s, then 60 s (DAYBOOK_UPLOAD_RETRY_DELAY scales it; the tests set 0).
+    LOG="$APP/build/export.log"
+    for (( attempt = 1; ; attempt++ )); do
+        rm -rf "${EXPORT_PATH:?}"
+        if xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$OPTIONS" ${AUTH[@]+"${AUTH[@]}"} 2>&1 | tee "$LOG"; then
+            break
+        fi
+        if [[ "$EXPORT" != upload || $attempt -ge 3 ]] \
+            || ! grep -q -i -E 'request timed out|network connection was lost|could not connect|not connected to the internet|NSURLErrorDomain|ENOTFOUND|-100[1459]' "$LOG"; then
+            exit 70
+        fi
+        echo "::warning title=Upload retried::the upload failed on the network (attempt $attempt of 3); trying again"
+        sleep $(( attempt * ${DAYBOOK_UPLOAD_RETRY_DELAY:-30} ))
+    done
     if [[ "$EXPORT" == upload ]]; then
         echo "Uploaded $ARCHIVE_PATH to App Store Connect."
     else
