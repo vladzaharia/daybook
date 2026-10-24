@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "apple-foundation-models",
+      "name": "Apple Foundation Models",
+      "maker": "Apple",
+      "engine": "appleFoundationModels",
+      "roles": [
+        "smallTasks"
+      ],
+      "summary": "Names conversations and suggests vocabulary.",
+      "homepage": "https://developer.apple.com/documentation/foundationmodels",
+      "license": {
+        "id": "Apple-FM",
+        "name": "Apple Foundation Models framework terms",
+        "url": "https://developer.apple.com/apple-intelligence/acceptable-use-requirements-for-the-foundation-models-framework/",
+        "allowsCommercialUse": true
+      },
+      "variants": [
+        {
+          "id": "system",
+          "name": "Apple Intelligence",
+          "detail": "Titles and vocabulary suggestions.",
+          "capabilities": {
+            "contextLength": 8192,
+            "structuredOutput": true
+          },
+          "minimumEngineVersion": 1,
+          "systemProvided": true,
+          "revisions": []
+        }
+      ]
+    }
+  ]
+}

@@ -79,4 +79,44 @@ final class TimedNotesTests: XCTestCase {
         let note = TimedNote(time: 12.345, text: "A detail")
         XCTAssertEqual(try JSONDecoder().decode(TimedNote.self, from: JSONEncoder().encode(note)), note)
     }
+
+    // Regression: times used to vanish from the page and Floating Notes whenever the saved anchors
+    // and the paragraph count disagreed, e.g. after one line arrived without an anchor.
+
+    func testParagraphTimesSurviveAParagraphWithoutAnAnchor() {
+        let meeting = Meeting(notes: "Beta date — hold the 14th?\nTyped where no anchor was saved\nAsk about export",
+                              timedNotes: [TimedNote(time: 2, text: "Beta date — hold the 14th?"), TimedNote(time: 24, text: "Ask about export")])
+        XCTAssertEqual(meeting.paragraphTimes(), [2, nil, 24])
+    }
+
+    func testParagraphTimesSurviveAnAnchorWhoseParagraphIsGone() {
+        let meeting = Meeting(notes: "First\nThird",
+                              timedNotes: [TimedNote(time: 1, text: "First"), TimedNote(time: 2, text: "Second"), TimedNote(time: 3, text: "Third")])
+        XCTAssertEqual(meeting.paragraphTimes(), [1, 3])
+    }
+
+    func testParagraphTimesFollowRewordedAndSplitParagraphs() {
+        let reworded = Meeting(notes: "Discuss next year's budget\nAfterward",
+                               timedNotes: [TimedNote(time: 12, text: "Discuss budget")])
+        XCTAssertEqual(reworded.paragraphTimes(), [12, nil])
+        let split = Meeting(notes: "Budget\nand travel", timedNotes: [TimedNote(time: 12, text: "Budget and travel")])
+        XCTAssertEqual(split.paragraphTimes(), [12, 12])
+    }
+
+    func testParagraphTimesCountOnlyNonblankParagraphs() {
+        let meeting = Meeting(notes: "\nOne\r\n  \n\tTwo\u{2028}Three\n",
+                              timedNotes: [TimedNote(time: 5, text: "One"), TimedNote(time: 6, text: "Two"), TimedNote(time: 7, text: "Three")])
+        XCTAssertEqual(meeting.paragraphTimes(), [5, 6, 7])
+    }
+
+    func testParagraphTimesWithoutAnchorsAreUntimed() {
+        XCTAssertEqual(Meeting(notes: "Agenda\nQuestions").paragraphTimes(), [nil, nil])
+        XCTAssertEqual(Meeting(notes: "Agenda", timedNotes: []).paragraphTimes(), [nil])
+        XCTAssertEqual(Meeting(notes: " \n", timedNotes: [TimedNote(time: 3, text: "Gone")]).paragraphTimes(), [])
+    }
+
+    func testParagraphTimesMatchSavedAnchorsExactly() {
+        let anchors = NoteTimeline.reconcile(previous: [], text: "Decision\nFollow-up", captureTime: 42.5)
+        XCTAssertEqual(Meeting(notes: "Decision\nFollow-up", timedNotes: anchors).paragraphTimes(), [42.5, 42.5])
+    }
 }

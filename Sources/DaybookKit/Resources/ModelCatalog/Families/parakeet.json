@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "parakeet",
+      "name": "Parakeet",
+      "maker": "NVIDIA and Moondream",
+      "engine": "parakeet",
+      "roles": [
+        "transcription"
+      ],
+      "summary": "Transcribes 25 European languages.",
+      "homepage": "https://huggingface.co/moondream/parakeet-ultra",
+      "license": {
+        "id": "CC-BY-4.0",
+        "name": "CC BY 4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "allowsCommercialUse": true,
+        "attribution": "Parakeet Ultra and Parakeet Redux by Moondream (moondream/parakeet-ultra, moondream/parakeet-redux), post-trained from NVIDIA's parakeet-tdt-0.6b-v3 (nvidia/parakeet-tdt-0.6b-v3), all licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changed: converted to Core ML by FluidInference (FluidInference/parakeet-ultra-coreml, FluidInference/parakeet-redux-coreml), with an int8 (Ultra) or ternary (Redux) encoder and the v3 preprocessor and vocabulary; Daybook merges its sub-word timings into words."
+      },
+      "variants": [
+        {
+          "id": "ultra",
+          "name": "Parakeet Ultra",
+          "detail": "Recommended. 25 European languages.",
+          "homepage": "https://huggingface.co/FluidInference/parakeet-ultra-coreml",
+          "releaseDate": "2026-09-22",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "wordTimestamps": true,
+            "wordConfidence": true,
+            "languages": [
+              "bg",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "et",
+              "fi",
+              "fr",
+              "hr",
+              "hu",
+              "it",
+              "lt",
+              "lv",
+              "mt",
+              "nl",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sl",
+              "sv",
+              "uk"
+            ],
+            "vocabularyPrompt": false,
+            "streaming": false
+          },
+          "engineOptions": {
+            "version": "ultra"
+          },
+          "revisions": [
+            {
+              "id": "95eaa59a39d4394f047a4dc5cce480388a60d1b6",
+              "releaseDate": "2026-09-24",
+              "summary": "Refresh accuracy/speed numbers (v3-family long-form path)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/parakeet-ultra-coreml",
+                  "revision": "95eaa59a39d4394f047a4dc5cce480388a60d1b6",
+                  "include": [
+                    "Preprocessor.mlmodelc/*",
+                    "Encoder.mlmodelc/*",
+                    "Decoder.mlmodelc/*",
+                    "JointDecisionv3.mlmodelc/*",
+                    "parakeet_vocab.json"
+                  ],
+                  "files": [
+                    {
+                      "path": "Decoder.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "fe92b6cfaa012abd5248c0bc877832f19807015abffc60d87b8ccc8ccb48b3b5"
+                    },
+                    {
+                      "path": "Decoder.mlmodelc/coremldata.bin",
+                      "size": 560,
+                      "sha256": "3b06e66768f0df7e21795f50e2b29300e33eeb1a2579dc42c695279c2d308497"
+                    },
+                    {
+                      "path": "Decoder.mlmodelc/model.mil",
+                      "size": 13110,
+                      "gitOID": "36dcd5cbb71d13f42a177427ddbab7539e0d167e"
+                    },
+                    {
+                      "path": "Decoder.mlmodelc/weights/weight.bin",
+                      "size": 23604992,
+                      "sha256": "02a0d219f281b9665bc10c8768649403b2eebbbf4b44c627041d948e0de11bb4"
+                    },
+                    {
+                      "path": "Encoder.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "d87101d824d6723cf95304da33755c3c60e762663b9ef2b0c4bd0aa166a09a0d"
+                    },
+                    {
+                      "path": "Encoder.mlmodelc/coremldata.bin",
+                      "size": 514,
+                      "sha256": "397a84a4062f563cbc5f56077c674f09a61d85be5090f61d2f1932afb92ac0fe"
+                    },
+                    {
+                      "path": "Encoder.mlmodelc/model.mil",
+                      "size": 1002653,
+                      "gitOID": "8c5c9915fc71bb7e9b0be1e7b55e38ec6a007e7f"
+                    },
+                    {
+                      "path": "Encoder.mlmodelc/weights/weight.bin",
+                      "size": 594211328,
+                      "sha256": "315ba01f33cadbf601d43ac7f5c86208b7aa75fdaa34705c9869d5abe3521c9b"
+                    },
+                    {
+                      "path": "JointDecisionv3.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "68d38ca646aebafa7a9329e2efda50f5767c49e89fdb5f77f212072bb66f97c4"
+                    },
+                    {
+                      "path": "JointDecisionv3.mlmodelc/coremldata.bin",
+                      "size": 592,
+                      "sha256": "5e3af5a4ce686f6c237cadbd9284e10d333bc0e1546633cd0e430e6194044bc4"
+                    },
+                    {
+                      "path": "JointDecisionv3.mlmodelc/model.mil",
+                      "size": 11777,
+                      "gitOID": "be552d46f98f9dc9b242b0d1659833db60aa3f83"
+                    },
+                    {
+                      "path": "JointDecisionv3.mlmodelc/weights/weight.bin",
+                      "size": 12642764,
+                      "sha256": "3f310b85b82341c53ec383025ab094a4e462ee1c592e1ad7c6bfe39cff66ca25"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "c9beeb989c8d66f8be11df59bc6df277ec76cee404f6865b46243835ef562f6d"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/coremldata.bin",
+                      "size": 486,
+                      "sha256": "dbde3f2300842c1fd51ef3ff948a0bcffe65ffd2dca10707f2509f32c1d65b1d"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/metadata.json",
+                      "size": 2841,
+                      "gitOID": "06162c58cf2f5343a0e60f36f843bcdf3cc58527"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/model.mil",
+                      "size": 28181,
+                      "gitOID": "f987e2479228436c49189aa47edb376db74dcff5"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/weights/weight.bin",
+                      "size": 491072,
+                      "sha256": "129b76e3aeafa8afa3ea76d995b964b145fe83700d579f6ff42c4c38fa0968ea"
+                    },
+                    {
+                      "path": "parakeet_vocab.json",
+                      "size": 151122,
+                      "gitOID": "c684822ec3b671ebc449c433a7012398d39b8bb0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "redux",
+          "name": "Parakeet Redux",
+          "detail": "Smaller download. 25 European languages.",
+          "homepage": "https://huggingface.co/FluidInference/parakeet-redux-coreml",
+          "releaseDate": "2026-09-22",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "wordTimestamps": true,
+            "wordConfidence": true,
+            "languages": [
+              "bg",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "et",
+              "fi",
+              "fr",
+              "hr",
+              "hu",
+              "it",
+              "lt",
+              "lv",
+              "mt",
+              "nl",
+              "pl",
+              "pt",
+              "ro",
+              "ru",
+              "sk",
+              "sl",
+              "sv",
+              "uk"
+            ],
+            "vocabularyPrompt": false,
+            "streaming": false
+          },
+          "engineOptions": {
+            "version": "redux"
+          },
+          "revisions": [
+            {
+              "id": "8c5ef97a29cd120dc76b354b3f22b7fec3b486f9",
+              "releaseDate": "2026-09-24",
+              "summary": "Refresh accuracy/speed numbers (ANE default, v3-family long-form path)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/parakeet-redux-coreml",
+                  "revision": "8c5ef97a29cd120dc76b354b3f22b7fec3b486f9",
+                  "include": [
+                    "Preprocessor.mlmodelc/*",
+                    "Encoder.mlmodelc/*",
+                    "Decoder.mlmodelc/*",
+                    "JointDecisionv3.mlmodelc/*",
+                    "parakeet_vocab.json"
+                  ],
+                  "files": [
+                    {
+                      "path": "Decoder.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "7f24e7248d57024c6f1c5a2ea306f4a6a89db45a363218523bb6410c4b1aecf0"
+                    },
+                    {
+                      "path": "Decoder.mlmodelc/coremldata.bin",
+                      "size": 560,
+                      "sha256": "422da51d983e93a3e48cd6d46a17d6c32844452414c8e242fb0caaca2b8af5ed"
+                    },
+                    {
+                      "path": "Decoder.mlmodelc/model.mil",
+                      "size": 13110,
+                      "gitOID": "36dcd5cbb71d13f42a177427ddbab7539e0d167e"
+                    },
+                    {
+                      "path": "Decoder.mlmodelc/weights/weight.bin",
+                      "size": 23604992,
+                      "sha256": "6c6c88c23ee5492a6b229e8cc636ddadb2b01ae0dd559d9cb63123bebf507d77"
+                    },
+                    {
+                      "path": "Encoder.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "7862e972e09315df099d4bfd320743bf106acbf7fe4343317f9de45b0635d7b7"
+                    },
+                    {
+                      "path": "Encoder.mlmodelc/coremldata.bin",
+                      "size": 506,
+                      "sha256": "ca0b212fe3c06c3ccd35e508fa61e4dfaad19dd0c55b82e4f5bf8711e7758fd9"
+                    },
+                    {
+                      "path": "Encoder.mlmodelc/model.mil",
+                      "size": 965906,
+                      "gitOID": "8328897b1fce282401724875571b75b6c542c4ed"
+                    },
+                    {
+                      "path": "Encoder.mlmodelc/weights/weight.bin",
+                      "size": 182389312,
+                      "sha256": "adbb5550dc6488717d3a1407b53122fbdb1af5e99c330ee20f8d8cfd9ec49252"
+                    },
+                    {
+                      "path": "JointDecisionv3.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "fc857a756b8c9c9f31aa9e1062766cc0a82ac035ef369d6e1cbe97184921479c"
+                    },
+                    {
+                      "path": "JointDecisionv3.mlmodelc/coremldata.bin",
+                      "size": 592,
+                      "sha256": "611ea653e2adede7cc1cfe70da36296844f97e95e2c7dd961d45230e5599389d"
+                    },
+                    {
+                      "path": "JointDecisionv3.mlmodelc/model.mil",
+                      "size": 11777,
+                      "gitOID": "be552d46f98f9dc9b242b0d1659833db60aa3f83"
+                    },
+                    {
+                      "path": "JointDecisionv3.mlmodelc/weights/weight.bin",
+                      "size": 12642764,
+                      "sha256": "73b0288acd115fc4c36038f66b6cbf49233182488febf5d8c787bea4009535f7"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "c9beeb989c8d66f8be11df59bc6df277ec76cee404f6865b46243835ef562f6d"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/coremldata.bin",
+                      "size": 486,
+                      "sha256": "dbde3f2300842c1fd51ef3ff948a0bcffe65ffd2dca10707f2509f32c1d65b1d"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/metadata.json",
+                      "size": 2841,
+                      "gitOID": "06162c58cf2f5343a0e60f36f843bcdf3cc58527"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/model.mil",
+                      "size": 28181,
+                      "gitOID": "f987e2479228436c49189aa47edb376db74dcff5"
+                    },
+                    {
+                      "path": "Preprocessor.mlmodelc/weights/weight.bin",
+                      "size": 491072,
+                      "sha256": "129b76e3aeafa8afa3ea76d995b964b145fe83700d579f6ff42c4c38fa0968ea"
+                    },
+                    {
+                      "path": "parakeet_vocab.json",
+                      "size": 151122,
+                      "gitOID": "c684822ec3b671ebc449c433a7012398d39b8bb0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

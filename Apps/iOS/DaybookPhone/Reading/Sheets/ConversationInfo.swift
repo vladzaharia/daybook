@@ -1,0 +1,299 @@
+import DaybookKit
+import SwiftUI
+
+/// The Mac's inspector, as a sheet: where the conversation is filed, who spoke, its recordings
+/// and how they were lined up, and how it was processed.
+struct ConversationInfo: View {
+    @ObservedObject var library: LibraryController
+    let meetingID: UUID
+    @Environment(\.dismiss) private var dismiss
+    @Environment(ReadingSession.self) private var session
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let meeting = library.meeting(meetingID) {
+                    Form {
+                        Section("Details") { details(meeting) }
+                        Section("People") { people(meeting) }
+                        Section {
+                            ForEach(meeting.tracks) { track in AudioSourceRow(meeting: meeting, track: track) }
+                            if meeting.tracks.isEmpty { Text("No recordings yet.").foregroundStyle(.secondary) }
+                        } header: {
+                            Text("Audio")
+                        }
+                        Section("Processing") { processing(meeting) }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .background(Color(uiColor: .systemGroupedBackground))
+                } else {
+                    ContentUnavailableView("Conversation Not Found", systemImage: "doc.questionmark")
+                }
+            }
+            .navigationTitle("Info")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    // MARK: Details
+
+    @ViewBuilder private func details(_ meeting: Meeting) -> some View {
+        Picker(selection: Binding(get: { meeting.folderID }, set: { library.moveToFolder([meeting.id], $0) })) {
+            Text("None").tag(UUID?.none)
+            ForEach(library.folders) { folder in Text(folder.name).tag(UUID?.some(folder.id)) }
+        } label: { Label("Folder", systemImage: "folder") }
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Tags", systemImage: "tag")
+            TagEditor(tags: meeting.tags ?? []) { library.setTags(meeting.id, text: $0.joined(separator: ",")) }
+        }
+        .padding(.vertical, 2)
+        Picker(selection: Binding(get: { PlacementChoice(meeting.placement) }, set: { library.setPlacement([meeting.id], $0.placement) })) {
+            Text(automaticPlacementTitle(meeting)).tag(PlacementChoice.automatic)
+            Text("Work").tag(PlacementChoice.work)
+            Text("Personal").tag(PlacementChoice.personal)
+        } label: { Label("Shows In", systemImage: "rectangle.stack") }
+        Picker(selection: Binding(get: { library.templateSelection(for: meeting.id) }, set: { id in
+            if library.chooseTemplate(id, for: meeting.id), !meeting.unifiedTranscript.isEmpty {
+                library.requestProcessing(meeting.id, mode: .summaryOnly, templateID: id == "auto" ? nil : id)
+            }
+        })) {
+            Text(automaticTemplateTitle(meeting)).tag("auto")
+            ForEach(library.templates) { Text($0.name).tag($0.id) }
+        } label: { Label("Template", systemImage: "doc.text") }
+        LabeledContent("Created", value: meeting.date.formatted(.dateTime.day().month(.abbreviated).year().hour().minute()))
+        LabeledContent("Edited", value: meeting.updatedAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
+    }
+
+    private func automaticTemplateTitle(_ meeting: Meeting) -> String {
+        guard let kind = meeting.summary?.kind, kind != .auto else { return "Automatic" }
+        return "Automatic (\(kind.title))"
+    }
+
+    private func automaticPlacementTitle(_ meeting: Meeting) -> String {
+        var automatic = meeting
+        automatic.placement = nil
+        switch automatic.effectivePlacement {
+        case .work?: return "Work (automatic)"
+        case .personal?: return "Personal (automatic)"
+        case nil: return "Automatic"
+        }
+    }
+
+    // MARK: People
+
+    @ViewBuilder private func people(_ meeting: Meeting) -> some View {
+        if meeting.speakers.isEmpty {
+            Text(meeting.tracks.isEmpty ? "No recording yet." : "No speakers yet")
+                .foregroundStyle(.secondary)
+        } else {
+            let total = max(1, meeting.speakers.map { talkTime($0.id, in: meeting) }.reduce(0, +))
+            ForEach(Array(meeting.speakers.enumerated()), id: \.element.id) { index, speaker in
+                let time = talkTime(speaker.id, in: meeting)
+                SpeakerRow(name: speaker.name, ink: PhoneStyle.speakerInk(index), talkTime: time, share: time / total) { name in
+                    library.renameSpeaker(speaker.id, to: name, in: meeting.id)
+                }
+            }
+        }
+    }
+
+    private func talkTime(_ id: String, in meeting: Meeting) -> TimeInterval {
+        meeting.unifiedTranscript.filter { $0.speakerID == id }.reduce(0) { $0 + max(0, $1.end - $1.start) }
+    }
+
+    // MARK: Processing
+
+    @ViewBuilder private func processing(_ meeting: Meeting) -> some View {
+        if let run = meeting.transcripts.max(by: { $0.createdAt < $1.createdAt }) {
+            LabeledContent("Transcribed") {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(ModelCatalog.builtIn.name(for: run.modelID, provenance: run.processingSettings?.model))
+                    Text(run.createdAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            LabeledContent("Transcribed", value: meeting.tracks.isEmpty ? "No recording" : "Not yet")
+        }
+        LabeledContent("Speakers", value: meeting.speakers.compactMap(\.analysisSettings).first.map { ModelCatalog.builtIn.name(for: $0.modelID, provenance: $0.model) }
+            ?? (meeting.speakers.isEmpty ? "Not identified" : "From the recordings"))
+        if let summary = meeting.summary {
+            LabeledContent("Summary") {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(ModelCatalog.builtIn.name(for: summary.modelID, provenance: summary.processingSettings?.model))
+                    Text(summary.createdAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        if let status = StatusPresentation.row(ProcessingStatus(meeting)) {
+            LabeledContent("Now", value: status.text)
+        }
+        ReprocessMenu(library: library, meeting: meeting)
+        Button {
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.sheet = .history(meeting.id) }
+        } label: { Label("Version History", systemImage: "clock.arrow.circlepath") }
+            .disabled(meeting.revisions.isEmpty)
+    }
+}
+
+private enum PlacementChoice: Hashable {
+    case automatic, work, personal
+    init(_ placement: LibraryPlacement?) {
+        switch placement {
+        case .work?: self = .work
+        case .personal?: self = .personal
+        case nil: self = .automatic
+        }
+    }
+    var placement: LibraryPlacement? {
+        switch self {
+        case .automatic: return nil
+        case .work: return .work
+        case .personal: return .personal
+        }
+    }
+}
+
+/// A speaker: their ink, their name (tap to rename), and how much of the talking they did.
+private struct SpeakerRow: View {
+    let name: String
+    let ink: Color
+    let talkTime: TimeInterval
+    let share: Double
+    let save: (String) -> Void
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle().fill(ink).frame(width: 10, height: 10).accessibilityHidden(true)
+            TextField("Speaker", text: $draft)
+                .foregroundStyle(ink)
+                .fontWeight(.semibold)
+                .textInputAutocapitalization(.words)
+                .submitLabel(.done)
+                .focused($focused)
+                .onSubmit(commit)
+                .onChange(of: focused) { _, active in if !active { commit() } }
+                .accessibilityLabel("Speaker name")
+                .accessibilityHint("Edit to rename this speaker everywhere in the conversation.")
+            Spacer(minLength: 8)
+            Capsule().fill(Color.primary.opacity(0.08)).frame(width: 52, height: 5)
+                .overlay(alignment: .leading) { Capsule().fill(ink).frame(width: max(5, 52 * share), height: 5) }
+                .accessibilityLabel("\(Int((share * 100).rounded())) percent of the talking")
+            Text(DurationLabel.format(talkTime)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(minWidth: 52, alignment: .trailing)
+        }
+        .onAppear { draft = name }
+        .onChange(of: name) { _, value in if !focused { draft = value } }
+    }
+
+    private func commit() {
+        let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty { draft = name } else if value != name { save(value) }
+    }
+}
+
+/// A recording: where it came from, how long, whether its audio is on this iPhone, and how it was
+/// lined up with the others.
+private struct AudioSourceRow: View {
+    let meeting: Meeting
+    let track: RecordingTrack
+    @Environment(\.audioProvider) private var provider
+    @Environment(ReadingSession.self) private var session
+    @State private var availability: AudioAvailability?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: SourceDescription.symbol(track)).foregroundStyle(.secondary).frame(width: 22)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(SourceDescription.name(track, in: meeting)).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    Text(track.duration.map(TimeLabel.short) ?? "—").monospacedDigit().foregroundStyle(.secondary)
+                }
+                HStack(spacing: 4) {
+                    if SourceDescription.isUnaligned(track, in: meeting) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(PhoneStyle.Ink.warning)
+                    }
+                    Text(SourceDescription.timing(track, in: meeting))
+                }
+                .font(.footnote).foregroundStyle(.secondary)
+                if let availability {
+                    Label(availabilityText(availability), systemImage: availabilitySymbol(availability))
+                        .labelStyle(CompactLabelStyle())
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            Button {
+                session.player.play(.source(track, 0), in: meeting, provider: provider)
+            } label: {
+                Image(systemName: "play.circle.fill").font(.title2).symbolRenderingMode(.hierarchical).foregroundStyle(PhoneStyle.accent)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Play this recording")
+        }
+        .accessibilityElement(children: .combine)
+        .task(id: track.id) { availability = await provider.availability(of: track, in: meeting.id) }
+    }
+
+    private func availabilityText(_ availability: AudioAvailability) -> String {
+        switch availability {
+        case .local: return "On this iPhone"
+        case .downloadable(let bytes?): return "In iCloud · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
+        case .downloadable(nil): return "In iCloud"
+        case .offline: return "Not on this iPhone yet"
+        case .missing: return "Not in the library on this iPhone"
+        }
+    }
+
+    private func availabilitySymbol(_ availability: AudioAvailability) -> String {
+        switch availability {
+        case .local: return "iphone"
+        case .downloadable: return "icloud.and.arrow.down"
+        case .offline: return "icloud.slash"
+        case .missing: return "questionmark.circle"
+        }
+    }
+}
+
+/// Tags as chips with a remove button, then a field for another.
+struct TagEditor: View {
+    let tags: [String]
+    let save: ([String]) -> Void
+    @State private var draft = ""
+
+    var body: some View {
+        FlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(tags, id: \.self) { tag in
+                HStack(spacing: 4) {
+                    Text(tag)
+                    Button { save(tags.filter { $0 != tag }) } label: { Image(systemName: "xmark").font(.caption2.weight(.bold)) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove tag \(tag)")
+                }
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(PhoneStyle.Ink.link)
+                .padding(.leading, 10).padding(.trailing, 8).padding(.vertical, 4)
+                .background(PhoneStyle.accent.opacity(0.14), in: Capsule())
+            }
+            TextField("Add Tag…", text: $draft)
+                .font(.subheadline)
+                .frame(minWidth: 90)
+                .fixedSize()
+                .submitLabel(.done)
+                .textInputAutocapitalization(.never)
+                .onSubmit(commit)
+        }
+    }
+
+    private func commit() {
+        let tag = draft.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: " ")
+        draft = ""
+        guard !tag.isEmpty, !tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) else { return }
+        save(tags + [tag])
+    }
+}

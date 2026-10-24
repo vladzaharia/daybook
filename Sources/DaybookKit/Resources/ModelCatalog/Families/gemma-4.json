@@ -1,0 +1,485 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "gemma-4",
+      "name": "Gemma 4",
+      "maker": "Google DeepMind",
+      "engine": "mlxLanguage",
+      "roles": [
+        "summarization"
+      ],
+      "summary": "Writes summaries and notes.",
+      "homepage": "https://huggingface.co/collections/google/gemma-4",
+      "license": {
+        "id": "Apache-2.0",
+        "name": "Apache License 2.0",
+        "url": "https://ai.google.dev/gemma/docs/gemma_4_license",
+        "allowsCommercialUse": true,
+        "attribution": "Gemma 4 by Google DeepMind, under the Apache License 2.0. MLX conversions by mlx-community."
+      },
+      "variants": [
+        {
+          "id": "e2b-4bit",
+          "name": "Gemma 4 · E2B",
+          "detail": "Fast and small.",
+          "releaseDate": "2026-04-02",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "contextLength": 131072,
+            "structuredOutput": true,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "gemma4",
+            "thinking": "off"
+          },
+          "minimumEngineVersion": 2,
+          "supersedes": [
+            "qwen2.5/1.5b-4bit"
+          ],
+          "homepage": "https://huggingface.co/mlx-community/gemma-4-e2b-it-4bit",
+          "revisions": [
+            {
+              "id": "238767527555cb75a05732a84dff5d6ba0dd6809",
+              "releaseDate": "2026-07-06",
+              "summary": "Re-upload MLX conversion from google/gemma-4-E2B-it@70af34e20bd4b7a91f0de6b22675850c43922a03",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/gemma-4-e2b-it-4bit",
+                  "revision": "238767527555cb75a05732a84dff5d6ba0dd6809",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "chat_template.jinja",
+                      "size": 17336,
+                      "gitOID": "c19999a347da729cf62806a8ddb7eb8e315223b5"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 6395,
+                      "gitOID": "1f8a26de63cd505f2fb5c98ad3f08f3e7f47a9de"
+                    },
+                    {
+                      "path": "generation_config.json",
+                      "size": 208,
+                      "gitOID": "e605bb4523b1462ea9d9a3810b9e3ecf7ab7b1f6"
+                    },
+                    {
+                      "path": "model.safetensors",
+                      "size": 3550670554,
+                      "sha256": "038e39a37a7667373d2c3991375446b10c96ae1d717a68674870343db376b76e"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 218323,
+                      "gitOID": "b145d4f0cf82ffc8c1f9bef70da4b4083646382d"
+                    },
+                    {
+                      "path": "processor_config.json",
+                      "size": 1316,
+                      "gitOID": "a086fb7e04b477c291a120b0a004abb78b11c6d2"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 32169626,
+                      "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 2740,
+                      "gitOID": "cf6235aee46a24bf71f251c0a4e7a0379948f7d2"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "e4b-4bit",
+          "name": "Gemma 4 · E4B",
+          "detail": "Balanced quality and speed.",
+          "releaseDate": "2026-04-02",
+          "recommendedMemoryGB": 16,
+          "capabilities": {
+            "contextLength": 131072,
+            "structuredOutput": true,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "gemma4",
+            "thinking": "off"
+          },
+          "minimumEngineVersion": 2,
+          "supersedes": [
+            "qwen2.5/3b-4bit"
+          ],
+          "homepage": "https://huggingface.co/mlx-community/gemma-4-e4b-it-4bit",
+          "revisions": [
+            {
+              "id": "475b9088d29754a3379866cf5aeb6b41acd313c2",
+              "releaseDate": "2026-07-06",
+              "summary": "Re-upload MLX conversion from google/gemma-4-E4B-it@fee6332c1abaafb77f6f9624236c63aa2f1d0187",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/gemma-4-e4b-it-4bit",
+                  "revision": "475b9088d29754a3379866cf5aeb6b41acd313c2",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "chat_template.jinja",
+                      "size": 17336,
+                      "gitOID": "c19999a347da729cf62806a8ddb7eb8e315223b5"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 6628,
+                      "gitOID": "4ee08502c4f98810dd43800ec849bd69f94adc98"
+                    },
+                    {
+                      "path": "generation_config.json",
+                      "size": 208,
+                      "gitOID": "e605bb4523b1462ea9d9a3810b9e3ecf7ab7b1f6"
+                    },
+                    {
+                      "path": "model.safetensors",
+                      "size": 5146800534,
+                      "sha256": "932b8271fc3fe65adcc78b96c10c6268bbfb13e8f67d1358727c0d6ee97e1eff"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 240961,
+                      "gitOID": "c03ce5f7086b735345038501f731634de064493b"
+                    },
+                    {
+                      "path": "processor_config.json",
+                      "size": 1316,
+                      "gitOID": "a086fb7e04b477c291a120b0a004abb78b11c6d2"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 32169626,
+                      "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 2740,
+                      "gitOID": "cf6235aee46a24bf71f251c0a4e7a0379948f7d2"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "12b-4bit",
+          "name": "Gemma 4 · 12B",
+          "detail": "Best for most conversations.",
+          "releaseDate": "2026-06-03",
+          "recommendedMemoryGB": 16,
+          "capabilities": {
+            "contextLength": 262144,
+            "structuredOutput": true,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "gemma4_unified",
+            "thinking": "off"
+          },
+          "minimumEngineVersion": 2,
+          "supersedes": [
+            "qwen2.5/7b-4bit"
+          ],
+          "homepage": "https://huggingface.co/mlx-community/gemma-4-12B-it-4bit",
+          "revisions": [
+            {
+              "id": "73bcf09092aa277861d5a191b989b666f7f32e8f",
+              "releaseDate": "2026-06-08",
+              "summary": "Update checkpoint (#2)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/gemma-4-12B-it-4bit",
+                  "revision": "73bcf09092aa277861d5a191b989b666f7f32e8f",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "chat_template.jinja",
+                      "size": 17466,
+                      "gitOID": "e61bbfe9a31db79ea1e4e557b046f895ad7899d0"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 5415,
+                      "gitOID": "d70dc3961e79b7bc4f4aef8eb875d67ebd144527"
+                    },
+                    {
+                      "path": "generation_config.json",
+                      "size": 260,
+                      "gitOID": "d09dccf1b9aee197ef72a6e88a1ceff74b842ff3"
+                    },
+                    {
+                      "path": "model-00001-of-00002.safetensors",
+                      "size": 5351756584,
+                      "sha256": "0d58feed0c98a69c07317b4481aeae5ab2785f12a496ea96ab24c4842808de78"
+                    },
+                    {
+                      "path": "model-00002-of-00002.safetensors",
+                      "size": 1389282927,
+                      "sha256": "5b00a1bcb596ce6e827b4cdea6ecf2a0f35bb01306eb87c1ea4b3bcde36c7755"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 135329,
+                      "gitOID": "c50946ccb1c9cbd9c5410164b0e8b7251062ac78"
+                    },
+                    {
+                      "path": "processor_config.json",
+                      "size": 868,
+                      "gitOID": "62a14d5cc4040dc144f6454faa603fc45036a1e0"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 32169626,
+                      "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 2719,
+                      "gitOID": "5c5c5b11eeb9f94ce14c6a7b058745662ae9f68a"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "26b-a4b-qat-4bit",
+          "name": "Gemma 4 · 26B A4B",
+          "detail": "Detailed and fast.",
+          "releaseDate": "2026-04-02",
+          "recommendedMemoryGB": 32,
+          "capabilities": {
+            "contextLength": 262144,
+            "structuredOutput": true,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "gemma4",
+            "thinking": "off"
+          },
+          "minimumEngineVersion": 2,
+          "homepage": "https://huggingface.co/mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+          "revisions": [
+            {
+              "id": "0e3cbab38ce568cf6e23543010d08d03b731910c",
+              "releaseDate": "2026-06-05",
+              "summary": "Upload folder using huggingface_hub",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/gemma-4-26B-A4B-it-qat-4bit",
+                  "revision": "0e3cbab38ce568cf6e23543010d08d03b731910c",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "chat_template.jinja",
+                      "size": 16934,
+                      "gitOID": "f62ca843a405a3066bdbddba8e42c92dd1ca4058"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 33376,
+                      "gitOID": "b0d4f6e5dae9c2a93ff05e8849ba43dfd4911c71"
+                    },
+                    {
+                      "path": "generation_config.json",
+                      "size": 203,
+                      "gitOID": "5a376e9fca28bfac73fe81b623bd6e4d00bb0817"
+                    },
+                    {
+                      "path": "model-00001-of-00003.safetensors",
+                      "size": 5275612587,
+                      "sha256": "898863f0d5eba7153a9c9b9443aac1969809f2149e88481c725b6da40783f129"
+                    },
+                    {
+                      "path": "model-00002-of-00003.safetensors",
+                      "size": 5296718232,
+                      "sha256": "2abdca76ed4a647cfe8af680908894e2709b4e1221ddbbbef1b1edb14f60e303"
+                    },
+                    {
+                      "path": "model-00003-of-00003.safetensors",
+                      "size": 5036507755,
+                      "sha256": "a554f0fdb61bc9e510a5318e723a780c31434fd3e3dcdd3c16c700f835ade7b7"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 176940,
+                      "gitOID": "ebc8565a0ecf420c25627bc5b0edc699c5ba16e9"
+                    },
+                    {
+                      "path": "processor_config.json",
+                      "size": 902,
+                      "gitOID": "13e92a44d19566f334d7450e7898935e16e16f3d"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 32169626,
+                      "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 2740,
+                      "gitOID": "cf6235aee46a24bf71f251c0a4e7a0379948f7d2"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "31b-8bit",
+          "name": "Gemma 4 · 31B",
+          "detail": "Most careful. Slowest.",
+          "releaseDate": "2026-04-02",
+          "recommendedMemoryGB": 64,
+          "capabilities": {
+            "contextLength": 262144,
+            "structuredOutput": true,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "gemma4",
+            "thinking": "off"
+          },
+          "minimumEngineVersion": 2,
+          "homepage": "https://huggingface.co/mlx-community/gemma-4-31b-it-8bit",
+          "revisions": [
+            {
+              "id": "f5f3dc92ab4af76724c36c21eb6bedadb3a851be",
+              "releaseDate": "2026-07-05",
+              "summary": "Re-upload google/gemma-4-31B-it MLX 8bit",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/gemma-4-31b-it-8bit",
+                  "revision": "f5f3dc92ab4af76724c36c21eb6bedadb3a851be",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "chat_template.jinja",
+                      "size": 17466,
+                      "gitOID": "e61bbfe9a31db79ea1e4e557b046f895ad7899d0"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 6046,
+                      "gitOID": "403382e330a23f563c7072139ef6b90bc7c5fbbd"
+                    },
+                    {
+                      "path": "generation_config.json",
+                      "size": 208,
+                      "gitOID": "e605bb4523b1462ea9d9a3810b9e3ecf7ab7b1f6"
+                    },
+                    {
+                      "path": "model-00001-of-00007.safetensors",
+                      "size": 5258667341,
+                      "sha256": "c3fe7c584ab9fb211c3071ac035628ccc6861c4a7e1b59c200f58b33ddb81435"
+                    },
+                    {
+                      "path": "model-00002-of-00007.safetensors",
+                      "size": 5328997408,
+                      "sha256": "ed27cbf128295cb8c5fe462ccee517f5840f034b8310af432707c6b01089d2ce"
+                    },
+                    {
+                      "path": "model-00003-of-00007.safetensors",
+                      "size": 5270505988,
+                      "sha256": "7a6cf32b03f6953bb42d863a4cc28e07289b6ea9fd501dfa9882b19e5539b048"
+                    },
+                    {
+                      "path": "model-00004-of-00007.safetensors",
+                      "size": 5329041180,
+                      "sha256": "615bb5fb4e2150da2ef820f2beae5dcf7939fae8b6405c5d8cfb376a16d18ff3"
+                    },
+                    {
+                      "path": "model-00005-of-00007.safetensors",
+                      "size": 5346547174,
+                      "sha256": "f1f2fad40a9535464bc81e522c13021d2478413be623cd07d2db00a2b19fc01d"
+                    },
+                    {
+                      "path": "model-00006-of-00007.safetensors",
+                      "size": 5270505993,
+                      "sha256": "4dbf38950088a46ed5c9baab1921f5aa75ad4a498ee51e25765c951148983761"
+                    },
+                    {
+                      "path": "model-00007-of-00007.safetensors",
+                      "size": 1958855331,
+                      "sha256": "67e62dc49c0f849b3f2b119a644d48b6e4caa92a1e2ef4569bc6e90ae826cc85"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 205370,
+                      "gitOID": "cc261a771cbb6dc175d31344cda33541c6301a2e"
+                    },
+                    {
+                      "path": "processor_config.json",
+                      "size": 1316,
+                      "gitOID": "a086fb7e04b477c291a120b0a004abb78b11c6d2"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 32169626,
+                      "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 2740,
+                      "gitOID": "cf6235aee46a24bf71f251c0a4e7a0379948f7d2"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

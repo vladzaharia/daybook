@@ -1,0 +1,225 @@
+import DaybookKit
+import XCTest
+@testable import DaybookPhone
+
+/// A phone and a Mac sharing one library through a temporary folder standing in for the iCloud
+/// container: the phone replica's wiring (on-demand audio, presence, bounded passes, status), live
+/// library updates, Mac presence, and the sync-backed audio provider.
+@MainActor
+final class SyncServicesTests: XCTestCase {
+    func testARecordingUploadsAtOnceAndAMacsChangesArriveLive() async throws {
+        let container = try temporaryDirectory("container")
+        let phone = try await makePhone(container)
+        XCTAssertEqual(phone.sync.statusLine, "Waiting to sync")
+        await phone.sync.synchronize(.launch)
+        XCTAssertEqual(phone.sync.statusLine, "Up to date")
+        let presenceBefore = MacPresence.resolve(connectedMac: nil, devices: phone.sync.devices, syncAvailable: true,
+                                                 syncReason: nil, devicesListed: phone.sync.devicesListed)
+        XCTAssertEqual(presenceBefore, .noMac)
+        XCTAssertEqual(presenceBefore.waitingLine(), "No Mac has synced this library yet")
+
+        let filed = try await record(into: phone)
+        XCTAssertEqual(filed.request?.mode, .newAudio)
+        try await waitUntil("the change is counted") { phone.sync.localChanges > 0 }
+        XCTAssertEqual(phone.sync.statusLine, "1 change waiting to sync")
+        await phone.sync.synchronize(.filed)
+        XCTAssertEqual(phone.sync.statusLine, "Up to date")
+        XCTAssertEqual(phone.sync.localChanges, 0)
+        let blobs = try FileManager.default.contentsOfDirectory(atPath: container.appendingPathComponent("Blobs").path)
+        XCTAssertEqual(blobs, [filed.meeting.tracks[0].sha256], "the recording's audio is in the container after one pass")
+        let me = try XCTUnwrap(phone.sync.devices.first(where: \.isCurrentDevice))
+        XCTAssertEqual(me.deviceClass, .phone)
+        XCTAssertEqual(me.audioPolicy, .onDemand)
+
+        // A Mac syncs: it gets the conversation with its audio and the request, and announces itself.
+        let mac = try await makeMac(container)
+        let applied = await mac.synchronize()
+        XCTAssertEqual(applied?.acknowledged, true)
+        let onMac = try XCTUnwrap(mac.meeting(filed.meeting.id))
+        XCTAssertEqual(onMac.openProcessingRequests.map(\.mode), [.newAudio])
+        let macAudio = try await mac.audioURL(for: onMac.tracks[0], in: onMac.id)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: macAudio.path))
+
+        // The Mac renames it; the phone's next pass applies it, and views reading the library follow.
+        mac.rename(onMac.id, to: "Design review, agreed")
+        await mac.flush()
+        _ = await mac.synchronize()
+        let revision = phone.library.revision
+        await phone.sync.synchronize(.remote)
+        XCTAssertEqual(phone.library.conversations.first?.title, "Design review, agreed")
+        try await waitUntil("observers are told") { phone.library.revision != revision }
+        XCTAssertTrue(phone.sync.lastReceived.contains(onMac.id))
+
+        let presence = MacPresence.resolve(connectedMac: nil, devices: phone.sync.devices, syncAvailable: true,
+                                           syncReason: nil, devicesListed: phone.sync.devicesListed)
+        guard case .seen(let name, let seen) = presence else { return XCTFail("expected the Mac's presence, got \(presence)") }
+        XCTAssertEqual(name, "Studio Mac")
+        XCTAssertEqual(presence.waitingLine(now: seen.addingTimeInterval(60)), "Waiting for Studio Mac")
+        XCTAssertEqual(presence.waitingLine(now: seen.addingTimeInterval(2 * 3_600 + 5)), "Waiting for your Mac · last seen 2 h ago")
+
+        // Nothing changed on either side: the timer's check lists the journal and runs no pass.
+        let passes = phone.sync.passes
+        await phone.sync.synchronize(.timer)
+        XCTAssertEqual(phone.sync.passes, passes)
+        // A change on the Mac is noticed by the same check.
+        mac.setTags(onMac.id, text: "design")
+        await mac.flush()
+        _ = await mac.synchronize()
+        await phone.sync.synchronize(.timer)
+        XCTAssertEqual(phone.sync.passes, passes + 1)
+        XCTAssertEqual(phone.library.controller.meeting(onMac.id)?.tags, ["design"])
+    }
+
+    func testStatusSaysWhySyncCantRun() async throws {
+        let library = try PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        let sync = PhoneSync(library: library.controller)
+        XCTAssertFalse(sync.isConnected)
+        XCTAssertEqual(sync.statusLine, "Sync isn't set up for this library.")
+        await sync.synchronize(.manual)
+        XCTAssertEqual(sync.passes, 0)
+        let presence = MacPresence.resolve(connectedMac: nil, devices: [], syncAvailable: false,
+                                           syncReason: "Sign in to iCloud Drive to sync your recordings.",
+                                           devicesListed: false)
+        XCTAssertEqual(presence.summary(), "Sign in to iCloud Drive to sync your recordings.")
+        XCTAssertEqual(MacPresence.resolve(connectedMac: "Studio Mac", devices: [], syncAvailable: false, syncReason: "x", devicesListed: false),
+                       .connected(name: "Studio Mac"), "a Mac on the link is present whatever iCloud says")
+    }
+
+    func testBoundedPassesContinueUntilTheJournalIsRead() async throws {
+        let container = try temporaryDirectory("container")
+        let mac = try await makeMac(container)
+        for index in 0..<5 { mac.newMeeting(title: "Meeting \(index)") }
+        await mac.flush()
+        _ = await mac.synchronize()
+        let phone = try await makePhone(container)
+        phone.sync.isForeground = false   // no automatic continuation; drive it here
+        // A pass that may read only two journal entries at a time leaves work for the next.
+        let applied = await phone.library.controller.synchronize(limits: SyncPassLimits(maxJournalReads: 2))
+        XCTAssertEqual(applied?.hasMoreWork, true)
+        XCTAssertLessThan(phone.library.conversations.count, 5)
+        for _ in 0..<5 where phone.library.conversations.count < 5 { await phone.sync.synchronize(.manual) }
+        XCTAssertEqual(phone.library.conversations.count, 5)
+        XCTAssertFalse(phone.sync.hasMoreWork)
+    }
+
+    // MARK: Audio provider
+
+    func testAudioDownloadsOnDemandWithProgressAndCanBeCancelled() async throws {
+        let container = try temporaryDirectory("container")
+        let recorder = try await makePhone(container, name: "Recording iPhone")
+        let filed = try await record(into: recorder)
+        await recorder.sync.synchronize(.filed)
+        let track = filed.meeting.tracks[0]
+        do { let availability = await recorder.audio.availability(of: track, in: filed.meeting.id); XCTAssertEqual(availability, .local, "recorded here") }
+
+        // Another iPhone has the conversation at once, but not its audio.
+        let reader = try await makePhone(container, name: "Reading iPhone")
+        await reader.sync.synchronize(.launch)
+        XCTAssertNotNil(reader.library.controller.meeting(filed.meeting.id))
+        do { let availability = await reader.audio.availability(of: track, in: filed.meeting.id); XCTAssertEqual(availability, .downloadable(bytes: nil)) }
+
+        // Cancelled while the recording isn't in the container: nothing is installed.
+        let blob = container.appendingPathComponent("Blobs/\(track.sha256)")
+        let aside = container.appendingPathComponent("aside")
+        try FileManager.default.moveItem(at: blob, to: aside)
+        var phases: [AudioFetchProgress.Phase] = []
+        let waiting = Task { try await reader.audio.localAudio(for: track, in: filed.meeting.id) { phases.append($0.phase) } }
+        try await waitUntil("waiting for the upload") { phases.contains(.waitingForUpload) }
+        XCTAssertNotNil(reader.audio.downloads[track.id])
+        waiting.cancel()
+        do {
+            _ = try await waiting.value
+            XCTFail("a cancelled download returns nothing")
+        } catch is CancellationError {}
+        do { let availability = await reader.audio.availability(of: track, in: filed.meeting.id); XCTAssertEqual(availability, .downloadable(bytes: nil)) }
+        XCTAssertNil(reader.audio.downloads[track.id])
+
+        // Back in the container: it downloads with progress, verified, and plays from the library.
+        try FileManager.default.moveItem(at: aside, to: blob)
+        var fractions: [Double] = []
+        let url = try await reader.audio.localAudio(for: track, in: filed.meeting.id) { fractions.append($0) }
+        XCTAssertEqual(fractions.last, 1)
+        XCTAssertEqual(fractions, fractions.sorted(), "progress only moves forward")
+        XCTAssertEqual(try AudioDigest.sha256(fileURL: url), track.sha256)
+        do { let availability = await reader.audio.availability(of: track, in: filed.meeting.id); XCTAssertEqual(availability, .local) }
+        XCTAssertEqual(reader.audio.usage.downloadedBytes, UInt64((try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0))
+    }
+
+    func testDownloadedAudioStaysWithinTheBudgetAndCanBeCleared() async throws {
+        let container = try temporaryDirectory("container")
+        let recorder = try await makePhone(container, name: "Recording iPhone")
+        let first = try await record(into: recorder, title: "First", seconds: 3)
+        let second = try await record(into: recorder, title: "Second", seconds: 3)
+        await recorder.sync.synchronize(.filed)
+
+        // Room for about one recording.
+        let size = UInt64((try FileManager.default.attributesOfItem(atPath: container.appendingPathComponent("Blobs/\(first.meeting.tracks[0].sha256)").path)[.size] as? NSNumber)?.int64Value ?? 0)
+        let reader = try await makePhone(container, name: "Reading iPhone", budget: size + size / 2)
+        reader.audio.keepWindow = 0
+        reader.audio.playingWindow = 0
+        await reader.sync.synchronize(.launch)
+        _ = try await reader.audio.localAudio(for: first.meeting.tracks[0], in: first.meeting.id) { _ in }
+        _ = try await reader.audio.localAudio(for: second.meeting.tracks[0], in: second.meeting.id) { _ in }
+        // The least recently played went back to iCloud to make room for the one just played.
+        do { let availability = await reader.audio.availability(of: first.meeting.tracks[0], in: first.meeting.id); XCTAssertEqual(availability, .downloadable(bytes: nil)) }
+        do { let availability = await reader.audio.availability(of: second.meeting.tracks[0], in: second.meeting.id); XCTAssertEqual(availability, .local) }
+        XCTAssertLessThanOrEqual(reader.audio.usage.bytes, size + size / 2)
+
+        // Clear Downloaded Audio removes downloads only; the recording phone keeps what it recorded.
+        let freed = await reader.audio.clearDownloaded()
+        XCTAssertGreaterThan(freed, 0)
+        do { let availability = await reader.audio.availability(of: second.meeting.tracks[0], in: second.meeting.id); XCTAssertEqual(availability, .downloadable(bytes: nil)) }
+        XCTAssertEqual(reader.audio.usage.bytes, 0)
+        _ = await recorder.audio.clearDownloaded()
+        do { let availability = await recorder.audio.availability(of: first.meeting.tracks[0], in: first.meeting.id); XCTAssertEqual(availability, .local) }
+    }
+}
+
+/// An iPhone library connected to a folder standing in for the container, as the app wires it.
+@MainActor
+struct PhoneRig {
+    let library: PhoneLibrary
+    let sync: PhoneSync
+    let audio: SyncAudioProvider
+}
+
+@MainActor
+extension XCTestCase {
+    func makePhone(_ container: URL, name: String = "Test iPhone", budget: UInt64 = 1_000_000_000) async throws -> PhoneRig {
+        let root = try temporaryDirectory("phone-\(name)")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
+        let controller = LibrarySyncController(localRoot: root, defaults: defaults)
+        controller.replica = PhoneSync.replica(displayName: name, budget: budget)
+        let library = try PhoneLibrary(rootURL: root, sync: controller, installation: UUID().uuidString)
+        try await library.reload()
+        let sync = PhoneSync(library: library.controller)
+        try sync.connect(toFolder: container, monitor: false)
+        let audio = SyncAudioProvider(library: library, sync: sync, budget: budget,
+                                      options: AudioFetchOptions(pollInterval: .milliseconds(20), timeout: .seconds(10)))
+        return PhoneRig(library: library, sync: sync, audio: audio)
+    }
+
+    /// A Mac with models: an eager replica that writes presence.
+    func makeMac(_ container: URL, name: String = "Studio Mac") async throws -> LibraryController {
+        let root = try temporaryDirectory("mac-\(name)")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
+        let controller = LibrarySyncController(localRoot: root, defaults: defaults)
+        controller.replica = .mac(displayName: name, canProcess: true)
+        let library = LibraryController(rootURL: root, sync: controller)
+        try await library.load()
+        try controller.connect(to: container, monitorChanges: false)
+        return library
+    }
+
+    /// Records `seconds` of tone and files it, as Stop does.
+    func record(into phone: PhoneRig, title: String = "Design review", seconds: TimeInterval = 4) async throws -> PhoneLibrary.Filed {
+        let rig = RecorderRig()
+        let id = UUID()
+        try await rig.recorder.start(in: phone.library.stagingURL.appendingPathComponent(id.uuidString), id: id, title: title)
+        rig.pump(1)
+        rig.recorder.editNotes("Decisions")
+        rig.pump(seconds - 1)
+        rig.recorder.addBookmark()
+        return try await phone.library.fileRecording(try await rig.stop())
+    }
+}

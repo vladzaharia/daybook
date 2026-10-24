@@ -1,0 +1,279 @@
+import DaybookLink
+import SwiftUI
+
+/// Settings › Macs: paired Macs and how each is doing, and Pair with a Mac.
+struct MacsSection: View {
+    @Environment(PhoneAppModel.self) private var model
+    @Binding var showingPairing: Bool
+
+    var body: some View {
+        Section {
+            ForEach(model.link.macs) { mac in
+                NavigationLink(value: SettingsRoute.mac(mac.id)) { MacRow(mac: mac) }
+            }
+            Button {
+                showingPairing = true
+            } label: {
+                Label(model.link.macs.isEmpty ? "Pair with Your Mac…" : "Pair Another Mac…", systemImage: "plus.circle")
+            }
+        } header: {
+            Text("Macs")
+        }
+    }
+}
+
+struct MacRow: View {
+    let mac: PhoneLink.Mac
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 18))
+                    .foregroundStyle(mac.isConnected ? PhoneStyle.accent : .secondary)
+                    .frame(width: 30, height: 30)
+                Circle()
+                    .fill(mac.isConnected ? PhoneStyle.accent : Color(uiColor: .tertiaryLabel))
+                    .frame(width: 8, height: 8)
+                    .overlay(Circle().stroke(Color(uiColor: .secondarySystemGroupedBackground), lineWidth: 2))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(mac.name)
+                Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var line: String {
+        if let recording = mac.recording, mac.isRecording {
+            return recording.phase == .paused ? "Paused recording" : "Recording now"
+        }
+        return mac.stateLine
+    }
+}
+
+/// One paired Mac: its connection, clock, and Unpair.
+struct MacDetailScreen: View {
+    @Environment(PhoneAppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let macID: UUID
+    @State private var confirmingUnpair = false
+
+    var body: some View {
+        if let mac = model.link.macs.first(where: { $0.id == macID }) {
+            Form {
+                Section {
+                    MacRow(mac: mac)
+                }
+                Section("This Mac") {
+                    LabeledContent("Transcribes", value: mac.canProcess ? "Yes" : mac.isConnected ? "No models yet" : "Unknown until connected")
+                    if let version = mac.appVersion { LabeledContent("Daybook", value: version) }
+                    LabeledContent("Paired", value: mac.pairedAt.formatted(date: .abbreviated, time: .omitted))
+                    if let clock = mac.clock {
+                        LabeledContent("Clock", value: clockLine(clock))
+                    }
+                }
+                Section {
+                    Button("Unpair \(mac.name)", role: .destructive) { confirmingUnpair = true }
+                }
+            }
+            .navigationTitle(mac.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .confirmationDialog("Unpair \(mac.name)?", isPresented: $confirmingUnpair, titleVisibility: .visible) {
+                Button("Unpair", role: .destructive) {
+                    Task {
+                        await model.link.unpair(macID)
+                        dismiss()
+                    }
+                }
+            } message: {
+                Text("Recording together and live progress stop until you pair again.")
+            }
+        } else {
+            ContentUnavailableView("Not Paired", systemImage: "desktopcomputer")
+        }
+    }
+
+    /// "In step (±4 ms)" or "12 ms ahead (±4 ms)": how the recordings will line up.
+    private func clockLine(_ clock: LinkClockEstimate) -> String {
+        let offset = Int((clock.offset * 1000).rounded()), uncertainty = max(1, Int((clock.uncertainty * 1000).rounded()))
+        if abs(offset) <= uncertainty { return "In step (±\(uncertainty) ms)" }
+        return "\(abs(offset)) ms \(offset > 0 ? "ahead" : "behind") (±\(uncertainty) ms)"
+    }
+}
+
+/// Pair with a Mac: choose it, type the six digits it shows. The code proves you can see the Mac's
+/// screen; nothing else is needed (docs/link.md, "Pairing").
+struct PairingSheet: View {
+    @Environment(PhoneAppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection: String?
+    @State private var code = ""
+    @State private var pairing = false
+    @State private var error: String?
+    @State private var paired: String?
+    @FocusState private var codeFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: PhoneStyle.Space.s5) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Image(systemName: "macbook.and.iphone")
+                            .font(.system(size: 40, weight: .light))
+                            .foregroundStyle(PhoneStyle.accent)
+                        Text("Pair with Your Mac")
+                            .font(PhoneStyle.Typeface.title(28))
+                            .foregroundStyle(PhoneStyle.Ink.title)
+                        Text("On your Mac, open Daybook › Settings › Devices and add your iPhone. It shows a six-digit code.")
+                            .font(.callout)
+                            .foregroundStyle(PhoneStyle.Ink.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let paired {
+                        Label("Paired with \(paired)", systemImage: "checkmark.circle.fill")
+                            .font(.headline)
+                            .foregroundStyle(PhoneStyle.accent)
+                    } else {
+                        macList
+                        codeEntry
+                        if let error {
+                            Label(error, systemImage: "exclamationmark.triangle")
+                                .font(.subheadline)
+                                .foregroundStyle(PhoneStyle.Ink.warning)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(PhoneStyle.Space.s5)
+                .frame(maxWidth: 520, alignment: .leading)
+                .frame(maxWidth: .infinity)
+            }
+            .background(Color(uiColor: .systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(paired == nil ? "Cancel" : "Done") { dismiss() } }
+                if paired == nil {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Pair") { Task { await pair() } }
+                            .disabled(!canPair)
+                    }
+                }
+            }
+            .task {
+                await model.link.startBrowsing()
+                if selection == nil { selection = model.link.candidates.first(where: \.isPairing)?.id ?? model.link.candidates.first?.id }
+                if model.options.openSettings == "pairing" { code = "482 9"; codeFocused = false }
+            }
+            .onDisappear { Task { await model.link.stopBrowsing() } }
+            .onChange(of: model.link.candidates) { _, candidates in
+                if selection == nil || !candidates.contains(where: { $0.id == selection }) {
+                    selection = candidates.first(where: \.isPairing)?.id ?? candidates.first?.id
+                }
+            }
+        }
+    }
+
+    private var digits: String { code.filter(\.isNumber) }
+    private var canPair: Bool { digits.count == 6 && selection != nil && !pairing }
+
+    private var macList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Macs on This Wi-Fi")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(PhoneStyle.Ink.meta)
+                .textCase(.uppercase)
+            VStack(spacing: 0) {
+                let candidates = model.link.candidates
+                if candidates.isEmpty {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                        Text("Looking for Macs… Both need to be on the same Wi-Fi.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ForEach(candidates) { mac in
+                    Button { selection = mac.id } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "desktopcomputer").foregroundStyle(PhoneStyle.accent).frame(width: 26)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mac.name).foregroundStyle(.primary)
+                                Text(mac.isPaired ? "Paired" : mac.isPairing ? "Showing a code" : "Open pairing on this Mac")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if selection == mac.id { Image(systemName: "checkmark").foregroundStyle(PhoneStyle.accent).fontWeight(.semibold) }
+                        }
+                        .padding(14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if mac.id != candidates.last?.id { Divider().padding(.leading, 52) }
+                }
+            }
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    private var codeEntry: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Code")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(PhoneStyle.Ink.meta)
+                .textCase(.uppercase)
+            ZStack {
+                TextField("", text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .focused($codeFocused)
+                    .opacity(0.02)
+                    .onChange(of: code) { _, value in
+                        let filtered = String(value.filter(\.isNumber).prefix(6))
+                        if filtered != value { code = filtered }
+                        error = nil
+                    }
+                HStack(spacing: 8) {
+                    ForEach(0..<6, id: \.self) { index in
+                        let characters = Array(digits)
+                        Text(index < characters.count ? String(characters[index]) : "")
+                            .font(.system(size: 30, weight: .medium).monospacedDigit())
+                            .foregroundStyle(PhoneStyle.Ink.title)
+                            .frame(maxWidth: .infinity, minHeight: 60)
+                            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(index == characters.count && codeFocused ? PhoneStyle.accent : Color.clear, lineWidth: 2))
+                        if index == 2 { Text("–").foregroundStyle(.tertiary) }
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { codeFocused = true }
+            .accessibilityElement()
+            .accessibilityLabel("Pairing code")
+            .accessibilityValue(digits.isEmpty ? "Empty" : digits.map(String.init).joined(separator: " "))
+            if pairing {
+                HStack(spacing: 8) { ProgressView(); Text("Pairing…").foregroundStyle(.secondary) }
+            }
+        }
+    }
+
+    private func pair() async {
+        guard let selection, let mac = model.link.candidates.first(where: { $0.id == selection }) else { return }
+        pairing = true
+        defer { pairing = false }
+        do {
+            let device = try await model.link.pair(with: mac.endpoint, code: digits)
+            paired = device.name
+            code = ""
+        } catch {
+            self.error = PhoneLink.message(for: error)
+            code = ""
+        }
+    }
+}

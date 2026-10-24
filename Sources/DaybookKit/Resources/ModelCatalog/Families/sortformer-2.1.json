@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "sortformer-2.1",
+      "name": "Sortformer 2.1",
+      "maker": "NVIDIA",
+      "engine": "sortformer",
+      "roles": [
+        "diarization"
+      ],
+      "summary": "Tells up to four speakers apart.",
+      "homepage": "https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1",
+      "license": {
+        "id": "NVIDIA-Open-Model-License",
+        "name": "NVIDIA Open Model License",
+        "url": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        "allowsCommercialUse": true,
+        "attribution": "Licensed by NVIDIA Corporation under the NVIDIA Open Model License (nvidia/diar_streaming_sortformer_4spk-v2.1). Core ML conversion by FluidInference (FluidInference/diar-streaming-sortformer-coreml, CC BY 4.0)."
+      },
+      "variants": [
+        {
+          "id": "compact",
+          "name": "Sortformer 2.1 · Compact",
+          "detail": "Smaller download. At most 4 speakers; no voice matching.",
+          "releaseDate": "2025-10-22",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "maxSpeakers": 4,
+            "expectedSpeakerCount": false,
+            "streaming": false
+          },
+          "engineOptions": {
+            "precision": "palettized"
+          },
+          "revisions": [
+            {
+              "id": "ae9a27ab45dc0aa3abede7d2d6bad2b7a69aa6d1",
+              "releaseDate": "2026-06-24",
+              "summary": "Add offline Sortformer v2.1 fused model (palettized)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/diar-streaming-sortformer-coreml",
+                  "revision": "ae9a27ab45dc0aa3abede7d2d6bad2b7a69aa6d1",
+                  "include": [
+                    "v3/palettized/SortformerOffline_v2.1.mlmodelc/*"
+                  ],
+                  "root": "v3/palettized/SortformerOffline_v2.1.mlmodelc",
+                  "files": [
+                    {
+                      "path": "v3/palettized/SortformerOffline_v2.1.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "d089abd182fa99fa06fc6b1ac4a19f4facf26efe463a525d955de7738b992911"
+                    },
+                    {
+                      "path": "v3/palettized/SortformerOffline_v2.1.mlmodelc/coremldata.bin",
+                      "size": 842,
+                      "sha256": "d1d42633c334b71b94c04714e09edf3d68a38a6496f1ae851fd08dfef7571736"
+                    },
+                    {
+                      "path": "v3/palettized/SortformerOffline_v2.1.mlmodelc/model.mil",
+                      "size": 1808228,
+                      "gitOID": "35cf68d8868bcff90e90b724cd49d38d2545681e"
+                    },
+                    {
+                      "path": "v3/palettized/SortformerOffline_v2.1.mlmodelc/weights/weight.bin",
+                      "size": 90425472,
+                      "sha256": "846e44443e302dc44c914ee807f29537e01ec67d1d463a61ef277e1198527138"
+                    }
+                  ]
+                }
+              ],
+              "legacy": {
+                "ids": [
+                  "speaker-sortformer-v2.1-compact"
+                ],
+                "artifactPaths": {
+                  "model": "models/FluidInference/diar-streaming-sortformer-coreml"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "fp16",
+          "name": "Sortformer 2.1 · Full Precision",
+          "detail": "Better on noisy audio. At most 4 speakers; no voice matching.",
+          "releaseDate": "2025-10-22",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "maxSpeakers": 4,
+            "expectedSpeakerCount": false,
+            "streaming": false
+          },
+          "engineOptions": {
+            "precision": "fp16"
+          },
+          "revisions": [
+            {
+              "id": "ae9a27ab45dc0aa3abede7d2d6bad2b7a69aa6d1",
+              "releaseDate": "2026-06-24",
+              "summary": "Add offline Sortformer v2.1 fused model (palettized)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/diar-streaming-sortformer-coreml",
+                  "revision": "ae9a27ab45dc0aa3abede7d2d6bad2b7a69aa6d1",
+                  "include": [
+                    "v3/fp16/SortformerOffline_v2.1.mlmodelc/*"
+                  ],
+                  "root": "v3/fp16/SortformerOffline_v2.1.mlmodelc",
+                  "files": [
+                    {
+                      "path": "v3/fp16/SortformerOffline_v2.1.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "7a9cea3055d0916c7e46ea8dc4bd06a6db3e877b2ad9a8354c628137238d7ce9"
+                    },
+                    {
+                      "path": "v3/fp16/SortformerOffline_v2.1.mlmodelc/coremldata.bin",
+                      "size": 842,
+                      "sha256": "181b9cc71c90caad0b465f0c513faf83427230fe304a4c82434b76eb11cc2cfd"
+                    },
+                    {
+                      "path": "v3/fp16/SortformerOffline_v2.1.mlmodelc/model.mil",
+                      "size": 1734998,
+                      "gitOID": "8c7e12385261e08ad3a655cd345a774218503b66"
+                    },
+                    {
+                      "path": "v3/fp16/SortformerOffline_v2.1.mlmodelc/weights/weight.bin",
+                      "size": 239846720,
+                      "sha256": "6896b9f24eb084af26ca4b2e522df990ab4560c0dfaaf25d856e4eb945d10c12"
+                    }
+                  ]
+                }
+              ],
+              "legacy": {
+                "ids": [
+                  "speaker-sortformer-v2.1"
+                ],
+                "artifactPaths": {
+                  "model": "models/FluidInference/diar-streaming-sortformer-coreml"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

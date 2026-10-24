@@ -3,69 +3,46 @@ import AVFoundation
 import Combine
 import CoreMedia
 import Foundation
-import ScreenCaptureKit
 
-enum CapturedTrackRole: String, Codable {
-    case microphone
-    case systemAudio
-}
+/// Everything the controller needs from the system, injectable so tests drive it with fakes
+/// instead of a real microphone, process tap, or ScreenCaptureKit stream.
+struct CaptureEnvironment {
+    /// Microphone permission; the live version prompts once when undetermined.
+    var microphoneAuthorization: @MainActor () async -> Bool
+    var makeMicrophone: @MainActor () -> CaptureAudioSource
+    var systemAudio: SystemAudioProviding
+    var currentRoute: () -> AudioOutputRoute
+    /// Starts observing output-route changes; the returned object stops observing when released.
+    var observeRoutes: (@escaping @Sendable (AudioOutputRoute) -> Void) -> AnyObject?
+    var hostTime: () -> TimeInterval
 
-struct CapturedAudioTrack: Codable, Identifiable, Equatable {
-    var id: CapturedTrackRole { role }
-    var role: CapturedTrackRole
-    var url: URL
-    var startedAt: Date
-    var firstSampleHostTimeSeconds: TimeInterval
-    /// Add this to a transcript timestamp to place it on the session timeline.
-    var offsetSeconds: TimeInterval
-    var sampleRate: Double
-    var channelCount: UInt32
-    var frameCount: Int64
-    var duration: TimeInterval { Double(frameCount) / sampleRate }
-}
-
-struct CaptureResult: Codable, Identifiable, Equatable {
-    var id: UUID
-    var startedAt: Date
-    var endedAt: Date
-    var tracks: [CapturedAudioTrack]
-    var warnings: [String]
-    var directory: URL
-}
-
-struct CaptureSessionManifest: Codable {
-    var id: UUID
-    var startedAt: Date
-    var hostTimeSeconds: TimeInterval
-    var includeSystemAudio: Bool
-}
-
-enum RecordingError: LocalizedError {
-    case alreadyRecording
-    case microphoneDenied
-    case noMicrophone
-    case noDisplay
-    case outputDirectoryInUse
-    case invalidAudio
-    case audioFormatChanged
-    case interrupted(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .alreadyRecording: return "A recording is already in progress."
-        case .microphoneDenied: return "Allow Daybook to use the microphone in System Settings → Privacy & Security → Microphone."
-        case .noMicrophone: return "No microphone is available. Connect an input device and try again."
-        case .noDisplay: return "System audio capture needs an active display and Screen & System Audio Recording permission."
-        case .outputDirectoryInUse: return "This recording folder already contains captured audio. A new folder is required to preserve the existing recording."
-        case .invalidAudio: return "The audio device supplied an unsupported audio buffer."
-        case .audioFormatChanged: return "The audio device changed during recording. The completed audio has been preserved; start a new recording with the new device."
-        case .interrupted(let reason): return reason
-        }
+    static var live: CaptureEnvironment {
+        CaptureEnvironment(
+            microphoneAuthorization: {
+                switch AVCaptureDevice.authorizationStatus(for: .audio) {
+                case .authorized: return true
+                case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
+                default: return false
+                }
+            },
+            makeMicrophone: { MicrophoneSource() },
+            systemAudio: LiveSystemAudioProvider(),
+            currentRoute: { AudioRouteMonitor.currentRoute() },
+            observeRoutes: { handler in
+                let monitor = AudioRouteMonitor()
+                monitor.start(onChange: handler)
+                return monitor
+            },
+            hostTime: { CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) })
     }
 }
 
-/// Records native PCM audio without a remote service. ScreenCaptureKit provides
-/// system audio; no video output is registered and no screen images are stored.
+/// Records the microphone and the call as separate native PCM tracks on one host-clock timeline.
+///
+/// Call audio comes from a Core Audio process tap on the detected call app when one is known, and
+/// from ScreenCaptureKit (all Mac playback except Daybook) otherwise or if the tap fails. Device
+/// and route changes are followed rather than ending the recording. After Stop, `CaptureFinalizer`
+/// removes the call's echo from the microphone; this controller only captures.
 @MainActor
 final class RecordingController: ObservableObject {
     enum State: String { case idle, starting, recording, stopping }
@@ -73,127 +50,106 @@ final class RecordingController: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var lastResult: CaptureResult?
     @Published private(set) var startedAt: Date?
+    /// How the call is being recorded (process tap or ScreenCaptureKit) and why.
+    @Published private(set) var systemAudioCapture: SystemAudioCaptureInfo?
+    /// The current output route; `.headphones` means the call cannot echo into the microphone.
+    @Published private(set) var outputRoute: AudioOutputRoute?
+    /// Call audio was audible within the last few seconds. Changes rarely, so it is safe to observe
+    /// through AppState; per-source meters are on `levels`.
+    @Published private(set) var isCallAudioDetected = false
+    /// Live "You" and "Call" meters. Observe directly; see `CaptureLevelMonitor`.
+    let levels = CaptureLevelMonitor()
     var isRecording: Bool { state == .recording }
     /// Monotonic time shared with audio-track offsets, unaffected by wall-clock edits.
     var elapsedTime: TimeInterval {
         guard let manifest else { return 0 }
-        return max(0, CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) - manifest.hostTimeSeconds)
+        return max(0, environment.hostTime() - manifest.hostTimeSeconds)
     }
     /// Called after an unexpected stop (device failure, revoked permission, sleep).
     /// The partial recording is complete and safe to import at this point.
     var onUnexpectedStop: ((CaptureResult) -> Void)?
+    /// Copies each source's live audio to captions (`LiveCaptionsController.prepare`). Set before
+    /// `start`; it's read once when a recording starts and dropped when it ends.
+    var captionTap: CaptureCaptionTap?
 
-    private var engine: AVAudioEngine?
-    private var microphoneTapInstalled = false
-    private var stream: SCStream?
-    private var streamOutput: SystemAudioOutput?
+    private let environment: CaptureEnvironment
+    private var microphone: CaptureAudioSource?
+    private var system: CaptureAudioSource?
     private var microphoneWriter: PCMTrackWriter?
     private var systemWriter: PCMTrackWriter?
     private var manifest: CaptureSessionManifest?
     private var directory: URL?
     private var warnings: [String] = []
+    private var routeEvents: [AudioRouteEvent] = []
+    private var routeObservation: AnyObject?
+    private var meterTimer: Timer?
     private var cancelStart = false
     private var observers: [NSObjectProtocol] = []
+    /// This recording's caption tap, on its session timeline.
+    private var activeCaptionTap: CaptureCaptionTap?
 
-    init() {
+    init(environment: CaptureEnvironment = .live) {
+        self.environment = environment
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.captureFailed(RecordingError.interrupted("Recording stopped because the Mac is going to sleep. Recorded audio has been preserved.")) }
-        })
-        observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] notification in
-            Task { @MainActor in
-                guard let self, let changedEngine = notification.object as? AVAudioEngine, changedEngine === self.engine else { return }
-                self.captureFailed(RecordingError.audioFormatChanged)
-            }
+            Task { @MainActor in self?.captureFailed(RecordingError.interrupted("Recording stopped because the Mac went to sleep. Everything up to then is saved.")) }
         })
     }
 
-    func start(in directory: URL, includeSystemAudio: Bool = true) async throws {
+    /// `callApp` is the meeting app to record on its own (from `MeetingMonitor` or the running
+    /// apps); without it, call audio is all Mac playback.
+    func start(in directory: URL, includeSystemAudio: Bool = true, callApp: CallAppTarget? = nil) async throws {
         guard state == .idle else { throw RecordingError.alreadyRecording }
         state = .starting
         lastError = nil
         lastResult = nil
         cancelStart = false
         warnings = []
+        routeEvents = []
+        systemAudioCapture = nil
+        levels.reset()
         do {
             guard !["capture-session.json", "microphone.caf", "systemAudio.caf"].contains(where: {
                 FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
             }) else { throw RecordingError.outputDirectoryInUse }
-            let granted: Bool
-            switch AVCaptureDevice.authorizationStatus(for: .audio) {
-            case .authorized: granted = true
-            case .notDetermined: granted = await AVCaptureDevice.requestAccess(for: .audio)
-            default: granted = false
-            }
-            guard granted else { throw RecordingError.microphoneDenied }
-            try checkStartCancellation()
-
-            // Request system permission before starting the mic, avoiding a partial
-            // microphone-only recording while a permission dialog is unanswered.
-            var filter: SCContentFilter?
-            if includeSystemAudio {
-                let content: SCShareableContent
-                do { content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false) }
-                catch {
-                    throw RecordingError.interrupted("System audio is unavailable. Allow Daybook in System Settings → Privacy & Security → Screen & System Audio Recording, then relaunch if macOS requests it. \(error.localizedDescription)")
-                }
-                guard let display = content.displays.first else { throw RecordingError.noDisplay }
-                filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-            }
+            guard await environment.microphoneAuthorization() else { throw RecordingError.microphoneDenied }
             try checkStartCancellation()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let startDate = Date()
-            let anchor = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
-            let manifest = CaptureSessionManifest(id: UUID(), startedAt: startDate, hostTimeSeconds: anchor, includeSystemAudio: includeSystemAudio)
+            let manifest = CaptureSessionManifest(id: UUID(), startedAt: startDate, hostTimeSeconds: environment.hostTime(),
+                                                  includeSystemAudio: includeSystemAudio, callApp: includeSystemAudio ? callApp : nil)
             self.directory = directory
             self.manifest = manifest
             self.startedAt = startDate
-            try Self.persist(manifest, at: directory.appendingPathComponent("capture-session.json"))
+            try CaptureJSON.persist(manifest, at: directory.appendingPathComponent("capture-session.json"))
+            let captions = captionTap?.onSessionTimeline(from: manifest.hostTimeSeconds)
+            activeCaptionTap = captions
+            observeRoutes()
 
-            let failure: (Error) -> Void = { [weak self] error in
-                Task { @MainActor in self?.captureFailed(error) }
-            }
-            let micWriter = PCMTrackWriter(role: .microphone, directory: directory, manifest: manifest, failure: failure)
-            self.microphoneWriter = micWriter
-            let audioEngine = AVAudioEngine()
-            self.engine = audioEngine
-            let input = audioEngine.inputNode
-            let format = input.outputFormat(forBus: 0)
-            guard format.sampleRate > 0 && format.channelCount > 0 else { throw RecordingError.noMicrophone }
-            input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, time in
-                guard let copied = PCMTrackWriter.copy(buffer) else {
-                    failure(RecordingError.invalidAudio)
-                    return
-                }
-                let hostSeconds = time.isHostTimeValid
-                    ? AVAudioTime.seconds(forHostTime: time.hostTime)
-                    : CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
-                micWriter.append(copied, hostTimeSeconds: hostSeconds)
-            }
-            microphoneTapInstalled = true
-            audioEngine.prepare()
-            try audioEngine.start()
-
-            if let filter {
-                let writer = PCMTrackWriter(role: .systemAudio, directory: directory, manifest: manifest, failure: failure)
+            // Call audio starts first, so permission prompts are answered before the microphone
+            // runs and a dialog never leaves a microphone-only recording behind.
+            if includeSystemAudio {
+                let writer = makeWriter(.systemAudio, manifest: manifest, directory: directory)
                 systemWriter = writer
-                let output = SystemAudioOutput(writer: writer, failure: failure)
-                streamOutput = output
-                let configuration = SCStreamConfiguration()
-                configuration.width = 2
-                configuration.height = 2
-                configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-                configuration.showsCursor = false
-                configuration.capturesAudio = true
-                configuration.excludesCurrentProcessAudio = true
-                configuration.sampleRate = 48_000
-                configuration.channelCount = 2
-                let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
-                self.stream = stream
-                try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: output.queue)
-                try await stream.startCapture()
+                let callCaptions = captions?.call
+                let (source, info) = try await SystemAudioSelector.start(target: callApp, provider: environment.systemAudio,
+                    onBuffer: { buffer, time in writer.append(buffer, hostTimeSeconds: time); callCaptions?(buffer, time) },
+                    onEvent: { [weak self] event in Task { @MainActor in self?.systemEvent(event) } })
+                system = source
+                systemAudioCapture = info
+                writer.setMethod(info.method.rawValue)
+                if let reason = info.fallbackReason, callApp != nil { warnings.append(reason) }
             }
             try checkStartCancellation()
+            let micWriter = makeWriter(.microphone, manifest: manifest, directory: directory, method: "microphone")
+            microphoneWriter = micWriter
+            let mic = environment.makeMicrophone()
+            microphone = mic
+            let microphoneCaptions = captions?.microphone
+            try await mic.start(onBuffer: { buffer, time in micWriter.append(buffer, hostTimeSeconds: time); microphoneCaptions?(buffer, time) },
+                                onEvent: { [weak self] event in Task { @MainActor in self?.microphoneEvent(event) } })
+            try checkStartCancellation()
             state = .recording
+            startMetering()
         } catch {
             lastError = error.localizedDescription
             warnings.append(error.localizedDescription)
@@ -215,9 +171,85 @@ final class RecordingController: ObservableObject {
         return await finishCapture()
     }
 
+    private func makeWriter(_ role: CapturedTrackRole, manifest: CaptureSessionManifest, directory: URL, method: String? = nil) -> PCMTrackWriter {
+        PCMTrackWriter(role: role, directory: directory, manifest: manifest, method: method) { [weak self] error in
+            Task { @MainActor in self?.writerFailed(role, error) }
+        }
+    }
+
     private func checkStartCancellation() throws {
         if cancelStart { throw CancellationError() }
         if let lastError { throw RecordingError.interrupted(lastError) }
+    }
+
+    // MARK: Source and writer events
+
+    private func microphoneEvent(_ event: CaptureSourceEvent) {
+        switch event {
+        case .deviceChanged(let note):
+            microphoneWriter?.markDiscontinuity(note)
+            warnings.append(note)
+        case .failed(let error):
+            captureFailed(error)
+        }
+    }
+
+    /// Call audio problems never end the recording: a failed tap falls back to ScreenCaptureKit,
+    /// and anything else stops only the call track.
+    private func systemEvent(_ event: CaptureSourceEvent) {
+        guard state == .recording || state == .starting else { return }
+        switch event {
+        case .deviceChanged(let note):
+            systemWriter?.markDiscontinuity(note)
+            warnings.append(note)
+        case .failed(let error):
+            Task { await systemFailed(error) }
+        }
+    }
+
+    private func writerFailed(_ role: CapturedTrackRole, _ error: Error) {
+        if role == .microphone || error is PCMTrackWriterError { captureFailed(error); return }
+        guard state == .recording else { return }
+        Task { await stopCallTrack(reason: "Call audio stopped: \(error.localizedDescription) The microphone kept recording.") }
+    }
+
+    private func systemFailed(_ error: Error) async {
+        guard state == .recording, let current = system else { return }
+        guard current.method == "process-tap", let writer = systemWriter else {
+            await stopCallTrack(reason: "Call audio stopped: \(error.localizedDescription) The microphone kept recording.")
+            return
+        }
+        if case ProcessTapError.silent = error, !environment.systemAudio.screenCaptureAuthorized {
+            // Possibly just a quiet call. Switching would show a permission prompt mid-call, so keep
+            // the tap (it records again as soon as the app plays sound) and say why it may be silent.
+            warnings.append("The call stayed silent. If its audio is missing, allow Daybook in System Settings › Privacy & Security › Screen & System Audio Recording.")
+            return
+        }
+        system = nil
+        await current.stop()
+        do {
+            let screen = try await environment.systemAudio.makeScreenCapture()
+            writer.markDiscontinuity("Switched call capture to all Mac audio.")
+            let callCaptions = activeCaptionTap?.call
+            try await screen.start(onBuffer: { buffer, time in writer.append(buffer, hostTimeSeconds: time); callCaptions?(buffer, time) },
+                                   onEvent: { [weak self] event in Task { @MainActor in self?.systemEvent(event) } })
+            guard state == .recording else { await screen.stop(); return }
+            system = screen
+            writer.setMethod(SystemAudioCaptureInfo.Method.screenCaptureKit.rawValue)
+            let reason = "Recording only the call app stopped working (\(error.localizedDescription)), so all Mac audio is recorded from here on."
+            systemAudioCapture = SystemAudioCaptureInfo(method: .screenCaptureKit, capturedApps: systemAudioCapture?.capturedApps,
+                                                        fallbackReason: reason, switchedAt: elapsedTime)
+            warnings.append(reason)
+        } catch {
+            warnings.append("Call audio stopped and could not switch to all Mac audio: \(error.localizedDescription) The microphone kept recording.")
+        }
+    }
+
+    private func stopCallTrack(reason: String) async {
+        warnings.append(reason)
+        let current = system
+        system = nil
+        await current?.stop()
     }
 
     private func captureFailed(_ error: Error) {
@@ -231,21 +263,50 @@ final class RecordingController: ObservableObject {
         }
     }
 
+    // MARK: Routes and meters
+
+    private func observeRoutes() {
+        let route = environment.currentRoute()
+        outputRoute = route
+        routeEvents = [AudioRouteEvent(time: 0, route: route)]
+        routeObservation = environment.observeRoutes { [weak self] route in
+            Task { @MainActor in self?.routeChanged(route) }
+        }
+    }
+
+    private func routeChanged(_ route: AudioOutputRoute) {
+        guard manifest != nil, route != outputRoute else { return }
+        outputRoute = route
+        routeEvents.append(AudioRouteEvent(time: elapsedTime, route: route))
+    }
+
+    private func startMetering() {
+        meterTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateLevels() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        meterTimer = timer
+    }
+
+    /// Called by the meter timer; internal so tests can sample without waiting on it.
+    func updateLevels() {
+        guard state == .recording else { return }
+        levels.update(microphone: microphoneWriter?.meter.read(), call: system == nil ? nil : systemWriter?.meter.read(),
+                      hostTime: environment.hostTime(), elapsed: elapsedTime)
+        if levels.isCallAudioDetected != isCallAudioDetected { isCallAudioDetected = levels.isCallAudioDetected }
+    }
+
+    // MARK: Finishing
+
     private func finishCapture() async -> CaptureResult? {
-        engine?.stop()
-        if microphoneTapInstalled {
-            engine?.inputNode.removeTap(onBus: 0)
-            microphoneTapInstalled = false
-        }
-        engine = nil
-        if let stream {
-            do { try await stream.stopCapture() }
-            catch { warnings.append("System audio stopped with: \(error.localizedDescription)") }
-        }
-        stream = nil
-        // Drain all ScreenCaptureKit callbacks before closing the writers.
-        if let output = streamOutput { await output.drain() }
-        streamOutput = nil
+        meterTimer?.invalidate()
+        meterTimer = nil
+        if let microphone { await microphone.stop() }
+        microphone = nil
+        if let system { await system.stop() }
+        system = nil
+        routeObservation = nil
         var tracks: [CapturedAudioTrack] = []
         for writer in [microphoneWriter, systemWriter].compactMap({ $0 }) {
             let outcome = await writer.finish()
@@ -254,6 +315,7 @@ final class RecordingController: ObservableObject {
         }
         microphoneWriter = nil
         systemWriter = nil
+        activeCaptionTap = nil
         var result: CaptureResult?
         if let manifest, let directory {
             if tracks.isEmpty { warnings.append("No audio samples were received.") }
@@ -261,8 +323,9 @@ final class RecordingController: ObservableObject {
                 warnings.append("No system audio was received. Check the meeting's output and recording permission.")
             }
             let completed = CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: Date(), tracks: tracks,
-                                          warnings: Array(Set(warnings)).sorted(), directory: directory)
-            do { try Self.persist(completed, at: directory.appendingPathComponent("capture-result.json")) }
+                                          warnings: Array(Set(warnings)).sorted(), directory: directory,
+                                          systemAudio: systemAudioCapture, outputRoutes: routeEvents.isEmpty ? nil : routeEvents)
+            do { try CaptureJSON.persist(completed, at: directory.appendingPathComponent("capture-result.json")) }
             catch { lastError = "Audio was saved, but recording metadata could not be saved: \(error.localizedDescription)" }
             lastResult = completed
             result = completed
@@ -270,172 +333,9 @@ final class RecordingController: ObservableObject {
         self.manifest = nil
         self.directory = nil
         startedAt = nil
+        isCallAudioDetected = false
+        levels.reset()
         state = .idle
         return result
-    }
-
-    private static func persist<T: Encodable>(_ value: T, at url: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        try encoder.encode(value).write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    }
-}
-
-/// All file mutation happens on a serial queue, never the real-time input thread.
-final class PCMTrackWriter: @unchecked Sendable {
-    struct Outcome { var track: CapturedAudioTrack?; var error: String? }
-    private let queue = DispatchQueue(label: "app.daybook.audio-writer", qos: .userInitiated)
-    private let role: CapturedTrackRole
-    private let url: URL
-    private let metadataURL: URL
-    private let manifest: CaptureSessionManifest
-    private let failure: (Error) -> Void
-    private var file: AVAudioFile?
-    private var track: CapturedAudioTrack?
-    private var errorMessage: String?
-    private var isFinished = false
-    private var lastMetadataWrite: TimeInterval = -.infinity
-    private let pendingSlots = DispatchSemaphore(value: 256)
-    private let overflowLock = NSLock()
-    private var overflowReported = false
-
-    init(role: CapturedTrackRole, directory: URL, manifest: CaptureSessionManifest, failure: @escaping (Error) -> Void) {
-        self.role = role
-        self.url = directory.appendingPathComponent(role.rawValue + ".caf")
-        self.metadataURL = directory.appendingPathComponent(role.rawValue + ".json")
-        self.manifest = manifest
-        self.failure = failure
-    }
-
-    func append(_ buffer: AVAudioPCMBuffer, hostTimeSeconds: TimeInterval) {
-        guard pendingSlots.wait(timeout: .now()) == .success else {
-            overflowLock.lock()
-            let shouldReport = !overflowReported
-            overflowReported = true
-            overflowLock.unlock()
-            if shouldReport { failure(RecordingError.interrupted("The disk could not keep up with audio recording. Captured audio has been preserved.")) }
-            return
-        }
-        queue.async { [self] in
-            defer { pendingSlots.signal() }
-            guard !isFinished, errorMessage == nil, buffer.frameLength > 0 else { return }
-            do {
-                if file == nil {
-                    file = try AVAudioFile(forWriting: url, settings: buffer.format.settings,
-                                           commonFormat: buffer.format.commonFormat, interleaved: buffer.format.isInterleaved)
-                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-                    let offset = hostTimeSeconds - manifest.hostTimeSeconds
-                    track = CapturedAudioTrack(role: role, url: url,
-                        startedAt: manifest.startedAt.addingTimeInterval(offset), firstSampleHostTimeSeconds: hostTimeSeconds,
-                        offsetSeconds: offset, sampleRate: buffer.format.sampleRate,
-                        channelCount: buffer.format.channelCount, frameCount: 0)
-                }
-                guard let file, var current = track, file.processingFormat == buffer.format else {
-                    throw RecordingError.audioFormatChanged
-                }
-                // Preserve clock gaps as silence, so transcript seconds still map to
-                // capture time. A large discontinuity likely means sleep/device loss.
-                let expectedTime = current.firstSampleHostTimeSeconds + current.duration
-                let gap = hostTimeSeconds - expectedTime
-                guard gap.isFinite else { throw RecordingError.invalidAudio }
-                if gap > 5 || gap < -0.1 {
-                    throw RecordingError.interrupted("The \(role.rawValue) audio clock was interrupted. Recorded audio has been preserved.")
-                }
-                if gap > 0.08 {
-                    let count = AVAudioFrameCount((gap * current.sampleRate).rounded())
-                    if let silence = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: count) {
-                        silence.frameLength = count
-                        for audio in UnsafeMutableAudioBufferListPointer(silence.mutableAudioBufferList) {
-                            if let data = audio.mData { memset(data, 0, Int(audio.mDataByteSize)) }
-                        }
-                        try file.write(from: silence)
-                        current.frameCount += Int64(count)
-                    }
-                }
-                try file.write(from: buffer)
-                current.frameCount += Int64(buffer.frameLength)
-                track = current
-                if hostTimeSeconds - lastMetadataWrite >= 10 {
-                    try persistTrack(current)
-                    lastMetadataWrite = hostTimeSeconds
-                }
-            } catch {
-                errorMessage = error.localizedDescription
-                failure(error)
-            }
-        }
-    }
-
-    func finish() async -> Outcome {
-        await withCheckedContinuation { continuation in
-            queue.async { [self] in
-                isFinished = true
-                file = nil // Close the CAF before callers import/read it.
-                if let track {
-                    do { try persistTrack(track) }
-                    catch { errorMessage = errorMessage ?? error.localizedDescription }
-                }
-                continuation.resume(returning: Outcome(track: track, error: errorMessage))
-            }
-        }
-    }
-
-    private func persistTrack(_ track: CapturedAudioTrack) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        try encoder.encode(track).write(to: metadataURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: metadataURL.path)
-    }
-
-    static func copy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return nil }
-        copy.frameLength = buffer.frameLength
-        let source = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
-        let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
-        guard source.count == destination.count else { return nil }
-        for index in source.indices {
-            guard let input = source[index].mData, let output = destination[index].mData else { return nil }
-            memcpy(output, input, Int(min(source[index].mDataByteSize, destination[index].mDataByteSize)))
-        }
-        return copy
-    }
-}
-
-private final class SystemAudioOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    let queue = DispatchQueue(label: "app.daybook.system-audio", qos: .userInitiated)
-    private let writer: PCMTrackWriter
-    private let failure: (Error) -> Void
-
-    init(writer: PCMTrackWriter, failure: @escaping (Error) -> Void) {
-        self.writer = writer
-        self.failure = failure
-    }
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, sampleBuffer.isValid, CMSampleBufferDataIsReady(sampleBuffer),
-              let description = sampleBuffer.formatDescription,
-              let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(description),
-              let format = AVAudioFormat(streamDescription: streamDescription) else { return }
-        let frames = CMSampleBufferGetNumSamples(sampleBuffer)
-        guard frames > 0, frames <= Int(Int32.max),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)) else { return }
-        buffer.frameLength = AVAudioFrameCount(frames)
-        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(sampleBuffer, at: 0, frameCount: Int32(frames), into: buffer.mutableAudioBufferList)
-        guard status == noErr else {
-            failure(NSError(domain: NSOSStatusErrorDomain, code: Int(status)))
-            return
-        }
-        writer.append(buffer, hostTimeSeconds: CMTimeGetSeconds(sampleBuffer.presentationTimeStamp))
-    }
-
-    func stream(_ stream: SCStream, didStopWithError error: Error) { failure(error) }
-
-    func drain() async {
-        await withCheckedContinuation { continuation in
-            queue.async { continuation.resume() }
-        }
     }
 }

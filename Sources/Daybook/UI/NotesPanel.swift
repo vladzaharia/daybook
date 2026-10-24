@@ -1,151 +1,225 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import SwiftUI
 
-/// A utility panel that can sit beside a full-screen call without bringing the
-/// library window forward. Text input becomes key when the user clicks the notes.
+// Floating Notes (docs/interface.md, "Floating Notes"): a floating version of the iPhone's main
+// screen, on a non-activating panel that sits over someone else's full-screen call without taking
+// focus from it. A status bar across the title band; while recording, the clock, You and Call
+// meters, your notes with their times, live captions, and large Bookmark and Stop; afterwards,
+// what's becoming of the recording; with nothing recording, a small home: status lines, Record and
+// Import, and recent conversations. The views live in `FloatingNotes/`.
+
+/// AppState's handle on the panel. There is one panel for the app, so every handle drives it.
 @MainActor
 final class NotesPanelController {
-    private var panel: MeetingNotesPanel?
-    private var displayedMeetingID: UUID?
+    /// Shows the panel on `meetingID`, or on its home when nil.
+    func show(state: AppState, meetingID: UUID?) {
+        FloatingNotesWindow.shared.show(state: state, focus: meetingID)
+    }
 
-    func show(state: AppState, meetingID: UUID) {
-        let panel: MeetingNotesPanel
-        if let existing = self.panel {
-            panel = existing
-        } else {
-            panel = MeetingNotesPanel(contentRect: .zero,
-                styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
-                backing: .buffered, defer: false)
-            panel.level = .floating
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            panel.isFloatingPanel = true
-            panel.hidesOnDeactivate = false
-            panel.isReleasedWhenClosed = false
-            panel.isMovableByWindowBackground = true
-            panel.minSize = NSSize(width: 320, height: 360)
-            panel.animationBehavior = .utilityWindow
-            panel.title = "Daybook Notes"
-            panel.titlebarAppearsTransparent = true
-            self.panel = panel
-        }
+    func close() { FloatingNotesWindow.shared.close() }
+}
 
-        if displayedMeetingID != meetingID || panel.contentViewController == nil {
-            panel.contentViewController = NSHostingController(rootView: MeetingNotesView(state: state, meetingID: meetingID))
-            displayedMeetingID = meetingID
+/// The panel itself: made once, kept for the life of the app, hidden rather than closed.
+@MainActor
+final class FloatingNotesWindow {
+    static let shared = FloatingNotesWindow()
+
+    private var panel: FloatingNotesPanel?
+    private let chrome = PanelChrome()
+    private var model: FloatingNotesModel?
+
+    var isVisible: Bool { panel?.isVisible == true }
+
+    /// - Parameters:
+    ///   - focus: The conversation to show; nil shows the home (or the recording, while there is one).
+    ///   - afterStop: Show `focus` as just stopped, as if the panel had watched it record.
+    func show(state: AppState, focus: UUID?, afterStop: Bool = false) {
+        let panel = self.panel ?? makePanel()
+        if model?.state !== state || panel.contentViewController == nil {
+            let model = FloatingNotesModel(state: state)
+            self.model = model
+            let hosting = NSHostingController(rootView: FloatingNotesRoot(model: model, state: state, chrome: chrome))
+            // The person sizes the panel; SwiftUI must not shrink it to the content's minimum.
+            hosting.sizingOptions = []
+            let frame = panel.frame
+            panel.contentViewController = hosting
+            panel.setFrame(frame, display: false)
+            chrome.track(hosting.view)
         }
-        if !panel.isVisible {
-            let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
-            if let frame = screen?.visibleFrame {
-                let width = min(CGFloat(370), frame.width - 32)
-                let height = min(CGFloat(660), frame.height - 32)
-                panel.setFrame(NSRect(x: frame.maxX - width - 16, y: frame.maxY - height - 16,
-                                      width: width, height: height), display: true)
-            }
-        }
-        // Automatic appearance must not steal typing focus from the meeting app.
+        var watched = afterStop
+        #if DEBUG
+        // `--notes-after-stop` shows the post-Stop sheet, which a simulated recording can't reach.
+        if CommandLine.arguments.contains("--notes-after-stop") { watched = true }
+        #endif
+        model?.focus(focus, afterStop: watched)
+        // Appearing automatically must not take typing focus from the meeting app.
         panel.orderFrontRegardless()
+        chrome.measure(panel)
+        DispatchQueue.main.async { [chrome] in chrome.measure(panel) }
     }
 
     func close() { panel?.close() }
+
+    private func makePanel() -> FloatingNotesPanel {
+        // A full title bar, not `.utilityWindow`: its 28 pt band and standard close button hold the
+        // status bar. No toolbar, so the window keeps the smaller corner radius.
+        let panel = FloatingNotesPanel(contentRect: NSRect(origin: .zero, size: FloatingLayout.defaultSize),
+                                       styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+                                       backing: .buffered, defer: false)
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.isExcludedFromWindowsMenu = true
+        panel.isReleasedWhenClosed = false
+        panel.isMovableByWindowBackground = true
+        panel.minSize = FloatingLayout.minimumSize
+        panel.maxSize = FloatingLayout.maximumSize
+        panel.animationBehavior = .utilityWindow
+        panel.title = "Floating Notes"
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.titlebarSeparatorStyle = .none
+        // Paper behind everything, so a live resize never flashes window grey.
+        panel.backgroundColor = NSColor(DaybookPalette.paper)
+        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        panel.standardWindowButton(.zoomButton)?.isHidden = true
+        // Close stays in the accessibility tree and fades in only while the pointer is over the panel.
+        panel.standardWindowButton(.closeButton)?.alphaValue = 0
+        chrome.closeButton = panel.standardWindowButton(.closeButton)
+        chrome.panel = panel
+        self.panel = panel
+        if !panel.setFrameUsingName("FloatingNotes") { place(panel) }
+        panel.setFrameAutosaveName("FloatingNotes")
+        #if DEBUG
+        if let size = FloatingNotesDemo.size {
+            panel.setFrame(NSRect(origin: panel.frame.origin, size: size), display: false)
+        }
+        // Increase Contrast can't be turned on for one app, so the shared tokens draw their
+        // contrast values (and SwiftUI's contrast is set on the root view).
+        if FloatingNotesDemo.increasedContrast { DaybookShade.simulatesIncreasedContrast = true }
+        #endif
+        return panel
+    }
+
+    /// First appearance: top-trailing of the screen under the pointer, inset 20 pt.
+    private func place(_ panel: NSPanel) {
+        let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
+        guard let frame = screen?.visibleFrame else { return }
+        let size = NSSize(width: min(FloatingLayout.defaultSize.width, frame.width - 40), height: min(FloatingLayout.defaultSize.height, frame.height - 40))
+        panel.setFrame(NSRect(x: frame.maxX - size.width - 20, y: frame.maxY - size.height - 20, width: size.width, height: size.height), display: true)
+    }
 }
 
-private final class MeetingNotesPanel: NSPanel {
+private final class FloatingNotesPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
 
-private struct MeetingNotesView: View {
-    @ObservedObject var state: AppState
-    let meetingID: UUID
+/// The panel's sizes and the grid its content keeps, in points.
+enum FloatingLayout {
+    static let defaultSize = NSSize(width: 360, height: 560)
+    static let minimumSize = NSSize(width: 280, height: 196)
+    static let maximumSize = NSSize(width: 640, height: 1000)
+    /// Below this height (the whole window), the panel is compact: the status bar, one caption
+    /// line, and the controls.
+    static let compactBelow: CGFloat = 380
+    /// The height the Compact button snaps to.
+    static let compactHeight: CGFloat = 212
 
-    private var meeting: Meeting? { state.meetings.first(where: { $0.id == meetingID }) }
-    private var isRecording: Bool { state.recordingID == meetingID }
-    private var notes: Binding<String> {
-        Binding(get: { meeting?.notes ?? "" }, set: { state.editNotes(meetingID, text: $0) })
+    /// Every left and right edge of content.
+    static let inset: CGFloat = 16
+    /// Times, caption sources, and the bookmark glyph are right-aligned here; text starts at `textLeading`.
+    static let laneTrailing: CGFloat = 44
+    static let laneGap: CGFloat = 8
+    static var textLeading: CGFloat { laneTrailing + laneGap }
+    static let timeSize: CGFloat = 11
+}
+
+/// What the sheet needs from the window around it. SwiftUI's own hover tracking isn't reliable in a
+/// non-key panel of an inactive app, which is this panel's normal state during a call.
+@MainActor
+final class PanelChrome: NSResponder, ObservableObject {
+    @Published var isHovering = false
+    /// The title-bar band's height: the status bar is centred in it.
+    @Published var band: CGFloat = 28
+    /// The close button's centre line, from the top of the window.
+    @Published var buttonCenter: CGFloat = 14
+    /// The close button's leading inset, which the Compact button's trailing inset mirrors.
+    @Published var buttonInset: CGFloat = 8
+    /// The close button's width, so the status bar starts clear of it.
+    @Published var buttonWidth: CGFloat = 14
+    weak var closeButton: NSButton?
+    weak var panel: NSPanel?
+    /// The height to return to from Compact.
+    private var fullHeight: CGFloat?
+    private var area: NSTrackingArea?
+
+    override init() {
+        super.init()
+        #if DEBUG
+        // `--notes-hover` shows the hover-only chrome in snapshots, which have no pointer.
+        if CommandLine.arguments.contains("--notes-hover") { isHovering = true }
+        #endif
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Label("YOUR NOTES", systemImage: "square.and.pencil")
-                        .font(.system(size: 10, weight: .semibold)).tracking(1.1).foregroundStyle(.secondary)
-                    Spacer()
-                    if isRecording {
-                        TimelineView(.periodic(from: .now, by: 1)) { _ in
-                            HStack(spacing: 6) {
-                                Circle().fill(.red).frame(width: 6, height: 6)
-                                Text(TimeLabel.format(state.recorder.elapsedTime))
-                                    .monospacedDigit()
-                            }.font(.caption.weight(.medium))
-                        }.accessibilityLabel("Recording in progress")
-                    } else {
-                        Label("Local", systemImage: "lock").font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
-                Text(meeting?.title ?? "Conversation unavailable")
-                    .font(.system(size: 19, weight: .semibold, design: .rounded)).lineLimit(3)
-                Text(isRecording ? "Stay in the conversation. Capture what matters." : "Your notes are saved with this conversation.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 18)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-            Divider()
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: notes)
-                    .font(.system(size: 15))
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 14).padding(.vertical, 14)
-                    .accessibilityLabel("Meeting notes")
-                    .disabled(meeting == nil)
-                if meeting?.notes.isEmpty != false {
-                    Text("A thought, a question, a detail to remember…")
-                        .font(.system(size: 15)).foregroundStyle(.tertiary)
-                        .padding(.horizontal, 20).padding(.top, 22)
-                        .allowsHitTesting(false)
-                }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    func track(_ view: NSView) {
+        if let area { view.removeTrackingArea(area) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        view.addTrackingArea(area)
+        self.area = area
+    }
 
-            Divider()
-            VStack(alignment: .leading, spacing: 12) {
-                if isRecording {
-                    HStack {
-                        Button { state.addHighlight(meetingID) } label: {
-                            Label("Mark moment", systemImage: "bookmark")
-                        }.help("Add a timestamped highlight to this recording")
-                        Spacer()
-                        Button {
-                            Task { await state.stopRecording() }
-                        } label: {
-                            Label(state.isStoppingRecording ? "Saving…" : "Stop", systemImage: "stop.fill")
-                        }.disabled(state.isStoppingRecording)
-                    }.buttonStyle(.bordered).controlSize(.small)
-                }
-                if let anchors = meeting?.timedNotes, !anchors.isEmpty {
-                    VStack(alignment: .leading, spacing: 5) {
-                        ForEach(Array(anchors.suffix(2))) { note in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(note.time.map(TimeLabel.format) ?? "Untimed")
-                                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                                    .frame(width: 48, alignment: .leading)
-                                Text(note.text).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                        }
-                    }.accessibilityLabel("Recent note timestamps")
-                }
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Included in your final summary").font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    if let count = meeting?.highlights.count, count > 0 {
-                        Label("\(count)", systemImage: "bookmark.fill")
-                            .font(.caption2).foregroundStyle(.secondary)
-                            .accessibilityLabel("\(count) marked moments")
-                    }
-                }
-            }.padding(16)
+    func measure(_ panel: NSPanel) {
+        let band = panel.frame.height - panel.contentLayoutRect.height
+        if band > 0, band != self.band { self.band = band }
+        if let button = panel.standardWindowButton(.closeButton) {
+            let rect = button.convert(button.bounds, to: nil)
+            let center = panel.frame.height - rect.midY, inset = rect.minX
+            if center > 0, center != buttonCenter { buttonCenter = center }
+            if inset > 0, inset != buttonInset { buttonInset = inset }
+            if rect.width > 0, rect.width != buttonWidth { buttonWidth = rect.width }
+        } else if band > 0 {
+            buttonCenter = band / 2
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .tint(Color(red: 0.22, green: 0.43, blue: 0.38))
-        .frame(minWidth: 300, minHeight: 320)
+        if NSMouseInRect(NSEvent.mouseLocation, panel.frame, false) { setHovering(true) }
+        closeButton?.alphaValue = isHovering ? 1 : 0
+    }
+
+    /// Compact snaps the panel to its compact height, keeping its top edge; Expand returns it to the
+    /// height it had. The layout follows the size, so dragging the edge does the same.
+    func setCompact(_ compact: Bool, animate: Bool) {
+        guard let panel else { return }
+        var frame = panel.frame
+        let height: CGFloat
+        if compact {
+            fullHeight = frame.height
+            height = FloatingLayout.compactHeight
+        } else {
+            height = max(FloatingLayout.compactBelow + 40, fullHeight ?? FloatingLayout.defaultSize.height)
+        }
+        frame.origin.y += frame.height - height
+        frame.size.height = height
+        panel.setFrame(frame, display: true, animate: animate)
+    }
+
+    override func mouseEntered(with event: NSEvent) { setHovering(true) }
+    override func mouseExited(with event: NSEvent) { setHovering(false) }
+
+    private func setHovering(_ value: Bool) {
+        #if DEBUG
+        if CommandLine.arguments.contains("--notes-hover") { return }
+        #endif
+        guard value != isHovering else { return }
+        isHovering = value
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            closeButton?.animator().alphaValue = value ? 1 : 0
+        }
     }
 }

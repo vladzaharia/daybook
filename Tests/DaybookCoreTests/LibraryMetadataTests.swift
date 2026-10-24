@@ -81,4 +81,58 @@ final class LibraryMetadataTests: XCTestCase {
         XCTAssertEqual(a.merging(b).merging(c), a.merging(b.merging(c)))
         XCTAssertEqual(a.merging(b).merging(c), c.merging(b).merging(a))
     }
+    // MARK: Recorder ownership
+
+    private func ownership(_ owner: String, _ name: String, at date: Date, serial: String = "D3200SIM0000001") -> RecorderOwnership {
+        RecorderOwnership(kind: "soundcore.work", serial: serial, ownerID: owner, ownerName: name,
+                          ownerClass: owner.hasPrefix("phone") ? .phone : .mac, claimedAt: date)
+    }
+
+    func testMetadataWrittenBeforeOwnershipStillDecodes() throws {
+        let json = #"{"schemaVersion":1,"folders":[],"templates":[],"vocabulary":[]}"#
+        let metadata = try JSONDecoder().decode(LibraryMetadata.self, from: Data(json.utf8))
+        XCTAssertNil(metadata.recorders)
+        XCTAssertTrue(metadata.recorderOwners.isEmpty)
+        XCTAssertEqual(metadata.merging(LibraryMetadata()), metadata, "merging two libraries without ownership adds none")
+        XCTAssertNil(metadata.merging(LibraryMetadata()).recorders)
+    }
+
+    func testOwnershipRoundTripsAndIsFoundBySerial() throws {
+        var metadata = LibraryMetadata()
+        let record = ownership("phone-1", "Alex’s iPhone", at: earlier)
+        metadata.recorders = [.init(id: record.id, value: record, modifiedAt: earlier)]
+        let decoded = try JSONDecoder().decode(LibraryMetadata.self, from: JSONEncoder().encode(metadata))
+        XCTAssertEqual(decoded, metadata)
+        XCTAssertEqual(decoded.recorderOwner(kind: "soundcore.work", serial: "D3200SIM0000001"), record)
+        XCTAssertNil(decoded.recorderOwner(kind: "soundcore.work", serial: "OTHER"))
+        XCTAssertNil(decoded.recorderOwner(kind: "plaud.notepin", serial: "D3200SIM0000001"))
+        XCTAssertEqual(record.id, RecorderOwnership.id(kind: "soundcore.work", serial: "D3200SIM0000001"))
+    }
+
+    func testTheLaterClaimWinsAndAReleaseIsKeptAgainstAnOlderClaim() {
+        let mac = ownership("mac-1", "Studio Mac", at: earlier)
+        let phone = ownership("phone-1", "Alex’s iPhone", at: later)
+        var a = LibraryMetadata(), b = LibraryMetadata()
+        a.recorders = [.init(id: mac.id, value: mac, modifiedAt: earlier)]
+        b.recorders = [.init(id: phone.id, value: phone, modifiedAt: later)]
+        XCTAssertEqual(a.merging(b), b.merging(a))
+        XCTAssertEqual(a.merging(b).recorderOwners, [phone])
+
+        // The phone lets it go after the Mac's older claim: the release wins, and nobody owns it.
+        var released = LibraryMetadata()
+        released.recorders = [.init(id: phone.id, value: nil, modifiedAt: Date(timeIntervalSince1970: 300))]
+        let merged = a.merging(b).merging(released)
+        XCTAssertTrue(merged.recorderOwners.isEmpty)
+        XCTAssertEqual(merged.recorders?.count, 1, "the deletion marker is kept so it syncs")
+        XCTAssertTrue(merged.merging(a).recorderOwners.isEmpty, "an older claim arriving late doesn't come back")
+
+        // Other recorders and other settings are independent.
+        var other = LibraryMetadata()
+        let second = ownership("mac-1", "Studio Mac", at: earlier, serial: "SECOND")
+        other.recorders = [.init(id: second.id, value: second, modifiedAt: earlier)]
+        other.folders = [.init(id: "f", value: LibraryFolder(name: "Work"), modifiedAt: earlier)]
+        let combined = merged.merging(other)
+        XCTAssertEqual(combined.recorderOwners, [second])
+        XCTAssertEqual(combined.folders.count, 1)
+    }
 }

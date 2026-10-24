@@ -1,32 +1,99 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
+// Layers, bottom up (docs/architecture.md):
+//   DaybookCore          models, storage, sync journal, fusion, alignment (macOS + iOS)
+//   DaybookDevices       recorders: the device framework, Soundcore over Bluetooth, folders; live captions of
+//                        a recorder's live audio through DaybookCaptions (macOS + iOS)
+//   DaybookKit           the library both apps share: edits, search, sync, processing status and requests,
+//                        recorder handoff (macOS + iOS)
+//   DaybookIntelligence  local models: the Mac's ProcessingEngine (macOS for now; no AppKit)
+//   DaybookLink          the Mac <-> iPhone local-network channel: pairing, control, status (macOS + iOS)
+//   DaybookCaptions      tentative on-device live captions for any audio source (Speech framework; macOS + iOS)
+//   DaybookDesign        the design both apps share: tokens, the rolling meter, the clock, caption strip,
+//                        status lines and chips, and the recorder's controls (SwiftUI only; macOS + iOS)
+//   Daybook              the Mac app
 let package = Package(
     name: "Daybook",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v15), .iOS(.v26)],
     products: [
         .executable(name: "Daybook", targets: ["Daybook"]),
-        .library(name: "DaybookCore", targets: ["DaybookCore"])
+        .library(name: "DaybookCore", targets: ["DaybookCore"]),
+        .library(name: "DaybookDevices", targets: ["DaybookDevices"]),
+        .library(name: "DaybookKit", targets: ["DaybookKit"]),
+        .library(name: "DaybookIntelligence", targets: ["DaybookIntelligence"]),
+        .library(name: "DaybookLink", targets: ["DaybookLink"]),
+        .library(name: "DaybookCaptions", targets: ["DaybookCaptions"]),
+        .library(name: "DaybookDesign", targets: ["DaybookDesign"])
     ],
     dependencies: [
-        .package(url: "https://github.com/argmaxinc/WhisperKit.git", exact: "0.18.0"),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", exact: "2.29.3"),
+        // argmax-oss-swift is the renamed WhisperKit repository; it vendors its own Hub and tokenizer code.
+        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", exact: "1.1.1"),
+        // Default traits: FoundationModelsIntegration only gates products Daybook doesn't link (MLXFoundationModels,
+        // MLXHuggingFace), and turning it off makes SwiftPM refuse to update a checkout of 2.x, which declared no traits.
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", exact: "3.32.3"),
+        // mlx-swift-lm asks for 0.32.x; pinned here so the MLX runtime never moves on its own.
+        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7", traits: []),
+        // Hub: the model store's downloads. Tokenizers: MLX's tokenizer and chat templates (MLXTokenizerAdapter).
         .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.1.6")
     ],
     targets: [
         .target(name: "DaybookCore"),
-        .executableTarget(name: "Daybook", dependencies: [
+        .target(name: "DaybookLink"),
+        // Foundation, AVFoundation, and Speech only, so the device framework can use it too.
+        .target(name: "DaybookCaptions"),
+        // SwiftUI only, no models: either app's views can use it without the other's code.
+        .target(name: "DaybookDesign"),
+        .target(name: "DaybookDevices", dependencies: ["DaybookCore", "DaybookCaptions"]),
+        // DaybookLink for the recorder handoff's fast path (RecorderHandoff.swift). Resources/ModelCatalog
+        // is the built-in model manifest (docs/models.md), shared so the iPhone can name the models behind
+        // a result and list their licenses.
+        .target(name: "DaybookKit", dependencies: ["DaybookCore", "DaybookDevices", "DaybookLink"],
+                resources: [.copy("Resources/ModelCatalog")]),
+        .target(name: "DaybookIntelligence", dependencies: [
             "DaybookCore",
-            .product(name: "WhisperKit", package: "WhisperKit"),
+            "DaybookKit",
+            .product(name: "WhisperKit", package: "argmax-oss-swift"),
+            .product(name: "MLX", package: "mlx-swift"),
             .product(name: "MLXLLM", package: "mlx-swift-lm"),
             .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+            .product(name: "MLXGuidedGeneration", package: "mlx-swift-lm"),
             .product(name: "FluidAudio", package: "FluidAudio"),
             .product(name: "Hub", package: "swift-transformers"),
             .product(name: "Tokenizers", package: "swift-transformers")
         ]),
+        .executableTarget(name: "Daybook", dependencies: [
+            "DaybookCore",
+            "DaybookDevices",
+            "DaybookKit",
+            "DaybookIntelligence",
+            "DaybookLink",
+            "DaybookCaptions",
+            "DaybookDesign"
+        ]),
         .testTarget(name: "DaybookCoreTests", dependencies: ["DaybookCore"]),
-        .testTarget(name: "DaybookTests", dependencies: ["Daybook", "DaybookCore"])
+        // Device tests decode transferred audio with DaybookIntelligence's reader (macOS).
+        .testTarget(name: "DaybookDevicesTests", dependencies: ["DaybookDevices", "DaybookCore", "DaybookIntelligence", "DaybookCaptions"]),
+        .testTarget(name: "DaybookKitTests", dependencies: ["DaybookKit", "DaybookCore", "DaybookDevices", "DaybookLink"]),
+        .testTarget(name: "DaybookIntelligenceTests", dependencies: [
+            "DaybookIntelligence",
+            "DaybookKit",
+            "DaybookCore",
+            .product(name: "FluidAudio", package: "FluidAudio")
+        ]),
+        .testTarget(name: "DaybookTests", dependencies: [
+            "Daybook",
+            "DaybookCore",
+            "DaybookDevices",
+            "DaybookKit",
+            "DaybookIntelligence",
+            "DaybookLink",
+            "DaybookCaptions",
+            "DaybookDesign"
+        ]),
+        .testTarget(name: "DaybookLinkTests", dependencies: ["DaybookLink"]),
+        .testTarget(name: "DaybookCaptionsTests", dependencies: ["DaybookCaptions"])
     ],
     swiftLanguageModes: [.v5]
 )

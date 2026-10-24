@@ -1,0 +1,132 @@
+# Daybook for Mac, built by Xcode so it can carry the iCloud container through a provisioning profile.
+# Generate the project with scripts/build-app.sh (--generate-only), or:
+#   xcodegen generate --spec Apps/macOS/project.yml --project Apps/macOS
+# DaybookMac.xcodeproj is generated and ignored by git; this file is the source of truth.
+#
+# The app target compiles Sources/Daybook in place, the same files as the SwiftPM `Daybook` executable
+# (which stays for `swift build`, `swift run`, and `swift test`), and links the package's libraries.
+# Resources/Info.plist and Resources/*.entitlements are referenced through build settings, so XcodeGen
+# never rewrites them.
+name: DaybookMac
+
+options:
+  bundleIdPrefix: local.daybook
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  developmentLanguage: en
+
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+
+settings:
+  base:
+    # The package uses the Swift 5 language mode; the app matches.
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Apple silicon only: MLX and the models need it, and the release ZIP is arm64.
+    ARCHS: arm64
+    # The icon script runs Swift and iconutil, and the notices script reads package checkouts.
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+
+packages:
+  # The repository's Swift package. Its Package.resolved is copied into the generated project by
+  # scripts/build-app.sh, so Xcode resolves the same pinned versions as `swift build`.
+  Daybook:
+    path: ../..
+
+targets:
+  Daybook:
+    type: application
+    platform: macOS
+    sources:
+      - path: ../../Sources/Daybook
+      - path: ../../Resources/Assets.xcassets
+      - path: ../../Resources/Info.plist
+        buildPhase: none
+      - path: ../../Resources/Daybook.entitlements
+        buildPhase: none
+      - path: ../../Resources/Daybook-Local.entitlements
+        buildPhase: none
+    dependencies:
+      - package: Daybook
+        product: DaybookCore
+      - package: Daybook
+        product: DaybookDevices
+      - package: Daybook
+        product: DaybookKit
+      - package: Daybook
+        product: DaybookIntelligence
+      - package: Daybook
+        product: DaybookLink
+      - package: Daybook
+        product: DaybookDesign
+    postCompileScripts:
+      - name: Generate app icon
+        # The same drawing as before: scripts/make-icon.swift, then iconutil. Runs when the script changes.
+        basedOnDependencyAnalysis: true
+        inputFiles:
+          - $(DAYBOOK_ROOT)/scripts/make-icon.swift
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Daybook.icns
+        script: |
+          set -euo pipefail
+          iconset="${DERIVED_FILE_DIR}/Daybook.iconset"
+          /bin/rm -rf "${iconset:?}"
+          /usr/bin/env -u SDKROOT -u MACOSX_DEPLOYMENT_TARGET xcrun --sdk macosx swift "${DAYBOOK_ROOT}/scripts/make-icon.swift" "${iconset}"
+          mkdir -p "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          iconutil -c icns "${iconset}" -o "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Daybook.icns"
+      - name: Copy third-party notices
+        # THIRD_PARTY_NOTICES.md and every resolved package's license, as the SwiftPM bundle had them.
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          resources="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "${resources}/Licenses"
+          /bin/cp -f "${DAYBOOK_ROOT}/THIRD_PARTY_NOTICES.md" "${resources}/ThirdPartyNotices.md"
+          checkouts="${DAYBOOK_SOURCE_PACKAGES:-${BUILD_DIR%/Build/*}/SourcePackages}/checkouts"
+          if [[ ! -d "${checkouts}" ]]; then
+            echo "warning: package checkouts not found at ${checkouts}; licenses not copied"
+            exit 0
+          fi
+          for package_dir in "${checkouts}"/*/; do
+            package="$(basename "${package_dir}")"
+            for name in LICENSE LICENSE.md LICENSE.txt LICENSE-MIT COPYING; do
+              if [[ -f "${package_dir}${name}" ]]; then
+                /bin/cp -f "${package_dir}${name}" "${resources}/Licenses/${package}-${name}.txt"
+              fi
+            done
+          done
+    settings:
+      base:
+        PRODUCT_NAME: Daybook
+        PRODUCT_BUNDLE_IDENTIFIER: local.daybook.app
+        PRODUCT_MODULE_NAME: Daybook
+        INFOPLIST_FILE: $(DAYBOOK_ROOT)/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        COMBINE_HIDPI_IMAGES: YES
+        # One executable, as the SwiftPM bundle had (no separate debug dylib).
+        ENABLE_DEBUG_DYLIB: NO
+        ENABLE_PREVIEWS: NO
+        DEAD_CODE_STRIPPING: YES
+
+schemes:
+  Daybook:
+    build:
+      targets:
+        Daybook: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

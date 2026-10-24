@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "community-1",
+      "name": "Community-1",
+      "maker": "pyannoteAI",
+      "engine": "community1",
+      "roles": [
+        "diarization",
+        "speakerEmbedding"
+      ],
+      "summary": "Tells speakers apart and remembers their voices.",
+      "homepage": "https://huggingface.co/pyannote/speaker-diarization-community-1",
+      "license": {
+        "id": "CC-BY-4.0",
+        "name": "CC BY 4.0 (scoped)",
+        "url": "https://huggingface.co/FluidInference/speaker-diarization-coreml/blob/df2625ac79a7ac6b65ad868fee6d80f320da4232/NOTICE.md",
+        "allowsCommercialUse": true,
+        "attribution": "pyannote speaker-diarization-community-1 by pyannoteAI, including its WeSpeaker ResNet34 speaker-embedding model, licensed under CC BY 4.0 (https://huggingface.co/pyannote/speaker-diarization-community-1). Converted to Core ML by FluidInference; the license scope and changes are described in the repository's NOTICE.md and PROVENANCE.md."
+      },
+      "variants": [
+        {
+          "id": "offline",
+          "name": "Community-1 Speaker Detection",
+          "detail": "Any number of speakers. Remembers voices across recordings.",
+          "releaseDate": "2025-04-15",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "voiceEmbeddings": {
+              "space": "fluid-community1-embedding-df2625ac79a7ac6b",
+              "dimensions": 256
+            },
+            "expectedSpeakerCount": true,
+            "streaming": false
+          },
+          "revisions": [
+            {
+              "id": "df2625ac79a7ac6b65ad868fee6d80f320da4232",
+              "releaseDate": "2026-09-19",
+              "summary": "Document Community-1 provenance and license scope",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/speaker-diarization-coreml",
+                  "revision": "df2625ac79a7ac6b65ad868fee6d80f320da4232",
+                  "include": [
+                    "Segmentation.mlmodelc/*",
+                    "FBank.mlmodelc/*",
+                    "Embedding.mlmodelc/*",
+                    "PldaRho.mlmodelc/*",
+                    "plda-parameters.json"
+                  ],
+                  "files": [
+                    {
+                      "path": "Embedding.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "8d6706436639b53830b4dbe8aaf9c9a843f7f582d63e16f3cb8bb7c6ccd58682"
+                    },
+                    {
+                      "path": "Embedding.mlmodelc/coremldata.bin",
+                      "size": 704,
+                      "sha256": "4a705bac27d151d9642f37609296042a15602a42253039e0921dc9e75da7e004"
+                    },
+                    {
+                      "path": "Embedding.mlmodelc/metadata.json",
+                      "size": 2818,
+                      "gitOID": "71c70e8c4972bbba271728ee32d9629a31498976"
+                    },
+                    {
+                      "path": "Embedding.mlmodelc/model.mil",
+                      "size": 78432,
+                      "gitOID": "39c8175875111f64245779cecad5185968a6db34"
+                    },
+                    {
+                      "path": "Embedding.mlmodelc/weights/weight.bin",
+                      "size": 13412288,
+                      "sha256": "99356b2985b8d43880a657024d941d450b38820451ccff903f76ed4e52d1868b"
+                    },
+                    {
+                      "path": "FBank.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "0e8bd3a8b82ac123580989f490e4d9245127c535857630b543311268accc3f0a"
+                    },
+                    {
+                      "path": "FBank.mlmodelc/coremldata.bin",
+                      "size": 853,
+                      "sha256": "57ac436bb0671cbb5527a339134d695f752eb77f7a18966b93c6835335595759"
+                    },
+                    {
+                      "path": "FBank.mlmodelc/metadata.json",
+                      "size": 3409,
+                      "gitOID": "b48f04253ef4cd5f92ef76453c57d82ccee3ba31"
+                    },
+                    {
+                      "path": "FBank.mlmodelc/model.mil",
+                      "size": 15667,
+                      "gitOID": "0e01e8a188d4fe7ee97866948c2ee159fe505248"
+                    },
+                    {
+                      "path": "FBank.mlmodelc/weights/weight.bin",
+                      "size": 1776896,
+                      "sha256": "9e83fdd3ea78064b078069e4d9141603c61c47a27fd19e7e3142ff7476f8db36"
+                    },
+                    {
+                      "path": "PldaRho.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "8940ea6044dbcbefa22da8cc41e0b485e1fb5ed89aecaf37c6e0c483a97ddcd7"
+                    },
+                    {
+                      "path": "PldaRho.mlmodelc/coremldata.bin",
+                      "size": 763,
+                      "sha256": "4d9741477f721c79b09fcdfe455110c4b7d4272e2de3496bf1729d966d3ee418"
+                    },
+                    {
+                      "path": "PldaRho.mlmodelc/metadata.json",
+                      "size": 2749,
+                      "gitOID": "b964649416a95f0d8b3f7155a9a1ef46b79543aa"
+                    },
+                    {
+                      "path": "PldaRho.mlmodelc/model.mil",
+                      "size": 7613,
+                      "gitOID": "30c6a1b1bfb5a5a2a9498d52c9529c15ba9e3917"
+                    },
+                    {
+                      "path": "PldaRho.mlmodelc/weights/weight.bin",
+                      "size": 200192,
+                      "sha256": "80f7d229202636d372428c90596f11a91545f07da77259f07153aaf225914a36"
+                    },
+                    {
+                      "path": "Segmentation.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "64265f8e7ad41a5f68d630c15288c2499cca5892ad49e20096819cdeac004cdb"
+                    },
+                    {
+                      "path": "Segmentation.mlmodelc/coremldata.bin",
+                      "size": 812,
+                      "sha256": "ea51481b8bd3e496ad3cf16f066ddaa37f20e8772eaac76b3393c28de20e06bc"
+                    },
+                    {
+                      "path": "Segmentation.mlmodelc/metadata.json",
+                      "size": 3410,
+                      "gitOID": "604d6f1f829f47120b5d291825e28a7ee01b5d18"
+                    },
+                    {
+                      "path": "Segmentation.mlmodelc/model.mil",
+                      "size": 43063,
+                      "gitOID": "60b457187b267fd64cd00410f4165d218c4fe7d7"
+                    },
+                    {
+                      "path": "Segmentation.mlmodelc/weights/weight.bin",
+                      "size": 5959360,
+                      "sha256": "c3189a64946c75bc24fcb98afe89ad78c52bdbadfdf65e857fb1b81e2cc9fbb2"
+                    },
+                    {
+                      "path": "plda-parameters.json",
+                      "size": 89416,
+                      "gitOID": "104dc2572aec3eb7d606a619fa738cdc43824cff"
+                    }
+                  ]
+                }
+              ],
+              "legacy": {
+                "ids": [
+                  "speaker-community-1"
+                ],
+                "artifactPaths": {
+                  "model": "speaker-diarization"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

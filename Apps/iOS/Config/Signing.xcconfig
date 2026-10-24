@@ -1,0 +1,20 @@
+// Signing and iCloud for Daybook on iPhone.
+//
+// Automatic signing with the team from DAYBOOK_TEAM_ID. Set it in the environment when building
+// from the command line (scripts/build-ios.sh --device), or in Signing.local.xcconfig next to this
+// file (ignored by git) when building from Xcode, which doesn't see shell variables:
+//
+//     DAYBOOK_TEAM_ID = ABCDE12345
+//     DAYBOOK_ICLOUD_CONTAINER = iCloud.local.daybook
+//
+// Simulator builds need no team: Xcode signs them to run locally, and the app reports that iCloud
+// isn't available. Registering the identifiers, app group, and iCloud container with an Apple
+// Developer account is a separate, deliberate step (Xcode's Signing & Capabilities with the team
+// selected); nothing in this repository does it.
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM = $(DAYBOOK_TEAM_ID)
+
+// The iCloud container sync uses: the entitlements and Info.plist's DaybookICloudContainerIdentifier.
+DAYBOOK_ICLOUD_CONTAINER = iCloud.local.daybook
+
+#include? "Signing.local.xcconfig"

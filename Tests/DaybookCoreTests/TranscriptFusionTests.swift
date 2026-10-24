@@ -109,15 +109,24 @@ final class TranscriptFusionTests: XCTestCase {
         let second = [segment(b, 0, "We will not launch the product tomorrow", confidence: 0.5),
                       segment(b, 10, "We approved the calendar update but rejected the database migration", confidence: 0.5)]
         let result = TranscriptFusion.fuse([TrackTranscript(trackID: a, segments: first, knownOffset: 0), TrackTranscript(trackID: b, segments: second, knownOffset: 0)])
-        XCTAssertEqual(result.segments.count, 4)
+        // The same speech is fused into one passage, but a negation or a clause only one source
+        // heard survives the vote even though the other source is more confident.
+        XCTAssertEqual(result.segments.map(\.text), ["We will not launch the product tomorrow",
+                                                     "We approved the calendar update but rejected the database migration"])
         XCTAssertTrue(result.segments.contains { $0.text.contains("not launch") })
         XCTAssertTrue(result.segments.contains { $0.text.contains("rejected") })
+        // Both versions remain in provenance, and the confident source didn't support "not".
+        let negation = result.segments[0].provenance
+        XCTAssertEqual(negation.map(\.text), ["We will launch the product tomorrow", "We will not launch the product tomorrow"])
+        XCTAssertEqual(negation[0].wordIndices, [0, 1, 3, 4, 5, 6])
     }
     func testDifferentSegmentBoundariesPreserveAllSourceWords() {
         let first = TrackTranscript(trackID: a, segments: [segment(a, 0, "Please review the calendar update and schedule the next planning meeting")], knownOffset: 0)
         let second = TrackTranscript(trackID: b, segments: [segment(b, 0, "Please review the calendar update"), segment(b, 2, "and schedule the next planning meeting")], knownOffset: 0)
         let result = TranscriptFusion.fuse([first, second])
-        XCTAssertEqual(result.segments.count, 3)
+        // Word-level fusion merges the same speech across different segment boundaries.
+        XCTAssertEqual(result.segments.count, 1)
+        XCTAssertEqual(result.segments[0].text, "Please review the calendar update and schedule the next planning meeting")
         XCTAssertEqual(Set(result.segments.flatMap(\.provenance).map(\.segmentID)), Set((first.segments + second.segments).map(\.id)))
     }
     func testSingleCoincidentalPhraseDoesNotAlignTracks() {

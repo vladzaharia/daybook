@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+@testable import DaybookKit
 import Foundation
 import XCTest
 @testable import Daybook
@@ -78,6 +79,9 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(TimeLabel.format(-15), "−00:15")
         XCTAssertEqual(TimeLabel.format(3661), "1:01:01")
         XCTAssertEqual(TimeLabel.format(.nan), "00:00")
+        XCTAssertEqual(TimeLabel.short(14), "0:14")
+        XCTAssertEqual(TimeLabel.short(-15), "−0:15")
+        XCTAssertEqual(TimeLabel.short(3661), "1:01:01")
     }
 
     func testRecoveryNeverResurrectsTrashedConversation() async throws {

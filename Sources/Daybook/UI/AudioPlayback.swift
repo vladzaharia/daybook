@@ -10,8 +10,29 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var currentURL: URL?
     @Published private(set) var errorMessage: String?
+    /// Playback speed, kept when another source loads.
+    @Published var rate: Float = 1 { didSet { player?.rate = rate } }
+    /// The recording and conversation now loaded, so views can follow along.
+    @Published private(set) var trackID: UUID?
+    @Published private(set) var meetingID: UUID?
     private var player: AVAudioPlayer?
     private var timer: Timer?
+
+    /// Starts or seeks playback of one recording of a conversation.
+    func play(url: URL, at seconds: TimeInterval = 0, trackID: UUID, meetingID: UUID) {
+        self.trackID = trackID; self.meetingID = meetingID
+        play(url: url, at: seconds)
+    }
+
+    /// Silences the current source; used only by debug launch actions.
+    func mute() { player?.volume = 0 }
+
+    func toggle() {
+        guard player != nil else { return }
+        if isPlaying { pause() } else { resume() }
+    }
+
+    func skip(_ seconds: TimeInterval) { seek(to: position + seconds) }
 
     /// Starts or seeks playback; loading another URL replaces the current source.
     func play(url: URL, at seconds: TimeInterval = 0) {
@@ -20,9 +41,11 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
                 stop()
                 let loaded = try AVAudioPlayer(contentsOf: url)
                 loaded.delegate = self
+                loaded.enableRate = true
                 guard loaded.prepareToPlay() else {
                     throw NSError(domain: "DaybookPlayback", code: 1, userInfo: [NSLocalizedDescriptionKey: "This audio file could not be prepared for playback."])
                 }
+                loaded.rate = rate
                 player = loaded
                 currentURL = url
                 duration = loaded.duration
@@ -75,6 +98,17 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
         position = 0
         isPlaying = false
         invalidateTimer()
+    }
+
+    /// Stops playback and releases the source, which hides playback controls.
+    func unload() {
+        stop()
+        player = nil
+        currentURL = nil
+        trackID = nil
+        meetingID = nil
+        duration = 0
+        errorMessage = nil
     }
 
     /// Bind a playback slider's setter to this method. Seeking preserves pause/play.

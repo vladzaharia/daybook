@@ -1,0 +1,187 @@
+import DaybookCore
+import DaybookKit
+import Foundation
+
+/// The Mac's `ProcessingEngine`: local models through `MeetingInference` (`LocalIntelligenceRuntime`,
+/// or a fake in tests). It transcribes with the chosen speech model, identifies speakers when asked,
+/// and summarizes with the chosen language model, recording on every run exactly which model
+/// (family, variant, revision, engine version) produced it. When a small-tasks model is selected
+/// (Apple Foundation Models), it chooses the title, the meeting kind, and vocabulary suggestions
+/// first; when it isn't, or can't run, the summarizer does that as it always has.
+public struct InferenceProcessingEngine: ProcessingEngine {
+    /// The models and options one job runs with, fixed when it was queued.
+    public struct Configuration: Sendable {
+        public var transcriptionModel: ModelReference
+        public var summaryModel: ModelReference
+        public var detectSpeakers: Bool
+        public var speakerModel: ModelReference
+        /// Computes voice profiles when the speaker model doesn't (`ModelRouting.voiceEmbedder`); nil otherwise.
+        public var voiceEmbeddingModel: ModelReference?
+        /// Titles, the meeting kind, and vocabulary suggestions (`ModelSelections[.smallTasks]`), when
+        /// one is selected and available; nil leaves them to the summarizer.
+        public var smallTasksModel: ModelReference?
+        public var speakerOptions: SpeakerAnalysisOptions
+        /// Identifies equivalent settings across runs (`ProcessingSettings` "configuration").
+        public var fingerprint: String
+        public var speakerMatchThreshold: Double
+        public var speakerMatchMargin: Double
+        /// The chosen transcription language (a BCP-47 code); nil for Automatic (`TranscriptionRoute`).
+        public var transcriptionLanguage: String?
+        /// Automatic only: transcribes instead when the first transcript is in a language
+        /// `transcriptionModel` doesn't cover (`TranscriptionRouter`).
+        public var languageFallbackModel: ModelReference?
+
+        public init(transcriptionModel: ModelReference, summaryModel: ModelReference, detectSpeakers: Bool, speakerModel: ModelReference,
+                    voiceEmbeddingModel: ModelReference? = nil, smallTasksModel: ModelReference? = nil,
+                    speakerOptions: SpeakerAnalysisOptions, fingerprint: String,
+                    speakerMatchThreshold: Double, speakerMatchMargin: Double,
+                    transcriptionLanguage: String? = nil, languageFallbackModel: ModelReference? = nil) {
+            self.transcriptionModel = transcriptionModel; self.summaryModel = summaryModel; self.detectSpeakers = detectSpeakers
+            self.speakerModel = speakerModel; self.voiceEmbeddingModel = voiceEmbeddingModel; self.smallTasksModel = smallTasksModel
+            self.speakerOptions = speakerOptions
+            self.fingerprint = fingerprint; self.speakerMatchThreshold = speakerMatchThreshold; self.speakerMatchMargin = speakerMatchMargin
+            self.transcriptionLanguage = transcriptionLanguage; self.languageFallbackModel = languageFallbackModel
+        }
+
+        /// What a transcript run records about how it was made.
+        func parameters(mode: ProcessingRequest.Mode) -> [String: String] {
+            var values = ["mode": mode.rawValue, "configuration": fingerprint,
+                          "speakerModel": detectSpeakers ? speakerModel.id : "disabled",
+                          "speakerQuality": speakerOptions.quality.rawValue,
+                          "matchThreshold": String(speakerMatchThreshold), "matchMargin": String(speakerMatchMargin)]
+            if detectSpeakers, let embedder = voiceEmbeddingModel { values["voiceEmbeddingModel"] = embedder.id }
+            return values
+        }
+    }
+
+    public let inference: any MeetingInference
+    public let configuration: Configuration
+
+    public init(inference: any MeetingInference, configuration: Configuration) {
+        self.inference = inference
+        self.configuration = configuration
+    }
+
+    public func transcribe(_ input: TrackProcessingInput, progress: @escaping ProcessingProgressHandler) async throws -> TrackProcessingOutput {
+        let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
+        let result: RecognitionResult
+        var transcriptModel = configuration.transcriptionModel.id
+        var transcriptProvenance: ModelProvenance?
+        var notices: [String] = []
+        var routing: [String: String] = [:]
+        if input.mode == .speakerRefresh, let previous = input.previousTranscript {
+            // Speakers again from the saved transcript: its words, or its passages for older runs.
+            transcriptModel = previous.modelID
+            transcriptProvenance = previous.processingSettings?.model
+            if let words = previous.words, !words.isEmpty {
+                let restored = words.map { RecognizedWord(text: $0.text, start: $0.start, end: $0.end, confidence: $0.confidence ?? 1) }
+                result = RecognitionResult(segments: [.init(start: restored.first!.start, end: restored.last!.end,
+                    text: restored.map(\.text).joined(), confidence: 1, words: restored)], language: previous.language,
+                    duration: input.track.duration ?? restored.last!.end)
+            } else {
+                result = RecognitionResult(segments: previous.segments.map { .init(start: $0.start, end: $0.end, text: $0.text, confidence: $0.confidence ?? 1, words: []) },
+                    language: previous.language, duration: input.track.duration ?? previous.segments.last?.end ?? 0)
+                notices.append("This older transcript has no saved word timings. Speaker labels use passage boundaries; re-transcribe for finer speaker changes.")
+            }
+        } else {
+            // Language routing: the model that actually transcribed is the one recorded.
+            let routed = try await TranscriptionRouter(inference: inference, model: configuration.transcriptionModel,
+                                                       language: configuration.transcriptionLanguage,
+                                                       fallback: configuration.languageFallbackModel)
+                .run(url: input.audioURL, glossary: input.vocabulary, progress: report)
+            result = routed.result
+            transcriptModel = routed.model.id
+            transcriptProvenance = result.provenance
+            routing = routed.parameters
+            notices += routed.notices
+        }
+        var analysis: SpeakerAnalysis?
+        if configuration.detectSpeakers {
+            do {
+                analysis = try await inference.diarize(url: input.audioURL, model: configuration.speakerModel,
+                                                       options: configuration.speakerOptions, progress: report)
+            } catch is CancellationError { throw CancellationError() }
+            catch {
+                if input.mode == .speakerRefresh { throw error }
+                notices.append("Transcription succeeded, but speaker detection failed for \(input.track.fileName): \(error.localizedDescription)")
+            }
+            // Routing by capability: a diarizer without voice profiles gets them from the embedding model.
+            if let found = analysis, found.embeddingModelID == nil, let embedder = configuration.voiceEmbeddingModel {
+                do { analysis = try await inference.embedVoices(url: input.audioURL, analysis: found, model: embedder, progress: report) }
+                catch is CancellationError { throw CancellationError() }
+                catch { notices.append("Speakers were found, but voice profiles couldn’t be made for \(input.track.fileName): \(error.localizedDescription)") }
+            }
+        }
+        if let warnings = analysis?.warnings, !warnings.isEmpty { notices.append(warnings.joined(separator: "\n")) }
+        let runID = UUID()
+        let segments = TranscriptBuilder.segments(result: result, speakers: analysis, track: input.track, runID: runID)
+        let settings = ProcessingSettings(modelID: transcriptModel,
+                                          parameters: configuration.parameters(mode: input.mode).merging(routing) { $1 },
+                                          model: transcriptProvenance)
+        let speakers = Set(segments.compactMap(\.speakerID)).sorted().map { label in
+            let cluster = String(label.dropFirst(runID.uuidString.count + 1))
+            return Speaker(id: label, name: "", sourceTrackID: input.track.id, embedding: analysis?.embeddings[cluster],
+                           embeddingModelID: analysis?.embeddingModelID,
+                           analysisSettings: ProcessingSettings(modelID: configuration.speakerModel.id, parameters: settings.parameters,
+                                                                model: analysis?.provenance))
+        }
+        let words = result.segments.flatMap(\.words).map { TranscriptWord(text: $0.text, start: $0.start, end: $0.end, confidence: $0.confidence) }
+        let transcript = TrackTranscript(id: runID, trackID: input.track.id, segments: segments, language: result.language,
+                                         modelID: transcriptModel, knownOffset: input.track.offset, processingSettings: settings,
+                                         words: words.isEmpty ? nil : words)
+        return TrackProcessingOutput(transcript: transcript, speakers: speakers, speakerEmbeddingModelID: analysis?.embeddingModelID,
+                                     duration: result.duration, notices: notices)
+    }
+
+    public func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],
+                          progress: @escaping ProcessingProgressHandler) async throws -> SummaryProcessingOutput {
+        let transcript = MeetingEvidence.transcript(meeting)
+        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DaybookError.noSpeech }
+        let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
+        let notes = MeetingEvidence.notes(meeting)
+        let requestedKind = template?.kind ?? meeting.kind
+        let small = try await smallTasks(transcript: transcript, notes: notes, kind: requestedKind, vocabulary: vocabulary, progress: report)
+        // The small-tasks model's kind guides the summary's sections, as a chosen kind would.
+        let summaryKind = requestedKind == .auto ? (small?.kind ?? .auto) : requestedKind
+        let generated = try await inference.summarize(
+            transcript: transcript, notes: notes, template: summaryKind,
+            glossary: vocabulary, model: configuration.summaryModel, templateInstructions: template?.instructions,
+            highlightEvidence: MeetingEvidence.highlights(meeting), progress: report)
+        var summary = generated.summary
+        var parameters = ["configuration": configuration.fingerprint, "templateID": template?.id ?? "auto",
+                          "templateInstructions": template?.instructions ?? "Automatic selection"]
+        var suggestedTerms = generated.suggestedTerms
+        if let small, let model = configuration.smallTasksModel {
+            if let title = small.title { summary.title = title }
+            if requestedKind == .auto, let kind = small.kind { summary.kind = kind }
+            suggestedTerms = Self.merging(small.suggestedTerms, into: suggestedTerms)
+            parameters["smallTasksModel"] = model.id
+            if let provenance = small.provenance { parameters["smallTasksEngine"] = "\(provenance.engine) \(provenance.engineVersion)" }
+        }
+        summary.processingSettings = ProcessingSettings(modelID: configuration.summaryModel.id, parameters: parameters,
+                                                        model: generated.provenance)
+        return SummaryProcessingOutput(summary: summary, suggestedTerms: suggestedTerms, warnings: generated.warnings)
+    }
+
+    /// The small-tasks step: nil when no small-tasks model is selected, or it can't run (Apple
+    /// Intelligence off, a refusal, an unreadable answer), so the summarizer's own title, kind, and
+    /// terms stand exactly as before.
+    private func smallTasks(transcript: String, notes: String, kind: MeetingKind, vocabulary: [String],
+                            progress: @escaping IntelligenceProgressHandler) async throws -> SmallTaskResult? {
+        guard let model = configuration.smallTasksModel else { return nil }
+        do {
+            return try await inference.performSmallTasks(transcript: transcript, notes: notes, template: kind,
+                                                         glossary: vocabulary, model: model, progress: progress)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+    }
+
+    /// Both models' suggestions, the small-tasks model's first, without duplicates, at most 12.
+    static func merging(_ first: [String], into second: [String]) -> [String] {
+        var seen = Set<String>()
+        return Array((first + second).filter { seen.insert($0.lowercased()).inserted }.prefix(12))
+    }
+}

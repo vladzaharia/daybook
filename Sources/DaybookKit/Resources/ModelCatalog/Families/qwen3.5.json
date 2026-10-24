@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "qwen3.5",
+      "name": "Qwen 3.5",
+      "maker": "Qwen team, Alibaba Cloud",
+      "engine": "mlxLanguage",
+      "roles": [
+        "summarization"
+      ],
+      "summary": "Writes summaries and notes in many languages.",
+      "homepage": "https://huggingface.co/collections/Qwen/qwen35",
+      "license": {
+        "id": "Apache-2.0",
+        "name": "Apache License 2.0",
+        "url": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE",
+        "allowsCommercialUse": true,
+        "attribution": "Qwen3.5 by the Qwen team, Alibaba Cloud, under the Apache License 2.0. MLX 4-bit conversions by mlx-community."
+      },
+      "variants": [
+        {
+          "id": "4b-4bit",
+          "name": "Qwen 3.5 · 4B",
+          "detail": "Fast. Many languages.",
+          "releaseDate": "2026-02-27",
+          "recommendedMemoryGB": 8,
+          "capabilities": {
+            "contextLength": 262144,
+            "structuredOutput": true,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "qwen3_5",
+            "thinking": "off"
+          },
+          "minimumEngineVersion": 2,
+          "homepage": "https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit",
+          "revisions": [
+            {
+              "id": "32f3e8ecf65426fc3306969496342d504bfa13f3",
+              "releaseDate": "2026-03-02",
+              "summary": "Upload folder using huggingface_hub",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/Qwen3.5-4B-MLX-4bit",
+                  "revision": "32f3e8ecf65426fc3306969496342d504bfa13f3",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "chat_template.jinja",
+                      "size": 7756,
+                      "gitOID": "a585dec894e63da457d9440ec6aa7caa16d20860"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 3366,
+                      "gitOID": "cb3e1a878a5c4a0505e0c9967da45820b2ca6bd3"
+                    },
+                    {
+                      "path": "model.safetensors",
+                      "size": 3034300695,
+                      "sha256": "5fb9acd0246866381cf8c5c354c6db1019f6498eec4ccb4f5edcc71ffeacb2db"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 101944,
+                      "gitOID": "40196ba58595ef9b3fad25a8a6daf3288b953c19"
+                    },
+                    {
+                      "path": "preprocessor_config.json",
+                      "size": 390,
+                      "gitOID": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+                    },
+                    {
+                      "path": "processor_config.json",
+                      "size": 1300,
+                      "gitOID": "7ad6acdf4203f22b7b990e36ccc3a1fe38563d5e"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 19989343,
+                      "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 1139,
+                      "gitOID": "a068e2468cff426a9b105006e74e044030a6faf4"
+                    },
+                    {
+                      "path": "video_preprocessor_config.json",
+                      "size": 385,
+                      "gitOID": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+                    },
+                    {
+                      "path": "vocab.json",
+                      "size": 6722759,
+                      "gitOID": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "9b-4bit",
+          "name": "Qwen 3.5 · 9B",
+          "detail": "Balanced. Many languages.",
+          "releaseDate": "2026-02-27",
+          "recommendedMemoryGB": 16,
+          "capabilities": {
+            "contextLength": 262144,
+            "structuredOutput": true,
+            "languages": [
+              "*"
+            ]
+          },
+          "engineOptions": {
+            "architecture": "qwen3_5",
+            "thinking": "off"
+          },
+          "minimumEngineVersion": 2,
+          "homepage": "https://huggingface.co/mlx-community/Qwen3.5-9B-MLX-4bit",
+          "revisions": [
+            {
+              "id": "938d8919941c6e7efd3c7150eff7fe9d12afa631",
+              "releaseDate": "2026-03-23",
+              "summary": "Set pipeline_tag in metadata (#1)",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "mlx-community/Qwen3.5-9B-MLX-4bit",
+                  "revision": "938d8919941c6e7efd3c7150eff7fe9d12afa631",
+                  "include": [
+                    "*.safetensors",
+                    "*.json",
+                    "*.jinja"
+                  ],
+                  "files": [
+                    {
+                      "path": "chat_template.jinja",
+                      "size": 7756,
+                      "gitOID": "a585dec894e63da457d9440ec6aa7caa16d20860"
+                    },
+                    {
+                      "path": "config.json",
+                      "size": 3331,
+                      "gitOID": "0435ae3f4b3c8b907f7359a2f8f7150d316f3435"
+                    },
+                    {
+                      "path": "model-00001-of-00002.safetensors",
+                      "size": 5349771222,
+                      "sha256": "a68b87558c6ef43f74c2bd63ce7e9092ceddc3101f3def0030774bae5f42aadd"
+                    },
+                    {
+                      "path": "model-00002-of-00002.safetensors",
+                      "size": 600449850,
+                      "sha256": "b0a770bf8469c7f3f18756a0e0283f1c1174344a83e059a4e483f6af4907352d"
+                    },
+                    {
+                      "path": "model.safetensors.index.json",
+                      "size": 123592,
+                      "gitOID": "d366fa524ccd8f4ed93a67c7857597dc56172b92"
+                    },
+                    {
+                      "path": "preprocessor_config.json",
+                      "size": 390,
+                      "gitOID": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+                    },
+                    {
+                      "path": "processor_config.json",
+                      "size": 1300,
+                      "gitOID": "7ad6acdf4203f22b7b990e36ccc3a1fe38563d5e"
+                    },
+                    {
+                      "path": "tokenizer.json",
+                      "size": 19989343,
+                      "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4"
+                    },
+                    {
+                      "path": "tokenizer_config.json",
+                      "size": 1139,
+                      "gitOID": "a068e2468cff426a9b105006e74e044030a6faf4"
+                    },
+                    {
+                      "path": "video_preprocessor_config.json",
+                      "size": 385,
+                      "gitOID": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+                    },
+                    {
+                      "path": "vocab.json",
+                      "size": 6722759,
+                      "gitOID": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
