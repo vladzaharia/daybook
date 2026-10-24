@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, urlparse
 
 LOG, PORT_FILE = sys.argv[1], sys.argv[2]
 APP_ID, BUILD_ID, GROUP_ID = "6700000001", "build-1", "group-1"
+# An internal group with access to every build: App Store Connect refuses to add builds to it.
+ALL_BUILDS_GROUP_ID = "group-all"
 state = {"build_polls": 0}
 
 
@@ -69,7 +71,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/v1/betaGroups":
             name = query.get("filter[name]", ["?"])[0]
             groups = [{"type": "betaGroups", "id": GROUP_ID,
-                       "attributes": {"name": "External testers", "isInternalGroup": False}}]
+                       "attributes": {"name": "External testers", "isInternalGroup": False}},
+                      {"type": "betaGroups", "id": ALL_BUILDS_GROUP_ID,
+                       "attributes": {"name": "Daybook Internal", "isInternalGroup": True, "hasAccessToAllBuilds": True}}]
             self.reply(200, {"data": [g for g in groups if g["attributes"]["name"] == name]})
         else:
             self.reply(404, {"errors": [{"status": "404", "code": "NOT_FOUND", "title": "not mocked"}]})
@@ -81,6 +85,9 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(201, {"data": {"type": "betaBuildLocalizations", "id": "loc-1"}})
         elif path == f"/v1/betaGroups/{GROUP_ID}/relationships/builds":
             self.reply(204)
+        elif path == f"/v1/betaGroups/{ALL_BUILDS_GROUP_ID}/relationships/builds":
+            self.reply(422, {"errors": [{"status": "422", "code": "ENTITY_UNPROCESSABLE",
+                                         "title": "Builds cannot be assigned to this internal group."}]})
         elif path == "/v1/betaAppReviewSubmissions":
             self.reply(201, {"data": {"type": "betaAppReviewSubmissions", "id": "review-1"}})
         else:

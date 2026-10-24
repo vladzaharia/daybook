@@ -132,6 +132,12 @@ expect_eq "JWT on every request" "ES256 ABC123DEFG appstoreconnect-v1 64" \
     "$(jq -r '"\(.jwt.header.alg) \(.jwt.header.kid) \(.jwt.payload.aud) \(.jwt.signature_bytes)"' "$log" | sort -u)"
 expect_ok "reports export compliance" grep -q 'usesNonExemptEncryption=false' "$work/testflight.err"
 : > "$log"
+expect_ok "an internal group with every build needs no assignment" env ASC_API_BASE="http://127.0.0.1:$port" ASC_POLL_SECONDS=0 \
+    DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
+    "$ci/asc-testflight.sh" --bundle-id local.daybook.phone --version 1.4.0 --build 1057 --group "Daybook Internal"
+expect_eq "nothing is added or submitted for review" "" \
+    "$(jq -r 'select(.method == "POST" and (.path | test("relationships/builds|betaAppReviewSubmissions"))) | .path' "$log")"
+: > "$log"
 expect_fail "unknown group fails" env ASC_API_BASE="http://127.0.0.1:$port" ASC_POLL_SECONDS=0 \
     DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
     "$ci/asc-testflight.sh" --bundle-id local.daybook.phone --version 1.4.0 --build 1057 --group "Nobody"
