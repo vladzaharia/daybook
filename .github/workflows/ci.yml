@@ -97,6 +97,10 @@ jobs:
       - name: Build the package and its tests
         id: build
         run: |
+          # Swift Build's cached build plans hold the Metal compiler's absolute path, a cryptex mount
+          # whose name differs on every runner. Plan again on this one; compiled objects stay cached
+          # and only the Metal shader steps re-run.
+          rm -rf .build/out/Intermediates.noindex/XCBuildData
           mkdir -p build/test-results
           swift build --build-tests 2>&1 | tee build/test-results/build.log
       - name: Save the SwiftPM build
