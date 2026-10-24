@@ -12,6 +12,9 @@
 #     upload (ITMS-90713 / ITMS-90022).
 #   - the app runs on iPad (UIDeviceFamily isn't [1]). Daybook is iPhone only, and an iPad app must
 #     list all four orientations for multitasking or App Store Connect rejects the upload.
+#   - an App Intent's title, description, short title, or phrase names an Apple product (iPhone,
+#     iPad, iPod, Apple, Siri). Processing rejects such a build after the upload (ITMS-90626), so it
+#     never reaches TestFlight.
 #   - CFBundleShortVersionString or CFBundleVersion of the app or any extension differs from
 #     --version / --build (an extension must match its app).
 #   - a bundle identifier isn't the expected one (local.daybook.phone, local.daybook.phone.widgets).
@@ -59,6 +62,27 @@ if [[ "$families" == "[1]" ]]; then
     ok "UIDeviceFamily = [1] (iPhone only)"
 else
     problem "UIDeviceFamily is ${families:-missing}, not [1]. An app that runs on iPad must list all four orientations for multitasking, and App Store Connect rejects the upload otherwise. Keep TARGETED_DEVICE_FAMILY: \"1\" on every target in Apps/iOS/project.yml (XcodeGen's presets set \"1,2\")."
+fi
+
+# App Intent metadata (the app's and every extension's): only the people-facing strings, so the
+# com.apple.link.* protocol identifiers don't count.
+intent_files=()
+while IFS= read -r file; do intent_files+=("$file"); done < <(find "$app" -path '*/Metadata.appintents/extract.actionsdata' -type f)
+if (( ${#intent_files[@]} )); then
+    command -v jq >/dev/null || { echo "check-ios-archive.sh: jq is required to check App Intent strings" >&2; exit 1; }
+    named=""
+    for file in "${intent_files[@]}"; do
+        named+="$(jq -r '[paths(scalars) as $p
+                | select(($p | last) == "key" or any($p[]; . == "phrases" or . == "shortTitle"))
+                | getpath($p) | select(type == "string")
+                | select(test("(?i)\\b(iphone|ipad|ipod|apple|siri)\\b"))] | unique | .[]' "$file")"$'\n'
+    done
+    named="$(printf '%s' "$named" | sed '/^$/d' | sort -u)"
+    if [[ -z "$named" ]]; then
+        ok "App Intent strings name no Apple product"
+    else
+        problem "App Intent strings name an Apple product, which App Store processing rejects (ITMS-90626, Invalid Siri Support): $(printf '%s' "$named" | paste -sd '|' -)"
+    fi
 fi
 
 if [[ -n "$(plist_type "$info" CFBundleIcons)" || -n "$(plist_type "$info" CFBundleIconFiles)" ]]; then
