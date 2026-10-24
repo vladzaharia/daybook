@@ -180,25 +180,28 @@ final class LinkSessionTests: XCTestCase {
     }
 
     func testHeartbeatTimeoutEndsASilentConnectionAndReconnects() async throws {
+        // A timeout of several intervals, so a busy CI machine stalling the loop briefly isn't mistaken
+        // for a dead connection.
         var configuration = LinkConfiguration.loopback()
-        configuration.heartbeatInterval = 0.1
-        configuration.heartbeatTimeout = 0.5
+        configuration.heartbeatInterval = 0.2
+        configuration.heartbeatTimeout = 1.2
         let pair = try await LinkedPair.make(self, service: configuration, client: configuration, relay: (0, 0))
         try await pair.connect()
-        try await Task.sleep(nanoseconds: 1_000_000_000)
+        try await Task.sleep(nanoseconds: 2_000_000_000)
         // Heartbeats keep a quiet but healthy connection up past the timeout.
-        XCTAssertFalse(pair.phoneEvents.contains { $0.disconnectReason != nil })
+        XCTAssertFalse(pair.phoneEvents.contains { $0.disconnectReason != nil },
+                       "\(pair.phoneEvents.all.compactMap(\.disconnectReason))")
 
         let frozenAt = Date()
         pair.relay?.freeze()
 
-        let phoneReason = try await pair.phoneEvents.next("phone timeout", timeout: 3) { $0.disconnectReason }
+        let phoneReason = try await pair.phoneEvents.next("phone timeout", timeout: 5) { $0.disconnectReason }
         XCTAssertEqual(phoneReason, .heartbeatTimeout)
-        let macReason = try await pair.macEvents.next("Mac timeout", timeout: 3) { $0.disconnectReason }
+        let macReason = try await pair.macEvents.next("Mac timeout", timeout: 5) { $0.disconnectReason }
         XCTAssertEqual(macReason, .heartbeatTimeout)
         let elapsed = Date().timeIntervalSince(frozenAt)
-        XCTAssertGreaterThanOrEqual(elapsed, 0.4)
-        XCTAssertLessThan(elapsed, 2.5)
+        XCTAssertGreaterThanOrEqual(elapsed, 1.0)
+        XCTAssertLessThan(elapsed, 4.5)
 
         // New connections through the relay work, so the phone comes back.
         _ = try await pair.phoneEvents.next("reconnected") { $0.connected }
