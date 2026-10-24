@@ -204,6 +204,16 @@ public final class LibrarySyncController: ObservableObject {
     /// Starts sync at launch. With the iCloud entitlement and an account, sync uses the app's container
     /// automatically, moving a previously chosen folder's journal there first (once). Builds without iCloud
     /// stay off, unless `developmentFolderSyncKey` brings back the chosen folder.
+    /// Returns once the container lookup that `restore()` (or a retry) started has finished, whether it
+    /// connected or failed; `folder` and `iCloud` then say which. The lookup runs in the background, so
+    /// reading `folder` right after `restore()` sees nil until it's done.
+    public func waitForContainer() async {
+        while let task = containerTask {
+            await task.value
+            if task == containerTask { return }
+        }
+    }
+
     public func restore() {
         guard let identifier = environment.containerIdentifier, environment.hasEntitlement(identifier) else {
             iCloud = .unavailableInThisBuild
@@ -294,6 +304,9 @@ public final class LibrarySyncController: ObservableObject {
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = "Connected · preparing sync"; configurationID = UUID()
         isICloudLocation = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true || root.path.contains("/Library/Mobile Documents/")
+        // Other devices learn this one exists (and what it is) right away, not only after its first full
+        // pass, which can take minutes on a new library. Presence is advisory, so a failure is ignored.
+        if let engine, replica.device != nil { Task { try? await engine.publishPresence() } }
         if monitorChanges { startMonitoring(url); requestSync() }
     }
 

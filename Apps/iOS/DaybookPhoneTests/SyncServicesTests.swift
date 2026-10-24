@@ -85,6 +85,27 @@ final class SyncServicesTests: XCTestCase {
                        .connected(name: "Studio Mac"), "a Mac on the link is present whatever iCloud says")
     }
 
+    func testAMacThatChecksInWithoutProcessingIsNamedNotCalledEarlier() {
+        let now = Date()
+        let mac = KnownSyncDevice(id: "mac", deviceClass: .mac, displayName: "Studio Mac", canProcess: false, lastSeen: now)
+        let phone = KnownSyncDevice(id: "phone", deviceClass: .phone, displayName: "iPhone", lastSeen: now, isCurrentDevice: true)
+        // A device known only from the journal: an old identity, or one that hasn't checked in yet.
+        let journalOnly = KnownSyncDevice(id: "old")
+        let presence = MacPresence.resolve(connectedMac: nil, devices: [mac, phone, journalOnly], syncAvailable: true,
+                                           syncReason: nil, devicesListed: true)
+        XCTAssertEqual(presence, .notProcessing(name: "Studio Mac", lastSeen: now))
+        XCTAssertEqual(presence.macName, "Studio Mac")
+        XCTAssertFalse(presence.isMacAround, "It won't transcribe, so nothing waits on it")
+        XCTAssertTrue(presence.summary(now: now).contains("Settings › Models"))
+        // Without any Mac presence, a journal-only device is still read as an earlier Daybook.
+        XCTAssertEqual(MacPresence.resolve(connectedMac: nil, devices: [phone, journalOnly], syncAvailable: true,
+                                           syncReason: nil, devicesListed: true), .olderMac)
+        // A Mac that processes wins over one that doesn't.
+        let processor = KnownSyncDevice(id: "studio", deviceClass: .mac, displayName: "Mini", canProcess: true, lastSeen: now.addingTimeInterval(-60))
+        XCTAssertEqual(MacPresence.resolve(connectedMac: nil, devices: [mac, processor, phone], syncAvailable: true,
+                                           syncReason: nil, devicesListed: true), .seen(name: "Mini", lastSeen: now.addingTimeInterval(-60)))
+    }
+
     func testBoundedPassesContinueUntilTheJournalIsRead() async throws {
         let container = try temporaryDirectory("container")
         let mac = try await makeMac(container)

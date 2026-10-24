@@ -259,6 +259,8 @@ enum StatusSheetModel {
             let seen = "Last seen \(MacPresence.age(now.timeIntervalSince(date)))"
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name,
                               text: [seen, waitingText].compactMap { $0 }.joined(separator: " · "), tone: .calm)
+        case .notProcessing(let name, _):
+            return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name, text: "Not set up to transcribe", tone: .attention)
         case .olderMac:
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: "Your Mac", text: "Syncs with an earlier Daybook", tone: .calm)
         case .noMac:

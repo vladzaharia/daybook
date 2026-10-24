@@ -18,6 +18,9 @@ enum MacPresence: Equatable, Sendable {
     case connected(name: String)
     /// A Mac that processes last synced at `lastSeen`, by its presence record.
     case seen(name: String, lastSeen: Date)
+    /// A Mac syncs this library but doesn't process: it has no models yet, or doesn't transcribe
+    /// synced recordings. Its presence record says which Mac, not why.
+    case notProcessing(name: String, lastSeen: Date)
     /// A Mac running an older Daybook (no presence records) syncs this library; when isn't known.
     case olderMac
     /// No Mac has synced this library yet.
@@ -35,12 +38,18 @@ enum MacPresence: Equatable, Sendable {
         if let mac = devices.latestProcessor, let seen = mac.lastSeen {
             return .seen(name: mac.displayName ?? "your Mac", lastSeen: seen)
         }
+        // A Mac that checked in without processing is still this library's Mac; only with none at all
+        // can a device seen only in the journal be an earlier Daybook.
+        if let mac = devices.filter({ !$0.isCurrentDevice && $0.deviceClass == .mac && $0.lastSeen != nil })
+            .max(by: { ($0.lastSeen ?? .distantPast) < ($1.lastSeen ?? .distantPast) }), let seen = mac.lastSeen {
+            return .notProcessing(name: mac.displayName ?? "your Mac", lastSeen: seen)
+        }
         return devices.hasPeersWithoutPresence ? .olderMac : .noMac
     }
 
     var macName: String? {
         switch self {
-        case .connected(let name), .seen(let name, _): return name
+        case .connected(let name), .seen(let name, _), .notProcessing(let name, _): return name
         default: return nil
         }
     }
@@ -64,6 +73,7 @@ enum MacPresence: Equatable, Sendable {
             let age = now.timeIntervalSince(date)
             if age < Self.recentlySeen { return "Waiting for \(name)" }
             return "Waiting for your Mac · last seen \(Self.age(age))"
+        case .notProcessing(let name, _): return "Waiting for \(name) to transcribe"
         case .olderMac: return "Waiting for your Mac"
         case .noMac: return "No Mac has synced this library yet"
         }
@@ -78,6 +88,8 @@ enum MacPresence: Equatable, Sendable {
         case .seen(let name, let date):
             let age = now.timeIntervalSince(date)
             return age < Self.recentlySeen ? "\(name) synced just now." : "\(name) last synced \(Self.age(age))."
+        case .notProcessing(let name, _):
+            return "\(name) isn't set up to transcribe. On it, download models in Daybook › Settings › Models and turn on Transcribe synced recordings in Settings › Library."
         case .olderMac: return "A Mac with an earlier Daybook syncs this library."
         case .noMac: return "No Mac has synced this library yet. Open Daybook on your Mac."
         }
