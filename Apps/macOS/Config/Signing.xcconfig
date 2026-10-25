@@ -24,6 +24,11 @@ DAYBOOK_ROOT = $(SRCROOT)/../..
 // The iPhone app (Apps/iOS) uses the same one.
 DAYBOOK_ICLOUD_CONTAINER = iCloud.local.daybook
 
+// Push for CKSyncEngine (the courier), in signed builds' entitlements. Apple Development profiles grant
+// `development`; the Developer ID export re-signs with the Developer ID profile's `production`, which is what
+// ships (and what Production CloudKit pushes need). Writing `production` here would fail development signing.
+DAYBOOK_APS_ENVIRONMENT = development
+
 DAYBOOK_CODE_SIGN_STYLE_signed = Automatic
 DAYBOOK_CODE_SIGN_STYLE_local = Manual
 DAYBOOK_CODE_SIGN_IDENTITY_signed = Apple Development

@@ -17,4 +17,9 @@ DEVELOPMENT_TEAM = $(DAYBOOK_TEAM_ID)
 // The iCloud container sync uses: the entitlements and Info.plist's DaybookICloudContainerIdentifier.
 DAYBOOK_ICLOUD_CONTAINER = iCloud.local.daybook
 
+// Push for CKSyncEngine (the courier). Apple Development profiles grant `development`; the App Store export
+// for TestFlight re-signs with the distribution profile's `production`, which is what ships (and what Production
+// CloudKit pushes need). Writing `production` here would fail development signing.
+DAYBOOK_APS_ENVIRONMENT = development
+
 #include? "Signing.local.xcconfig"

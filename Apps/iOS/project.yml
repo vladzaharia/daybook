@@ -58,12 +58,17 @@ targets:
         # Sync uses the app's own iCloud ubiquity container (hidden from the Files app: no
         # NSUbiquitousContainers entry), resolved by LibrarySyncController from
         # DaybookICloudContainerIdentifier below. DAYBOOK_ICLOUD_CONTAINER is set in Config/Signing.xcconfig.
+        # CloudKit in the same container carries the courier (CloudKitCourier, docs/icloud-sync.md), whose
+        # CKSyncEngine needs push: DAYBOOK_APS_ENVIRONMENT is `development` for development signing, and the
+        # App Store export re-signs it `production`.
         com.apple.developer.icloud-services:
           - CloudDocuments
+          - CloudKit
         com.apple.developer.icloud-container-identifiers:
           - $(DAYBOOK_ICLOUD_CONTAINER)
         com.apple.developer.ubiquity-container-identifiers:
           - $(DAYBOOK_ICLOUD_CONTAINER)
+        aps-environment: $(DAYBOOK_APS_ENVIRONMENT)
     info:
       path: DaybookPhone/Resources/Info.plist
       properties:
@@ -88,11 +93,13 @@ targets:
           - _daybook-link._tcp
         NSBluetoothAlwaysUsageDescription: Daybook connects to your Soundcore Work to import its recordings.
         # audio: recording with the screen locked; bluetooth-central: Soundcore imports and state
-        # restoration; fetch: BGAppRefreshTask sync passes (PhoneSync.refreshIdentifier).
+        # restoration; fetch: BGAppRefreshTask sync passes (PhoneSync.refreshIdentifier);
+        # remote-notification: CloudKit's silent pushes, which the courier's CKSyncEngine relies on.
         UIBackgroundModes:
           - audio
           - bluetooth-central
           - fetch
+          - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - local.daybook.phone.sync
         NSSupportsLiveActivities: true
