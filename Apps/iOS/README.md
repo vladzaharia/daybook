@@ -36,16 +36,19 @@ Identifiers: `local.daybook.phone` (app), `local.daybook.phone.widgets` (widget 
 `iCloud.local.daybook`, set in `Config/Signing.xcconfig` and overridable in the local file).
 
 Sync uses the app's own iCloud ubiquity container, not a folder picked in Files. The app's
-entitlements carry `com.apple.developer.icloud-services = [CloudDocuments]` and the container in
-`icloud-container-identifiers` and `ubiquity-container-identifiers`; Info.plist's
+entitlements carry `com.apple.developer.icloud-services = [CloudDocuments, CloudKit]` and the container in
+`icloud-container-identifiers` and `ubiquity-container-identifiers`, plus `aps-environment`
+(`$(DAYBOOK_APS_ENVIRONMENT)`, `development`; the App Store export re-signs it `production`). CloudKit and
+push carry the courier, which sends each recording to the Mac ahead of iCloud Drive (docs/icloud-sync.md,
+"Courier (CloudKit)"); the app never creates it in tests or with `--sync-folder`. Info.plist's
 `DaybookICloudContainerIdentifier` names it for `LibrarySyncController`, which resolves
 `url(forUbiquityContainerIdentifier:)/Documents/Daybook`. There's no `NSUbiquitousContainers` entry,
 so the container stays out of the Files app. Without a team, or without iCloud Drive, the app says
 "iCloud isn't available" and keeps recordings on the phone.
 
-Registering the identifiers, app group, and iCloud container on the Apple Developer account is a
-separate, deliberate step for the account owner (Xcode › Signing & Capabilities with the team
-selected). Nothing here does it: the build script never passes `-allowProvisioningUpdates`.
+Registering the identifiers, app group, iCloud container, CloudKit, and Push Notifications on the Apple
+Developer account is a separate, deliberate step for the account owner (docs/release.md, "One-time setup").
+Nothing here does it: the build script never passes `-allowProvisioningUpdates`.
 
 ## Layout
 

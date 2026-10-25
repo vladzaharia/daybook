@@ -4,7 +4,7 @@ Daybook keeps a local working library and exchanges changes through a journal in
 
 ## The iCloud container
 
-- **Entitlements.** Both apps are signed with `com.apple.developer.icloud-services = [CloudDocuments]` and the container in `com.apple.developer.icloud-container-identifiers` and `com.apple.developer.ubiquity-container-identifiers`, through a provisioning profile (Mac: `Resources/Daybook.entitlements`, Developer ID or Apple Development; iPhone: `Apps/iOS/project.yml`). Info.plist's `DaybookICloudContainerIdentifier` names the container. There's no `NSUbiquitousContainers` entry, so the container stays out of iCloud Drive in Finder and Files.
+- **Entitlements.** Both apps are signed with `com.apple.developer.icloud-services = [CloudDocuments, CloudKit]` and the container in `com.apple.developer.icloud-container-identifiers` and `com.apple.developer.ubiquity-container-identifiers`, plus push for the courier (`aps-environment` on iPhone, `com.apple.developer.aps-environment` on the Mac), through a provisioning profile (Mac: `Resources/Daybook.entitlements`, Developer ID or Apple Development; iPhone: `Apps/iOS/project.yml`). CloudKit and push serve only the [courier](#courier-cloudkit). Info.plist's `DaybookICloudContainerIdentifier` names the container. There's no `NSUbiquitousContainers` entry, so the container stays out of iCloud Drive in Finder and Files.
 - **Resolution** (`LibrarySyncController.restore()`, in DaybookKit, the same on both platforms):
   1. No container in Info.plist, or (on macOS) no `ubiquity-container-identifiers` entitlement in the running app's signature: *Not available in this build*. Sync stays off; see [Development builds](#development-builds).
   2. Sync turned off on this device in Settings: *Off*.
@@ -35,7 +35,7 @@ Earlier Mac builds synced through a folder the person chose in iCloud Drive (a s
 
 ## Development builds
 
-Unsigned and ad hoc builds (`swift run Daybook`, `scripts/build-app.sh --ad-hoc`) and tests have no iCloud entitlement, so the container can't be used and sync is off. The folder transport is still there for them, behind a hidden preference:
+Unsigned and ad hoc builds (`swift run Daybook`, `scripts/build-app.sh --ad-hoc`) and tests have no iCloud entitlement, so the container can't be used and sync is off. They have no CloudKit either, so no courier is created. The folder transport is still there for them, behind a hidden preference:
 
 ```sh
 # Xcode ad hoc build (bundle ID local.daybook.app); a launch argument works for any build:
@@ -64,6 +64,8 @@ Two devices receiving the same meeting identity reconcile their recordings and e
 Local library/Sync/          # never synchronized
   <library>-<device>.json    # causal checkpoint
   audio-cache.json           # on-demand replicas: fetched and published audio, last played
+  Inbox/<library ID>/        # courier deliveries waiting for iCloud Drive (Events/, Metadata/, Blobs/)
+  Courier/                   # the courier: outbox.json, Outbox/ (staged copies), cloudkit-state.json
 ```
 
 `NSFileCoordinator` coordinates access with the file provider. `NSMetadataQuery` requests updates for the journal's tree. Evicted files trigger iCloud download requests and remain pending until readable. Files and event hashes are validated, relative paths cannot escape the library, symlinks are rejected, and a partially downloaded recording is never installed: audio reaches the library only by an atomic move after its SHA-256 matches. An uploaded local file is not assumed to have reached another Mac: upload and download counts remain visible.
@@ -118,6 +120,48 @@ A replica configured with a `SyncDeviceIdentity` writes its own `Devices/<SHA-25
 `knownDevices()` lists every presence record, this device, and any device seen only on journal entries, which is an older Daybook with no presence (`reportsPresence == false`). `lastSeen` is clamped to the reader's clock. On the phone, `devices.latestProcessor` gives "Waiting for your Mac · last seen 2 h ago". If it's nil and `hasPeersWithoutPresence` is false, no Mac has synced this library yet.
 
 The format is versioned. Additive fields keep `schemaVersion` 1. An incompatible change must bump it, and readers skip versions they don't know. Readers also skip files of another format, files over 64 KB, malformed files, and records whose file name doesn't match their device ID. Unknown device classes read as `other`. Presence is advisory: a failed write never fails a pass. Daybook versions without presence only list `Events/`, `Metadata/`, and `Blobs/`, so they ignore `Devices/` and any other new folder. A frozen copy of the version 1 engine (`LegacyLibrarySyncFixture.swift`) checks this in the tests.
+
+## Courier (CloudKit)
+
+iCloud Drive can take minutes to hours to move a file between devices, and longer on cellular. The courier carries the journal files the iPhone writes to the Mac through CloudKit as well, usually within seconds over any network. iCloud Drive still carries every file exactly as before; the courier only gets some there first. When the courier is off, slow, or refuses a file, sync is what it was without it.
+
+**What travels.** After a pass, `SyncResult.writtenFiles` lists the files that pass wrote into the sync folder: events, metadata, and audio objects it copied there (a file written by a pass that later failed is reported by the next one that returns). Each is a `SyncJournalFile`: its path relative to the sync folder, its SHA-256, and its size. Only `Events/`, `Metadata/`, and `Blobs/` entries named by their SHA-256 travel; the manifest and presence never do.
+
+**The pieces** (DaybookKit, shared by both apps):
+
+- `SyncCourier`, the protocol: `start(role:receiver:onStatus:)`, `send`, `flush`, `fetch`, `removeExpired`, `status`. Roles are `.send` (the iPhone) and `.receive` (a Mac).
+- `CourierOutbox`, which every courier uses: what's waiting (with a staged copy of its bytes in `Sync/Courier/Outbox/`), what was sent, what was left to iCloud Drive, and which files are known to be on the server, in `Sync/Courier/outbox.json`.
+- `CloudKitCourier`, the real one, and `InMemoryCourier` over `InMemoryCourierService`, the fake the tests use.
+- `LibrarySyncController` owns the wiring (`courier`, `courierRole`, `courierStatus`).
+
+**Sending, once.** After each pass, `LibrarySyncController` hands `writtenFiles` to the courier and asks it to send now. The courier takes a file only if it hasn't before (waiting, sent, or skipped), stages a coordinated, hash-checked copy (`LibrarySyncEngine.copyJournalFile`), so iCloud evicting the original can't change what's sent, and remembers it in the outbox, which survives relaunches. A retried pass, or one that reports the same file again, sends nothing new. Sent files are remembered for 30 days. On the iPhone, the pass after a recording is filed runs under a background-task assertion, and `PhoneSync.synchronizeFinishing` keeps it until the courier has taken the files and tried sending them (`finishCourierSends()`); if the assertion runs out, the wait ends and CloudKit carries on as the system allows.
+
+**CloudKit.** `CloudKitCourier` runs a `CKSyncEngine` on the private database of the app's container (`iCloud.local.daybook`):
+
+- **Records.** One custom zone, `Courier`, and one record per file, type `CourierFile`. Its fields are `path`, `sha256`, `size`, `deviceID`, `libraryID`, `createdAt`, and `asset` (a `CKAsset`). The record name is `<library ID>.<path with / as .>`, e.g. `3F2A….Events.<sha256>.json`, so sending a file again replaces the record instead of adding one; a "server record changed" answer means it's there already and counts as sent. The courier never queries, so the schema needs no indexes.
+- **Pushes and scheduling.** The engine subscribes to the database and fetches when CloudKit pushes, so both apps carry push entitlements and register for remote notifications once the courier is available (`onCourierAvailable`). On the Mac a push the app sees also asks for a fetch (`fetchCourier()`). The iPhone's engine leaves the `Courier` zone out of its fetches, so it never downloads its own recordings back.
+- **Retries.** The engine retries network failures, rate limits (honouring retry-after), busy zones, and a temporarily unavailable account itself. A refusal for lack of iCloud storage waits 1 minute, doubling to at most 6 hours, then goes again. A missing zone is recreated and the file resent. A staged file that's gone, or a file refused for a reason that won't pass, is left to iCloud Drive. Three such refusals in a row (a schema missing from Production, say), or one error saying CloudKit won't serve the container at all (bad container, missing entitlement, permission failure, a restricted managed account), turn the courier off until the account changes or the app launches again, so it doesn't upload recordings for nothing.
+- **Off, quietly.** The courier isn't created at all unless the build is signed for CloudKit with the container (on the Mac this reads the code signature; creating a `CKContainer` without the entitlement would stop the app). It turns itself off when there's no iCloud account, iCloud is restricted, or the account can't be determined, and tries again when the account changes. Off, it takes nothing, and whatever was waiting is left to iCloud Drive. There is no message: iCloud Drive carries everything.
+- **Accounts and resets.** Signing out or switching accounts clears the outbox (the engine drops its pending changes itself). If the person deletes the app's iCloud data (the zone is purged or its encrypted data reset), the courier keeps nothing and resends nothing.
+- **Size.** Files over 50 MB, the maximum Apple documents for a CloudKit asset field, aren't sent; iCloud Drive carries them. That's about 100 minutes of the phone's 64 kbit/s AAC.
+
+**Receiving into the engine.** A Mac's courier hands each fetched file to `LibrarySyncEngine.receiveCourierFile(_:libraryID:contents:)` while CloudKit's copy is still in its staging area. The engine:
+
+1. accepts only an `Events/`, `Metadata/`, or `Blobs/` path named by the SHA-256 it came with, for the library this replica syncs (`waitingForLibrary` until a pass has read the manifest; the file stays on the courier);
+2. reports `alreadyHave` when the sync folder holds the file downloaded, or the inbox holds it;
+3. otherwise checks the size, copies it while checking its SHA-256, and moves it into `Sync/Inbox/<library ID>/<path>`. A file that doesn't match is `rejected` and discarded.
+
+The controller then asks for a pass and returns the settled files (stored, already here, or rejected), which the courier deletes from CloudKit. Nothing from the inbox is ever written into the sync folder: a second device writing the same file there is how iCloud Drive makes conflict copies (`daybook-sync 2.json`).
+
+**Reading with an inbox.** A pass lists each journal folder as the union of the sync folder's entries and the inbox's (`journalListing(in:)`), so a delivery is a remote change to `hasRemoteChanges()`, and the same file arriving later through iCloud Drive isn't one. An entry is read from the sync folder when its copy there is downloaded and matches its name, and otherwise from the inbox, asking iCloud to download the sync folder's copy. Audio is installed the same way: an eager pass copies a delivered object while the sync folder's copy isn't downloaded, and `fetchAudio` uses one instead of waiting for iCloud. Every copy is checked against its SHA-256 again on the way into the library; a delivery that no longer matches is discarded and iCloud Drive's copy takes over. A pass that publishes a track whose audio came by courier doesn't upload that object: the device that recorded it does. With an empty or missing inbox, everything behaves exactly as before.
+
+**De-duplication.** A file has one name everywhere: its path in the sync folder, which is its SHA-256. The courier's record name is derived from it, so a resend replaces itself; the engine's journal listing de-duplicates the sync folder's and the inbox's copies by name; and once the sync folder holds the file downloaded and identical, the end of each pass deletes the inbox copy (`pruneCourierInbox()`). It never deletes one sooner, because a pass may have applied it, and losing an applied entry could roll a conversation back.
+
+**Expiry.** CloudKit has no expiry, so the courier deletes `CourierFile` records older than 7 days that its device knows about: a sender, the files it sent (`removeExpired()`, at start and at most hourly after a pass); a receiver, any it fetches that are that old, without delivering them. A receiver deletes what it stored as soon as it's stored, so records normally live seconds to minutes. Courier storage counts against the person's iCloud storage while it lasts.
+
+**Status.** `LibrarySyncController.courierStatus` (`CourierStatus`) has the availability, how many files wait to send and since when, the last error, and whether iCloud storage is full. A send is stuck after 15 minutes (`isStuck`). The iPhone's sync line then says "Waiting to send 2 items to your Mac", or "iCloud storage is full"; nothing else in the interface mentions the courier.
+
+**Limits.** With more than one Mac, the first Mac to store a file deletes it from the courier, so another Mac that hadn't fetched it yet gets it through iCloud Drive. Only the iPhone sends; transcripts and summaries from the Mac travel by iCloud Drive alone. A file that arrives before a Mac has read the library's manifest isn't delivered again and expires (iCloud Drive carries it).
 
 ## Phone cadence and the controller hook
 
@@ -178,10 +222,31 @@ Replica tests (`LibrarySyncReplicaTests`) simulate iCloud in a temporary folder.
 - bounded and cancelled passes;
 - partial journal reads that must not roll back.
 
+Courier tests never touch CloudKit. `LibrarySyncInboxTests` (DaybookCore) withhold files from the simulated iCloud folder to play iCloud Drive lagging behind, and cover:
+
+- what a pass reports writing, once;
+- a verified delivery read before iCloud Drive brings it, with its audio installed, and nothing written into the sync folder (not even by a later edit on the Mac);
+- the same files arriving through iCloud Drive pruning the inbox without rolling anything back;
+- damaged, short, foreign, and non-journal deliveries rejected, an unknown library waiting, and a delivery damaged after it was stored discarded in favour of iCloud Drive's copy;
+- `fetchAudio` installing from the inbox without waiting for iCloud.
+
+`LibrarySyncCourierTests` (DaybookKit) run an iPhone and a Mac controller with `InMemoryCourier`:
+
+- each written file sent once through network failures, retries, and a relaunch;
+- files over the size limit left to iCloud Drive;
+- storage-full refusals waiting longer each time;
+- the Mac storing, applying before iCloud Drive, and deleting from the courier;
+- a damaged courier file discarded while iCloud Drive still delivers;
+- an unavailable courier leaving sync unchanged (and `CloudKitCourier` never created without the entitlement);
+- seven-day expiry by the sender and by a receiver.
+
+The iPhone's `SyncServicesTests` check that a filed recording reaches the courier and that a stuck send shows in the sync line.
+
 Migration and container tests (`LibrarySyncMigrationTests`, `LibrarySyncContainerTests`) use a temporary "chosen folder" and a temporary "container" with a scripted account. They cover a verified, idempotent copy that leaves the folder byte-for-byte unchanged; continuing in the container without republishing; merging into a container another library started (checkpoint carried over) and one another Mac moved into first; evicted journal files that wait and resume, with this Mac's own audio used instead of downloads; never overwriting the container or copying damaged files; no entitlement (sync off, folder transport only behind the development preference); signed out, iCloud Drive off, container unavailable; turning sync off and on; and account changes pausing until the person chooses.
 
-Actual propagation through Apple's service on two physical Macs, or a Mac and an iPhone, has not been exercised; nor has the container on a signed build (see `docs/validation.md`). Acceptance should include:
+Actual propagation through Apple's service on two physical Macs, or a Mac and an iPhone, has not been exercised; nor has the container on a signed build, nor the courier against CloudKit (see `docs/validation.md`). Acceptance should include:
 
+- the courier: a phone recording reaching the Mac on Wi-Fi and cellular ahead of iCloud Drive, pushes arriving with the app in front and in the background, the Mac deleting what it stored, storage-full and offline sends, and records expiring;
 - eviction, offline edits, and account changes;
 - quota exhaustion, very large recordings, and simultaneous first-time setup;
 - on an iPhone:
@@ -197,3 +262,5 @@ Actual propagation through Apple's service on two physical Macs, or a Mac and an
 - [Designing for Documents in iCloud](https://developer.apple.com/library/archive/documentation/General/Conceptual/iCloudDesignGuide/Chapters/DesigningForDocumentsIniCloud.html): coordinated document access, conflict versions, and container discovery.
 - [NSFileCoordinator](https://developer.apple.com/documentation/foundation/nsfilecoordinator): coordinated reads and writes with file presenters/providers.
 - [Enabling iCloud Storage](https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingiCloud.html): app-owned container access requires matching entitlements; a folder bookmark does not grant an app arbitrary container access.
+- `CKSyncEngine` (CloudKit headers in the Xcode 27.1 SDK, `CKSyncEngine.h`): needs the CloudKit and remote-notification entitlements; retries network, rate-limit, and account errors itself; one engine per database in Production. Apple's sample: [sample-cloudkit-sync-engine](https://github.com/apple/sample-cloudkit-sync-engine).
+- [CloudKit Web Services Reference, "Data Size Limits"](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/CloudKitWebServicesReference/PropertyMetrics.html): 1 MB per record, not counting assets; 50 MB per asset field.
