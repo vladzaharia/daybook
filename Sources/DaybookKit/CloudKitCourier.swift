@@ -96,14 +96,31 @@ public actor CloudKitCourier: SyncCourier {
     public func flush() async {
         guard let engine, availability == .available else { return }
         requeueDue()
-        do { try await engine.sendChanges() } catch { note(error) }
+        var options = CKSyncEngine.SendChangesOptions()
+        options.operationGroup = Self.immediateGroup("Send recordings")
+        do { try await engine.sendChanges(options) } catch { note(error) }
         publish()
     }
 
     public func fetch() async {
         guard let engine, availability == .available else { return }
-        do { try await engine.fetchChanges() } catch { note(error) }
+        var options = CKSyncEngine.FetchChangesOptions()
+        if !role.contains(.receive) { options.scope = .allExcluding([zoneID]) }
+        options.operationGroup = Self.immediateGroup("Receive recordings")
+        do { try await engine.fetchChanges(options) } catch { note(error) }
         publish()
+    }
+
+    /// Sends and fetches someone is waiting for: a recording just made on the iPhone, a push on the Mac.
+    /// CloudKit's default quality of service is discretionary, which the system defers for Wi-Fi, power, or
+    /// Low Power Mode; user-initiated work runs now, over cellular too. The engine's own scheduled syncs stay
+    /// discretionary and only back these up.
+    static func immediateGroup(_ name: String) -> CKOperationGroup {
+        let group = CKOperationGroup()
+        group.name = name
+        group.defaultConfiguration.allowsCellularAccess = true
+        group.defaultConfiguration.qualityOfService = .userInitiated
+        return group
     }
 
     public func removeExpired() async {
