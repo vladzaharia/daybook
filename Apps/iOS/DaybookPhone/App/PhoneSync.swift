@@ -55,6 +55,8 @@ final class PhoneSync {
     private(set) var lastReceived: Set<UUID> = []
     /// Completed passes in this run (tests and diagnostics).
     private(set) var passes = 0
+    /// The courier sending this iPhone's files to the Mac ahead of iCloud Drive, when there is one.
+    private(set) var courier = CourierStatus()
 
     /// Nil for a library without sync (unit tests of other parts).
     let controller: LibrarySyncController?
@@ -85,6 +87,7 @@ final class PhoneSync {
         controller = library.sync
         if controller == nil { connection = .unavailable("Sync isn't set up for this library.") }
         controller?.onSyncRequested = { [weak self] in await self?.synchronize(.remote) }
+        controller?.$courierStatus.sink { [weak self] status in self?.courier = status }.store(in: &subscriptions)
         // Count local changes as they happen, shortly after, so a burst of typing counts once.
         library.objectWillChange.sink { [weak self] _ in self?.scheduleRecount() }.store(in: &subscriptions)
     }
@@ -252,11 +255,15 @@ final class PhoneSync {
     }
 
     /// Runs a pass that must not stop when the app goes to the background (a just-filed recording's
-    /// upload), under a background-task assertion of a few seconds to a few minutes.
+    /// upload), under a background-task assertion of a few seconds to a few minutes. The courier sends
+    /// what the pass wrote under the same assertion.
     func synchronizeFinishing(_ trigger: Trigger) {
         let application = UIApplication.shared
         var assertion = UIBackgroundTaskIdentifier.invalid
-        let pass = Task { await self.synchronize(trigger) }
+        let pass = Task {
+            await self.synchronize(trigger)
+            await self.controller?.finishCourierSends()
+        }
         assertion = application.beginBackgroundTask(withName: "Daybook sync") { pass.cancel() }
         Task {
             await pass.value
@@ -275,6 +282,7 @@ final class PhoneSync {
             if isSyncing { return changesInFlight > 0 ? "Syncing \(Self.changes(changesInFlight))" : "Syncing…" }
             if let lastError { return "Sync paused: \(lastError)" }
             if pendingUploads > 0 { return "Uploading \(pendingUploads) \(pendingUploads == 1 ? "item" : "items") to iCloud" }
+            if let line = courierLine() { return line }
             if hasMoreWork { return "Syncing… more to come" }
             if localChanges > 0 { return "\(Self.changes(localChanges).capitalizedFirst) waiting to sync" }
             if pendingDownloads > 0 { return "Waiting for iCloud to download \(pendingDownloads) \(pendingDownloads == 1 ? "item" : "items")" }
@@ -288,7 +296,18 @@ final class PhoneSync {
         return "Last synced \(MacPresence.age(now.timeIntervalSince(lastSynced)))"
     }
 
-    var isUpToDate: Bool { isConnected && !isSyncing && lastError == nil && localChanges == 0 && pendingUploads == 0 && !hasMoreWork && lastSynced != nil }
+    var isUpToDate: Bool {
+        isConnected && !isSyncing && lastError == nil && localChanges == 0 && pendingUploads == 0 && !hasMoreWork && lastSynced != nil
+            && courierLine() == nil
+    }
+
+    /// A send to the Mac by courier that has waited a while (`CourierStatus.stuckAfter`); nil otherwise.
+    func courierLine(now: Date = Date()) -> String? {
+        guard courier.isStuck(now: now) else { return nil }
+        if courier.storageFull { return "iCloud storage is full" }
+        let count = courier.waitingToSend
+        return "Waiting to send \(count) \(count == 1 ? "item" : "items") to your Mac"
+    }
 
     private static func changes(_ count: Int) -> String { count == 1 ? "1 change" : "\(count) changes" }
 

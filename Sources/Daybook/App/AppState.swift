@@ -190,6 +190,14 @@ final class AppState: ObservableObject {
         let sync = LibrarySyncController(localRoot: libraryURL, defaults: defaults)
         // Presence: other devices see this Mac and whether it can process. Updated as models change.
         sync.replica = .mac(displayName: ProcessingRequest.Device.currentName, canProcess: false)
+        // The courier: what an iPhone records arrives through CloudKit ahead of iCloud Drive (docs/icloud-sync.md,
+        // "Courier (CloudKit)"). Nil in builds without CloudKit (ad hoc, `swift run`, tests): iCloud Drive alone.
+        sync.courier = CloudKitCourier.ifEntitled(containerIdentifier: sync.environment.containerIdentifier,
+                                                  directory: libraryURL.appendingPathComponent("Sync/Courier", isDirectory: true),
+                                                  deviceID: sync.deviceID)
+        sync.courierRole = .receive
+        // CKSyncEngine learns of new files through pushes, which need the app registered for them.
+        sync.onCourierAvailable = { NSApplication.shared.registerForRemoteNotifications() }
         self.sync = sync
         library = LibraryController(rootURL: libraryURL, sync: sync)
         storageURL = libraryURL

@@ -19,6 +19,16 @@ struct DaybookPhoneApp: App {
         // The phone is an on-demand replica: conversations arrive at once, audio when it's played.
         let sync = LibrarySyncController(localRoot: root, defaults: .standard)
         sync.replica = PhoneSync.replica(displayName: ProcessingRequest.Device.currentName, budget: settings.audioCacheBudget)
+        // The courier sends what each pass writes to the Mac through CloudKit, ahead of iCloud Drive
+        // (docs/icloud-sync.md, "Courier (CloudKit)"). Never in tests or with a debug sync folder.
+        if !options.isRunningTests, !LaunchOptions.isTestHost, options.syncFolder == nil {
+            sync.courier = CloudKitCourier.ifEntitled(containerIdentifier: sync.environment.containerIdentifier,
+                                                      directory: root.appendingPathComponent("Sync/Courier", isDirectory: true),
+                                                      deviceID: sync.deviceID)
+            sync.courierRole = .send
+            // CKSyncEngine's subscription delivers through push, which needs the app registered for it.
+            sync.onCourierAvailable = { UIApplication.shared.registerForRemoteNotifications() }
+        }
         let library: PhoneLibrary
         if let opened = try? PhoneLibrary(rootURL: root, sync: sync) {
             library = opened

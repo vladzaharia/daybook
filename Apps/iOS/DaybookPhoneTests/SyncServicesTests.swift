@@ -194,6 +194,33 @@ final class SyncServicesTests: XCTestCase {
         _ = await recorder.audio.clearDownloaded()
         do { let availability = await recorder.audio.availability(of: first.meeting.tracks[0], in: first.meeting.id); XCTAssertEqual(availability, .local) }
     }
+
+    func testAFiledRecordingGoesToTheCourierAndAStuckSendIsShown() async throws {
+        let container = try temporaryDirectory("container")
+        let service = InMemoryCourierService()
+        service.failure = .network
+        // The courier's clock runs 20 minutes behind, so what it takes has been waiting that long.
+        let phone = try await makePhone(container) { directory in
+            InMemoryCourier(service: service, directory: directory, deviceID: "Test iPhone", clock: { Date().addingTimeInterval(-20 * 60) })
+        }
+        try await waitUntil("the courier to start") { phone.sync.courier.availability == .available }
+        await phone.sync.synchronize(.launch)
+        let filed = try await record(into: phone)
+        await phone.sync.synchronize(.filed)
+        await phone.sync.controller?.finishCourierSends()
+        try await waitUntil("the files to wait") { phone.sync.courier.waitingToSend > 0 }
+        let waiting = phone.sync.courier.waitingToSend
+        XCTAssertEqual(phone.sync.statusLine, "Waiting to send \(waiting) items to your Mac")
+        XCTAssertFalse(phone.sync.isUpToDate)
+
+        // The network returns: the recording's audio goes, and the line says what's true again.
+        service.failure = nil
+        let courier = try XCTUnwrap(phone.sync.controller?.courier)
+        await courier.flush()
+        try await waitUntil("the send") { phone.sync.courier.waitingToSend == 0 }
+        XCTAssertEqual(phone.sync.statusLine, "Up to date")
+        XCTAssertTrue(service.fileIDs.contains { $0.hasSuffix(".Blobs.\(filed.meeting.tracks[0].sha256)") })
+    }
 }
 
 /// An iPhone library connected to a folder standing in for the container, as the app wires it.
@@ -206,11 +233,17 @@ struct PhoneRig {
 
 @MainActor
 extension XCTestCase {
-    func makePhone(_ container: URL, name: String = "Test iPhone", budget: UInt64 = 1_000_000_000) async throws -> PhoneRig {
+    /// `courier` makes it send what its passes write, as the app does with CloudKit (tests use `InMemoryCourier`).
+    func makePhone(_ container: URL, name: String = "Test iPhone", budget: UInt64 = 1_000_000_000,
+                   courier: ((URL) -> any SyncCourier)? = nil) async throws -> PhoneRig {
         let root = try temporaryDirectory("phone-\(name)")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
         let controller = LibrarySyncController(localRoot: root, defaults: defaults)
         controller.replica = PhoneSync.replica(displayName: name, budget: budget)
+        if let courier {
+            controller.courier = courier(root.appendingPathComponent("Sync/Courier", isDirectory: true))
+            controller.courierRole = .send
+        }
         let library = try PhoneLibrary(rootURL: root, sync: controller, installation: UUID().uuidString)
         try await library.reload()
         let sync = PhoneSync(library: library.controller)
