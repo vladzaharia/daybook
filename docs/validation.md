@@ -501,3 +501,32 @@ Still to check on a Mac running macOS 26 or later, in a real call:
 - macOS 15: no captions, no Settings choices beyond the explanation, and no errors.
 - Soundcore Listen Live on hardware: how large the opening burst is, that captions catch up to the
   present, and caption latency (see Devices above).
+
+## CloudKit courier
+
+Run on 2026-10-24 on Apple silicon, macOS 27.0, Xcode 27.1 (27A9275), with fakes only: no CloudKit, iCloud account, network, or real library was touched (`docs/icloud-sync.md`, "Courier (CloudKit)").
+
+- `swift test`: 657 XCTest cases passed, up from 647. The ten new ones are `LibrarySyncInboxTests` (3, DaybookCore) and `LibrarySyncCourierTests` (7, DaybookKit); every existing sync test passed unchanged.
+- `scripts/build-ios.sh --test` on an iPhone Duo simulator (iOS 27.1) made for the run: 73 passed, up from 72 (`SyncServicesTests.testAFiledRecordingGoesToTheCourierAndAStuckSendIsShown`). The iOS build compiles `CloudKitCourier` against the iOS 27.1 SDK.
+- `scripts/build-app.sh --debug --ad-hoc`: the Mac Xcode project builds and packages; the ad hoc build carries no CloudKit or push entitlement and creates no courier.
+
+What the tests cover, with `InMemoryCourier` and a temporary folder standing in for the container (files are held back from it to play iCloud Drive lagging):
+
+- a pass reports the files it wrote, once; the iPhone's courier sends each once through network failures, retried passes, and a relaunch; files over 50 MB stay with iCloud Drive; storage-full refusals wait 1 minute, then longer;
+- the Mac verifies deliveries into `Sync/Inbox`, applies them (audio included) before iCloud Drive brings them, deletes them from the courier, and never writes them into the container, not even when it publishes an edit to the same conversation;
+- the same files arriving through iCloud Drive prune the inbox with nothing rolled back, and aren't a remote change;
+- damaged, truncated, foreign-library, and non-journal deliveries are rejected; one damaged after it was stored is discarded when read, and iCloud Drive's copy is installed;
+- `fetchAudio` installs from the inbox without waiting for iCloud;
+- with the courier unavailable, sync runs as before and nothing is staged; `CloudKitCourier.ifEntitled` returns nil in an unsigned process;
+- courier files expire after seven days, deleted by the sender and by a receiver that sees them;
+- the iPhone's sync line shows a send stuck for 15 minutes, then "Up to date" once it goes.
+
+Not verified (needs signed builds, the account steps in `docs/release.md` step 7, and real devices):
+
+- `CKSyncEngine` against the real container, in Development and Production: zone creation, saves with assets, the "server record changed" answer to a resend, deletes, and the saved engine state across launches;
+- pushes: delivery to the Mac with Daybook in front and behind, to the iPhone in the background, and whether the iPhone's engine, which leaves the `Courier` zone out of its fetches, settles rather than fetching again on each push;
+- how long a filed recording takes to reach the Mac on Wi-Fi and cellular, against iCloud Drive; sends that finish after the background-task assertion ends;
+- storage-full, offline, and Low Power Mode behaviour, and the real error codes CloudKit returns for a schema missing from Production;
+- whether the 50 MB limit (Apple's documented asset-field maximum) is the right cut-off for the native API;
+- the exported entitlements: `production` push and the `Production` container environment on the Developer ID and TestFlight builds;
+- two Macs: the first to store a file deletes it, so the other gets it through iCloud Drive.

@@ -105,9 +105,25 @@ Apps/iOS            (Xcode, via XcodeGen)
   - The phone uses an **on-demand audio** policy: meetings, transcripts, and summaries apply immediately; audio blobs download only for playback, and can be evicted.
   - Phone recordings upload as blobs like any other source.
   - Requires signed builds with the iCloud capability on both apps (same team, same container). Unsigned development builds and tests keep the folder transport, which is never offered as the product setup.
+- **Courier (CloudKit).**
+  - The iPhone also sends every file a pass writes (the recording, its events, library metadata) through CloudKit, in the same container's private database. It does so right after a recording is filed, under the same background-task assertion as that pass.
+  - The Mac stores them in its courier inbox, applies them in a pass, and deletes them from CloudKit, usually seconds after the recording is filed, on any network.
+  - iCloud Drive still carries everything, and the courier never writes into the container. The courier is off in builds without CloudKit, without an account, or when CloudKit refuses; sync then works as before.
+  - A send that's stuck for 15 minutes shows in the sync line ("Waiting to send 2 items to your Mac", "iCloud storage is full"). See `docs/icloud-sync.md`, "Courier (CloudKit)".
 - **Local link.**
   - When both are on the same network, DaybookLink (Network.framework, Bonjour, TLS with a pre-shared key from pairing) carries what iCloud is too slow for: start and stop for multipoint, live recording state, bookmarks, and live processing progress.
   - Without it, everything still works through sync, just later.
+- **What goes where.**
+
+  | What | iCloud Drive (`<container>/Documents/Daybook`) | CloudKit courier (private database, zone `Courier`) | Local link |
+  |---|---|---|---|
+  | A phone recording (its audio object) | Always | From the iPhone, up to 50 MB, until a Mac stores it (at most 7 days) | No |
+  | Conversations, edits, requests, library settings (events and metadata) | Always | From the iPhone | No |
+  | Transcripts, speakers, summaries from the Mac | Always | No | Live progress only |
+  | The manifest and presence (`daybook-sync.json`, `Devices/`) | Always | Never | Capabilities |
+  | Recording control, live state, bookmarks during multipoint | No | No | Yes |
+  | Courier bookkeeping (`Sync/Courier/`, `Sync/Inbox/`) | Never (local only) | No | No |
+
 - **One live-caption engine.** Every live caption, whatever the source, goes through `DaybookCaptions`:
   - the phone's microphone;
   - the Mac's microphone and call audio, captioned separately as You and Call, with lines the microphone only heard from the speakers suppressed;
@@ -197,6 +213,6 @@ Same system as the Mac (`docs/interface.md`): paper, the Ink scale, Electric Tea
 
 - `swift test` stays green for the Mac and core, with tests for the kits, the request queue and claims, the sync replica policy, and the link (loopback).
 - iOS: `xcodebuild test` on the iPhone Duo simulator for kit and app logic. Screenshots with `xcrun simctl io <device> screenshot` in both postures and appearances.
-- Still needs a real iPhone Duo and Mac: hinge transitions, background recording across calls and interruptions, Live Activity, Bluetooth with a real Soundcore in the background, local-network pairing, iCloud on-demand downloads, battery and thermals.
+- Still needs a real iPhone Duo and Mac: hinge transitions, background recording across calls and interruptions, Live Activity, Bluetooth with a real Soundcore in the background, local-network pairing, iCloud on-demand downloads, the CloudKit courier (pushes, background sends, cellular), battery and thermals.
 
-Signing: set `DAYBOOK_TEAM_ID` for device builds. Bundle IDs are `local.daybook.app` (Mac), `local.daybook.phone`, and `local.daybook.phone.widgets`, with app group `group.local.daybook.phone` and iCloud container `iCloud.local.daybook`.
+Signing: set `DAYBOOK_TEAM_ID` for device builds. Bundle IDs are `local.daybook.app` (Mac), `local.daybook.phone`, and `local.daybook.phone.widgets`, with app group `group.local.daybook.phone` and iCloud container `iCloud.local.daybook` (iCloud Documents and CloudKit). Both app IDs also need Push Notifications, for the courier (`docs/release.md`, "One-time setup").
