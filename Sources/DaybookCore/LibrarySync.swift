@@ -18,6 +18,9 @@ public struct SyncResult: Sendable {
     public var notLocalAudio: [UUID: Set<UUID>] = [:]
     /// Journal reads or audio copies left for a later pass because this pass reached its `SyncPassLimits`.
     public var deferredItems: Int = 0
+    /// Journal files this replica wrote into the sync folder since the last pass that returned: events, metadata, and
+    /// audio objects it copied there. A courier sends them ahead of iCloud Drive (docs/icloud-sync.md, "Courier").
+    public var writtenFiles: [SyncJournalFile] = []
     public var hasPendingTransfers: Bool { pendingDownloads > 0 || pendingUploads > 0 }
     /// Synchronize again soon: this pass stopped at its work limits.
     public var hasMoreWork: Bool { deferredItems > 0 }
@@ -61,6 +64,8 @@ public actor LibrarySyncEngine {
     private var eventCache: [String: SyncEventRecord] = [:]
     private var metadataCache: [String: SyncMetadataRecord] = [:]
     private var ownJournalWrites: Set<String> = []
+    /// Files written into the sync folder that no returned pass has reported yet (`SyncResult.writtenFiles`).
+    private var courierWrites: [String: SyncJournalFile] = [:]
     /// Devices that wrote the journal entries seen by the last pass, including ones without presence.
     var journalDeviceIDs: Set<String> = []
     /// Journal file names seen by the last pass that finished with nothing pending or deferred.
@@ -68,7 +73,7 @@ public actor LibrarySyncEngine {
     var presenceWritten: (record: SyncDeviceRecord, at: Date)?
     /// The sync library's ID, from its manifest, once a pass has read it. The iPhone's local link
     /// tags its Bonjour browsing with it (docs/link.md, "Discovery").
-    public private(set) var libraryID: UUID?
+    public internal(set) var libraryID: UUID?
     var audioIndexStorage: AudioCacheIndex?
     var audioIndexDirty = false
 
@@ -107,14 +112,14 @@ public actor LibrarySyncEngine {
         var events: [String: SyncEventRecord] = [:]
         var metadata: [String: SyncMetadataRecord] = [:]
         ownJournalWrites = []
-        let eventURLs = try journalFiles(in: "Events"), metadataURLs = try journalFiles(in: "Metadata")
+        let eventURLs = try journalListing(in: "Events"), metadataURLs = try journalListing(in: "Metadata")
         for url in eventURLs {
             try Task.checkCancellation()
             let name = url.deletingPathExtension().lastPathComponent
             if let cached = eventCache[name] { events[name] = cached; continue }
             guard budget.admitJournalRead() else { continue }
             do {
-                let bytes = try SyncFiles.read(url, below: remoteRoot, cloud: cloud)
+                let bytes = try readJournal(url, in: "Events")
                 let hash = try eventHash(url, bytes: bytes)
                 let event = try decoder.decode(SyncEventRecord.self, from: bytes)
                 guard event.schemaVersion == 1, event.parents.allSatisfy(SyncFiles.isHash),
@@ -131,7 +136,7 @@ public actor LibrarySyncEngine {
             if let cached = metadataCache[name] { metadata[name] = cached; continue }
             guard budget.admitJournalRead() else { metadataIncomplete = true; continue }
             do {
-                let bytes = try SyncFiles.read(url, below: remoteRoot, cloud: cloud)
+                let bytes = try readJournal(url, in: "Metadata")
                 let hash = try eventHash(url, bytes: bytes)
                 let record = try decoder.decode(SyncMetadataRecord.self, from: bytes)
                 guard record.schemaVersion == 1, record.parents.allSatisfy(SyncFiles.isHash) else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
@@ -295,14 +300,18 @@ public actor LibrarySyncEngine {
         // A coordinated local write is not necessarily uploaded to iCloud yet.
         pendingUploads += try countPendingCloudUploads()
         try saveAudioIndexIfNeeded()
+        // Courier deliveries the sync folder now holds, downloaded and identical, aren't needed any more.
+        pruneCourierInbox()
         let listing = Set((eventURLs + metadataURLs).map(\.lastPathComponent)).union(ownJournalWrites)
         settledJournalListing = pendingDownloads == 0 && budget.deferred == 0 ? listing : nil
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
+        let written = courierWrites.values.sorted { $0.path < $1.path }
+        courierWrites = [:]
         return SyncResult(checkpointID: checkpointID, meetings: output.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date > $1.date },
             deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
             pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
-            changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred)
+            changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred, writtenFiles: written)
     }
 
     /// A cheap check for a phone's timer: lists the journal folders without reading or downloading files.
@@ -310,7 +319,7 @@ public actor LibrarySyncEngine {
     /// deferred), or when no pass has settled in this process. Local edits are the caller's to track.
     public func hasRemoteChanges() -> Bool {
         guard let settled = settledJournalListing,
-              let events = try? journalFiles(in: "Events"), let metadata = try? journalFiles(in: "Metadata") else { return true }
+              let events = try? journalListing(in: "Events"), let metadata = try? journalListing(in: "Metadata") else { return true }
         return Set((events + metadata).map(\.lastPathComponent)) != settled
     }
 
@@ -351,6 +360,15 @@ public actor LibrarySyncEngine {
         return result
     }
 
+    /// The library's ID from a manifest the sync folder already holds downloaded, without creating one or waiting.
+    func existingLibraryID() -> UUID? {
+        let url = remoteRoot.appendingPathComponent("daybook-sync.json")
+        guard SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
+              let manifest = try? decoder.decode(SyncManifest.self, from: bytes),
+              manifest.format == "DaybookSync", manifest.schemaVersion == 1 else { return nil }
+        return manifest.libraryID
+    }
+
     private func loadCheckpoint(libraryID: UUID) throws {
         let name = "\(libraryID.uuidString)-\(SyncDigest.sha256(data: Data(deviceID.utf8)).prefix(16)).json"
         let url = localRoot.appendingPathComponent("Sync/\(name)")
@@ -383,6 +401,8 @@ public actor LibrarySyncEngine {
             } else { try LocalFiles.atomicWrite(bytes, to: target) }
         }
         ownJournalWrites.insert(url.lastPathComponent)
+        let path = "\(directory)/\(id).json"
+        courierWrites[path] = SyncJournalFile(path: path, sha256: id, size: Int64(bytes.count))
         return id
     }
     func journalFiles(in name: String) throws -> [URL] {
@@ -460,6 +480,10 @@ public actor LibrarySyncEngine {
             verifiedAssets[target.path] = try assetStamp(target, digest: asset.sha256)
             return
         }
+        // A courier brought this object from the device that recorded it, and that device uploads it through iCloud
+        // Drive. Writing it into the sync folder here as well would make two writers of one file.
+        if inboxCopy("Blobs/\(asset.sha256)") != nil { return }
+        var wrote = false
         try SyncFiles.coordinateWrite(target, below: remoteRoot) { url in
             if self.fm.fileExists(atPath: url.path) {
                 guard try SyncDigest.sha256(fileURL: url) == asset.sha256 else { throw LibrarySyncError.invalidBlob(asset.sha256) }
@@ -471,8 +495,14 @@ public actor LibrarySyncEngine {
             guard try SyncDigest.sha256(fileURL: temporary) == asset.sha256 else { throw LibrarySyncError.invalidBlob(asset.sha256) }
             try self.fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
             try self.fm.moveItem(at: temporary, to: url)
+            wrote = true
         }
-        verifiedAssets[target.path] = try? assetStamp(target, digest: asset.sha256)
+        let stamp = try? assetStamp(target, digest: asset.sha256)
+        verifiedAssets[target.path] = stamp
+        if wrote, let stamp {
+            let path = "Blobs/\(asset.sha256)"
+            courierWrites[path] = SyncJournalFile(path: path, sha256: asset.sha256, size: Int64(stamp.size))
+        }
     }
 
     private func validate(snapshot: Meeting, assets: [SyncAsset]) throws {
@@ -508,13 +538,24 @@ public actor LibrarySyncEngine {
             // Copying audio is the expensive part of an eager pass; respect the pass's time budget.
             if budget.timeExceeded { throw SyncDeferredWork() }
             let remote = blobURL(asset.sha256)
-            try SyncFiles.available(remote, cloud: cloud)
-            guard fm.fileExists(atPath: remote.path) else { throw SyncPendingDownload() }
+            // While the sync folder's copy isn't downloaded, a courier delivery of the same object will do.
+            let delivered = courierBlob(asset.sha256)
+            if delivered == nil {
+                try SyncFiles.available(remote, cloud: cloud)
+                guard fm.fileExists(atPath: remote.path) else { throw SyncPendingDownload() }
+            }
             try LocalFiles.directory(destination.deletingLastPathComponent())
             let temporary = destination.deletingLastPathComponent().appendingPathComponent(".download-\(UUID().uuidString)")
             defer { try? fm.removeItem(at: temporary) }
-            try SyncFiles.coordinateRead(remote, below: remoteRoot) { try self.fm.copyItem(at: $0, to: temporary) }
-            guard try SyncDigest.sha256(fileURL: temporary) == asset.sha256 else { throw LibrarySyncError.invalidBlob(asset.sha256) }
+            if let delivered {
+                try SyncFiles.coordinateRead(delivered, below: inboxBase) { try self.fm.copyItem(at: $0, to: temporary) }
+            } else {
+                try SyncFiles.coordinateRead(remote, below: remoteRoot) { try self.fm.copyItem(at: $0, to: temporary) }
+            }
+            guard try SyncDigest.sha256(fileURL: temporary) == asset.sha256 else {
+                if let delivered { discardDelivery(delivered); throw SyncPendingDownload() }
+                throw LibrarySyncError.invalidBlob(asset.sha256)
+            }
             try install(temporary, at: destination, in: directory, warnings: &warnings)
             verifiedAssets[destination.path] = try assetStamp(destination, digest: asset.sha256)
         }
@@ -598,7 +639,7 @@ public actor LibrarySyncEngine {
     }
 }
 
-private struct SyncManifest: Codable { var format = "DaybookSync"; var schemaVersion = 1; var libraryID: UUID }
+struct SyncManifest: Codable { var format = "DaybookSync"; var schemaVersion = 1; var libraryID: UUID }
 struct SyncAsset: Codable, Equatable { var relativePath: String; var sha256: String }
 private struct SyncEventRecord: Codable {
     var schemaVersion = 1

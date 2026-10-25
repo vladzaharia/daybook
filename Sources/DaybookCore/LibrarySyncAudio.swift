@@ -51,7 +51,8 @@ extension LibrarySyncEngine {
 
     /// Makes one track's audio local: requests the iCloud download of an evicted object, waits for it (or for
     /// the recording to finish uploading elsewhere), copies it with a coordinated read while computing its
-    /// SHA-256, and installs it at the track's path in the local library. Cancel the calling task to stop;
+    /// SHA-256, and installs it at the track's path in the local library. A courier delivery of the object in the
+    /// inbox is used instead of waiting while the sync folder's copy isn't downloaded. Cancel the calling task to stop;
     /// nothing partial is ever left in the library. Corrupt objects throw `integrityMismatch` and install nothing.
     @discardableResult
     public func fetchAudio(for track: RecordingTrack, in meetingID: UUID, options: AudioFetchOptions = AudioFetchOptions(),
@@ -69,12 +70,22 @@ extension LibrarySyncEngine {
         }
         let remote = blobURL(track.sha256)
         try SyncFiles.noSymlinks(remote, below: remoteRoot)
-        try await waitUntilLocal(remote, options: options, progress: progress)
-        try LocalFiles.directory(destination.deletingLastPathComponent())
         let temporary = destination.deletingLastPathComponent().appendingPathComponent(".fetch-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: temporary) }
-        let total = ((try? fm.attributesOfItem(atPath: remote.path))?[.size] as? NSNumber)?.int64Value
-        let digest = try await copyVerifying(remote, to: temporary, totalBytes: total, progress: progress)
+        var digest: String?
+        // A courier delivery of the object, while the sync folder's copy isn't downloaded, saves waiting for iCloud.
+        if let delivered = courierBlob(track.sha256) {
+            try LocalFiles.directory(destination.deletingLastPathComponent())
+            let total = ((try? fm.attributesOfItem(atPath: delivered.path))?[.size] as? NSNumber)?.int64Value
+            let copied = try await copyVerifying(delivered, below: inboxBase, to: temporary, totalBytes: total, progress: progress)
+            if copied == track.sha256 { digest = copied } else { discardDelivery(delivered) }
+        }
+        if digest == nil {
+            try await waitUntilLocal(remote, options: options, progress: progress)
+            try LocalFiles.directory(destination.deletingLastPathComponent())
+            let total = ((try? fm.attributesOfItem(atPath: remote.path))?[.size] as? NSNumber)?.int64Value
+            digest = try await copyVerifying(remote, below: remoteRoot, to: temporary, totalBytes: total, progress: progress)
+        }
         guard digest == track.sha256 else { throw AudioFetchError.integrityMismatch(track.fileName) }
         try Task.checkCancellation()
         // The actor ran other work during the copy; the conversation may have moved to the Trash.
@@ -130,9 +141,9 @@ extension LibrarySyncEngine {
     }
 
     /// Runs off the actor so a long copy doesn't hold up sync passes. Copies and hashes in one pass.
-    private nonisolated func copyVerifying(_ remote: URL, to temporary: URL, totalBytes: Int64?,
+    private nonisolated func copyVerifying(_ remote: URL, below root: URL, to temporary: URL, totalBytes: Int64?,
                                            progress: (@Sendable (AudioFetchProgress) -> Void)?) async throws -> String {
-        try SyncFiles.coordinateRead(remote, below: remoteRoot) { source in
+        try SyncFiles.coordinateRead(remote, below: root) { source in
             guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
                 throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: temporary.path])
             }
