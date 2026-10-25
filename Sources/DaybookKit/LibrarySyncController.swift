@@ -307,6 +307,7 @@ public final class LibrarySyncController: ObservableObject {
         // Other devices learn this one exists (and what it is) right away, not only after its first full
         // pass, which can take minutes on a new library. Presence is advisory, so a failure is ignored.
         if let engine, replica.device != nil { Task { try? await engine.publishPresence() } }
+        startCourier()
         if monitorChanges { startMonitoring(url); requestSync() }
     }
 
@@ -314,6 +315,7 @@ public final class LibrarySyncController: ObservableObject {
     /// `turnOnICloudSync()`. Local and iCloud copies are kept either way.
     public func disconnect() {
         guard !isSyncing else { return }
+        stopCourier()
         if transport == .iCloudContainer || (transport == .none && containerIdentifier != nil) {
             defaults.set(true, forKey: Key.turnedOff)
             containerTask?.cancel(); containerTask = nil; migrationTask?.cancel(); migrationTask = nil
@@ -350,6 +352,7 @@ public final class LibrarySyncController: ObservableObject {
             let result = try await task.value
             activeTask = nil
             guard generation == configurationID else { isSyncing = false; return nil }
+            handToCourier(result.writtenFiles, engine: engine)
             pendingReceipt = result.checkpointID
             pendingDownloads = result.pendingDownloads; pendingUploads = result.pendingUploads; warnings = result.warnings
             hasMoreWork = result.hasMoreWork
@@ -401,6 +404,99 @@ public final class LibrarySyncController: ObservableObject {
     public func libraryID() async -> UUID? {
         guard let engine else { return nil }
         return await engine.libraryID
+    }
+
+    // MARK: Courier
+
+    /// The fast path beside iCloud Drive (docs/icloud-sync.md, "Courier (CloudKit)"): the iPhone sends the files its
+    /// passes write, a Mac receives them into the engine's inbox. Set it and `courierRole` before connecting. Nil, or
+    /// unavailable: iCloud Drive carries everything, exactly as without a courier.
+    public var courier: (any SyncCourier)?
+    public var courierRole: CourierRole = []
+    /// The courier's state for the sync status: how many files wait to send, and whether a send is stuck.
+    @Published public private(set) var courierStatus = CourierStatus()
+    /// Called once the courier is available. The apps register for remote notifications, which CKSyncEngine needs.
+    public var onCourierAvailable: (() -> Void)?
+    private var courierStart: Task<Void, Never>?
+    private var courierSends: Task<Void, Never>?
+    private var courierExpiryCheck: Date?
+
+    private func startCourier() {
+        guard let courier, !courierRole.isEmpty, courierStart == nil else { return }
+        let role = courierRole
+        weak let weakSelf = self
+        var receiver: CourierReceiver?
+        if role.contains(.receive) {
+            receiver = { files in await weakSelf?.receiveCourierFiles(files) ?? [] }
+        }
+        let onStatus: @Sendable (CourierStatus) -> Void = { status in
+            Task { @MainActor in weakSelf?.courierStatus = status }
+        }
+        courierStart = Task {
+            let availability = await courier.start(role: role, receiver: receiver, onStatus: onStatus)
+            guard availability == .available else { return }
+            weakSelf?.onCourierAvailable?()
+            if role.contains(.receive) { await courier.fetch() }
+        }
+    }
+
+    private func stopCourier() {
+        guard let courier, let start = courierStart else { return }
+        courierStart = nil
+        Task { await start.value; await courier.stop() }
+    }
+
+    /// Hands the files a pass wrote to the courier and asks it to send them now. Each file is sent once, however
+    /// often a pass reports it. Expired courier files are cleared at most hourly, after a pass.
+    private func handToCourier(_ files: [SyncJournalFile], engine: LibrarySyncEngine) {
+        guard let courier, let start = courierStart else { return }
+        let now = Date()
+        if courierExpiryCheck.map({ now.timeIntervalSince($0) >= 3_600 }) ?? true {
+            courierExpiryCheck = now
+            Task { await start.value; await courier.removeExpired() }
+        }
+        guard courierRole.contains(.send), !files.isEmpty else { return }
+        let deviceID = self.deviceID, previous = courierSends
+        courierSends = Task {
+            await start.value
+            await previous?.value
+            guard let libraryID = await engine.libraryID else { return }
+            let outgoing = files.map { file in
+                CourierOutgoingFile(libraryID: libraryID, journal: file, deviceID: deviceID) { try engine.copyJournalFile(file, to: $0) }
+            }
+            await courier.send(outgoing)
+            await courier.flush()
+        }
+    }
+
+    /// Waits until the courier has taken what the latest passes wrote and tried sending it. The iPhone waits under its
+    /// background-task assertion. Returns at once if the calling task is cancelled; the courier carries on as the
+    /// system allows, and iCloud Drive carries everything regardless.
+    public func finishCourierSends() async {
+        guard let sends = courierSends else { return }
+        await TaskWaiter.wait(for: sends)
+    }
+
+    /// Asks the courier for what other devices sent (a push arrived).
+    public func fetchCourier() {
+        guard let courier, let start = courierStart else { return }
+        Task { await start.value; await courier.fetch() }
+    }
+
+    /// Files a courier brought. Each is verified and kept in the engine's inbox, never written into the sync folder;
+    /// a pass then applies them. Returns those the courier may delete: stored, already here, or rejected.
+    private func receiveCourierFiles(_ files: [CourierIncomingFile]) async -> Set<String> {
+        guard let engine else { return [] }
+        var settled = Set<String>()
+        var stored = false
+        for incoming in files {
+            guard let delivery = try? await engine.receiveCourierFile(incoming.file.journal, libraryID: incoming.file.libraryID,
+                                                                      contents: incoming.contents) else { continue }
+            if delivery == .stored { stored = true }
+            if delivery.isSettled { settled.insert(incoming.file.id) }
+        }
+        if stored { requestSync() }
+        return settled
     }
 
     // MARK: iCloud container
@@ -656,6 +752,44 @@ private extension SyncMigrationRecord {
         containerLibraryID = outcome.destinationLibraryID ?? containerLibraryID
         adoptedCheckpoint = adoptedCheckpoint || outcome.adoptedCheckpoint
         skipped = Array(Set(skipped + outcome.progress.skipped)).sorted()
+    }
+}
+
+/// Waits for a task, or until the waiting task is cancelled, whichever comes first. Awaiting `task.value` alone can't
+/// be cut short.
+enum TaskWaiter {
+    static func wait(for task: Task<Void, Never>) async {
+        let gate = Gate()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                gate.hold(continuation)
+                Task { await task.value; gate.open() }
+            }
+        } onCancel: { gate.open() }
+    }
+
+    private final class Gate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var isOpen = false
+
+        func hold(_ waiting: CheckedContinuation<Void, Never>) {
+            let resumeNow = lock.withLock { () -> Bool in
+                if isOpen { return true }
+                continuation = waiting
+                return false
+            }
+            if resumeNow { waiting.resume() }
+        }
+
+        func open() {
+            let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                isOpen = true
+                defer { continuation = nil }
+                return continuation
+            }
+            waiting?.resume()
+        }
     }
 }
 

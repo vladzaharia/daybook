@@ -283,6 +283,12 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// A CloudKit push: the iPhone sent files by courier. CKSyncEngine fetches on its own pushes; asking too costs
+    /// nothing and covers a fetch the system put off.
+    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+        state?.sync.fetchCourier()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         switch LaunchOptions.value(after: "--appearance") {
