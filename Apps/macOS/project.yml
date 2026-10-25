@@ -6,7 +6,9 @@
 # The app target compiles Sources/Daybook in place, the same files as the SwiftPM `Daybook` executable
 # (which stays for `swift build`, `swift run`, and `swift test`), and links the package's libraries.
 # Resources/Info.plist and Resources/*.entitlements are referenced through build settings, so XcodeGen
-# never rewrites them.
+# never rewrites them. Signed builds (Daybook.entitlements) carry iCloud with iCloud Documents and CloudKit (the
+# courier, docs/icloud-sync.md) and push for CKSyncEngine, so the app ID needs the iCloud and Push Notifications
+# capabilities (docs/release.md, "One-time setup"). Ad hoc builds (Daybook-Local.entitlements) carry neither.
 name: DaybookMac
 
 options:

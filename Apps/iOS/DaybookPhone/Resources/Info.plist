@@ -76,6 +76,7 @@
 		<string>audio</string>
 		<string>bluetooth-central</string>
 		<string>fetch</string>
+		<string>remote-notification</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
