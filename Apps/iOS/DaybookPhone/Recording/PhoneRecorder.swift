@@ -107,6 +107,9 @@ final class PhoneRecorder {
     @ObservationIgnored private var notesSave: Task<Void, Never>?
     @ObservationIgnored private var cancelStart = false
     @ObservationIgnored private let journalQueue = DispatchQueue(label: "local.daybook.phone.journal", qos: .utility)
+    /// Whether the last journal write failed, touched only on `journalQueue`: a failure is reported
+    /// once, until a write succeeds again.
+    @ObservationIgnored private let journalHealth = JournalHealth()
 
     static let silentMicrophoneSeconds: TimeInterval = 3
     /// The pause message when iOS gives no reason (a call, Siri, an alarm).
@@ -253,7 +256,7 @@ final class PhoneRecorder {
         guard var journal, let directory else { return }
         sync(&journal)
         self.journal = journal
-        try? journal.write(to: directory)
+        writeJournalNow(journal, to: directory)
     }
 
     /// The app is being terminated: finish the open segment and journal so the next launch recovers
@@ -266,7 +269,7 @@ final class PhoneRecorder {
         writer?.closeSegmentNow()
         if var journal, let directory {
             sync(&journal)
-            try? journal.write(to: directory)
+            writeJournalNow(journal, to: directory)
         }
     }
 
@@ -550,8 +553,34 @@ final class PhoneRecorder {
         guard var journal, let directory else { return }
         sync(&journal)
         self.journal = journal
-        let snapshot = journal
-        journalQueue.async { try? snapshot.write(to: directory) }
+        let snapshot = journal, health = journalHealth
+        journalQueue.async { [weak self] in
+            do {
+                try snapshot.write(to: directory)
+                health.failing = false
+            } catch {
+                guard !health.failing else { return }
+                health.failing = true
+                let message = error.localizedDescription
+                Task { @MainActor in self?.journalWriteFailed(message) }
+            }
+        }
+    }
+
+    /// Writes the journal now, on the caller's thread; a failure is reported like a queued one.
+    private func writeJournalNow(_ journal: PhoneCaptureJournal, to directory: URL) {
+        do { try journal.write(to: directory) }
+        catch { journalWriteFailed(error.localizedDescription) }
+    }
+
+    /// The recording's journal (its notes, bookmarks, and how to recover the audio) couldn't be
+    /// written, usually because the iPhone is full. Said once, not every five seconds; the audio
+    /// already written stays.
+    private func journalWriteFailed(_ message: String) {
+        let warning = "Notes and bookmarks couldn’t be saved with the recording: \(message)"
+        guard lastError != warning else { return }
+        lastError = warning
+        onChange?()
     }
 
     private func startTimers() {
@@ -588,4 +617,9 @@ final class PhoneRecorder {
         if silent != isMicrophoneSilent { isMicrophoneSilent = silent }
         onLevel?(level)
     }
+}
+
+/// Whether journal writes are failing; read and written only on the recorder's journal queue.
+private final class JournalHealth: @unchecked Sendable {
+    var failing = false
 }
