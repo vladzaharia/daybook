@@ -205,6 +205,8 @@ final class PhoneLibrary {
         let duration = try await Self.duration(of: url)
         await controller.acquireLock()
         defer { controller.releaseLock() }
+        // Another device's import of it may have arrived through sync meanwhile: keep that one.
+        if let held = DeviceLibraryLinks.meeting(holding: identity, in: controller.meetings).flatMap(controller.meeting) { return Filed(meeting: held) }
         var target = attachTo.flatMap { controller.meeting($0) != nil ? $0 : nil }
         if target == nil { target = try await controller.existingMeeting(containingAudioAt: url)?.id }
         let id = target ?? controller.newMeeting(title: Self.deviceTitle(identity, fallback: url), date: Self.deviceStart(identity) ?? Date())

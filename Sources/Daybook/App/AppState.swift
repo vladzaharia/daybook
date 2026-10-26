@@ -382,6 +382,8 @@ final class AppState: ObservableObject {
         guard library.isLoaded else { throw AppError.libraryUnavailable }
         var meetingIDs: [UUID] = []
         for url in urls {
+            // A recorder's recording another device imported may have arrived through sync meanwhile.
+            if let device, let held = DeviceLibraryLinks.meeting(holding: device, in: meetings) { meetingIDs.append(held); continue }
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             // Validate before creating a library entry; zero-length and unsupported files remain outside the library.

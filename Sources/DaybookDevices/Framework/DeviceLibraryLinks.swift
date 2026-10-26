@@ -34,6 +34,22 @@ public struct DeviceLibraryLinks: Equatable {
 
     public static func partialID(_ recordingID: String) -> String { recordingID + partialSuffix }
 
+    /// The conversation that already holds this recording in full: the same kind and recording ID,
+    /// from the same recorder when both name a serial. Importers check it right before they ingest,
+    /// because another device's import of the same recording can arrive through sync while this one
+    /// transfers. A Listen Live portion never matches: each is its own stretch of audio.
+    public static func meeting(holding identity: DeviceRecordingIdentity, in meetings: [Meeting]) -> UUID? {
+        guard !identity.recordingID.hasSuffix(partialSuffix) else { return nil }
+        for meeting in meetings {
+            for track in meeting.tracks {
+                guard let device = track.device, device.kind == identity.kind, device.recordingID == identity.recordingID else { continue }
+                if let serial = identity.serial, let other = device.serial, !serial.isEmpty, !other.isEmpty, serial != other { continue }
+                return meeting.id
+            }
+        }
+        return nil
+    }
+
     /// The recording a Listen Live portion belongs to; any other ID unchanged.
     public static func wholeRecordingID(_ recordingID: String) -> String {
         recordingID.hasSuffix(partialSuffix) ? String(recordingID.dropLast(partialSuffix.count)) : recordingID

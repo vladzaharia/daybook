@@ -315,6 +315,28 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(rig.device.received.filter { $0 == (0x1a, 0x07) }.count, 2)
     }
 
+    func testARecordingThatArrivesThroughSyncWhileItTransfersIsNotImportedAgain() async throws {
+        let device = recorder(count: 1)
+        device.pace = .milliseconds(15)
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        let target = try XCTUnwrap(rig.session.newRecordings.first)
+        rig.session.importRecordings([target])
+        try await waitUntil("the transfer") { if case .receiving = rig.session.phase { return true } else { return false } }
+        // Meanwhile another device's import of it reaches this library.
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: device.serial, recordingID: target.id)
+        let synced = Meeting(title: "From Alex’s iPhone", tracks: [RecordingTrack(source: .soundcore, relativePath: "Originals/p.wav",
+                                                                                   fileName: "p.wav", device: identity)])
+        rig.library.meetings.append(synced)
+        rig.session.libraryChanged(rig.library.meetings, ready: true)
+        try await waitUntil("the transfer to end") { !rig.session.queue.isActive }
+        XCTAssertTrue(rig.library.imports.isEmpty, "the importer isn't asked for a second copy")
+        XCTAssertTrue(rig.session.failures.isEmpty)
+        XCTAssertNil(rig.session.transferProblem)
+        XCTAssertEqual(rig.session.links.imported[target.id], synced.id)
+        XCTAssertTrue(stagedFiles.isEmpty)
+    }
+
     func testIntegrityFailuresSaveNothingAfterOneQuietRetry() async throws {
         for fault in [SimulatedSoundcore.Fault.skipSlice(at: 10), .skipSlice(at: 48), .wrongSize] {
             let device = recorder()

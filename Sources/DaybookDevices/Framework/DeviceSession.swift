@@ -393,7 +393,11 @@ public final class DeviceSession: ObservableObject, Identifiable {
             do {
                 guard let importer else { throw DaybookError.libraryUnavailable }
                 let identity = DeviceRecordingIdentity(kind: kind.id, serial: audio.serial, recordingID: item.recording.id)
-                _ = try await importer(audio.url, identity, item.attachTo ?? links.partial[item.recording.id], kind.audioSource)
+                // Another device's import of it may have arrived through sync while this transferred:
+                // the library keeps the one it has rather than a second conversation.
+                if DeviceLibraryLinks.meeting(holding: identity, in: meetings) == nil {
+                    _ = try await importer(audio.url, identity, item.attachTo ?? links.partial[item.recording.id], kind.audioSource)
+                }
                 connection.didImport(item.recording)
                 outcome = .imported
             } catch {

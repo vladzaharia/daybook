@@ -235,6 +235,37 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(phone.library.meetings.filter { $0.tracks.contains { $0.deviceRecordingID == id } }.count, 1)
     }
 
+    func testARecordingBothDevicesImportBeforeSyncEndsUpInOneConversation() async throws {
+        let recorder = makeRecorder(count: 1, seconds: 10)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        // Nobody manages it yet (an older build, or before ownership arrived): the phone imports it.
+        phone.session.connect()
+        try await waitUntil("the phone lists it") { phone.session.direct?.isInventoryCurrent == true && phone.session.newRecordings.count == 1 }
+        let id = phone.session.newRecordings[0].id
+        phone.session.importRecordings(phone.session.newRecordings)
+        try await waitUntil("the phone imported it", timeout: 20) { phone.imported.count == 1 && !phone.session.queue.isActive }
+        phone.session.disconnect(.direct)
+        try await syncAll(phone)
+
+        // The Mac hasn't synced since, so it imports it too; the phone's conversation arrives mid-transfer.
+        recorder.pace = .milliseconds(15)
+        mac.session.connect()
+        try await waitUntil("the Mac lists it") { mac.session.direct?.isInventoryCurrent == true && mac.session.newRecordings.count == 1 }
+        mac.session.importRecordings(mac.session.newRecordings)
+        try await waitUntil("the Mac's transfer") { (mac.session.phase?.fraction ?? 0) > 0 }
+        try await syncAll(mac)
+        XCTAssertTrue(mac.session.queue.current != nil, "still transferring when the phone's import arrived")
+        try await waitUntil("the Mac's transfer to end", timeout: 20) { !mac.session.queue.isActive }
+        XCTAssertTrue(mac.imported.isEmpty, "the Mac keeps the phone's import instead of a second conversation")
+        XCTAssertTrue(mac.session.failures.isEmpty)
+
+        try await syncAll(mac, phone)
+        for library in [mac.library, phone.library] {
+            XCTAssertEqual(library.meetings.filter { $0.tracks.contains { $0.deviceRecordingID == id } }.count, 1)
+        }
+    }
+
     func testARecordingKeepsGoingAndRecordControlMovesWithOwnership() async throws {
         let recorder = makeRecorder(count: 1)
         let mac = try await makeSide("Mac", .mac, recorder)
