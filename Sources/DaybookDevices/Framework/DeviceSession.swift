@@ -41,6 +41,10 @@ public final class DeviceSession: ObservableObject, Identifiable {
     /// Libraries load after devices start; nothing imports automatically until then.
     public private(set) var libraryReady = false
     private var meetings: [Meeting] = []
+    /// What the links were last built from.
+    private var linkInputs: (tracks: [DeviceLibraryIndex.Track], serial: String?)?
+    /// How often the links were rebuilt (tests).
+    private(set) var linkRebuilds = 0
     private var runner: Task<Void, Never>?
     private var runnerToken: UUID?
     private var rate = TransferRateEstimator()
@@ -181,13 +185,30 @@ public final class DeviceSession: ObservableObject, Identifiable {
     // MARK: Library
 
     public func libraryChanged(_ meetings: [Meeting], ready: Bool) {
+        libraryChanged(meetings, index: DeviceLibraryIndex(meetings: meetings), ready: ready)
+    }
+
+    /// The library changed, with its recorder tracks already indexed (the hub indexes once for every device).
+    public func libraryChanged(_ meetings: [Meeting], index: DeviceLibraryIndex, ready: Bool) {
         self.meetings = meetings
         let serial = status?.serial ?? (direct as? SoundcoreConnection)?.remembered?.serial
-        var updated = DeviceLibraryLinks(meetings: meetings, kind: kind.id, serial: serial)
+        let tracks = index.tracks(kind: kind.id)
+        // Only this kind's tracks (and the recorder's serial) decide the links; anything else in the
+        // library changing leaves them as they are.
+        var changed = linkInputs?.tracks != tracks || linkInputs?.serial != serial
         #if DEBUG
-        if let demoLinks { updated = demoLinks(meetings) }
+        // Demo links match by time, from the whole library.
+        if demoLinks != nil { changed = true }
         #endif
-        if updated != links { links = updated }
+        if changed {
+            linkInputs = (tracks, serial)
+            linkRebuilds += 1
+            var updated = DeviceLibraryLinks(tracks: tracks, serial: serial)
+            #if DEBUG
+            if let demoLinks { updated = demoLinks(meetings) }
+            #endif
+            if updated != links { links = updated }
+        }
         for case let backed as any LibraryBackedConnection in connections { backed.libraryChanged(meetings) }
         if ready && !libraryReady { libraryReady = true }
         // A recording another device imported has arrived (or never will, after a day): it counts normally.

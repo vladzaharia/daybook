@@ -14,6 +14,7 @@ public final class DeviceHub: ObservableObject {
     public var importer: DeviceImporter? { didSet { (sessions + [pendingSetup].compactMap { $0 }).forEach { $0.importer = importer } } }
 
     private var meetings: [Meeting] = []
+    private var index = DeviceLibraryIndex(meetings: [])
     private var libraryReady = false
     private var started = false
     /// Staged audio older than this belongs to an earlier run: no transfer of this one owns it.
@@ -103,9 +104,11 @@ public final class DeviceHub: ObservableObject {
     /// The library changed: every device recomputes which of its recordings are already in it.
     public func libraryChanged(_ meetings: [Meeting], ready: Bool) {
         self.meetings = meetings
+        // One pass over the library for every device.
+        index = DeviceLibraryIndex(meetings: meetings)
         libraryReady = libraryReady || ready
-        sessions.forEach { $0.libraryChanged(meetings, ready: libraryReady) }
-        pendingSetup?.libraryChanged(meetings, ready: libraryReady)
+        sessions.forEach { $0.libraryChanged(meetings, index: index, ready: libraryReady) }
+        pendingSetup?.libraryChanged(meetings, index: index, ready: libraryReady)
     }
 
     // MARK: Setup
@@ -121,7 +124,7 @@ public final class DeviceHub: ObservableObject {
         let device = ConfiguredDevice(kind: kind, name: number == 0 ? kind.name : "\(kind.name) \(number + 1)")
         guard let session = makeSession(device) else { return nil }
         session.activate()
-        session.libraryChanged(meetings, ready: libraryReady)
+        session.libraryChanged(meetings, index: index, ready: libraryReady)
         #if DEBUG
         Self.demo.prepareSetup?(session)
         #endif
@@ -154,7 +157,7 @@ public final class DeviceHub: ObservableObject {
         if let existing = session(device.id) { return existing }
         guard let session = makeSession(device) else { return nil }
         if started { session.activate() }
-        session.libraryChanged(meetings, ready: libraryReady)
+        session.libraryChanged(meetings, index: index, ready: libraryReady)
         sessions.append(session)
         persist()
         return session

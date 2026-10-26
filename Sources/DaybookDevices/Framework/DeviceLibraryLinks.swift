@@ -46,29 +46,62 @@ public struct DeviceLibraryLinks: Equatable {
     /// Links for one device kind. With a serial number, tracks from a different recorder of the same
     /// kind don't count; tracks without one (exports) always do.
     public init(meetings: [Meeting], kind: String, serial: String? = nil, recentLimit: Int = 10) {
+        self.init(tracks: DeviceLibraryIndex(meetings: meetings).tracks(kind: kind), serial: serial, recentLimit: recentLimit)
+    }
+
+    /// Links from one kind's tracks in the library's index.
+    public init(tracks: [DeviceLibraryIndex.Track], serial: String? = nil, recentLimit: Int = 10) {
         var entries: [Entry] = []
-        for meeting in meetings {
-            for track in meeting.tracks {
-                guard let device = track.device, device.kind == kind else { continue }
-                if let serial, let other = device.serial, !serial.isEmpty, other != serial { continue }
-                if device.recordingID.hasSuffix(Self.partialSuffix) {
-                    let id = String(device.recordingID.dropLast(Self.partialSuffix.count))
-                    partial[id] = partial[id] ?? meeting.id
-                } else {
-                    imported[device.recordingID] = meeting.id
-                    // Existing libraries used name/size file IDs. Their verified import digest
-                    // also recognizes the new content ID on another device without reimporting.
-                    if device.recordingID.hasPrefix("file:"), !track.sha256.isEmpty {
-                        imported[ImportFolderWatcher.recordingID(sha256: track.sha256)] = meeting.id
-                    }
+        for track in tracks {
+            let device = track.device
+            if let serial, let other = device.serial, !serial.isEmpty, other != serial { continue }
+            if device.recordingID.hasSuffix(Self.partialSuffix) {
+                let id = String(device.recordingID.dropLast(Self.partialSuffix.count))
+                partial[id] = partial[id] ?? track.meetingID
+            } else {
+                imported[device.recordingID] = track.meetingID
+                // Existing libraries used name/size file IDs. Their verified import digest
+                // also recognizes the new content ID on another device without reimporting.
+                if device.recordingID.hasPrefix("file:"), !track.sha256.isEmpty {
+                    imported[ImportFolderWatcher.recordingID(sha256: track.sha256)] = track.meetingID
                 }
-                entries.append(Entry(recordingID: device.recordingID, meetingID: meeting.id, trackID: track.id,
-                                     importedAt: track.createdAt, fileName: track.fileName))
             }
+            entries.append(Entry(recordingID: device.recordingID, meetingID: track.meetingID, trackID: track.trackID,
+                                 importedAt: track.createdAt, fileName: track.fileName))
         }
         for id in imported.keys { partial[id] = nil }
         recent = Array(entries.sorted { $0.importedAt > $1.importedAt }.prefix(recentLimit))
     }
+}
+
+/// The library's recorder tracks by device kind, made in one pass over the library however many
+/// devices read it. A device rebuilds its links only when its kind's tracks change, so editing a
+/// conversation's notes or title costs every device nothing.
+public struct DeviceLibraryIndex: Equatable {
+    /// One recorder track: what links need from it.
+    public struct Track: Equatable {
+        public let meetingID: UUID
+        public let trackID: UUID
+        public let device: DeviceRecordingIdentity
+        public let createdAt: Date
+        public let fileName: String
+        public let sha256: String
+    }
+
+    private var byKind: [String: [Track]] = [:]
+
+    public init(meetings: [Meeting]) {
+        for meeting in meetings {
+            for track in meeting.tracks {
+                guard let device = track.device else { continue }
+                byKind[device.kind, default: []].append(Track(meetingID: meeting.id, trackID: track.id, device: device,
+                                                              createdAt: track.createdAt, fileName: track.fileName, sha256: track.sha256))
+            }
+        }
+    }
+
+    /// One kind's tracks, in library order.
+    public func tracks(kind: String) -> [Track] { byKind[kind] ?? [] }
 }
 
 /// When a recorder's recording started, read from its identity: Soundcore recording IDs are Unix start
