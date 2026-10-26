@@ -3,6 +3,7 @@ import Foundation
 
 public enum LibraryError: LocalizedError {
     case unsafePath(String), corruptMeeting(UUID), unsupportedSchema(Int), invalidAudio(String), invalidHighlight, invalidTranscript, trashedMeeting(UUID), missingMeeting(UUID), unsupportedHighlightSchema(Int), invalidHighlightSidecar
+    case unreadableLibrarySettings
     public var errorDescription: String? {
         switch self {
         case .unsafePath(let path): return "The library rejected an unsafe file path: \(path)"
@@ -15,6 +16,7 @@ public enum LibraryError: LocalizedError {
         case .missingMeeting: return "This conversation isn’t in the library."
         case .unsupportedHighlightSchema(let version): return "Highlight sidecar version \(version) is not supported. This version of Daybook reads version 1."
         case .invalidHighlightSidecar: return "The JSON sidecar is not a Daybook highlights file. It must contain a highlights array with time in seconds and text for each marker."
+        case .unreadableLibrarySettings: return "Your folders and templates can’t be saved until Daybook can read them."
         }
     }
 }
@@ -38,6 +40,8 @@ public actor MeetingStore {
     private var cache: [UUID: (meeting: Meeting, stamp: FileStamp)] = [:]
     /// Files and folders written since the last durability barrier (`synchronizeWrites`).
     private var unsynchronized = Set<URL>()
+    /// `library.json`: whether it may be written, and whether it holds settings that were read.
+    var libraryFile = LibraryFileState.unknown
     /// How many `meeting.json` files were read and decoded, and written (tests check the cache).
     private(set) var metadataReads = 0
     private(set) var metadataWrites = 0

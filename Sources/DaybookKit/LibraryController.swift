@@ -40,6 +40,8 @@ public final class LibraryController: ObservableObject {
     private var persistenceErrors: [String: String] { saves.failures }
     /// Edits since the last sync request; the request goes out once they're written.
     private var syncWanted = false
+    /// False when `library.json` couldn't be read or a newer Daybook wrote it: never overwritten.
+    private var metadataWritable = true
     private var lifecycle: AnyCancellable?
     private var notesTasks: [UUID: Task<Void, Never>] = [:]
     private var noteOriginals: [UUID: String] = [:]
@@ -69,27 +71,35 @@ public final class LibraryController: ObservableObject {
     // MARK: Loading
 
     /// Opens the store and loads the conversations, vocabulary, and library settings. Work that was
-    /// running when the app last quit is marked interrupted; nothing is lost.
+    /// running when the app last quit is marked interrupted; nothing is lost. Only a library folder
+    /// that can't be opened at all fails: a damaged or newer settings file, unreadable vocabulary, or
+    /// a conversation that can't be saved now is a notice, and the library opens.
     public func load() async throws {
         guard !isLoaded else { return }
         let store = try MeetingStore(rootURL: rootURL)
         let glossaryStore = try GlossaryStore(rootURL: rootURL)
         self.store = store; self.glossaryStore = glossaryStore
         meetings = try await store.list()
-        glossary = try await glossaryStore.list()
-        if let data = try? Data(contentsOf: rootURL.appendingPathComponent("library.json")) {
-            metadata = try JSONDecoder().decode(LibraryMetadata.self, from: data)
-            guard metadata.schemaVersion == 1 else { throw DaybookError.libraryUnavailable }
+        var warnings = await store.warnings
+        do { glossary = try await glossaryStore.list() }
+        catch { glossary = []; warnings.append("Your vocabulary couldn’t be read: \(error.localizedDescription)") }
+        let settings = await store.loadLibraryMetadata()
+        metadataWritable = settings.isWritable
+        warnings += settings.warnings
+        if let saved = settings.metadata {
+            metadata = saved
             if !metadata.vocabulary.isEmpty { glossary = metadata.vocabulary.compactMap(\.value) }
         } else {
             metadata.vocabulary = glossary.map { .init(id: $0.id.uuidString, value: $0) }
         }
         for index in meetings.indices where [.transcribing, .summarizing, .recording].contains(meetings[index].status) {
-            meetings[index].status = .imported
-            meetings[index].errorMessage = "Processing was interrupted. Your audio and notes are saved."
-            try await store.save(meetings[index])
+            var meeting = meetings[index]
+            meeting.status = .imported
+            meeting.errorMessage = "Processing was interrupted. Your audio and notes are saved."
+            meetings[index] = meeting
+            persist(meeting, requestingSync: false)
         }
-        let warnings = await store.warnings
+        await saves.drain()
         if !warnings.isEmpty { notice = warnings.joined(separator: "\n") }
         isLoaded = true
     }
@@ -174,12 +184,10 @@ public final class LibraryController: ObservableObject {
 
     private func persistMetadata(requestingSync: Bool = true) {
         if requestingSync && !isApplyingSync { syncWanted = true }
-        let snapshot = metadata, url = rootURL.appendingPathComponent("library.json")
-        saves.enqueue("library-settings") {
-            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(snapshot).write(to: url, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        }
+        // Settings that couldn't be read, or that a newer Daybook wrote, are never overwritten.
+        guard let store, metadataWritable else { return }
+        let snapshot = metadata
+        saves.enqueue("library-settings") { try await store.saveLibraryMetadata(snapshot) }
     }
 
     private func reportSaveFailure(_ key: String, _ error: Error) {
