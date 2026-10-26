@@ -580,6 +580,27 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(rig.connection.problem?.id, SoundcoreIssue.didNotConfirm.rawValue)
     }
 
+    func testTheRecordersButtonListsItAgainOnStartAndOnStop() async throws {
+        let rig = rig(recorder(count: 1))
+        try await connectThroughSetup(rig)
+        let listings = { rig.device.received.filter { $0 == (0x1b, 0x0e) }.count }
+        let before = listings()
+
+        rig.device.pressButton()
+        try await waitUntil("recording now") { rig.connection.status?.isRecording == true && rig.session.split.inProgress != nil }
+        XCTAssertGreaterThan(listings(), before)
+        let id = try XCTUnwrap(rig.session.split.inProgress?.id)
+
+        let afterStart = listings()
+        rig.device.pressButton()
+        try await waitUntil("the finished recording, listed") {
+            !rig.connection.isRefreshing && rig.session.split.inProgress == nil && rig.session.newRecordings.contains { $0.id == id }
+        }
+        XCTAssertGreaterThan(listings(), afterStart, "a stop lists it again too")
+        XCTAssertEqual(rig.connection.status?.isRecording, false)
+        XCTAssertEqual(rig.session.newRecordings.first { $0.id == id }?.byteCount, UInt64(rig.device.recordings[0].size), "with its final size")
+    }
+
     func testListenLiveSavesWhatArrivedAsAPartOfTheRecording() async throws {
         let device = recorder()
         device.isRecording = true

@@ -135,6 +135,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     /// The recorder has been listed since this connection was confirmed. Until then `recordings` is
     /// the remembered list, which can name a recording that has since started, grown, or finished.
     private var listedThisConnection = false
+    /// Listings under way (a refresh, or one after the recorder's button), for `isRefreshing`.
+    private var listingsInFlight = 0
     private var names: [UUID: String] = [:]
     /// Listen Live's captioner, its listeners, and where the live audio has reached (16 kHz frames).
     private var captioner: (any LiveCaptioning)?
@@ -251,16 +253,37 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     public func refresh() {
         guard case .connected = phase, let session, !isRefreshing, !live.isListening else { return }
-        isRefreshing = true
-        publish()
+        beginListing()
         Task {
             await perform {
                 self.applyStatus(try await session.readStatus())
                 self.applyListing(try await session.listRecordings())
             }
-            self.isRefreshing = false
-            self.publish()
+            self.endListing()
         }
+    }
+
+    /// The recorder started or stopped on its own (its button): list it again, so a new recording
+    /// shows as in progress and a finished one appears with its final size. Imports wait meanwhile.
+    private func relist() {
+        guard let session else { return }
+        beginListing()
+        Task {
+            await perform { self.applyListing(try await session.listRecordings()) }
+            self.endListing()
+        }
+    }
+
+    private func beginListing() {
+        listingsInFlight += 1
+        if !isRefreshing { isRefreshing = true }
+        publish()
+    }
+
+    private func endListing() {
+        listingsInFlight = max(0, listingsInFlight - 1)
+        if listingsInFlight == 0 { isRefreshing = false }
+        publish()
     }
 
     public func refreshIfStale() {
@@ -809,7 +832,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             current.caseCharging = caseCharging
         case .recording(let on):
             current.isRecording = on
-            if on { Task { await perform { if let session = self.session { self.applyListing(try await session.listRecordings()) } } } }
+            // Either way the list changes: a recording appears in progress, or one is finished.
+            relist()
         }
         applyStatus(current)
         publish()
