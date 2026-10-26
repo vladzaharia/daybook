@@ -90,6 +90,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         self.link.onProcessingFinished = { [weak self] _ in
             Task { await self?.sync.synchronize(.linkFinished) }
         }
+        self.link.onMacRecordingState = { [weak self] mac, state in self?.macReported(state, from: mac) }
+        self.link.onMacConnected = { [weak self] mac in self?.macConnected(mac) }
         self.devices.onImported = { [weak self] filed in self?.filedElsewhere(filed) }
         wireRecorderHandoff()
         // A conversation moved to the Trash takes its live captions with it.
@@ -433,6 +435,22 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
         updateActivity()
         publish()
+    }
+
+    /// A Mac said what it's recording. One this iPhone records with that has stopped, or moved on to
+    /// another conversation, is marked so on the recording screen.
+    private func macReported(_ state: LinkRecordingState, from macID: UUID) {
+        guard let session = multipoint, let mac = session.macs.first(where: { $0.id == macID }), mac.state == .recording else { return }
+        let recordsThis = state.conversationID == session.conversationID && state.phase != .idle
+        guard !recordsThis else { return }
+        multipoint?.update(macID) { $0.state = .stopped }
+        updateActivity()
+        publish()
+    }
+
+    /// A Mac connected: it hears this iPhone's recording state at once.
+    private func macConnected(_ macID: UUID) {
+        sendRecordingState(force: true)
     }
 
     /// Stopping here stops the Macs this iPhone started; a Mac that was already recording keeps going.

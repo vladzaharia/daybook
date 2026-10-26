@@ -20,7 +20,8 @@ final class PhoneLink {
         /// From its capabilities once connected.
         var canProcess = false
         var appVersion: String?
-        /// Its recorder, from `recording.state`.
+        /// Its recorder, from `recording.state`, with `sentAt` on this iPhone's clock. Nil when it said
+        /// it's idle, or when it hasn't said for `recordingStateLifetime` (it repeats it while recording).
         var recording: LinkRecordingState?
         /// Its clock relative to this iPhone's, once samples are in (offset = Mac − iPhone).
         var clock: LinkClockEstimate?
@@ -90,6 +91,13 @@ final class PhoneLink {
     @ObservationIgnored var onHandoffMessage: ((LinkMessage, UUID) -> Void)?
     /// A Mac connected or went away.
     @ObservationIgnored var onMacsChanged: (() -> Void)?
+    /// A Mac connected (again): what's waiting for it (a stop) can go now.
+    @ObservationIgnored var onMacConnected: ((UUID) -> Void)?
+    /// A Mac said what it's recording, or that it's idle.
+    @ObservationIgnored var onMacRecordingState: ((UUID, LinkRecordingState) -> Void)?
+
+    /// A Mac's word on its recorder lasts this long; it repeats it every 15 s while recording.
+    static let recordingStateLifetime: TimeInterval = 45
 
     @ObservationIgnored let client: LinkClient
     @ObservationIgnored private var identity: LinkIdentity
@@ -137,6 +145,7 @@ final class PhoneLink {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
                 self?.pruneProgress()
+                self?.pruneRecordingStates()
             }
         }
     }
@@ -330,6 +339,7 @@ final class PhoneLink {
                 mac.handsOffRecorders = peer.capabilities.handsOffRecorders
             }
             onMacsChanged?()
+            if case .connected = event { onMacConnected?(peer.deviceID) }
         case .disconnected(let id, _):
             update(id) { mac in
                 mac.lastConnectedAt = Date()
@@ -355,7 +365,10 @@ final class PhoneLink {
                 liveProgress[progress.meetingID] = live
             }
         case .recordingState(let state):
-            update(macID) { $0.recording = state.phase == .idle ? nil : state }
+            var heard = state
+            heard.sentAt = macs.first(where: { $0.id == macID })?.clock?.localDate(fromPeer: state.sentAt) ?? Date()
+            update(macID) { $0.recording = state.phase == .idle ? nil : heard }
+            onMacRecordingState?(macID, heard)
         case .bookmark, .processingNudge:
             // A Mac's bookmarks are on its own recording and arrive with it through sync.
             break
@@ -376,6 +389,14 @@ final class PhoneLink {
     private func pruneProgress(now: Date = Date()) {
         let fresh = liveProgress.filter { now.timeIntervalSince($0.value.receivedAt) < LiveProgress.staleAfter }
         if fresh.count != liveProgress.count { liveProgress = fresh }
+    }
+
+    /// A Mac that stopped saying it's recording may have stopped (or gone): what it said no longer counts.
+    func pruneRecordingStates(now: Date = Date()) {
+        for mac in macs {
+            guard let state = mac.recording, now.timeIntervalSince(state.sentAt) > Self.recordingStateLifetime else { continue }
+            update(mac.id) { $0.recording = nil }
+        }
     }
 
     private func reloadPaired() {

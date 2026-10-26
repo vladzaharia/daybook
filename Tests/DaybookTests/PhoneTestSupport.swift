@@ -33,6 +33,10 @@ final class LinkEvents: @unchecked Sendable {
         all.compactMap { if case .received(.processingProgress(let progress), _) = $0 { return progress }; return nil }
     }
     var unpaired: Bool { all.contains { if case .unpaired = $0 { return true }; return false } }
+    /// What the Mac said about its own recorder, in order.
+    var states: [LinkRecordingState] {
+        all.compactMap { if case .received(.recordingState(let state), _) = $0 { return state }; return nil }
+    }
 }
 
 /// What the phone's record-control handler was asked, and how it answers.

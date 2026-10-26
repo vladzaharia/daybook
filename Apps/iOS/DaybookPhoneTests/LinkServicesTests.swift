@@ -294,6 +294,49 @@ final class LinkServicesTests: XCTestCase {
         }
     }
 
+    func testAMacsRecordingStateMarksItBusyOrStoppedAndExpires() async throws {
+        let mac = try await makeMac()
+        await mac.service.setRecordControlHandler { _, request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "mac-1"))
+        }
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        let phoneID = link.deviceID
+
+        // Busy with a conversation of its own: not offered to record this one.
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: UUID(), startedAt: Date())), to: phoneID)
+        try await waitUntil("the Mac's state") { link.macs.first?.isRecording == true }
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        XCTAssertTrue(model.macsToRecordWith.isEmpty, "a Mac recording something else isn't offered")
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .idle)), to: phoneID)
+        try await waitUntil("idle") { link.macs.first?.isRecording == false }
+        XCTAssertEqual(model.macsToRecordWith.map(\.name), ["Studio Mac"])
+
+        // Recording with this iPhone, then stopped on the Mac: the line says so.
+        let id = try XCTUnwrap(model.recorder.captureID)
+        await model.recordOnMac(mac.id)
+        XCTAssertEqual(model.multipointLine, "Also recording on Studio Mac")
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: id, startedAt: Date())), to: phoneID)
+        try await waitUntil("recording") { link.macs.first?.recording?.conversationID == id }
+        XCTAssertEqual(model.multipoint?.macs.first?.state, .recording)
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .idle)), to: phoneID)
+        try await waitUntil("stopped") { model.multipoint?.macs.first?.state == .stopped }
+        XCTAssertNil(model.multipointLine)
+
+        // What a Mac said lasts 45 s; it repeats it every 15 s while recording.
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: UUID(), startedAt: Date())), to: phoneID)
+        try await waitUntil("recording again") { link.macs.first?.isRecording == true }
+        link.pruneRecordingStates(now: Date().addingTimeInterval(30))
+        XCTAssertTrue(link.macs.first?.isRecording == true)
+        link.pruneRecordingStates(now: Date().addingTimeInterval(46))
+        XCTAssertFalse(link.macs.first?.isRecording == true, "a Mac that stopped saying so may have stopped")
+        try await model.stopRecording()
+    }
+
     func testRecordRequestsCanBeTurnedOff() async throws {
         let mac = try await makeMac()
         let link = makeLink()

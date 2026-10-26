@@ -132,7 +132,8 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(start.action, .start)
         XCTAssertEqual(start.conversationID, id)
         XCTAssertEqual(start.title, "Design review")
-        XCTAssertEqual(start.timing?.timelineStart, start.timing?.startedAt, "a new conversation's timeline begins with this Mac's recording")
+        XCTAssertEqual(start.timing?.timelineStart?.timeIntervalSince1970 ?? 0, start.timing?.startedAt?.timeIntervalSince1970 ?? 1, accuracy: 0.001,
+                       "a new conversation's timeline begins with this Mac's recording")
         XCTAssertEqual(start.timing?.clockOffset ?? 0, 2.5, accuracy: 0.05, "The Mac's prior travels with the request")
 
         macStopsRecording(rig, id)
@@ -151,6 +152,28 @@ final class PhoneLinkTests: XCTestCase {
         macStopsRecording(rig, other)
     }
 
+    func testTheMacTellsPhonesWhatItRecordsAsItChangesWhileItRecordsAndAsTheyConnect() async throws {
+        let rig = try await rig()
+        rig.state.phoneLink.recordingStateInterval = .milliseconds(150)
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        try await waitFor("the state as the phone connects") { phone.events.states.first?.phase == .idle }
+
+        let id = macStartsRecording(rig)
+        try await waitFor("recording") { phone.events.states.contains { $0.phase == .recording && $0.conversationID == id } }
+        let started = try XCTUnwrap(phone.events.states.first { $0.phase == .recording })
+        XCTAssertEqual(started.startedAt?.timeIntervalSince1970 ?? 0, rig.state.recordingStartedAt?.timeIntervalSince1970 ?? 1, accuracy: 0.001)
+        // Repeated while it records, so the phone can tell it's still at it.
+        try await waitFor("the state again") { phone.events.states.filter { $0.phase == .recording }.count >= 3 }
+
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        try await waitFor("idle") { phone.events.states.last?.phase == .idle }
+        let count = phone.events.states.count
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(phone.events.states.count, count, "nothing more while idle")
+    }
+
     func testRecordingIntoAnEarlierConversationTellsThePhoneWhereItsTimelineBegan() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state)
@@ -163,8 +186,8 @@ final class PhoneLinkTests: XCTestCase {
         await rig.state.sources.recorders.settle()
         let request = try XCTUnwrap(phone.recorder.requests.first)
         XCTAssertEqual(request.title, "Standup", "the conversation as this Mac has it")
-        XCTAssertEqual(request.date, rig.meeting(id)?.date)
-        XCTAssertEqual(request.timing?.startedAt, macStart)
+        XCTAssertEqual(request.date?.timeIntervalSince1970 ?? 0, rig.meeting(id)?.date.timeIntervalSince1970 ?? 1, accuracy: 0.001)
+        XCTAssertEqual(request.timing?.startedAt?.timeIntervalSince1970 ?? 0, macStart.timeIntervalSince1970, accuracy: 0.001)
         XCTAssertEqual(request.timing?.timelineStart?.timeIntervalSince1970 ?? 0, earlier.timeIntervalSince1970, accuracy: 0.001,
                        "the timeline began with the earlier recording, not this Mac's start")
         XCTAssertEqual(request.timing?.elapsed ?? 0, 600, accuracy: 2, "seconds of that timeline")

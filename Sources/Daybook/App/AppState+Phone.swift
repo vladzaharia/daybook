@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Combine
 import DaybookCore
 import DaybookKit
 import DaybookLink
@@ -40,6 +41,13 @@ extension AppState {
             guard let self else { return .refused(LinkRecordRefusal(reason: .unsupported)) }
             return await self.answerPhone(request, from: peer)
         }
+        // Phones hear what this Mac records: when that changes, every 15 s meanwhile, and as they connect.
+        phoneLink.localRecordingState = { [weak self] in self?.macRecordingState() ?? LinkRecordingState(phase: .idle) }
+        Publishers.CombineLatest3($recordingID, $isStartingRecording, $isStoppingRecording)
+            .map { RecordingPhaseKey(recording: $0, starting: $1, stopping: $2) }
+            .removeDuplicates().dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.phoneLink.sendRecordingState() } }
+            .store(in: &subscriptions)
         // The phone's synced recordings list follows sync being on or off.
         sync.$folder.dropFirst().sink { [weak self] _ in
             Task { @MainActor in self?.phoneSessions.forEach { $0.connection(.files)?.refresh() } }
@@ -94,6 +102,13 @@ extension AppState {
     private func phoneConnected(_ peer: LinkPeer) {
         // A phone that reconnects while this Mac processes sees where it is at once.
         if let id = processingID { reportToPhones(id, force: true) }
+    }
+
+    /// This Mac's recorder, as phones see it.
+    func macRecordingState(now: Date = Date()) -> LinkRecordingState {
+        let phase: LinkRecordingState.Phase = isStoppingRecording ? .stopping : recordingID != nil ? .recording : isStartingRecording ? .starting : .idle
+        return LinkRecordingState(phase: phase, conversationID: recordingID, startedAt: recordingStartedAt,
+                                  elapsed: recordingStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0, sentAt: now)
     }
 
     // MARK: Messages from phones
@@ -284,4 +299,11 @@ extension AppState {
         }
         return false
     }
+}
+
+/// What a phone's view of this Mac's recorder changes with.
+private struct RecordingPhaseKey: Equatable {
+    var recording: UUID?
+    var starting: Bool
+    var stopping: Bool
 }
