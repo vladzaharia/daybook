@@ -97,6 +97,7 @@ final class PhoneRecorder {
     @ObservationIgnored private let environment: PhoneRecorderEnvironment
     @ObservationIgnored private var input: (any AudioInputSource)?
     @ObservationIgnored private var writer: PhoneTrackWriter?
+    @ObservationIgnored private var inputGeneration = UUID()
     @ObservationIgnored private var journal: PhoneCaptureJournal?
     @ObservationIgnored private var directory: URL?
     @ObservationIgnored private var meterTimer: Timer?
@@ -204,6 +205,7 @@ final class PhoneRecorder {
             return nil
         }
         state = .stopping
+        inputGeneration = UUID()
         onChange?()
         stopTimers()
         notesSave?.cancel()
@@ -364,6 +366,7 @@ final class PhoneRecorder {
 
     private func pause(_ reason: PauseReason, message: String) async {
         guard state == .recording else { return }
+        inputGeneration = UUID()
         state = .paused(reason)
         pauseMessage = message
         pausedAt = elapsedTime
@@ -383,6 +386,9 @@ final class PhoneRecorder {
     }
 
     private func rebuildAfterMediaServicesReset() async {
+        guard state == .recording || isPaused else { return }
+        let generation = UUID()
+        inputGeneration = generation
         let wasRecording = state == .recording
         writer?.setAcceptingAudio(false)
         input?.stop()
@@ -390,9 +396,11 @@ final class PhoneRecorder {
         journal?.warnings.append("Audio services restarted during the recording; it continued in a new part.")
         if let writer {
             await writer.waitUntilWritten()
+            guard inputGeneration == generation else { return }
             await writer.closeSegment()
         }
-        if wasRecording {
+        guard inputGeneration == generation else { return }
+        if wasRecording, state == .recording {
             do {
                 try environment.session.activate()
                 inputRoute = environment.session.currentInput
@@ -444,6 +452,7 @@ final class PhoneRecorder {
 
     private func startInput() throws {
         guard let writer else { throw PhoneRecorderError.notRecording }
+        inputGeneration = UUID()
         let input = environment.makeInput()
         writer.setAcceptingAudio(true)
         let tap = audioTap
