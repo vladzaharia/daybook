@@ -201,6 +201,55 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertEqual(try records().filter { $0["deviceID"] as? String == "B" }.count, 1)
     }
 
+    func testACrashBetweenWritingAnEntryAndSavingTheCheckpointPublishesTheSameEntry() async throws {
+        let a = try engine("A")
+        let base = try await publish(Meeting(title: "Plan", notes: "First"), using: a, name: "A")
+        let checkpoint = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: local("A").appendingPathComponent("Sync"), includingPropertiesForKeys: nil)
+            .first { $0.pathExtension == "json" })
+        let saved = try Data(contentsOf: checkpoint)
+        var edited = base; edited.setNotes("Second")
+        var renamed = Meeting(title: "Another"); renamed.notes = "Also new"
+        let first = try await a.synchronize(meetings: [edited, renamed])
+        XCTAssertEqual(first.publishedEvents, 2)
+        let written = try records().count
+        // The process stops after writing both entries but before the checkpoint recorded them.
+        try saved.write(to: checkpoint)
+        let restarted = try engine("A")
+        let again = try await restarted.synchronize(meetings: [edited, renamed])
+        XCTAssertEqual(try records().count, written, "the same bytes again, not a second sibling of each")
+        try await apply(again, to: "A", using: restarted)
+        let b = try engine("B")
+        let pulled = try await b.synchronize(meetings: [])
+        XCTAssertEqual(Set(pulled.meetings.map(\.notes)), ["Second", "Also new"])
+        XCTAssertFalse(pulled.meetings.contains { $0.revisions.contains { $0.field.hasPrefix("sync:") } })
+    }
+
+    func testBasesLiveInTheirOwnFilesAndOnlyUsedSnapshotsStayInMemory() async throws {
+        let a = try engine("A"), b = try engine("B")
+        var meeting = try await publish(Meeting(title: "Long history"), using: a, name: "A")
+        for index in 0..<12 {
+            meeting.setNotes("Revision \(index)")
+            meeting = try await publish(meeting, using: a, name: "A")
+        }
+        let other = try await publish(Meeting(title: "Short"), using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: [])
+        try await apply(pulled, to: "B", using: b)
+        let counts = await b.cacheCounts()
+        XCTAssertEqual(counts.headers, 14, "every event's header")
+        XCTAssertEqual(counts.snapshots, 2, "only the two heads' snapshots")
+        let sync = local("B").appendingPathComponent("Sync")
+        let checkpoint = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: sync, includingPropertiesForKeys: nil).first { $0.pathExtension == "json" })
+        let stored = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: checkpoint)) as? [String: Any])
+        XCTAssertEqual((stored["bases"] as? [String: Any])?.count, 0, "no copy of the library in the checkpoint")
+        let bases = sync.appendingPathComponent("Bases/\(checkpoint.deletingPathExtension().lastPathComponent)")
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: bases.path)), ["\(meeting.id).json", "\(other.id).json"])
+        // A restarted engine reads them back: nothing is published again.
+        let restarted = try engine("B")
+        let again = try await restarted.synchronize(meetings: pulled.meetings)
+        XCTAssertEqual(again.publishedEvents, 0)
+        XCTAssertTrue(again.changedMeetingIDs.isEmpty)
+    }
+
     func testFailedLocalUploadPreservesUnsentEdits() async throws {
         let a = try engine("A")
         let base = try await publish(Meeting(notes: "Published base"), using: a, name: "A")
@@ -218,6 +267,7 @@ final class LibrarySyncTests: XCTestCase {
         let fresh = try await differentLibrary.synchronize(meetings: [original])
         XCTAssertEqual(fresh.publishedEvents, 1)
         let checkpoints = try FileManager.default.contentsOfDirectory(at: local("A").appendingPathComponent("Sync"), includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
         XCTAssertEqual(checkpoints.count, 2)
         for checkpoint in checkpoints { try Data("broken".utf8).write(to: checkpoint) }
         let restart = try engine("A")

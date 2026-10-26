@@ -274,13 +274,6 @@ public actor LibrarySyncMigration {
     /// The engine keeps one checkpoint per library identity and device (`Sync/<library>-<device>.json`).
     /// Copies this device's checkpoint for `old` to `new` when it has none there yet.
     private func adoptCheckpoint(from old: UUID, to new: UUID) throws -> Bool {
-        let device = SyncDigest.sha256(data: Data(deviceID.utf8)).prefix(16)
-        let sync = localRoot.appendingPathComponent("Sync", isDirectory: true)
-        let from = sync.appendingPathComponent("\(old.uuidString)-\(device).json")
-        let to = sync.appendingPathComponent("\(new.uuidString)-\(device).json")
-        try SyncFiles.noSymlinks(from, below: localRoot); try SyncFiles.noSymlinks(to, below: localRoot)
-        guard fm.fileExists(atPath: from.path), !fm.fileExists(atPath: to.path) else { return false }
-        try LocalFiles.atomicWrite(Data(contentsOf: from), to: to)
-        return true
+        try LibrarySyncEngine.adoptCheckpoint(localRoot: localRoot, deviceID: deviceID, from: old, to: new)
     }
 }

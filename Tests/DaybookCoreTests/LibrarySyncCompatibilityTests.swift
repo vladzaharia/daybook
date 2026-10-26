@@ -110,4 +110,55 @@ final class LibrarySyncCompatibilityTests: XCTestCase {
         XCTAssertFalse(result.warnings.contains { $0.contains("Folders and templates are waiting") })
         XCTAssertTrue(try eventNames("Metadata").contains(child))
     }
+
+    /// A Mac updated in place: the current engine opens the local state the version 1 engine left, with a pass it
+    /// returned but never acknowledged and part of the journal it hadn't read yet.
+    func testUpgradingInPlaceContinuesFromTheOlderEnginesState() async throws {
+        let legacy = try LegacyLibrarySyncEngine(localRoot: local("A"), remoteRoot: remote, deviceID: "A")
+        let storeA = try MeetingStore(rootURL: local("A"))
+        let shared = Meeting(title: "Shared", notes: "v1"), other = Meeting(title: "Other")
+        let first = try await legacy.synchronize(meetings: [shared, other])
+        for meeting in first.meetings { try await storeA.save(meeting) }
+        try await legacy.acknowledge(first.checkpointID)
+
+        // Another Mac edits one conversation and starts a new one.
+        let b = try engine("B")
+        let pulledByB = try await pass(b, "B")
+        var onB = try XCTUnwrap(pulledByB.meetings.first { $0.id == shared.id })
+        onB.setNotes("Edited on B")
+        let fromB = Meeting(title: "From B")
+        let beforeB = try eventNames()
+        try await pass(b, "B", [onB, fromB])
+        // The older engine's last pass: B's new conversation hadn't downloaded yet, and its result was never
+        // acknowledged (the app quit while saving).
+        let newConversation = try XCTUnwrap(try eventNames().subtracting(beforeB).first { name in
+            let data = try Data(contentsOf: remote.appendingPathComponent("Events/\(name).json"))
+            return (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["meetingID"] as? String == fromB.id.uuidString
+        })
+        let aside = root.appendingPathComponent("aside.json"), withheld = remote.appendingPathComponent("Events/\(newConversation).json")
+        try FileManager.default.moveItem(at: withheld, to: aside)
+        var renamed = other; renamed.title = "Other, renamed on A"
+        let unacknowledged = try await legacy.synchronize(meetings: [shared, renamed])
+        XCTAssertEqual(unacknowledged.publishedEvents, 1)
+        try await storeA.save(renamed)
+        try FileManager.default.moveItem(at: aside, to: withheld)
+
+        // Updated: the current engine continues from that state.
+        let current = try engine("A")
+        let result = try await pass(current, "A", [shared, renamed])
+        XCTAssertEqual(result.publishedEvents, 0, "nothing the older engine published is published again")
+        XCTAssertEqual(Set(result.meetings.map(\.title)), ["Shared", "Other, renamed on A", "From B"])
+        XCTAssertEqual(result.meetings.first { $0.id == shared.id }?.notes, "Edited on B")
+        XCTAssertFalse(result.meetings.contains { $0.revisions.contains { $0.field.hasPrefix("sync:") } })
+        let libraryID = await current.libraryID
+        let stem = LibrarySyncEngine.checkpointStem(libraryID: try XCTUnwrap(libraryID), deviceID: "A")
+        let checkpoint = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: local("A").appendingPathComponent("Sync/\(stem).json"))) as? [String: Any])
+        XCTAssertEqual((checkpoint["bases"] as? [String: Any])?.count, 0, "the bases moved into their own files")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: local("A").appendingPathComponent("Sync/Bases/\(stem)").path).count, 3)
+        let settled = try await current.synchronize(meetings: result.meetings)
+        XCTAssertEqual(settled.publishedEvents, 0)
+        XCTAssertTrue(settled.changedMeetingIDs.isEmpty)
+        let onBAgain = try await pass(b, "B", [onB, fromB])
+        XCTAssertEqual(onBAgain.meetings.first { $0.id == other.id }?.title, "Other, renamed on A")
+    }
 }

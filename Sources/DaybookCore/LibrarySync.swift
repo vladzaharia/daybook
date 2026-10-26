@@ -57,11 +57,16 @@ public actor LibrarySyncEngine {
     let fm = FileManager.default
     private let decoder = JSONDecoder()
     private var checkpointURL: URL?
+    private var basesURL: URL?
     private var state = SyncCheckpoint()
     var verifiedAssets: [String: VerifiedAsset] = [:]
     // Journal records are immutable and content-addressed: once read and validated they never need
     // reading again. The directory listing each pass remains the source of truth for membership.
-    private var eventCache: [String: SyncEventRecord] = [:]
+    // Every event's header stays in memory; a snapshot is kept only while passes use it (a head, or the
+    // base of a merge) and is otherwise read again when needed, so memory follows the library, not its history.
+    private var eventCache: [String: SyncEventHeader] = [:]
+    private var snapshotCache: [String: Meeting] = [:]
+    private var snapshotsUsed: Set<String> = []
     private var metadataCache: [String: SyncMetadataRecord] = [:]
     /// Journal entries that can't be read (a newer format, damage), with the warning to show. Never retried
     /// in this process: an entry's content can't change. A relaunch (perhaps after an update) reads them again.
@@ -114,7 +119,7 @@ public actor LibrarySyncEngine {
         var unreadJournalFiles = 0
         var metadataIncomplete = false
         var failedPublications = Set<UUID>()
-        var events: [String: SyncEventRecord] = [:]
+        var events: [String: SyncEventHeader] = [:]
         var metadata: [String: SyncMetadataRecord] = [:]
         ownJournalWrites = []
         let eventURLs = try journalListing(in: "Events"), metadataURLs = try journalListing(in: "Metadata")
@@ -132,7 +137,8 @@ public actor LibrarySyncEngine {
                 guard event.schemaVersion == 1, event.parents.allSatisfy(SyncFiles.isHash),
                       event.deleted != (event.snapshot != nil), event.snapshot?.id == event.meetingID || event.deleted else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
                 if let snapshot = event.snapshot { try validate(snapshot: snapshot, assets: event.assets) }
-                events[hash] = event; eventCache[hash] = event
+                let header = SyncEventHeader(event)
+                events[hash] = header; eventCache[hash] = header
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
             catch let error as CancellationError { throw error }
             catch { warnings.append(markUnreadable(name, error)); unreadJournalFiles += 1 }
@@ -180,61 +186,71 @@ public actor LibrarySyncEngine {
         if let children = try? fm.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil) {
             deletes.formUnion(children.compactMap { UUID(uuidString: $0.lastPathComponent) })
         }
-        // Publish changes against the last applied heads, not newly observed remote heads. This is what
-        // distinguishes a genuine offline concurrent edit from a sequential edit after a pull.
-        for supplied in meetings.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
-            try Task.checkCancellation()
-            let key = supplied.id.uuidString
-            guard !state.deletedIDs.contains(supplied.id) else { continue }
-            // Cheap equality first: most meetings are unchanged on most passes.
-            if supplied == state.bases[key] || (state.pending?.bases[key]).map({ $0 == supplied }) == true { continue }
-            let fingerprint = try hash(supplied)
-            guard fingerprint != state.submittedHashes[key], fingerprint != state.bases[key].flatMap({ try? hash($0) }),
-                  fingerprint != state.pending?.bases[key].flatMap({ try? hash($0) }) else { continue }
-            do {
-                let prepared = try prepareUpload(supplied, journalAssets: journalAssets)
-                pendingUploads += prepared.pendingUploads
-                state.sequence += 1
-                let event = SyncEventRecord(meetingID: supplied.id, deviceID: deviceID, sequence: state.sequence,
-                    parents: (state.heads[key] ?? []).sorted(), snapshot: prepared.meeting, deleted: false, assets: prepared.assets)
-                let id = try writeRecord(event, directory: "Events")
-                events[id] = event; eventCache[id] = event; state.submittedHashes[key] = fingerprint
-                state.heads[key] = [id]
-                // Persist after every publication so interruption cannot accidentally reparent it later.
-                try saveCheckpoint(); published += 1
-            } catch is SyncPendingDownload { pendingDownloads += 1; pendingUploads += 1; failedPublications.insert(supplied.id) }
-            catch let error as CancellationError { throw error }
-            catch { warnings.append(error.localizedDescription); pendingUploads += 1; failedPublications.insert(supplied.id) }
-        }
-        // A deletion this replica already knows about has an event in the journal. When part of the journal
-        // is unread (still downloading, or deferred by limits), don't mistake that for a missing tombstone.
+        // Every publication of a pass shares one sequence number, and the checkpoint is saved once after them. A
+        // pass interrupted between writing an entry and saving (a crash, a cancelled background pass) writes the
+        // same bytes again next time for anything unchanged, so the entry it left is the one it publishes.
+        let passSequence = state.sequence + 1
         let journalIncomplete = unreadJournalFiles > 0 || budget.deferred > 0
-        for id in deletes.sorted(by: { $0.uuidString < $1.uuidString })
-        where !events.values.contains(where: { $0.meetingID == id && $0.deleted }) && !(journalIncomplete && state.deletedIDs.contains(id)) {
-            state.sequence += 1
-            let event = SyncEventRecord(meetingID: id, deviceID: deviceID, sequence: state.sequence,
-                parents: (state.heads[id.uuidString] ?? []).sorted(), snapshot: nil, deleted: true, assets: [])
-            let eventID = try writeRecord(event, directory: "Events")
-            events[eventID] = event; eventCache[eventID] = event; state.heads[id.uuidString] = [eventID]
-            try saveCheckpoint(); published += 1
-        }
-        deletes.formUnion(events.values.filter(\.deleted).map(\.meetingID))
-
-        if let libraryMetadata {
-            let fingerprint = SyncDigest.sha256(data: libraryMetadata)
-            if fingerprint != state.metadataSubmittedHash {
-                state.sequence += 1
-                let record = SyncMetadataRecord(deviceID: deviceID, sequence: state.sequence, parents: state.metadataHeads.sorted(), data: libraryMetadata)
-                let id = try writeRecord(record, directory: "Metadata")
-                metadata[id] = record; metadataCache[id] = record; state.metadataSubmittedHash = fingerprint; state.metadataHeads = [id]
-                try saveCheckpoint(); published += 1
+        do {
+            // Publish changes against the last applied heads, not newly observed remote heads. This is what
+            // distinguishes a genuine offline concurrent edit from a sequential edit after a pull.
+            for supplied in meetings.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+                try Task.checkCancellation()
+                let key = supplied.id.uuidString
+                guard !state.deletedIDs.contains(supplied.id) else { continue }
+                // Cheap equality first: most meetings are unchanged on most passes.
+                let pendingBase = state.pending?.changedBases?[key]
+                if supplied == state.bases[key] || pendingBase == supplied { continue }
+                let fingerprint = try hash(supplied)
+                guard fingerprint != state.submittedHashes[key], fingerprint != state.bases[key].flatMap({ try? hash($0) }),
+                      fingerprint != pendingBase.flatMap({ try? hash($0) }) else { continue }
+                do {
+                    let prepared = try prepareUpload(supplied, journalAssets: journalAssets)
+                    pendingUploads += prepared.pendingUploads
+                    let event = SyncEventRecord(meetingID: supplied.id, deviceID: deviceID, sequence: passSequence,
+                        parents: (state.heads[key] ?? []).sorted(), snapshot: prepared.meeting, deleted: false, assets: prepared.assets)
+                    let id = try writeRecord(event, directory: "Events")
+                    events[id] = SyncEventHeader(event); eventCache[id] = events[id]; snapshotCache[id] = prepared.meeting
+                    state.submittedHashes[key] = fingerprint
+                    state.heads[key] = [id]
+                    published += 1
+                } catch is SyncPendingDownload { pendingDownloads += 1; pendingUploads += 1; failedPublications.insert(supplied.id) }
+                catch let error as CancellationError { throw error }
+                catch { warnings.append(error.localizedDescription); pendingUploads += 1; failedPublications.insert(supplied.id) }
             }
+            // A deletion this replica already knows about has an event in the journal. When part of the journal
+            // is unread (still downloading, or deferred by limits), don't mistake that for a missing tombstone.
+            for id in deletes.sorted(by: { $0.uuidString < $1.uuidString })
+            where !events.values.contains(where: { $0.meetingID == id && $0.deleted }) && !(journalIncomplete && state.deletedIDs.contains(id)) {
+                let event = SyncEventRecord(meetingID: id, deviceID: deviceID, sequence: passSequence,
+                    parents: (state.heads[id.uuidString] ?? []).sorted(), snapshot: nil, deleted: true, assets: [])
+                let eventID = try writeRecord(event, directory: "Events")
+                events[eventID] = SyncEventHeader(event); eventCache[eventID] = events[eventID]; state.heads[id.uuidString] = [eventID]
+                published += 1
+            }
+            deletes.formUnion(events.values.filter(\.deleted).map(\.meetingID))
+
+            if let libraryMetadata {
+                let fingerprint = SyncDigest.sha256(data: libraryMetadata)
+                if fingerprint != state.metadataSubmittedHash {
+                    let record = SyncMetadataRecord(deviceID: deviceID, sequence: passSequence, parents: state.metadataHeads.sorted(), data: libraryMetadata)
+                    let id = try writeRecord(record, directory: "Metadata")
+                    metadata[id] = record; metadataCache[id] = record; state.metadataSubmittedHash = fingerprint; state.metadataHeads = [id]
+                    published += 1
+                }
+            }
+            if published > 0 { state.sequence = passSequence; try saveCheckpoint() }
+        } catch {
+            // Keep what was published before the pass stopped, so the next one builds on it.
+            if published > 0 { state.sequence = passSequence; try? saveCheckpoint() }
+            throw error
         }
 
         var output = Dictionary(meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var changed = Set<UUID>()
         var notLocalAudio: [UUID: Set<UUID>] = [:]
-        var proposedBases = state.bases
+        var baseChanges: [String: Meeting] = [:]
+        var removedBases = Set<String>()
         var proposedHeads = state.heads
         let completeAncestors = try completeAncestorIDs(events: events, budget: &budget)
         // Events whose only missing ancestors can't be read (a newer format): nothing will arrive to complete them.
@@ -247,9 +263,9 @@ public actor LibrarySyncEngine {
             guard !budget.timeExceeded else { budget.deferred += 1; continue }
             if deletes.contains(meetingID) {
                 output.removeValue(forKey: meetingID)
-                if ids.contains(where: { events[$0]?.snapshot != nil }) {
+                if ids.contains(where: { events[$0]?.deleted == false }), state.bases[meetingID.uuidString] != nil {
                     // The immutable journal remains a recovery archive for edit/delete races.
-                    proposedBases.removeValue(forKey: meetingID.uuidString)
+                    removedBases.insert(meetingID.uuidString)
                 }
                 proposedHeads[meetingID.uuidString] = heads(ids: ids, parents: { events[$0]?.parents ?? [] })
                 continue
@@ -266,10 +282,10 @@ public actor LibrarySyncEngine {
             // heads weren't read this pass would roll back to an older snapshot. It waits for a fuller read.
             if journalIncomplete, let applied = state.heads[meetingID.uuidString], !applied.allSatisfy({ events[$0] != nil }) { continue }
             memo.warnings = []
-            guard let merged = mergedSnapshot(of: headIDs, events: events, memo: &memo) else { continue }
-            warnings += memo.warnings
-            let assets = mergedAssets(for: merged, eventIDs: ids, events: events)
             do {
+                guard let merged = try mergedSnapshot(of: headIDs, events: events, memo: &memo) else { continue }
+                warnings += memo.warnings
+                let assets = mergedAssets(for: merged, eventIDs: ids, events: events)
                 try validate(snapshot: merged, assets: assets)
                 switch audioPolicy {
                 case .eager:
@@ -283,7 +299,7 @@ public actor LibrarySyncEngine {
                 }
                 if output[meetingID] != merged { changed.insert(meetingID) }
                 output[meetingID] = merged
-                proposedBases[meetingID.uuidString] = merged
+                if state.bases[meetingID.uuidString] != merged { baseChanges[meetingID.uuidString] = merged }
                 proposedHeads[meetingID.uuidString] = headIDs
             } catch is SyncPendingDownload { pendingDownloads += 1 }
             catch is SyncDeferredWork { budget.deferred += 1 }
@@ -315,9 +331,12 @@ public actor LibrarySyncEngine {
         }
         let checkpointID = UUID()
         try Task.checkCancellation()
-        state.pending = SyncPendingApply(id: checkpointID, bases: proposedBases, heads: proposedHeads,
-            metadataHeads: missingMetadataParents.isEmpty && !metadataIncomplete ? metadataHeads : state.metadataHeads)
+        state.pending = SyncPendingApply(id: checkpointID, heads: proposedHeads,
+            metadataHeads: missingMetadataParents.isEmpty && !metadataIncomplete ? metadataHeads : state.metadataHeads,
+            changedBases: baseChanges, removedBases: removedBases.sorted())
         try saveCheckpoint()
+        retainCaches(heads: Set(proposedHeads.values.joined()).union(state.heads.values.joined()),
+                     metadataHeads: Set(metadataHeads).union(state.metadataHeads))
         // A coordinated local write is not necessarily uploaded to iCloud yet.
         pendingUploads += try countPendingCloudUploads()
         try saveAudioIndexIfNeeded()
@@ -351,11 +370,19 @@ public actor LibrarySyncEngine {
         let previous = state
         // Forget what was published only where the applied base moved. A conversation held back this pass
         // (audio pending, a parent missing, an unread journal) keeps it, so the same edit isn't published again.
-        for (id, base) in pending.bases where state.bases[id] != base { state.submittedHashes.removeValue(forKey: id) }
-        for id in state.bases.keys where pending.bases[id] == nil { state.submittedHashes.removeValue(forKey: id) }
-        state.bases = pending.bases; state.heads = pending.heads; state.metadataHeads = pending.metadataHeads
+        for (id, base) in pending.changedBases ?? [:] where state.bases[id] != base {
+            state.submittedHashes.removeValue(forKey: id); state.bases[id] = base
+        }
+        for id in pending.removedBases ?? [] where state.bases[id] != nil {
+            state.submittedHashes.removeValue(forKey: id); state.bases.removeValue(forKey: id)
+        }
+        state.heads = pending.heads; state.metadataHeads = pending.metadataHeads
         state.pending = nil
-        do { try saveCheckpoint() } catch { state = previous; throw error }
+        do {
+            // Base files first: a crash before the checkpoint leaves bases ahead of heads, which only republishes.
+            try saveBases(Array((pending.changedBases ?? [:]).keys), removing: pending.removedBases ?? [])
+            try saveCheckpoint()
+        } catch { state = previous; throw error }
     }
 
     private func prepareRemote() throws -> SyncManifest {
@@ -393,21 +420,108 @@ public actor LibrarySyncEngine {
         return manifest.libraryID
     }
 
+    /// The checkpoint (`Sync/<library>-<device>.json`) holds heads and what was published; the applied base of
+    /// each conversation is its own file beside it (`Sync/Bases/<library>-<device>/<meeting>.json`), written only
+    /// when it changes. Checkpoints from earlier versions held every base inline and are moved out once.
     private func loadCheckpoint(libraryID: UUID) throws {
-        let name = "\(libraryID.uuidString)-\(SyncDigest.sha256(data: Data(deviceID.utf8)).prefix(16)).json"
-        let url = localRoot.appendingPathComponent("Sync/\(name)")
+        let stem = Self.checkpointStem(libraryID: libraryID, deviceID: deviceID)
+        let url = localRoot.appendingPathComponent("Sync/\(stem).json")
         try SyncFiles.noSymlinks(url, below: localRoot)
         if checkpointURL == url { return }
+        let bases = localRoot.appendingPathComponent("Sync/Bases/\(stem)", isDirectory: true)
+        try SyncFiles.noSymlinks(bases, below: localRoot)
+        basesURL = bases
         if fm.fileExists(atPath: url.path) {
-            guard let decoded = try? decoder.decode(SyncCheckpoint.self, from: Data(contentsOf: url)) else { throw LibrarySyncError.corruptState }
-            state = decoded
-        } else { state = SyncCheckpoint() }
-        checkpointURL = url
+            guard var decoded = try? decoder.decode(SyncCheckpoint.self, from: Data(contentsOf: url)) else { throw LibrarySyncError.corruptState }
+            if decoded.baseFiles == true {
+                decoded.bases = try loadBases(from: bases)
+                state = decoded; checkpointURL = url
+            } else {
+                // Inline bases (and a full copy in an unacknowledged pass) from an earlier version.
+                if let pending = decoded.pending, pending.changedBases == nil {
+                    decoded.pending?.changedBases = pending.bases.filter { decoded.bases[$0.key] != $0.value }
+                    decoded.pending?.removedBases = decoded.bases.keys.filter { pending.bases[$0] == nil }.sorted()
+                }
+                decoded.pending?.bases = [:]
+                decoded.baseFiles = true
+                state = decoded; checkpointURL = url
+                try saveBases(Array(state.bases.keys), removing: [])
+                try saveCheckpoint()
+            }
+        } else {
+            state = SyncCheckpoint(); state.baseFiles = true
+            checkpointURL = url
+        }
+    }
+    /// Copies this device's checkpoint, and its bases, from one library identity to another when it has none
+    /// there yet: the journal is the same, only its identity changed (a move into the container, or a manifest
+    /// conflict resolved to the other identity). True when it copied.
+    static func adoptCheckpoint(localRoot: URL, deviceID: String, from old: UUID, to new: UUID) throws -> Bool {
+        let fm = FileManager.default
+        let sync = localRoot.appendingPathComponent("Sync", isDirectory: true)
+        let fromStem = checkpointStem(libraryID: old, deviceID: deviceID), toStem = checkpointStem(libraryID: new, deviceID: deviceID)
+        let from = sync.appendingPathComponent("\(fromStem).json"), to = sync.appendingPathComponent("\(toStem).json")
+        try SyncFiles.noSymlinks(from, below: localRoot); try SyncFiles.noSymlinks(to, below: localRoot)
+        guard fm.fileExists(atPath: from.path), !fm.fileExists(atPath: to.path) else { return false }
+        let fromBases = sync.appendingPathComponent("Bases/\(fromStem)", isDirectory: true)
+        let toBases = sync.appendingPathComponent("Bases/\(toStem)", isDirectory: true)
+        try SyncFiles.noSymlinks(fromBases, below: localRoot); try SyncFiles.noSymlinks(toBases, below: localRoot)
+        if fm.fileExists(atPath: fromBases.path) {
+            try? fm.removeItem(at: toBases)
+            try LocalFiles.directory(toBases.deletingLastPathComponent())
+            try fm.copyItem(at: fromBases, to: toBases)
+        }
+        try LocalFiles.atomicWrite(Data(contentsOf: from), to: to)
+        return true
+    }
+    static func checkpointStem(libraryID: UUID, deviceID: String) -> String {
+        "\(libraryID.uuidString)-\(SyncDigest.sha256(data: Data(deviceID.utf8)).prefix(16))"
     }
     private func saveCheckpoint() throws {
         guard let checkpointURL else { throw LibrarySyncError.corruptState }
         try SyncFiles.noSymlinks(checkpointURL, below: localRoot)
-        try LocalFiles.atomicWrite(SyncEncoding.data(state), to: checkpointURL)
+        // Bases live in their own files. Empty inline copies keep the file readable by earlier versions.
+        var stored = state
+        stored.bases = [:]
+        try LocalFiles.atomicWrite(SyncEncoding.data(stored), to: checkpointURL)
+    }
+    private func loadBases(from directory: URL) throws -> [String: Meeting] {
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return [:] }
+        var bases: [String: Meeting] = [:]
+        for name in names where name.hasSuffix(".json") {
+            let key = String(name.dropLast(5))
+            guard UUID(uuidString: key) != nil else { continue }
+            // A base that can't be read only means the next pass publishes that conversation again.
+            if let base = try? decoder.decode(Meeting.self, from: Data(contentsOf: directory.appendingPathComponent(name))) { bases[key] = base }
+        }
+        return bases
+    }
+    private func saveBases(_ keys: [String], removing removed: [String]) throws {
+        guard let basesURL else { throw LibrarySyncError.corruptState }
+        guard !keys.isEmpty || !removed.isEmpty else { return }
+        try SyncFiles.noSymlinks(basesURL, below: localRoot)
+        try LocalFiles.directory(basesURL)
+        for key in keys {
+            guard UUID(uuidString: key) != nil, let base = state.bases[key] else { continue }
+            try LocalFiles.atomicWrite(SyncEncoding.data(base), to: basesURL.appendingPathComponent("\(key).json"))
+        }
+        for key in removed where UUID(uuidString: key) != nil {
+            try? fm.removeItem(at: basesURL.appendingPathComponent("\(key).json"))
+        }
+    }
+    /// After a pass: snapshots the pass used stay (heads, bases of merges), others are read again if needed, and
+    /// only the library settings that are heads keep their data.
+    private func retainCaches(heads: Set<String>, metadataHeads: Set<String>) {
+        let keep = snapshotsUsed.union(heads)
+        snapshotCache = snapshotCache.filter { keep.contains($0.key) }
+        snapshotsUsed = []
+        for (id, record) in metadataCache where !metadataHeads.contains(id) && !record.data.isEmpty {
+            metadataCache[id]?.data = Data()
+        }
+    }
+    /// How much the engine holds in memory (tests).
+    func cacheCounts() -> (headers: Int, snapshots: Int, metadataData: Int) {
+        (eventCache.count, snapshotCache.count, metadataCache.values.filter { !$0.data.isEmpty }.count)
     }
     private func hash<T: Encodable>(_ value: T) throws -> String { SyncDigest.sha256(data: try SyncEncoding.data(value)) }
     /// A journal entry (or the library settings in one) that declares a schema newer than this version reads.
@@ -494,7 +608,8 @@ public actor LibrarySyncEngine {
         try appendPhotoAssets(&meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
         let originals = directory.appendingPathComponent("Originals", isDirectory: true)
         if let files = try? fm.contentsOfDirectory(at: originals, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
-            for file in files where file.pathExtension == "json" && file.lastPathComponent.contains(".highlights-") {
+            // In name order, so publishing the same conversation again writes the same bytes.
+            for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where file.pathExtension == "json" && file.lastPathComponent.contains(".highlights-") {
                 try SyncFiles.noSymlinks(file, below: localRoot)
                 assets.append(SyncAsset(relativePath: "Originals/\(file.lastPathComponent)", sha256: try SyncDigest.sha256(fileURL: file)))
             }
@@ -561,7 +676,7 @@ public actor LibrarySyncEngine {
         }
         try validatePhotoAssets(snapshot, assets: assets)
     }
-    private func mergedAssets(for meeting: Meeting, eventIDs: [String], events: [String: SyncEventRecord]) -> [SyncAsset] {
+    private func mergedAssets(for meeting: Meeting, eventIDs: [String], events: [String: SyncEventHeader]) -> [SyncAsset] {
         var assets = meeting.tracks.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) } + photoAssets(of: meeting)
         for id in eventIDs.sorted() {
             for asset in events[id]?.assets ?? [] where asset.relativePath.contains(".highlights-") && !assets.contains(asset) { assets.append(asset) }
@@ -648,7 +763,7 @@ public actor LibrarySyncEngine {
     /// Visit every edge once. Missing parents and cycles never become ready, while shared
     /// ancestors in a merge history do not multiply the work or consume the call stack.
     /// `present` are entries that count as available though they aren't among `events`.
-    private func completeAncestorIDs(events: [String: SyncEventRecord], budget: inout SyncPassBudget, present: Set<String> = []) throws -> Set<String> {
+    private func completeAncestorIDs(events: [String: SyncEventHeader], budget: inout SyncPassBudget, present: Set<String> = []) throws -> Set<String> {
         var remaining: [String: Int] = [:]
         var children: [String: [String]] = [:]
         var ready: [String] = []
@@ -672,7 +787,7 @@ public actor LibrarySyncEngine {
         }
         return complete
     }
-    private func ancestorIDs(_ id: String, events: [String: SyncEventRecord]) -> Set<String> {
+    private func ancestorIDs(_ id: String, events: [String: SyncEventHeader]) -> Set<String> {
         var result = Set<String>(), pending = [id]
         while let current = pending.popLast() {
             guard result.insert(current).inserted else { continue }
@@ -684,23 +799,23 @@ public actor LibrarySyncEngine {
     /// the merge of all their maximal common ancestors, computed the same way (git's recursive strategy).
     /// After a criss-cross, where two devices each applied the same merge and then edited, the base is that
     /// merge rather than one arbitrary parent of it, so a tag removed or a bookmark deleted there stays gone.
-    private func mergedSnapshot(of ids: [String], events: [String: SyncEventRecord], memo: inout MergeMemo) -> Meeting? {
+    private func mergedSnapshot(of ids: [String], events: [String: SyncEventHeader], memo: inout MergeMemo) throws -> Meeting? {
         let ids = ids.sorted()
         if let cached = memo.merged[ids] { return cached }
         // Only the heads' own merge reports conflicts; a virtual base's were reported when it was made.
         let reports = memo.depth == 0
         memo.depth += 1
         defer { memo.depth -= 1 }
-        guard let first = ids.first, var merged = resolvedSnapshot(first, events: events, memo: &memo) else { return nil }
+        guard let first = ids.first, var merged = try resolvedSnapshot(first, events: events, memo: &memo) else { return nil }
         var folded = [first]
         for next in ids.dropFirst() {
-            guard let snapshot = resolvedSnapshot(next, events: events, memo: &memo) else { continue }
+            guard let snapshot = try resolvedSnapshot(next, events: events, memo: &memo) else { continue }
             var common = Set<String>()
             for id in folded { common.formUnion(ancestors(of: id, events: events, memo: &memo)) }
             common.formIntersection(ancestors(of: next, events: events, memo: &memo))
             // The maximal common ancestors: those no other common ancestor descends from.
-            let maximal = common.subtracting(common.flatMap { events[$0]?.parents ?? [] }).filter { events[$0]?.snapshot != nil }
-            let base = maximal.isEmpty ? nil : mergedSnapshot(of: Array(maximal), events: events, memo: &memo)
+            let maximal = common.subtracting(common.flatMap { events[$0]?.parents ?? [] }).filter { events[$0]?.deleted == false }
+            let base = maximal.isEmpty ? nil : try mergedSnapshot(of: Array(maximal), events: events, memo: &memo)
             let result = MeetingMerge.merge(base: base, local: merged, remote: snapshot)
             merged = result.meeting; folded.append(next)
             if reports { memo.warnings += result.warnings }
@@ -710,24 +825,37 @@ public actor LibrarySyncEngine {
     }
     /// An event's snapshot. One written by a Daybook that predates photos carries no photos, and its
     /// summary sections no photo IDs; they're taken from its parents, so its edit doesn't remove them.
-    private func resolvedSnapshot(_ id: String, events: [String: SyncEventRecord], memo: inout MergeMemo) -> Meeting? {
+    private func resolvedSnapshot(_ id: String, events: [String: SyncEventHeader], memo: inout MergeMemo) throws -> Meeting? {
         if let cached = memo.resolved[id] { return cached }
-        guard let event = events[id], var snapshot = event.snapshot else { return nil }
+        guard let event = events[id], !event.deleted else { return nil }
+        var snapshot = try self.snapshot(of: id)
         if snapshot.photos == nil, !event.parents.isEmpty, event.parents.contains(where: { ancestorHasPhotos($0, events: events) }),
-           let parent = mergedSnapshot(of: event.parents, events: events, memo: &memo) {
+           let parent = try mergedSnapshot(of: event.parents, events: events, memo: &memo) {
             snapshot = snapshot.restoringPhotos(from: parent)
         }
         memo.resolved[id] = snapshot
         return snapshot
     }
-    private func ancestors(of id: String, events: [String: SyncEventRecord], memo: inout MergeMemo) -> Set<String> {
+    /// An event's snapshot, as written: from memory, or read again (and checked against its name).
+    private func snapshot(of id: String) throws -> Meeting {
+        snapshotsUsed.insert(id)
+        if let cached = snapshotCache[id] { return cached }
+        let url = remoteRoot.appendingPathComponent("Events/\(id).json")
+        let bytes = try readJournal(url, in: "Events")
+        guard SyncDigest.sha256(data: bytes) == id, let snapshot = try decoder.decode(SyncEventRecord.self, from: bytes).snapshot else {
+            throw LibrarySyncError.invalidEvent(url.lastPathComponent)
+        }
+        snapshotCache[id] = snapshot
+        return snapshot
+    }
+    private func ancestors(of id: String, events: [String: SyncEventHeader], memo: inout MergeMemo) -> Set<String> {
         if let cached = memo.ancestors[id] { return cached }
         let result = ancestorIDs(id, events: events)
         memo.ancestors[id] = result
         return result
     }
     /// Whether the event or any ancestor carries photos. Immutable, so remembered across passes.
-    private func ancestorHasPhotos(_ id: String, events: [String: SyncEventRecord]) -> Bool {
+    private func ancestorHasPhotos(_ id: String, events: [String: SyncEventHeader]) -> Bool {
         if let known = photoLineage[id] { return known }
         var stack = [id]
         while let current = stack.last {
@@ -735,7 +863,7 @@ public actor LibrarySyncEngine {
             guard let event = events[current] else { photoLineage[current] = false; stack.removeLast(); continue }
             let unknown = event.parents.filter { photoLineage[$0] == nil && !stack.contains($0) }
             if !unknown.isEmpty { stack += unknown; continue }
-            photoLineage[current] = event.snapshot?.photos != nil || event.parents.contains { photoLineage[$0] == true }
+            photoLineage[current] = event.hasPhotos || event.parents.contains { photoLineage[$0] == true }
             stack.removeLast()
         }
         return photoLineage[id] ?? false
@@ -774,15 +902,32 @@ private struct SyncMetadataRecord: Codable {
     var parents: [String]
     var data: Data
 }
+/// What a pass needs of every event without its snapshot, which is read when a merge needs it.
+private struct SyncEventHeader {
+    var meetingID: UUID
+    var deviceID: String
+    var parents: [String]
+    var deleted: Bool
+    var assets: [SyncAsset]
+    var hasPhotos: Bool
+    init(_ record: SyncEventRecord) {
+        meetingID = record.meetingID; deviceID = record.deviceID; parents = record.parents; deleted = record.deleted
+        assets = record.assets; hasPhotos = record.snapshot?.photos != nil
+    }
+}
 private struct SyncCheckpoint: Codable {
     var sequence = 0
     var heads: [String: [String]] = [:]
+    /// In memory, every conversation's applied base. On disk, empty: each base is its own file (`baseFiles`).
+    /// Earlier versions wrote them here, and this is where they're read from once.
     var bases: [String: Meeting] = [:]
     var submittedHashes: [String: String] = [:]
     var deletedIDs: Set<UUID> = []
     var metadataHeads: [String] = []
     var metadataSubmittedHash: String?
     var pending: SyncPendingApply?
+    /// Bases are in `Sync/Bases/<library>-<device>/`. Nil in checkpoints from earlier versions.
+    var baseFiles: Bool?
 }
 /// One pass's merges: results by head set, resolved snapshots, and ancestor sets.
 private struct MergeMemo {
@@ -794,9 +939,13 @@ private struct MergeMemo {
 }
 private struct SyncPendingApply: Codable {
     var id: UUID
-    var bases: [String: Meeting]
+    /// A full copy of every base, in earlier versions; empty now (`changedBases`).
+    var bases: [String: Meeting] = [:]
     var heads: [String: [String]]
     var metadataHeads: [String]
+    /// The bases this pass changes, and those it removes (deleted conversations).
+    var changedBases: [String: Meeting]?
+    var removedBases: [String]?
 }
 struct VerifiedAsset: Codable, Equatable { var digest: String; var size: UInt64; var modified: Date; var inode: UInt64 }
 struct SyncPendingDownload: LocalizedError {
