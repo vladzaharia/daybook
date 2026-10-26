@@ -2,6 +2,20 @@
 
 ## Security review fixes (2026-10-25)
 
+Regression tests cover: a pairing refusal believed only before the first commitment, a Mac
+impersonator that refuses after a reveal burning the code (across a relaunch, as salted digests that
+expire), and an early `busy` leaving it usable; which addresses the link listener treats as local,
+and that it drops others before pairing; moving Mac link keys into the data-protection keychain,
+falling back, retrying an interrupted move, and keeping the newer pairing; model links dropped in
+the app and Markdown escaped in exports and Copy Summary; Floating Notes kept out of screen capture;
+model files without a checksum refused; copies kept off Universal Clipboard on both apps; exported
+and shared photos without GPS, maker notes, camera details, or original names, originals untouched;
+inbox copies removed after import and kept on failure, shared exports cleared; backup exclusion and
+the library setting; and a newly paired Mac refused until allowed, with earlier pairings unaffected.
+
+- `swift test`: 728 tests passed across all seven bundles (`DaybookLinkTests` 66).
+- `scripts/build-ios.sh --test` on an iOS 27.1 simulator: 95 tests passed.
+
 Still requires real devices:
 
 - **Link on a real network.** Pair and connect a phone and a Mac on ordinary Wi-Fi, over IPv4 and
