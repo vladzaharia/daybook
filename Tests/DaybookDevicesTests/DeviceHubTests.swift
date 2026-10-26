@@ -253,4 +253,13 @@ final class DeviceHubTests: XCTestCase {
         XCTAssertEqual(ImportFolderWatcher.failureMessage(DaybookError.invalidAudio("x")), "Couldn’t read this file.")
         XCTAssertEqual(ImportFolderWatcher.failureMessage(DaybookError.libraryUnavailable), "Couldn’t import this file.")
     }
+
+    /// In the App Sandbox the process's home is the container; folders are named from the person's own home.
+    func testFolderPathsAreNamedFromThePersonsHomeNotTheContainer() {
+        let home = URL(fileURLWithPath: "/Users/dana", isDirectory: true)
+        XCTAssertEqual(ImportFolderWatcher.displayPath(URL(fileURLWithPath: "/Users/dana/Documents/Recorder"), home: home), "Documents › Recorder")
+        XCTAssertEqual(ImportFolderWatcher.displayPath(URL(fileURLWithPath: "/Users/dana/Library/Mobile Documents/com~apple~CloudDocs/Daybook Import"),
+                                                       home: home), "iCloud Drive › Daybook Import")
+        XCTAssertEqual(ImportFolderWatcher.displayPath(URL(fileURLWithPath: "/Users/sam/Music/Exports"), home: home), "Music › Exports")
+    }
 }

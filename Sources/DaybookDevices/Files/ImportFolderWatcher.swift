@@ -77,7 +77,7 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     }
 
     /// "iCloud Drive › Daybook Import".
-    public var folderDisplayName: String? { folder.map(Self.displayPath) }
+    public var folderDisplayName: String? { folder.map { Self.displayPath($0) } }
 
     // A sandboxed Mac keeps access with a security-scoped bookmark; on iPhone a folder picked in
     // Files is security-scoped already and keeps a minimal bookmark. Both are polled, not observed.
@@ -323,13 +323,14 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     public static let accessLost = DeviceProblem(id: "folderAccessLost", title: "Daybook can’t read the import folder",
                                           message: "Choose your import folder again to keep importing.", actions: [.chooseFolder])
 
-    /// "iCloud Drive › Daybook Import", "Documents › Recorder", or the folder's name.
-    public nonisolated static func displayPath(_ url: URL) -> String {
+    /// "iCloud Drive › Daybook Import", "Documents › Recorder", or the folder's name. `home` is the person's own home
+    /// folder (`UserHome`), not the sandbox container's.
+    public nonisolated static func displayPath(_ url: URL, home: URL = UserHome.url) -> String {
         let components = url.standardizedFileURL.pathComponents
         if let index = components.firstIndex(of: "com~apple~CloudDocs") {
             return (["iCloud Drive"] + components[(index + 1)...]).joined(separator: " › ")
         }
-        let home = URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.pathComponents
+        let home = home.standardizedFileURL.pathComponents
         if components.count > home.count, Array(components.prefix(home.count)) == home {
             return components[home.count...].joined(separator: " › ")
         }
