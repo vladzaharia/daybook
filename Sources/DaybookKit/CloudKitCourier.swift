@@ -6,13 +6,16 @@ import Security
 #endif
 
 /// The courier over CloudKit (docs/icloud-sync.md, "Courier (CloudKit)"): a `CKSyncEngine` on the private database
-/// of the app's container, with one custom zone, `Courier`, and one `CourierFile` record per journal file, named by
-/// its library and path so a resend replaces itself. The engine schedules sends and fetches, subscribes to the
+/// of the app's container, with custom zones `Courier` (a plaintext library's files) and `SealedCourier` (an encrypted
+/// library's, `Sealed/…`), and one `CourierFile` record per journal file, named by its library and path so a resend
+/// replaces itself. Daybook 0.3.0 and earlier fetch only `Courier` and leave other zones alone. The engine schedules sends and fetches, subscribes to the
 /// database for pushes, and retries network failures and rate limits itself; this courier retries refusals for lack
 /// of storage with a growing delay, deletes what a Mac stored and anything older than seven days, and turns itself
 /// off quietly when CloudKit can't be used.
 public actor CloudKitCourier: SyncCourier {
     public static let zoneName = "Courier"
+    /// An encrypted library's files travel in a zone of their own, which earlier versions never read or clear.
+    public static let sealedZoneName = "SealedCourier"
     public static let recordType = "CourierFile"
 
     enum Field {
@@ -26,6 +29,8 @@ public actor CloudKitCourier: SyncCourier {
     private let policy: CourierPolicy
     private let outbox: CourierOutbox
     private let zoneID = CKRecordZone.ID(zoneName: CloudKitCourier.zoneName, ownerName: CKCurrentUserDefaultName)
+    private let sealedZoneID = CKRecordZone.ID(zoneName: CloudKitCourier.sealedZoneName, ownerName: CKCurrentUserDefaultName)
+    private var zoneIDs: [CKRecordZone.ID] { [zoneID, sealedZoneID] }
     private var engine: CKSyncEngine?
     private var role: CourierRole = []
     private var receiver: CourierReceiver?
@@ -105,7 +110,7 @@ public actor CloudKitCourier: SyncCourier {
     public func fetch() async {
         guard let engine, availability == .available else { return }
         var options = CKSyncEngine.FetchChangesOptions()
-        if !role.contains(.receive) { options.scope = .allExcluding([zoneID]) }
+        if !role.contains(.receive) { options.scope = .allExcluding(zoneIDs) }
         options.operationGroup = Self.immediateGroup("Receive recordings")
         do { try await engine.fetchChanges(options) } catch { note(error) }
         publish()
@@ -134,6 +139,17 @@ public actor CloudKitCourier: SyncCourier {
 
     public func status() async -> CourierStatus { outbox.status(availability: availability) }
 
+    /// The library became encrypted: plaintext files still waiting aren't sent, and those this device knows are on the
+    /// server are deleted.
+    public func forgetPlaintext() async {
+        let known = outbox.dropPlaintext(now: Date())
+        if let engine, availability == .available, !known.isEmpty {
+            engine.state.add(pendingRecordZoneChanges: known.map { .deleteRecord(recordID($0)) })
+        }
+        outbox.save()
+        publish()
+    }
+
     // MARK: Connecting
 
     /// Checks the account and creates the engine. Without an account (or while it can't be determined) the courier
@@ -158,7 +174,7 @@ public actor CloudKitCourier: SyncCourier {
         self.engine = engine
         availability = .available
         refusals = 0
-        if role.contains(.send) { engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))]) }
+        if role.contains(.send) { engine.state.add(pendingDatabaseChanges: zoneIDs.map { .saveZone(CKRecordZone(zoneID: $0)) }) }
         requeueDue()
         await removeExpired()
     }
@@ -213,7 +229,10 @@ public actor CloudKitCourier: SyncCourier {
 
     // MARK: Sending
 
-    private func recordID(_ name: String) -> CKRecord.ID { CKRecord.ID(recordName: name, zoneID: zoneID) }
+    /// A file's record: an encrypted library's (`<library>.Sealed.…`) in its own zone.
+    private func recordID(_ name: String) -> CKRecord.ID { CKRecord.ID(recordName: name, zoneID: Self.isSealed(name) ? sealedZoneID : zoneID) }
+
+    static func isSealed(_ recordName: String) -> Bool { recordName.split(separator: ".").dropFirst().first == "Sealed" }
 
     /// Puts every file that's due back in the engine's pending changes, and waits for the next one that isn't.
     private func requeueDue() {
@@ -268,13 +287,15 @@ public actor CloudKitCourier: SyncCourier {
               let createdAt = record[Field.createdAt] as? Date else { return nil }
         let file = CourierFile(libraryID: library, journal: SyncJournalFile(path: path, sha256: sha256, size: size),
                                deviceID: deviceID, createdAt: createdAt)
-        return file.journal.isContentAddressed && file.id == record.recordID.recordName ? file : nil
+        // Each zone carries one kind of file.
+        let zone = file.journal.isSealed ? sealedZoneName : zoneName
+        return file.journal.isContentAddressed && file.id == record.recordID.recordName && record.recordID.zoneID.zoneName == zone ? file : nil
     }
 
     private func handleSent(_ sent: CKSyncEngine.Event.SentRecordZoneChanges, engine: CKSyncEngine) {
         let now = Date()
         var resend: [CKSyncEngine.PendingRecordZoneChange] = []
-        var zoneMissing = false
+        var missingZones = Set<CKRecordZone.ID>()
         for record in sent.savedRecords {
             outbox.markSent(record.recordID.recordName, now: now)
             refusals = 0
@@ -287,7 +308,7 @@ public actor CloudKitCourier: SyncCourier {
                 // The server has a record by this name: the same file, sent before. Names are content addresses.
                 outbox.markSent(name, now: now)
             case .zoneNotFound, .userDeletedZone:
-                zoneMissing = true; resend.append(.saveRecord(id))
+                missingZones.insert(id.zoneID); resend.append(.saveRecord(id))
             case .unknownItem:
                 resend.append(.saveRecord(id))
             case .quotaExceeded:
@@ -303,7 +324,7 @@ public actor CloudKitCourier: SyncCourier {
                 refusals += Self.isUnusable(failure.error) ? 3 : 1
             }
         }
-        if zoneMissing { engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))]) }
+        if !missingZones.isEmpty { engine.state.add(pendingDatabaseChanges: missingZones.map { .saveZone(CKRecordZone(zoneID: $0)) }) }
         if !resend.isEmpty { engine.state.add(pendingRecordZoneChanges: resend) }
         for id in sent.deletedRecordIDs { outbox.forget(id.recordName) }
         for (id, error) in sent.failedRecordDeletes {
@@ -332,7 +353,7 @@ public actor CloudKitCourier: SyncCourier {
         var delete: [String] = []
         for modification in changes.modifications {
             let record = modification.record
-            guard record.recordID.zoneID == zoneID, record.recordType == Self.recordType else { continue }
+            guard zoneIDs.contains(record.recordID.zoneID), record.recordType == Self.recordType else { continue }
             guard let file = Self.file(from: record) else {
                 // Nobody can use a malformed file; the receiver clears it.
                 if role.contains(.receive) { delete.append(record.recordID.recordName) }
@@ -390,7 +411,7 @@ extension CloudKitCourier: CKSyncEngineDelegate {
             switch change.changeType {
             case .signIn:
                 availability = .available
-                if role.contains(.send) { syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))]) }
+                if role.contains(.send) { syncEngine.state.add(pendingDatabaseChanges: zoneIDs.map { .saveZone(CKRecordZone(zoneID: $0)) }) }
             case .signOut:
                 // The engine has dropped its pending changes; nothing here belongs to the new state of things.
                 outbox.reset()
@@ -398,19 +419,19 @@ extension CloudKitCourier: CKSyncEngineDelegate {
             case .switchAccounts:
                 outbox.reset()
                 availability = .available
-                if role.contains(.send) { syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))]) }
+                if role.contains(.send) { syncEngine.state.add(pendingDatabaseChanges: zoneIDs.map { .saveZone(CKRecordZone(zoneID: $0)) }) }
             @unknown default:
                 break
             }
             outbox.save()
         case .fetchedDatabaseChanges(let changes):
-            for deletion in changes.deletions where deletion.zoneID == zoneID {
+            for deletion in changes.deletions where zoneIDs.contains(deletion.zoneID) {
                 switch deletion.reason {
                 case .purged, .encryptedDataReset:
                     // The person removed the app's iCloud data: keep nothing and resend nothing.
                     outbox.reset()
                 case .deleted:
-                    if role.contains(.send) { syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))]) }
+                    if role.contains(.send) { syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: deletion.zoneID))]) }
                 @unknown default:
                     break
                 }
@@ -419,11 +440,11 @@ extension CloudKitCourier: CKSyncEngineDelegate {
         case .fetchedRecordZoneChanges(let changes):
             await receive(changes, engine: syncEngine)
         case .sentDatabaseChanges(let sent):
-            for failure in sent.failedZoneSaves where failure.zone.zoneID == zoneID { note(failure.error) }
+            for failure in sent.failedZoneSaves where zoneIDs.contains(failure.zone.zoneID) { note(failure.error) }
         case .sentRecordZoneChanges(let sent):
             handleSent(sent, engine: syncEngine)
         case .didFetchRecordZoneChanges(let fetched):
-            if fetched.zoneID == zoneID, let error = fetched.error { note(error) }
+            if zoneIDs.contains(fetched.zoneID), let error = fetched.error { note(error) }
         case .willFetchChanges, .willFetchRecordZoneChanges, .didFetchChanges, .willSendChanges, .didSendChanges:
             break
         @unknown default:
@@ -459,7 +480,7 @@ extension CloudKitCourier: CKSyncEngineDelegate {
         // A device that only sends never downloads the zone: it would fetch its own recordings back.
         guard !role.contains(.receive) else { return context.options }
         var options = context.options
-        options.scope = .allExcluding([zoneID])
+        options.scope = .allExcluding(zoneIDs)
         return options
     }
 }

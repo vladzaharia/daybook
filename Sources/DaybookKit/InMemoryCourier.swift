@@ -89,15 +89,22 @@ public actor InMemoryCourier: SyncCourier {
     private var onStatus: (@Sendable (CourierStatus) -> Void)?
     private var availability: CourierAvailability = .checking
     private var token = 0
+    /// The zones this courier fetches, as `CloudKitCourier` names them: both, or only `Courier` to play Daybook 0.3.0,
+    /// which never reads (or clears) an encrypted library's zone.
+    private let zones: Set<String>
     /// Files handed to the receiver, by ID, in order (tests).
     public private(set) var delivered: [String] = []
 
     /// `directory` holds the outbox (the CloudKit courier uses `Sync/Courier` in the library).
     public init(service: InMemoryCourierService, directory: URL, deviceID: String, policy: CourierPolicy = CourierPolicy(),
-                clock: @escaping @Sendable () -> Date = { Date() }) {
+                clock: @escaping @Sendable () -> Date = { Date() },
+                zones: Set<String> = [CloudKitCourier.zoneName, CloudKitCourier.sealedZoneName]) {
         self.service = service; self.directory = directory; self.deviceID = deviceID; self.policy = policy; self.clock = clock
+        self.zones = zones
         outbox = CourierOutbox(directory: directory, policy: policy)
     }
+
+    private func zone(of id: String) -> String { CloudKitCourier.isSealed(id) ? CloudKitCourier.sealedZoneName : CloudKitCourier.zoneName }
 
     public func start(role: CourierRole, receiver: CourierReceiver?, onStatus: @escaping @Sendable (CourierStatus) -> Void) async -> CourierAvailability {
         self.role = role; self.receiver = receiver; self.onStatus = onStatus
@@ -145,7 +152,7 @@ public actor InMemoryCourier: SyncCourier {
         var incoming: [CourierIncomingFile] = []
         let scratch = directory.appendingPathComponent("Fetched-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
-        for (file, data) in changes {
+        for (file, data) in changes where zones.contains(zone(of: file.id)) {
             if now.timeIntervalSince(file.createdAt) >= policy.expiry { service.delete(file.id); outbox.forget(file.id); continue }
             guard role.contains(.receive), receiver != nil, file.deviceID != deviceID else { continue }
             outbox.noteKnown(file.id, createdAt: file.createdAt)
@@ -174,6 +181,12 @@ public actor InMemoryCourier: SyncCourier {
     }
 
     public func status() async -> CourierStatus { outbox.status(availability: availability) }
+
+    public func forgetPlaintext() async {
+        for id in outbox.dropPlaintext(now: clock()) { service.delete(id) }
+        outbox.save(now: clock())
+        publish()
+    }
 
     private func publish() { onStatus?(outbox.status(availability: availability)) }
 }
