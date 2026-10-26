@@ -40,10 +40,12 @@ Earlier Mac builds synced through a folder the person chose in iCloud Drive (a s
 Unsigned and ad hoc builds (`swift run Daybook`, `scripts/build-app.sh --ad-hoc`) and tests have no iCloud entitlement, so the container can't be used and sync is off. They have no CloudKit either, so no courier is created. The folder transport is still there for them, behind a hidden preference:
 
 ```sh
-# Xcode ad hoc build (bundle ID local.daybook.app); a launch argument works for any build:
-defaults write local.daybook.app DaybookDevelopmentFolderSync -bool YES
 swift run Daybook -DaybookDevelopmentFolderSync YES
+open dist/Daybook.app --args -DaybookDevelopmentFolderSync YES
 ```
+
+Use the launch argument: it works for any build, and `defaults write` can't reach a sandboxed build's preferences,
+which live in its container (docs/sandbox.md).
 
 With it, Settings › Library offers Choose Folder…, and a chosen folder is restored at launch. Builds signed for iCloud ignore it and never offer a folder. Tests connect folders directly with `LibrarySyncController.connect(to:)`.
 

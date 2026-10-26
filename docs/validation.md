@@ -207,7 +207,8 @@ Not exercised, needing signed builds and real accounts:
 
 - The data-protection keychain item for the device identity on signed Mac and iPhone builds (unsigned
   `swift test` has no such keychain, so preferences are used), and Migration Assistant or a backup restore
-  producing a Mac that takes a new identity.
+  producing a Mac that takes a new identity. Also the identity following the library into the App Sandbox's
+  container and back (`Sync/replica.json`, docs/sandbox.md) with the real keychain.
 - `NSMetadataQuery`'s first gather on a fresh device against a container that already holds a library,
   and `NSFileVersion` conflict versions of `daybook-sync.json` from two devices creating a library at once
   (renamed copies are tested; conflict versions can't be produced on a local volume).

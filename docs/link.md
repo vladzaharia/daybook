@@ -380,8 +380,8 @@ Both apps' Info.plist:
   `Resources/Info.plist`.
 - No entitlement is needed for Bonjour through Network.framework:
   `com.apple.developer.networking.multicast` is for raw multicast only.
-- The non-sandboxed Mac app needs no network entitlement. A sandboxed build would need
-  `com.apple.security.network.server` and `.client`.
+- An unsandboxed Mac app needs no network entitlement. In the App Sandbox the listener needs
+  `com.apple.security.network.server` and connections `.client` (docs/sandbox.md), loopback included.
 - Keychain: the default access group works.
   - Items are in the data-protection keychain as `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`,
     so a recording that continues on the iPhone's Lock Screen can reconnect, and neither iCloud

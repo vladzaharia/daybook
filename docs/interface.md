@@ -198,4 +198,8 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --snapshot <dir> [--snapshot-delay <seconds>]
 ```
 
+`.build/debug/Daybook` isn't sandboxed and takes any path. A sandboxed build (docs/sandbox.md) can reach only its
+container and, ad hoc, `/private/tmp/daybook/`: `dist/Daybook.app/Contents/MacOS/Daybook --library /tmp/daybook/ui
+--snapshot /tmp/daybook/shots`. Any other path stops it at launch with a message naming where it may write.
+
 `--snapshot` renders every visible window to PNG from inside the app, then exits. It works while the screen is locked, when `screencapture` can't. Put flags that take no value last: AppKit reads the arguments as `-key value` pairs, so one in the middle turns the next value into a file to open, and no window appears.

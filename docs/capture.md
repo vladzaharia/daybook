@@ -91,7 +91,9 @@ A call that's genuinely silent for 45 seconds (a waiting room, or alone in the m
 the watchdog too. That costs isolation, not audio.
 
 Reading Core Audio device and process properties doesn't prompt, and neither does listening for
-route changes. The signed app also needs `com.apple.security.device.audio-input`. Daybook doesn't
+route changes. The signed app also needs `com.apple.security.device.audio-input`; in the App Sandbox the
+microphone needs `com.apple.security.device.microphone` too, and process taps are expected to work with
+`audio-input` but haven't been verified sandboxed (docs/sandbox.md). Daybook doesn't
 request Camera, Accessibility, Apple Events, or network access to record.
 
 ## Staging folder
