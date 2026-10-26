@@ -3,7 +3,7 @@
 Three GitHub Actions workflows build Daybook on GitHub-hosted Macs:
 
 - **CI** (`.github/workflows/ci.yml`) builds and tests every push to `main`, every pull request, and manual runs.
-- **Release** (`.github/workflows/release.yml`) ships a `v*` tag, or a manual run from `main`. The iPhone app goes to TestFlight. The Mac app is signed with Developer ID, notarized, and attached to a GitHub Release.
+- **Release** (`.github/workflows/release.yml`) ships a `v*` tag on a commit that's on `main`, or a manual run from `main`. The iPhone app goes to TestFlight. The Mac app is signed with Developer ID, notarized, and attached to a draft GitHub Release, which is published once both apps are out.
 - **CI under load** (`.github/workflows/starved.yml`) runs the tests on starved machines nightly and on demand, to find timing-dependent tests. Nothing waits for it.
 
 Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A Developer ID `.p12` is an optional fallback for the Mac app.
@@ -13,8 +13,8 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 | Workflow | Job | Runner | What it does |
 |---|---|---|---|
 | CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on every script under `scripts/` (all bash), and `scripts/ci/tests/run-tests.sh`, which also compiles the Python helpers with warnings as errors |
-| CI | `package` | `xcode-27` | `swift build --build-tests` once, then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
-| CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --test` on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), the crash-recovery test alone, then an unsigned Release device archive checked the way a release would be |
+| CI | `package` | `xcode-27` | `swift build --build-tests --force-resolved-versions` once (then `git diff --exit-code -- Package.resolved`), then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
+| CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --test` on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), the two encoder timing tests alone (see below), then an unsigned Release device archive checked the way a release would be |
 | CI | `mac` | `xcode-27` | `scripts/ci/tests/run-tests.sh --require-all` (every group, including the macOS-only ones: CryptoKit's JWT check, the archive checks, the upload retry, the build scripts, and the keychain), then `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input, which a manual run and `release.yml` set; a release's validation always builds Release), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
 | CI | `caches` | `ubuntu-24.04` | pushes to `main` only: deletes the caches this run's keys superseded (`scripts/ci/prune-caches.sh`) |
 | CI under load | `package` | `xcode-27` | nightly and manual: the package's test bundles at background priority while busy loops take every core |
@@ -90,7 +90,7 @@ Every release job authenticates Xcode with the App Store Connect API key. The ke
 
 That's the one exception to "nothing but the owner's first-time provisioning passes `-allowProvisioningUpdates`" (AGENTS.md): the release pipeline, authenticated by the key in the approval-gated `release` environment. `build-app.sh` and `build-ios.sh` refuse the key unless they run on GitHub Actions under `release.yml`, so a local build or an agent can't reach that path by setting the variables.
 
-- **Archive** (`build-ios.sh --archive`, `build-app.sh`): automatic signing with Apple Development.
+- **Archive** (`build-ios.sh --archive`, `build-app.sh --archive-only`): automatic signing with Apple Development.
   - A fresh runner has no development certificate, so Xcode creates one through the key. It appears in the account as *Apple Development: Created via API*.
   - Xcode fetches or creates the development profiles for the existing identifiers.
   - These certificates sign nothing that ships, and revoking old ones is harmless: see [Development certificates](#development-certificates).
@@ -143,7 +143,7 @@ Third-party code runs on the release runners: package manifests, swift-syntax ma
 | Step | API key | Developer ID `.p12` | Compiles third-party code |
 |---|---|---|---|
 | Fetch the packages | | | manifests only |
-| Look for this run's build (iPhone) | yes | | |
+| Look for this run's build (iPhone); resume a pending notarization (Mac, re-runs) | yes | | |
 | Archive (iPhone, Mac) | yes | | **yes** |
 | Upload (iPhone), TestFlight (iPhone) | yes | | |
 | Export with Developer ID (Mac) | yes | when configured | |
@@ -255,7 +255,7 @@ In order, by the owner or their delegate:
 
    b. **Profiles.** Changing an App ID's capabilities invalidates its profiles.
       - The manually managed Mac profile: Profiles › **Daybook Developer ID** (Developer ID, `local.daybook.app`; now shown as Invalid) › **Edit** › keep the **Developer ID Application (G2)** certificate › **Save**. There's nothing to download: `scripts/ci/asc-profile.sh` installs the newest active one on every run. To check it, download it and run `security cms -D -i "Daybook_Developer_ID.provisionprofile" | plutil -p - | grep -A3 -E "aps-environment|icloud-services"`: it lists `production` and `CloudKit`.
-      - Xcode-managed profiles (the iPhone's development and App Store profiles, the Mac's development profile) are regenerated by the release jobs' automatic signing, which already runs with the Admin key and `-allowProvisioningUpdates`. For signed builds on the owner's Mac, the owner runs `DAYBOOK_TEAM_ID=48H7CLBV8Y ./scripts/build-app.sh --debug --allow-provisioning-updates` once (README.md, "First-time provisioning"); no one else passes that flag.
+      - Xcode-managed profiles (the iPhone's development and App Store profiles, the Mac's development profile) are regenerated by the release jobs' automatic signing, which already runs with the Admin key and `-allowProvisioningUpdates`. For signed builds on the owner's Mac, the owner runs `DAYBOOK_TEAM_ID=48H7CLBV8Y ./scripts/build-app.sh --debug --allow-provisioning-updates` once (README.md, "First-time provisioning"); apart from the release pipeline (see [How it works](#how-it-works)), no one else passes that flag.
 
    c. **The CloudKit schema.** icloud.developer.apple.com › CloudKit Console › CloudKit Database › container **`iCloud.local.daybook`**:
       - Choose the **Development** environment › **Schema** › **Record Types** › **+**. Name the type **`CourierFile`** and add these fields: `path` (String), `sha256` (String), `size` (Int(64)), `deviceID` (String), `libraryID` (String), `createdAt` (Date/Time), `asset` (Asset). Save. A development-signed build that sends one recording creates the same type in Development by itself; check that its fields match.
@@ -382,7 +382,7 @@ The Mac job attests every file in `SHA256SUMS.txt` with `actions/attest-build-pr
 | Release: "Xcode 27.1 … is build 27A…, not 27A9275" | The image moved to another Xcode build. Once CI has passed with it, set the `DAYBOOK_RELEASE_XCODE_BUILD` repository variable to the new build and re-run. |
 | `cannot execute tool 'metal' due to missing Metal Toolchain` | The download in `select-xcode.sh --metal` failed or was skipped. Re-run; it retries three times. |
 | `Unable to find a device matching the provided destination specifier` | The simulator set changed. `pick-simulator.sh` prints what it chose; run `xcrun simctl list devices available` in a step to see what's there. |
-| "Passed on retry" warning | A timing-budget test missed once on a slow VM. Occasional is expected. Every run means a real slowdown: compare the timings in the log with `docs/validation.md`. |
+| "Passed on retry" warning | A timing-sensitive test (the package's budget test, or one of the iPhone encoder tests) failed once on a slow VM and passed on its retry. Occasional is expected. Every run means a real slowdown: compare the timings in the log with `docs/validation.md`, and the nightly CI under load run. |
 | CI is slow after a dependency or Xcode change | The cache key changed. The first push to `main` saves a new cache, and its `caches` job then deletes the superseded one. |
 | Archive: "No signing certificate 'iOS Development' found" or "No Account for Team" | The API key isn't being used or lacks the role. Check the three `ASC_*` secrets and that the key is a **team** key with **Admin** access. |
 | Mac export: cloud signing permission error, or no "Developer ID Application" certificate | Cloud-managed Developer ID isn't available to the key. Add the [.p12 fallback](#fallback-a-developer-id-p12). |
