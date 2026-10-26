@@ -342,13 +342,14 @@ public final class LibrarySyncController: ObservableObject {
     public func deferUntilIdle() { if folder != nil && !isSyncing { status = "Waiting for recording or local processing to finish" } }
 
     public func synchronize(meetings: [Meeting], deletedMeetingIDs: Set<UUID>, metadata: Data,
-                            limits: SyncPassLimits = .unlimited) async throws -> SyncResult? {
+                            limits: SyncPassLimits = .unlimited, protecting: Set<UUID> = []) async throws -> SyncResult? {
         try Task.checkCancellation()
         guard let engine, !isSyncing else { return nil }
         let generation = configurationID
         isSyncing = true; status = "Syncing recordings and conversations…"
         do {
-            let task = Task { try await engine.synchronize(meetings: meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: metadata, limits: limits) }
+            let task = Task { try await engine.synchronize(meetings: meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: metadata,
+                                                           limits: limits, protecting: protecting) }
             activeTask = task
             let result = try await withTaskCancellationHandler {
                 try await task.value

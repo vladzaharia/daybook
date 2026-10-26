@@ -66,4 +66,34 @@ final class LibrarySyncApplyTests: XCTestCase {
         XCTAssertTrue(phone.notice?.contains("newer version of Daybook") == true)
         await sync(phone)
     }
+
+    func testARecordingIntoAConversationDeletedOnTheMacIsKeptOnThePhone() async throws {
+        let mac = try await library("Mac"), phone = try await library("Phone", phone: true)
+        let id = phone.newMeeting(title: "Walk and talk")
+        await phone.flush()
+        await sync(phone); await sync(mac)
+        XCTAssertNotNil(mac.meeting(id))
+        _ = try await mac.moveToTrash(id)
+        await sync(mac)
+        // The phone records into it meanwhile; the pass during the recording leaves it alone.
+        let file = root.appendingPathComponent("phone.m4a")
+        try Data("phone recording".utf8).write(to: file)
+        await phone.acquireLock()
+        _ = try await phone.ingest(file, into: id, provenance: .file(source: .microphone))
+        phone.releaseLock()
+        await sync(phone, protecting: id)
+        XCTAssertNotNil(phone.meeting(id))
+        // After it, the recording is kept as a new conversation and the deleted one goes to the Trash.
+        await sync(phone)
+        XCTAssertNil(phone.meeting(id))
+        XCTAssertTrue(phone.trashedMeetingIDs().contains(id))
+        let kept = try XCTUnwrap(phone.meetings.first)
+        XCTAssertEqual(kept.title, "Walk and talk")
+        XCTAssertEqual(kept.tracks.count, 1)
+        XCTAssertTrue(phone.notice?.contains("kept as a new conversation") == true)
+        await sync(phone)
+        await sync(mac)
+        XCTAssertEqual(mac.meeting(kept.id)?.tracks.map(\.sha256), kept.tracks.map(\.sha256))
+        XCTAssertNil(mac.meeting(id))
+    }
 }

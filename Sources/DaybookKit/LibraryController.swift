@@ -583,7 +583,8 @@ public final class LibraryController: ObservableObject {
             let snapshot = meetings
             let deleted = Set(trashedMeetingIDs())
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-            guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata), limits: limits) else { return nil }
+            guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata),
+                                                          limits: limits, protecting: active.map { [$0] } ?? []) else { return nil }
             // Save edits made while iCloud hydrated files before applying a remote deletion.
             await flush()
             try Task.checkCancellation()

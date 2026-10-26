@@ -471,6 +471,9 @@ extension AppState {
         Task { [weak self] in
             guard let self else { return }
             for await current in self.$processingID.values where current != id { break }
+            // Take in what other devices added meanwhile (notes or photos from the phone) before deciding. Sync keeps
+            // anything that still arrives after the deletion as a new conversation.
+            await self.synchronizeLibrary()
             guard let meeting = self.meetings.first(where: { $0.id == id }) else { return }
             guard !meeting.hasPersonMadeContent, meeting.tracks.count <= 1, id != self.recordingID,
                   !self.isStartingRecording, !self.isStoppingRecording else {

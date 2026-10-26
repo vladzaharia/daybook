@@ -16,7 +16,9 @@ final class LibrarySyncTests: XCTestCase {
     private func apply(_ result: SyncResult, to name: String, using engine: LibrarySyncEngine) async throws {
         let store = try MeetingStore(rootURL: local(name))
         for meeting in result.meetings { try await store.save(meeting) }
-        for id in result.deletedMeetingIDs { _ = try await store.moveToTrash(id) }
+        for id in result.deletedMeetingIDs where FileManager.default.fileExists(atPath: local(name).appendingPathComponent("Meetings/\(id)").path) {
+            _ = try await store.moveToTrash(id)
+        }
         try await engine.acknowledge(result.checkpointID)
     }
     private func publish(_ meeting: Meeting, using engine: LibrarySyncEngine, name: String) async throws -> Meeting {
@@ -149,14 +151,24 @@ final class LibrarySyncTests: XCTestCase {
         let base = try await publish(Meeting(notes: "Recoverable"), using: a, name: "A")
         let initial = try await b.synchronize(meetings: []); try await apply(initial, to: "B", using: b)
         let deleted = try await a.synchronize(meetings: [], deletedMeetingIDs: [base.id]); try await apply(deleted, to: "A", using: a)
+        // An edit the deletion never saw is kept as a new conversation; the deleted one stays deleted.
         var concurrent = base; concurrent.setNotes("Unsynced edit retained in the journal")
         let result = try await b.synchronize(meetings: [concurrent])
-        XCTAssertTrue(result.meetings.isEmpty); XCTAssertTrue(result.deletedMeetingIDs.contains(base.id))
+        XCTAssertTrue(result.deletedMeetingIDs.contains(base.id))
+        XCTAssertFalse(result.meetings.contains { $0.id == base.id })
+        XCTAssertEqual(result.meetings.map(\.notes), [concurrent.notes])
         XCTAssertTrue(try records().contains { ($0["snapshot"] as? [String: Any])?["notes"] as? String == concurrent.notes })
         try await apply(result, to: "B", using: b)
         let restart = try engine("B")
         let stale = try await restart.synchronize(meetings: [base])
         XCTAssertTrue(stale.meetings.isEmpty); XCTAssertEqual(stale.publishedEvents, 0)
+        // An unchanged copy simply goes.
+        let other = try await publish(Meeting(notes: "Nothing new"), using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: []); try await apply(pulled, to: "B", using: b)
+        let gone = try await a.synchronize(meetings: [], deletedMeetingIDs: [other.id]); try await apply(gone, to: "A", using: a)
+        let plain = try await b.synchronize(meetings: [other])
+        XCTAssertTrue(plain.deletedMeetingIDs.contains(other.id))
+        XCTAssertTrue(plain.meetings.isEmpty)
     }
 
     func testMissingOrCorruptBlobNeverAppliesRemoteMetadataAndRetries() async throws {

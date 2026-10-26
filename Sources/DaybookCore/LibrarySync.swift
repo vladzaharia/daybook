@@ -105,8 +105,10 @@ public actor LibrarySyncEngine {
     /// One synchronization pass: read the journal, publish local changes, and return merged snapshots to
     /// save before `acknowledge`. `limits` bounds the pass for phones; leftover work sets `hasMoreWork`.
     /// Cancelling the calling task stops the pass; an unacknowledged pull is offered again next time.
+    /// `protecting` are conversations this device is recording or processing into: a deletion from another
+    /// device waits until they're no longer protected, and what this device added is then kept (see below).
     public func synchronize(meetings: [Meeting], deletedMeetingIDs: Set<UUID> = [], libraryMetadata: Data? = nil,
-                            limits: SyncPassLimits = .unlimited) async throws -> SyncResult {
+                            limits: SyncPassLimits = .unlimited, protecting: Set<UUID> = []) async throws -> SyncResult {
         try Task.checkCancellation()
         let manifest = try prepareRemote()
         libraryID = manifest.libraryID
@@ -181,11 +183,12 @@ public actor LibrarySyncEngine {
         // Assets any readable event references. An on-demand replica can publish a track whose audio it
         // never downloaded (or evicted) by reference to one of these.
         let journalAssets = Set(events.values.flatMap { $0.assets.map(\.sha256) })
-        var deletes = deletedMeetingIDs.union(state.deletedIDs)
+        var deletedHere = deletedMeetingIDs
         let trash = localRoot.appendingPathComponent("Trash", isDirectory: true)
         if let children = try? fm.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil) {
-            deletes.formUnion(children.compactMap { UUID(uuidString: $0.lastPathComponent) })
+            deletedHere.formUnion(children.compactMap { UUID(uuidString: $0.lastPathComponent) })
         }
+        var deletes = deletedHere.union(state.deletedIDs)
         // Every publication of a pass shares one sequence number, and the checkpoint is saved once after them. A
         // pass interrupted between writing an entry and saving (a crash, a cancelled background pass) writes the
         // same bytes again next time for anything unchanged, so the entry it left is the one it publishes.
@@ -257,11 +260,34 @@ public actor LibrarySyncEngine {
         let unreadable = Set(unreadableJournal.keys)
         let settledAncestors = unreadable.isEmpty ? completeAncestors : try completeAncestorIDs(events: events, budget: &budget, present: unreadable)
         var memo = MergeMemo()
+        /// Deleted elsewhere but kept here this pass (protected, or waiting to read what the deletion saw).
+        var held = Set<UUID>()
         let grouped = Dictionary(grouping: events.keys, by: { events[$0]!.meetingID })
         for (meetingID, ids) in grouped.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             try Task.checkCancellation()
             guard !budget.timeExceeded else { budget.deferred += 1; continue }
             if deletes.contains(meetingID) {
+                // Deleted on another device while this one still has it. A conversation being recorded or
+                // processed here waits; then anything it holds that the deletion never saw (recordings, photos,
+                // bookmarks, notes) is kept as a new conversation instead of disappearing with it.
+                if let local = output[meetingID], !deletedHere.contains(meetingID) {
+                    if protecting.contains(meetingID) { held.insert(meetingID); continue }
+                    do {
+                        if let fork = try keepContentAddedAfterDeletion(local, deletions: ids.filter { events[$0]?.deleted == true },
+                                                                       events: events, memo: &memo, supplied: output) {
+                            output[fork.id] = fork; changed.insert(fork.id)
+                            if audioPolicy == .onDemand {
+                                let missing = Set(fork.tracks.filter { availability(of: $0, in: fork.id) == .notLocal }.map(\.id))
+                                if !missing.isEmpty { notLocalAudio[fork.id] = missing }
+                            }
+                            warnings.append("“\(local.title)” was deleted on another device after it changed here, so it’s kept as a new conversation.")
+                        }
+                    } catch is SyncPendingDownload { pendingDownloads += 1; held.insert(meetingID); continue }
+                    catch let error as CancellationError { throw error }
+                    catch { warnings.append(error.localizedDescription); held.insert(meetingID); continue }
+                } else if output[meetingID] == nil {
+                    trashOrphanFolder(meetingID)
+                }
                 output.removeValue(forKey: meetingID)
                 if ids.contains(where: { events[$0]?.deleted == false }), state.bases[meetingID.uuidString] != nil {
                     // The immutable journal remains a recovery archive for edit/delete races.
@@ -306,8 +332,9 @@ public actor LibrarySyncEngine {
             catch let error as CancellationError { throw error }
             catch { warnings.append(error.localizedDescription); pendingDownloads += 1 }
         }
-        for id in deletes { output.removeValue(forKey: id); changed.remove(id); notLocalAudio.removeValue(forKey: id) }
         state.deletedIDs.formUnion(deletes)
+        deletes.subtract(held)
+        for id in deletes { output.removeValue(forKey: id); changed.remove(id); notLocalAudio.removeValue(forKey: id) }
         var sourceMeetings: [String: Set<UUID>] = [:]
         for meeting in output.values {
             for track in meeting.tracks where !track.sha256.isEmpty { sourceMeetings[track.sha256, default: []].insert(meeting.id) }
@@ -352,6 +379,38 @@ public actor LibrarySyncEngine {
             deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
             pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
             changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred, writtenFiles: written)
+    }
+
+    /// A conversation deleted elsewhere that holds what the deletion never saw becomes a new conversation with
+    /// it all, files included, named deterministically by the deletion so every device that keeps it makes the
+    /// same one. Nil when there's nothing new to keep (the deletion simply applies).
+    private func keepContentAddedAfterDeletion(_ local: Meeting, deletions: [String], events: [String: SyncEventHeader],
+                                               memo: inout MergeMemo, supplied: [UUID: Meeting]) throws -> Meeting? {
+        let parents = Set(deletions.flatMap { events[$0]?.parents ?? [] }).filter { events[$0]?.deleted == false }
+        // What the device that deleted it had: the merge of the deletion's parents.
+        let seen = parents.isEmpty ? nil : try mergedSnapshot(of: Array(parents), events: events, memo: &memo)
+        guard local.hasContent(notIn: seen) else { return nil }
+        let forkID = SyncEncoding.uuid("\(local.id.uuidString):kept-after-deletion:\(deletions.sorted().joined(separator: ","))")
+        if let existing = supplied[forkID] { return existing }
+        try requireNotTrashed(forkID)
+        let source = localRoot.appendingPathComponent("Meetings/\(local.id.uuidString)", isDirectory: true)
+        let destination = localRoot.appendingPathComponent("Meetings/\(forkID.uuidString)", isDirectory: true)
+        try SyncFiles.noSymlinks(source, below: localRoot); try SyncFiles.noSymlinks(destination, below: localRoot)
+        try MeetingFolderCopy.copyFiles(from: source, to: destination)
+        return local.keptAs(forkID, field: "source:kept-after-deletion", title: "Kept after it was deleted on another device")
+    }
+    /// A conversation deleted elsewhere whose folder here never got its `meeting.json` (an eager pass installed
+    /// its audio, then the deletion arrived before the pass was saved) goes to the Trash with it.
+    private func trashOrphanFolder(_ meetingID: UUID) {
+        let folder = localRoot.appendingPathComponent("Meetings/\(meetingID.uuidString)", isDirectory: true)
+        guard (try? SyncFiles.noSymlinks(folder, below: localRoot)) != nil, fm.fileExists(atPath: folder.path),
+              !fm.fileExists(atPath: folder.appendingPathComponent("meeting.json").path),
+              !fm.fileExists(atPath: folder.appendingPathComponent("meeting.recovery.json").path) else { return }
+        let trash = localRoot.appendingPathComponent("Trash", isDirectory: true)
+        var destination = trash.appendingPathComponent(meetingID.uuidString, isDirectory: true)
+        if fm.fileExists(atPath: destination.path) { destination = destination.appendingPathComponent("Orphaned-\(UUID().uuidString)", isDirectory: true) }
+        try? LocalFiles.directory(destination.deletingLastPathComponent())
+        try? fm.moveItem(at: folder, to: destination)
     }
 
     /// A cheap check for a phone's timer: lists the journal folders without reading or downloading files.
