@@ -223,7 +223,26 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     }
 
     private func startDate(of id: UInt32?) -> Date? {
-        id.flatMap { SoundcoreRecording(id: $0, size: 0).date }
+        id.flatMap { SoundcoreRecording(id: $0, size: 0).start(correction: clockCorrection) }
+    }
+
+    /// The recorder's clock as last measured, when it was this recorder.
+    public var clock: SoundcoreClock? {
+        guard let clock = remembered?.clock, clock.serial == recorderSerial else { return nil }
+        return clock
+    }
+
+    private var clockCorrection: TimeInterval { clock?.correction ?? 0 }
+
+    /// A Start the recorder confirmed: its new recording's ID is when it started by its own clock.
+    private func measureClock(recordingID: UInt32, sentAt: Date) {
+        guard let serial = recorderSerial, var snapshot = remembered else { return }
+        let measured = SoundcoreClock(serial: serial, recordingID: recordingID, sentAt: sentAt)
+        snapshot.clock = measured
+        remembered = snapshot
+        persist()
+        SoundcoreClocks.record(measured)
+        rebuildRecordings()
     }
 
     private static func seconds(_ duration: Duration) -> TimeInterval {
@@ -251,6 +270,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     public func activate() {
         guard !isDemo else { return }
         remembered = storage.decode(SoundcoreSnapshot.self, "recorder")
+        if let clock { SoundcoreClocks.record(clock) }
         if let remembered {
             listing = remembered.recordings
             inventoryUpdatedAt = remembered.recordingsUpdatedAt
@@ -447,9 +467,11 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         origin = .person
         recordCommandPending = true
         publish()
+        let before = activeRecordingID
         Task {
             var confirmed = false
             await perform {
+                let sentAt = Date()
                 _ = try await session.setRecording(on)
                 let deadline = ContinuousClock.now.advanced(by: self.timing.recordConfirm)
                 while !confirmed, ContinuousClock.now < deadline {
@@ -459,7 +481,11 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
                 }
                 if confirmed {
                     self.applyListing(try await session.listRecordings())
-                    if on { self.startedHereID = self.activeRecordingID }
+                    if on, let started = self.activeRecordingID {
+                        self.startedHereID = started
+                        // A new recording (not one resumed on firmware that keeps it open) dates the clock.
+                        if started != before { self.measureClock(recordingID: started, sentAt: sentAt) }
+                    }
                 }
             }
             if !confirmed, self.session === session { self.problem = SoundcoreIssue.didNotConfirm.problem }
@@ -603,6 +629,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         ]
         if let session, session.rejectedFrames > 0 {
             rows.append(DeviceDetail(label: "Malformed frames ignored", value: "\(session.rejectedFrames)"))
+        }
+        if let clock {
+            rows.append(DeviceDetail(label: "Recorder clock", value: clock.summary))
         }
         return rows
     }
@@ -913,9 +942,10 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         } else {
             recordingNow = recordingState?.activeRecordingID
         }
-        var result = listing.map { $0.deviceRecording(inProgress: $0.id == recordingNow) }
+        let correction = clockCorrection
+        var result = listing.map { $0.deviceRecording(inProgress: $0.id == recordingNow, clockCorrection: correction) }
         if let recordingNow, !listing.contains(where: { $0.id == recordingNow }) {
-            result.insert(SoundcoreRecording(id: recordingNow, size: 0).deviceRecording(inProgress: true), at: 0)
+            result.insert(SoundcoreRecording(id: recordingNow, size: 0).deviceRecording(inProgress: true, clockCorrection: correction), at: 0)
         }
         if result != recordings { recordings = result }
     }

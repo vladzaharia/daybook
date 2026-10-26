@@ -156,6 +156,8 @@ public struct SoundcoreSnapshot: Codable, Equatable {
     /// `recordingsUpdatedAt`; whether it was recording is `info.isRecording` as of `statusUpdatedAt`.
     /// Optional, so earlier snapshots decode.
     public var activeRecordingID: UInt32?
+    /// The recorder's clock, as last measured. Optional, so earlier snapshots decode.
+    public var clock: SoundcoreClock?
 
     /// The name shown in Settings: "soundcore Work ··7F3A".
     public var displayName: String { serial.isEmpty ? name : "\(name) \(maskedSerial(serial))" }
@@ -232,8 +234,10 @@ extension SoundcoreDeviceInfo {
 }
 
 extension SoundcoreRecording {
-    /// The generic form; the ID is the start time as a decimal string.
-    public func deviceRecording(inProgress: Bool = false) -> DeviceRecording {
-        DeviceRecording(id: String(id), startedAt: date, length: length, byteCount: UInt64(size), isInProgress: inProgress)
+    /// The generic form; the ID is the start time as a decimal string. `clockCorrection` is the
+    /// recorder's measured clock offset, taken off its start.
+    public func deviceRecording(inProgress: Bool = false, clockCorrection: TimeInterval = 0) -> DeviceRecording {
+        DeviceRecording(id: String(id), startedAt: start(correction: clockCorrection), length: length, byteCount: UInt64(size),
+                        isInProgress: inProgress)
     }
 }

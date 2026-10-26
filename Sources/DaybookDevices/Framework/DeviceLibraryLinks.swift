@@ -72,13 +72,14 @@ public struct DeviceLibraryLinks: Equatable {
 }
 
 /// When a recorder's recording started, read from its identity: Soundcore recording IDs are Unix start
-/// times on the recorder's clock. The one place every surface dates or titles an import from.
+/// times on the recorder's clock, less its measured offset (`SoundcoreClocks`). The one place every
+/// surface dates or titles an import from.
 @MainActor
 public enum DeviceRecordingStart {
     public static func date(of identity: DeviceRecordingIdentity) -> Date? {
         guard identity.kind == SoundcoreWorkIntegration.id,
               let seconds = UInt32(DeviceLibraryLinks.wholeRecordingID(identity.recordingID)) else { return nil }
-        return SoundcoreRecording(id: seconds, size: 0).date
+        return SoundcoreRecording(id: seconds, size: 0).start(correction: SoundcoreClocks.clock(serial: identity.serial)?.correction ?? 0)
     }
 }
 

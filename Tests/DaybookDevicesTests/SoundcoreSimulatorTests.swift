@@ -626,6 +626,59 @@ final class SoundcoreSimulatorTests: XCTestCase {
         watching.cancel()
     }
 
+    func testAStartDaybookSendsMeasuresTheRecordersClockAndDatesItsRecordingsByIt() async throws {
+        // A recorder whose clock runs five minutes fast (or was set in another time zone).
+        let device = recorder(count: 1)
+        device.serial = "D3200SKEW0000005"
+        device.clockOffset = 300
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        XCTAssertNil(rig.connection.clock, "nothing measured until Daybook starts a recording")
+        let sent = Date()
+        rig.connection.startRecording()
+        try await waitUntil("recording") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == true }
+        let clock = try XCTUnwrap(rig.connection.clock)
+        XCTAssertEqual(clock.offset, 300, accuracy: SoundcoreClock.resolution)
+        XCTAssertTrue(clock.isFlagged)
+        XCTAssertEqual(clock.serial, device.serial)
+        XCTAssertTrue(rig.connection.technicalDetails.contains { $0.label == "Recorder clock" && $0.value.hasSuffix("ahead") })
+        // Its recording in progress is dated on this device's clock, not five minutes ahead.
+        let started = try XCTUnwrap(rig.connection.status?.recordingStartedAt)
+        XCTAssertEqual(started.timeIntervalSince(sent), 0, accuracy: 3)
+        XCTAssertEqual(rig.connection.recordingState?.startedAt, started)
+
+        rig.connection.pauseRecording()
+        try await waitUntil("its recording, listed") { rig.session.split.inProgress == nil && rig.session.newRecordings.count == 2 }
+        let finished = try XCTUnwrap(rig.session.newRecordings.first)
+        XCTAssertEqual(try XCTUnwrap(finished.startedAt).timeIntervalSince(sent), 0, accuracy: 3)
+        // What dates an import from its identity alone uses the same clock.
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: device.serial, recordingID: finished.id)
+        XCTAssertEqual(DeviceRecordingStart.date(of: identity), finished.startedAt)
+
+        // It's remembered with the recorder.
+        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
+        environment.soundcoreTransport = { InertSoundcoreTransport() }
+        let relaunched = SoundcoreConnection(device: rig.configured, environment: environment)
+        relaunched.activate()
+        XCTAssertEqual(relaunched.clock, clock)
+        relaunched.shutDown()
+    }
+
+    func testARecorderInStepIsNotCorrected() async throws {
+        let device = recorder(count: 1)
+        device.serial = "D3200INSTEP00001"
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        rig.connection.startRecording()
+        try await waitUntil("recording") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == true }
+        let clock = try XCTUnwrap(rig.connection.clock)
+        XCTAssertFalse(clock.isFlagged)
+        XCTAssertEqual(clock.correction, 0, "within the measurement's resolution")
+        XCTAssertEqual(clock.summary, "In step")
+        let id = try XCTUnwrap(device.activeRecording?.id)
+        XCTAssertEqual(rig.connection.status?.recordingStartedAt, SoundcoreRecording(id: id, size: 0).date)
+    }
+
     func testTheRecordersButtonListsItAgainOnStartAndOnStop() async throws {
         let rig = rig(recorder(count: 1))
         try await connectThroughSetup(rig)
