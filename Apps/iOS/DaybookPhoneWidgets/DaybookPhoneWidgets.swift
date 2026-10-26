@@ -5,6 +5,7 @@ import WidgetKit
 struct DaybookPhoneWidgets: WidgetBundle {
     var body: some Widget {
         RecordingLiveActivity()
+        RecorderLiveActivity()
         RecordConversationControl()
         RecorderWidget()
     }

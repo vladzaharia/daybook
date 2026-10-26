@@ -95,6 +95,7 @@ final class RecordingActivityController {
         for stale in Activity<RecordingActivityAttributes>.activities {
             Task { await stale.end(nil, dismissalPolicy: .immediate) }
         }
+        RecorderActivityController.endLeftovers()
     }
 }
 
