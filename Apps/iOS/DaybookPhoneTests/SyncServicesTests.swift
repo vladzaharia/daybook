@@ -78,9 +78,9 @@ final class SyncServicesTests: XCTestCase {
         await sync.synchronize(.manual)
         XCTAssertEqual(sync.passes, 0)
         let presence = MacPresence.resolve(connectedMac: nil, devices: [], syncAvailable: false,
-                                           syncReason: "Sign in to iCloud Drive to sync your recordings.",
+                                           syncReason: CloudAvailability.signedOutMessage,
                                            devicesListed: false)
-        XCTAssertEqual(presence.summary(), "Sign in to iCloud Drive to sync your recordings.")
+        XCTAssertEqual(presence.summary(), "Sign in to iCloud to sync your library.")
         XCTAssertEqual(MacPresence.resolve(connectedMac: "Studio Mac", devices: [], syncAvailable: false, syncReason: "x", devicesListed: false),
                        .connected(name: "Studio Mac"), "a Mac on the link is present whatever iCloud says")
     }

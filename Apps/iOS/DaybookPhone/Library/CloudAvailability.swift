@@ -15,13 +15,22 @@ enum CloudAvailability: Equatable, Sendable {
 
     static let infoKey = "DaybookICloudContainerIdentifier"
 
-    static let unsetMessage = "iCloud isn't set up for this build."
+    static let unsetMessage = "iCloud isn’t set up for this build."
 
     static var containerIdentifier: String? {
         Bundle.main.object(forInfoDictionaryKey: infoKey) as? String
     }
 
+    static let signedOutMessage = "Sign in to iCloud to sync your library."
+    static let iCloudDriveOffMessage = "Turn on iCloud Drive for Daybook in Settings."
+
     var isAvailable: Bool { if case .available = self { return true } else { return false } }
+
+    /// Settings can fix it (signing in, or iCloud Drive for Daybook); a build without iCloud can't.
+    var settingsCanFix: Bool {
+        if case .unavailable(let reason) = self { return reason != Self.unsetMessage }
+        return false
+    }
 
     /// The sentence the interface shows; nil when there's nothing to say.
     var message: String? {
@@ -39,11 +48,11 @@ enum CloudAvailability: Equatable, Sendable {
             return .unavailable(unsetMessage)
         }
         guard signedIn() else {
-            return .unavailable("Sign in to iCloud Drive to sync your recordings.")
+            return .unavailable(signedOutMessage)
         }
         let url = await Task.detached(priority: .utility) { resolve(container) }.value
         guard let url else {
-            return .unavailable("Turn on iCloud Drive for Daybook in Settings to sync your recordings.")
+            return .unavailable(iCloudDriveOffMessage)
         }
         return .available(url.appendingPathComponent("Documents", isDirectory: true).appendingPathComponent("Daybook", isDirectory: true))
     }

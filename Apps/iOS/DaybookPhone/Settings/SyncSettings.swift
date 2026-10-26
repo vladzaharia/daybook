@@ -1,9 +1,11 @@
 import DaybookKit
 import SwiftUI
+import UIKit
 
 /// Settings › iCloud: what sync is doing right now, in one honest line, and the library's devices.
 struct SyncSection: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         let sync = model.sync
@@ -34,6 +36,9 @@ struct SyncSection: View {
                     LabeledContent("Devices in This Library", value: devicesSummary)
                 }
             } else if case .unavailable = sync.connection {
+                if model.cloud.settingsCanFix, let url = URL(string: UIApplication.openSettingsURLString) {
+                    Button("Open Settings") { openURL(url) }
+                }
                 Button("Check Again") { Task { await model.refreshCloud() } }
             }
         } header: {
