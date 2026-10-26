@@ -168,7 +168,7 @@ public struct ModelCatalog: Sendable {
             let result = try readBuiltInManifest()
             return ModelCatalog(builtIn: result.manifest, warnings: result.warnings)
         } catch {
-            return ModelCatalog(builtIn: ModelManifest(), warnings: ["The built-in model list couldn't be read: \(error.localizedDescription)"])
+            return ModelCatalog(builtIn: ModelManifest(), warnings: ["The built-in model list couldn’t be read: \(error.localizedDescription)"])
         }
     }()
 

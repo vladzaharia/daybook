@@ -238,9 +238,14 @@ private struct Passage: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if segment.provenance.count > 1 {
-                        Button { showingSources = true } label: { Image(systemName: "square.on.square").font(.system(size: 10)) }
+                        // A stack, not two squares, which reads as Copy.
+                        Button { showingSources = true } label: {
+                            Image(systemName: "rectangle.stack").font(.system(size: 11 * scale))
+                                .frame(minWidth: 18, minHeight: 18).contentShape(Rectangle())
+                        }
                             .buttonStyle(.plain).foregroundStyle(Ink.meta)
                             .help("Heard in \(segment.provenance.count) recordings")
+                            .accessibilityLabel("Heard in \(segment.provenance.count) recordings")
                             .popover(isPresented: $showingSources) { HeardInRecordings(meeting: meeting, segment: segment, play: play) }
                     }
                 }
@@ -345,9 +350,12 @@ private struct NoteBlock: View {
             .onHover { hovering = $0 }
             .animation(Motion.hover, value: hovering)
             .onTapGesture(perform: open)
-            .help("Your note. Click to see it on the Summary.")
+            .help("Show on Summary")
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Your note at \(SpokenTime.format(note.time ?? 0)): \(note.text)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: "Show on Summary", open)
+            .accessibilityAction { open() }
         }
     }
 }

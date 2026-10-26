@@ -9,12 +9,13 @@ struct MacsSection: View {
     var body: some View {
         Section {
             ForEach(model.link.macs) { mac in
-                NavigationLink(value: SettingsRoute.mac(mac.id)) { MacRow(mac: mac) }
+                NavigationLink(value: SettingsRoute.mac(mac.id)) { MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac)) }
             }
             Button {
                 showingPairing = true
             } label: {
-                Label(model.link.macs.isEmpty ? "Pair with Your Mac…" : "Pair Another Mac…", systemImage: "plus.circle")
+                // The Mac's instructions name this item, so it's always the same words.
+                Label("Pair with Your Mac…", systemImage: "plus.circle")
             }
         } header: {
             Text("Macs")
@@ -24,6 +25,8 @@ struct MacsSection: View {
 
 struct MacRow: View {
     let mac: PhoneLink.Mac
+    /// Its presence in the library says it's recording, while the link has no word from it.
+    var recordingBySync = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -50,6 +53,7 @@ struct MacRow: View {
         if let recording = mac.recording, mac.isRecording {
             return recording.phase == .paused ? "Paused recording" : "Recording now"
         }
+        if recordingBySync { return "Recording now" }
         return mac.stateLine
     }
 }
@@ -65,13 +69,13 @@ struct MacDetailScreen: View {
         if let mac = model.link.macs.first(where: { $0.id == macID }) {
             Form {
                 Section {
-                    MacRow(mac: mac)
+                    MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac))
                 }
                 Section("This Mac") {
                     Toggle("Can Start Recording", isOn: Binding(
                         get: { model.settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) },
                         set: { model.settings.setMacMayStartRecording($0, for: mac.id, pairedAt: mac.pairedAt) }))
-                    LabeledContent("Transcribes", value: mac.canProcess ? "Yes" : mac.isConnected ? "No models yet" : "Unknown until connected")
+                    LabeledContent("Transcribes", value: mac.canProcess ? "Yes" : mac.isConnected ? "Not set up" : "Unknown until connected")
                     if let version = mac.appVersion { LabeledContent("Daybook", value: version) }
                     LabeledContent("Paired", value: mac.pairedAt.formatted(date: .abbreviated, time: .omitted))
                     if let clock = mac.clock {
@@ -133,9 +137,9 @@ struct PairingSheet: View {
                             .font(.system(size: 40, weight: .light))
                             .foregroundStyle(PhoneStyle.accent)
                         Text("Pair with Your Mac")
-                            .font(PhoneStyle.Typeface.title(28))
+                            .font(PhoneStyle.Typeface.title(.title))
                             .foregroundStyle(PhoneStyle.Ink.title)
-                        Text("On your Mac, open Daybook › Settings › Devices and add your iPhone. It shows a six-digit code.")
+                        Text("On your Mac, open Daybook › Settings › Devices and add your iPhone.")
                             .font(.callout)
                             .foregroundStyle(PhoneStyle.Ink.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -206,7 +210,7 @@ struct PairingSheet: View {
 
     private var macList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Macs on This Wi-Fi")
+            Text("Macs on This Wi‑Fi")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(PhoneStyle.Ink.meta)
                 .textCase(.uppercase)
@@ -215,7 +219,7 @@ struct PairingSheet: View {
                 if candidates.isEmpty {
                     HStack(spacing: 12) {
                         ProgressView()
-                        Text("Looking for Macs… Both need to be on the same Wi-Fi.")
+                        Text("Looking for Macs… Both need to be on the same Wi‑Fi.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -228,7 +232,7 @@ struct PairingSheet: View {
                             Image(systemName: "desktopcomputer").foregroundStyle(PhoneStyle.accent).frame(width: 26)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(mac.name).foregroundStyle(.primary)
-                                Text(mac.isPaired ? "Paired" : mac.isPairing ? "Showing a code" : "Open pairing on this Mac")
+                                Text(mac.isPaired ? "Paired" : mac.isPairing ? "Showing a code" : "Not showing a code")
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -238,6 +242,7 @@ struct PairingSheet: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(selection == mac.id ? .isSelected : [])
                     if mac.id != candidates.last?.id { Divider().padding(.leading, 52) }
                 }
             }
@@ -252,11 +257,14 @@ struct PairingSheet: View {
                 .foregroundStyle(PhoneStyle.Ink.meta)
                 .textCase(.uppercase)
             ZStack {
+                // The real field, nearly invisible under the boxes: VoiceOver and the keyboard use it.
                 TextField("", text: $code)
                     .keyboardType(.numberPad)
                     .textContentType(.oneTimeCode)
                     .focused($codeFocused)
                     .opacity(0.02)
+                    .accessibilityLabel("Code on \(mac.name)")
+                    .accessibilityValue(digits.isEmpty ? "Empty" : digits.map(String.init).joined(separator: " "))
                     .onChange(of: code) { _, value in
                         let filtered = String(value.filter(\.isNumber).prefix(6))
                         if filtered != value { code = filtered }
@@ -276,12 +284,10 @@ struct PairingSheet: View {
                     }
                 }
                 .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
             .contentShape(Rectangle())
             .onTapGesture { codeFocused = true }
-            .accessibilityElement()
-            .accessibilityLabel("Pairing code")
-            .accessibilityValue(digits.isEmpty ? "Empty" : digits.map(String.init).joined(separator: " "))
             if pairing {
                 HStack(spacing: 8) { ProgressView(); Text("Pairing…").foregroundStyle(.secondary) }
             }

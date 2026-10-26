@@ -12,6 +12,7 @@ struct LibraryView: View {
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var autoCollapsedSidebar = false
     @State private var windowWidth: CGFloat = 1280
+    @State private var problemDetails: AppProblem?
     @FocusState private var searchFocused: Bool
 
     /// The conversation whose controls the toolbar shows; on the device page, an imported recording's conversation.
@@ -76,9 +77,14 @@ struct LibraryView: View {
             Text(state.trashRequestIDs.count > 1 ? "Their audio, notes, and summaries go with them."
                  : "Its audio, notes, and summary go with it.")
         }
-        .alert("Daybook Couldn’t Finish That", isPresented: Binding(get: { state.errorMessage != nil }, set: { if !$0 { state.errorMessage = nil } })) {
-            Button("OK") { state.errorMessage = nil }
-        } message: { Text(state.errorMessage ?? "") }
+        .alert(state.shownProblem?.title ?? "", isPresented: Binding(get: { state.shownProblem != nil }, set: { if !$0 { state.dismissProblem() } }),
+               presenting: state.shownProblem) { problem in
+            Button("OK") { state.dismissProblem() }
+            if problem.details != nil {
+                Button("Details…") { problemDetails = problem; state.dismissProblem() }
+            }
+        } message: { problem in Text(problem.message) }
+        .sheet(item: $problemDetails) { ProblemDetailsSheet(problem: $0) }
     }
 
     @ViewBuilder private var detail: some View {
@@ -247,10 +253,12 @@ private struct EmptyLibraryView: View {
             .controlSize(.large)
             .padding(.top, Space.s2)
             if let id = state.downloadingID {
-                Text("Downloading \(state.modelCatalog.name(for: id)) · \(Int(state.downloadProgress.fraction * 100))%")
-                    .font(TypeStyle.status)
-                    .foregroundStyle(Ink.secondary)
-                    .padding(.top, Space.s6)
+                ActivityReader(download: state.downloadActivity) {
+                    Text("Downloading \(state.modelCatalog.name(for: id)) · \(Int(state.downloadProgress.fraction * 100))%")
+                        .font(TypeStyle.status)
+                        .foregroundStyle(Ink.secondary)
+                        .padding(.top, Space.s6)
+                }
             }
         }
         .offset(y: -24)
@@ -258,7 +266,7 @@ private struct EmptyLibraryView: View {
         .background(DaybookStyle.paper)
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in
-            Task { do { try await state.importFiles(urls, source: .imported, attachTo: nil) } catch { state.errorMessage = error.localizedDescription } }
+            Task { do { try await state.importFiles(urls, source: .imported, attachTo: nil) } catch { state.report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) } }
             return !urls.isEmpty
         } isTargeted: { isDropTargeted = $0 }
     }
@@ -304,7 +312,7 @@ private struct AddRecordingDrop: ViewModifier {
             .dropDestination(for: URL.self) { urls, _ in
                 let audio = AppState.droppedRecordings(urls)
                 guard !audio.isEmpty, state.recordingID != meeting.id else { return false }
-                Task { do { try await state.importFiles(audio, source: .imported, attachTo: meeting.id) } catch { state.errorMessage = error.localizedDescription } }
+                Task { do { try await state.importFiles(audio, source: .imported, attachTo: meeting.id) } catch { state.report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) } }
                 return true
             } isTargeted: { targeted = $0 }
     }

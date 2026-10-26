@@ -17,6 +17,7 @@ import Foundation
 ///     --show-importer            open Import Audio's file picker at launch
 ///     --demo-captions            scripted live captions while recording (no speech recognition)
 ///     --interface-orientation portrait|landscape   turn the interface in table mode (the simulator can't turn the device)
+///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
 ///     --caption-probe [file]     log what live captions can do here (and, if ready, caption the file); never downloads
 ///     --open-settings [macs|devices|device|pairing|storage|templates|vocabulary|recording|add-device]
 ///     --posture closed|open|partial[:degrees]   force the fold posture (see DevicePosture)
@@ -45,6 +46,7 @@ struct LaunchOptions {
     var importFile: String?
     var showImporter = false
     var demoCaptions = false
+    var writeNotes = false
     var interfaceOrientation: String?
     var captionProbe: String?
     var openSettings: String?
@@ -72,6 +74,7 @@ struct LaunchOptions {
         deviceAutopilot = arguments.contains("--device-autopilot")
         showImporter = arguments.contains("--show-importer")
         demoCaptions = arguments.contains("--demo-captions")
+        writeNotes = arguments.contains("--write-notes")
         interfaceOrientation = Self.value(after: "--interface-orientation", in: arguments)
         if arguments.contains("--caption-probe") {
             let next = Self.value(after: "--caption-probe", in: arguments)

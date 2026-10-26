@@ -112,11 +112,13 @@ enum PhoneStyle {
     /// Type: New York for titles only, SF for everything else, monospaced digits for every time.
     /// Everything here follows Dynamic Type.
     enum Typeface {
-        /// New York, for the recorder's and library's titles at a fixed size.
-        static func title(_ size: CGFloat = 28) -> Font { .system(size: size, weight: .semibold, design: .serif) }
+        /// New York, for the recorder's and library's titles, at a text style so it follows Dynamic
+        /// Type: `.title` is 28 pt at the default size, `.title2` 22 pt, `.title3` 20 pt.
+        static func title(_ style: Font.TextStyle = .title) -> Font { .system(style, design: .serif, weight: .semibold) }
         /// Every time uses monospaced digits.
         static func clock(_ size: CGFloat) -> Font { .system(size: size, weight: .medium).monospacedDigit() }
-        static let marginTime = Font.system(size: 11, weight: .regular).monospacedDigit()
+        /// Times in a lane beside notes: 11 pt at the default size, following Dynamic Type.
+        static let marginTime = Font.caption2.monospacedDigit()
 
         /// The page title (Mac 28 pt).
         static let docTitle = Font.system(.title, design: .serif, weight: .semibold)

@@ -73,7 +73,7 @@ extension AppState {
             if devices.pendingSetup === session { devices.commitSetup() }
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            report("Couldn’t Use That Folder", "Choose another folder.", error)
             return false
         }
     }

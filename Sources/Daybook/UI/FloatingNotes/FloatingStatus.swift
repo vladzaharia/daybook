@@ -167,9 +167,9 @@ enum FloatingStatus {
         case .idle: return nil
         case .starting: return FloatingPhase(phase: .starting, title: "Starting")
         case .recording:
-            if inputs.microphoneSilent { return FloatingPhase(phase: .recording, title: "Recording", detail: "Mic silent", detailIsWarning: true) }
+            if inputs.microphoneSilent { return FloatingPhase(phase: .recording, title: "Recording", detail: "Microphone silent", detailIsWarning: true) }
             return FloatingPhase(phase: .recording, title: "Recording", detail: inputs.inputDevice)
-        case .saving: return FloatingPhase(phase: .saving, title: "Saving")
+        case .saving: return FloatingPhase(phase: .saving, title: "Saving…")
         case .saved: return FloatingPhase(phase: .saved, title: "Saved", detail: inputs.duration.map(TimeLabel.short))
         case .stopped: return FloatingPhase(phase: .stopped, title: "Stopped")
         }

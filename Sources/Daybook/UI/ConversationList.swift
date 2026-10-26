@@ -22,7 +22,8 @@ struct ConversationList: View {
             if state.isSearching { results } else { browsing }
         }
         .navigationTitle(title)
-        .navigationSubtitle(subtitle)
+        // The subtitle follows a download's percent without redrawing the list.
+        .modifier(ListSubtitle(download: state.downloadActivity) { subtitle })
         .safeAreaInset(edge: .top, spacing: 0) { LibraryNotice(state: state) }
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in importAudio(urls) } isTargeted: { isDropTargeted = $0 }
@@ -37,8 +38,12 @@ struct ConversationList: View {
             ForEach(DateGroup.groups(for: meetings)) { group in
                 Section(group.title) {
                     ForEach(group.meetings) { meeting in
-                        ConversationRow(meeting: meeting, status: RowStatus(state: state, meeting: meeting), timeLabel: RowDate.format(meeting.date, group: group.title),
-                                        selected: selection.wrappedValue.contains(meeting.id))
+                        // Only the row being processed follows its progress; the others watch an activity that never moves.
+                        ActivityReader(processing: state.processingID == meeting.id ? state.processingActivity : nil) {
+                            ConversationRow(meeting: meeting, status: RowStatus(state: state, meeting: meeting),
+                                            timeLabel: RowDate.format(meeting.date, group: group.title),
+                                            selected: selection.wrappedValue.contains(meeting.id))
+                        }
                             .tag(meeting.id)
                             .draggable(meeting.id.uuidString)
                             .listRowSeparator(.hidden)
@@ -153,9 +158,17 @@ struct ConversationList: View {
     private func importAudio(_ urls: [URL]) -> Bool {
         let audio = AppState.droppedRecordings(urls)
         guard !audio.isEmpty else { return false }
-        Task { do { try await state.importFiles(audio, source: .imported, attachTo: nil) } catch { state.errorMessage = error.localizedDescription } }
+        Task { do { try await state.importFiles(audio, source: .imported, attachTo: nil) } catch { state.report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) } }
         return true
     }
+}
+
+/// The list's subtitle, redrawn by a download's progress on its own.
+private struct ListSubtitle: ViewModifier {
+    @ObservedObject var download: ActivityProgress
+    let text: () -> String
+
+    func body(content: Content) -> some View { content.navigationSubtitle(text()) }
 }
 
 // MARK: - Rows

@@ -208,12 +208,12 @@ enum PhoneRecorderError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .alreadyRecording: return "A recording is already in progress."
-        case .notRecording: return "Daybook isn't recording."
+        case .notRecording: return "Daybook isn’t recording."
         case .microphoneDenied: return "Allow Daybook to use the microphone in Settings › Privacy & Security › Microphone."
         case .noMicrophone: return "No microphone is available."
         case .directoryInUse: return "This recording folder is already in use. Start the recording again."
-        case .encoderUnavailable(let detail): return "Recording couldn't continue (\(detail)). Everything up to then is saved."
-        case .diskBacklog: return "Storage couldn't keep up with the recording. Everything up to then is saved."
+        case .encoderUnavailable(let detail): return "Recording couldn’t continue (\(detail)). Everything up to then is saved."
+        case .diskBacklog: return "Storage couldn’t keep up with the recording. Everything up to then is saved."
         case .nothingRecorded: return "No audio was recorded."
         }
     }

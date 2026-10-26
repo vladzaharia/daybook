@@ -73,7 +73,7 @@ private struct PocketRecording: View {
             .padding(.top, PhoneStyle.Space.s2)
             .padding(.bottom, PhoneStyle.Space.s3)
         }
-        .animation(.snappy(duration: 0.3), value: recorder.isPaused)
+        .motion(.snappy(duration: 0.3), value: recorder.isPaused)
     }
 }
 
@@ -99,8 +99,8 @@ private struct NotesPage: View {
         let recorder = model.recorder
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(recorder.title.isEmpty ? "New conversation" : recorder.title)
-                    .font(PhoneStyle.Typeface.title(24))
+                Text(recorder.title.isEmpty ? "Untitled Conversation" : recorder.title)
+                    .font(PhoneStyle.Typeface.title(.title2))
                     .foregroundStyle(PhoneStyle.Ink.title)
                     .lineLimit(2)
                 Text(byline)
@@ -116,9 +116,10 @@ private struct NotesPage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// "Today · 10:15 AM · AirPods Pro": the microphone it's recording with, as the header names it.
     private var byline: String {
         let started = model.recorder.startedAt ?? Date()
-        var parts = ["Today", started.formatted(date: .omitted, time: .shortened), "iPhone microphone"]
+        var parts = ["Today", started.formatted(date: .omitted, time: .shortened), model.recorder.inputRoute?.name ?? "iPhone Microphone"]
         if let mac = model.multipoint?.recordingMacs.first?.name ?? (model.multipoint?.isMacLed == true ? model.multipoint?.macs.first?.name : nil) {
             parts[2] = "iPhone and \(mac)"
         }
@@ -170,7 +171,7 @@ private struct RecorderPage: View {
         .padding(.top, PhoneStyle.Space.s5)
         .padding(.bottom, PhoneStyle.Space.s3)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .animation(.snappy(duration: 0.3), value: recorder.isPaused)
+        .motion(.snappy(duration: 0.3), value: recorder.isPaused)
     }
 }
 
@@ -222,7 +223,10 @@ private struct TableRecording: View {
         .onChange(of: model.recorder.isPaused) { _, paused in if paused { wake() } }
         .onChange(of: writing) { wake() }
         .persistentSystemOverlays(.hidden)
-        .onAppear { InterfaceOrientation.apply(model.options.interfaceOrientation) }
+        .onAppear {
+            InterfaceOrientation.apply(model.options.interfaceOrientation)
+            if model.options.writeNotes { writing = true }
+        }
     }
 
     private func wake() {
@@ -233,7 +237,8 @@ private struct TableRecording: View {
 
 /// Flex mode: the top half stands facing the room (captions, the clock, the level), the bottom half
 /// lies flat under the hand (Bookmark and Stop). Writing, the notes take the standing half and the
-/// keyboard the flat one, like a laptop.
+/// keyboard the flat one, like a laptop; Bookmark and Done move up beside the clock, where the
+/// keyboard can't cover them.
 private struct FlexTable: View {
     @Environment(PhoneAppModel.self) private var model
     @Binding var writing: Bool
@@ -243,12 +248,14 @@ private struct FlexTable: View {
         let recorder = model.recorder
         HorizontalCreaseSplit {
             VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
-                HStack(alignment: .center) {
+                HStack(alignment: .center, spacing: PhoneStyle.Space.s3) {
                     RecordingStatusHeader(showsTitle: false)
                     MultipointStatus(compact: true)
                     if writing {
                         Spacer(minLength: 0)
                         RecordingClockText(size: 34, weight: .medium)
+                            .fixedSize()
+                        WritingControls(writing: $writing, touched: wake)
                     }
                 }
                 if writing {
@@ -337,7 +344,7 @@ private struct BookTable: View {
                 }
                 Spacer(minLength: 0)
                 HStack(spacing: PhoneStyle.Space.s3) {
-                    TableTools(writing: $writing, size: 52)
+                    TableTools(writing: $writing, size: 52, showsLabels: true)
                     StopControl(height: 52).frame(maxWidth: 220)
                 }
             }
@@ -347,24 +354,81 @@ private struct BookTable: View {
     }
 }
 
-/// Write Notes (Done while writing) and Take Photo, beside Stop.
+/// Write Notes (Done while writing) and Take Photo, beside Stop: labelled where there's room, like
+/// the controls around them.
 private struct TableTools: View {
     @Binding var writing: Bool
     var size: CGFloat
+    var showsLabels = false
 
     var body: some View {
-        HStack(spacing: PhoneStyle.Space.s3) {
-            Button { writing.toggle() } label: {
-                Image(systemName: writing ? "keyboard.chevron.compact.down" : "square.and.pencil")
-                    .font(.system(size: size * 0.4, weight: .medium))
-                    .foregroundStyle(PhoneStyle.Ink.title)
-                    .frame(width: size, height: size)
-                    .contentShape(Circle())
+        HStack(alignment: .top, spacing: PhoneStyle.Space.s3) {
+            VStack(spacing: PhoneStyle.Space.s1) {
+                Button { writing.toggle() } label: {
+                    Image(systemName: writing ? "keyboard.chevron.compact.down" : "square.and.pencil")
+                        .font(.system(size: size * 0.4, weight: .medium))
+                        .foregroundStyle(PhoneStyle.Ink.title)
+                        .frame(width: size, height: size)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel(writing ? "Done Writing" : "Write Notes")
+                if showsLabels { label(writing ? "Done" : "Notes") }
+            }
+            VStack(spacing: PhoneStyle.Space.s1) {
+                CameraControl(size: size)
+                if showsLabels { label("Photo") }
+            }
+        }
+    }
+
+    private func label(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(PhoneStyle.Ink.secondary)
+            .lineLimit(1)
+            .accessibilityHidden(true)
+    }
+}
+
+/// While writing in flex mode, beside the clock on the standing half: Bookmark, and Done to put the
+/// keyboard away and bring Stop back.
+private struct WritingControls: View {
+    @Environment(PhoneAppModel.self) private var model
+    @Binding var writing: Bool
+    var touched: () -> Void
+
+    var body: some View {
+        let count = model.recorder.bookmarkCount
+        HStack(spacing: PhoneStyle.Space.s2) {
+            Button {
+                touched()
+                Task { try? await model.addBookmark() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "bookmark.fill").symbolEffect(.bounce, value: count)
+                    if count > 0 { Text("\(count)").monospacedDigit().contentTransition(.numericText()) }
+                }
+                .font(.headline)
+                .foregroundStyle(PhoneStyle.bookmark)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .accessibilityLabel(writing ? "Done Writing" : "Write Notes")
-            CameraControl(size: size)
+            .disabled(!model.recorder.isCapturing || model.recorder.state == .starting)
+            .sensoryFeedback(.impact(weight: .medium), trigger: count)
+            .accessibilityLabel(count > 0 ? "Bookmark, \(count) so far" : "Bookmark")
+            Button { writing = false } label: {
+                Text("Done")
+                    .font(.headline)
+                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .frame(minHeight: 44)
+                    .padding(.horizontal, PhoneStyle.Space.s1)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.glass)
+            .accessibilityHint("Puts the keyboard away")
         }
     }
 }

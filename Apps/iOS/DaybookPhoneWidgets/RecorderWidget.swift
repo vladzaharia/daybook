@@ -149,7 +149,7 @@ private struct SmallRecorder: View {
                         Text(SharedRecordingState.headline(display)).font(.caption.weight(.semibold))
                     }
                 } else {
-                    Text("Daybook").font(PhoneStyle.Typeface.title(17)).foregroundStyle(PhoneStyle.Ink.title)
+                    Text("Daybook").font(PhoneStyle.Typeface.title(.headline)).foregroundStyle(PhoneStyle.Ink.title)
                 }
                 if let title = state.lastRecordingTitle {
                     // A conversation's title is private: hidden while the iPhone is locked.

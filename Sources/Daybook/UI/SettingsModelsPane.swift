@@ -11,6 +11,8 @@ import SwiftUI
 /// catalog decides which roles and models appear.
 struct ModelSettings: View {
     @ObservedObject var state: AppState
+    /// The pane is the download's progress view: it follows the download itself.
+    @ObservedObject private var download: ActivityProgress
     @StateObject private var manager: ModelManager
     @Environment(\.openWindow) private var openWindow
     @State private var showingVoiceMatching = false
@@ -21,6 +23,7 @@ struct ModelSettings: View {
 
     init(state: AppState) {
         self.state = state
+        download = state.downloadActivity
         _manager = StateObject(wrappedValue: ModelManager(state: state))
     }
 
@@ -351,9 +354,6 @@ private struct VoiceMatchingSheet: View {
                 }
                 .labelsHidden()
             }
-            Text("Stricter settings name fewer people automatically but make fewer mistakes.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Restore Defaults") {
                     state.processingPreferences.speakerMatchThreshold = 0.82

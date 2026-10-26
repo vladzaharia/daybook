@@ -33,16 +33,16 @@ struct SettingsScreen: View {
                 RecordersSection(showingAddDevice: $showingAddDevice)
                 Section {
                     NavigationLink(value: SettingsRoute.recording) {
-                        SettingsRow(title: "Recording", detail: recordingSummary, systemImage: "waveform", tint: PhoneStyle.Ink.record)
+                        // Red means recording right now, so the tile isn't red.
+                        SettingsRow(title: "Recording", detail: recordingSummary, systemImage: "waveform", tint: PhoneStyle.accent)
                     }
                     NavigationLink(value: SettingsRoute.storage) {
-                        SettingsRow(title: "Storage", detail: storageSummary, systemImage: "internaldrive", tint: .gray)
+                        SettingsRow(title: "Storage", detail: storageSummary, systemImage: "internaldrive")
                     }
                 }
                 Section {
                     NavigationLink(value: SettingsRoute.templates) {
-                        SettingsRow(title: "Summary Templates", detail: "\(model.library.controller.templates.count) templates",
-                                    systemImage: "doc.text", tint: PhoneStyle.accent)
+                        SettingsRow(title: "Summary Templates", detail: templatesSummary, systemImage: "doc.text", tint: PhoneStyle.accent)
                     }
                     NavigationLink(value: SettingsRoute.vocabulary) {
                         SettingsRow(title: "Vocabulary", detail: vocabularySummary, systemImage: "character.book.closed", tint: PhoneStyle.accent)
@@ -52,7 +52,7 @@ struct SettingsScreen: View {
                 }
                 Section {
                     NavigationLink(value: SettingsRoute.about) {
-                        SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle", tint: .gray)
+                        SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle")
                     }
                 }
             }
@@ -93,6 +93,11 @@ struct SettingsScreen: View {
         return used == 0 ? "No downloaded audio" : "\(ByteCountFormatter.string(fromByteCount: Int64(used), countStyle: .file)) of audio"
     }
 
+    private var templatesSummary: String {
+        let count = model.library.controller.templates.count
+        return count == 1 ? "1 template" : "\(count) templates"
+    }
+
     private var vocabularySummary: String {
         let count = model.library.controller.glossary.filter(\.approved).count
         return count == 0 ? "No terms yet" : count == 1 ? "1 term" : "\(count) terms"
@@ -130,7 +135,8 @@ struct SettingsRow: View {
     let title: String
     let detail: String?
     let systemImage: String
-    var tint: Color = .gray
+    /// System gray, which keeps its contrast in Dark Mode and Increase Contrast; teal for what you set up.
+    var tint: Color = Color(uiColor: .systemGray)
 
     var body: some View {
         HStack(spacing: 12) {
@@ -179,7 +185,6 @@ struct RecordingSettingsScreen: View {
             Section {
                 LabeledContent("Format", value: "AAC, 48 kHz mono")
                 LabeledContent("Size", value: "About 29 MB an hour")
-                LabeledContent("Notes and bookmarks", value: "Timed to the recording")
             } header: {
                 Text("Quality")
             } footer: {
@@ -198,7 +203,7 @@ struct AboutScreen: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Daybook").font(PhoneStyle.Typeface.title(30)).foregroundStyle(PhoneStyle.Ink.title)
+                    Text("Daybook").font(PhoneStyle.Typeface.title(.title)).foregroundStyle(PhoneStyle.Ink.title)
                     Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 6)

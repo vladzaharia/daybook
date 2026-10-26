@@ -214,10 +214,42 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(queue[2].line, "Waiting")
         XCTAssertTrue(queue[2].requestedHere, "“Requested from this iPhone”")
         XCTAssertFalse(queue[3].requestedHere)
-        XCTAssertEqual(queue[4].line, "Studio Mac couldn’t finish: No speech was recognized.")
+        XCTAssertEqual(queue[4].line, "No speech in this recording")
+        XCTAssertEqual(queue[4].detail, "The audio is saved.")
+        XCTAssertEqual(queue[4].details, "No speech was recognized.", "the Mac's words, behind Details")
         XCTAssertTrue(queue[4].failed)
         XCTAssertEqual(StatusSheetModel.queue(meetings: [waitingNew, failed, waitingOld, running, live], liveProgress: progress,
                                               thisDevice: phone.id, now: now, limit: 2).count, 2)
+    }
+
+    func testAFailureSaysWhatItMeansAndKeepsTheMacsWordsForDetails() {
+        let phone = ProcessingRequest.Device(id: "phone", name: "Alex’s iPhone")
+        let studio = ProcessingRequest.Device(id: "studio", name: "Studio Mac")
+        var failed = Meeting(title: "Failed")
+        failed.status = .imported
+        let failedRequest = ProcessingRequest(meetingID: failed.id, mode: .newAudio, requestedBy: phone, createdAt: now.addingTimeInterval(-3_000))
+            .failed(by: studio, at: now.addingTimeInterval(-2_000), reason: "MLX error: Metal heap allocation failed (code 7)")
+        failed.processingRequests = failedRequest.map { [$0] }
+        let entry = StatusSheetModel.queue(meetings: [failed], liveProgress: [:], thisDevice: phone.id, now: now).first
+        XCTAssertEqual(entry?.line, "Studio Mac couldn’t finish")
+        XCTAssertEqual(entry?.detail, "Something went wrong on Studio Mac. The recording is saved.")
+        XCTAssertEqual(entry?.details, "MLX error: Metal heap allocation failed (code 7)")
+        XCTAssertFalse(entry?.line.contains("MLX") ?? true)
+
+        // Over the link, the line names the Mac and nothing more.
+        let live = LiveProgress(LinkProcessingProgress(meetingID: UUID(), phase: .failed, macName: "Studio Mac", detail: "MLX error"))
+        XCTAssertEqual(live.line, "Studio Mac couldn’t finish")
+    }
+
+    func testAMacRecordingByItsPresenceShowsAsRecording() {
+        var inputs = StatusInputs()
+        inputs.mac = .recording(name: "Studio Mac", lastSeen: now)
+        let line = StatusSheetModel.macLine(inputs, now: now)
+        XCTAssertEqual(line.title, "Studio Mac")
+        XCTAssertEqual(line.text, "Recording")
+        XCTAssertEqual(line.tone, .recording)
+        inputs.queue = [StatusQueueEntry(id: UUID(), title: "A", line: "Waiting", requestedHere: true, progress: nil, isRunning: false)]
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Recording · 1 waiting")
     }
 
     func testCompactDetentGrowsWithTextSize() {

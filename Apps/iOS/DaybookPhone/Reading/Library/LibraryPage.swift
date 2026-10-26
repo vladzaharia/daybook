@@ -21,8 +21,7 @@ struct LibraryPage: View {
     @State private var showingSettings = false
     @State private var naming: FolderNaming?
     @State private var folderName = ""
-    @State private var confirmingTrash: [UUID] = []
-    @State private var trashError: String?
+    @State private var deletingFolder: LibraryFolder?
 
     private enum FolderNaming: Identifiable {
         case new([UUID]), rename(UUID)
@@ -61,16 +60,18 @@ struct LibraryPage: View {
                 Button("Cancel", role: .cancel) { naming = nil }
                 Button(naming.map { if case .rename = $0 { return "Rename" } else { return "Create" } } ?? "Create") { commitFolder() }
             }
-            .confirmationDialog(confirmingTrash.count == 1 ? "Move this conversation to the Trash?" : "Move \(confirmingTrash.count) conversations to the Trash?",
-                                isPresented: Binding(get: { !confirmingTrash.isEmpty }, set: { if !$0 { confirmingTrash = [] } }),
-                                titleVisibility: .visible) {
-                Button("Move to Trash", role: .destructive) { trash(confirmingTrash); confirmingTrash = [] }
+            .alert("Delete the folder “\(deletingFolder?.name ?? "")”?", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } })) {
+                Button("Delete Folder", role: .destructive) {
+                    if let folder = deletingFolder {
+                        library.removeFolder(folder.id)
+                        if session.place == .library(.folder(folder.id)) { session.place = .library(.section(.all)) }
+                    }
+                    deletingFolder = nil
+                }
+                Button("Cancel", role: .cancel) { deletingFolder = nil }
             } message: {
-                Text(confirmingTrash.count == 1 ? "Its audio and notes go with it." : "Their audio and notes go with them.")
+                Text(LibraryWords.folderDeletion(conversations: library.meetings.filter { $0.folderID == deletingFolder?.id }.count))
             }
-            .alert("Couldn’t Move to Trash", isPresented: Binding(get: { trashError != nil }, set: { if !$0 { trashError = nil } })) {
-                Button("OK", role: .cancel) { }
-            } message: { Text(trashError ?? "") }
             .onChange(of: session.searchText) { _, text in
                 if !text.isEmpty, session.isSelecting { session.isSelecting = false; session.selection = [] }
             }
@@ -105,7 +106,7 @@ struct LibraryPage: View {
                             .tag(meeting.id)
                             .listRowBackground(rowBackground(meeting.id))
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) { trash([meeting.id]) } label: { Label("Trash", systemImage: "trash") }
+                                Button(role: .destructive) { session.confirmingTrash = [meeting.id] } label: { Label("Trash", systemImage: "trash") }
                                 Button { session.sheet = .move([meeting.id]) } label: { Label("Move", systemImage: "folder") }
                                     .tint(PhoneStyle.prominentFill)
                             }
@@ -129,7 +130,7 @@ struct LibraryPage: View {
         .scrollContentBackground(.hidden)
         .paperBackground()
         .contextMenu(forSelectionType: UUID.self) { ids in
-            RowMenu(library: library, ids: Array(ids), trash: { confirmingTrash = $0 })
+            RowMenu(library: library, ids: Array(ids), trash: { session.confirmingTrash = $0 })
         } primaryAction: { ids in
             guard let id = ids.first else { return }
             twoPage ? session.select(id) : session.open(id)
@@ -194,7 +195,7 @@ struct LibraryPage: View {
         case .section(.all):
             VStack(spacing: PhoneStyle.Space.s3) {
                 Image(systemName: "waveform").font(.largeTitle).foregroundStyle(PhoneStyle.brandGradient)
-                Text("No conversations yet").font(PhoneStyle.Typeface.title(22)).foregroundStyle(PhoneStyle.Ink.title)
+                Text("No Conversations Yet").font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
                 Text("Conversations you record or import appear here.")
                     .font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary).multilineTextAlignment(.center)
             }
@@ -237,7 +238,8 @@ struct LibraryPage: View {
         if !session.isSelecting {
             ToolbarTitleMenu {
                 PlacesMenu(library: library, newFolder: { naming = .new([]); folderName = "" },
-                           renameFolder: { id in naming = .rename(id); folderName = library.folders.first { $0.id == id }?.name ?? "" })
+                           renameFolder: { id in naming = .rename(id); folderName = library.folders.first { $0.id == id }?.name ?? "" },
+                           deleteFolder: { id in deletingFolder = library.folders.first { $0.id == id } })
             }
         }
         if session.isSelecting {
@@ -271,7 +273,7 @@ struct LibraryPage: View {
     /// Record at the thumb, a mini player while something plays, or the selection's actions.
     @ViewBuilder private var bottomBar: some View {
         if session.isSelecting {
-            SelectionBar(library: library, ids: Array(session.selection), trash: { confirmingTrash = $0 })
+            SelectionBar(library: library, ids: Array(session.selection), trash: { session.confirmingTrash = $0 })
         } else if !session.isSearchPresented {
             VStack(spacing: PhoneStyle.Space.s2) {
                 if let id = session.player.meetingID, !(twoPage && session.openID == id), let meeting = library.meeting(id) {
@@ -307,19 +309,6 @@ struct LibraryPage: View {
         session.newNote(in: library)
     }
 
-    private func trash(_ ids: [UUID]) {
-        Task {
-            for id in ids {
-                do {
-                    if try await library.moveToTrash(id) { session.forget(id) }
-                } catch {
-                    trashError = error.localizedDescription
-                }
-            }
-            if session.isSelecting { session.isSelecting = false; session.selection = [] }
-        }
-    }
-
     private func commitFolder() {
         let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
         defer { naming = nil }
@@ -339,6 +328,7 @@ private struct PlacesMenu: View {
     @ObservedObject var library: LibraryController
     let newFolder: () -> Void
     let renameFolder: (UUID) -> Void
+    let deleteFolder: (UUID) -> Void
     @Environment(ReadingSession.self) private var session
 
     var body: some View {
@@ -359,10 +349,7 @@ private struct PlacesMenu: View {
             Button(action: newFolder) { Label("New Folder…", systemImage: "folder.badge.plus") }
             if case .library(.folder(let id)) = session.place {
                 Button { renameFolder(id) } label: { Label("Rename Folder…", systemImage: "pencil") }
-                Button(role: .destructive) {
-                    library.removeFolder(id)
-                    session.place = .library(.section(.all))
-                } label: { Label("Delete Folder", systemImage: "folder.badge.minus") }
+                Button(role: .destructive) { deleteFolder(id) } label: { Label("Delete Folder…", systemImage: "folder.badge.minus") }
             }
         }
         Section {
@@ -404,7 +391,7 @@ struct RowMenu: View {
             }
             Divider()
             Button(role: .destructive) { trash(ids) } label: {
-                Label(meetings.count == 1 ? "Move to Trash" : "Move \(meetings.count) to Trash", systemImage: "trash")
+                Label(meetings.count == 1 ? "Move to Trash…" : "Move \(meetings.count) to Trash…", systemImage: "trash")
             }
         }
     }

@@ -28,6 +28,12 @@ extension AppState {
 
     func focusTitle(_ id: UUID) { titleFocusRequest = id }
 
+    /// File › New Note (⌘N): a conversation that's only your notes so far, titled as on the iPhone
+    /// ("Note at 10:15 AM"), in the place being viewed. Record records into it.
+    @discardableResult func newNote(at now: Date = Date()) -> UUID {
+        newMeeting(title: LibraryWords.noteTitle(at: now), date: now)
+    }
+
     /// The selected template; "auto" lets the local model identify the kind of conversation.
     /// Choosing a different template summarizes again right away; the earlier summary stays in Version History.
     func templateSelection(for meetingID: UUID) -> Binding<String> {

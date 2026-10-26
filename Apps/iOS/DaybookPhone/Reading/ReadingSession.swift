@@ -57,8 +57,10 @@ final class ReadingSession {
     var cameraFor: UUID?
     /// A new note: its notes take the keyboard when the page appears.
     var focusNotesFor: UUID?
-    /// One sentence for the person when something couldn't be done (the audio isn't here to share).
-    var alert: String?
+    /// Something couldn't be done (the audio isn't here to share): an alert naming it.
+    var alert: ReadingAlert?
+    /// Conversations waiting for the person to confirm moving them to the Trash.
+    var confirmingTrash: [UUID] = []
 
     let player = PlaybackController()
     /// Debug launch arguments for screenshots, applied once the library has loaded.
@@ -94,7 +96,7 @@ final class ReadingSession {
         case .library(.section(.personal)): placement = .personal
         default: break
         }
-        let id = library.newMeeting(title: "Note at \(now.formatted(date: .omitted, time: .shortened))", date: now,
+        let id = library.newMeeting(title: LibraryWords.noteTitle(at: now), date: now,
                                     folderID: folder, placement: placement)
         focusNotesFor = id
         open(id, mode: .summary)
@@ -179,7 +181,10 @@ enum ReadingSheet: Identifiable, Equatable {
     case tags([UUID])
     case correct(meetingID: UUID, segmentID: UUID)
     case heardIn(meetingID: UUID, segmentID: UUID)
+    /// A Mac's own words for a failure.
     case details(String)
+    /// The system's words behind an alert or notice on this iPhone.
+    case errorDetails(String)
 
     var id: String {
         switch self {
@@ -193,7 +198,27 @@ enum ReadingSheet: Identifiable, Equatable {
         case .correct(let meeting, let segment): return "correct:\(meeting):\(segment)"
         case .heardIn(let meeting, let segment): return "heard:\(meeting):\(segment)"
         case .details(let text): return "details:" + text
+        case .errorDetails(let text): return "error-details:" + text
         }
+    }
+}
+
+/// An alert for something that couldn't be done: a title naming it ("Couldn’t Share"), one plain
+/// sentence with what to do, and the system's own words only behind Details.
+struct ReadingAlert: Equatable {
+    var title: String
+    var message: String
+    var details: String?
+
+    init(title: String, message: String, details: String? = nil) {
+        self.title = title; self.message = message; self.details = details
+    }
+
+    /// Daybook's own errors already say what to do in plain words; anything else gets `fallback`,
+    /// with its words behind Details.
+    init(title: String, error: Error, fallback: String) {
+        let plain = PlainError.message(for: error, fallback: fallback)
+        self.init(title: title, message: plain.message, details: plain.details)
     }
 }
 

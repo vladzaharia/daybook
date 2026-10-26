@@ -117,6 +117,8 @@ final class PhoneRecorder {
     static let silentMicrophoneSeconds: TimeInterval = 3
     /// The pause message when iOS gives no reason (a call, Siri, an alarm).
     static let unspecifiedInterruption = "A call or another app interrupted the recording."
+    /// `lastError` when the journal can't be written, before the system's reason.
+    static let journalWarning = "Notes and bookmarks couldn’t be saved with the recording"
 
     init(environment: PhoneRecorderEnvironment) {
         self.environment = environment
@@ -375,7 +377,7 @@ final class PhoneRecorder {
             let index = Int(file.dropFirst("segment-".count).dropLast(".m4a".count)) ?? (journal.segments.count)
             let previousEnd = journal.segments.map { $0.startOffset + Double($0.frameCount) / journal.sampleRate }.max() ?? 0
             journal.segments.append(CaptureSegment(index: index, fileName: file, startOffset: previousEnd, frameCount: 0, closed: false,
-                                                   firstSampleHostTime: 0, clockAnchors: [], notes: ["Placed after the previous part; its exact start wasn't saved."]))
+                                                   firstSampleHostTime: 0, clockAnchors: [], notes: ["Placed after the previous part; its exact start wasn’t saved."]))
         }
     }
 
@@ -589,7 +591,7 @@ final class PhoneRecorder {
     /// written, usually because the iPhone is full. Said once, not every five seconds; the audio
     /// already written stays.
     private func journalWriteFailed(_ message: String) {
-        let warning = "Notes and bookmarks couldn’t be saved with the recording: \(message)"
+        let warning = "\(Self.journalWarning): \(message)"
         guard lastError != warning else { return }
         lastError = warning
         onChange?()

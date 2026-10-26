@@ -115,7 +115,7 @@ enum CorrectionTransfer {
                 issues.append(CorrectionTransferIssue(originalSegment: proposal.original,
                     candidateSegmentIDs: (proposal.candidates.isEmpty ? proposal.reviewCandidates : proposal.candidates).map { segments[$0].id },
                     reason: proposal.candidates.isEmpty
-                        ? "The new transcript changed this passage's source timing or wording, or its source is unaligned. Review the saved correction before applying it."
+                        ? "The new transcript changed this passage’s source timing or wording, or its source is unaligned. Review the saved correction before applying it."
                         : "More than one new passage matches this correction. Choose the intended passage after reviewing the source audio."))
                 continue
             }

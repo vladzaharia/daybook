@@ -7,11 +7,16 @@ import SwiftUI
 /// can bring back a chosen folder with `LibrarySyncController.developmentFolderSyncKey`.
 struct SyncSettingsView: View {
     @ObservedObject var state: AppState
+    /// Followed directly: the window doesn't redraw for every sync status change.
+    @ObservedObject private var sync: LibrarySyncController
     @State private var confirmingTurnOff = false
     @State private var confirmingAccount = false
     @State private var confirmingSkip = false
 
-    private var sync: LibrarySyncController { state.sync }
+    init(state: AppState) {
+        self.state = state
+        sync = state.sync
+    }
 
     var body: some View {
         Section {
@@ -63,7 +68,7 @@ struct SyncSettingsView: View {
             LabeledContent("Status") {
                 Text(connectedStatus).foregroundStyle(.secondary).monospacedDigit()
             }
-            if let problem { SyncWarning(text: problem) }
+            if let problem { SyncWarning(text: problem.text, details: problem.details) }
             if let remaining = remainingMigration { SyncNote(text: remaining) }
             ForEach(Array(sync.warnings.enumerated()), id: \.offset) { _, warning in
                 SyncWarning(text: warning)
@@ -94,7 +99,7 @@ struct SyncSettingsView: View {
                 }
             }
         case .containerUnavailable(let reason):
-            SyncWarning(text: reason) { Button("Try Again") { sync.retryContainer() } }
+            SyncWarning(text: "iCloud isn’t available right now.", details: reason) { Button("Try Again") { sync.retryContainer() } }
         default:
             EmptyView()
         }
@@ -104,7 +109,7 @@ struct SyncSettingsView: View {
     private var headline: String {
         switch sync.iCloud {
         case .checking: return "Checking iCloud…"
-        case .connected: return "Syncing with iCloud"
+        case .connected: return "On"
         case .iCloudDriveOff: return "iCloud is off in System Settings"
         case .signedOut: return "Signed out"
         case .migrating(let progress):
@@ -164,12 +169,12 @@ struct SyncSettingsView: View {
         return "Up to date · \(time)"
     }
 
-    /// A paused or failed sync, explained in place.
-    private var problem: String? {
+    /// A paused or failed sync, in place: what happened, with the reason behind Details.
+    private var problem: (text: String, details: String?)? {
         let text = sync.status
         guard text.hasPrefix("Sync paused") || text.hasPrefix("Couldn") || text.hasPrefix("Reconnect")
                 || text.hasPrefix("Apple Account") else { return nil }
-        return text.hasPrefix("Sync paused: ") ? "iCloud sync is paused: " + text.dropFirst("Sync paused: ".count) : text
+        return SyncProblemWords.split(text)
     }
 
     private var remainingMigration: String? {
@@ -206,7 +211,7 @@ struct SyncSettingsView: View {
                         .disabled(sync.isSyncing)
                 }
             }
-            if let problem { SyncWarning(text: problem) }
+            if let problem { SyncWarning(text: problem.text, details: problem.details) }
             ForEach(Array(sync.warnings.enumerated()), id: \.offset) { _, warning in
                 SyncWarning(text: warning)
             }
@@ -231,7 +236,10 @@ struct SyncSettingsView: View {
 /// An inline sync warning: a warning glyph, one sentence, and at most one action.
 private struct SyncWarning<Action: View>: View {
     let text: String
+    /// The system's own words, behind Details….
+    var details: String?
     @ViewBuilder var action: Action
+    @State private var showingDetails = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
@@ -240,13 +248,29 @@ private struct SyncWarning<Action: View>: View {
                 .accessibilityHidden(true)
             Text(text).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: Space.s3)
+            if let details {
+                Button("Details…") { showingDetails = true }
+                    .popover(isPresented: $showingDetails) {
+                        Text(details).font(.callout).textSelection(.enabled).padding(14).frame(width: 320, alignment: .leading)
+                    }
+            }
             action
         }
     }
 }
 
 extension SyncWarning where Action == EmptyView {
-    init(text: String) { self.init(text: text) { EmptyView() } }
+    init(text: String, details: String? = nil) { self.init(text: text, details: details) { EmptyView() } }
+}
+
+/// "Sync paused: <the system's words>" as a sentence, with the words for Details.
+enum SyncProblemWords {
+    static func split(_ status: String) -> (text: String, details: String?) {
+        guard let range = status.range(of: ": ") else { return (status, nil) }
+        let head = String(status[..<range.lowerBound]), reason = String(status[range.upperBound...])
+        let text = head == "Sync paused" ? "Sync is paused." : head + "."
+        return (text, reason.isEmpty ? nil : reason)
+    }
 }
 
 /// A neutral line of sync information.

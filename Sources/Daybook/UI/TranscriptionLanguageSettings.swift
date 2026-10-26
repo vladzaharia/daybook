@@ -81,9 +81,11 @@ struct TranscriptionLanguageSettings: View {
 
     @ViewBuilder private func status(_ key: String) -> some View {
         if state.downloadingID == key {
-            ProgressView(value: state.downloadProgress.fraction)
-                .frame(width: 80)
-                .accessibilityLabel("Downloading \(catalog.name(for: key))")
+            ActivityReader(download: state.downloadActivity) {
+                ProgressView(value: state.downloadProgress.fraction)
+                    .frame(width: 80)
+                    .accessibilityLabel("Downloading \(catalog.name(for: key))")
+            }
         } else if state.pendingDownloads.contains(key) {
             Text("Waiting to download…").foregroundStyle(.secondary)
         } else if !state.installedModels.contains(key) {

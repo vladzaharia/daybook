@@ -133,7 +133,8 @@ struct PairedPhonesList: View {
                     if index > 0 { Divider() }
                     HStack(spacing: Space.s3) {
                         Image(systemName: "iphone")
-                            .foregroundStyle(link.peers[phone.deviceID] != nil ? AnyShapeStyle(DaybookStyle.neonMint) : AnyShapeStyle(.secondary))
+                            // Connected is teal, like every linked device; mint means playing.
+                            .foregroundStyle(link.peers[phone.deviceID] != nil ? AnyShapeStyle(DaybookStyle.accent) : AnyShapeStyle(.secondary))
                             .frame(width: 20)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 1) {

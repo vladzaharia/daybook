@@ -74,13 +74,13 @@ final class SyncServicesTests: XCTestCase {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         let sync = PhoneSync(library: library.controller)
         XCTAssertFalse(sync.isConnected)
-        XCTAssertEqual(sync.statusLine, "Sync isn't set up for this library.")
+        XCTAssertEqual(sync.statusLine, "Sync isn’t set up for this library.")
         await sync.synchronize(.manual)
         XCTAssertEqual(sync.passes, 0)
         let presence = MacPresence.resolve(connectedMac: nil, devices: [], syncAvailable: false,
-                                           syncReason: "Sign in to iCloud Drive to sync your recordings.",
+                                           syncReason: CloudAvailability.signedOutMessage,
                                            devicesListed: false)
-        XCTAssertEqual(presence.summary(), "Sign in to iCloud Drive to sync your recordings.")
+        XCTAssertEqual(presence.summary(), "Sign in to iCloud to sync your library.")
         XCTAssertEqual(MacPresence.resolve(connectedMac: "Studio Mac", devices: [], syncAvailable: false, syncReason: "x", devicesListed: false),
                        .connected(name: "Studio Mac"), "a Mac on the link is present whatever iCloud says")
     }
@@ -96,7 +96,7 @@ final class SyncServicesTests: XCTestCase {
         XCTAssertEqual(presence, .notProcessing(name: "Studio Mac", lastSeen: now))
         XCTAssertEqual(presence.macName, "Studio Mac")
         XCTAssertFalse(presence.isMacAround, "It won't transcribe, so nothing waits on it")
-        XCTAssertTrue(presence.summary(now: now).contains("Settings › Models"))
+        XCTAssertEqual(presence.summary(now: now), "Studio Mac isn’t set up to transcribe. Finish in Daybook › Settings on Studio Mac.")
         // Without any Mac presence, a journal-only device is still read as an earlier Daybook.
         XCTAssertEqual(MacPresence.resolve(connectedMac: nil, devices: [phone, journalOnly], syncAvailable: true,
                                            syncReason: nil, devicesListed: true), .olderMac)
@@ -104,6 +104,22 @@ final class SyncServicesTests: XCTestCase {
         let processor = KnownSyncDevice(id: "studio", deviceClass: .mac, displayName: "Mini", canProcess: true, lastSeen: now.addingTimeInterval(-60))
         XCTAssertEqual(MacPresence.resolve(connectedMac: nil, devices: [mac, processor, phone], syncAvailable: true,
                                            syncReason: nil, devicesListed: true), .seen(name: "Mini", lastSeen: now.addingTimeInterval(-60)))
+    }
+
+    func testAMacWhosePresenceSaysItsRecordingIsNamedAsRecording() {
+        let now = Date()
+        let activity = SyncDeviceActivity(recordingConversationID: UUID(), since: now.addingTimeInterval(-300), expiresAt: now.addingTimeInterval(60))
+        let studio = KnownSyncDevice(id: "studio", deviceClass: .mac, displayName: "Studio Mac", canProcess: true, lastSeen: now, activity: activity)
+        let presence = MacPresence.resolve(connectedMac: nil, devices: [studio], syncAvailable: true, syncReason: nil, devicesListed: true, now: now)
+        XCTAssertEqual(presence, .recording(name: "Studio Mac", lastSeen: now))
+        XCTAssertEqual(presence.summary(now: now), "Studio Mac is recording.")
+        XCTAssertEqual(presence.waitingLine(now: now), "Waiting for Studio Mac, which is recording")
+        XCTAssertTrue(presence.isMacAround)
+        // Once the activity expires it's an ordinary sighting again; the link, when it's there, wins.
+        XCTAssertEqual(MacPresence.resolve(connectedMac: nil, devices: [studio], syncAvailable: true, syncReason: nil, devicesListed: true,
+                                           now: now.addingTimeInterval(120)), .seen(name: "Studio Mac", lastSeen: now))
+        XCTAssertEqual(MacPresence.resolve(connectedMac: "Studio Mac", devices: [studio], syncAvailable: true, syncReason: nil, devicesListed: true,
+                                           now: now), .connected(name: "Studio Mac"))
     }
 
     func testBoundedPassesContinueUntilTheJournalIsRead() async throws {

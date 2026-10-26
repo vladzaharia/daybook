@@ -16,7 +16,7 @@ public enum SpeakerQuality: String, Codable, CaseIterable, Sendable {
     public var detail: String {
         switch self {
         case .fast: return "Reuse similar voice embeddings or use less window overlap to reduce processing."
-        case .balanced: return "Standard analysis with the selected model's recommended settings."
+        case .balanced: return "Standard analysis with the selected model’s recommended settings."
         case .accurate: return "Analyze more overlapping windows and refine ambiguous turns. Takes longer; accuracy still depends on the recording."
         }
     }

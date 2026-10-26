@@ -8,8 +8,16 @@ import SwiftUI
 struct PhoneOverview: View {
     @ObservedObject var state: AppState
     @ObservedObject var session: DeviceSession
+    /// Whether sync is on, for the byline.
+    @ObservedObject private var sync: LibrarySyncController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
+
+    init(state: AppState, session: DeviceSession) {
+        self.state = state
+        self.session = session
+        sync = state.sync
+    }
 
     private var direct: (any DeviceConnection)? { session.direct }
 
@@ -59,7 +67,7 @@ struct PhoneOverview: View {
                     .transition(.deviceNotice(reduceMotion: reduceMotion))
             }
 
-            DeviceHeading("How recordings arrive")
+            DeviceHeading("Import")
             DeviceMethodRows(state: state, session: session)
 
             RecentImports(state: state, session: session, heading: "Recently recorded")
@@ -70,9 +78,9 @@ struct PhoneOverview: View {
     private func byline(now: Date) -> String {
         guard let direct, direct.isSetUp else { return "Not paired" }
         if direct.state.isConnected {
-            var parts = ["Connected over Wi‑Fi"]
+            var parts = ["Connected"]
             if session.status?.isRecording == true { parts.append((direct as? PhoneLinkConnection)?.recordingPhase == .paused ? "Paused" : "Recording") }
-            if state.sync.folder == nil { parts.append("Sync is off") }
+            if sync.folder == nil { parts.append("Sync is off") }
             return parts.joined(separator: " · ")
         }
         if let last = direct.lastConnectedAt { return "Not connected · Last connected \(DeviceDateFormat.lastSeen(last, now: now))" }
@@ -84,7 +92,7 @@ struct PhoneOverview: View {
         let conversation = (direct as? PhoneLinkConnection)?.recordingConversationID.flatMap { id in state.meetings.first { $0.id == id } }
         return DeviceBox {
             HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                Image(systemName: paused ? "pause.circle" : "record.circle").foregroundStyle(paused ? Ink.secondary : .red).accessibilityHidden(true)
+                Image(systemName: paused ? "pause.circle" : "record.circle").foregroundStyle(paused ? Ink.secondary : Ink.record).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text((paused ? "Paused" : "Recording now") + (status.recordingStartedAt.map { " · since \($0.formatted(date: .omitted, time: .shortened))" } ?? ""))
                         .font(TypeStyle.statusLead).foregroundStyle(Ink.body)

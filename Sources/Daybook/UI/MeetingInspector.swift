@@ -209,6 +209,7 @@ private struct AudioRow: View {
                     .buttonStyle(.borderless)
                     .disabled(state.isRecording)
                     .help("Play this recording")
+                    .accessibilityLabel("Play \(name)")
                 Menu {
                     Button("Play", action: playThis).disabled(state.isRecording)
                     Divider()
@@ -219,6 +220,8 @@ private struct AudioRow: View {
                     Button("Show in Finder") { state.showInFinder(meeting.id) }
                 } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.button).buttonStyle(.borderless).menuIndicator(.hidden).fixedSize()
+                    .help("More")
+                    .accessibilityLabel("More for \(name)")
             }
             HStack(spacing: 4) {
                 if alignment?.method == .unaligned {

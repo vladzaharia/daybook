@@ -159,11 +159,7 @@ private struct DevicePageContent: View {
                     }
                 }
             } header: {
-                Text("How Recordings Arrive")
-            } footer: {
-                if let restored = model.devices.restoredAt, session.direct != nil {
-                    Text("Reconnected in the background \(DeviceDateFormat.relative(restored)).")
-                }
+                Text("Import")
             }
         }
         .navigationTitle(session.device.name)
@@ -200,7 +196,7 @@ private struct DevicePageContent: View {
         HStack(alignment: .center, spacing: 14) {
             DeviceGlyph(session: session, size: 56)
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.device.name).font(PhoneStyle.Typeface.title(26)).foregroundStyle(PhoneStyle.Ink.title)
+                Text(session.device.name).font(PhoneStyle.Typeface.title(.title)).foregroundStyle(PhoneStyle.Ink.title)
                 HStack(spacing: 6) {
                     Circle().fill(session.isLinked ? PhoneStyle.accent : Color(uiColor: .tertiaryLabel)).frame(width: 7, height: 7)
                     Text(PhoneDeviceCopy.line(for: session)).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
@@ -468,7 +464,7 @@ private struct SetupScreen: View {
                         Text("Nothing found yet.")
                     }
                 }
-                Section("If It Doesn't Appear") {
+                Section("If It Doesn’t Appear") {
                     ForEach(PhoneDeviceCopy.tips(session.kind), id: \.text) { tip in
                         Label(tip.text, systemImage: tip.symbol).font(.subheadline)
                     }
@@ -495,7 +491,7 @@ private struct SetupScreen: View {
                         try files.watch(url)
                         done(session.id)
                     } catch {
-                        folderError = error.localizedDescription
+                        folderError = "Daybook can’t read that folder. Choose another one."
                     }
                 }
             }
@@ -523,7 +519,7 @@ enum PhoneDeviceCopy {
         case .searching: return "Looking for it…"
         case .connecting: return "Connecting…"
         case .reconnecting: return "Reconnecting…"
-        case .unavailable: return session.problem.map { problem(for: $0.id)?.title ?? $0.title } ?? "Bluetooth isn't available"
+        case .unavailable: return session.problem.map { problem(for: $0.id)?.title ?? $0.title } ?? "Bluetooth isn’t available"
         case .notSetUp: return "Not set up"
         case .notConnected:
             if let status = session.status, status.isRecording == true { return DeviceDateFormat.recordingAsOf(status.updatedAt) }
@@ -561,11 +557,11 @@ enum PhoneDeviceCopy {
 
     private static func problem(for id: String) -> (title: String, message: String)? {
         switch SoundcoreIssue(rawValue: id) {
-        case .bluetoothDenied?: return ("Daybook can't use Bluetooth", "Allow Bluetooth for Daybook in Settings › Daybook.")
-        case .bluetoothUnsupported?: return ("This iPhone can't connect to Soundcore", "Export recordings from the Soundcore app and import them with Import Audio.")
+        case .bluetoothDenied?: return ("Daybook can’t use Bluetooth", "Allow Bluetooth for Daybook in Settings › Daybook.")
+        case .bluetoothUnsupported?: return ("This iPhone can’t connect to Soundcore", "Export recordings from the Soundcore app and import them with Import Audio.")
         case .notFound?: return ("No Soundcore found nearby", "Take it out of its case, close the Soundcore app, and bring it close to this iPhone.")
-        case .connectTimeout?: return ("Soundcore didn't finish connecting", "Take it out of its case to wake it, and close the Soundcore app.")
-        case .rejected?: return ("This Soundcore didn't accept the connection", "Export from the Soundcore app and import the file instead.")
+        case .connectTimeout?: return ("Soundcore didn’t finish connecting", "Take it out of its case to wake it, and close the Soundcore app.")
+        case .rejected?: return ("This Soundcore didn’t accept the connection", "Export from the Soundcore app and import the file instead.")
         default: return nil
         }
     }

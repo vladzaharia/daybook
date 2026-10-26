@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookKit
 import SwiftUI
 
 /// Notes while recording: each paragraph with its recording time in the margin, bookmarks in the
@@ -8,8 +9,8 @@ struct TimedNotesView: View {
     @Environment(PhoneAppModel.self) private var model
     @State private var draft = ""
     @FocusState private var composing: Bool
-
-    private static let lane: CGFloat = 44
+    /// The lane of times, wide enough for "1:02:03" at the person's text size.
+    @ScaledMetric(relativeTo: .caption2) private var lane: CGFloat = 44
 
     var body: some View {
         let recorder = model.recorder
@@ -37,20 +38,26 @@ struct TimedNotesView: View {
             Text(item.time.map(TimeLabel.short) ?? "")
                 .font(PhoneStyle.Typeface.marginTime)
                 .foregroundStyle(item.isBookmark ? PhoneStyle.bookmark : PhoneStyle.Ink.meta)
-                .frame(width: Self.lane, alignment: .trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(width: lane, alignment: .trailing)
+                .accessibilityHidden(true)
             switch item.kind {
             case .paragraph(let index, let text):
                 TextField("", text: Binding(get: { text }, set: { replaceParagraph(index, with: $0) }), axis: .vertical)
                     .font(.body)
                     .foregroundStyle(PhoneStyle.Ink.body)
+                    .accessibilityLabel(item.time.map { "Note at \(SpokenTime.format($0.rounded(.down)))" } ?? "Note")
             case .bookmark:
                 Label("Bookmark", systemImage: "bookmark.fill")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(PhoneStyle.bookmark)
+                    .accessibilityLabel(item.time.map { "Bookmark at \(SpokenTime.format($0.rounded(.down)))" } ?? "Bookmark")
             case .photo:
                 Label("Photo", systemImage: "camera.fill")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(PhoneStyle.Ink.secondary)
+                    .accessibilityLabel(item.time.map { "Photo at \(SpokenTime.format($0.rounded(.down)))" } ?? "Photo")
             }
         }
     }
@@ -61,8 +68,11 @@ struct TimedNotesView: View {
                 Text(composing || !draft.isEmpty ? TimeLabel.short(model.recorder.elapsedTime) : "")
                     .font(PhoneStyle.Typeface.marginTime)
                     .foregroundStyle(PhoneStyle.Ink.faint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            .frame(width: Self.lane, alignment: .trailing)
+            .frame(width: lane, alignment: .trailing)
+            .accessibilityHidden(true)
             TextField("Write a note", text: $draft)
                 .font(.body)
                 .foregroundStyle(PhoneStyle.Ink.body)

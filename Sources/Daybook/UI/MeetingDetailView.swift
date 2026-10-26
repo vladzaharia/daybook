@@ -143,7 +143,7 @@ struct ConversationMoreMenu: View {
             AddRecordingFromDeviceItems(state: state)
         }
         .disabled(locked)
-        Button("Add Photo…") { state.chooseAddPhoto(to: meeting.id) }
+        Button("Add Photos…") { state.chooseAddPhoto(to: meeting.id) }
         ReprocessMenu(state: state, meeting: meeting)
         Button("Version History…") { state.activeSheet = .versionHistory }.disabled(meeting.revisions.isEmpty)
         Divider()
@@ -157,7 +157,7 @@ struct ReprocessMenu: View {
     let meeting: Meeting
     var body: some View {
         Menu("Reprocess") {
-            if meeting.hasUntranscribedAudio { Button("Transcribe Now") { state.enqueue(meeting.id, mode: .newAudio) } }
+            if meeting.hasUntranscribedAudio { Button("Transcribe") { state.enqueue(meeting.id, mode: .newAudio) } }
             Button("Summarize Again") { state.enqueue(meeting.id, mode: .summaryOnly) }.disabled(meeting.unifiedTranscript.isEmpty)
             Button("Identify Speakers Again") { state.enqueue(meeting.id, mode: .speakerRefresh) }.disabled(meeting.transcripts.isEmpty)
             Button("Transcribe Everything Again") { state.enqueue(meeting.id, mode: .fullRetranscription) }

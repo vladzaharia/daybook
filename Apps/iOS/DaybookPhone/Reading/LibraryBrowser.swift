@@ -52,13 +52,24 @@ private struct ReadingLayout: View {
         }
         .fullScreenCover(isPresented: Binding(get: { session.cameraFor != nil }, set: { if !$0 { session.cameraFor = nil } })) {
             if let id = session.cameraFor {
-                CameraPicker(capture: { photo in addPhoto(photo, to: id) }, finish: { session.cameraFor = nil })
+                CameraPicker(capture: { photo in addPhoto(photo, to: id) }, finish: { session.cameraFor = nil },
+                             failed: { session.alert = ReadingAlert(title: "Couldn’t Save Photo", message: "Take it again.") })
                     .ignoresSafeArea()
             }
         }
-        .alert("Daybook", isPresented: Binding(get: { session.alert != nil }, set: { if !$0 { session.alert = nil } })) {
+        .alert(session.alert?.title ?? "", isPresented: Binding(get: { session.alert != nil }, set: { if !$0 { session.alert = nil } }),
+               presenting: session.alert) { alert in
+            if let details = alert.details {
+                Button("Details") { session.sheet = .errorDetails(details) }
+            }
             Button("OK", role: .cancel) { }
-        } message: { Text(session.alert ?? "") }
+        } message: { alert in Text(alert.message) }
+        .alert(trashTitle, isPresented: Binding(get: { !session.confirmingTrash.isEmpty }, set: { if !$0 { session.confirmingTrash = [] } })) {
+            Button("Move to Trash", role: .destructive) { trash(session.confirmingTrash) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(session.confirmingTrash.count > 1 ? "Their audio, notes, and summaries go with them." : "Its audio, notes, and summary go with it.")
+        }
         .onChange(of: library.isLoaded, initial: true) { _, loaded in
             guard loaded else { return }
             session.launch.apply(to: session, library: library, provider: provider)
@@ -75,10 +86,37 @@ private struct ReadingLayout: View {
         }
     }
 
+    /// "Move “Weekly sync” to the Trash?", as on the Mac.
+    private var trashTitle: String {
+        let ids = session.confirmingTrash
+        if ids.count > 1 { return "Move \(ids.count) conversations to the Trash?" }
+        let title = ids.first.flatMap { library.meeting($0)?.title }.flatMap { $0.isEmpty ? nil : $0 }
+        return title.map { "Move “\($0)” to the Trash?" } ?? "Move this conversation to the Trash?"
+    }
+
+    private func trash(_ ids: [UUID]) {
+        Task {
+            var failures: [String] = []
+            for id in ids {
+                do {
+                    if try await library.moveToTrash(id) { session.forget(id) }
+                } catch {
+                    failures.append(error.localizedDescription)
+                }
+            }
+            if session.isSelecting { session.isSelecting = false; session.selection = [] }
+            if !failures.isEmpty {
+                session.alert = ReadingAlert(title: "Couldn’t Move to Trash",
+                                             message: failures.count == 1 ? "Try again." : "\(failures.count) conversations weren’t moved. Try again.",
+                                             details: failures.joined(separator: "\n"))
+            }
+        }
+    }
+
     private func addPhoto(_ photo: CameraPhoto, to id: UUID) {
         Task {
             do { try await library.addCameraPhoto(photo, to: id) }
-            catch { session.alert = "The photo couldn’t be added: \(error.localizedDescription)" }
+            catch { session.alert = ReadingAlert(title: "Couldn’t Save Photo", error: error, fallback: "Take it again.") }
         }
     }
 
@@ -130,7 +168,6 @@ private struct ReadingLayout: View {
                     TranscriptPage(library: library, player: session.player, meeting: meeting, showsHeader: false)
                         .safeAreaInset(edge: .bottom, spacing: 0) { PlayerBar(player: session.player, library: library, meeting: meeting) }
                         .navigationBarTitleDisplayMode(.inline)
-                        .toolbar { TranscriptToolbar(meeting: meeting) }
                 }
                 .environment(\.isTwoPage, true)
                 .transition(pageTurn(from: .trailing))
@@ -193,20 +230,8 @@ private struct ReadingLayout: View {
     }
 }
 
-/// The transcript page's own toolbar on two pages: where it's playing, and the speakers' Info.
-private struct TranscriptToolbar: ToolbarContent {
-    let meeting: Meeting
-    @Environment(ReadingSession.self) private var session
-
-    var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Button { session.sheet = .info(meeting.id) } label: { Label("People", systemImage: "person.2") }
-                .disabled(meeting.speakers.isEmpty)
-        }
-    }
-}
-
-/// The right page before anything is chosen.
+/// The right page before anything is chosen. In an empty library the left page already says what
+/// to do, so this page shows only the mark.
 private struct NotebookPlaceholder: View {
     let isEmpty: Bool
     var body: some View {
@@ -215,12 +240,10 @@ private struct NotebookPlaceholder: View {
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(PhoneStyle.brandGradient)
                 .accessibilityHidden(true)
-            Text(isEmpty ? "Your conversations will open here" : "Choose a conversation")
-                .font(PhoneStyle.Typeface.title(22)).foregroundStyle(PhoneStyle.Ink.title)
-                .multilineTextAlignment(.center)
-            if isEmpty {
-                Text("Record one with the button on the left, or on your Mac.")
-                    .font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary).multilineTextAlignment(.center)
+            if !isEmpty {
+                Text("Choose a Conversation")
+                    .font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
+                    .multilineTextAlignment(.center)
             }
         }
         .padding(PhoneStyle.Space.s6)

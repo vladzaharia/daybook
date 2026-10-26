@@ -39,7 +39,7 @@ enum RecordingCommandError: Error, CustomLocalizedStringResourceConvertible {
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .appUnavailable: return "Open Daybook to record."
-        case .notRecording: return "Daybook isn't recording."
+        case .notRecording: return "Daybook isn’t recording."
         case .failed(let reason): return "\(reason)"
         }
     }

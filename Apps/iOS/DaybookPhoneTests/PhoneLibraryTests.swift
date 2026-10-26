@@ -389,6 +389,32 @@ final class PhoneLibraryTests: XCTestCase {
         } catch {}
     }
 
+    func testRecordingIntoANewNoteFilesIntoItAfterItsNotes() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        try await library.reload()
+        let rig = RecorderRig()
+        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        let session = ReadingSession()
+        let note = session.newNote(in: library.controller)
+        library.controller.update(note) { $0.notes = "Agenda" }
+        let title = try XCTUnwrap(library.controller.meeting(note)?.title)
+        XCTAssertTrue(title.hasPrefix("Note at "), title)
+
+        try await model.startRecording(into: note, title: title, multipoint: nil)
+        XCTAssertEqual(rig.recorder.captureID, note)
+        rig.pump(1)
+        model.editNotes("Said during the call")
+        rig.pump(1)
+        try await model.stopRecording()
+
+        XCTAssertEqual(library.conversations.count, 1, "no second conversation")
+        let filed = try XCTUnwrap(library.controller.meeting(note))
+        XCTAssertEqual(filed.title, title)
+        XCTAssertEqual(filed.tracks.count, 1)
+        XCTAssertEqual(filed.notes, "Agenda\nSaid during the call")
+    }
+
     func testTwoStartsAtOnceLeaveTheOneThatWonAlone() async throws {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         let rig = RecorderRig()

@@ -1,13 +1,18 @@
 import DaybookIntelligence
 import Foundation
+import SwiftUI
 
 /// The progress of this Mac's current processing job or model download. Engines report it from any
 /// thread, as often as they like (a download reports per network chunk); it reaches the main actor
-/// at most ten times a second, the latest value winning, in one hop. Views that draw it can observe
-/// this object; `onChange` tells `AppState`, which republishes only when the whole percent or the
-/// message changes, so the rest of the window isn't redrawn for every report.
+/// at most ten times a second, the latest value winning, in one hop. Views that draw it observe this
+/// object (`ActivityReader`), so a progress bar moves smoothly and nothing else in the window redraws;
+/// `onChange` tells `AppState`, which renews the request's claim and tells connected iPhones.
 @MainActor
 final class ActivityProgress: ObservableObject {
+    /// Never reports: what a view observes when the activity it would show isn't its own (a list row
+    /// that isn't being processed), so it keeps its identity without redrawing at progress pace.
+    static let idle = ActivityProgress(IntelligenceProgress(0, ""))
+
     @Published private(set) var value: IntelligenceProgress
     /// After each change on the main actor; `visible` when the percent or message changed.
     var onChange: (_ visible: Bool) -> Void = { _ in }
@@ -71,4 +76,22 @@ final class ActivityProgress: ObservableObject {
 
         func discard() { lock.withLock { pending = nil } }
     }
+}
+
+/// Draws `content` again whenever the activities report, without redrawing anything around it: a
+/// progress bar, a percentage, a status line that names the stage.
+struct ActivityReader<Content: View>: View {
+    @ObservedObject var processing: ActivityProgress
+    @ObservedObject var download: ActivityProgress
+    @ViewBuilder var content: () -> Content
+
+    /// An activity left out is one that never moves (`ActivityProgress.idle`).
+    @MainActor
+    init(processing: ActivityProgress? = nil, download: ActivityProgress? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.processing = processing ?? .idle
+        self.download = download ?? .idle
+        self.content = content
+    }
+
+    var body: some View { content() }
 }

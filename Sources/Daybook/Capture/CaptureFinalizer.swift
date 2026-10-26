@@ -73,7 +73,7 @@ enum CaptureFinalizer {
             return report
         } catch {
             try? FileManager.default.removeItem(at: temporary)
-            return .failed(error is CancellationError ? "Echo removal was cancelled." : error.localizedDescription)
+            return .failed(error is CancellationError ? "Echo removal was canceled." : error.localizedDescription)
         }
     }
 

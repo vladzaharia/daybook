@@ -119,11 +119,11 @@ final class LiveCaptionEngineTests: XCTestCase {
         let missing = await LiveCaptionAvailability.check(locale: english, asking: answers(status: .notInstalled))
         XCTAssertEqual(missing, .needsDownload(Locale(identifier: "en-US")))
         let unsupported = await LiveCaptionAvailability.check(locale: english, asking: answers(status: .unsupported))
-        XCTAssertEqual(unsupported, .unavailable("Captions aren't available for \(LiveCaptionAvailability.name(english))."))
+        XCTAssertEqual(unsupported, .unavailable("Captions aren’t available for \(LiveCaptionAvailability.name(english))."))
         let unknownLanguage = await LiveCaptionAvailability.check(locale: klingon, asking: answers(status: .installed))
-        XCTAssertEqual(unknownLanguage, .unavailable("Captions aren't available for \(LiveCaptionAvailability.name(klingon))."))
+        XCTAssertEqual(unknownLanguage, .unavailable("Captions aren’t available for \(LiveCaptionAvailability.name(klingon))."))
         let noDevice = await LiveCaptionAvailability.check(locale: english, asking: answers(device: false, status: .installed))
-        XCTAssertEqual(noDevice, .unavailable("Live captions aren't available on this device."))
+        XCTAssertEqual(noDevice, .unavailable("Live captions aren’t available on this device."))
         XCTAssertEqual(LiveCaptionAvailability.name(english).isEmpty, false)
     }
 

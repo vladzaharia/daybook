@@ -90,7 +90,7 @@ struct LiveSystemAudioProvider: SystemAudioProviding {
         let content: SCShareableContent
         do { content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false) }
         catch {
-            throw RecordingError.interrupted("System audio is unavailable. Allow Daybook in System Settings › Privacy & Security › Screen & System Audio Recording. \(error.localizedDescription)")
+            throw RecordingError.interrupted("System audio is unavailable. Allow Daybook in System Settings › Privacy & Security › Screen & System Audio Recording.")
         }
         guard let display = content.displays.first else { throw RecordingError.noDisplay }
         return ScreenCaptureAudioSource(filter: SCContentFilter(display: display, excludingApplications: [], exceptingWindows: []))

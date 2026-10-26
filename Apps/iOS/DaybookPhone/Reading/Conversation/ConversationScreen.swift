@@ -28,7 +28,7 @@ struct ConversationScreen: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 PlayerBar(player: session.player, library: library, meeting: meeting)
             }
-            .animation(.snappy(duration: 0.25), value: session.player.isActive(for: meeting.id))
+            .motion(.snappy(duration: 0.25), value: session.player.isActive(for: meeting.id))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -101,11 +101,7 @@ struct ConversationMoreMenu: View {
             Label(personal ? "Move to Work" : "Move to Personal", systemImage: personal ? "briefcase" : "house")
         }
         Divider()
-        Button(role: .destructive) {
-            Task {
-                if (try? await library.moveToTrash(meeting.id)) == true { session.forget(meeting.id) }
-            }
-        } label: { Label("Move to Trash", systemImage: "trash") }
+        Button(role: .destructive) { session.confirmingTrash = [meeting.id] } label: { Label("Move to Trash…", systemImage: "trash") }
     }
 }
 
@@ -116,16 +112,14 @@ struct ReprocessMenu: View {
 
     var body: some View {
         Menu {
-            Section("Your Mac does this") {
-                if meeting.hasUntranscribedAudio {
-                    Button { request(.newAudio) } label: { Label("Transcribe", systemImage: "waveform") }
-                }
-                Button { request(.summaryOnly) } label: { Label("Summarize Again", systemImage: "text.alignleft") }
-                    .disabled(meeting.unifiedTranscript.isEmpty)
-                Button { request(.speakerRefresh) } label: { Label("Identify Speakers Again", systemImage: "person.2") }
-                    .disabled(meeting.transcripts.isEmpty)
-                Button { request(.fullRetranscription) } label: { Label("Transcribe Everything Again", systemImage: "arrow.clockwise") }
+            if meeting.hasUntranscribedAudio {
+                Button { request(.newAudio) } label: { Label("Transcribe", systemImage: "waveform") }
             }
+            Button { request(.summaryOnly) } label: { Label("Summarize Again", systemImage: "text.alignleft") }
+                .disabled(meeting.unifiedTranscript.isEmpty)
+            Button { request(.speakerRefresh) } label: { Label("Identify Speakers Again", systemImage: "person.2") }
+                .disabled(meeting.transcripts.isEmpty)
+            Button { request(.fullRetranscription) } label: { Label("Transcribe Everything Again", systemImage: "arrow.clockwise") }
         } label: {
             Label("Reprocess", systemImage: "laptopcomputer")
         }
@@ -161,7 +155,7 @@ struct ExportMenu: View {
                 let files = originals
                 let url = try await Task.detached { try ExportFiles.markdownWithPhotos(meeting, originals: files) }.value
                 session.sheet = .share([url])
-            } catch { session.alert = "The Markdown couldn’t be prepared: \(error.localizedDescription)" }
+            } catch { session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The Markdown couldn’t be prepared. Try again.") }
         }
     }
 
@@ -173,7 +167,7 @@ struct ExportMenu: View {
                 let url = try await provider.localAudio(for: track, in: meeting.id) { _ in }
                 session.sheet = .share([try ExportFiles.audio(url, meeting: meeting, track: track)])
             } catch {
-                session.alert = error.localizedDescription
+                session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The audio couldn’t be prepared. Try again.")
             }
         }
     }

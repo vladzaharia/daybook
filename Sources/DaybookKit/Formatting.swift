@@ -109,3 +109,28 @@ extension Meeting {
         return named.prefix(3).joined(separator: ", ") + " and \(named.count - 3) others"
     }
 }
+
+/// Sentences both apps put in the same dialogs, so the Mac and the iPhone say the same thing.
+public enum LibraryWords {
+    /// New Note's title on both apps: "Note at 10:15 AM".
+    public static func noteTitle(at date: Date) -> String {
+        "Note at \(date.formatted(date: .omitted, time: .shortened))"
+    }
+
+    /// Under "Delete the folder “Clients”?": what happens to what's in it.
+    public static func folderDeletion(conversations count: Int) -> String {
+        switch count {
+        case 0: return "The folder is empty."
+        case 1: return "The conversation in it stays in your library."
+        default: return "The \(count) conversations in it stay in your library."
+        }
+    }
+}
+
+extension Meeting {
+    /// VoiceOver's name for a photo, on both apps: "Photo at 2 minutes, 5 seconds: Whiteboard".
+    public func photoAccessibilityLabel(_ photo: MeetingPhoto) -> String {
+        let time = timelineTime(of: photo).map { " at \(SpokenTime.format($0))" } ?? ""
+        return "Photo\(time)" + (photo.displayCaption.map { ": \($0)" } ?? "")
+    }
+}

@@ -37,7 +37,7 @@ final class FloatingNotesStatusTests: XCTestCase {
     func testRecordingPhaseNamesTheInputDeviceUntilTheMicrophoneIsSilent() {
         XCTAssertEqual(FloatingStatus.phase(recording()), FloatingPhase(phase: .recording, title: "Recording", detail: "MacBook Pro Microphone"))
         let silent = FloatingStatus.phase(recording { $0.microphoneSilent = true })
-        XCTAssertEqual(silent?.detail, "Mic silent")
+        XCTAssertEqual(silent?.detail, "Microphone silent", "as the iPhone says it")
         XCTAssertEqual(silent?.detailIsWarning, true)
     }
 

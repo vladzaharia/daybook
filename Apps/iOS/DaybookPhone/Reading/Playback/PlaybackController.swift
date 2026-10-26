@@ -76,7 +76,8 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
             } catch is CancellationError {
             } catch {
                 guard let self, !Task.isCancelled, self.meetingID == meetingID else { return }
-                self.phase = .unavailable(error.localizedDescription)
+                // The provider's own reasons are plain ("It downloads when you’re online"); others get a sentence.
+                self.phase = .unavailable(PlainError.message(for: error, fallback: "The audio couldn’t be loaded. Try again.").message)
             }
         }
     }
@@ -203,7 +204,7 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
             guard let self, self.player === player else { return }
             self.isPlaying = false
             self.stopTimer()
-            self.phase = .unavailable(error?.localizedDescription ?? "This recording couldn’t be decoded.")
+            self.phase = .unavailable("This recording couldn’t be played.")
         }
     }
 

@@ -1,9 +1,12 @@
 import DaybookKit
 import SwiftUI
+import UIKit
 
 /// Settings › iCloud: what sync is doing right now, in one honest line, and the library's devices.
 struct SyncSection: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.openURL) private var openURL
+    @State private var showingDetails = false
 
     var body: some View {
         let sync = model.sync
@@ -24,6 +27,9 @@ struct SyncSection: View {
                 .accessibilityElement(children: .combine)
             }
             if sync.isConnected {
+                if sync.lastError != nil {
+                    Button("Details") { showingDetails = true }
+                }
                 Button {
                     Task { await model.sync.synchronize(.manual) }
                 } label: {
@@ -34,6 +40,9 @@ struct SyncSection: View {
                     LabeledContent("Devices in This Library", value: devicesSummary)
                 }
             } else if case .unavailable = sync.connection {
+                if model.cloud.settingsCanFix, let url = URL(string: UIApplication.openSettingsURLString) {
+                    Button("Open Settings") { openURL(url) }
+                }
                 Button("Check Again") { Task { await model.refreshCloud() } }
             }
         } header: {
@@ -41,6 +50,7 @@ struct SyncSection: View {
         } footer: {
             if let footer { Text(footer) }
         }
+        .sheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: model.sync.lastError ?? "") }
     }
 
     private var devicesSummary: String {
@@ -119,11 +129,12 @@ struct LibraryDevicesScreen: View {
     private func name(_ device: KnownSyncDevice) -> String {
         // A device known only from the journal hasn't written a presence record: an earlier Daybook, or
         // one that hasn't finished its first sync. It can't be told which, or what kind of device it is.
-        device.displayName ?? (device.deviceClass == nil ? "A device that hasn't checked in" : "Unnamed device")
+        device.displayName ?? (device.deviceClass == nil ? "A device that hasn’t checked in" : "Unnamed device")
     }
 
     private func detail(_ device: KnownSyncDevice, now: Date) -> String {
         var parts: [String] = []
+        if device.deviceClass == .mac, device.isRecording(at: now) { parts.append("Recording now") }
         if device.canProcess == true { parts.append("Transcribes and summarizes") }
         if let seen = device.lastSeen {
             parts.append(device.isCurrentDevice ? "Synced \(MacPresence.age(now.timeIntervalSince(seen)))" : "Last seen \(MacPresence.age(now.timeIntervalSince(seen)))")

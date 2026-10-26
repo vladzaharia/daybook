@@ -931,3 +931,18 @@ Not verified (needs signed builds, the account steps in `docs/release.md` step 7
 - whether the 50 MB limit (Apple's documented asset-field maximum) is the right cut-off for the native API;
 - the exported entitlements: `production` push and the `Production` container environment on the Developer ID and TestFlight builds;
 - two Macs: the first to store a file deletes it, so the other gets it through iCloud Drive.
+
+## Design, copy, and accessibility sweep (2026-10-26)
+
+Run on Apple silicon with Xcode 27.1, against fakes and synthetic audio only: no microphone, network, Bluetooth, or real library.
+
+- `swift test`: 902 XCTest cases passed, none failed. New: `ProblemWordsTests` (the Mac's alert titles, plain sentences, and Details), `LibraryWordsTests` (the folder sentence and the photo VoiceOver label both apps share), `LibraryPlaceTests.testNewNoteIsTitledAsOnTheIPhoneAndSelected`, and `WindowInvalidationTests` rewritten for progress that redraws only what follows it and an AppState that forwards only the library and the device list.
+- `scripts/build-ios.sh --test --test-arg -parallel-testing-enabled --test-arg NO` on a new iPhone Duo simulator (iOS 27.1): 145 passed. New: `PlainWordsTests` (notices with Details and fixes, the recorder's journal warning while recording), recording into a New Note (`PhoneLibraryTests`), the status sheet's plain Mac failures and its Recording line (`StatusSheetModelTests`), `MacPresence.recording` (`SyncServicesTests`), and Open Settings for iCloud (`ShellTests`).
+- Mac `--snapshot` captures: the processing demo (list row, page status line, and Floating Notes chip all at 40 % through `ActivityReader`), Settings › General ("Record calls automatically"), and Settings › Models with a download at 40 %.
+- iPhone simulator captures: table mode writing in flex mode (`--write-notes`: Bookmark and Done beside the clock), the notebook while recording, Settings and Pair with Your Mac on the cover display, the empty notebook library (the right page shows only the mark), and a New Note's "No recording yet" with Record on both the spread and one column.
+
+Not verified here:
+
+- The table-mode keyboard itself: the capture shows the writing state before the notes field takes focus (the simulator can't tap), so that the keyboard leaves the header's Bookmark and Done uncovered follows from the layout (they're on the standing half, the keyboard covers the flat one) rather than a capture.
+- VoiceOver on a device: the pairing code field, the notes lane's "Note at …" labels, and the Mac transcript note's Show on Summary action were checked in code and by their accessibility modifiers, not with VoiceOver running.
+- Open Settings lands on Daybook's page in Settings; iOS has no public link to iCloud's own settings, so signing in or turning on iCloud Drive is a step from there.

@@ -69,8 +69,7 @@ struct SidebarView: View {
             }
             Button("Cancel", role: .cancel) { folderToDelete = nil }
         } message: {
-            let count = state.meetings.filter { $0.folderID == folderToDelete?.id }.count
-            Text(count == 0 ? "The folder is empty." : "The \(count == 1 ? "conversation" : "\(count) conversations") in it stay in your library.")
+            Text(LibraryWords.folderDeletion(conversations: state.meetings.filter { $0.folderID == folderToDelete?.id }.count))
         }
     }
 
@@ -108,7 +107,7 @@ struct SidebarView: View {
     private func importAudio(_ urls: [URL]) -> Bool {
         let audio = AppState.droppedRecordings(urls)
         guard !audio.isEmpty else { return false }
-        Task { do { try await state.importFiles(audio, source: .imported, attachTo: nil) } catch { state.errorMessage = error.localizedDescription } }
+        Task { do { try await state.importFiles(audio, source: .imported, attachTo: nil) } catch { state.report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) } }
         return true
     }
 }
