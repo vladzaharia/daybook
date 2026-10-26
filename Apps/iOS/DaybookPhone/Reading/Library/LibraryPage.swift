@@ -14,6 +14,7 @@ struct LibraryPage: View {
     /// Two pages: a tap shows the conversation on the right page instead of opening it.
     var twoPage = false
     @Environment(ReadingSession.self) private var session
+    @Environment(PhoneAppModel.self) private var model
     @Environment(\.liveCaptionStore) private var captionStore
     /// The status sheet holds Record, Import, and Search while it's up (pocket); leave it room.
     @Environment(\.statusSheetInset) private var statusSheetInset
@@ -133,7 +134,8 @@ struct LibraryPage: View {
             guard let id = ids.first else { return }
             twoPage ? session.select(id) : session.open(id)
         }
-        .refreshable { _ = await library.synchronize() }
+        // Through PhoneSync, so a pull joins a pass already running instead of being dropped, and the status follows.
+        .refreshable { await model.sync.synchronize(.manual) }
         .overlay { if meetings.isEmpty && library.isLoaded { emptyPlace } }
         .motion(library.isLoaded ? PhoneStyle.Motion.state : .linear(duration: 0), value: meetings.map(\.id))
     }

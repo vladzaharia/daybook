@@ -158,4 +158,50 @@ final class LibrarySyncApplyTests: XCTestCase {
             XCTAssertFalse(mac.meeting(id)?.revisions.contains { $0.field.hasPrefix("sync:") } ?? true, "no status conflicts")
         }
     }
+
+    func testAnEditMadeWhileAPassRunsAsksForAnotherPassThatPublishesIt() async throws {
+        let gate = OneTimeGate()
+        let mac = try await library("Mac", cloud: SyncCloudFiles(requestDownload: { _ in gate.hold() }, isUploaded: { _ in true }))
+        let id = mac.newMeeting(title: "Before")
+        await mac.flush()
+        await sync(mac)
+        // An entry still in iCloud makes the next pass ask for a download, which the test holds.
+        let placeholder = container.appendingPathComponent("Events/.\(String(repeating: "a", count: 64)).json.icloud")
+        try Data().write(to: placeholder)
+        mac.sync?.syncDebounce = .seconds(60)
+        let running = Task { await mac.synchronize() }
+        try await waitUntil("the pass to reach the journal") { gate.entered }
+        mac.rename(id, to: "Edited while the pass ran")
+        gate.release()
+        let applied = await running.value
+        XCTAssertEqual(applied?.acknowledged, true)
+        XCTAssertEqual(applied?.editedDuringPass, [id])
+        XCTAssertEqual(mac.meeting(id)?.title, "Edited while the pass ran", "the pass didn't undo it")
+        XCTAssertEqual(mac.sync?.hasPendingSyncRequest, true, "another pass is on its way")
+        try FileManager.default.removeItem(at: placeholder)
+        let next = await sync(mac)
+        XCTAssertEqual(next?.published, 1)
+        XCTAssertEqual(next?.editedDuringPass, [])
+    }
+
+    private func waitUntil(_ what: String, timeout: Duration = .seconds(10), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+}
+
+/// Holds the first cloud-provider call until released; later ones pass straight through.
+private final class OneTimeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var held = false, _entered = false
+    var entered: Bool { lock.withLock { _entered } }
+    func hold() {
+        let first = lock.withLock { () -> Bool in defer { held = true; _entered = true }; return !held }
+        if first { _ = semaphore.wait(timeout: .now() + 10) }
+    }
+    func release() { semaphore.signal() }
 }

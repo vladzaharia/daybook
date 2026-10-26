@@ -39,6 +39,11 @@ public final class LibraryController: ObservableObject {
     private var notesTasks: [UUID: Task<Void, Never>] = [:]
     private var noteOriginals: [UUID: String] = [:]
     private var locked = false
+    /// Conversations edited (and whether settings were) while the current sync pass ran.
+    private var editedDuringSync = Set<UUID>()
+    private var settingsEditedDuringSync = false
+    /// The saves being made are the pass's own.
+    private var savingSyncResult = false
     private var lockWaiters: [CheckedContinuation<Void, Never>] = []
 
     public init(rootURL: URL, sync: LibrarySyncController?) {
@@ -141,7 +146,7 @@ public final class LibraryController: ObservableObject {
     /// Saves are ordered: each waits for the one before, so the last edit is the one on disk.
     private func persist(_ meeting: Meeting) {
         guard let store else { return }
-        if !isApplyingSync { sync?.requestSync() }
+        noteChange(meeting.id)
         let prior = persistence
         persistence = Task { [weak self] in
             await prior?.value
@@ -151,7 +156,7 @@ public final class LibraryController: ObservableObject {
     }
 
     private func persistMetadata() {
-        if !isApplyingSync { sync?.requestSync() }
+        noteChange(nil)
         let snapshot = metadata, url = rootURL.appendingPathComponent("library.json"), prior = persistence
         persistence = Task { [weak self] in
             await prior?.value
@@ -162,6 +167,14 @@ public final class LibraryController: ObservableObject {
                 self?.persistenceErrors.removeValue(forKey: "library-settings")
             } catch { self?.persistenceErrors["library-settings"] = error.localizedDescription; self?.errorMessage = "Couldn’t save library settings: \(error.localizedDescription)" }
         }
+    }
+
+    /// Every save asks for a sync pass, except the saves that apply one. An edit made while a pass runs isn't in
+    /// that pass: it's remembered, and asks for another pass when this one ends.
+    private func noteChange(_ id: UUID?) {
+        guard !savingSyncResult else { return }
+        guard isApplyingSync else { sync?.requestSync(); return }
+        if let id { editedDuringSync.insert(id) } else { settingsEditedDuringSync = true }
     }
 
     /// Finishes note edits in progress and waits for every save.
@@ -599,8 +612,16 @@ public final class LibraryController: ObservableObject {
     public func synchronize(protecting active: UUID? = nil, limits: SyncPassLimits = .unlimited) async -> SyncApplied? {
         guard !Task.isCancelled, isLoaded, let sync, sync.folder != nil, !isApplyingSync else { return nil }
         isApplyingSync = true
+        editedDuringSync = []; settingsEditedDuringSync = false
         await acquireLock()
-        defer { releaseLock(); isApplyingSync = false }
+        var applied = await applyPass(sync, protecting: active, limits: limits)
+        releaseLock(); isApplyingSync = false
+        applied?.editedDuringPass = editedDuringSync; applied?.settingsEditedDuringPass = settingsEditedDuringSync
+        if !editedDuringSync.isEmpty || settingsEditedDuringSync { sync.requestSync() }
+        return applied
+    }
+
+    private func applyPass(_ sync: LibrarySyncController, protecting active: UUID?, limits: SyncPassLimits) async -> SyncApplied? {
         await flush()
         guard let store else { return nil }
         var applied: SyncApplied?
@@ -627,6 +648,8 @@ public final class LibraryController: ObservableObject {
                 }
             }
             var mergeWarnings = result.warnings
+            savingSyncResult = true
+            defer { savingSyncResult = false }
             for remote in result.meetings where !result.deletedMeetingIDs.contains(remote.id) {
                 try Task.checkCancellation()
                 var merged = remote
@@ -662,6 +685,7 @@ public final class LibraryController: ObservableObject {
                 glossary = mergedGlossary
                 persistGlossary()
             }
+            savingSyncResult = false
             applied = SyncApplied(before: snapshot, received: result.meetings.map(\.id), acknowledged: false,
                                   changed: result.changedMeetingIDs.union(result.deletedMeetingIDs), published: result.publishedEvents,
                                   hasMoreWork: result.hasMoreWork, notLocalAudio: result.notLocalAudio)
@@ -696,6 +720,11 @@ public struct SyncApplied: Sendable {
     public var hasMoreWork = false
     /// On an on-demand replica, tracks whose audio stays in iCloud until it's played, by conversation.
     public var notLocalAudio: [UUID: Set<UUID>] = [:]
+    /// Conversations edited here while the pass ran, and whether library settings were: not in this pass.
+    /// Another pass has been asked for.
+    public var editedDuringPass: Set<UUID> = []
+    public var settingsEditedDuringPass = false
+    public var hasEditsAfterThisPass: Bool { !editedDuringPass.isEmpty || settingsEditedDuringPass }
 
     public init(before: [Meeting], received: [UUID], acknowledged: Bool, changed: Set<UUID> = [], published: Int = 0,
                 hasMoreWork: Bool = false, notLocalAudio: [UUID: Set<UUID>] = [:]) {
