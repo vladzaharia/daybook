@@ -75,6 +75,12 @@ final class LibrarySyncCourierTests: XCTestCase {
         }
     }
 
+    /// Waits out a pass the courier asked for, so the next `synchronize()` runs one of its own
+    /// rather than finding a pass already applying.
+    private func settle(_ device: Device) async throws {
+        try await wait("the courier's pass to finish") { !device.library.isApplyingSync }
+    }
+
     /// A recording filed on `device`, then one pass, and the courier given what it wrote.
     private func recordAndSync(on device: Device, bytes: Data, title: String = "Design review") async throws -> Meeting {
         // Synthetic bytes; sync never decodes audio.
@@ -223,6 +229,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         // A push: the Mac fetches, verifies, keeps the files in its inbox, and asks for a pass, which applies them.
         await mac.courier.fetch()
         try await wait("the conversation on the Mac") { mac.library.meeting(meeting.id) != nil }
+        try await settle(mac)
         let onMac = try XCTUnwrap(mac.library.meeting(meeting.id))
         XCTAssertEqual(onMac.tracks, meeting.tracks)
         let audio = try await mac.library.audioURL(for: onMac.tracks[0], in: onMac.id)
@@ -262,6 +269,7 @@ final class LibrarySyncCourierTests: XCTestCase {
 
         await mac.courier.fetch()
         try await wait("the courier to be cleared") { self.service.fileIDs.isEmpty }
+        try await settle(mac)
         let inbox = await mac.sync.engine?.courierInboxCount()
         XCTAssertEqual(inbox, written.count - 1, "Everything but the damaged audio")
         _ = await mac.library.synchronize()
@@ -322,6 +330,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         XCTAssertTrue(service.fileIDs.isEmpty)
         let delivered = await mac.courier.delivered
         XCTAssertTrue(delivered.isEmpty)
+        try await settle(mac)
         // iCloud Drive carries it regardless.
         _ = await mac.library.synchronize()
         XCTAssertNotNil(mac.library.meeting(newer.id))

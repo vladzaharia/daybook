@@ -360,7 +360,7 @@ final class PhoneAppModel: RecordingCommandHandling {
                 publish()
                 return
             }
-            try await library.controller.addCameraPhoto(photo, to: id)
+            try await library.controller.addCameraPhoto(photo, to: id, origin: .thisIPhone(installation: library.installationID))
         } catch {
             notice = "The photo couldn’t be saved: \(error.localizedDescription)"
             publish()

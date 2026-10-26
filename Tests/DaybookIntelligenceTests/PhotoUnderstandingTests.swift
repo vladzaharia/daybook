@@ -73,18 +73,23 @@ final class PhotoUnderstandingTests: XCTestCase {
         let describer = try XCTUnwrap(reader as? any DescribingImages)
         let results = try await describer.describe([sharp, copy, blurred, other].map { ImageDescriptionRequest(url: $0) }, progress: { _ in })
         XCTAssertEqual(results.count, 4)
-        let text = results[0].recognizedText?.uppercased() ?? ""
-        XCTAssertTrue(text.contains("LAUNCH PLAN"), text)
-        XCTAssertTrue(text.contains("BUDGET"), text)
         XCTAssertGreaterThan(results[0].sharpness ?? 0, 0.3)
         XCTAssertLessThan(results[2].sharpness ?? 1, PhotoReading.minimumSharpness, "a defocused copy reads as blurred")
         XCTAssertEqual(results[1].duplicateOf, 0, "the same shot again is a near copy")
         XCTAssertNil(results[3].duplicateOf, "a different board isn't")
-        XCTAssertTrue(results[3].recognizedText?.uppercased().contains("DESIGNERS") == true)
-        XCTAssertTrue(PhotoReading.isInformative(results[0], caption: results[0].caption))
         XCTAssertFalse(PhotoReading.isInformative(results[1], caption: results[1].caption))
         XCTAssertFalse(PhotoReading.isInformative(results[2], caption: results[2].caption))
-        XCTAssertNotNil(results[0].caption)
+        // Text recognition can't run in some virtual machines (CI's); everything above still holds there.
+        if VisionImageReader.canRecognizeText {
+            let text = results[0].recognizedText?.uppercased() ?? ""
+            XCTAssertTrue(text.contains("LAUNCH PLAN"), text)
+            XCTAssertTrue(text.contains("BUDGET"), text)
+            XCTAssertTrue(results[3].recognizedText?.uppercased().contains("DESIGNERS") == true)
+            XCTAssertTrue(PhotoReading.isInformative(results[0], caption: results[0].caption))
+            XCTAssertNotNil(results[0].caption)
+        } else {
+            XCTAssertNil(results[0].recognizedText)
+        }
         // Compare-only requests read nothing but still count for near copies.
         let compared = try await describer.describe([ImageDescriptionRequest(url: sharp, compareOnly: true), ImageDescriptionRequest(url: copy)],
                                                     progress: { _ in })
@@ -105,7 +110,7 @@ final class PhotoUnderstandingTests: XCTestCase {
         let runtime = LocalIntelligenceRuntime(modelsDirectory: folder.appendingPathComponent("Models"))
         let results = try await runtime.describeImages([ImageDescriptionRequest(url: image)], model: PhotoReading.visionModel)
         XCTAssertEqual(results.count, 1)
-        XCTAssertTrue(results[0].recognizedText?.contains("LAUNCH PLAN") == true)
+        if VisionImageReader.canRecognizeText { XCTAssertTrue(results[0].recognizedText?.contains("LAUNCH PLAN") == true) }
         XCTAssertEqual(results[0].provenance?.family, "apple-vision")
     }
 

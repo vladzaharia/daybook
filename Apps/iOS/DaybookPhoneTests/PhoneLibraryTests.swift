@@ -140,6 +140,7 @@ final class PhoneLibraryTests: XCTestCase {
         let recordingID = rig.recorder.captureID
         rig.pump(3)
         await model.addPhoto(syntheticCameraPhoto(capturedAt: rig.clock.now()), recording: recordingID)
+        rig.pump(2)
         // A Mac stopped the recording while the camera was still open.
         try await model.stopRecording()
         let late = rig.clock.now()
@@ -147,14 +148,14 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertNil(model.notice)
 
         let filed = try XCTUnwrap(library.conversations.first)
-        let photos = filed.visiblePhotos
-        XCTAssertEqual(photos.count, 2)
-        XCTAssertEqual(photos.first?.trackID, filed.tracks.first?.id)
-        XCTAssertEqual(photos.first?.time ?? -1, 3, accuracy: 1e-6)
-        let after = try XCTUnwrap(photos.last)
-        XCTAssertNil(after.trackID)
+        XCTAssertEqual(filed.visiblePhotos.count, 2)
+        let during = try XCTUnwrap(filed.visiblePhotos.first { $0.trackID != nil })
+        XCTAssertEqual(during.trackID, filed.tracks.first?.id)
+        XCTAssertEqual(during.time ?? -1, 3, accuracy: 1e-6)
+        let after = try XCTUnwrap(filed.visiblePhotos.first { $0.trackID == nil })
         XCTAssertEqual(after.capturedAt, late)
-        XCTAssertEqual(after.origin?.serial, PhoneDevice.installationID())
+        XCTAssertEqual(after.origin?.serial, "INSTALL-1", "the library's identity, as on its recordings")
+        XCTAssertEqual(filed.timelineTime(of: after) ?? -1, 5, accuracy: 1e-3, "placed by the phone track's clock")
     }
 
     func testFilingAgainNeverDuplicates() async throws {
