@@ -446,17 +446,21 @@ struct RecordingNotice: View {
     @State private var details: NoticeDetails?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            if model.recorder.isCapturing, let warning = PhoneAppModel.recorderWarning(model.recorder.lastError) {
-                NoticeRow(message: warning.message, details: warning.details, showDetails: show)
+        let warning = model.recorder.isCapturing ? PhoneAppModel.recorderWarning(model.recorder.lastError) : nil
+        // Nothing at all when there's nothing to say, so the stack around it keeps its spacing.
+        if warning != nil || model.notice != nil {
+            VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
+                if let warning {
+                    NoticeRow(message: warning.message, details: warning.details, showDetails: show)
+                }
+                if let notice = model.notice {
+                    NoticeRow(message: notice, details: model.noticeDetails, fix: model.noticeFix,
+                              dismiss: { model.dismissNotice() }, showDetails: show)
+                }
             }
-            if let notice = model.notice {
-                NoticeRow(message: notice, details: model.noticeDetails, fix: model.noticeFix,
-                          dismiss: { model.dismissNotice() }, showDetails: show)
-            }
+            .transition(.opacity)
+            .sheet(item: $details) { DetailsSheet(title: "Details", text: $0.text) }
         }
-        .transition(.opacity)
-        .sheet(item: $details) { DetailsSheet(title: "Details", text: $0.text) }
     }
 
     private func show(_ text: String) { details = NoticeDetails(text: text) }
