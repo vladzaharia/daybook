@@ -42,15 +42,41 @@ public enum LiveCaptionAvailability: Equatable, Sendable {
 
     public static func check(locale: Locale) async -> LiveCaptionAvailability {
         guard #available(macOS 26, iOS 26, *) else { return .unavailable("Live captions need a newer system.") }
-        guard SpeechTranscriber.isAvailable else { return .unavailable("Live captions aren't available on this device.") }
-        guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
+        return await check(locale: locale, asking: .system)
+    }
+
+    /// What `check` asks the system: questions only. Nothing here can request or install an asset,
+    /// which is how asking never downloads. Tests answer for the system.
+    struct Questions: Sendable {
+        enum ModelStatus: Sendable { case installed, notInstalled, unsupported }
+        var deviceSupportsCaptions: @Sendable () -> Bool
+        var supportedLocale: @Sendable (Locale) async -> Locale?
+        var modelStatus: @Sendable (Locale) async -> ModelStatus
+
+        @available(macOS 26, iOS 26, *)
+        static var system: Questions {
+            Questions(deviceSupportsCaptions: { SpeechTranscriber.isAvailable },
+                      supportedLocale: { await SpeechTranscriber.supportedLocale(equivalentTo: $0) },
+                      modelStatus: { locale in
+                          switch await AssetInventory.status(forModules: [SpeechCaptioner.transcriber(locale: locale)]) {
+                          case .installed: return .installed
+                          case .supported, .downloading: return .notInstalled
+                          case .unsupported: return .unsupported
+                          @unknown default: return .unsupported
+                          }
+                      })
+        }
+    }
+
+    static func check(locale: Locale, asking system: Questions) async -> LiveCaptionAvailability {
+        guard system.deviceSupportsCaptions() else { return .unavailable("Live captions aren't available on this device.") }
+        guard let supported = await system.supportedLocale(locale) else {
             return .unavailable("Captions aren't available for \(name(locale)).")
         }
-        switch await AssetInventory.status(forModules: [SpeechCaptioner.transcriber(locale: supported)]) {
+        switch await system.modelStatus(supported) {
         case .installed: return .ready(supported)
-        case .supported, .downloading: return .needsDownload(supported)
+        case .notInstalled: return .needsDownload(supported)
         case .unsupported: return .unavailable("Captions aren't available for \(name(locale)).")
-        @unknown default: return .unavailable("Captions aren't available for \(name(locale)).")
         }
     }
 

@@ -1,5 +1,6 @@
 import CryptoKit
 @testable import DaybookLink
+import DaybookTestSupport
 import Foundation
 @preconcurrency import Network
 import XCTest
@@ -30,10 +31,10 @@ final class EventRecorder: @unchecked Sendable {
     var all: [LinkEvent] { lock.withLock { events } }
 
     /// The next event after the last one returned that `match` accepts.
-    func next<T>(_ what: String, timeout: TimeInterval = 5, _ match: (LinkEvent) -> T?) async throws -> T {
-        let deadline = Date().addingTimeInterval(timeout)
-        while true {
-            let found: T? = lock.withLock {
+    func next<T>(_ what: String, timeout: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line,
+                 _ match: (LinkEvent) -> T?) async throws -> T {
+        try await waitFor(what, timeout: timeout, poll: .milliseconds(5), file: file, line: line, state: { "\(self.all)" }) {
+            lock.withLock {
                 for index in cursor..<events.count {
                     if let value = match(events[index]) {
                         cursor = index + 1
@@ -42,9 +43,6 @@ final class EventRecorder: @unchecked Sendable {
                 }
                 return nil
             }
-            if let found { return found }
-            if Date() > deadline { throw TestTimeout(description: "Timed out waiting for \(what). Saw: \(all)") }
-            try await Task.sleep(nanoseconds: 5_000_000)
         }
     }
 
@@ -63,6 +61,19 @@ extension LinkEvent {
     var pairingCode: LinkPairingCode?? { if case .pairingCode(let code) = self { return .some(code) }; return nil }
     var pairingFailure: LinkPairingError? { if case .pairingFailed(let error) = self { return error }; return nil }
     var state: LinkConnectionState? { if case .connectionState(_, let state) = self { return state }; return nil }
+}
+
+extension LinkConfiguration {
+    /// `loopback()`, its timeouts stretched by DAYBOOK_TEST_TIMEOUT_SCALE: a machine starved enough
+    /// to need longer waits also misses heartbeats and handshakes for longer.
+    static func testLoopback() -> LinkConfiguration {
+        var configuration = LinkConfiguration.loopback()
+        configuration.heartbeatTimeout = TestTiming.scaled(configuration.heartbeatTimeout)
+        configuration.handshakeTimeout = TestTiming.scaled(configuration.handshakeTimeout)
+        configuration.requestTimeout = TestTiming.scaled(configuration.requestTimeout)
+        configuration.pairingTimeout = TestTiming.scaled(configuration.pairingTimeout)
+        return configuration
+    }
 }
 
 /// A clock running ahead of (or behind) this machine's.
@@ -122,8 +133,8 @@ struct LinkedPair: Sendable {
     let relay: DelayingRelay?
     let endpoint: LinkEndpoint
 
-    static func make(_ test: XCTestCase, service serviceConfiguration: LinkConfiguration = .loopback(),
-                     client clientConfiguration: LinkConfiguration = .loopback(),
+    static func make(_ test: XCTestCase, service serviceConfiguration: LinkConfiguration = .testLoopback(),
+                     client clientConfiguration: LinkConfiguration = .testLoopback(),
                      relay delays: (up: TimeInterval, down: TimeInterval)? = nil,
                      pskIdentity: Data? = nil) async throws -> LinkedPair {
         let mac = Fixture.mac(), phone = Fixture.phone()
@@ -172,7 +183,7 @@ final class Once: @unchecked Sendable {
 }
 
 /// A loopback TCP relay that delays bytes each way, and can freeze (stop forwarding without
-/// closing, like Wi-Fi that silently went away) or drop every connection.
+/// closing, like Wi-Fi that silently went away), refuse new connections, or drop every connection.
 final class DelayingRelay: @unchecked Sendable {
     private let queue = DispatchQueue(label: "test.relay")
     private let listener: NWListener
@@ -181,6 +192,9 @@ final class DelayingRelay: @unchecked Sendable {
     private let downstreamDelay: TimeInterval
     private var pipes: [(inbound: NWConnection, outbound: NWConnection, id: Int)] = []
     private var frozen: Set<Int> = []
+    private var refusing = false
+    /// When each pipe last passed bytes on, toward the service (upstream) and toward the client.
+    private var lastDelivered: [Int: (upstream: Date?, downstream: Date?)] = [:]
     private var nextID = 0
     private(set) var port: UInt16 = 0
 
@@ -222,14 +236,15 @@ final class DelayingRelay: @unchecked Sendable {
     }
 
     private func accept(_ inbound: NWConnection) {
+        guard !refusing else { inbound.cancel(); return }
         let outbound = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: targetPort)!, using: Self.noDelayTCP())
         let id = nextID
         nextID += 1
         pipes.append((inbound, outbound, id))
         inbound.start(queue: queue)
         outbound.start(queue: queue)
-        pump(from: inbound, to: Conveyor(destination: outbound, delay: upstreamDelay), id: id)
-        pump(from: outbound, to: Conveyor(destination: inbound, delay: downstreamDelay), id: id)
+        pump(from: inbound, to: Conveyor(destination: outbound, delay: upstreamDelay, pipe: id, upstream: true), id: id)
+        pump(from: outbound, to: Conveyor(destination: inbound, delay: downstreamDelay, pipe: id, upstream: false), id: id)
     }
 
     /// Delivers what it's given, in order, `delay` after it arrived. (Separate `asyncAfter`
@@ -237,12 +252,16 @@ final class DelayingRelay: @unchecked Sendable {
     private final class Conveyor {
         let destination: NWConnection
         let delay: TimeInterval
+        let pipe: Int
+        let upstream: Bool
         var items: [(data: Data?, due: DispatchTime)] = []
         var running = false
 
-        init(destination: NWConnection, delay: TimeInterval) {
+        init(destination: NWConnection, delay: TimeInterval, pipe: Int, upstream: Bool) {
             self.destination = destination
             self.delay = delay
+            self.pipe = pipe
+            self.upstream = upstream
         }
     }
 
@@ -258,10 +277,17 @@ final class DelayingRelay: @unchecked Sendable {
         queue.asyncAfter(deadline: head.due) { [weak self] in
             guard let self else { return }
             let item = conveyor.items.removeFirst()
-            if let data = item.data {
-                conveyor.destination.send(content: data, completion: .contentProcessed { _ in })
-            } else {
-                conveyor.destination.cancel()
+            // Frozen, what was still in flight is lost too, so nothing arrives after the freeze
+            // (however late a starved machine runs this).
+            if !self.frozen.contains(conveyor.pipe) {
+                if let data = item.data {
+                    var delivered = self.lastDelivered[conveyor.pipe] ?? (nil, nil)
+                    if conveyor.upstream { delivered.upstream = Date() } else { delivered.downstream = Date() }
+                    self.lastDelivered[conveyor.pipe] = delivered
+                    conveyor.destination.send(content: data, completion: .contentProcessed { _ in })
+                } else {
+                    conveyor.destination.cancel()
+                }
             }
             self.advance(conveyor)
         }
@@ -289,6 +315,17 @@ final class DelayingRelay: @unchecked Sendable {
 
     /// Existing connections stop carrying bytes but stay open. New connections work.
     func freeze() { queue.sync { frozen.formUnion(pipes.map(\.id)) } }
+
+    /// New connections are closed as soon as they arrive (true) or carried again (false).
+    func refuseNewConnections(_ refuse: Bool) { queue.sync { refusing = refuse } }
+
+    /// The last time a frozen connection passed bytes on toward the service (`upstream`) or toward
+    /// the client: after it, the receiving side heard nothing more on that connection.
+    func lastDeliveryBeforeFreeze(upstream: Bool) -> Date? {
+        queue.sync {
+            frozen.compactMap { upstream ? lastDelivered[$0]?.upstream : lastDelivered[$0]?.downstream }.max()
+        }
+    }
 
     /// Closes every connection through the relay.
     func dropAll() {
@@ -331,7 +368,7 @@ final class RawChannel: @unchecked Sendable {
             channel.onEnd = { [weak self] end in self?.lock.withLock { self?.ended = end } }
             channel.start()
         }
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(timeout))
         while !lock.withLock({ ready }) {
             if let ended = lock.withLock({ ended }) { throw TestTimeout(description: "raw channel ended: \(ended)") }
             if Date() > deadline { throw TestTimeout(description: "raw channel not ready") }
@@ -345,7 +382,7 @@ final class RawChannel: @unchecked Sendable {
 
     /// The next frame, or nil once the connection has ended and nothing is left.
     func receive(timeout: TimeInterval = 5) async throws -> Data? {
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(timeout))
         while true {
             let (frame, isOver): (Data?, Bool) = lock.withLock {
                 if !inbox.isEmpty { return (inbox.removeFirst(), false) }

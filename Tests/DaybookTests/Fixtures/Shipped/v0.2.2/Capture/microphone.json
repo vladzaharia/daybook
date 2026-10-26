@@ -1,0 +1,29 @@
+{
+  "channelCount" : 1,
+  "clockAnchors" : [
+    {
+      "frame" : 0,
+      "hostTime" : 91234.75
+    },
+    {
+      "frame" : 48000,
+      "hostTime" : 91235.75
+    },
+    {
+      "frame" : 96000,
+      "hostTime" : 91236.875,
+      "resync" : true
+    }
+  ],
+  "firstSampleHostTimeSeconds" : 91234.75,
+  "frameCount" : 2940000,
+  "method" : "microphone",
+  "notes" : [
+    "Switched to MacBook Pro Microphone at 12.5 s."
+  ],
+  "offsetSeconds" : 0.25,
+  "role" : "microphone",
+  "sampleRate" : 48000,
+  "startedAt" : 1792600000250,
+  "url" : "file:\/\/\/Users\/example\/Library\/Application%20Support\/Daybook\/Staging\/0B2C3D4E-0000-4000-8000-000000000001\/microphone.caf"
+}

@@ -1,10 +1,13 @@
 import AVFoundation
 @testable import DaybookCaptions
+import DaybookTestSupport
+import Speech
 import XCTest
 
 /// The shared caption engine without speech recognition: assembling volatile and final results,
-/// timing across gaps and bursts, converting any PCM format, scripted captioners running side by
-/// side, and asking about availability (which never downloads).
+/// timing across gaps and bursts, converting any PCM format, and asking about availability (which
+/// never downloads). Captioners running side by side are covered through the Mac's recording, in
+/// DaybookTests' LiveCaptionsTests.
 final class LiveCaptionEngineTests: XCTestCase {
     func testTentativeTextIsReplacedInPlaceAndFinalTextStays() {
         var assembler = LiveCaptionAssembler()
@@ -91,38 +94,57 @@ final class LiveCaptionEngineTests: XCTestCase {
         }
     }
 
-    func testScriptedCaptionersRunSideBySide() async throws {
-        // A Mac captions You and Call separately: two captioners at once, each with its own segments.
-        let you = ScriptedCaptioner(lines: [.init(at: 0, text: "I'll send the deck")], wordInterval: 0.01, leavesLastTentative: false)
-        let call = ScriptedCaptioner(lines: [.init(at: 0, text: "Thanks, see you Friday")], wordInterval: 0.01, leavesLastTentative: false)
-        async let a: [LiveCaptionSegment] = last(of: you.updates)
-        async let b: [LiveCaptionSegment] = last(of: call.updates)
-        await you.start(locale: Locale(identifier: "en_US"), sourceFormat: nil)
-        await call.start(locale: Locale(identifier: "en_US"), sourceFormat: nil)
-        try await Task.sleep(for: .milliseconds(400))
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!, frameCapacity: 480))
-        you.append(buffer, at: nil)
-        await you.finish()
-        await call.finish()
-        let (youSegments, callSegments) = await (a, b)
-        XCTAssertEqual(youSegments.map(\.text), ["I'll send the deck"])
-        XCTAssertEqual(callSegments.map(\.text), ["Thanks, see you Friday"])
-        XCTAssertEqual(you.buffersSeen, 1)
-        XCTAssertEqual(call.buffersSeen, 0)
-    }
-
-    func testAskingAboutAvailabilityNeverDownloads() async {
-        // Answers whatever this machine has; the only point is that it returns without installing anything.
-        let availability = await LiveCaptionAvailability.check(locale: Locale(identifier: "en_US"))
-        switch availability {
-        case .ready, .needsDownload, .unavailable: break
+    /// Availability comes from the system's answers alone. The questions it can ask have no way to
+    /// request or install an asset, so asking can't download.
+    func testAvailabilityIsReadFromTheSystemsAnswers() async {
+        let english = Locale(identifier: "en_US"), klingon = Locale(identifier: "tlh")
+        final class Asked: @unchecked Sendable {
+            private let lock = NSLock()
+            private var locales: [String] = []
+            func append(_ locale: Locale) { lock.withLock { locales.append(locale.identifier) } }
+            var all: [String] { lock.withLock { locales } }
         }
-        XCTAssertEqual(LiveCaptionAvailability.name(Locale(identifier: "en_US")).isEmpty, false)
+        func answers(device: Bool = true, status: LiveCaptionAvailability.Questions.ModelStatus, asked: Asked = Asked()) -> LiveCaptionAvailability.Questions {
+            LiveCaptionAvailability.Questions(
+                deviceSupportsCaptions: { device },
+                // The system's own form of a language it covers.
+                supportedLocale: { $0.language.languageCode == "en" ? Locale(identifier: "en-US") : nil },
+                modelStatus: { asked.append($0); return status })
+        }
+
+        let asked = Asked()
+        let ready = await LiveCaptionAvailability.check(locale: english, asking: answers(status: .installed, asked: asked))
+        XCTAssertEqual(ready, .ready(Locale(identifier: "en-US")))
+        XCTAssertEqual(asked.all, ["en-US"], "the model is looked up for the system's form of the language")
+        let missing = await LiveCaptionAvailability.check(locale: english, asking: answers(status: .notInstalled))
+        XCTAssertEqual(missing, .needsDownload(Locale(identifier: "en-US")))
+        let unsupported = await LiveCaptionAvailability.check(locale: english, asking: answers(status: .unsupported))
+        XCTAssertEqual(unsupported, .unavailable("Captions aren't available for \(LiveCaptionAvailability.name(english))."))
+        let unknownLanguage = await LiveCaptionAvailability.check(locale: klingon, asking: answers(status: .installed))
+        XCTAssertEqual(unknownLanguage, .unavailable("Captions aren't available for \(LiveCaptionAvailability.name(klingon))."))
+        let noDevice = await LiveCaptionAvailability.check(locale: english, asking: answers(device: false, status: .installed))
+        XCTAssertEqual(noDevice, .unavailable("Live captions aren't available on this device."))
+        XCTAssertEqual(LiveCaptionAvailability.name(english).isEmpty, false)
     }
 
-    private func last(of stream: AsyncStream<[LiveCaptionSegment]>) async -> [LiveCaptionSegment] {
-        var last: [LiveCaptionSegment] = []
-        for await snapshot in stream { last = snapshot }
-        return last
+    /// This machine's real answer, where it has speech recognition: it comes back promptly.
+    func testAskingThisMachineAboutAvailabilityAnswersPromptly() async throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("Live captions need macOS 26.") }
+        try XCTSkipUnless(SpeechTranscriber.isAvailable, "This machine has no speech transcriber.")
+        // Unstructured, so a system call that never returns can't hold the test past the limit.
+        let limit = TestTiming.scaled(10)
+        final class First: @unchecked Sendable {
+            private let lock = NSLock()
+            private var continuation: CheckedContinuation<LiveCaptionAvailability?, Never>?
+            init(_ continuation: CheckedContinuation<LiveCaptionAvailability?, Never>) { self.continuation = continuation }
+            func resume(_ value: LiveCaptionAvailability?) { lock.withLock { continuation.take() }?.resume(returning: value) }
+        }
+        let availability = await withCheckedContinuation { (continuation: CheckedContinuation<LiveCaptionAvailability?, Never>) in
+            let first = First(continuation)
+            Task { first.resume(await LiveCaptionAvailability.check(locale: Locale(identifier: "en_US"))) }
+            Task { try? await Task.sleep(for: .seconds(limit)); first.resume(nil) }
+        }
+        let answer = try XCTUnwrap(availability, "no answer within \(limit) s")
+        if let locale = answer.locale { XCTAssertEqual(locale.language.languageCode, "en") }
     }
 }

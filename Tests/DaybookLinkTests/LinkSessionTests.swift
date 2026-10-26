@@ -1,4 +1,5 @@
 @testable import DaybookLink
+import DaybookTestSupport
 import Foundation
 import XCTest
 
@@ -119,9 +120,9 @@ final class LinkSessionTests: XCTestCase {
     // MARK: Versions
 
     func testVersionNegotiationPicksTheHighestCommonVersion() async throws {
-        var serviceConfiguration = LinkConfiguration.loopback()
+        var serviceConfiguration = LinkConfiguration.testLoopback()
         serviceConfiguration.supportedVersions = 1...2
-        var clientConfiguration = LinkConfiguration.loopback()
+        var clientConfiguration = LinkConfiguration.testLoopback()
         clientConfiguration.supportedVersions = 1...3
         let pair = try await LinkedPair.make(self, service: serviceConfiguration, client: clientConfiguration)
         let (macSide, phoneSide) = try await pair.connect()
@@ -134,9 +135,9 @@ final class LinkSessionTests: XCTestCase {
     }
 
     func testIncompatibleVersionsAreRefusedWithoutRetrying() async throws {
-        var serviceConfiguration = LinkConfiguration.loopback()
+        var serviceConfiguration = LinkConfiguration.testLoopback()
         serviceConfiguration.supportedVersions = 1...2
-        var clientConfiguration = LinkConfiguration.loopback()
+        var clientConfiguration = LinkConfiguration.testLoopback()
         clientConfiguration.supportedVersions = 3...4
         let pair = try await LinkedPair.make(self, service: serviceConfiguration, client: clientConfiguration)
         try await pair.client.connect(to: pair.mac.deviceID, via: pair.endpoint)
@@ -193,29 +194,42 @@ final class LinkSessionTests: XCTestCase {
 
     func testHeartbeatTimeoutEndsASilentConnectionAndReconnects() async throws {
         // A timeout of several intervals, so a busy CI machine stalling the loop briefly isn't mistaken
-        // for a dead connection.
-        var configuration = LinkConfiguration.loopback()
+        // for a dead connection (and longer still where DAYBOOK_TEST_TIMEOUT_SCALE says it's starved).
+        var configuration = LinkConfiguration.testLoopback()
         configuration.heartbeatInterval = 0.2
-        configuration.heartbeatTimeout = 1.2
+        configuration.heartbeatTimeout = TestTiming.scaled(1.2)
         let pair = try await LinkedPair.make(self, service: configuration, client: configuration, relay: (0, 0))
         try await pair.connect()
-        try await Task.sleep(nanoseconds: 2_000_000_000)
-        // Heartbeats keep a quiet but healthy connection up past the timeout.
-        XCTAssertFalse(pair.phoneEvents.contains { $0.disconnectReason != nil },
-                       "\(pair.phoneEvents.all.compactMap(\.disconnectReason))")
+        try await Task.sleep(for: .seconds(configuration.heartbeatTimeout + 0.8))
+        // Heartbeats keep a quiet but healthy connection up past the timeout. (If they didn't, what
+        // follows would be measuring the wrong disconnection.)
+        let early = (pair.phoneEvents.all + pair.macEvents.all).compactMap(\.disconnectReason)
+        guard early.isEmpty else { return XCTFail("a healthy connection dropped: \(early)") }
 
+        let relay = try XCTUnwrap(pair.relay)
+        // Until both sides have given up, the phone can't come back: a new connection would replace
+        // the Mac's silent session before its own timeout ended it.
+        relay.refuseNewConnections(true)
         let frozenAt = Date()
-        pair.relay?.freeze()
+        relay.freeze()
 
         let phoneReason = try await pair.phoneEvents.next("phone timeout", timeout: 5) { $0.disconnectReason }
+        let phoneGaveUpBy = Date()
         XCTAssertEqual(phoneReason, .heartbeatTimeout)
         let macReason = try await pair.macEvents.next("Mac timeout", timeout: 5) { $0.disconnectReason }
+        let macGaveUpBy = Date()
         XCTAssertEqual(macReason, .heartbeatTimeout)
-        let elapsed = Date().timeIntervalSince(frozenAt)
-        XCTAssertGreaterThanOrEqual(elapsed, 1.0)
-        XCTAssertLessThan(elapsed, 4.5)
+        // Each side waits out the whole timeout after the last bytes the relay passed it, however late
+        // a starved machine ran the last heartbeat before the freeze. (Measuring from the freeze
+        // instead undercounts by up to an interval.)
+        let lastToPhone = try XCTUnwrap(relay.lastDeliveryBeforeFreeze(upstream: false))
+        let lastToMac = try XCTUnwrap(relay.lastDeliveryBeforeFreeze(upstream: true))
+        XCTAssertGreaterThanOrEqual(phoneGaveUpBy.timeIntervalSince(lastToPhone), configuration.heartbeatTimeout)
+        XCTAssertGreaterThanOrEqual(macGaveUpBy.timeIntervalSince(lastToMac), configuration.heartbeatTimeout)
+        XCTAssertLessThan(Date().timeIntervalSince(frozenAt), configuration.heartbeatTimeout + TestTiming.scaled(3.3))
 
-        // New connections through the relay work, so the phone comes back.
+        // New connections through the relay work again, so the phone comes back.
+        relay.refuseNewConnections(false)
         _ = try await pair.phoneEvents.next("reconnected") { $0.connected }
         await pair.tearDown()
     }
@@ -246,9 +260,9 @@ final class LinkSessionTests: XCTestCase {
     // MARK: Clock
 
     func testClockOffsetIsEstimatedWithinToleranceOverADelayedLink() async throws {
-        var macConfiguration = LinkConfiguration.loopback()
+        var macConfiguration = LinkConfiguration.testLoopback()
         macConfiguration.clock = OffsetClock(offset: 2.5)
-        var phoneConfiguration = LinkConfiguration.loopback()
+        var phoneConfiguration = LinkConfiguration.testLoopback()
         phoneConfiguration.clockSamplesPerBurst = 5
         let pair = try await LinkedPair.make(self, service: macConfiguration, client: phoneConfiguration, relay: (0.04, 0.04))
         try await pair.connect()
@@ -257,26 +271,24 @@ final class LinkSessionTests: XCTestCase {
             guard let clock = event.updated?.clock, clock.sampleCount >= 5 else { return nil }
             return clock
         }
-        XCTAssertEqual(estimate.offset, 2.5, accuracy: 0.02)
-        XCTAssertGreaterThanOrEqual(estimate.roundTrip, 0.08)
-        XCTAssertLessThan(estimate.roundTrip, 0.3)
-        XCTAssertEqual(estimate.localDate(fromPeer: t0.addingTimeInterval(2.5)).timeIntervalSince(t0), 0, accuracy: 0.02)
+        assertEstimate(estimate, offset: 2.5, up: 0.04, down: 0.04)
+        XCTAssertEqual(estimate.localDate(fromPeer: t0.addingTimeInterval(2.5)).timeIntervalSince(t0), 2.5 - estimate.offset, accuracy: 1e-6)
 
         // The Mac measures too, and sees the phone behind it by the same amount.
         let macEstimate = try await pair.macEvents.next("Mac estimate") { event -> LinkClockEstimate? in
             guard let clock = event.updated?.clock, clock.sampleCount >= 4 else { return nil }
             return clock
         }
-        XCTAssertEqual(macEstimate.offset, -2.5, accuracy: 0.02)
+        assertEstimate(macEstimate, offset: -2.5, up: 0.04, down: 0.04)
         await pair.tearDown()
     }
 
     /// Lopsided delay biases the estimate by half the difference, which the reported uncertainty
     /// (half the round trip) always covers.
     func testLopsidedDelayStaysWithinTheReportedUncertainty() async throws {
-        var macConfiguration = LinkConfiguration.loopback()
+        var macConfiguration = LinkConfiguration.testLoopback()
         macConfiguration.clock = OffsetClock(offset: -1.25)
-        var phoneConfiguration = LinkConfiguration.loopback()
+        var phoneConfiguration = LinkConfiguration.testLoopback()
         phoneConfiguration.clockSamplesPerBurst = 5
         let pair = try await LinkedPair.make(self, service: macConfiguration, client: phoneConfiguration, relay: (0.06, 0.01))
         try await pair.connect()
@@ -285,10 +297,27 @@ final class LinkSessionTests: XCTestCase {
             guard let clock = event.updated?.clock, clock.sampleCount >= 5 else { return nil }
             return clock
         }
-        let error = estimate.offset - (-1.25)
-        XCTAssertEqual(error, (0.06 - 0.01) / 2, accuracy: 0.015)
-        XCTAssertLessThanOrEqual(abs(error), estimate.uncertainty)
+        // Biased toward the slow direction by half the difference, as NTP predicts.
+        assertEstimate(estimate, offset: -1.25, up: 0.06, down: 0.01)
         await pair.tearDown()
+    }
+
+    /// A trip through the relay takes at least its delay each way (`up` toward the peer, `down`
+    /// back), plus whatever else the machine adds: scheduling, TLS, a loaded CPU. The estimate is
+    /// off from the true offset by (up − down) / 2, give or take half of that extra, which the
+    /// round trip reports. So the bound is tight on an idle machine and honest on a starved one,
+    /// where a fixed tolerance (±20 ms) failed.
+    private func assertEstimate(_ estimate: LinkClockEstimate, offset: TimeInterval, up: TimeInterval, down: TimeInterval,
+                                file: StaticString = #filePath, line: UInt = #line) {
+        // Clock reads and JSON dates are good to well under a millisecond.
+        let epsilon = 0.002
+        let floor = up + down
+        XCTAssertGreaterThanOrEqual(estimate.roundTrip, floor - epsilon, "every round trip includes the relay's delays", file: file, line: line)
+        let error = estimate.offset - offset
+        let extra = max(0, estimate.roundTrip - floor)
+        XCTAssertEqual(error, (up - down) / 2, accuracy: extra / 2 + epsilon,
+                       "round trip \(estimate.roundTrip) s, of which \(extra) s beyond the relay", file: file, line: line)
+        XCTAssertLessThanOrEqual(abs(error), estimate.uncertainty + epsilon, "within the reported uncertainty", file: file, line: line)
     }
 
     func testClockFilterTrustsTheShortestRoundTrip() {
@@ -362,7 +391,7 @@ final class LinkSessionTests: XCTestCase {
     }
 
     func testRecordRequestTimesOutWhenTheAnswerNeverComes() async throws {
-        var configuration = LinkConfiguration.loopback()
+        var configuration = LinkConfiguration.testLoopback()
         configuration.requestTimeout = 0.2
         let pair = try await LinkedPair.make(self, service: configuration)
         try await pair.connect()

@@ -92,14 +92,64 @@ struct DecodedAudio {
 /// A 440 Hz tone at amplitude 0.3 has an RMS of 0.3 / √2.
 let toneRMS: Float = 0.3 / Float(2).squareRoot()
 
+// Waiting for something to happen, as the package's tests do (Tests/DaybookTestSupport/Waiting.swift):
+// a timeout always fails the test by throwing, which also stops it, and says what it waited for,
+// where, and what it last saw. Every timeout stretches by DAYBOOK_TEST_TIMEOUT_SCALE; xcodebuild
+// hands the test runner its TEST_RUNNER_-prefixed variables with the prefix removed, so CI sets
+// TEST_RUNNER_DAYBOOK_TEST_TIMEOUT_SCALE.
+
+/// Timeouts in tests, stretched on slow machines.
+enum TestTiming {
+    /// `DAYBOOK_TEST_TIMEOUT_SCALE` (1 when unset or not a number of at least 1). Nothing ever waits
+    /// less than its nominal timeout.
+    static let scale: Double = {
+        guard let raw = ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"], let value = Double(raw),
+              value.isFinite else { return 1 }
+        return max(1, value)
+    }()
+
+    /// `seconds`, stretched by `scale`.
+    static func scaled(_ seconds: TimeInterval) -> TimeInterval { seconds * scale }
+}
+
+/// A wait that ran out of time. Thrown, so the test fails with this description.
+struct WaitTimeout: Error, CustomStringConvertible, LocalizedError {
+    let description: String
+    var errorDescription: String? { description }
+
+    init(_ what: String, after seconds: TimeInterval, file: StaticString, line: UInt, lastState: String?) {
+        var text = "Timed out after \(String(format: "%.1f", seconds)) s waiting for \(what) (\(file):\(line))"
+        if let lastState { text += ". Last seen: \(lastState)" }
+        description = text
+    }
+}
+
 extension XCTestCase {
-    /// Polls (on the main actor) until `condition` holds.
+    /// Polls on the main actor until `condition` holds. Throws `WaitTimeout` after `timeout` seconds
+    /// (stretched by `TestTiming.scale`), with `state()` describing what it last saw.
     @MainActor
-    func waitUntil(_ description: String, timeout: TimeInterval = 10, _ condition: @escaping @MainActor () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { XCTFail("Timed out waiting for \(description)"); return }
-            try await Task.sleep(for: .milliseconds(10))
+    func waitUntil(_ description: String, timeout: TimeInterval = 10, poll: Duration = .milliseconds(10),
+                   file: StaticString = #filePath, line: UInt = #line,
+                   state: (@MainActor () -> String)? = nil, _ condition: @MainActor () throws -> Bool) async throws {
+        _ = try await waitFor(description, timeout: timeout, poll: poll, file: file, line: line, state: state) { try condition() ? true : nil }
+    }
+
+    /// Polls on the main actor until `value` returns something, and returns that. Throws
+    /// `WaitTimeout` after `timeout` seconds (stretched by `TestTiming.scale`).
+    @MainActor
+    func waitFor<T>(_ description: String, timeout: TimeInterval = 10, poll: Duration = .milliseconds(10),
+                    file: StaticString = #filePath, line: UInt = #line,
+                    state: (@MainActor () -> String)? = nil, _ value: @MainActor () throws -> T?) async throws -> T {
+        let limit = TestTiming.scaled(timeout)
+        let deadline = ContinuousClock.now + .seconds(limit)
+        while true {
+            if let found = try value() { return found }
+            guard ContinuousClock.now < deadline else {
+                let timeout = WaitTimeout(description, after: limit, file: file, line: line, lastState: state?())
+                print("error: \(timeout)")
+                throw timeout
+            }
+            try await Task.sleep(for: poll)
         }
     }
 

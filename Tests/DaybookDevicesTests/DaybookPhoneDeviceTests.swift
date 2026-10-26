@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookDevices
@@ -7,16 +8,10 @@ import XCTest
 /// ID, and its recordings, which are listed from the library because they arrive through sync.
 @MainActor
 final class DaybookPhoneDeviceTests: XCTestCase {
-    private var suite = ""
     private var defaults: UserDefaults!
 
     override func setUp() async throws {
-        suite = "local.daybook.tests.phone-device.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suite)
-    }
-
-    override func tearDown() async throws {
-        defaults.removePersistentDomain(forName: suite)
+        defaults = makeTestDefaults("local.daybook.tests.phone-device")
     }
 
     private func environment(syncs: @escaping () -> Bool = { true }, paired: Set<String> = []) -> DeviceEnvironment {

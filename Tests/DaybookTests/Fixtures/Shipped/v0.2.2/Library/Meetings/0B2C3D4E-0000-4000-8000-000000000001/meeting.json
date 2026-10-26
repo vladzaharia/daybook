@@ -1,0 +1,585 @@
+{
+  "alignmentReports" : [
+    {
+      "explanation" : "Reference recording.",
+      "matchedAnchors" : 0,
+      "method" : "reference",
+      "offset" : 0,
+      "rate" : 1,
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A4"
+    },
+    {
+      "explanation" : "Captured together.",
+      "matchedAnchors" : 0,
+      "method" : "provided",
+      "offset" : 0.25,
+      "rate" : 1,
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A2"
+    },
+    {
+      "explanation" : "Matched 4 phrases.",
+      "matchedAnchors" : 4,
+      "method" : "anchors",
+      "offset" : 2.875,
+      "rate" : 1.0001220703125,
+      "residual" : 0.0625,
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3"
+    }
+  ],
+  "audioAlignments" : [
+    {
+      "algorithmVersion" : 1,
+      "explanation" : "Too little shared speech.",
+      "measuredAt" : 814292970,
+      "referenceDigest" : "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "referenceTrackID" : "0B2C3D4E-0000-4000-8000-0000000000A1",
+      "trackDigest" : "b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3",
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3"
+    }
+  ],
+  "companions" : [
+    {
+      "clock" : {
+        "measuredAt" : 814292800,
+        "offset" : 3,
+        "samples" : 2,
+        "uncertainty" : 0.5
+      },
+      "deviceID" : "0B2C3D4E-0000-4000-8000-0000000000D9",
+      "deviceKind" : "soundcore.work",
+      "deviceName" : "soundcore Work",
+      "deviceSerial" : "D3200SIM0000001",
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000E2",
+      "macEndedAt" : 814292861,
+      "macStartedAt" : 814292800,
+      "recorderStartedAt" : 814292803,
+      "recordingID" : "1792600000",
+      "startedByDaybook" : true,
+      "state" : "attached",
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3"
+    }
+  ],
+  "date" : 814292800,
+  "folderID" : "0B2C3D4E-0000-4000-8000-0000000000F1",
+  "fusionSummary" : {
+    "corroboratedWords" : 6,
+    "disputedWords" : 0,
+    "ownerSpeakerID" : "owner",
+    "sources" : [
+      {
+        "confidence" : 1,
+        "included" : true,
+        "method" : "reference",
+        "offset" : 0.25,
+        "rate" : 1,
+        "role" : "microphone",
+        "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A4",
+        "transcriptID" : "0B2C3D4E-0000-4000-8000-0000000007A1",
+        "words" : 4,
+        "wordsCorroborated" : 0,
+        "wordsMerged" : 0,
+        "wordsOverruled" : 0,
+        "wordsUsed" : 4
+      },
+      {
+        "confidence" : 0.875,
+        "included" : true,
+        "method" : "anchors",
+        "note" : "Merged with the call.",
+        "offset" : 2.875,
+        "rate" : 1.0001220703125,
+        "referenceTrackID" : "0B2C3D4E-0000-4000-8000-0000000000A4",
+        "role" : "room",
+        "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3",
+        "transcriptID" : "0B2C3D4E-0000-4000-8000-0000000007A3",
+        "words" : 6,
+        "wordsCorroborated" : 6,
+        "wordsMerged" : 6,
+        "wordsOverruled" : 0,
+        "wordsUsed" : 0
+      }
+    ],
+    "speakerMappings" : [
+      {
+        "reason" : "sharedSpeech",
+        "share" : 0.875,
+        "speakerID" : "S2",
+        "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3"
+      }
+    ],
+    "version" : 1,
+    "words" : 10
+  },
+  "highlights" : [
+    {
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000B1",
+      "text" : "Decision",
+      "time" : 4.5
+    },
+    {
+      "duration" : 5,
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000B2",
+      "text" : "",
+      "time" : 1.5,
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3"
+    }
+  ],
+  "id" : "0B2C3D4E-0000-4000-8000-000000000001",
+  "kind" : "general",
+  "notes" : "Agenda\nShip the prototype",
+  "placement" : "work",
+  "processingRequests" : [
+    {
+      "claim" : {
+        "claimedAt" : 814293210,
+        "device" : {
+          "id" : "5D6E7F80-0000-4000-8000-00000000000A",
+          "name" : "Studio Mac"
+        },
+        "expiresAt" : 814293810,
+        "fraction" : 0.5,
+        "heartbeat" : 814293220,
+        "stage" : "summarizing"
+      },
+      "createdAt" : 814293200,
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000E4",
+      "meetingID" : "0B2C3D4E-0000-4000-8000-000000000001",
+      "mode" : "summaryOnly",
+      "outcome" : {
+        "device" : {
+          "id" : "5D6E7F80-0000-4000-8000-00000000000A",
+          "name" : "Studio Mac"
+        },
+        "finishedAt" : 814293230,
+        "result" : "completed"
+      },
+      "requestedBy" : {
+        "id" : "5D6E7F80-0000-4000-8000-00000000000B",
+        "name" : "Alex’s iPhone"
+      },
+      "templateID" : "general"
+    }
+  ],
+  "revisions" : [
+    {
+      "date" : 814293050,
+      "field" : "notes",
+      "id" : "0B2C3D4E-0000-4000-8000-00000000000E",
+      "newValue" : "Agenda\nShip the prototype",
+      "oldValue" : "Agenda"
+    }
+  ],
+  "schemaVersion" : 1,
+  "sourceSuggestions" : [
+    {
+      "candidateMeetingIDs" : [
+        "0B2C3D4E-0000-4000-8000-000000000001",
+        "0B2C3D4E-0000-4000-8000-000000000002"
+      ],
+      "clockOffsets" : [
+        "0B2C3D4E-0000-4000-8000-000000000002",
+        -1800
+      ],
+      "confidence" : 0.5,
+      "createdAt" : 814292982,
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000E3",
+      "reason" : "severalConversations",
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A5"
+    }
+  ],
+  "speakers" : [
+    {
+      "id" : "owner",
+      "name" : "Me",
+      "sourceTrackID" : "0B2C3D4E-0000-4000-8000-0000000000A4"
+    },
+    {
+      "analysisSettings" : {
+        "createdAt" : 814292920,
+        "modelID" : "community-1\/offline",
+        "parameters" : {
+
+        }
+      },
+      "embedding" : [
+        0.125,
+        -0.5,
+        0.25
+      ],
+      "embeddingModelID" : "community-1\/offline",
+      "id" : "S2",
+      "name" : "Alex",
+      "sourceTrackID" : "0B2C3D4E-0000-4000-8000-0000000000A2"
+    }
+  ],
+  "status" : "ready",
+  "summary" : {
+    "actionItems" : [
+      {
+        "completed" : true,
+        "id" : "0B2C3D4E-0000-4000-8000-00000000000D",
+        "owner" : "Alex",
+        "text" : "Ship the prototype"
+      }
+    ],
+    "createdAt" : 814293000,
+    "kind" : "general",
+    "modelID" : "gemma-4\/e4b-4bit",
+    "overview" : "The team agreed to ship the prototype on Friday.",
+    "processingSettings" : {
+      "createdAt" : 814293000,
+      "model" : {
+        "engine" : "mlx",
+        "engineVersion" : "3.32.3",
+        "family" : "gemma-4",
+        "name" : "Gemma 4 E4B · 4-bit",
+        "revision" : "4b1d2c3e4f5061728394a5b6c7d8e9f001122334",
+        "variant" : "e4b-4bit"
+      },
+      "modelID" : "gemma-4\/e4b-4bit",
+      "parameters" : {
+        "template" : "general"
+      }
+    },
+    "sections" : [
+      {
+        "body" : "- Ship the prototype on Friday.",
+        "heading" : "Decisions",
+        "id" : "0B2C3D4E-0000-4000-8000-00000000000C"
+      }
+    ],
+    "title" : "Prototype planning"
+  },
+  "tags" : [
+    "planning",
+    "synthetic"
+  ],
+  "templateID" : "general",
+  "timedNotes" : [
+    {
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000C1",
+      "text" : "Agenda"
+    },
+    {
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000C2",
+      "text" : "Ship the prototype",
+      "time" : 12.5
+    }
+  ],
+  "title" : "Prototype planning",
+  "tracks" : [
+    {
+      "capture" : {
+        "clockRate" : 48000.5,
+        "method" : "microphone",
+        "notes" : [
+          "Switched to MacBook Pro Microphone at 12.5 s."
+        ],
+        "outputRoute" : "speakers",
+        "peerClocks" : [
+          {
+            "deviceClass" : "phone",
+            "deviceID" : "5D6E7F80-0000-4000-8000-00000000000B",
+            "measuredAt" : 814292801,
+            "name" : "Alex’s iPhone",
+            "offset" : 0.375,
+            "peerRecordingStartedAt" : 814292802,
+            "sampleCount" : 5,
+            "uncertainty" : 0.0125
+          }
+        ]
+      },
+      "createdAt" : 814292800,
+      "duration" : 61.25,
+      "fileName" : "microphone.caf",
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000A1",
+      "offset" : 0.25,
+      "relativePath" : "Originals\/microphone.caf",
+      "sha256" : "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "source" : "microphone",
+      "startedAt" : 814292800.25
+    },
+    {
+      "capture" : {
+        "capturedApps" : [
+          "us.zoom.xos"
+        ],
+        "clockRate" : 48000,
+        "method" : "process-tap"
+      },
+      "createdAt" : 814292800,
+      "duration" : 60.5,
+      "fileName" : "systemAudio.caf",
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000A2",
+      "offset" : 0.5,
+      "relativePath" : "Originals\/systemAudio.caf",
+      "sha256" : "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "source" : "systemAudio",
+      "startedAt" : 814292800.5
+    },
+    {
+      "capture" : {
+        "echoRemoval" : {
+          "doubleTalkFraction" : 0.125,
+          "durationSeconds" : 61.25,
+          "echoReturnLossEnhancementDB" : 18.5,
+          "outcome" : "applied",
+          "processingSampleRate" : 16000
+        },
+        "method" : "microphone"
+      },
+      "createdAt" : 814292862,
+      "derivedFrom" : "0B2C3D4E-0000-4000-8000-0000000000A1",
+      "duration" : 61.25,
+      "fileName" : "microphone.echo-cancelled.caf",
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000A4",
+      "offset" : 0.25,
+      "processing" : "echo-cancelled",
+      "relativePath" : "Originals\/microphone.echo-cancelled.caf",
+      "sha256" : "b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4",
+      "source" : "microphone",
+      "startedAt" : 814292800.25
+    },
+    {
+      "alignment" : {
+        "audioChecked" : true,
+        "clockOffset" : 3,
+        "confidence" : 0.875,
+        "date" : 814292970,
+        "method" : "audio",
+        "offset" : 2.875,
+        "rate" : 1.0001220703125,
+        "referenceTrackID" : "0B2C3D4E-0000-4000-8000-0000000000A1"
+      },
+      "createdAt" : 814292950,
+      "deviceKind" : "soundcore.work",
+      "deviceRecordingID" : "1792600000",
+      "deviceSerial" : "D3200SIM0000001",
+      "duration" : 58.5,
+      "fileName" : "Soundcore-1792600000.wav",
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000A3",
+      "relativePath" : "Originals\/Soundcore-1792600000.wav",
+      "sha256" : "b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3",
+      "source" : "soundcore",
+      "startedAt" : 814292800
+    },
+    {
+      "alignment" : {
+        "clockOffset" : 0.375,
+        "date" : 814292981,
+        "heldNoteIDs" : [
+          "0B2C3D4E-0000-4000-8000-0000000000C2"
+        ],
+        "method" : "pending",
+        "rate" : 1
+      },
+      "createdAt" : 814292980,
+      "deviceKind" : "daybook.iphone",
+      "deviceRecordingID" : "0B2C3D4E-0000-4000-8000-0000000000A6",
+      "duration" : 59,
+      "fileName" : "iPhone.m4a",
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000A5",
+      "relativePath" : "Originals\/iPhone.m4a",
+      "sha256" : "b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5",
+      "source" : "imported",
+      "startedAt" : 814292801
+    }
+  ],
+  "transcripts" : [
+    {
+      "createdAt" : 814292900,
+      "id" : "0B2C3D4E-0000-4000-8000-0000000007A1",
+      "knownOffset" : 0.25,
+      "language" : "en",
+      "modelID" : "whisper\/base",
+      "processingSettings" : {
+        "createdAt" : 814292900,
+        "model" : {
+          "engine" : "whisperkit",
+          "engineVersion" : "1.1.1",
+          "family" : "whisper",
+          "name" : "Whisper Base",
+          "repository" : "argmaxinc\/whisperkit-coreml",
+          "revision" : "0f63a7800b00dd0226abd051b906c246e1907482",
+          "variant" : "base"
+        },
+        "modelID" : "whisper\/base",
+        "parameters" : {
+          "language" : "en",
+          "temperature" : "0"
+        }
+      },
+      "segments" : [
+        {
+          "confidence" : 0.9375,
+          "end" : 2.25,
+          "id" : "0B2C3D4E-0000-4000-8000-0000000005A1",
+          "provenance" : [
+
+          ],
+          "speakerID" : "owner",
+          "start" : 0.5,
+          "text" : "Let's review the agenda.",
+          "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A4"
+        }
+      ],
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A4",
+      "words" : [
+        {
+          "confidence" : 0.91,
+          "end" : 0.75,
+          "start" : 0.5,
+          "text" : "Let's"
+        },
+        {
+          "confidence" : 0.875,
+          "end" : 1.25,
+          "start" : 0.75,
+          "text" : "review"
+        },
+        {
+          "end" : 1.5,
+          "start" : 1.25,
+          "text" : "the"
+        },
+        {
+          "confidence" : 0.96875,
+          "end" : 2.25,
+          "start" : 1.5,
+          "text" : "agenda."
+        }
+      ]
+    },
+    {
+      "createdAt" : 814292900,
+      "id" : "0B2C3D4E-0000-4000-8000-0000000007A2",
+      "knownOffset" : 0.5,
+      "language" : "en",
+      "modelID" : "whisper\/base",
+      "processingSettings" : {
+        "createdAt" : 814292900,
+        "model" : {
+          "engine" : "whisperkit",
+          "engineVersion" : "1.1.1",
+          "family" : "whisper",
+          "name" : "Whisper Base",
+          "repository" : "argmaxinc\/whisperkit-coreml",
+          "revision" : "0f63a7800b00dd0226abd051b906c246e1907482",
+          "variant" : "base"
+        },
+        "modelID" : "whisper\/base",
+        "parameters" : {
+          "language" : "en",
+          "temperature" : "0"
+        }
+      },
+      "segments" : [
+        {
+          "confidence" : 0.875,
+          "end" : 6.5,
+          "id" : "0B2C3D4E-0000-4000-8000-0000000005A2",
+          "provenance" : [
+
+          ],
+          "speakerID" : "S2",
+          "start" : 3,
+          "text" : "We ship the prototype on Friday.",
+          "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A2"
+        }
+      ],
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A2"
+    },
+    {
+      "createdAt" : 814292960,
+      "id" : "0B2C3D4E-0000-4000-8000-0000000007A3",
+      "language" : "en",
+      "modelID" : "whisper\/base",
+      "processingSettings" : {
+        "createdAt" : 814292900,
+        "model" : {
+          "engine" : "whisperkit",
+          "engineVersion" : "1.1.1",
+          "family" : "whisper",
+          "name" : "Whisper Base",
+          "repository" : "argmaxinc\/whisperkit-coreml",
+          "revision" : "0f63a7800b00dd0226abd051b906c246e1907482",
+          "variant" : "base"
+        },
+        "modelID" : "whisper\/base",
+        "parameters" : {
+          "language" : "en",
+          "temperature" : "0"
+        }
+      },
+      "segments" : [
+        {
+          "confidence" : 0.8125,
+          "end" : 3.75,
+          "id" : "0B2C3D4E-0000-4000-8000-0000000005A3",
+          "provenance" : [
+
+          ],
+          "start" : 0.25,
+          "text" : "We ship the prototype on Friday.",
+          "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3"
+        }
+      ],
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3"
+    }
+  ],
+  "unifiedTranscript" : [
+    {
+      "confidence" : 0.9375,
+      "end" : 2.5,
+      "id" : "0B2C3D4E-0000-4000-8000-0000000009A1",
+      "provenance" : [
+        {
+          "confidence" : 0.9375,
+          "end" : 2.25,
+          "segmentID" : "0B2C3D4E-0000-4000-8000-0000000005A1",
+          "start" : 0.5,
+          "text" : "Let's review the agenda.",
+          "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A4",
+          "wordIndices" : [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      ],
+      "speakerID" : "owner",
+      "start" : 0.75,
+      "text" : "Let's review the agenda.",
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A4"
+    },
+    {
+      "confidence" : 0.875,
+      "end" : 7,
+      "id" : "0B2C3D4E-0000-4000-8000-0000000009A2",
+      "provenance" : [
+        {
+          "confidence" : 0.875,
+          "end" : 6.5,
+          "segmentID" : "0B2C3D4E-0000-4000-8000-0000000005A2",
+          "start" : 3,
+          "text" : "We ship the prototype on Friday.",
+          "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A2"
+        },
+        {
+          "confidence" : 0.8125,
+          "end" : 3.75,
+          "segmentID" : "0B2C3D4E-0000-4000-8000-0000000005A3",
+          "start" : 0.25,
+          "text" : "We ship the prototype on Friday.",
+          "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A3"
+        }
+      ],
+      "speakerID" : "S2",
+      "start" : 3.5,
+      "text" : "We ship the prototype on Friday.",
+      "trackID" : "0B2C3D4E-0000-4000-8000-0000000000A2"
+    }
+  ],
+  "updatedAt" : 814293100
+}

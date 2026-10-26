@@ -74,14 +74,19 @@ let package = Package(
             "DaybookCaptions",
             "DaybookDesign"
         ]),
-        .testTarget(name: "DaybookCoreTests", dependencies: ["DaybookCore"]),
+        // What every test bundle shares (Tests/DaybookTestSupport): waiting for something to happen, and
+        // UserDefaults suites that are removed when a test ends.
+        .target(name: "DaybookTestSupport", path: "Tests/DaybookTestSupport"),
+        .testTarget(name: "DaybookCoreTests", dependencies: ["DaybookCore", "DaybookTestSupport"]),
         // Device tests decode transferred audio with DaybookIntelligence's reader (macOS).
-        .testTarget(name: "DaybookDevicesTests", dependencies: ["DaybookDevices", "DaybookCore", "DaybookIntelligence", "DaybookCaptions"]),
-        .testTarget(name: "DaybookKitTests", dependencies: ["DaybookKit", "DaybookCore", "DaybookDevices", "DaybookLink"]),
+        .testTarget(name: "DaybookDevicesTests", dependencies: ["DaybookDevices", "DaybookCore", "DaybookIntelligence", "DaybookCaptions",
+                                                               "DaybookTestSupport"]),
+        .testTarget(name: "DaybookKitTests", dependencies: ["DaybookKit", "DaybookCore", "DaybookDevices", "DaybookLink", "DaybookTestSupport"]),
         .testTarget(name: "DaybookIntelligenceTests", dependencies: [
             "DaybookIntelligence",
             "DaybookKit",
             "DaybookCore",
+            "DaybookTestSupport",
             .product(name: "FluidAudio", package: "FluidAudio")
         ]),
         .testTarget(name: "DaybookTests", dependencies: [
@@ -92,10 +97,11 @@ let package = Package(
             "DaybookIntelligence",
             "DaybookLink",
             "DaybookCaptions",
-            "DaybookDesign"
-        ]),
-        .testTarget(name: "DaybookLinkTests", dependencies: ["DaybookLink"]),
-        .testTarget(name: "DaybookCaptionsTests", dependencies: ["DaybookCaptions"])
+            "DaybookDesign",
+            "DaybookTestSupport"
+        ], resources: [.copy("Fixtures")]), // Fixtures/Shipped: files written by shipped versions.
+        .testTarget(name: "DaybookLinkTests", dependencies: ["DaybookLink", "DaybookTestSupport"]),
+        .testTarget(name: "DaybookCaptionsTests", dependencies: ["DaybookCaptions", "DaybookTestSupport"])
     ],
     swiftLanguageModes: [.v5]
 )

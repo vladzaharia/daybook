@@ -1,6 +1,7 @@
 import DaybookCore
 @testable import DaybookIntelligence
 @testable import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -10,11 +11,9 @@ import XCTest
 @MainActor
 final class ModelPreferenceMigrationTests: XCTestCase {
     private var roots: [URL] = []
-    private var suites: [String] = []
 
     override func tearDown() async throws {
         for root in roots { try? FileManager.default.removeItem(at: root) }
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
     }
 
     private func library() throws -> URL {
@@ -25,9 +24,7 @@ final class ModelPreferenceMigrationTests: XCTestCase {
     }
 
     private func defaults() -> UserDefaults {
-        let suite = "local.daybook.tests.models.\(UUID().uuidString)"
-        suites.append(suite)
-        return UserDefaults(suiteName: suite)!
+        makeTestDefaults("local.daybook.tests.models")
     }
 
     func testStoredModelIDsMigrateToVariantSelections() throws {

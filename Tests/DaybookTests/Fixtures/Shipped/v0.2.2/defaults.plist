@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>device.0B2C3D4E-0000-4000-8000-0000000000D9.direct.recorder</key>
+	<data>
+	eyJzZXJpYWwiOiJEMzIwMFNJTTAwMDAwMDEiLCJuYW1lIjoic291bmRjb3JlIFdvcmsi
+	LCJpbmZvIjp7InNlcmlhbCI6IkQzMjAwU0lNMDAwMDAwMSIsInRvdGFsQnl0ZXMiOjcy
+	MDAwMDAwMDAsImNhc2VDaGFyZ2luZyI6dHJ1ZSwiZmlybXdhcmUiOiIyLjEuNCIsImNh
+	c2VCYXR0ZXJ5Ijo2MCwibWljcm9waG9uZUNoYXJnaW5nIjpmYWxzZSwibWljcm9waG9u
+	ZUJhdHRlcnkiOjgwLCJjYXNlRmlybXdhcmUiOiIxLjAuOSIsImlzUmVjb3JkaW5nIjpm
+	YWxzZSwiZnJlZUJ5dGVzIjo2MTAwMDAwMDAwfSwibGFzdENvbm5lY3RlZEF0Ijo4MTQy
+	OTM0MDAsInJlY29yZGluZ3MiOlt7ImlkIjoxNzkyNjAwMDAwLCJlbmRUaW1lc3RhbXAi
+	OjE3OTI2MDAwNTgsInNpemUiOjQ2ODAwMH0seyJpZCI6MTc5MjYwMzYwMCwic2l6ZSI6
+	MTYwMDAwfV0sInJlY29yZGluZ3NVcGRhdGVkQXQiOjgxNDI5MzQwMCwic3RhdHVzVXBk
+	YXRlZEF0Ijo4MTQyOTM0MDAsImRldmljZUlEIjoiMEIyQzNENEUtMDAwMC00MDAwLTgw
+	MDAtMDAwMDAwMDAwMERBIn0=
+	</data>
+	<key>device.0B2C3D4E-0000-4000-8000-0000000000DB.files.completed</key>
+	<array>
+		<string>file:2026-10-20 Planning.m4a|482113</string>
+		<string>file:notes.m4a|20480</string>
+	</array>
+	<key>device.0B2C3D4E-0000-4000-8000-0000000000DB.files.lastImport</key>
+	<date>2026-10-20T12:42:30Z</date>
+	<key>devices.configured</key>
+	<data>
+	W3siYWxzb1JlY29yZHNXaXRoTWFjIjpmYWxzZSwiaWQiOiIwQjJDM0Q0RS0wMDAwLTQw
+	MDAtODAwMC0wMDAwMDAwMDAwRDkiLCJhZGRlZEF0Ijo4MTQwOTI4MDAsImRpc2FibGVk
+	TWV0aG9kcyI6WyJmaWxlcyJdLCJpbXBvcnRzQXV0b21hdGljYWxseSI6ZmFsc2UsImtp
+	bmRJRCI6InNvdW5kY29yZS53b3JrIiwibmFtZSI6IkRlc2sgcmVjb3JkZXIiLCJhdXRv
+	bWF0aWNJbXBvcnRzU2luY2UiOjgxNDA5MjgwMH0seyJpZCI6IjBCMkMzRDRFLTAwMDAt
+	NDAwMC04MDAwLTAwMDAwMDAwMDBEQiIsImFkZGVkQXQiOjgxNDEwMjgwMCwiZGlzYWJs
+	ZWRNZXRob2RzIjpbXSwiaW1wb3J0c0F1dG9tYXRpY2FsbHkiOnRydWUsImtpbmRJRCI6
+	InJlY29yZGVyLmZpbGVzIiwibmFtZSI6Ik90aGVyIFJlY29yZGVyIiwiYXV0b21hdGlj
+	SW1wb3J0c1NpbmNlIjo4MTQxMTI4MDB9LHsiaWQiOiI1RDZFN0Y4MC0wMDAwLTQwMDAt
+	ODAwMC0wMDAwMDAwMDAwMEIiLCJhZGRlZEF0Ijo4MTQxMjI4MDAsImRpc2FibGVkTWV0
+	aG9kcyI6W10sImltcG9ydHNBdXRvbWF0aWNhbGx5Ijp0cnVlLCJraW5kSUQiOiJkYXli
+	b29rLmlwaG9uZSIsIm5hbWUiOiJBbGV44oCZcyBpUGhvbmUiLCJhdXRvbWF0aWNJbXBv
+	cnRzU2luY2UiOjgxNDEyMjgwMH1d
+	</data>
+	<key>includeComputerAudio</key>
+	<false/>
+	<key>modelSelections</key>
+	<data>
+	eyJrZXlzIjp7InRyYW5zY3JpcHRpb24iOiJwYXJha2VldFwvdWx0cmEiLCJzcGVha2Vy
+	RW1iZWRkaW5nIjoiY29tbXVuaXR5LTFcL29mZmxpbmUiLCJkaWFyaXphdGlvbiI6ImNv
+	bW11bml0eS0xXC9vZmZsaW5lIiwic3VtbWFyaXphdGlvbiI6ImdlbW1hLTRcL2U0Yi00
+	Yml0Iiwic21hbGxUYXNrcyI6ImFwcGxlLWZvdW5kYXRpb24tbW9kZWxzXC9zeXN0ZW0i
+	fX0=
+	</data>
+	<key>modelSelections.smallTasksAdded</key>
+	<true/>
+	<key>processingPreferences</key>
+	<data>
+	eyJzcGVha2VyTWF0Y2hUaHJlc2hvbGQiOjAuODc1LCJvdGhlckxhbmd1YWdlc01vZGVs
+	SUQiOiJ3aGlzcGVyXC9zbWFsbCIsIm1hdGNoU3BlYWtlcnNBY3Jvc3NTb3VyY2VzIjpm
+	YWxzZSwic3BlYWtlck1vZGVsSUQiOiJjb21tdW5pdHktMVwvb2ZmbGluZSIsInNwZWFr
+	ZXJPcHRpb25zIjp7InF1YWxpdHkiOiJhY2N1cmF0ZSIsImV4cGVjdGVkU3BlYWtlckNv
+	dW50IjozfSwic3BlYWtlck1hdGNoTWFyZ2luIjowLjA2MjUsInRyYW5zY3JpcHRpb25M
+	YW5ndWFnZSI6ImRlIn0=
+	</data>
+	<key>readingScale</key>
+	<real>1.25</real>
+</dict>
+</plist>

@@ -14,12 +14,54 @@ final class DeviceOwnershipTests: XCTestCase {
         #endif
     }
 
+    /// The simulated recorder these tests reach for, and every transport made for it.
+    @MainActor
+    final class Recorder {
+        let device: SimulatedSoundcore
+        var transports: [SimulatedSoundcoreTransport] = []
+        /// Connections and searches tried so far, on every transport.
+        var attempts: Int { transports.reduce(0) { $0 + $1.connectAttempts + $1.scans } }
+
+        init() {
+            // Two one-second recordings, sent as fast as the link takes them: the `--device-simulator`
+            // demo's six- and nine-second recordings paced at 60 ms made one import take about 6 s.
+            let now = UInt32(Date().timeIntervalSince1970)
+            device = SimulatedSoundcore(recordings: [
+                .init(id: now - 3 * 3_600, frames: SimulatedSoundcore.frames(seconds: 1, frequency: 330)),
+                .init(id: now - 26 * 3_600, frames: SimulatedSoundcore.frames(seconds: 1, frequency: 440))
+            ])
+        }
+    }
+
+    /// The app's devices against `recorder`, as `--device-simulator` wires them (a new transport for
+    /// each connection, never Bluetooth), with preferences in a throwaway suite. PhoneDevices builds
+    /// its own `DeviceEnvironment`, so `SoundcoreTiming` and `RecorderHandoff.Timing` stay at their
+    /// production values; nothing here waits on them.
+    private func makeDevices(_ library: PhoneLibrary, _ recorder: Recorder, settings: PhoneSettings) throws -> PhoneDevices {
+        let suite = "DeviceOwnershipTests-devices-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        DeviceHub.demo = DeviceHubDemo(transport: { [recorder] in
+            let transport = SimulatedSoundcoreTransport(device: recorder.device)
+            recorder.transports.append(transport)
+            return transport
+        })
+        let devices = PhoneDevices(library: library, settings: settings, mode: .inert, defaults: defaults)
+        addTeardownBlock { devices.shutDown() }
+        return devices
+    }
+
+    /// Runs everything already queued on the main queue.
+    private func drainMainQueue() async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in DispatchQueue.main.async { done.resume() } }
+    }
+
     func testSetupClaimsTheRecorderAndAMacTakingItOverIsHonoured() async throws {
         let container = try temporaryDirectory("container")
         let phone = try await makePhone(container)
         let settings = PhoneSettings(defaults: UserDefaults(suiteName: "DeviceOwnershipTests-\(UUID().uuidString)")!)
-        let devices = PhoneDevices(library: phone.library, settings: settings, mode: .simulator)
-        addTeardownBlock { devices.shutDown() }
+        let recorder = Recorder()
+        let devices = try makeDevices(phone.library, recorder, settings: settings)
         var imported: [PhoneLibrary.Filed] = []
         devices.onImported = { imported.append($0) }
         devices.start()
@@ -44,7 +86,7 @@ final class DeviceOwnershipTests: XCTestCase {
         try await waitUntil("its recordings are listed") { !session.newRecordings.isEmpty }
         // As automatic import does, so the test host never asks for notification permission.
         session.importRecordings([session.newRecordings[0]], automatic: true)
-        try await waitUntil("imported", timeout: 20) { !imported.isEmpty }
+        try await waitUntil("imported") { !imported.isEmpty }
         let filed = try XCTUnwrap(imported.first)
         XCTAssertEqual(filed.meeting.tracks.first?.deviceKind, kind.id)
         XCTAssertEqual(filed.meeting.tracks.first?.deviceSerial, serial)
@@ -62,9 +104,12 @@ final class DeviceOwnershipTests: XCTestCase {
         await phone.sync.synchronize(.remote)
         try await waitUntil("the phone lets go") { session.managedElsewhere?.ownerName == "Studio Mac" && !session.isLinked }
         XCTAssertEqual(PhoneDeviceCopy.line(for: session), "Managed by Studio Mac")
+        let attempts = recorder.attempts
         session.connect()
-        try await Task.sleep(for: .milliseconds(300))
+        await drainMainQueue()
         XCTAssertFalse(session.isLinked, "this iPhone doesn't connect to a recorder the Mac manages")
+        XCTAssertEqual(recorder.attempts, attempts, "it doesn't even search for it")
+        XCTAssertFalse(recorder.device.isOccupied)
 
         // Manage on This iPhone takes it back; with automatic import on, it reconnects by itself.
         devices.claim(session)
@@ -84,8 +129,7 @@ final class DeviceOwnershipTests: XCTestCase {
         let container = try temporaryDirectory("container")
         let phone = try await makePhone(container)
         let settings = PhoneSettings(defaults: UserDefaults(suiteName: "DeviceOwnershipTests-\(UUID().uuidString)")!)
-        let devices = PhoneDevices(library: phone.library, settings: settings, mode: .simulator)
-        addTeardownBlock { devices.shutDown() }
+        let devices = try makeDevices(phone.library, Recorder(), settings: settings)
         let link = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil,
                                                            syncDeviceID: phone.library.controller.thisDevice.id),
                              keyStore: MemoryLinkKeyStore(), configuration: .loopback())

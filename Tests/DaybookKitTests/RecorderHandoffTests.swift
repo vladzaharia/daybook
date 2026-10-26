@@ -3,6 +3,7 @@ import CryptoKit
 import DaybookCore
 import DaybookDevices
 import DaybookLink
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -15,7 +16,6 @@ import XCTest
 final class RecorderHandoffTests: XCTestCase {
     private var root: URL!
     private var cloud: URL!
-    private var suites: [String] = []
     private var sides: [Side] = []
     private var links: [LinkPair] = []
     private let base = UInt32(Date().timeIntervalSince1970) - 50_000
@@ -31,13 +31,14 @@ final class RecorderHandoffTests: XCTestCase {
         for side in sides { side.hub.shutDown(); side.library.sync?.disconnect() }
         links = []
         sides = []
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         try? FileManager.default.removeItem(at: root)
     }
 
     // MARK: Tests
 
-    func testOverTheLinkTheRecorderMovesInSeconds() async throws {
+    /// No sync pass between asking and connecting: the link alone moves it. (How fast is the link's
+    /// business, not this test's; a starved machine is slow and still correct.)
+    func testOverTheLinkTheRecorderMovesWithoutWaitingForSync() async throws {
         let recorder = makeRecorder(count: 1)
         let mac = try await makeSide("Mac", .mac, recorder)
         let phone = try await makeSide("Phone", .phone, recorder)
@@ -46,12 +47,9 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(phone.session.managedElsewhere?.ownerID, mac.id, "the phone knows the Mac manages it")
         try await link(mac, phone)
 
-        let started = Date()
         phone.handoff.useHere(phone.session)
         XCTAssertEqual(phone.handoff.state(of: phone.session), .asking(owner: "Studio Mac"))
-        try await waitUntil("the phone connects", timeout: 10) { phone.session.isLinked }
-        let elapsed = Date().timeIntervalSince(started)
-        XCTAssertLessThan(elapsed, 5, "a handoff over the link takes seconds")
+        try await waitUntil("the phone connects") { phone.session.isLinked }
 
         XCTAssertFalse(mac.session.isLinked, "the Mac let go")
         XCTAssertEqual(mac.library.recorderOwner(kind: kind, serial: recorder.serial)?.ownerID, phone.id, "the Mac recorded the new owner")
@@ -122,9 +120,12 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(RecorderHandoff.Words.headline(phone.handoff.state(of: phone.session), recorder: "Soundcore Work", here: "this iPhone"),
                        "Waiting for Studio Mac to let go…")
         XCTAssertEqual(phone.library.recorderHandoff(kind: kind, serial: recorder.serial)?.phase, .requested)
-        XCTAssertFalse(phone.handoff.isOverdue(phone.handoff.state(of: phone.session)))
-        try await Task.sleep(for: .milliseconds(400))
-        XCTAssertTrue(phone.handoff.isOverdue(phone.handoff.state(of: phone.session)), "after its patience runs out it says it hasn't heard")
+        // Patience is measured from the request, at whatever moment the page looks.
+        let waiting = phone.handoff.state(of: phone.session)
+        guard case .waitingForSync(_, let since) = waiting else { return XCTFail("\(waiting)") }
+        XCTAssertFalse(phone.handoff.isOverdue(waiting, now: since.addingTimeInterval(Self.handoffTiming.patience - 0.05)))
+        XCTAssertTrue(phone.handoff.isOverdue(waiting, now: since.addingTimeInterval(Self.handoffTiming.patience + 0.05)),
+                      "after its patience runs out it says it hasn't heard")
 
         // Take Over Anyway while the Mac is still connected: the recorder doesn't answer here yet.
         phone.handoff.takeOverAnyway(phone.session)
@@ -165,7 +166,9 @@ final class RecorderHandoffTests: XCTestCase {
     }
 
     func testATransferFinishesOnTheOldOwnerAndWaitingImportsContinueOnTheNewOne() async throws {
-        let recorder = makeRecorder(count: 3, seconds: 6)
+        // Only the Mac's transfer needs to take a while (it must still be running when the phone
+        // asks); the two that continue on the phone are short and unpaced.
+        let recorder = makeRecorder(count: 3, seconds: 1, oldestSeconds: 6)
         recorder.pace = .milliseconds(12)
         let mac = try await makeSide("Mac", .mac, recorder)
         let phone = try await makeSide("Phone", .phone, recorder)
@@ -180,14 +183,22 @@ final class RecorderHandoffTests: XCTestCase {
         try await waitUntil("the first transfer is under way") { mac.session.queue.current != nil && (mac.session.phase?.fraction ?? 0) > 0 }
         let first = try XCTUnwrap(mac.session.queue.current?.id)
         XCTAssertEqual(first, ids[0])
+        // A transfer keeps the pace it started with.
+        recorder.pace = nil
 
         phone.handoff.useHere(phone.session)
         try await waitUntil("the Mac says it's finishing an import") {
             if case .ownerFinishing(_, .importing?) = phone.handoff.state(of: phone.session) { return true }; return false
         }
         XCTAssertEqual(mac.session.isHandingOff, true)
-        try await waitUntil("the phone connects", timeout: 20) { phone.session.isLinked }
-        try await waitUntil("the phone imports what was waiting", timeout: 20) { phone.imported.count == 2 }
+        try await waitUntil("the phone connects", timeout: 20,
+                            state: { "\(phone.handoff.state(of: phone.session)); Mac imported \(mac.imported.map(\.recordingID))" }) {
+            phone.session.isLinked
+        }
+        try await waitUntil("the phone imports what was waiting", timeout: 20,
+                            state: { "imported \(phone.imported.map(\.recordingID)), queue \(phone.session.queue)" }) {
+            phone.imported.count == 2
+        }
 
         XCTAssertEqual(mac.imported.map(\.recordingID), [first], "the transfer in progress finished on the Mac, and nothing else started there")
         XCTAssertEqual(Set(phone.imported.map(\.recordingID)), Set(ids.dropFirst()), "the rest continued on the phone")
@@ -362,9 +373,13 @@ final class RecorderHandoffTests: XCTestCase {
 
     private let kind = SoundcoreWorkIntegration.id
 
-    private func makeRecorder(count: Int, seconds: Double = 1) -> SimulatedSoundcore {
+    /// `count` recordings an hour apart, the newest first; the oldest, imported first, can be longer.
+    private func makeRecorder(count: Int, seconds: Double = 1, oldestSeconds: Double? = nil) -> SimulatedSoundcore {
         let frames = SimulatedSoundcore.frames(seconds: seconds)
-        return SimulatedSoundcore(recordings: (0..<count).map { .init(id: base - UInt32($0) * 3_600, frames: frames) })
+        let oldest = oldestSeconds.map { SimulatedSoundcore.frames(seconds: $0) } ?? frames
+        return SimulatedSoundcore(recordings: (0..<count).map {
+            .init(id: base - UInt32($0) * 3_600, frames: $0 == count - 1 ? oldest : frames)
+        })
     }
 
     /// One device: its library (syncing through the shared folder), its hub with the recorder set
@@ -391,9 +406,7 @@ final class RecorderHandoffTests: XCTestCase {
 
     private func makeSide(_ name: String, _ deviceClass: SyncDeviceClass, _ recorder: SimulatedSoundcore,
                           automatic: Bool = false, setUp: Bool = true, knownOwner: Side? = nil) async throws -> Side {
-        let suite = "daybook.handoff.\(name).\(UUID().uuidString)"
-        suites.append(suite)
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = makeTestDefaults("daybook.handoff.\(name)")
         let local = root.appendingPathComponent(name, isDirectory: true)
         let staging = root.appendingPathComponent("\(name)-staging", isDirectory: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -483,13 +496,16 @@ final class RecorderHandoffTests: XCTestCase {
         try await waitUntil("the Mac lists the recordings") { mac.session.direct?.isRefreshing == false && mac.session.direct?.inventoryUpdatedAt != nil }
     }
 
-    /// Sync passes in order, each one saving first.
-    private func syncAll(_ order: Side...) async throws {
+    /// Sync passes in order, each one saving first, and each acknowledged.
+    private func syncAll(_ order: Side..., file: StaticString = #filePath, line: UInt = #line) async throws {
         for side in order {
             await side.library.flush()
-            _ = await side.library.synchronize()
-            // Let the coordinator see what arrived.
-            try await Task.sleep(for: .milliseconds(30))
+            let applied = await side.library.synchronize()
+            XCTAssertEqual(applied?.acknowledged, true, "\(side.name)'s sync pass ran and was acknowledged", file: file, line: line)
+            // The coordinator looks at what arrived in a main-actor task it starts when the library's
+            // settings change. The main actor runs its tasks in order, so once a task started now has
+            // run, that look has happened (twice over, for a look that starts another).
+            for _ in 0..<2 { await Task { @MainActor in }.value }
         }
     }
 
@@ -579,13 +595,5 @@ final class RecorderHandoffTests: XCTestCase {
         try await client.connect(to: macID, via: endpoint)
         try await waitUntil("linked") { !macEnd.peers.isEmpty && !phoneEnd.peers.isEmpty }
         return pair
-    }
-
-    private func waitUntil(_ what: String, timeout: TimeInterval = 8, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { XCTFail("Timed out waiting for \(what)"); throw CancellationError() }
-            try await Task.sleep(for: .milliseconds(10))
-        }
     }
 }

@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -8,7 +9,6 @@ import XCTest
 @MainActor
 final class RecorderOwnershipTests: XCTestCase {
     private var root: URL!
-    private var suites: [String] = []
     private let serial = "D3200SIM0000001"
 
     override func setUp() async throws {
@@ -17,20 +17,24 @@ final class RecorderOwnershipTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         try? FileManager.default.removeItem(at: root)
     }
 
     /// A library with its own sync identity, connected to the shared folder when given.
     private func library(_ name: String, cloud: URL? = nil) async throws -> LibraryController {
-        let suite = "daybook.ownership.\(name).\(UUID().uuidString)"
-        suites.append(suite)
         let local = root.appendingPathComponent(name, isDirectory: true)
-        let sync = LibrarySyncController(localRoot: local, defaults: UserDefaults(suiteName: suite)!)
+        let sync = LibrarySyncController(localRoot: local, defaults: makeTestDefaults("daybook.ownership.\(name)"))
         if let cloud { try sync.connect(to: cloud, monitorChanges: false) }
         let library = LibraryController(rootURL: local, sync: sync)
         try await library.load()
         return library
+    }
+
+    /// One sync pass that must run and be acknowledged, so a check after it isn't vacuous.
+    private func pass(_ library: LibraryController, file: StaticString = #filePath, line: UInt = #line) async {
+        await library.flush()
+        let applied = await library.synchronize()
+        XCTAssertEqual(applied?.acknowledged, true, "the sync pass ran and was acknowledged", file: file, line: line)
     }
 
     func testClaimAndReleaseSaveAsLibrarySettings() async throws {
@@ -67,25 +71,25 @@ final class RecorderOwnershipTests: XCTestCase {
 
         let t1 = Date(timeIntervalSince1970: 1_800_000_000)
         phone.claimRecorder(kind: "soundcore.work", serial: serial, deviceClass: .phone, at: t1)
-        await phone.flush()
-        _ = await phone.synchronize()
-        _ = await mac.synchronize()
+        await pass(phone)
+        await pass(mac)
         let seenOnMac = try XCTUnwrap(mac.recorderOwner(kind: "soundcore.work", serial: serial))
         XCTAssertEqual(seenOnMac.ownerID, phone.thisDevice.id, "the Mac learns that the phone manages it")
 
         // The Mac takes it back ("Use on This Mac"), later: that claim wins on both.
         mac.claimRecorder(kind: "soundcore.work", serial: serial, deviceClass: .mac, at: t1.addingTimeInterval(60))
-        await mac.flush()
-        _ = await mac.synchronize()
-        _ = await phone.synchronize()
+        await pass(mac)
+        await pass(phone)
         XCTAssertEqual(phone.recorderOwner(kind: "soundcore.work", serial: serial)?.ownerID, mac.thisDevice.id)
         XCTAssertEqual(phone.recorderOwner(kind: "soundcore.work", serial: serial)?.ownerClass, .mac)
 
-        // Removing the recorder on the phone doesn't undo the Mac's claim.
+        // Removing the recorder on the phone doesn't undo the Mac's claim, on either device.
         phone.releaseRecorder(kind: "soundcore.work", serial: serial, onlyIfOwnedBy: phone.thisDevice.id)
-        await phone.flush()
-        _ = await phone.synchronize()
-        _ = await mac.synchronize()
+        XCTAssertEqual(phone.recorderOwner(kind: "soundcore.work", serial: serial)?.ownerID, mac.thisDevice.id)
+        await pass(phone)
+        await pass(mac)
         XCTAssertEqual(mac.recorderOwner(kind: "soundcore.work", serial: serial)?.ownerID, mac.thisDevice.id)
+        await pass(phone)
+        XCTAssertEqual(phone.recorderOwner(kind: "soundcore.work", serial: serial)?.ownerID, mac.thisDevice.id)
     }
 }

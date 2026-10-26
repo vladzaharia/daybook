@@ -1,0 +1,332 @@
+{
+  "alignmentReports" : [
+    {
+      "explanation" : "Reference recording.",
+      "matchedAnchors" : 0,
+      "method" : "reference",
+      "offset" : 0,
+      "rate" : 1,
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A1"
+    },
+    {
+      "explanation" : "Captured together.",
+      "matchedAnchors" : 0,
+      "method" : "provided",
+      "offset" : 0.125,
+      "rate" : 1,
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A2"
+    },
+    {
+      "explanation" : "Matched 4 phrases.",
+      "matchedAnchors" : 4,
+      "method" : "anchors",
+      "offset" : 2.875,
+      "rate" : 1.0001220703125,
+      "residual" : 0.0625,
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A3"
+    }
+  ],
+  "date" : 814192800,
+  "folderID" : "0A1B2C3D-0000-4000-8000-0000000000F1",
+  "highlights" : [
+    {
+      "id" : "0A1B2C3D-0000-4000-8000-0000000000B1",
+      "text" : "Decision",
+      "time" : 4.5
+    },
+    {
+      "duration" : 5,
+      "id" : "0A1B2C3D-0000-4000-8000-0000000000B2",
+      "text" : "",
+      "time" : 1.5,
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A3"
+    }
+  ],
+  "id" : "0A1B2C3D-0000-4000-8000-000000000001",
+  "kind" : "general",
+  "notes" : "Agenda\nShip the prototype",
+  "revisions" : [
+    {
+      "date" : 814193050,
+      "field" : "notes",
+      "id" : "0A1B2C3D-0000-4000-8000-00000000000E",
+      "newValue" : "Agenda\nShip the prototype",
+      "oldValue" : "Agenda"
+    }
+  ],
+  "schemaVersion" : 1,
+  "speakerMatches" : [
+    {
+      "candidateSpeakerID" : "S1",
+      "configuration" : {
+        "minimumMargin" : 0.06,
+        "minimumSimilarity" : 0.82
+      },
+      "createdAt" : 814192930,
+      "reason" : "Below the similarity threshold.",
+      "runnerUpSimilarity" : 0.25,
+      "similarity" : 0.5,
+      "sourceSpeakerID" : "S2",
+      "status" : "belowThreshold"
+    }
+  ],
+  "speakers" : [
+    {
+      "analysisSettings" : {
+        "createdAt" : 814192920,
+        "modelID" : "speaker-community-1",
+        "parameters" : {
+
+        }
+      },
+      "embedding" : [
+        0.125,
+        -0.5,
+        0.25
+      ],
+      "embeddingModelID" : "fluid-community1-embedding-df2625ac79a7ac6b",
+      "id" : "S1",
+      "name" : "Alex",
+      "sourceTrackID" : "0A1B2C3D-0000-4000-8000-0000000000A1"
+    },
+    {
+      "id" : "S2",
+      "name" : "Speaker 2",
+      "sourceTrackID" : "0A1B2C3D-0000-4000-8000-0000000000A2"
+    }
+  ],
+  "status" : "ready",
+  "summary" : {
+    "actionItems" : [
+      {
+        "completed" : true,
+        "id" : "0A1B2C3D-0000-4000-8000-00000000000D",
+        "owner" : "Alex",
+        "text" : "Ship the prototype"
+      }
+    ],
+    "createdAt" : 814193000,
+    "kind" : "general",
+    "modelID" : "qwen-7b",
+    "overview" : "The team agreed to ship the prototype on Friday.",
+    "processingSettings" : {
+      "createdAt" : 814193000,
+      "modelID" : "qwen-7b",
+      "parameters" : {
+        "template" : "general"
+      }
+    },
+    "sections" : [
+      {
+        "body" : "- Ship the prototype on Friday.",
+        "heading" : "Decisions",
+        "id" : "0A1B2C3D-0000-4000-8000-00000000000C"
+      }
+    ],
+    "title" : "Prototype planning"
+  },
+  "tags" : [
+    "planning",
+    "synthetic"
+  ],
+  "templateID" : "general",
+  "timedNotes" : [
+    {
+      "id" : "0A1B2C3D-0000-4000-8000-0000000000C1",
+      "text" : "Agenda"
+    },
+    {
+      "id" : "0A1B2C3D-0000-4000-8000-0000000000C2",
+      "text" : "Ship the prototype",
+      "time" : 12.5
+    }
+  ],
+  "title" : "Prototype planning",
+  "tracks" : [
+    {
+      "createdAt" : 814192800,
+      "duration" : 61.25,
+      "fileName" : "microphone.caf",
+      "id" : "0A1B2C3D-0000-4000-8000-0000000000A1",
+      "offset" : 0,
+      "relativePath" : "Originals\/microphone.caf",
+      "sha256" : "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "source" : "microphone"
+    },
+    {
+      "createdAt" : 814192800,
+      "duration" : 60.5,
+      "fileName" : "systemAudio.caf",
+      "id" : "0A1B2C3D-0000-4000-8000-0000000000A2",
+      "offset" : 0.125,
+      "relativePath" : "Originals\/systemAudio.caf",
+      "sha256" : "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "source" : "systemAudio"
+    },
+    {
+      "createdAt" : 814192950,
+      "duration" : 58.5,
+      "fileName" : "2026-10-20 Planning.m4a",
+      "id" : "0A1B2C3D-0000-4000-8000-0000000000A3",
+      "relativePath" : "Originals\/2026-10-20 Planning.m4a",
+      "sha256" : "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "source" : "soundcore"
+    }
+  ],
+  "transcripts" : [
+    {
+      "createdAt" : 814192900,
+      "id" : "0A1B2C3D-0000-4000-8000-0000000007A1",
+      "knownOffset" : 0,
+      "language" : "en",
+      "modelID" : "whisper-base",
+      "processingSettings" : {
+        "createdAt" : 814192900,
+        "modelID" : "whisper-base",
+        "parameters" : {
+          "language" : "en",
+          "temperature" : "0"
+        }
+      },
+      "segments" : [
+        {
+          "confidence" : 0.9375,
+          "end" : 2.25,
+          "id" : "0A1B2C3D-0000-4000-8000-0000000005A1",
+          "provenance" : [
+
+          ],
+          "speakerID" : "S1",
+          "start" : 0.5,
+          "text" : "Let's review the agenda.",
+          "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A1"
+        }
+      ],
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A1",
+      "words" : [
+        {
+          "confidence" : 0.91,
+          "end" : 0.75,
+          "start" : 0.5,
+          "text" : "Let's"
+        },
+        {
+          "confidence" : 0.875,
+          "end" : 1.25,
+          "start" : 0.75,
+          "text" : "review"
+        },
+        {
+          "end" : 1.5,
+          "start" : 1.25,
+          "text" : "the"
+        },
+        {
+          "confidence" : 0.96875,
+          "end" : 2.25,
+          "start" : 1.5,
+          "text" : "agenda."
+        }
+      ]
+    },
+    {
+      "createdAt" : 814192900,
+      "id" : "0A1B2C3D-0000-4000-8000-0000000007A2",
+      "knownOffset" : 0.125,
+      "language" : "en",
+      "modelID" : "whisper-base",
+      "processingSettings" : {
+        "createdAt" : 814192900,
+        "modelID" : "whisper-base",
+        "parameters" : {
+          "language" : "en",
+          "temperature" : "0"
+        }
+      },
+      "segments" : [
+        {
+          "confidence" : 0.875,
+          "end" : 6.5,
+          "id" : "0A1B2C3D-0000-4000-8000-0000000005A2",
+          "provenance" : [
+
+          ],
+          "speakerID" : "S2",
+          "start" : 3,
+          "text" : "We ship the prototype on Friday.",
+          "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A2"
+        }
+      ],
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A2"
+    },
+    {
+      "createdAt" : 814192960,
+      "id" : "0A1B2C3D-0000-4000-8000-0000000007A3",
+      "language" : "en",
+      "modelID" : "whisper-base",
+      "segments" : [
+        {
+          "confidence" : 0.8125,
+          "end" : 3.75,
+          "id" : "0A1B2C3D-0000-4000-8000-0000000005A3",
+          "provenance" : [
+
+          ],
+          "start" : 0.25,
+          "text" : "We ship the prototype on Friday.",
+          "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A3"
+        }
+      ],
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A3"
+    }
+  ],
+  "unifiedTranscript" : [
+    {
+      "confidence" : 0.9375,
+      "end" : 2.25,
+      "id" : "0A1B2C3D-0000-4000-8000-0000000009A1",
+      "provenance" : [
+        {
+          "confidence" : 0.9375,
+          "end" : 2.25,
+          "segmentID" : "0A1B2C3D-0000-4000-8000-0000000005A1",
+          "start" : 0.5,
+          "text" : "Let's review the agenda.",
+          "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A1"
+        }
+      ],
+      "speakerID" : "S1",
+      "start" : 0.5,
+      "text" : "Let's review the agenda.",
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A1"
+    },
+    {
+      "confidence" : 0.875,
+      "end" : 6.625,
+      "id" : "0A1B2C3D-0000-4000-8000-0000000009A2",
+      "provenance" : [
+        {
+          "confidence" : 0.875,
+          "end" : 6.5,
+          "segmentID" : "0A1B2C3D-0000-4000-8000-0000000005A2",
+          "start" : 3,
+          "text" : "We ship the prototype on Friday.",
+          "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A2"
+        },
+        {
+          "confidence" : 0.8125,
+          "end" : 3.75,
+          "segmentID" : "0A1B2C3D-0000-4000-8000-0000000005A3",
+          "start" : 0.25,
+          "text" : "We ship the prototype on Friday.",
+          "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A3"
+        }
+      ],
+      "speakerID" : "S2",
+      "start" : 3.125,
+      "text" : "We ship the prototype on Friday.",
+      "trackID" : "0A1B2C3D-0000-4000-8000-0000000000A2"
+    }
+  ],
+  "updatedAt" : 814193100
+}

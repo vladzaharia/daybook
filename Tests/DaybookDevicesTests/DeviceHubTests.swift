@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookDevices
@@ -13,14 +14,13 @@ final class DeviceHubTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        suite = "local.daybook.tests.devices.\(UUID().uuidString)"
+        suite = makeTestSuite("local.daybook.tests.devices")
         defaults = UserDefaults(suiteName: suite)
         root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookDevices-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
     override func tearDown() async throws {
-        defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -28,14 +28,6 @@ final class DeviceHubTests: XCTestCase {
         var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: root.appendingPathComponent("Staging"))
         environment.soundcoreTransport = { XCTFail("No Bluetooth in hub tests"); return InertSoundcoreTransport() }
         return environment
-    }
-
-    private func waitUntil(_ what: String, timeout: TimeInterval = 15, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { XCTFail("Timed out waiting for \(what)"); throw CancellationError() }
-            try await Task.sleep(for: .milliseconds(20))
-        }
     }
 
     func testStartingRemovesAudioAKilledImportLeftStagedButNothingElse() throws {
@@ -143,8 +135,8 @@ final class DeviceHubTests: XCTestCase {
         hub.shutDown()
 
         // Another recorder's folder becomes an Other Recorder.
+        removeTestSuiteAtTeardown(suite + ".other")
         let other = UserDefaults(suiteName: suite + ".other")!
-        defer { other.removePersistentDomain(forName: suite + ".other") }
         other.set(bookmark, forKey: "importFolderBookmark")
         other.set("imported", forKey: "importFolderSource")
         var env = environment()

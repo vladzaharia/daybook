@@ -1,0 +1,99 @@
+{
+  "derivedTracks" : [
+    {
+      "derivedFrom" : "microphone",
+      "frameCount" : 980000,
+      "offsetSeconds" : 0.25,
+      "processing" : "echo-cancelled",
+      "sampleRate" : 16000,
+      "startedAt" : 1792600000250,
+      "url" : "file:\/\/\/Users\/example\/Library\/Application%20Support\/Daybook\/Staging\/0B2C3D4E-0000-4000-8000-000000000001\/microphone.echo-cancelled.caf"
+    }
+  ],
+  "directory" : "file:\/\/\/Users\/example\/Library\/Application%20Support\/Daybook\/Staging\/0B2C3D4E-0000-4000-8000-000000000001\/",
+  "echoRemoval" : {
+    "doubleTalkFraction" : 0.125,
+    "durationSeconds" : 61.25,
+    "echoReturnLossEnhancementDB" : 18.5,
+    "outcome" : "applied",
+    "processingSampleRate" : 16000
+  },
+  "endedAt" : 1792600061500,
+  "id" : "0B2C3D4E-0000-4000-8000-0000000000E1",
+  "outputRoutes" : [
+    {
+      "route" : {
+        "deviceName" : "MacBook Pro Speakers",
+        "kind" : "speakers",
+        "transport" : "built-in"
+      },
+      "time" : 0
+    },
+    {
+      "route" : {
+        "deviceName" : "AirPods Pro",
+        "kind" : "headphones",
+        "transport" : "bluetooth"
+      },
+      "time" : 30.5
+    }
+  ],
+  "startedAt" : 1792600000000,
+  "systemAudio" : {
+    "capturedApps" : [
+      "us.zoom.xos"
+    ],
+    "method" : "process-tap"
+  },
+  "tracks" : [
+    {
+      "channelCount" : 1,
+      "clockAnchors" : [
+        {
+          "frame" : 0,
+          "hostTime" : 91234.75
+        },
+        {
+          "frame" : 48000,
+          "hostTime" : 91235.75
+        },
+        {
+          "frame" : 96000,
+          "hostTime" : 91236.875,
+          "resync" : true
+        }
+      ],
+      "firstSampleHostTimeSeconds" : 91234.75,
+      "frameCount" : 2940000,
+      "method" : "microphone",
+      "notes" : [
+        "Switched to MacBook Pro Microphone at 12.5 s."
+      ],
+      "offsetSeconds" : 0.25,
+      "role" : "microphone",
+      "sampleRate" : 48000,
+      "startedAt" : 1792600000250,
+      "url" : "file:\/\/\/Users\/example\/Library\/Application%20Support\/Daybook\/Staging\/0B2C3D4E-0000-4000-8000-000000000001\/microphone.caf"
+    },
+    {
+      "channelCount" : 2,
+      "clockAnchors" : [
+        {
+          "frame" : 0,
+          "hostTime" : 91235
+        }
+      ],
+      "firstSampleHostTimeSeconds" : 91235,
+      "frameCount" : 2904000,
+      "method" : "process-tap",
+      "offsetSeconds" : 0.5,
+      "role" : "systemAudio",
+      "sampleRate" : 48000,
+      "startedAt" : 1792600000500,
+      "url" : "file:\/\/\/Users\/example\/Library\/Application%20Support\/Daybook\/Staging\/0B2C3D4E-0000-4000-8000-000000000001\/systemAudio.caf"
+    }
+  ],
+  "warnings" : [
+    "No system audio was received for the first second."
+  ]
+}

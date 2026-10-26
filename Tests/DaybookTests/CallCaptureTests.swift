@@ -1,6 +1,7 @@
 import Accelerate
 import AVFoundation
 import DaybookCore
+import DaybookTestSupport
 import XCTest
 @testable import Daybook
 
@@ -554,9 +555,8 @@ final class CaptureFinalizerTests: XCTestCase {
 final class CallIngestTests: XCTestCase {
     func testFinishedCallBecomesOriginalsPlusADerivedTrackThatIsTranscribedInstead() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookIngest-\(UUID().uuidString)")
-        let suite = "local.daybook.tests.\(root.lastPathComponent)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        let defaults = makeTestDefaults()
+        defer { try? FileManager.default.removeItem(at: root) }
         let meetingID = UUID()
         let staging = root.appendingPathComponent("Staging/\(meetingID.uuidString)")
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)

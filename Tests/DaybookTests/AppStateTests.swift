@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCore
 @testable import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -9,7 +10,7 @@ import XCTest
 final class AppStateTests: XCTestCase {
     func testConcurrentImportsPreserveBothSourcesAndCurrentNotes() async throws {
         let (state, root, defaults) = try await makeState()
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: defaultsSuite(root)) }
+        defer { try? FileManager.default.removeItem(at: root) }
         let id = state.newMeeting(title: "Concurrent import")
         let one = try audio(root, name: "one.wav", frequency: 220)
         let two = try audio(root, name: "two.wav", frequency: 440)
@@ -32,7 +33,7 @@ final class AppStateTests: XCTestCase {
 
     func testSameRecordingIsNotImportedAgainAsAnotherMeeting() async throws {
         let (state, root, defaults) = try await makeState()
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: defaultsSuite(root)) }
+        defer { try? FileManager.default.removeItem(at: root) }
         let one = try audio(root, name: "first.wav", frequency: 440)
         try await state.importFiles([one], source: .soundcore, attachTo: nil)
         await state.flush()
@@ -47,7 +48,7 @@ final class AppStateTests: XCTestCase {
 
     func testPendingRecordingCannotBeTrashed() async throws {
         let (state, root, defaults) = try await makeState()
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: defaultsSuite(root)) }
+        defer { try? FileManager.default.removeItem(at: root) }
         let id = state.newMeeting()
         state.isStartingRecording = true
         state.trashMeeting(id)
@@ -61,7 +62,7 @@ final class AppStateTests: XCTestCase {
 
     func testRestartPreservesNotesAndPendingAudioWithoutModels() async throws {
         let (state, root, defaults) = try await makeState()
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: defaultsSuite(root)) }
+        defer { try? FileManager.default.removeItem(at: root) }
         let one = try audio(root, name: "meeting.wav", frequency: 220)
         try await state.importFiles([one], source: .imported, attachTo: nil)
         let id = try XCTUnwrap(state.meetings.first?.id)
@@ -86,7 +87,7 @@ final class AppStateTests: XCTestCase {
 
     func testRecoveryNeverResurrectsTrashedConversation() async throws {
         let (state, root, defaults) = try await makeState()
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: defaultsSuite(root)) }
+        defer { try? FileManager.default.removeItem(at: root) }
         let id = state.newMeeting(title: "Intentionally trashed")
         await state.flush()
         let store = try MeetingStore(rootURL: root)
@@ -108,14 +109,13 @@ final class AppStateTests: XCTestCase {
     private func makeState() async throws -> (AppState, URL, UserDefaults) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookAppTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let defaults = UserDefaults(suiteName: defaultsSuite(root))!
+        let defaults = makeTestDefaults()
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         XCTAssertTrue(state.isReady)
         XCTAssertNil(state.errorMessage)
         return (state, root, defaults)
     }
-    private func defaultsSuite(_ root: URL) -> String { "local.daybook.tests.\(root.lastPathComponent)" }
     private func audio(_ root: URL, name: String, frequency: Double) throws -> URL {
         let url = root.appendingPathComponent(name)
         let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!

@@ -61,16 +61,21 @@ final class PhotoUnderstandingTests: XCTestCase {
 
     // MARK: Apple Vision
 
-    func testAppleVisionReadsTextJudgesSharpnessAndFindsNearCopies() async throws {
+    private func visionReader() async throws -> any DescribingImages {
+        let reader = try await AppleVisionEngine().load(ModelInstallation(receipt: ModelInstallReceipt(
+            model: try XCTUnwrap(ModelCatalog.builtIn.model("apple-vision/system")), revision: ModelRevisionEntry(id: "system", artifacts: []),
+            installedAt: Date()), directory: folder), role: .imageDescription, progress: { _ in })
+        return try XCTUnwrap(reader as? any DescribingImages)
+    }
+
+    /// Everywhere, text recognition or not (it can't run in some virtual machines, CI's among them).
+    func testAppleVisionJudgesSharpnessAndFindsNearCopies() async throws {
         let board = whiteboard(["LAUNCH PLAN", "BUDGET REVIEW"])
         let sharp = try file(board, "board.jpg")
         let copy = try file(board, "board-again.jpg", quality: 0.6)
         let blurred = try file(whiteboard(["LAUNCH PLAN", "BUDGET REVIEW"], blurred: true), "blurred.jpg")
         let other = try file(whiteboard(["HIRING", "TWO DESIGNERS", "ONE RECRUITER"], shift: 200), "other.png", type: .png)
-        let reader = try await AppleVisionEngine().load(ModelInstallation(receipt: ModelInstallReceipt(
-            model: try XCTUnwrap(ModelCatalog.builtIn.model("apple-vision/system")), revision: ModelRevisionEntry(id: "system", artifacts: []),
-            installedAt: Date()), directory: folder), role: .imageDescription, progress: { _ in })
-        let describer = try XCTUnwrap(reader as? any DescribingImages)
+        let describer = try await visionReader()
         let results = try await describer.describe([sharp, copy, blurred, other].map { ImageDescriptionRequest(url: $0) }, progress: { _ in })
         XCTAssertEqual(results.count, 4)
         XCTAssertGreaterThan(results[0].sharpness ?? 0, 0.3)
@@ -79,22 +84,50 @@ final class PhotoUnderstandingTests: XCTestCase {
         XCTAssertNil(results[3].duplicateOf, "a different board isn't")
         XCTAssertFalse(PhotoReading.isInformative(results[1], caption: results[1].caption))
         XCTAssertFalse(PhotoReading.isInformative(results[2], caption: results[2].caption))
-        // Text recognition can't run in some virtual machines (CI's); everything above still holds there.
-        if VisionImageReader.canRecognizeText {
-            let text = results[0].recognizedText?.uppercased() ?? ""
-            XCTAssertTrue(text.contains("LAUNCH PLAN"), text)
-            XCTAssertTrue(text.contains("BUDGET"), text)
-            XCTAssertTrue(results[3].recognizedText?.uppercased().contains("DESIGNERS") == true)
-            XCTAssertTrue(PhotoReading.isInformative(results[0], caption: results[0].caption))
-            XCTAssertNotNil(results[0].caption)
-        } else {
-            XCTAssertNil(results[0].recognizedText)
-        }
+        if !VisionImageReader.canRecognizeText { XCTAssertNil(results[0].recognizedText, "no text where it can't be read") }
         // Compare-only requests read nothing but still count for near copies.
         let compared = try await describer.describe([ImageDescriptionRequest(url: sharp, compareOnly: true), ImageDescriptionRequest(url: copy)],
                                                     progress: { _ in })
         XCTAssertNil(compared[0].recognizedText)
         XCTAssertEqual(compared[1].duplicateOf, 0)
+    }
+
+    /// Reported as skipped, not passed, where text recognition can't run.
+    func testAppleVisionReadsTheTextOnABoard() async throws {
+        try XCTSkipUnless(VisionImageReader.canRecognizeText, "Text recognition can't run on this machine (some virtual machines).")
+        let sharp = try file(whiteboard(["LAUNCH PLAN", "BUDGET REVIEW"]), "board.jpg")
+        let other = try file(whiteboard(["HIRING", "TWO DESIGNERS", "ONE RECRUITER"], shift: 200), "other.png", type: .png)
+        let results = try await visionReader().describe([sharp, other].map { ImageDescriptionRequest(url: $0) }, progress: { _ in })
+        let text = results[0].recognizedText?.uppercased() ?? ""
+        XCTAssertTrue(text.contains("LAUNCH PLAN"), text)
+        XCTAssertTrue(text.contains("BUDGET"), text)
+        XCTAssertTrue(results[1].recognizedText?.uppercased().contains("DESIGNERS") == true)
+        XCTAssertTrue(PhotoReading.isInformative(results[0], caption: results[0].caption))
+        XCTAssertNotNil(results[0].caption)
+    }
+
+    /// What makes a photo informative, from readings as Vision reports them (text included), so it's
+    /// checked everywhere.
+    func testASharpOriginalWithTextOrLabelsIsInformative() {
+        let board = ImageDescription(caption: PhotoReading.visionCaption(labels: [], text: "LAUNCH PLAN\nBUDGET REVIEW"),
+                                     recognizedText: "LAUNCH PLAN\nBUDGET REVIEW", labels: [], sharpness: 0.8)
+        XCTAssertEqual(board.caption, "“LAUNCH PLAN”")
+        XCTAssertTrue(PhotoReading.isInformative(board, caption: board.caption), "text alone is enough")
+        let labelled = ImageDescription(caption: PhotoReading.visionCaption(labels: ["whiteboard"], text: "LAUNCH PLAN"),
+                                        recognizedText: "LAUNCH PLAN", labels: ["whiteboard"], sharpness: 0.8)
+        XCTAssertEqual(labelled.caption, "Whiteboard · “LAUNCH PLAN”")
+        XCTAssertTrue(PhotoReading.isInformative(labelled, caption: labelled.caption))
+        let scene = ImageDescription(caption: "Desk", recognizedText: nil, labels: ["desk"], sharpness: 0.6)
+        XCTAssertTrue(PhotoReading.isInformative(scene, caption: scene.caption), "labels without text are enough")
+
+        var blurred = board
+        blurred.sharpness = PhotoReading.minimumSharpness / 2
+        XCTAssertFalse(PhotoReading.isInformative(blurred, caption: blurred.caption), "readable text doesn't save a blurred photo")
+        var copy = board
+        copy.duplicateOf = 0
+        XCTAssertFalse(PhotoReading.isInformative(copy, caption: copy.caption), "nor a near copy")
+        let blank = ImageDescription(caption: nil, recognizedText: "  \n", labels: [], sharpness: 0.9)
+        XCTAssertFalse(PhotoReading.isInformative(blank, caption: blank.caption), "whitespace isn't text")
     }
 
     func testCaptionsAreTidiedFromWhatModelsWrite() {
@@ -110,8 +143,16 @@ final class PhotoUnderstandingTests: XCTestCase {
         let runtime = LocalIntelligenceRuntime(modelsDirectory: folder.appendingPathComponent("Models"))
         let results = try await runtime.describeImages([ImageDescriptionRequest(url: image)], model: PhotoReading.visionModel)
         XCTAssertEqual(results.count, 1)
-        if VisionImageReader.canRecognizeText { XCTAssertTrue(results[0].recognizedText?.contains("LAUNCH PLAN") == true) }
         XCTAssertEqual(results[0].provenance?.family, "apple-vision")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("Models").path), "nothing installed")
+    }
+
+    func testTheRuntimeReadsAPhotosTextThroughVision() async throws {
+        try XCTSkipUnless(VisionImageReader.canRecognizeText, "Text recognition can't run on this machine (some virtual machines).")
+        let image = try file(whiteboard(["LAUNCH PLAN", "BUDGET REVIEW"]), "runtime.jpg")
+        let runtime = LocalIntelligenceRuntime(modelsDirectory: folder.appendingPathComponent("Models"))
+        let results = try await runtime.describeImages([ImageDescriptionRequest(url: image)], model: PhotoReading.visionModel)
+        XCTAssertTrue(results.first?.recognizedText?.contains("LAUNCH PLAN") == true, "\(results)")
     }
 
     func testTheCatalogDeclaresThePhotoRoleAndItsEngines() throws {

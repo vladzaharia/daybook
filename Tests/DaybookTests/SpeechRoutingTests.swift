@@ -1,6 +1,7 @@
 import DaybookCore
 @testable import DaybookIntelligence
 @testable import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -11,20 +12,16 @@ import XCTest
 @MainActor
 final class SpeechRoutingTests: XCTestCase {
     private var roots: [URL] = []
-    private var suites: [String] = []
 
     override func tearDown() async throws {
         for root in roots { try? FileManager.default.removeItem(at: root) }
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
     }
 
     private func state() throws -> AppState {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSpeechRouting-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         roots.append(root)
-        let suite = "local.daybook.tests.routing.\(UUID().uuidString)"
-        suites.append(suite)
-        return AppState(libraryURL: root, defaults: UserDefaults(suiteName: suite)!)
+        return AppState(libraryURL: root, defaults: makeTestDefaults("local.daybook.tests.routing"))
     }
 
     func testAutomaticAddsAnOptionalLanguageCheck() throws {

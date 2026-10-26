@@ -1,0 +1,11 @@
+{
+  "callApp" : {
+    "bundleID" : "us.zoom.xos",
+    "displayName" : "zoom.us",
+    "isBrowser" : false
+  },
+  "hostTimeSeconds" : 91234.5,
+  "id" : "0B2C3D4E-0000-4000-8000-0000000000E1",
+  "includeSystemAudio" : true,
+  "startedAt" : 1792600000000
+}
