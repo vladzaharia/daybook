@@ -2,6 +2,7 @@ import AVFoundation
 import DaybookCaptions
 import DaybookCore
 import DaybookIntelligence
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookDevices
@@ -17,14 +18,13 @@ final class SoundcoreSimulatorTests: XCTestCase {
     private var transportsMade = 0
 
     override func setUp() async throws {
-        suite = "local.daybook.tests.soundcore-sim.\(UUID().uuidString)"
+        suite = makeTestSuite("local.daybook.tests.soundcore-sim")
         defaults = UserDefaults(suiteName: suite)
         staging = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSim-\(UUID().uuidString)", isDirectory: true)
         transportsMade = 0
     }
 
     override func tearDown() async throws {
-        defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: staging)
     }
 
@@ -116,14 +116,6 @@ final class SoundcoreSimulatorTests: XCTestCase {
         let hooks = LiveCaptionHooks()
         hooks.makeCaptioner = { nil }
         return hooks
-    }
-
-    private func waitUntil(_ what: String, timeout: TimeInterval = 8, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { XCTFail("Timed out waiting for \(what)"); throw CancellationError() }
-            try await Task.sleep(for: .milliseconds(10))
-        }
     }
 
     /// Setup's search, then connect, as the Add Device sheet does.
@@ -383,13 +375,18 @@ final class SoundcoreSimulatorTests: XCTestCase {
         try await connectThroughSetup(rig)
         let target = rig.session.newRecordings[0]
         rig.session.importRecordings([target])
+        // One drop only: a transfer takes the fault it starts with, so disarm it once this one has
+        // started. (Disarmed later, after the checks below, a starved machine could reconnect and
+        // start the retry first, which would drop again.)
+        try await waitUntil("the transfer to start") { device.received.contains { $0 == (0x1a, 0x07) } }
+        device.fault = nil
         try await waitUntil("the drop") { rig.session.queue.isSuspended }
         XCTAssertEqual(rig.session.transferProblem?.id, SoundcoreIssue.disconnectedDuringImport.rawValue)
         XCTAssertEqual(rig.session.queue.waiting.first?.id, target.id, "The recording waits at the front")
         XCTAssertTrue(rig.library.imports.isEmpty, "Nothing partial is saved")
         XCTAssertTrue(stagedFiles.isEmpty)
-        device.fault = nil
-        try await waitUntil("the reconnect and resumed import", timeout: 10) { rig.library.imports.count == 1 }
+        try await waitUntil("the reconnect and resumed import") { rig.library.imports.count == 1 }
+        XCTAssertEqual(device.received.filter { $0 == (0x1a, 0x07) }.count, 2, "one transfer dropped, one resumed")
         XCTAssertEqual(rig.library.imports[0].identity.recordingID, target.id)
         XCTAssertNil(rig.session.transferProblem, "Resolved once it imported")
         XCTAssertFalse(rig.session.queue.isActive)
