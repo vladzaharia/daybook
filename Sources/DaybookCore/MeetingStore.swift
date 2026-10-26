@@ -365,6 +365,9 @@ public actor MeetingStore {
         catch { unsynchronized.formUnion(pending); throw error }
     }
 
+    /// What the next barrier will flush (tests).
+    var unsynchronizedWrites: Set<URL> { unsynchronized }
+
     /// Remembers a file or folder this store wrote, and the folders above it within the library,
     /// for the next barrier: a rename is durable only once its folder is.
     func noteWrite(_ url: URL) {

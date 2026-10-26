@@ -209,12 +209,18 @@ public final class LibraryController: ObservableObject {
         await saves.drain()
     }
 
-    /// A durability barrier for operations that discard recovery data or acknowledge a sync pull.
-    /// Waiting for the save queue alone does not mean its writes succeeded. With `ids`, only those
+    /// A durability barrier for operations that discard recovery data or acknowledge a sync pull:
+    /// every save is written, and everything written since the last barrier is flushed to permanent
+    /// storage (`MeetingStore.synchronizeWrites`). Waiting for the save queue alone does not mean its
+    /// writes succeeded. With `ids`, only those
     /// conversations' failed saves count (an unrelated conversation that can't be saved doesn't stop
     /// an import); without, every failure does.
     public func flushDurably(_ ids: Set<UUID>? = nil) async throws {
         await flush()
+        // What the saves and imports wrote since the last barrier reaches permanent storage.
+        if let store {
+            do { try await store.synchronizeWrites() } catch { throw DaybookError.saveFailed(error.localizedDescription) }
+        }
         let failures = persistenceErrors.filter { key, _ in
             guard let ids else { return true }
             return UUID(uuidString: key).map(ids.contains) ?? false
