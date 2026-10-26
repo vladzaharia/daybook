@@ -34,6 +34,9 @@ struct DaybookPhoneApp: App {
         let model = PhoneAppModel(recorder: PhoneRecorder(environment: environment), library: library,
                                   posture: DevicePosture(arguments: CommandLine.arguments), options: options, settings: settings)
         model.demoAudioSession = environment.session as? ScriptedAudioSession
+        // Nothing records in a new process yet: a widget state or Live Activity saying so is left from
+        // a run that ended, also when iOS relaunches the app in the background (which skips `launch`).
+        if !options.isRunningTests, !LaunchOptions.isTestHost { RecordingActivityController.clearLeftoversAtLaunch() }
         // Intents run in this process (Live Activity buttons, the control, Siri, the Action button);
         // register before any scene exists, because an intent can launch the app in the background.
         RecordingCommands.handler = model

@@ -51,7 +51,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private let activities = RecordingActivityController()
     @ObservationIgnored private var demo: Task<Void, Never>?
     @ObservationIgnored private var launched = false
-    @ObservationIgnored private var published: SharedRecordingState?
+    @ObservationIgnored private let sharedState = SharedStatePublisher()
     @ObservationIgnored private var lastStateSent = Date.distantPast
     /// The audio session synthetic demos use, so a script can interrupt the recording.
     @ObservationIgnored var demoAudioSession: ScriptedAudioSession?
@@ -587,6 +587,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         levels.append(recorder.state == .recording ? level.meterValue : 0)
         updateActivity()
         sendRecordingState(force: false)
+        // The widgets' confirmation that it's still recording, once a minute.
+        if sharedState.isDue() { publish() }
     }
 
     /// The recorder's state to connected Macs: on every change, and every 15 s while recording.
@@ -630,18 +632,15 @@ final class PhoneAppModel: RecordingCommandHandling {
             state.title = recorder.title
             state.bookmarkCount = recorder.bookmarkCount
             state.multipoint = multipoint?.shortLine
+            state.pausedElapsed = recorder.isPaused ? recorder.pausedAt : nil
         }
         if let latest = library.conversations.first {
             state.lastRecordingTitle = latest.title
             state.lastRecordingDate = latest.date
             state.lastRecordingDuration = latest.tracks.compactMap(\.duration).max()
         }
-        guard state != published else { return }
-        published = state
-        guard !options.isRunningTests else { return }
-        state.save()
-        WidgetCenter.shared.reloadTimelines(ofKind: SharedRecordingState.widgetKind)
-        ControlCenter.shared.reloadControls(ofKind: SharedRecordingState.controlKind)
+        sharedState.writes = !options.isRunningTests
+        sharedState.publish(state)
     }
 
     // MARK: Debug scripts

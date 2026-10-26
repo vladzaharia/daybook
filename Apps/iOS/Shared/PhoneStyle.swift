@@ -60,6 +60,24 @@ enum PhoneStyle {
         static let recordFill = Color(light: 0xD92D20, dark: 0xE5243B)
     }
 
+    /// A filled button's fill and label ink, as light, dark, light with Increase Contrast, and dark
+    /// with Increase Contrast. Every label keeps 4.5:1 on its fill (tests check it).
+    struct FilledInk {
+        let fill: [UInt32]
+        let label: [UInt32]
+        var fillColor: Color { Color(light: fill[0], dark: fill[1], lightContrast: fill[2], darkContrast: fill[3]) }
+        var labelColor: Color { Color(light: label[0], dark: label[1], lightContrast: label[2], darkContrast: label[3]) }
+    }
+
+    /// The Live Activity's buttons. Bookmark is amber, so its label is dark where the amber is light.
+    enum ActivityButton {
+        static let bookmark = FilledInk(fill: [0xA86400, 0xFFD23F, 0x8A5200, 0xFFDF70], label: [0xFFFFFF, 0x1F1600, 0xFFFFFF, 0x1F1600])
+        /// Resume isn't recording yet, so it isn't red: ink on paper, inverted.
+        static let resume = FilledInk(fill: [0x1A1917, 0xF5F4F0, 0x000000, 0xFFFFFF], label: [0xFFFFFF, 0x1A1917, 0xFFFFFF, 0x000000])
+        static let stop = FilledInk(fill: [0xD92D20, 0xE5243B, 0xB4221A, 0xC81E30], label: [0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF])
+        static let all = [bookmark, resume, stop]
+    }
+
     /// The Ink scale for UIKit text views (the notes editor), so both draw the same ink.
     enum UIInk {
         static let title = UIColor.daybook(light: 0x1A1917, dark: 0xF5F4F0, lightContrast: 0x000000, darkContrast: 0xFFFFFF)

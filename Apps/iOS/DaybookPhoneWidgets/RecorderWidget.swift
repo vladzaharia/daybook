@@ -19,6 +19,7 @@ struct RecorderWidget: Widget {
 struct RecorderEntry: TimelineEntry {
     var date: Date
     var state: SharedRecordingState
+    var display: SharedRecordingState.Display { state.display(at: date) }
 }
 
 struct RecorderTimeline: TimelineProvider {
@@ -31,9 +32,25 @@ struct RecorderTimeline: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<RecorderEntry>) -> Void) {
-        // The app reloads this whenever recording starts, stops, or bookmarks change; clocks count
-        // themselves, so one entry is enough.
-        completion(Timeline(entries: [RecorderEntry(date: .now, state: SharedRecordingState.load())], policy: .never))
+        // The app reloads this whenever recording starts, stops, or bookmarks change, and once a
+        // minute while it records; clocks count themselves. A second entry turns a recording the app
+        // stopped confirming into "Not confirmed" on its own.
+        let state = SharedRecordingState.load()
+        let entries = state.timelineDates(from: .now).map { RecorderEntry(date: $0, state: state) }
+        completion(Timeline(entries: entries, policy: .never))
+    }
+}
+
+/// The recording's clock: counting while recording, frozen while paused.
+private struct WidgetClock: View {
+    let display: SharedRecordingState.Display
+
+    var body: some View {
+        switch display {
+        case .recording(let since): Text(since, style: .timer)
+        case .paused(let elapsed): Text(TimeLabel.short(elapsed))
+        case .idle, .unconfirmed: Text("–")
+        }
     }
 }
 
@@ -43,13 +60,15 @@ struct RecorderWidgetView: View {
 
     var body: some View {
         let state = entry.state
+        let display = entry.display
+        let active = display != .idle && display != .unconfirmed
         switch family {
         case .accessoryCircular:
-            if state.isActive, let start = state.startedAt {
+            if active {
                 Button(intent: AddBookmarkIntent()) {
                     VStack(spacing: 0) {
                         Image(systemName: "bookmark.fill")
-                        Text(start, style: .timer).font(.caption2.monospacedDigit()).multilineTextAlignment(.center)
+                        WidgetClock(display: display).font(.caption2.monospacedDigit()).multilineTextAlignment(.center)
                     }
                 }
                 .buttonStyle(.plain)
@@ -65,50 +84,55 @@ struct RecorderWidgetView: View {
             }
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 2) {
-                if state.isActive, let start = state.startedAt {
-                    Label(state.phase == .paused ? "Paused" : "Recording", systemImage: "waveform").font(.headline)
-                    Text(start, style: .timer).monospacedDigit()
+                if active {
+                    Label(SharedRecordingState.headline(display), systemImage: "waveform").font(.headline)
+                    WidgetClock(display: display).monospacedDigit()
                     if let multipoint = state.multipoint {
                         Text(multipoint).font(.caption).lineLimit(1)
                     } else if state.bookmarkCount > 0 {
-                        Text("\(state.bookmarkCount) bookmarks").font(.caption)
+                        Text(SharedRecordingState.bookmarks(state.bookmarkCount)).font(.caption)
                     }
+                } else if display == .unconfirmed {
+                    Label(SharedRecordingState.headline(display), systemImage: "waveform").font(.headline)
                 } else {
                     Label("Daybook", systemImage: "waveform").font(.headline)
-                    Text(lastLine(state) ?? "Tap to record").font(.caption).lineLimit(2)
+                    if let title = state.lastRecordingTitle {
+                        // A conversation's title is private: hidden while the iPhone is locked.
+                        Text(title).font(.caption).lineLimit(2).privacySensitive()
+                    } else {
+                        Text("Tap to record").font(.caption).lineLimit(2)
+                    }
                 }
             }
             .widgetURL(nil)
         case .accessoryInline:
-            if state.isActive, let start = state.startedAt {
-                Text("Recording \(start, style: .timer)")
+            if case .recording(let since) = display {
+                Text("Recording \(since, style: .timer)")
             } else {
-                Text("Daybook ready")
+                Text(SharedRecordingState.inlineLine(display))
             }
         default:
-            SmallRecorder(state: state)
+            SmallRecorder(state: state, display: display)
         }
-    }
-
-    private func lastLine(_ state: SharedRecordingState) -> String? {
-        guard let title = state.lastRecordingTitle else { return nil }
-        return title
     }
 }
 
 private struct SmallRecorder: View {
     let state: SharedRecordingState
+    let display: SharedRecordingState.Display
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if state.isActive, let start = state.startedAt {
+            switch display {
+            case .recording, .paused:
+                let recording = { if case .recording = display { return true } else { return false } }()
                 HStack(spacing: 6) {
-                    Circle().fill(state.phase == .recording ? PhoneStyle.Ink.record : Color.gray).frame(width: 8, height: 8)
-                    Text(state.phase == .paused ? "Paused" : "Recording").font(.caption.weight(.semibold))
+                    Circle().fill(recording ? PhoneStyle.Ink.record : Color.gray).frame(width: 8, height: 8)
+                    Text(SharedRecordingState.headline(display)).font(.caption.weight(.semibold))
                 }
-                Text(start, style: .timer)
+                WidgetClock(display: display)
                     .font(.title.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(state.phase == .recording ? PhoneStyle.Ink.record : PhoneStyle.Ink.title)
+                    .foregroundStyle(recording ? PhoneStyle.Ink.record : PhoneStyle.Ink.title)
                 Spacer(minLength: 0)
                 Button(intent: AddBookmarkIntent()) {
                     Label(state.bookmarkCount > 0 ? "\(state.bookmarkCount)" : "Bookmark", systemImage: "bookmark.fill")
@@ -117,10 +141,19 @@ private struct SmallRecorder: View {
                 }
                 .tint(PhoneStyle.bookmark)
                 .foregroundStyle(PhoneStyle.bookmark)
-            } else {
-                Text("Daybook").font(PhoneStyle.Typeface.title(17)).foregroundStyle(PhoneStyle.Ink.title)
+                .accessibilityLabel(state.bookmarkCount > 0 ? "Bookmark, \(SharedRecordingState.bookmarks(state.bookmarkCount))" : "Bookmark")
+            case .unconfirmed, .idle:
+                if display == .unconfirmed {
+                    HStack(spacing: 6) {
+                        Circle().fill(Color.gray).frame(width: 8, height: 8)
+                        Text(SharedRecordingState.headline(display)).font(.caption.weight(.semibold))
+                    }
+                } else {
+                    Text("Daybook").font(PhoneStyle.Typeface.title(17)).foregroundStyle(PhoneStyle.Ink.title)
+                }
                 if let title = state.lastRecordingTitle {
-                    Text(title).font(.caption).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(2)
+                    // A conversation's title is private: hidden while the iPhone is locked.
+                    Text(title).font(.caption).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(2).privacySensitive()
                     if let date = state.lastRecordingDate {
                         Text(date, style: .relative).font(.caption2).foregroundStyle(PhoneStyle.Ink.meta)
                     }

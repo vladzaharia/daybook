@@ -34,6 +34,34 @@ struct RecordingActivityAttributes: ActivityAttributes {
 }
 
 extension RecordingActivityAttributes.ContentState {
+    /// How often the app refreshes the activity while it records, even when nothing changed, so
+    /// its stale date keeps rolling forward.
+    static let refreshInterval: TimeInterval = 60
+    /// Without a refresh for this long the activity is stale: the app may have been stopped (a
+    /// crash, the system ending it), and it shows "Not confirmed" rather than a clock that runs on.
+    static let staleAfter: TimeInterval = 90
+    /// A pause changes nothing until the person acts, and the app may be suspended through a call.
+    static let pausedStaleAfter: TimeInterval = 2 * 3_600
+
+    /// The stale date for content sent at `now`. A saved recording never goes stale.
+    func staleDate(from now: Date) -> Date? {
+        switch phase {
+        case .recording: return now.addingTimeInterval(Self.staleAfter)
+        case .paused: return now.addingTimeInterval(Self.pausedStaleAfter)
+        case .saved: return nil
+        }
+    }
+
+    /// "Recording", "Paused", "Saved", or "Not confirmed" once the system marks it stale.
+    func title(isStale: Bool) -> String {
+        switch phase {
+        case .saved: return "Saved"
+        case _ where isStale: return "Not confirmed"
+        case .recording: return "Recording"
+        case .paused: return "Paused"
+        }
+    }
+
     /// Steps the input level into four buckets (silent, quiet, speech, loud).
     static func levelBucket(_ meter: Double) -> Double {
         switch meter {
