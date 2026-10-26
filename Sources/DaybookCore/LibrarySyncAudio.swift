@@ -68,23 +68,26 @@ extension LibrarySyncEngine {
             progress?(AudioFetchProgress(phase: .installed, completedBytes: bytes, totalBytes: bytes))
             return destination
         }
-        let remote = blobURL(track.sha256)
+        // Sealed under a key held here in an encrypted library, else the plaintext object.
+        let object = remoteObject(track.sha256)
+        let remote = object.url
         try SyncFiles.noSymlinks(remote, below: remoteRoot)
         let temporary = destination.deletingLastPathComponent().appendingPathComponent(".fetch-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: temporary) }
         var digest: String?
         // A courier delivery of the object, while the sync folder's copy isn't downloaded, saves waiting for iCloud.
-        if let delivered = courierBlob(track.sha256) {
+        if let delivered = courierObject(track.sha256) {
             try LocalFiles.directory(destination.deletingLastPathComponent())
-            let total = ((try? fm.attributesOfItem(atPath: delivered.path))?[.size] as? NSNumber)?.int64Value
-            let copied = try await copyVerifying(delivered, below: inboxBase, to: temporary, totalBytes: total, progress: progress)
-            if copied == track.sha256 { digest = copied } else { discardDelivery(delivered) }
+            let total = ((try? fm.attributesOfItem(atPath: delivered.delivery.path))?[.size] as? NSNumber)?.int64Value
+            let copied = try await copyVerifying(delivered.delivery, of: delivered.object, below: inboxBase, to: temporary, expected: track.sha256,
+                                                 totalBytes: total, progress: progress)
+            if copied == track.sha256 { digest = copied } else { try? fm.removeItem(at: temporary); discardDelivery(delivered.delivery) }
         }
         if digest == nil {
             try await waitUntilLocal(remote, options: options, progress: progress)
             try LocalFiles.directory(destination.deletingLastPathComponent())
             let total = ((try? fm.attributesOfItem(atPath: remote.path))?[.size] as? NSNumber)?.int64Value
-            digest = try await copyVerifying(remote, below: remoteRoot, to: temporary, totalBytes: total, progress: progress)
+            digest = try await copyVerifying(remote, of: object, below: remoteRoot, to: temporary, expected: track.sha256, totalBytes: total, progress: progress)
         }
         guard digest == track.sha256 else { throw AudioFetchError.integrityMismatch(track.fileName) }
         try Task.checkCancellation()
@@ -140,10 +143,18 @@ extension LibrarySyncEngine {
         }
     }
 
-    /// Runs off the actor so a long copy doesn't hold up sync passes. Copies and hashes in one pass.
-    private nonisolated func copyVerifying(_ remote: URL, below root: URL, to temporary: URL, totalBytes: Int64?,
-                                           progress: (@Sendable (AudioFetchProgress) -> Void)?) async throws -> String {
-        try SyncFiles.coordinateRead(remote, below: root) { source in
+    /// Runs off the actor so a long copy doesn't hold up sync passes. Copies and hashes in one pass; a sealed object is
+    /// opened on the way (progress in plaintext bytes), and one that doesn't open returns "".
+    private nonisolated func copyVerifying(_ remote: URL, of object: RemoteObject, below root: URL, to temporary: URL, expected: String,
+                                           totalBytes: Int64?, progress: (@Sendable (AudioFetchProgress) -> Void)?) async throws -> String {
+        if case .sealed = object {
+            do {
+                return try copyPlaintext(remote, of: object, below: root, libraryID: nil, to: temporary, expected: expected) { done, total in
+                    progress?(AudioFetchProgress(phase: .copying, completedBytes: done, totalBytes: total))
+                }
+            } catch is SyncKeyPending { throw AudioFetchError.downloadFailed("This library’s key isn’t on this device yet.") }
+        }
+        return try SyncFiles.coordinateRead(remote, below: root) { source in
             guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
                 throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: temporary.path])
             }
@@ -200,12 +211,15 @@ extension LibrarySyncEngine {
         var inUse = audioIndex().entries.values.reduce(UInt64(0)) { $0 + $1.stamp.size }
         var evicted: [CachedAudio] = []
         var freed: UInt64 = 0
+        // In an encrypted library, an original recorded here is evicted only once another device holds the key or a
+        // recovery key was saved: otherwise iCloud's sealed copy could be the only one, unreadable if this device is lost.
+        let originalsMayGo = sealing == nil || sealedOriginalsMayEvict()
         let candidates = audioIndex().entries.values
             .filter { entry in !(entry.trackID.map { protected.contains($0) } ?? false) }
             .sorted(by: Self.evictionOrder)
         for entry in candidates where inUse > policy.budgetBytes {
             try Task.checkCancellation()
-            guard let url = evictableURL(entry, policy: policy) else { continue }
+            guard let url = evictableURL(entry, policy: policy, originalsMayGo: originalsMayGo) else { continue }
             try fm.removeItem(at: url)
             verifiedAssets.removeValue(forKey: url.path)
             updateAudioIndex { $0.entries.removeValue(forKey: entry.key) }
@@ -224,14 +238,16 @@ extension LibrarySyncEngine {
         localRoot.appendingPathComponent("Meetings/\(entry.meetingID.uuidString)/\(entry.relativePath)")
     }
 
-    private func evictableURL(_ entry: AudioCacheEntry, policy: AudioCachePolicy) -> URL? {
+    private func evictableURL(_ entry: AudioCacheEntry, policy: AudioCachePolicy, originalsMayGo: Bool) -> URL? {
         let directory = localRoot.appendingPathComponent("Meetings/\(entry.meetingID.uuidString)", isDirectory: true)
         guard let url = try? LocalFiles.relativeURL(entry.relativePath, in: directory),
               (try? SyncFiles.noSymlinks(url, below: localRoot)) != nil,
               // Only the exact bytes that were verified; anything changed since isn't this cache's to delete.
               (try? assetStamp(url, digest: entry.sha256)) == entry.stamp else { return nil }
         if entry.origin == .recordedHere && !policy.evictsUploadedOriginals { return nil }
-        let blob = blobURL(entry.sha256)
+        if entry.origin == .recordedHere, !originalsMayGo { return nil }
+        let object = remoteObject(entry.sha256)
+        let blob = object.url
         switch SyncFiles.itemState(blob) {
         case .absent:
             // The object is gone from the sync folder (or never arrived): the local file may be the only copy.
@@ -239,16 +255,17 @@ extension LibrarySyncEngine {
         case .inCloud:
             break
         case .local:
-            guard (try? verifiedRemote(blob, digest: entry.sha256)) == true else { return nil }
+            guard (try? verifiedRemote(object, digest: entry.sha256)) == true else { return nil }
         }
         if entry.origin == .recordedHere, !cloud.isUploaded(blob) { return nil }
         return url
     }
 
-    private func verifiedRemote(_ url: URL, digest: String) throws -> Bool {
+    private func verifiedRemote(_ object: RemoteObject, digest: String) throws -> Bool {
+        let url = object.url
         let stamp = try assetStamp(url, digest: digest)
         if verifiedAssets[url.path] == stamp { return true }
-        let valid = try SyncFiles.coordinateRead(url, below: remoteRoot) { try SyncDigest.sha256(fileURL: $0) == digest }
+        let valid = try objectHolds(object, digest: digest)
         if valid { verifiedAssets[url.path] = stamp }
         return valid
     }

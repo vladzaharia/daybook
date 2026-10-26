@@ -135,6 +135,9 @@ public protocol SyncCourier: AnyObject, Sendable {
     /// Deletes files older than `CourierPolicy.expiry` that this device knows about.
     func removeExpired() async
     func status() async -> CourierStatus
+    /// The library became encrypted: drops plaintext files still waiting, and deletes those this device knows are on the
+    /// server (docs/icloud-sync.md, "Encryption").
+    func forgetPlaintext() async
 }
 
 // MARK: - The outbox
@@ -275,6 +278,16 @@ final class CourierOutbox {
         let ids = ledger.known.filter { now.timeIntervalSince($0.value) >= policy.expiry }.map(\.key).sorted()
         for id in ids where ledger.waiting[id] != nil { drop(id, now: now) }
         return ids
+    }
+
+    /// Drops plaintext files waiting to send (an encrypted library's are `Sealed/…`), and returns those known to be on
+    /// the server, which are then forgotten: the courier deletes them.
+    func dropPlaintext(now: Date) -> [String] {
+        func plaintext(_ id: String) -> Bool { id.split(separator: ".").dropFirst().first != "Sealed" }
+        for id in ledger.waiting.keys where plaintext(id) { drop(id, now: now) }
+        let known = ledger.known.keys.filter(plaintext).sorted()
+        for id in known { ledger.known.removeValue(forKey: id) }
+        return known
     }
 
     /// Another account, or its data was reset: nothing here applies any more.

@@ -23,6 +23,8 @@ final class LinkWireTests: XCTestCase {
             .app(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .failed, fraction: nil, macName: "M",
                                                             detail: "Out of space"))),
             .app(.processingNudge(LinkProcessingNudge(requestID: UUID(), meetingID: id, mode: .transcribe, requestedAt: t0))),
+            .app(.libraryKeyRequest(LinkLibraryKeyRequest(libraryID: id, keyIDs: [String(repeating: "a", count: 32)]))),
+            .app(.libraryKeyGrant(LinkLibraryKeyGrant(libraryID: id, keyID: String(repeating: "a", count: 32), key: Data(repeating: 7, count: 32)))),
             .recordRequest(LinkRecordRequest(action: .stop, conversationID: id, timing: LinkTiming(startedAt: t0, elapsed: 60),
                                              sentAt: t0)),
             .recordRequest(LinkRecordRequest(action: .start, conversationID: id,

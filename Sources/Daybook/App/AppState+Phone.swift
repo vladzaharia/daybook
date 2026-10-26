@@ -149,7 +149,29 @@ extension AppState {
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             recorderHandoff.receive(message, from: phone)
+        case .libraryKeyRequest(let request):
+            Task { await grantLibraryKey(request, to: phone) }
+        case .libraryKeyGrant(let grant):
+            Task { await sync.accept(grant) }
         }
+    }
+
+    // MARK: Library keys
+
+    /// A paired iPhone waiting for the encrypted library's key asked this Mac: it gets the key when its library is this
+    /// Mac's, and the Mac says so.
+    private func grantLibraryKey(_ request: LinkLibraryKeyRequest, to phone: UUID) async {
+        guard phoneLink.isPaired(phone), let peer = phoneLink.peers[phone] else { return }
+        let grants = await sync.libraryKeyGrants(for: request, peerLibraryID: peer.capabilities.libraryID)
+        var sent = false
+        for grant in grants where (try? await phoneLink.send(.libraryKeyGrant(grant), to: phone)) != nil { sent = true }
+        if sent { post(["Sent this library’s key to \(peer.name)."]) }
+    }
+
+    /// Asks a connected iPhone for the encrypted library's key this Mac is waiting for.
+    func requestLibraryKey(from phone: UUID) async {
+        guard let request = await sync.libraryKeyRequest() else { return }
+        try? await phoneLink.send(.libraryKeyRequest(request), to: phone)
     }
 
     /// The connected phone that manages a recorder (by its synced ownership), when it starts and stops

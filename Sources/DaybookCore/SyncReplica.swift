@@ -42,12 +42,15 @@ public struct SyncReplicaConfiguration: Sendable {
     public var presenceRefreshInterval: TimeInterval
     /// File-provider operations. Tests substitute a simulated iCloud.
     public var cloud: SyncCloudFiles
+    /// Where this device keeps library keys (iCloud Keychain in the apps, `KeychainLibraryKeyStore`), to read and write
+    /// an encrypted library (docs/icloud-sync.md, "Encryption"). Nil: this replica can't open one, and waits for a key.
+    public var keyStore: (any LibraryKeyStore)?
 
     public init(audioPolicy: SyncAudioPolicy = .eager, device: SyncDeviceIdentity? = nil,
                 audioCache: AudioCachePolicy? = nil, presenceRefreshInterval: TimeInterval = 600,
-                cloud: SyncCloudFiles = .system) {
+                cloud: SyncCloudFiles = .system, keyStore: (any LibraryKeyStore)? = nil) {
         self.audioPolicy = audioPolicy; self.device = device; self.audioCache = audioCache
-        self.presenceRefreshInterval = presenceRefreshInterval; self.cloud = cloud
+        self.presenceRefreshInterval = presenceRefreshInterval; self.cloud = cloud; self.keyStore = keyStore
     }
 
     public static func mac(displayName: String, canProcess: Bool) -> Self {
@@ -150,6 +153,14 @@ public struct SyncDeviceActivity: Codable, Equatable, Sendable {
     public var isRecording: Bool { recordingConversationID != nil || recorders?.contains(where: \.isRecording) == true }
 }
 
+/// Whether a device holds an encrypted library's current key (`id`, hex), as its presence says.
+public struct SyncDeviceKeyState: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable { case waiting, ready }
+    public var state: State
+    public var id: String
+    public init(state: State, id: String) { self.state = state; self.id = id }
+}
+
 /// One device known to the library: from its presence record, or (for a replica running an older
 /// Daybook) only from the device ID on its journal entries.
 public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
@@ -164,7 +175,13 @@ public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
     public var isCurrentDevice: Bool
     /// What it's doing, as its presence record last said (nil without one, or with nothing to say).
     public var activity: SyncDeviceActivity?
+    /// What its Daybook says it can do (`LibrarySyncEngine.sealingFeature`). Empty for older versions.
+    public var features: [String] = []
+    /// In an encrypted library, whether it holds the current key.
+    public var keyState: SyncDeviceKeyState?
     public var reportsPresence: Bool { lastSeen != nil }
+    /// Its Daybook reads and writes encrypted libraries. A device without presence (an older Daybook) doesn't.
+    public var readsEncryptedLibraries: Bool { features.contains(LibrarySyncEngine.sealingFeature) }
     public init(id: String, deviceClass: SyncDeviceClass? = nil, displayName: String? = nil, canProcess: Bool? = nil,
                 audioPolicy: SyncAudioPolicy? = nil, lastSeen: Date? = nil, isCurrentDevice: Bool = false, activity: SyncDeviceActivity? = nil) {
         self.id = id; self.deviceClass = deviceClass; self.displayName = displayName; self.canProcess = canProcess
@@ -297,10 +314,13 @@ enum SyncDigest {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty {
+        // Each read is autoreleased: drained a chunk at a time, hashing a long recording takes a megabyte, not its size.
+        while try autoreleasepool(invoking: { () throws -> Bool in
+            guard let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty else { return false }
             try Task.checkCancellation()
             hasher.update(data: bytes)
-        }
+            return true
+        }) {}
         return hex(hasher.finalize())
     }
     static func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {

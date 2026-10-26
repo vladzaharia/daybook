@@ -69,7 +69,8 @@ Local library/Sync/          # never synchronized
   <library>-<device>.json    # causal checkpoint: heads, what was published, deletions, a pending pass
   Bases/<library>-<device>/  # each conversation's applied base, <meeting>.json, written when it changes
   audio-cache.json           # on-demand replicas: fetched and published audio, last played
-  Inbox/<library ID>/        # courier deliveries waiting for iCloud Drive (Events/, Metadata/, Blobs/)
+  Inbox/<library ID>/        # courier deliveries waiting for iCloud Drive (Events/, Metadata/, Blobs/, Sealed/…)
+  sealing.json               # sync folders this device synced encrypted (see Encryption)
   Courier/                   # the courier: outbox.json, Outbox/ (staged copies), cloudkit-state.json
 ```
 
@@ -134,13 +135,13 @@ A replica configured with a `SyncDeviceIdentity` writes its own `Devices/<SHA-25
 
 `knownDevices()` lists every presence record, this device, and any device seen only on journal entries, which is an older Daybook with no presence (`reportsPresence == false`). `lastSeen` is clamped to the reader's clock. On the phone, `devices.latestProcessor` gives "Waiting for your Mac · last seen 2 h ago". If it's nil and `hasPeersWithoutPresence` is false, no Mac has synced this library yet.
 
-The format is versioned. Additive fields (`installation`, `activity`) keep `schemaVersion` 1. An incompatible change must bump it, and readers skip versions they don't know. Readers also skip files of another format, files over 64 KB, malformed files, and records whose file name doesn't match their device ID. Unknown device classes read as `other`. Presence is advisory: a failed write never fails a pass. Daybook versions without presence only list `Events/`, `Metadata/`, and `Blobs/`, so they ignore `Devices/` and any other new folder. A frozen copy of the version 1 engine (`LegacyLibrarySyncFixture.swift`) checks this in the tests.
+The format is versioned. Additive fields (`installation`, `activity`, and `features`, `key`, and `sealed`, see Encryption) keep `schemaVersion` 1. An incompatible change must bump it, and readers skip versions they don't know. Readers also skip files of another format, files over 64 KB, malformed files, and records whose file name doesn't match their device ID. Unknown device classes read as `other`. Presence is advisory: a failed write never fails a pass. Daybook versions without presence only list `Events/`, `Metadata/`, and `Blobs/`, so they ignore `Devices/` and any other new folder. A frozen copy of the version 1 engine (`LegacyLibrarySyncFixture.swift`) checks this in the tests.
 
 ## Courier (CloudKit)
 
 iCloud Drive can take minutes to hours to move a file between devices, and longer on cellular. The courier carries the journal files the iPhone writes to the Mac through CloudKit as well, usually within seconds over any network. It doesn't wait for Wi-Fi: the sends after a recording and the Mac's fetch on a push run as user-initiated CloudKit work with cellular allowed, which the system doesn't defer for Wi-Fi, power, or Low Power Mode the way it defers CloudKit's default, discretionary work (`CloudKitCourier.immediateGroup`). iCloud Drive, the backup, follows the iPhone's Settings › Cellular › iCloud Drive switch, which no app can override. iCloud Drive still carries every file exactly as before; the courier only gets some there first. When the courier is off, slow, or refuses a file, sync is what it was without it.
 
-**What travels.** After a pass, `SyncResult.writtenFiles` lists the files that pass wrote into the sync folder: events, metadata, and audio objects it copied there (a file written by a pass that later failed is reported by the next one that returns). Each is a `SyncJournalFile`: its path relative to the sync folder, its SHA-256, and its size. Only `Events/`, `Metadata/`, and `Blobs/` entries named by their SHA-256 travel; the manifest and presence never do.
+**What travels.** After a pass, `SyncResult.writtenFiles` lists the files that pass wrote into the sync folder: events, metadata, and audio objects it copied there (a file written by a pass that later failed is reported by the next one that returns). Each is a `SyncJournalFile`: its path relative to the sync folder, its SHA-256, and its size. Only `Events/`, `Metadata/`, and `Blobs/` entries named by their SHA-256 travel (and an encrypted library's `Sealed/` files, see Encryption); the manifest and presence never do.
 
 **The pieces** (DaybookKit, shared by both apps):
 
@@ -153,8 +154,8 @@ iCloud Drive can take minutes to hours to move a file between devices, and longe
 
 **CloudKit.** `CloudKitCourier` runs a `CKSyncEngine` on the private database of the app's container (`iCloud.local.daybook`):
 
-- **Records.** One custom zone, `Courier`, and one record per file, type `CourierFile`. Its fields are `path`, `sha256`, `size`, `deviceID`, `libraryID`, `createdAt`, and `asset` (a `CKAsset`). The record name is `<library ID>.<path with / as .>`, e.g. `3F2A….Events.<sha256>.json`, so sending a file again replaces the record instead of adding one; a "server record changed" answer means it's there already and counts as sent. The courier never queries, so the schema needs no indexes.
-- **Pushes and scheduling.** The engine subscribes to the database and fetches when CloudKit pushes, so both apps carry push entitlements and register for remote notifications once the courier is available (`onCourierAvailable`). On the Mac a push the app sees also asks for a fetch (`fetchCourier()`). The iPhone's engine leaves the `Courier` zone out of its fetches, so it never downloads its own recordings back.
+- **Records.** A custom zone, `Courier` (and `SealedCourier` for an encrypted library's files, see Encryption), and one record per file, type `CourierFile`. Its fields are `path`, `sha256`, `size`, `deviceID`, `libraryID`, `createdAt`, and `asset` (a `CKAsset`). The record name is `<library ID>.<path with / as .>`, e.g. `3F2A….Events.<sha256>.json`, so sending a file again replaces the record instead of adding one; a "server record changed" answer means it's there already and counts as sent. The courier never queries, so the schema needs no indexes.
+- **Pushes and scheduling.** The engine subscribes to the database and fetches when CloudKit pushes, so both apps carry push entitlements and register for remote notifications once the courier is available (`onCourierAvailable`). On the Mac a push the app sees also asks for a fetch (`fetchCourier()`). The iPhone's engine leaves both zones out of its fetches, so it never downloads its own recordings back.
 - **Retries.** The engine retries network failures, rate limits (honouring retry-after), busy zones, and a temporarily unavailable account itself. A refusal for lack of iCloud storage waits 1 minute, doubling to at most 6 hours, then goes again. A missing zone is recreated and the file resent. A staged file that's gone, or a file refused for a reason that won't pass, is left to iCloud Drive. Three such refusals in a row (a schema missing from Production, say), or one error saying CloudKit won't serve the container at all (bad container, missing entitlement, permission failure, a restricted managed account), turn the courier off until the account changes or the app launches again, so it doesn't upload recordings for nothing.
 - **Off, quietly.** The courier isn't created at all unless the build is signed for CloudKit with the container (on the Mac this reads the code signature; creating a `CKContainer` without the entitlement would stop the app). It turns itself off when there's no iCloud account, iCloud is restricted, or the account can't be determined, and tries again when the account changes. Off, it takes nothing, and whatever was waiting is left to iCloud Drive. There is no message: iCloud Drive carries everything.
 - **Accounts and resets.** Signing out or switching accounts clears the outbox (the engine drops its pending changes itself). If the person deletes the app's iCloud data (the zone is purged or its encrypted data reset), the courier keeps nothing and resends nothing.
@@ -177,6 +178,134 @@ The controller then asks for a pass and returns the settled files (stored, alrea
 **Status.** `LibrarySyncController.courierStatus` (`CourierStatus`) has the availability, how many files wait to send and since when, the last error, and whether iCloud storage is full. A send is stuck after 15 minutes (`isStuck`). The iPhone's sync line then says "Waiting to send 2 items to your Mac", or "iCloud storage is full"; nothing else in the interface mentions the courier.
 
 **Limits.** With more than one Mac, the first Mac to store a file deletes it from the courier, so another Mac that hadn't fetched it yet gets it through iCloud Drive. Only the iPhone sends; transcripts and summaries from the Mac travel by iCloud Drive alone. A file that arrives before a Mac has read the library's manifest isn't delivered again and expires (iCloud Drive carries it).
+
+## Encryption
+
+A library can be encrypted in iCloud, end to end: Apple holds only sealed files, and every device that syncs it holds the
+library's key in iCloud Keychain. It's off until someone turns it on (Settings › Library › iCloud Sync › Encrypt Library in
+iCloud on the Mac, Settings › iCloud on the iPhone), and there's no turning it off: resetting means a new library.
+
+- **What it protects.** The library's content at rest in iCloud without Advanced Data Protection, and from someone who
+  has the Apple Account's password but no trusted device's passcode (iCloud Keychain is end-to-end encrypted). The
+  courier's CloudKit records hold only sealed bytes. Tampering is detected: every sealed file is authenticated, and a
+  manifest replaced by a plaintext one pauses sync on every device that synced the library encrypted.
+- **What it doesn't.** An Apple Account together with a trusted device's passcode; a compromised device; the Mac's
+  working library and Time Machine (FileVault and an encrypted backup do that); the iPhone's iCloud Backup unless
+  Storage › Include in iPhone Backups is off. Still visible to Apple: how many files there are and their sizes, when
+  they were written, how many devices sync and their kind, the library and key IDs, and the courier records' sizes and
+  dates. A Daybook that doesn't encrypt (0.3.0 and earlier) keeps writing its presence record, name included, in
+  plaintext. iCloud.com's Data Recovery keeps deleted files for 30 days, and Apple may keep plaintext that long after
+  it's retired.
+
+**Keys.** One 32-byte key per library (`LibraryKey`), current until it's rotated. Its ID is HMAC-SHA256(key,
+"DBSEAL1 key id" ‖ library ID), first 16 bytes; HKDF-SHA256 with the library ID as salt derives a naming key ("DBSEAL1
+names") and a content key ("DBSEAL1 content"). It's kept in iCloud Keychain (`KeychainLibraryKeyStore`): a generic
+password, service `local.daybook.library-key`, account `<library ID>:<key ID>`, synchronizable, readable after first
+unlock (a locked iPhone's background pass needs it), in the keychain group both apps list, `<team>.local.daybook.shared`.
+Its value is `{key, libraryID, keyID, createdAt, createdBy}`. Each app lists its own group first, so items stored without
+a group (pairing keys, the device ID) stay where they were. Unsigned and ad hoc builds have no group, so they can't open
+an encrypted library (they can't sync at all). A key reaches a device three ways: iCloud Keychain; a paired device over
+the local link (docs/link.md, "Library keys"); or a recovery key, 128 random bits shown as seven groups of four Crockford
+base32 characters (two of them check characters), which the manifest keeps each key wrapped with (AES-GCM under
+HKDF-SHA256(recovery key, library ID, "DBSEAL1 recovery"), bound to the key's ID and library).
+
+**Format** (`SealedObject.swift`, DBSEAL version 1). Every journal file of an encrypted library is a sealed object: an
+84-byte header (`DBSEAL`, version 1, kind: 1 event, 2 settings, 3 object, 4 presence; suite 1; 2^20-byte chunks;
+key ID; library ID; S; plaintext length), then the plaintext in 1 MiB chunks, each AES-256-GCM-sealed with a key derived
+for the object alone (HKDF-SHA256 of the content key, salt S, "DBSEAL1 file" ‖ kind), nonce = the chunk's index, and the
+header, index, and a final-chunk flag authenticated. S = HMAC-SHA256(naming key, kind ‖ library ID ‖ SHA-256(plaintext))
+is the file's name, so names reveal nothing without the key but stay deterministic: the same key and content give the
+same name and bytes on every device, a pass that writes an entry again writes identical bytes, and de-duplication works
+as before. Reordered, dropped, truncated, or altered chunks, another library's or kind's object, an unknown key, and
+plaintext that doesn't match the name are all refused. Known-answer vectors from an independent implementation freeze
+the format (`SealedObjectTests`); a change needs a new version.
+
+```text
+<container>/Documents/Daybook/
+  daybook-sync.json          # schemaVersion 2, with "sealing"
+  Sealed/Events/<S>          # sealed events
+  Sealed/Metadata/<S>        # sealed library settings versions
+  Sealed/Blobs/<S>           # sealed originals and sidecars
+  Devices/<SHA-256>.json     # presence: plaintext essentials, the name and activity sealed
+  Events/, Metadata/, Blobs/ # plaintext from before encryption, read only, until retired
+
+Local library/Sync/sealing.json   # this device synced an encrypted library here: never publish plaintext there
+```
+
+**The manifest.** `{"format":"DaybookSync","schemaVersion":2,"libraryID":…,"sealing":{"scheme":"DBSEAL-1","current":…,
+"sealedSince":…,"migrator":…,"legacyRetired":…,"keys":[{"id":…,"created":…,"recovery":…}]}}`. Version 2 is the switch:
+every earlier Daybook (0.1.0-preview through 0.3.0) stops at it with "This library was synced by a newer Daybook
+(version 2). Update Daybook to sync." and changes nothing; the frozen version 1 engine checks this in the tests. The gate
+stays strict however tolerant decoding is: version 2 with an unknown scheme reads as newer too. Unlike the rest of the
+journal the manifest changes (keys added, a recovery key saved, plaintext retired); versions written at once by devices
+of the same library merge the same way in any order, every key kept and the newest current. An encrypted library wins
+over a plaintext one started beside it (its devices carry on in it once they have the key); two different encrypted
+libraries pause sync.
+
+**On a pass.** The engine reads the manifest, then the keychain (every pass, so a key that arrives is picked up at once).
+Without the current key it reads and writes nothing (`keyUnavailable`): local recording and editing go on, the courier
+still takes deliveries, presence says it's waiting, and Settings says "Your library in iCloud is encrypted. Waiting for its
+key from iCloud Keychain." with Get Key from (a paired device) and Enter Recovery Key. With the key, an entry's ID is
+still the SHA-256 of its plaintext record, so parents, heads, merges, and checkpoints are exactly as before; only the
+files differ. Sealed and plaintext copies of an entry are one entry. Objects are found sealed under any key held here,
+else in plaintext from before; they're written sealed under the current key. Installing an object opens it while hashing
+the plaintext, into a temporary file that's moved into place only when the SHA-256 matches; cancellation and damage
+behave as before. Sealing and opening read the file once, in two overlapping lanes, so they take about the time a copy and
+its SHA-256 did (a 1 GiB original seals in 0.4 s on an M-series Mac, within 7 MiB of memory).
+
+**Turning it on** (`enableSealing`, `LibrarySyncController.enableEncryption`). Settings first lists the devices that
+would stop syncing until they're updated (their presence doesn't list the `sealed-1` feature, or they were seen only in
+the journal), and offers a recovery key. Then a new key is stored and read back, and only then is the manifest rewritten
+as version 2 with this device as the migrator. The courier drops plaintext files it still holds and deletes those it sent.
+A Mac that moved from a chosen folder (above) offers to delete that folder's plaintext copy of the journal
+(`deleteRetiredFolderJournal`): its manifest, `Events/`, `Metadata/`, `Blobs/`, and `Devices/`, nothing else.
+
+**The sealer** (`LibrarySyncSealer.swift`) seals the history again, never rewrites it, so nothing is republished: every
+event of a live conversation, only the deletion of a deleted one (its snapshots and audio are left behind), every settings
+version, and the objects live conversations use (their merged heads and highlight sidecars). The migrator does it, within
+each pass's limits; each device also seals plaintext entries it wrote itself (a pass already running when the manifest
+changed). A migrator not seen for two weeks is replaced by the next Mac with the key.
+
+**Retiring the plaintext.** The migrator deletes a plaintext file only when its sealed counterpart was read back whole and
+iCloud reports it uploaded, another device holds the key or a recovery key was saved, and a week has passed since
+encryption began. Then `Events/`, `Metadata/`, and `Blobs/` are emptied (the folders stay), plaintext presence records
+are deleted, and the manifest records `legacyRetired`. Only files a pass read and accounted for are deleted; an object
+nothing it read names is left alone. Plaintext that reappears later (Data Recovery, a stale device) is sealed if it's live
+and deleted. Until then, an iPhone keeps originals it recorded rather than evict them. A device that was away across
+retirement and still has a deleted conversation applies the deletion (its parents are gone, not on their way) or, if it
+changed the conversation meanwhile, keeps it as a new one. An on-demand replica publishes a recording it doesn't hold by
+reference only to an object in the sync folder; one the journal names but that isn't there waits.
+
+**Rotating** ("Erase Deleted Conversations from iCloud", `rotateKey`). A new key becomes current, the sealer seals what's
+live under it, and once every device seen in the last 30 days that reads encrypted libraries reports it holds the new key
+and a week has passed, the old key's files are deleted and the manifest stops listing it. Deleted conversations' history
+isn't carried over, so it's erased from iCloud. The old key itself stays in iCloud Keychain, so a file sealed with it
+later (a device that was away) or restored from iCloud.com stays readable and is sealed again, or deleted if it's a
+deleted conversation's. Remove a lost device from the Apple Account before rotating. There are no per-conversation keys:
+a deletion can't shred one key, so erasing is this coarse step.
+
+**The courier** carries sealed files in a zone of their own, `SealedCourier` (the same `CourierFile` record type), which
+Daybook 0.3.0 and earlier never fetch or clear. A sealed file's name isn't its bytes' SHA-256: the inbox accepts
+`Sealed/{Events,Metadata,Blobs}/<name>` with the SHA-256 of the bytes that travel, checks that the header names this
+library and the folder's kind, and prunes a delivery once the sync folder's copy has the same bytes. It's opened when it's
+read. Files the sealer writes are history every device has, so the courier doesn't carry them.
+
+**Presence** in an encrypted library keeps its plaintext essentials (device ID and class, whether it can process, audio
+policy, last seen, installation) and adds `features` (`["sealed-1"]`, in every library) and `key` (`{"state": "ready" |
+"waiting", "id": …}`); the name and activity travel in `sealed`, a presence object. A device waiting for the key writes no
+name. Presence written as sync connects, before a pass has read the manifest, reads it first, and says nothing private
+while it isn't downloaded.
+
+**Moving from a chosen folder** into an encrypted container seals every entry and object as it's copied (presence isn't
+copied), and waits for the key without it. Nothing is copied until the container's manifest is downloaded, and nothing
+into a container this device synced encrypted that has lost its manifest.
+
+**Downgrades.** Once a device has seen a library encrypted in a sync folder (`Sync/sealing.json`), a plaintext manifest
+there, or none, pauses sync: "The library in iCloud is no longer encrypted." Choosing another iCloud account forgets it.
+
+**Turning it on for new libraries.** `LibrarySyncEngine.sealsNewLibraries` (false) makes a new library encrypted from
+the start, its key stored before the manifest names it. Flip it once the device checks in docs/validation.md ("Library
+encryption") pass on the owner's Mac and iPhone.
 
 ## Phone cadence and the controller hook
 
@@ -255,6 +384,19 @@ Replica tests (`LibrarySyncReplicaTests`) simulate iCloud in a temporary folder.
 - bounded and cancelled passes;
 - partial journal reads that must not roll back.
 
+Encryption tests (`SealedObjectTests`, `LibraryKeyringTests`, `LibrarySyncSealingTests` in DaybookCore;
+`LibrarySyncEncryptionTests` and `KeychainLibraryKeyStoreTests` in DaybookKit; `LinkLibraryKeyTests`) use a
+`MemoryLibraryKeyStore` for iCloud Keychain (one shared between replicas plays it on, separate ones off) and cover:
+known-answer vectors; every altered header, chunk, and tag byte, truncation, reordering, and the wrong kind, library, or
+key; recovery keys; the version 1 engine refusing version 2 with the sync folder byte-identical afterwards; a plaintext
+library written exactly as before; downgrades; merged manifests; encrypted replicas converging with no title, note,
+transcript, speaker name, or device name anywhere in the sync folder; a replica without the key writing nothing and
+publishing once it arrives; recovery keys and link grants; damaged sealed audio; phone recordings on an eager Mac and
+by-reference publishing; the eviction guard; sealing history without republishing, retirement and its conditions, stale
+and restored plaintext, rotation erasing a deleted conversation; sealed courier files in their own zone, ignored by an
+earlier Daybook; and moving a chosen folder into an encrypted container. A 1 GiB sealing benchmark runs with
+`DAYBOOK_SEALED_PERFORMANCE=1`.
+
 Courier tests never touch CloudKit. `LibrarySyncInboxTests` (DaybookCore) withhold files from the simulated iCloud folder to play iCloud Drive lagging behind, and cover:
 
 - what a pass reports writing, once;
@@ -291,7 +433,7 @@ Actual propagation through Apple's service on two physical Macs, or a Mac and an
   - `BGAppRefreshTask` time limits;
   - battery and thermals.
 
-Two manifests resolve deterministically to the smallest library ID (above); only a conflict version that can't be read is surfaced. Sync does not add its own content encryption or replace independent backups; local and iCloud protections are controlled by macOS and the user's account settings.
+Two manifests resolve deterministically to the smallest library ID (above); only a conflict version that can't be read is surfaced. Unless the library is encrypted (see Encryption), sync adds no content encryption of its own; either way it doesn't replace independent backups.
 
 ## Apple references
 

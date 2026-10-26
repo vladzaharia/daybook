@@ -75,6 +75,28 @@ final class LibrarySyncContainerTests: XCTestCase {
         return result
     }
 
+    func testAnEncryptedLibraryCanDeleteThePreviousFoldersPlaintextCopy() async throws {
+        try await librarySyncedThroughFolder()
+        let unrelated = folder.appendingPathComponent("Shopping list.txt")
+        try Data("milk".utf8).write(to: unrelated)
+        let sync = controller(environment())
+        sync.replica.keyStore = MemoryLibraryKeyStore()
+        sync.syncDebounce = nil
+        sync.restore()
+        await sync.waitForContainer()
+        XCTAssertEqual(sync.iCloud, .connected)
+        XCTAssertNotNil(sync.migrationRecord?.completedAt)
+        XCTAssertFalse(sync.hasRetiredFolderJournal, "Only once the library is encrypted")
+        try await sync.enableEncryption()
+        XCTAssertTrue(sync.hasRetiredFolderJournal)
+        try sync.deleteRetiredFolderJournal()
+        XCTAssertFalse(sync.hasRetiredFolderJournal)
+        for name in ["daybook-sync.json", "Events", "Metadata", "Blobs"] {
+            XCTAssertFalse(fm.fileExists(atPath: folder.appendingPathComponent(name).path), name)
+        }
+        XCTAssertTrue(fm.fileExists(atPath: unrelated.path), "Nothing else in the folder is touched")
+    }
+
     func testBuildWithoutTheEntitlementKeepsSyncOffAndTheFolderTransportBehindTheDevelopmentDefault() async throws {
         try await librarySyncedThroughFolder()
         for environment in [environment(entitled: false), environment(identifier: nil), environment(identifier: "$(DAYBOOK_ICLOUD_CONTAINER)")] {

@@ -20,8 +20,7 @@ extension LibrarySyncEngine {
             let url = try LocalFiles.relativeURL(photo.relativePath, in: directory)
             try SyncFiles.noSymlinks(url, below: localRoot)
             guard fm.fileExists(atPath: url.path) else {
-                if audioPolicy == .onDemand, SyncFiles.isHash(photo.sha256),
-                   journalAssets.contains(photo.sha256) || SyncFiles.itemState(blobURL(photo.sha256)) != .absent {
+                if audioPolicy == .onDemand, SyncFiles.isHash(photo.sha256), try mayPublishByReference(photo.sha256, journalAssets: journalAssets) {
                     assets.append(SyncAsset(relativePath: photo.relativePath, sha256: photo.sha256))
                     byReference.insert(photo.relativePath)
                     continue

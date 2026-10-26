@@ -29,6 +29,8 @@ final class PhoneLink {
         /// Its sync replica ID (a Mac's equals its link ID) and whether it hands recorders over.
         var syncDeviceID: String?
         var handsOffRecorders = false
+        /// The synced library it has open, from its capabilities.
+        var libraryID: UUID?
         /// The recorders it manages, as it last said, on this iPhone's clock; kept after it disconnects,
         /// for as long as that can be trusted (`LinkRecorderState.lifetime`).
         var recorders: [LinkRecorderState] = []
@@ -92,6 +94,8 @@ final class PhoneLink {
     @ObservationIgnored var onProcessingFinished: ((UUID) -> Void)?
     /// A recorder handoff message from a Mac (the app model hands it to `RecorderHandoff`).
     @ObservationIgnored var onHandoffMessage: ((LinkMessage, UUID) -> Void)?
+    /// An encrypted library's key asked for, or sent, by a Mac (the app model answers or keeps it).
+    @ObservationIgnored var onLibraryKeyMessage: ((LinkMessage, UUID) -> Void)?
     /// A Mac connected or went away.
     @ObservationIgnored var onMacsChanged: (() -> Void)?
     /// A Mac connected (again): what's waiting for it (a stop) can go now.
@@ -349,6 +353,7 @@ final class PhoneLink {
                 mac.lastConnectedAt = Date()
                 mac.syncDeviceID = peer.capabilities.syncDeviceID ?? peer.deviceID.uuidString
                 mac.handsOffRecorders = peer.capabilities.handsOffRecorders
+                mac.libraryID = peer.capabilities.libraryID
             }
             onMacsChanged?()
             if case .connected = event { onMacConnected?(peer.deviceID) }
@@ -390,6 +395,8 @@ final class PhoneLink {
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             onHandoffMessage?(message, macID)
+        case .libraryKeyRequest, .libraryKeyGrant:
+            onLibraryKeyMessage?(message, macID)
         }
     }
 

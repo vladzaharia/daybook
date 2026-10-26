@@ -3,9 +3,11 @@ import Foundation
 /// A journal file by its place in the sync folder, as a courier carries it from the device that wrote it
 /// to the others, ahead of iCloud Drive (docs/icloud-sync.md, "Courier (CloudKit)").
 public struct SyncJournalFile: Codable, Hashable, Sendable {
-    /// Relative to the sync folder: `Events/<SHA-256>.json`, `Metadata/<SHA-256>.json`, or `Blobs/<SHA-256>`.
+    /// Relative to the sync folder: `Events/<SHA-256>.json`, `Metadata/<SHA-256>.json`, or `Blobs/<SHA-256>`; in an
+    /// encrypted library `Sealed/Events/<name>`, `Sealed/Metadata/<name>`, or `Sealed/Blobs/<name>`.
     public var path: String
-    /// The SHA-256 of the file's bytes, which is also its name.
+    /// The SHA-256 of the file's bytes, which is also a plaintext file's name. A sealed file's name is a keyed hash of
+    /// its plaintext instead (SealedObject.swift); this is still the SHA-256 of the bytes that travel.
     public var sha256: String
     public var size: Int64
 
@@ -14,12 +16,17 @@ public struct SyncJournalFile: Codable, Hashable, Sendable {
     }
 
     /// The folders a courier may carry. The manifest and presence records never travel by courier.
-    public static let directories = ["Events", "Metadata", "Blobs"]
+    public static let directories = ["Events", "Metadata", "Blobs", "Sealed/Events", "Sealed/Metadata", "Sealed/Blobs"]
 
-    /// The folder, when the path is in one a courier may carry and names `sha256` (its content address).
+    /// The folder, when the path is in one a courier may carry and names `sha256` (its content address), or is a sealed
+    /// file's name.
     public var directory: String? {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 2, SyncFiles.isHash(sha256), size >= 0 else { return nil }
+        guard SyncFiles.isHash(sha256), size >= 0 else { return nil }
+        if parts.count == 3, parts[0] == "Sealed", ["Events", "Metadata", "Blobs"].contains(parts[1]), SyncFiles.isHash(parts[2]) {
+            return "Sealed/\(parts[1])"
+        }
+        guard parts.count == 2 else { return nil }
         switch parts[0] {
         case "Events", "Metadata": return parts[1] == "\(sha256).json" ? parts[0] : nil
         case "Blobs": return parts[1] == sha256 ? parts[0] : nil
@@ -28,10 +35,14 @@ public struct SyncJournalFile: Codable, Hashable, Sendable {
     }
 
     public var isContentAddressed: Bool { directory != nil }
+    /// A file of an encrypted library (`Sealed/…`).
+    public var isSealed: Bool { directory?.hasPrefix("Sealed/") == true }
 
-    /// The content address a file in `directory` is named by.
-    static func address(of name: String, in directory: String) -> String {
-        directory == "Blobs" || !name.hasSuffix(".json") ? name : String(name.dropLast(5))
+    /// The content address a plaintext file in `directory` is named by. A sealed file's name isn't its bytes' SHA-256:
+    /// nil.
+    static func address(of name: String, in directory: String) -> String? {
+        if directory.hasPrefix("Sealed/") { return nil }
+        return directory == "Blobs" || !name.hasSuffix(".json") ? name : String(name.dropLast(5))
     }
 }
 
@@ -78,8 +89,8 @@ extension LibrarySyncEngine {
         return names.filter { !$0.hasPrefix(".") }
     }
 
-    /// A journal folder as a pass sees it: the sync folder's entries (downloaded, evicted, or placeholders), plus
-    /// courier deliveries iCloud Drive hasn't brought yet, all as sync-folder URLs.
+    /// A plaintext journal folder as a pass sees it: the sync folder's entries (downloaded, evicted, or placeholders),
+    /// plus courier deliveries iCloud Drive hasn't brought yet, all as sync-folder URLs. (Sealed ones: `sealedListing`.)
     func journalListing(in name: String) throws -> [URL] {
         let listed = try journalFiles(in: name)
         let delivered = inboxNames(name).filter { $0.hasSuffix(".json") && SyncFiles.isHash(String($0.dropLast(5))) }
@@ -115,18 +126,6 @@ extension LibrarySyncEngine {
         return bytes
     }
 
-    /// The courier's copy of an audio object to install from while the sync folder's copy isn't downloaded (or hasn't
-    /// arrived). Asks iCloud for the sync folder's copy, so the delivery can be pruned once it's there.
-    func courierBlob(_ sha256: String) -> URL? {
-        guard let delivered = inboxCopy("Blobs/\(sha256)") else { return nil }
-        let remote = blobURL(sha256)
-        switch SyncFiles.itemState(remote) {
-        case .local: return nil
-        case .inCloud: try? cloud.requestDownload(remote); return delivered
-        case .absent: return delivered
-        }
-    }
-
     /// Removes a delivery that no longer matches its SHA-256; iCloud Drive's copy takes over.
     func discardDelivery(_ url: URL) {
         guard (try? SyncFiles.noSymlinks(url, below: inboxBase)) != nil else { return }
@@ -150,6 +149,14 @@ extension LibrarySyncEngine {
         try SyncFiles.noSymlinks(destination, below: inboxBase)
         let size = (try? contents.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])).flatMap { $0.isRegularFile == true ? $0.fileSize : nil }
         guard let size, Int64(size) == file.size else { return .rejected("\(file.path) arrived incomplete.") }
+        // A sealed file must say it's of this library and the kind its folder holds (it's opened when it's read).
+        if let directory = file.directory, let kind = SealedKind(directory: directory) {
+            let handle = try FileHandle(forReadingFrom: contents)
+            let header = try handle.read(upToCount: SealedHeader.size) ?? Data()
+            try? handle.close()
+            guard let sealed = SealedObject.header(of: header), sealed.kind == kind else { return .rejected("\(file.path) isn’t a sealed \(kind) file.") }
+            guard sealed.libraryID == libraryID else { return .rejected("\(file.path) belongs to another library.") }
+        }
         try LocalFiles.directory(destination.deletingLastPathComponent())
         let temporary = destination.deletingLastPathComponent().appendingPathComponent(".incoming-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: temporary) }
@@ -183,14 +190,19 @@ extension LibrarySyncEngine {
                 guard (try? SyncFiles.noSymlinks(url, below: inboxBase)) != nil else { continue }
                 if name.hasPrefix(".") { try? fm.removeItem(at: url); continue }
                 let remote = remoteRoot.appendingPathComponent(directory, isDirectory: true).appendingPathComponent(name)
-                let expected = SyncJournalFile.address(of: name, in: directory)
+                // A plaintext file's name is its content; a sealed one's copies are compared byte for byte.
+                guard let expected = SyncJournalFile.address(of: name, in: directory)
+                        ?? (try? SyncFiles.coordinateRead(url, below: inboxBase) { try SyncDigest.sha256(fileURL: $0) }) else { continue }
                 let state = SyncFiles.itemState(remote)
                 if state == .local,
                    (try? SyncFiles.coordinateRead(remote, below: remoteRoot) { try SyncDigest.sha256(fileURL: $0) }) == expected {
                     try? fm.removeItem(at: url)
+                } else if !directory.hasPrefix("Sealed/"), sealing != nil, sealedCounterpartExists(name, in: directory) {
+                    // A plaintext delivery in an encrypted library, sealed since (the sealer read it): not needed.
+                    try? fm.removeItem(at: url)
                 } else {
                     if state == .absent, let arrived = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
-                       now.timeIntervalSince(arrived) >= Self.courierPromotionDelay {
+                       now.timeIntervalSince(arrived) >= Self.courierPromotionDelay, mayPromote(url, directory: directory, name: name) {
                         promoteDelivery(url, to: remote, expected: expected)
                     }
                     waiting += 1
@@ -200,9 +212,29 @@ extension LibrarySyncEngine {
         return waiting
     }
 
+    /// Whether a plaintext delivery's entry or object (named by its SHA-256) is in the sync folder sealed under the
+    /// current key.
+    private func sealedCounterpartExists(_ name: String, in directory: String) -> Bool {
+        guard let sealing, let kind = SealedKind(directory: "Sealed/\(directory)"),
+              let sealed = sealing.current.objectName(kind, plaintextSHA256: SyncJournalFile.address(of: name, in: directory) ?? "") else { return false }
+        return SyncFiles.itemState(remoteRoot.appendingPathComponent("Sealed/\(directory)/\(sealed)")) != .absent
+    }
+
+    /// Whether a delivery may be written into the sync folder: a plaintext one was verified against its name when it
+    /// arrived, and only into a plaintext library (an encrypted one never receives plaintext from this device); a sealed
+    /// one must open with a key held here (so it really is the object its name says).
+    private func mayPromote(_ delivery: URL, directory: String, name: String) -> Bool {
+        guard let kind = SealedKind(directory: directory) else { return sealing == nil && waitingForKey == nil && !syncedSealedLibraryHere }
+        guard let sealing else { return false }
+        return (try? SyncFiles.coordinateRead(delivery, below: inboxBase) { source in
+            try SealedObject.openFile(source, to: nil, kind: kind, libraryID: sealing.libraryID, keyring: sealing.keyring, expectedName: name)
+        }) != nil
+    }
+
     /// Writes a verified delivery into the sync folder where nothing holds its name. Best effort: a failure leaves it
     /// waiting in the inbox for the next pass.
     private func promoteDelivery(_ delivery: URL, to remote: URL, expected: String) {
+        try? LocalFiles.directory(remote.deletingLastPathComponent())
         try? SyncFiles.coordinateWrite(remote, below: remoteRoot) { target in
             guard !self.fm.fileExists(atPath: target.path) else { return }
             let temporary = target.deletingLastPathComponent().appendingPathComponent(".promote-\(UUID().uuidString)")

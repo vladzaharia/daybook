@@ -457,4 +457,8 @@ public enum LinkMessage: Sendable, Equatable {
     case recorderHandoffRequest(LinkRecorderHandoffRequest)
     case recorderHandoffReply(LinkRecorderHandoffReply)
     case recorderRelease(LinkRecorderRelease)
+    /// An encrypted library's key (LinkLibraryKey.swift): asked for by a device waiting for it, and sent by one that
+    /// holds it.
+    case libraryKeyRequest(LinkLibraryKeyRequest)
+    case libraryKeyGrant(LinkLibraryKeyGrant)
 }

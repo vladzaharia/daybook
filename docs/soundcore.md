@@ -61,7 +61,7 @@ The direct method, its connection state machine, integrity checks, and tests are
 
 The default library is `~/Library/Application Support/Daybook`. Each meeting has an immutable-originals directory, current JSON metadata, and the previous valid metadata snapshot. Writes replace metadata atomically. A corrupt current file can recover from the previous snapshot; the damaged file is retained for diagnosis. Unrecoverable meetings produce visible warnings without hiding other meetings. Paths that escape the meeting directory, including through symlinks, are rejected.
 
-Files use user-only POSIX permissions. This version does not implement application-level encryption; it relies on the Mac's account and disk protections. Daybook can optionally sync the library through a chosen iCloud Drive folder. Inference remains local. See [iCloud sync](icloud-sync.md) for conflict handling, scope, and recovery.
+Files use user-only POSIX permissions. The local library isn't encrypted by Daybook; it relies on the Mac's account and disk protections. Daybook can optionally sync the library through iCloud, end-to-end encrypted once that's turned on ([encryption](icloud-sync.md#encryption)). Inference remains local. See [iCloud sync](icloud-sync.md) for conflict handling, scope, and recovery.
 
 Corrections preserve the original transcript and append revision history. Proposed vocabulary stays scoped to its originating meeting. Only vocabulary explicitly approved by the user is available across meetings, so an automatically discovered therapy term does not silently enter a work-meeting prompt.
 

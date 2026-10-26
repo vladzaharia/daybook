@@ -106,7 +106,7 @@ Automatic recording is off initially. Turn it on in **Settings › General**. De
 
 `swift run Daybook` and other unbundled runs keep a separate library, `~/Library/Application Support/Daybook Development` (with its own models), so development never opens the app's library.
 
-Library directories and files restrict access to the current macOS user. Inference never uploads audio or text. Sync stores the library in Daybook's container in your iCloud account (turn it off in Settings › Library); no analytics service is used. Daybook does not add application-level encryption; protection depends on your Mac and iCloud settings. Sync preserves deleted conversations in local Trash and historical journal entries. Deletion tombstones prevent stale Macs from resurrecting the same meeting ID. See [sync architecture and recovery](docs/icloud-sync.md) before restoring a synced deletion.
+Library directories and files restrict access to the current macOS user. Inference never uploads audio or text. Sync stores the library in Daybook's container in your iCloud account (turn it off in Settings › Library); no analytics service is used. The library in iCloud can be encrypted end to end with a key kept in iCloud Keychain (Settings › Library › Encrypt Library in iCloud; see [encryption](docs/icloud-sync.md#encryption)); otherwise protection depends on your Mac and iCloud settings. Sync preserves deleted conversations in local Trash and historical journal entries. Deletion tombstones prevent stale Macs from resurrecting the same meeting ID. See [sync architecture and recovery](docs/icloud-sync.md) before restoring a synced deletion.
 
 ## Verify
 

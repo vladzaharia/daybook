@@ -18,7 +18,8 @@
 #   - CFBundleShortVersionString or CFBundleVersion of the app or any extension differs from
 #     --version / --build (an extension must match its app).
 #   - a bundle identifier isn't the expected one (local.daybook.phone, local.daybook.phone.widgets).
-#   - the archive is signed and the app lacks the app group or iCloud container entitlements.
+#   - the archive is signed and the app lacks the app group or iCloud container entitlements, or its keychain groups
+#     aren't its own and then the shared one (library keys for an encrypted library).
 set -euo pipefail
 
 archive=""
@@ -129,6 +130,15 @@ if codesign --verify --strict "$app" >/dev/null 2>&1; then
             problem "the signed app lacks the $needle entitlement"
         fi
     done
+    # Keychain groups: the app's own first (the default for items stored without a group), then the one the Mac app
+    # shares for an encrypted library's keys (docs/icloud-sync.md, "Encryption"). Each carries the team prefix.
+    groups="$(printf '%s' "$entitlements" | plutil -extract keychain-access-groups json -o - - 2>/dev/null || true)"
+    pattern='^\["[A-Z0-9]{10}\.local\.daybook\.phone","[A-Z0-9]{10}\.local\.daybook\.shared"\]$'
+    if [[ "$groups" =~ $pattern ]]; then
+        ok "keychain groups: $groups"
+    else
+        problem "keychain-access-groups is ${groups:-missing}, not [<team>.local.daybook.phone, <team>.local.daybook.shared] in that order. The provisioning profile must grant <team>.* (docs/release.md, Capabilities and entitlements)."
+    fi
 else
     echo "note: $(basename "$app") isn't signed; skipping the entitlement check"
 fi

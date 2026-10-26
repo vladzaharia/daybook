@@ -39,6 +39,7 @@ struct SyncSection: View {
                 NavigationLink(value: SettingsRoute.libraryDevices) {
                     LabeledContent("Devices in This Library", value: devicesSummary)
                 }
+                EncryptionRows()
             } else if case .unavailable = sync.connection {
                 if model.cloud.settingsCanFix, let url = URL(string: UIApplication.openSettingsURLString) {
                     Button("Open Settings") { openURL(url) }

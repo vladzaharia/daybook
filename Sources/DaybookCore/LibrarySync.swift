@@ -34,10 +34,18 @@ public enum SyncPassScope: Sendable {
     case metadataOnly
 }
 
-public enum LibrarySyncError: LocalizedError {
+public enum LibrarySyncError: LocalizedError, Equatable {
     case unsafeLocation, invalidManifest, manifestConflict, unsupportedVersion(Int), invalidEvent(String), invalidBlob(String), missingLocalAudio(String), corruptState, invalidCheckpoint
     /// No library is visible in the sync folder yet, and iCloud hasn't finished listing it: one may be there.
     case waitingForICloud
+    /// The library is encrypted and this device doesn't hold its current key (by ID, hex) yet. Nothing was read or
+    /// written; local edits wait. Every pass checks the keychain again.
+    case keyUnavailable(String)
+    /// This device synced an encrypted library here, and the library there now isn't encrypted: sync pauses rather
+    /// than publish plaintext (`SealingMemory`).
+    case sealingRemoved
+    /// This build can't keep a library key (no keychain group: an unsigned or ad hoc build).
+    case keyStoreUnavailable
     public var errorDescription: String? {
         switch self {
         case .unsafeLocation: return "The sync folder must be separate from the local library and cannot contain symbolic links."
@@ -50,6 +58,9 @@ public enum LibrarySyncError: LocalizedError {
         case .corruptState: return "Sync stopped: this device’s sync record is unreadable."
         case .invalidCheckpoint: return "Sync again to finish."
         case .waitingForICloud: return "Waiting for iCloud…"
+        case .keyUnavailable: return "Your library in iCloud is encrypted. Waiting for its key from iCloud Keychain."
+        case .sealingRemoved: return "The library in iCloud is no longer encrypted."
+        case .keyStoreUnavailable: return "This build of Daybook can’t keep encryption keys."
         }
     }
 }
@@ -76,18 +87,19 @@ public actor LibrarySyncEngine {
     // reading again. The directory listing each pass remains the source of truth for membership.
     // Every event's header stays in memory; a snapshot is kept only while passes use it (a head, or the
     // base of a merge) and is otherwise read again when needed, so memory follows the library, not its history.
-    private var eventCache: [String: SyncEventHeader] = [:]
+    var eventCache: [String: SyncEventHeader] = [:]
     private var snapshotCache: [String: Meeting] = [:]
     private var snapshotsUsed: Set<String> = []
-    private var metadataCache: [String: SyncMetadataRecord] = [:]
+    var metadataCache: [String: SyncMetadataRecord] = [:]
     /// Journal entries that can't be read (a newer format, damage), with the warning to show. Never retried
     /// in this process: an entry's content can't change. A relaunch (perhaps after an update) reads them again.
-    private var unreadableJournal: [String: String] = [:]
-    private var ownJournalWrites: Set<String> = []
+    var unreadableJournal: [String: String] = [:]
+    /// Paths of the journal files this pass wrote, so it doesn't count them as remote changes.
+    var ownJournalWrites: Set<String> = []
     /// Whether each event or one of its ancestors carries photos (`resolvedSnapshot`).
     private var photoLineage: [String: Bool] = [:]
     /// Files written into the sync folder that no returned pass has reported yet (`SyncResult.writtenFiles`).
-    private var courierWrites: [String: SyncJournalFile] = [:]
+    var courierWrites: [String: SyncJournalFile] = [:]
     /// Devices that wrote the journal entries seen by the last pass, including ones without presence.
     var journalDeviceIDs: Set<String> = []
     /// Journal file names seen by the last pass that finished with nothing pending or deferred.
@@ -103,6 +115,26 @@ public actor LibrarySyncEngine {
     public internal(set) var libraryID: UUID?
     var audioIndexStorage: AudioCacheIndex?
     var audioIndexDirty = false
+    /// Where this device keeps library keys (`SyncReplicaConfiguration.keyStore`).
+    let keyStore: (any LibraryKeyStore)?
+    /// An encrypted library's manifest and the keys held here, once a pass has read it (nil: plaintext, or no key).
+    var sealing: SealingState?
+    /// The current key (hex) of an encrypted library this device can't open yet.
+    public internal(set) var waitingForKey: String?
+    /// A manifest has been read (a pass, or presence looking first), so `sealing` and `waitingForKey` say what it is.
+    var manifestChecked = false
+    /// Sealed entries already opened, by path: the entry ID (SHA-256 of the plaintext record) each holds, and its key.
+    var sealedNames: [String: String] = [:]
+    var sealedKeys: [String: Data] = [:]
+    /// Where each event was read, by ID, to read its snapshot again (sealed files have other names).
+    var journalLocations: [String: URL] = [:]
+    /// Sealed files this process read back and found whole (the sealer's retirement needs it).
+    var sealerVerified: Set<String> = []
+    /// What the sealer reported on the last pass that ran it.
+    public internal(set) var sealerProgress: SealerProgress?
+    /// The sealer's clock (tests move it past the grace periods).
+    var sealerClock: @Sendable () -> Date = { Date() }
+    func setSealerClock(_ clock: @escaping @Sendable () -> Date) { sealerClock = clock }
 
     /// `waitsForListing`: in the iCloud container, a library (`daybook-sync.json`) isn't created until
     /// `listingGathered()` says iCloud has listed what's there, so a fresh device doesn't start a second library
@@ -116,7 +148,7 @@ public actor LibrarySyncEngine {
         self.localRoot = localRoot.standardizedFileURL
         self.remoteRoot = remoteRoot.standardizedFileURL
         self.deviceID = deviceID
-        audioPolicy = replica.audioPolicy; cloud = replica.cloud; device = replica.device
+        audioPolicy = replica.audioPolicy; cloud = replica.cloud; device = replica.device; keyStore = replica.keyStore
         audioCachePolicy = replica.audioCache; presenceRefreshInterval = replica.presenceRefreshInterval
         let local = localRoot.standardizedFileURL.resolvingSymlinksInPath().path
         let remote = remoteRoot.standardizedFileURL.resolvingSymlinksInPath().path
@@ -138,6 +170,12 @@ public actor LibrarySyncEngine {
         try Task.checkCancellation()
         let manifest = try prepareRemote()
         libraryID = manifest.libraryID
+        // An encrypted library whose key isn't here: nothing is read or written (the library never receives plaintext
+        // from this device), and local edits wait. Presence says this device is waiting for the key.
+        do { try loadSealing(manifest) } catch {
+            if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
+            throw error
+        }
         try loadCheckpoint(libraryID: manifest.libraryID, superseding: manifest.supersedes ?? [])
         if scope == .metadataOnly { return try synchronizeMetadataOnly(libraryMetadata, limits: limits) }
         var budget = SyncPassBudget(limits)
@@ -151,29 +189,38 @@ public actor LibrarySyncEngine {
         var events: [String: SyncEventHeader] = [:]
         var metadata: [String: SyncMetadataRecord] = [:]
         ownJournalWrites = []
-        let eventURLs = try journalListing(in: "Events"), metadataURLs = try journalListing(in: "Metadata")
-        for url in eventURLs {
+        let eventEntries = try journalEntries(.event), metadataEntries = try journalEntries(.metadata)
+        for entry in eventEntries {
             try Task.checkCancellation()
-            let name = url.deletingPathExtension().lastPathComponent
-            if let cached = eventCache[name] { events[name] = cached; continue }
-            if let reason = unreadableJournal[name] { warnings.append(reason); unreadJournalFiles += 1; continue }
+            // An entry's ID is its name when plaintext; a sealed one's is known once it has been opened.
+            let name = entry.isSealed ? sealedNames[entry.path] : entry.name
+            if let name, let cached = eventCache[name] { events[name] = cached; continue }
+            let unreadableKey = entry.isSealed ? entry.path : entry.name
+            if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); unreadJournalFiles += 1; continue }
             guard budget.admitJournalRead() else { continue }
             do {
-                let bytes = try readJournal(url, in: "Events")
-                let hash = try eventHash(url, bytes: bytes)
+                let (hash, bytes) = try readEntry(entry, kind: .event)
+                // Where to read its snapshot again: preferably sealed under the current key, which outlives the rest.
+                if entry.isSealed, journalLocations[hash] == nil || sealedKeys[entry.path] == sealing?.current.id { journalLocations[hash] = entry.url }
+                // The same entry, sealed and from before (or under two keys), is one entry.
+                if let cached = eventCache[hash] { events[hash] = cached; continue }
                 try requireSupportedVersion(bytes)
                 let event = try decoder.decode(SyncEventRecord.self, from: bytes)
                 guard event.schemaVersion == 1, event.parents.allSatisfy(SyncFiles.isHash),
-                      event.deleted != (event.snapshot != nil), event.snapshot?.id == event.meetingID || event.deleted else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
+                      event.deleted != (event.snapshot != nil), event.snapshot?.id == event.meetingID || event.deleted else { throw LibrarySyncError.invalidEvent(entry.url.lastPathComponent) }
                 if let snapshot = event.snapshot { try validate(snapshot: snapshot, assets: event.assets) }
                 let header = SyncEventHeader(event)
                 events[hash] = header; eventCache[hash] = header
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
             catch let error as CancellationError { throw error }
-            catch where Self.isPermanent(error) { warnings.append(markUnreadable(name, error)); unreadJournalFiles += 1 }
+            catch where Self.isPermanent(error) {
+                warnings.append(markUnreadable(unreadableKey, error)); unreadJournalFiles += 1
+                // A sealed entry opened but unreadable (a newer format) is unreadable by its ID too, which parents name.
+                if entry.isSealed, let id = sealedNames[entry.path] { unreadableJournal[id] = unreadableJournal[unreadableKey] }
+            }
             catch { warnings.append(error.localizedDescription); pendingDownloads += 1; unreadJournalFiles += 1 }
         }
-        let metadataRead = try readMetadata(metadataURLs, budget: &budget, warnings: &warnings)
+        let metadataRead = try readMetadata(metadataEntries, budget: &budget, warnings: &warnings)
         metadata = metadataRead.records
         metadataIncomplete = metadataRead.incomplete
         pendingDownloads += metadataRead.downloading; unreadJournalFiles += metadataRead.downloading
@@ -185,8 +232,11 @@ public actor LibrarySyncEngine {
             warnings.append(markUnreadable(id, LibrarySyncError.invalidEvent(id))); unreadJournalFiles += 1
         }
         // A parent that couldn't be read holds back its descendants until an update can read it; that isn't a
-        // download to wait for. Only parents not listed or not downloaded yet are.
-        let unknownParents = Set(events.values.flatMap(\.parents)).subtracting(events.keys).filter { unreadableJournal[$0] == nil }
+        // download to wait for. Only parents not listed or not downloaded yet are. An encrypted library keeps only the
+        // deletion of a deleted conversation (LibrarySyncSealer.swift), so its parents aren't waited for there.
+        let deletedConversations = sealing == nil ? [] : Set(events.values.filter(\.deleted).map(\.meetingID))
+        let unknownParents = Set(events.values.filter { !deletedConversations.contains($0.meetingID) }.flatMap(\.parents))
+            .subtracting(events.keys).filter { unreadableJournal[$0] == nil }
         if !unknownParents.isEmpty {
             pendingDownloads += unknownParents.count
             warnings.append("Some changes are waiting for the next sync.")
@@ -279,6 +329,8 @@ public actor LibrarySyncEngine {
         let unreadable = Set(unreadableJournal.keys)
         let settledAncestors = unreadable.isEmpty ? completeAncestors : try completeAncestorIDs(events: events, budget: &budget, present: unreadable)
         var memo = MergeMemo()
+        /// What each conversation's merge uses, for the sealer of an encrypted library.
+        var liveAssets: [UUID: [SyncAsset]] = [:]
         /// Deleted elsewhere but kept here this pass (protected, or waiting to read what the deletion saw).
         var held = Set<UUID>()
         var examinedDeletions = Set<UUID>()
@@ -295,7 +347,8 @@ public actor LibrarySyncEngine {
                     if protecting.contains(meetingID) { held.insert(meetingID); continue }
                     do {
                         if let fork = try keepContentAddedAfterDeletion(local, deletions: ids.filter { events[$0]?.deleted == true },
-                                                                       events: events, memo: &memo, supplied: output) {
+                                                                       events: events, memo: &memo, supplied: output,
+                                                                       parentsMayBeRetired: !journalIncomplete && sealing?.manifest.legacyRetired != nil) {
                             output[fork.id] = fork; changed.insert(fork.id)
                             if audioPolicy == .onDemand {
                                 let missing = Set(fork.tracks.filter { availability(of: $0, in: fork.id) == .notLocal }.map(\.id))
@@ -334,6 +387,7 @@ public actor LibrarySyncEngine {
                 warnings += memo.warnings
                 let assets = mergedAssets(for: merged, eventIDs: ids, events: events)
                 try validate(snapshot: merged, assets: assets)
+                liveAssets[meetingID] = assets
                 switch audioPolicy {
                 case .eager:
                     try hydrate(assets, meetingID: meetingID, warnings: &warnings, budget: &budget)
@@ -376,17 +430,25 @@ public actor LibrarySyncEngine {
         try saveCheckpoint()
         retainCaches(heads: Set(proposedHeads.values.joined()).union(state.heads.values.joined()),
                      metadataHeads: Set(metadataHeads).union(state.metadataHeads))
+        // An encrypted library: seal what's live from before (or under an older key), and retire what's no longer
+        // needed once it's safe. Nothing here changes what this pass returns.
+        if sealing != nil, !Task.isCancelled {
+            let liveConversations = Set(grouped.keys).subtracting(deletes)
+            let complete = pendingDownloads == 0 && budget.deferred == 0 && !journalIncomplete && !metadataIncomplete
+                && liveConversations.isSubset(of: liveAssets.keys)
+            sealerProgress = runSealer(SealerInput(events: events, metadata: metadata, eventEntries: eventEntries, metadataEntries: metadataEntries,
+                                                   deleted: deletes, liveAssets: liveAssets, complete: complete), budget: &budget, now: sealerClock())
+        }
         // A coordinated local write is not necessarily uploaded to iCloud yet.
         pendingUploads += try countPendingCloudUploads()
         try saveAudioIndexIfNeeded()
         // Courier deliveries the sync folder now holds, downloaded and identical, aren't needed any more.
         pruneCourierInbox()
-        let listing = Set((eventURLs + metadataURLs).map(\.lastPathComponent)).union(ownJournalWrites)
+        let listing = Set((eventEntries + metadataEntries).map(\.path)).union(ownJournalWrites)
         settledJournalListing = pendingDownloads == 0 && budget.deferred == 0 ? listing : nil
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
-        let written = courierWrites.values.sorted { $0.path < $1.path }
-        courierWrites = [:]
+        let written = takeCourierWrites()
         return SyncResult(checkpointID: checkpointID, meetings: output.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date > $1.date },
             deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
             pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
@@ -394,29 +456,33 @@ public actor LibrarySyncEngine {
     }
 
     /// Reads the library settings versions, first-time reads within `budget`.
-    private func readMetadata(_ urls: [URL], budget: inout SyncPassBudget, warnings: inout [String])
+    private func readMetadata(_ entries: [JournalEntry], budget: inout SyncPassBudget, warnings: inout [String])
         throws -> (records: [String: SyncMetadataRecord], incomplete: Bool, downloading: Int) {
         var metadata: [String: SyncMetadataRecord] = [:]
         var incomplete = false, downloading = 0
-        for url in urls {
+        for entry in entries {
             try Task.checkCancellation()
-            let name = url.deletingPathExtension().lastPathComponent
-            if let cached = metadataCache[name] { metadata[name] = cached; continue }
-            if let reason = unreadableJournal[name] { warnings.append(reason); continue }
+            let name = entry.isSealed ? sealedNames[entry.path] : entry.name
+            if let name, let cached = metadataCache[name] { metadata[name] = cached; continue }
+            let unreadableKey = entry.isSealed ? entry.path : entry.name
+            if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); continue }
             guard budget.admitJournalRead() else { incomplete = true; continue }
             do {
-                let bytes = try readJournal(url, in: "Metadata")
-                let hash = try eventHash(url, bytes: bytes)
+                let (hash, bytes) = try readEntry(entry, kind: .metadata)
+                if let cached = metadataCache[hash] { metadata[hash] = cached; continue }
                 try requireSupportedVersion(bytes)
                 let record = try decoder.decode(SyncMetadataRecord.self, from: bytes)
-                guard record.schemaVersion == 1, record.parents.allSatisfy(SyncFiles.isHash) else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
+                guard record.schemaVersion == 1, record.parents.allSatisfy(SyncFiles.isHash) else { throw LibrarySyncError.invalidEvent(entry.url.lastPathComponent) }
                 // Library settings a newer Daybook wrote in a format this one can't merge stay out of the heads here;
                 // they stay heads for the devices that read them, since nothing here is ever published over them.
                 try requireSupportedVersion(record.data)
                 metadata[hash] = record; metadataCache[hash] = record
             } catch is SyncPendingDownload { downloading += 1; incomplete = true }
             catch let error as CancellationError { throw error }
-            catch where Self.isPermanent(error) { warnings.append(markUnreadable(name, error)) }
+            catch where Self.isPermanent(error) {
+                warnings.append(markUnreadable(unreadableKey, error))
+                if entry.isSealed, let id = sealedNames[entry.path] { unreadableJournal[id] = unreadableJournal[unreadableKey] }
+            }
             catch { warnings.append(error.localizedDescription); downloading += 1; incomplete = true }
         }
         return (metadata, incomplete, downloading)
@@ -445,7 +511,7 @@ public actor LibrarySyncEngine {
         var warnings: [String] = []
         var pendingDownloads = 0, published = 0
         ownJournalWrites = []
-        let read = try readMetadata(try journalListing(in: "Metadata"), budget: &budget, warnings: &warnings)
+        let read = try readMetadata(try journalEntries(.metadata), budget: &budget, warnings: &warnings)
         var metadata = read.records
         pendingDownloads += read.downloading
         if let libraryMetadata, SyncDigest.sha256(data: libraryMetadata) != state.metadataSubmittedHash {
@@ -466,8 +532,7 @@ public actor LibrarySyncEngine {
         // Conversations weren't read: the next full pass decides what's new.
         settledJournalListing = nil
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
-        let written = courierWrites.values.sorted { $0.path < $1.path }
-        courierWrites = [:]
+        let written = takeCourierWrites()
         return SyncResult(checkpointID: checkpointID, meetings: [], deletedMeetingIDs: [], metadataVersions: settings.versions,
                           warnings: Array(Set(warnings)).sorted(), pendingDownloads: pendingDownloads, pendingUploads: 0,
                           publishedEvents: published, deferredItems: budget.deferred, writtenFiles: written)
@@ -477,15 +542,25 @@ public actor LibrarySyncEngine {
     /// it all, files included, named deterministically by the deletion so every device that keeps it makes the
     /// same one. Nil when there's nothing new to keep (the deletion simply applies).
     private func keepContentAddedAfterDeletion(_ local: Meeting, deletions: [String], events: [String: SyncEventHeader],
-                                               memo: inout MergeMemo, supplied: [UUID: Meeting]) throws -> Meeting? {
+                                               memo: inout MergeMemo, supplied: [UUID: Meeting],
+                                               parentsMayBeRetired: Bool = false) throws -> Meeting? {
         // The deletion itself, and what the device that deleted it had (the merge of its parents), must be read
         // before anything is judged new: a parent still downloading or deferred holds the conversation.
         guard !deletions.isEmpty else { throw SyncPendingDownload() }
         let allParents = Set(deletions.flatMap { events[$0]?.parents ?? [] })
-        if allParents.contains(where: { events[$0] == nil && unreadableJournal[$0] == nil }) { throw SyncPendingDownload() }
+        var retiredParents = false
+        if allParents.contains(where: { events[$0] == nil && unreadableJournal[$0] == nil }) {
+            // An encrypted library keeps only a deleted conversation's deletion once its plaintext is retired (the
+            // sealer, LibrarySyncSealer.swift): with the journal read in full, a parent that isn't there is gone, not
+            // on its way. Unchanged here since this device last synced it, the deletion applies; with changes of
+            // its own, those are kept as a new conversation.
+            guard parentsMayBeRetired else { throw SyncPendingDownload() }
+            if state.bases[local.id.uuidString] == local { return nil }
+            retiredParents = true
+        }
         let parents = allParents.filter { events[$0]?.deleted == false }
         // A parent this version can't read: what the deletion saw is unknown, so the deletion simply applies.
-        if parents.count < allParents.filter({ events[$0]?.deleted != true }).count { return nil }
+        if !retiredParents, parents.count < allParents.filter({ events[$0]?.deleted != true }).count { return nil }
         let seen = parents.isEmpty ? nil : try mergedSnapshot(of: Array(parents), events: events, memo: &memo)
         guard local.hasContent(notIn: seen) else { return nil }
         let forkID = SyncEncoding.uuid("\(local.id.uuidString):kept-after-deletion:\(deletions.sorted().joined(separator: ","))")
@@ -515,9 +590,8 @@ public actor LibrarySyncEngine {
     /// True when another replica added journal entries since the last pass that settled (nothing pending or
     /// deferred), or when no pass has settled in this process. Local edits are the caller's to track.
     public func hasRemoteChanges() -> Bool {
-        guard let settled = settledJournalListing,
-              let events = try? journalListing(in: "Events"), let metadata = try? journalListing(in: "Metadata") else { return true }
-        return Set((events + metadata).map(\.lastPathComponent)) != settled
+        guard let settled = settledJournalListing, let listing = try? listingPaths() else { return true }
+        return listing != settled
     }
 
     /// Commit causal acknowledgement only after the caller has saved the returned library.
@@ -542,33 +616,59 @@ public actor LibrarySyncEngine {
         } catch { state = previous; throw error }
     }
 
-    private func prepareRemote() throws -> SyncManifest {
+    func prepareRemote() throws -> SyncManifest {
         try SyncFiles.noSymlinks(remoteRoot, below: remoteRoot)
         try LocalFiles.directory(remoteRoot)
-        for name in ["Events", "Blobs", "Metadata"] {
-            let directory = remoteRoot.appendingPathComponent(name, isDirectory: true)
-            try SyncFiles.noSymlinks(directory, below: remoteRoot); try LocalFiles.directory(directory)
-        }
+        // A plaintext library's folders, as always. A sync folder this device knows holds an encrypted library gets its
+        // sealed folders instead, once the manifest says so.
+        let sealedHere = syncedSealedLibraryHere
+        if !sealedHere { try prepareFolders(["Events", "Blobs", "Metadata"]) }
         let manifestURL = remoteRoot.appendingPathComponent("daybook-sync.json")
         try SyncFiles.available(manifestURL, cloud: cloud)
         let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: manifestURL) ?? []
         let copies = manifestCopies()
-        if !conflicts.isEmpty || !copies.isEmpty { return try resolveManifest(at: manifestURL, conflicts: conflicts, copies: copies) }
-        if fm.fileExists(atPath: manifestURL.path) {
-            let existing = try decoder.decode(SyncManifest.self, from: SyncFiles.read(manifestURL, below: remoteRoot, cloud: cloud))
-            guard existing.format == "DaybookSync" else { throw LibrarySyncError.invalidManifest }
-            guard existing.schemaVersion == 1 else { throw LibrarySyncError.unsupportedVersion(existing.schemaVersion) }
-            return existing
+        let manifest: SyncManifest
+        if !conflicts.isEmpty || !copies.isEmpty {
+            manifest = try resolveManifest(at: manifestURL, conflicts: conflicts, copies: copies)
+        } else if fm.fileExists(atPath: manifestURL.path) {
+            manifest = try SyncManifest.checked(SyncManifest.decode(SyncFiles.read(manifestURL, below: remoteRoot, cloud: cloud)))
+        } else {
+            guard mayCreateLibrary else { throw LibrarySyncError.waitingForICloud }
+            // The encrypted library this device synced here is gone: starting a plaintext one in its place would be
+            // a downgrade. The person resets encryption instead.
+            guard !sealedHere else { throw LibrarySyncError.sealingRemoved }
+            manifest = try createLibrary(at: manifestURL)
         }
-        guard mayCreateLibrary else { throw LibrarySyncError.waitingForICloud }
+        // Downgrade defense: a plaintext manifest where this device synced an encrypted library.
+        if sealedHere, !manifest.isSealed { throw LibrarySyncError.sealingRemoved }
+        if manifest.isSealed { try prepareFolders(["Sealed", "Sealed/Events", "Sealed/Metadata", "Sealed/Blobs"]) }
+        return manifest
+    }
+
+    private func prepareFolders(_ names: [String]) throws {
+        for name in names {
+            let directory = remoteRoot.appendingPathComponent(name, isDirectory: true)
+            try SyncFiles.noSymlinks(directory, below: remoteRoot); try LocalFiles.directory(directory)
+        }
+    }
+
+    /// Starts a library: plaintext, or encrypted from the start when `sealsNewLibraries` (its key stored and read
+    /// back before the manifest names it). Another device's manifest written meanwhile is kept instead.
+    private func createLibrary(at manifestURL: URL) throws -> SyncManifest {
         var result = SyncManifest(libraryID: UUID())
+        if Self.sealsNewLibraries, let keyStore {
+            let key = LibraryKey.generate(libraryID: result.libraryID, createdBy: deviceID)
+            try keyStore.store(key)
+            result.schemaVersion = SyncManifest.sealedSchemaVersion
+            result.sealing = SyncManifest.Sealing(current: key.idHex, sealedSince: key.createdAt, migrator: deviceID,
+                                                  keys: [SyncManifest.Sealing.Key(id: key.idHex, created: key.createdAt)])
+        }
         try SyncFiles.coordinateWrite(manifestURL, below: remoteRoot) { url in
             if self.fm.fileExists(atPath: url.path) {
-                result = try self.decoder.decode(SyncManifest.self, from: Data(contentsOf: url))
-            } else { try LocalFiles.atomicWrite(SyncEncoding.data(result), to: url) }
+                result = try SyncManifest.decode(Data(contentsOf: url))
+            } else { try LocalFiles.atomicWrite(result.encoded(), to: url) }
         }
-        guard result.format == "DaybookSync", result.schemaVersion == 1 else { throw LibrarySyncError.invalidManifest }
-        return result
+        return try SyncManifest.checked(result)
     }
 
     /// iCloud has listed the sync folder: if no library is there, this device may start one.
@@ -586,32 +686,52 @@ public actor LibrarySyncEngine {
     /// names the others it supersedes, so each device continues from its checkpoint for whichever it had (see
     /// `loadCheckpoint`). The journal is shared either way; only its identity changes.
     private func resolveManifest(at url: URL, conflicts: [NSFileVersion], copies: [URL]) throws -> SyncManifest {
+        // A version from a newer Daybook is remembered (and refused below), not mistaken for damage.
+        var newer: Int?
         func decode(_ data: Data) -> SyncManifest? {
-            guard let manifest = try? decoder.decode(SyncManifest.self, from: data), manifest.format == "DaybookSync" else { return nil }
-            return manifest
+            do { return try SyncManifest.decode(data) } catch LibrarySyncError.unsupportedVersion(let version) { newer = version; return nil } catch { return nil }
         }
         var candidates: [SyncManifest] = []
         var current: SyncManifest?
         if fm.fileExists(atPath: url.path) {
-            guard let manifest = decode(try SyncFiles.read(url, below: remoteRoot, cloud: cloud)) else { throw LibrarySyncError.invalidManifest }
+            guard let manifest = decode(try SyncFiles.read(url, below: remoteRoot, cloud: cloud)) else {
+                if let newer { throw LibrarySyncError.unsupportedVersion(newer) }
+                throw LibrarySyncError.invalidManifest
+            }
             current = manifest; candidates.append(manifest)
         }
         for version in conflicts {
             // A version that can't be read yet can't be resolved; the person sees the conflict.
-            guard let data = try? Data(contentsOf: version.url), let manifest = decode(data) else { throw LibrarySyncError.manifestConflict }
+            guard let data = try? Data(contentsOf: version.url), let manifest = decode(data) else {
+                if let newer { throw LibrarySyncError.unsupportedVersion(newer) }
+                throw LibrarySyncError.manifestConflict
+            }
             candidates.append(manifest)
         }
         for copy in copies {
             guard SyncFiles.itemState(copy) == .local, let data = try? SyncFiles.read(copy, below: remoteRoot, cloud: cloud), let manifest = decode(data) else { continue }
             candidates.append(manifest)
         }
-        if let newer = candidates.first(where: { $0.schemaVersion != 1 }) { throw LibrarySyncError.unsupportedVersion(newer.schemaVersion) }
-        guard let winner = candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else { throw LibrarySyncError.manifestConflict }
+        if let newer { throw LibrarySyncError.unsupportedVersion(newer) }
+        for candidate in candidates { _ = try SyncManifest.checked(candidate) }
+        // An encrypted library wins over plaintext ones (whichever ID is smaller): it never becomes plaintext again, and
+        // the others' devices carry on in it once they have its key. Two encrypted libraries can't be merged: sync pauses.
+        let sealedIDs = Set(candidates.filter(\.isSealed).map(\.libraryID))
+        guard sealedIDs.count <= 1 else { throw LibrarySyncError.manifestConflict }
+        guard let winner = sealedIDs.first ?? candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else {
+            throw LibrarySyncError.manifestConflict
+        }
         let superseded = Set(candidates.map(\.libraryID) + candidates.flatMap { $0.supersedes ?? [] }).subtracting([winner])
         var resolved = SyncManifest(libraryID: winner)
         resolved.supersedes = superseded.isEmpty ? nil : superseded.sorted { $0.uuidString < $1.uuidString }
+        // An encrypted library's manifest changes (keys added, a recovery key saved): its versions merge, keeping every key.
+        let sealings = candidates.filter { $0.libraryID == winner }.compactMap(\.sealing)
+        if !sealings.isEmpty {
+            resolved.schemaVersion = SyncManifest.sealedSchemaVersion
+            resolved.sealing = sealings.dropFirst().reduce(sealings[0]) { $0.merged(with: $1) }
+        }
         if current != resolved {
-            try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(SyncEncoding.data(resolved), to: $0) }
+            try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(resolved.encoded(), to: $0) }
         }
         if !conflicts.isEmpty {
             for version in conflicts { version.isResolved = true }
@@ -624,8 +744,7 @@ public actor LibrarySyncEngine {
     func existingLibraryID() -> UUID? {
         let url = remoteRoot.appendingPathComponent("daybook-sync.json")
         guard SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
-              let manifest = try? decoder.decode(SyncManifest.self, from: bytes),
-              manifest.format == "DaybookSync", manifest.schemaVersion == 1 else { return nil }
+              let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)) else { return nil }
         return manifest.libraryID
     }
 
@@ -813,14 +932,19 @@ public actor LibrarySyncEngine {
     private func writeRecord<T: Encodable>(_ record: T, directory: String) throws -> String {
         try Task.checkCancellation()
         let bytes = try SyncEncoding.data(record), id = SyncDigest.sha256(data: bytes)
+        // An encrypted library's entries are sealed under its current key; the entry's ID is the same either way.
+        if let sealing {
+            try writeSealed(bytes, id: id, kind: directory == "Events" ? .event : .metadata, key: sealing.current)
+            return id
+        }
         let url = remoteRoot.appendingPathComponent("\(directory)/\(id).json")
         try SyncFiles.coordinateWrite(url, below: remoteRoot) { target in
             if self.fm.fileExists(atPath: target.path) {
                 guard try Data(contentsOf: target) == bytes else { throw LibrarySyncError.invalidEvent(target.lastPathComponent) }
             } else { try LocalFiles.atomicWrite(bytes, to: target) }
         }
-        ownJournalWrites.insert(url.lastPathComponent)
         let path = "\(directory)/\(id).json"
+        ownJournalWrites.insert(path)
         courierWrites[path] = SyncJournalFile(path: path, sha256: id, size: Int64(bytes.count))
         return id
     }
@@ -851,8 +975,7 @@ public actor LibrarySyncEngine {
             guard fm.fileExists(atPath: url.path) else {
                 // An on-demand replica holds only some audio. A track it never fetched (or evicted) is still
                 // published, unchanged, by reference to the object already in the sync folder or journal.
-                if audioPolicy == .onDemand, SyncFiles.isHash(track.sha256),
-                   journalAssets.contains(track.sha256) || SyncFiles.itemState(blobURL(track.sha256)) != .absent {
+                if audioPolicy == .onDemand, SyncFiles.isHash(track.sha256), try mayPublishByReference(track.sha256, journalAssets: journalAssets) {
                     assets.append(SyncAsset(relativePath: track.relativePath, sha256: track.sha256))
                     byReference.insert(track.relativePath)
                     continue
@@ -890,6 +1013,7 @@ public actor LibrarySyncEngine {
     }
 
     private func upload(_ asset: SyncAsset, from source: URL) throws {
+        if let sealing { return try uploadSealed(asset, from: source, sealing: sealing) }
         let target = blobURL(asset.sha256)
         // Never download an object just to re-verify it: on a phone that would fetch every recording.
         if audioPolicy == .onDemand, SyncFiles.itemState(target) == .inCloud { return }
@@ -959,23 +1083,25 @@ public actor LibrarySyncEngine {
             if try verified(destination, digest: asset.sha256) { continue }
             // Copying audio is the expensive part of an eager pass; respect the pass's time budget.
             if budget.timeExceeded { throw SyncDeferredWork() }
-            let remote = blobURL(asset.sha256)
+            // Sealed under a key held here, or plaintext from before an encrypted library's sealer reached it.
+            var object = remoteObject(asset.sha256)
             // While the sync folder's copy isn't downloaded, a courier delivery of the same object will do.
-            let delivered = courierBlob(asset.sha256)
-            if delivered == nil {
-                try SyncFiles.available(remote, cloud: cloud)
-                guard fm.fileExists(atPath: remote.path) else { throw SyncPendingDownload() }
+            let delivered = courierObject(asset.sha256)
+            if let delivered { object = delivered.object } else {
+                try SyncFiles.available(object.url, cloud: cloud)
+                guard fm.fileExists(atPath: object.url.path) else { throw SyncPendingDownload() }
             }
             try LocalFiles.directory(destination.deletingLastPathComponent())
             let temporary = destination.deletingLastPathComponent().appendingPathComponent(".download-\(UUID().uuidString)")
             defer { try? fm.removeItem(at: temporary) }
+            let digest: String
             if let delivered {
-                try SyncFiles.coordinateRead(delivered, below: inboxBase) { try self.fm.copyItem(at: $0, to: temporary) }
+                digest = try copyPlaintext(delivered.delivery, of: object, below: inboxBase, libraryID: libraryID, to: temporary, expected: asset.sha256)
             } else {
-                try SyncFiles.coordinateRead(remote, below: remoteRoot) { try self.fm.copyItem(at: $0, to: temporary) }
+                digest = try copyPlaintext(object.url, of: object, below: remoteRoot, libraryID: libraryID, to: temporary, expected: asset.sha256)
             }
-            guard try SyncDigest.sha256(fileURL: temporary) == asset.sha256 else {
-                if let delivered { discardDelivery(delivered); throw SyncPendingDownload() }
+            guard digest == asset.sha256 else {
+                if let delivered { discardDelivery(delivered.delivery); throw SyncPendingDownload() }
                 throw LibrarySyncError.invalidBlob(asset.sha256)
             }
             try install(temporary, at: destination, in: directory, warnings: &warnings)
@@ -1105,8 +1231,17 @@ public actor LibrarySyncEngine {
     private func snapshot(of id: String) throws -> Meeting {
         snapshotsUsed.insert(id)
         if let cached = snapshotCache[id] { return cached }
-        let url = remoteRoot.appendingPathComponent("Events/\(id).json")
-        let bytes = try readJournal(url, in: "Events")
+        let bytes: Data, url: URL
+        if let sealing, let sealed = sealedLocation(of: id, sealing: sealing) {
+            // Read again from a sealed file, opened and checked against the ID.
+            url = sealed
+            let directory = "Sealed/Events"
+            bytes = try readSealed(JournalEntry(url: sealed, path: "\(directory)/\(sealed.lastPathComponent)", directory: directory,
+                                                name: sealed.lastPathComponent, isSealed: true), kind: .event, sealing: sealing).0
+        } else {
+            url = remoteRoot.appendingPathComponent("Events/\(id).json")
+            bytes = try readJournal(url, in: "Events")
+        }
         guard SyncDigest.sha256(data: bytes) == id, let snapshot = try decoder.decode(SyncEventRecord.self, from: bytes).snapshot else {
             throw LibrarySyncError.invalidEvent(url.lastPathComponent)
         }
@@ -1136,7 +1271,10 @@ public actor LibrarySyncEngine {
     private func countPendingCloudUploads() throws -> Int {
         var count = 0
         var urls = [remoteRoot.appendingPathComponent("daybook-sync.json")]
-        for name in ["Events", "Blobs", "Metadata"] {
+        for name in ["Events", "Blobs", "Metadata"] where sealing == nil || fm.fileExists(atPath: remoteRoot.appendingPathComponent(name).path) {
+            urls += try fm.contentsOfDirectory(at: remoteRoot.appendingPathComponent(name), includingPropertiesForKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey], options: [.skipsHiddenFiles])
+        }
+        for name in ["Sealed/Events", "Sealed/Metadata", "Sealed/Blobs"] where fm.fileExists(atPath: remoteRoot.appendingPathComponent(name).path) {
             urls += try fm.contentsOfDirectory(at: remoteRoot.appendingPathComponent(name), includingPropertiesForKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey], options: [.skipsHiddenFiles])
         }
         for url in urls {
@@ -1153,9 +1291,11 @@ struct SyncManifest: Codable, Equatable {
     /// Library IDs this one replaced when two devices started a library in the same folder (`resolveManifest`).
     /// Additive: earlier versions ignore it.
     var supersedes: [UUID]?
+    /// How an encrypted library (`schemaVersion` 2) is sealed (LibrarySyncSealing.swift). Nil in a plaintext one.
+    var sealing: Sealing?
 }
 struct SyncAsset: Codable, Equatable { var relativePath: String; var sha256: String }
-private struct SyncEventRecord: Codable {
+struct SyncEventRecord: Codable {
     var schemaVersion = 1
     var meetingID: UUID
     var deviceID: String
@@ -1165,7 +1305,7 @@ private struct SyncEventRecord: Codable {
     var deleted: Bool
     var assets: [SyncAsset]
 }
-private struct SyncMetadataRecord: Codable {
+struct SyncMetadataRecord: Codable {
     var schemaVersion = 1
     var deviceID: String
     var sequence: Int
@@ -1173,7 +1313,7 @@ private struct SyncMetadataRecord: Codable {
     var data: Data
 }
 /// What a pass needs of every event without its snapshot, which is read when a merge needs it.
-private struct SyncEventHeader {
+struct SyncEventHeader {
     var meetingID: UUID
     var deviceID: String
     var parents: [String]
@@ -1302,6 +1442,20 @@ enum SyncFiles {
         if let coordinationError { throw coordinationError }
         guard let outcome else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
         return try outcome.get()
+    }
+    /// Deletes an item with a coordinated write (`.forDeleting`). An item that isn't there is fine.
+    static func coordinateDelete(_ url: URL, below root: URL) throws {
+        try noSymlinks(url, below: root)
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?, failure: Error?
+        coordinator.coordinate(writingItemAt: url, options: .forDeleting, error: &coordinationError) { target in
+            do {
+                try noSymlinks(target, below: root)
+                if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+            } catch { failure = error }
+        }
+        if let coordinationError { throw coordinationError }
+        if let failure { throw failure }
     }
     static func coordinateWrite(_ url: URL, below root: URL, operation: (URL) throws -> Void) throws {
         try Task.checkCancellation()

@@ -21,6 +21,14 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// ID (one was cloned from the other), and one of them takes a new identity (`sharesIdentity`).
     var installation: String?
     var activity: SyncDeviceActivity?
+    /// What this device's Daybook can do that others may need to know before relying on it: `sealed-1`, it reads
+    /// and writes encrypted libraries. Additive: older versions write none.
+    var features: [String]?
+    /// In an encrypted library: whether this device holds the current key, and which key that is.
+    var key: SyncDeviceKeyState?
+    /// In an encrypted library, the name and activity (anything about conversations), sealed (`SealedPresence`, a
+    /// DBSEAL presence object, base64); `displayName` is then empty and `activity` absent.
+    var sealed: String?
 
     init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
          installation: String? = nil, activity: SyncDeviceActivity? = nil) {
@@ -30,6 +38,7 @@ struct SyncDeviceRecord: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
+        case features, key, sealed
     }
 
     init(from decoder: Decoder) throws {
@@ -45,6 +54,9 @@ struct SyncDeviceRecord: Codable, Equatable {
         installation = try? values.decodeIfPresent(String.self, forKey: .installation)
         // Activity a newer Daybook wrote differently is left out, never a reason to skip the device.
         activity = (try? values.decodeIfPresent(SyncDeviceActivity.self, forKey: .activity)) ?? nil
+        features = (try? values.decodeIfPresent([String].self, forKey: .features)) ?? nil
+        key = (try? values.decodeIfPresent(SyncDeviceKeyState.self, forKey: .key)) ?? nil
+        sealed = (try? values.decodeIfPresent(String.self, forKey: .sealed)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -54,6 +66,12 @@ struct SyncDeviceRecord: Codable, Equatable {
         copy.activity?.expiresAt = .distantFuture; compared.activity?.expiresAt = .distantFuture
         return copy == compared
     }
+}
+
+/// The part of an encrypted library's presence record that's sealed.
+struct SealedPresence: Codable, Equatable {
+    var displayName: String
+    var activity: SyncDeviceActivity?
 }
 
 enum SyncPresenceFiles {
@@ -105,9 +123,15 @@ extension LibrarySyncEngine {
         guard let device else { return }
         var stamped = activity
         stamped?.expiresAt = now.addingTimeInterval(presenceRefreshInterval * 2.5)
-        let record = SyncDeviceRecord(deviceID: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
+        var record = SyncDeviceRecord(deviceID: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                       canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation,
                                       activity: stamped)
+        record.features = [Self.sealingFeature]
+        // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
+        let known = checkManifestForPresence()
+        if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
+        else if let waitingForKey { record.key = SyncDeviceKeyState(state: .waiting, id: waitingForKey); record.displayName = ""; record.activity = nil }
+        else if !known { record.displayName = ""; record.activity = nil }
         let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
         let url = directory.appendingPathComponent(SyncPresenceFiles.fileName(for: deviceID))
         // Another installation wrote this device's record recently: two devices share this device ID. The one with
@@ -123,7 +147,14 @@ extension LibrarySyncEngine {
            now.timeIntervalSince(last.at) < presenceRefreshInterval { return }
         try SyncFiles.noSymlinks(directory, below: remoteRoot)
         try LocalFiles.directory(directory)
-        let bytes = try SyncPresenceFiles.encode(record)
+        // In an encrypted library the name and activity travel sealed.
+        var written = record
+        if let sealing {
+            let inner = try SyncEncoding.data(SealedPresence(displayName: record.displayName, activity: record.activity))
+            written.sealed = SealedObject.seal(inner, kind: .presence, key: sealing.current).bytes.base64EncodedString()
+            written.displayName = ""; written.activity = nil
+        }
+        let bytes = try SyncPresenceFiles.encode(written)
         try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(bytes, to: $0) }
         presenceWritten = (record, now)
     }
@@ -147,14 +178,27 @@ extension LibrarySyncEngine {
             }
         }
         var devices = records.values.map { record in
-            KnownSyncDevice(id: record.deviceID, deviceClass: record.deviceClass, displayName: record.displayName,
-                            canProcess: record.canProcess, audioPolicy: record.audioPolicy.flatMap(SyncAudioPolicy.init(rawValue:)),
-                            lastSeen: min(record.lastSeen, now), isCurrentDevice: record.deviceID == deviceID, activity: record.activity)
+            var name: String? = record.displayName, activity = record.activity
+            // An encrypted library's presence: the name and activity are sealed, readable with the library's key.
+            if record.sealed != nil {
+                let inner = unsealedPresence(record)
+                name = inner?.displayName; activity = inner?.activity
+            }
+            var known = KnownSyncDevice(id: record.deviceID, deviceClass: record.deviceClass, displayName: name.flatMap { $0.isEmpty ? nil : $0 },
+                                        canProcess: record.canProcess, audioPolicy: record.audioPolicy.flatMap(SyncAudioPolicy.init(rawValue:)),
+                                        lastSeen: min(record.lastSeen, now), isCurrentDevice: record.deviceID == deviceID, activity: activity)
+            known.features = record.features ?? []
+            known.keyState = record.key
+            return known
         }
         if records[deviceID] == nil, let device {
-            devices.append(KnownSyncDevice(id: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
-                                           canProcess: device.canProcess, audioPolicy: audioPolicy,
-                                           lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true, activity: activity))
+            var known = KnownSyncDevice(id: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
+                                        canProcess: device.canProcess, audioPolicy: audioPolicy,
+                                        lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true, activity: activity)
+            known.features = [Self.sealingFeature]
+            known.keyState = sealing.map { SyncDeviceKeyState(state: .ready, id: $0.current.idHex) }
+                ?? waitingForKey.map { SyncDeviceKeyState(state: .waiting, id: $0) }
+            devices.append(known)
         }
         for id in journalDeviceIDs.subtracting(records.keys).subtracting([deviceID]).sorted() {
             devices.append(KnownSyncDevice(id: id))
@@ -164,4 +208,18 @@ extension LibrarySyncEngine {
             return x == y ? a.id < b.id : x > y
         }
     }
+}
+
+extension LibrarySyncEngine {
+    /// The sealed part of a presence record, opened with a key held here. Nil without one, or if it doesn't open.
+    func unsealedPresence(_ record: SyncDeviceRecord) -> SealedPresence? {
+        guard let sealed = record.sealed, let bytes = Data(base64Encoded: sealed), let sealing,
+              let opened = try? SealedObject.open(bytes, kind: .presence, libraryID: sealing.libraryID, keyring: sealing.keyring) else { return nil }
+        return try? JSONDecoder.presence.decode(SealedPresence.self, from: opened.plaintext)
+    }
+}
+
+extension JSONDecoder {
+    /// Dates as `SyncEncoding` writes them (the default strategy).
+    static let presence = JSONDecoder()
 }

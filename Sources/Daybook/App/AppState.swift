@@ -223,6 +223,9 @@ final class AppState: ObservableObject {
         let sync = LibrarySyncController(localRoot: libraryURL, defaults: defaults)
         // Presence: other devices see this Mac and whether it can process. Updated as models change.
         sync.replica = .mac(displayName: ProcessingRequest.Device.currentName, canProcess: false)
+        // An encrypted library's key, from iCloud Keychain. Nil in builds without the shared keychain group (ad hoc,
+        // `swift run`, tests), which can't sync anyway.
+        sync.replica.keyStore = KeychainLibraryKeyStore.system
         // The courier: what an iPhone records arrives through CloudKit ahead of iCloud Drive (docs/icloud-sync.md,
         // "Courier (CloudKit)"). Nil in builds without CloudKit (ad hoc, `swift run`, tests): iCloud Drive alone.
         sync.courier = CloudKitCourier.ifEntitled(containerIdentifier: sync.environment.containerIdentifier,

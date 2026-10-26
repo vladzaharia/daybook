@@ -7,6 +7,10 @@
      DAYBOOK_ICLOUD_CONTAINER and DAYBOOK_APS_ENVIRONMENT come from Apps/macOS/Config/Signing.xcconfig: push is
      `development` here, as Apple Development profiles grant it, and the Developer ID export re-signs it `production`.
      CloudKit carries the courier (docs/icloud-sync.md, "Courier (CloudKit)"); CKSyncEngine needs the push entitlement.
+     keychain-access-groups: this app's own group first, so it stays the default for items stored without a group (the
+     link's pairing keys, the sync device ID); then the group the iPhone app also lists, where library keys for an
+     encrypted library live (docs/icloud-sync.md, "Encryption"). The Developer ID profile grants <team>.*.
+
      Daybook-Sandbox.entitlements is this file plus the App Sandbox's keys (docs/sandbox.md): change both together. -->
 <plist version="1.0"><dict>
 <key>com.apple.security.device.audio-input</key><true/>
@@ -14,4 +18,5 @@
 <key>com.apple.developer.icloud-container-identifiers</key><array><string>$(DAYBOOK_ICLOUD_CONTAINER)</string></array>
 <key>com.apple.developer.ubiquity-container-identifiers</key><array><string>$(DAYBOOK_ICLOUD_CONTAINER)</string></array>
 <key>com.apple.developer.aps-environment</key><string>$(DAYBOOK_APS_ENVIRONMENT)</string>
+<key>keychain-access-groups</key><array><string>$(AppIdentifierPrefix)local.daybook.app</string><string>$(AppIdentifierPrefix)local.daybook.shared</string></array>
 </dict></plist>

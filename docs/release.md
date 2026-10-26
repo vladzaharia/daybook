@@ -123,13 +123,14 @@ scripts/asc-certificates.sh --revoke             # revokes the ones older than 3
 
 | App ID | Capabilities on the account | Signed entitlements |
 |---|---|---|
-| `local.daybook.app` (Mac) | iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications | `Resources/Daybook.entitlements`: audio input; `com.apple.developer.icloud-services` = `CloudDocuments`, `CloudKit`; the container in `com.apple.developer.icloud-container-identifiers` and `com.apple.developer.ubiquity-container-identifiers`; `com.apple.developer.aps-environment`. With `sandbox` (`--sandbox`), `Resources/Daybook-Sandbox.entitlements`: the same plus the App Sandbox ([docs/sandbox.md](sandbox.md)); no new capability on the App ID |
-| `local.daybook.phone` (iPhone) | App Groups (`group.local.daybook.phone`); iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications | `Apps/iOS/project.yml`: the same iCloud keys, `aps-environment`, the app group. Info.plist's `UIBackgroundModes` adds `remote-notification` (not a capability) |
+| `local.daybook.app` (Mac) | iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications | `Resources/Daybook.entitlements`: audio input; `com.apple.developer.icloud-services` = `CloudDocuments`, `CloudKit`; the container in `com.apple.developer.icloud-container-identifiers` and `com.apple.developer.ubiquity-container-identifiers`; `com.apple.developer.aps-environment`; `keychain-access-groups` = `<team>.local.daybook.app`, `<team>.local.daybook.shared`. With `sandbox` (`--sandbox`), `Resources/Daybook-Sandbox.entitlements`: the same plus the App Sandbox ([docs/sandbox.md](sandbox.md)); no new capability on the App ID |
+| `local.daybook.phone` (iPhone) | App Groups (`group.local.daybook.phone`); iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications | `Apps/iOS/project.yml`: the same iCloud keys, `aps-environment`, the app group, `keychain-access-groups` = `<team>.local.daybook.phone`, `<team>.local.daybook.shared`. Info.plist's `UIBackgroundModes` adds `remote-notification` (not a capability) |
 | `local.daybook.phone.widgets` | App Groups | the app group only |
 
 - CloudKit and push serve the courier (`docs/icloud-sync.md`, "Courier (CloudKit)"). `CKSyncEngine` needs both; CloudKit sends its own pushes, so there's no APNs key or certificate.
 - **Push is `development` in the files and `production` in what ships.** `DAYBOOK_APS_ENVIRONMENT` in each `Config/Signing.xcconfig` is `development`, which is what Apple Development profiles grant, and archives are signed that way. The exports re-sign with the distribution profile, so TestFlight (App Store profile) and Developer ID builds carry `production` and use CloudKit's **Production** environment, Xcode setting `com.apple.developer.icloud-container-environment` to `Production`. Writing `production` into the files instead fails development signing: "the provisioning profile grants it for the value 'development'". Apple's guidance is the same: keep `development` and let the export re-sign it.
-- Ad hoc and local builds (`build-app.sh --ad-hoc`, `Resources/Daybook-Local.entitlements`, `swift run`), simulator builds, and CI's unsigned builds carry neither CloudKit nor push, create no courier, and need no profile.
+- **Keychain groups** need no capability: a profile grants `keychain-access-groups` = `<team>.*`, which covers both. Each app lists its own group first, so items stored without a group (link pairing keys, the sync device ID) stay where they were; the shared group holds an encrypted library's key in iCloud Keychain, where both apps read it (`docs/icloud-sync.md`, "Encryption"). Check a profile with `security cms -D -i <profile> | plutil -p - | grep -A2 keychain-access-groups`: it lists `48H7CLBV8Y.*`. The "Daybook Developer ID" profile does; `scripts/ci/check-ios-archive.sh` checks a signed iPhone archive's groups and their order. If a profile ever didn't, signing fails with the group named, and the fallback is to share the Mac's own group (`<team>.local.daybook.app`) instead, listing it on the iPhone.
+- Ad hoc and local builds (`build-app.sh --ad-hoc`, `Resources/Daybook-Local.entitlements`, `swift run`), simulator builds, and CI's unsigned builds carry neither CloudKit nor push, create no courier, and need no profile. They have no keychain groups either, so they can't open an encrypted library (they can't sync at all).
 - Ad hoc builds run in the App Sandbox under their own bundle ID, `local.daybook.app.adhoc`, with no migration manifest; signed builds stay unsandboxed unless built with `--sandbox` ([docs/sandbox.md](sandbox.md)).
 
 ### Secrets on the runner
@@ -285,7 +286,11 @@ App Store Connect asks every iOS build whether it uses encryption.
 **The owner has decided:** Daybook uses only **exempt** encryption.
 
 - DaybookLink uses standard TLS, with a pre-shared key from pairing, through Network.framework.
-- Everything else uses CryptoKit and Apple's system frameworks.
+- Everything else uses CryptoKit and Apple's system frameworks. That includes the encrypted library in iCloud
+  (`docs/icloud-sync.md`, "Encryption"): AES-256-GCM, HKDF-SHA256, and HMAC-SHA256 from CryptoKit, keys in iCloud
+  Keychain. It's standard algorithms from the operating system, not an implementation of Daybook's own, so the answer
+  stays exempt; **the owner re-confirms this before the first release that lets people turn encryption on** (App Store
+  Connect's questions: proprietary algorithms, no; standard algorithms instead of or beside the OS's, no).
 - Nothing implements its own encryption.
 
 The answer is recorded in the app: `Apps/iOS/project.yml` sets `ITSAppUsesNonExemptEncryption: false`, which becomes the key in `DaybookPhone/Resources/Info.plist`. App Store Connect then doesn't ask, and builds never wait at "Missing Compliance".

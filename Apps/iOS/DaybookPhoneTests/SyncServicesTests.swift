@@ -70,6 +70,33 @@ final class SyncServicesTests: XCTestCase {
         XCTAssertEqual(phone.library.controller.meeting(onMac.id)?.tags, ["design"])
     }
 
+    func testAnEncryptedLibraryWaitsForItsKeyAndSaysSo() async throws {
+        let container = try temporaryDirectory("container")
+        let macKeys = MemoryLibraryKeyStore()
+        let mac = try await makeMac(container, keyStore: macKeys)
+        await assertPass(mac)
+        try await XCTUnwrap(mac.sync).enableEncryption()
+        _ = mac.newMeeting(title: "Encrypted on the Mac")
+        await mac.flush()
+        await assertPass(mac)
+
+        // iCloud Keychain hasn't brought the key here yet.
+        let phoneKeys = MemoryLibraryKeyStore()
+        let phone = try await makePhone(container, keyStore: phoneKeys)
+        await phone.sync.synchronize(.launch)
+        XCTAssertEqual(phone.sync.encryption, .waitingForKey)
+        XCTAssertEqual(phone.sync.statusLine, "Your library in iCloud is encrypted. Waiting for its key from iCloud Keychain.")
+        XCTAssertFalse(phone.sync.isUpToDate)
+        XCTAssertTrue(phone.library.conversations.isEmpty)
+
+        // It arrives: the next pass reads the library.
+        for key in macKeys.allKeys { try phoneKeys.store(key) }
+        await phone.sync.synchronize(.manual)
+        XCTAssertTrue(phone.sync.encryption.isOn)
+        XCTAssertEqual(phone.sync.statusLine, "Up to date")
+        XCTAssertEqual(phone.library.conversations.map(\.title), ["Encrypted on the Mac"])
+    }
+
     func testStatusSaysWhySyncCantRun() async throws {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         let sync = PhoneSync(library: library.controller)
@@ -295,11 +322,12 @@ struct PhoneRig {
 extension XCTestCase {
     /// `courier` makes it send what its passes write, as the app does with CloudKit (tests use `InMemoryCourier`).
     func makePhone(_ container: URL, name: String = "Test iPhone", budget: UInt64 = 1_000_000_000, cloud: SyncCloudFiles = .system,
-                   courier: ((URL) -> any SyncCourier)? = nil) async throws -> PhoneRig {
+                   courier: ((URL) -> any SyncCourier)? = nil, keyStore: (any LibraryKeyStore)? = nil) async throws -> PhoneRig {
         let root = try temporaryDirectory("phone-\(name)")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
         let controller = LibrarySyncController(localRoot: root, defaults: defaults)
         controller.replica = PhoneSync.replica(displayName: name, budget: budget, cloud: cloud)
+        controller.replica.keyStore = keyStore
         // Tests run every pass themselves; an edit's automatic pass would race them.
         controller.syncDebounce = nil
         if let courier {
@@ -322,11 +350,12 @@ extension XCTestCase {
     }
 
     /// A Mac with models: an eager replica that writes presence.
-    func makeMac(_ container: URL, name: String = "Studio Mac") async throws -> LibraryController {
+    func makeMac(_ container: URL, name: String = "Studio Mac", keyStore: (any LibraryKeyStore)? = nil) async throws -> LibraryController {
         let root = try temporaryDirectory("mac-\(name)")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
         let controller = LibrarySyncController(localRoot: root, defaults: defaults)
         controller.replica = .mac(displayName: name, canProcess: true)
+        controller.replica.keyStore = keyStore
         controller.syncDebounce = nil
         let library = LibraryController(rootURL: root, sync: controller)
         try await library.load()
