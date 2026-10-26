@@ -125,6 +125,33 @@ Still requires real devices:
   early notes with negative times (−0:42) on the Mac's Transcript page, in Floating Notes, on the
   iPhone, and in exports.
 
+## Finishing the 0.3.0 review (2026-10-26)
+
+Start Over for an encrypted library whose key is lost, an iPhone that seals history only on Wi‑Fi, iPhone backups of an
+encrypted library, times before the start in VoiceOver, and a copy sweep of the code written after the copy pass
+(docs/icloud-sync.md, "Starting over" and "The sealer"; docs/iphone.md, "Backups"; docs/copy-pass-2026-10.md).
+
+- `swift build --build-tests`: no new warnings. `swift test`: 1035 tests, 0 failures, one skipped (the 1 GiB
+  benchmark): DaybookCoreTests 330, DaybookTests 256, DaybookKitTests 164, DaybookDevicesTests 120,
+  DaybookIntelligenceTests 87, DaybookLinkTests 70, DaybookCaptionsTests 8.
+- `scripts/ci/tests/run-tests.sh --require-all`: 294 passed, 0 failed, 0 skipped.
+- `scripts/build-ios.sh --test` on a new iPhone Duo simulator (iOS 27.1), serial: 151 tests passed. The simulator was
+  deleted afterwards.
+- Regression tests:
+  - `LibrarySyncStartOverTests`: two replicas losing the key, then starting over and republishing; refusals while a
+    key is available; two devices starting over at once; unrelated libraries still pausing.
+  - `LibrarySyncEncryptionTests.testStartingOverWhenTheKeyIsLostOnEveryDevice`, through the controller.
+  - `LibrarySyncSealingTests.testAPhoneSealingHistoryDownloadsRecordingsOnlyOnWiFiInBatches` and
+    `testADeviceRemembersSyncingAnEncryptedLibraryBeforeAnyPass`.
+  - `BackupExclusionTests.testAnEncryptedLibraryKeepsItsConversationsOutUnlessIncluded`.
+  - `TimeWordsTests`, `LibraryWordsTests` (the encryption status and the network condition), `ProblemWordsTests`,
+    `PlainWordsTests`, `FloatingNotesStatusTests`, and `ModelManagerTests`.
+
+Still requires the owner's devices: Start Over (above, in "Library encryption"); an iPhone that turned encryption on
+sealing its history on cellular, then on Wi‑Fi ("Waiting for Wi‑Fi", then a few recordings at a time); and an iPhone
+backup of an encrypted library leaving out `Meetings/` (Settings › General › iPhone Storage › Daybook, or a Finder
+backup's size).
+
 ## Library encryption (2026-10-26)
 
 End-to-end encryption of the sync journal (docs/icloud-sync.md, "Encryption"), dark by default: Settings offers Encrypt
