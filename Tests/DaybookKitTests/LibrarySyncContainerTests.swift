@@ -115,6 +115,8 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertEqual(sync.folder?.standardizedFileURL, journal.standardizedFileURL)
         XCTAssertNil(sync.migrationRecord, "Nothing to migrate without a previous folder")
         XCTAssertNil(defaults.data(forKey: "syncFolderBookmark"))
+        // A new library starts only once iCloud has listed the container.
+        try await wait("iCloud's listing") { sync.containerListed }
         let result = try await sync.synchronize(meetings: [], deletedMeetingIDs: [], metadata: JSONEncoder().encode(LibraryMetadata()))
         let receipt = try XCTUnwrap(result)
         try await sync.acknowledge(receipt)
@@ -255,7 +257,7 @@ final class LibrarySyncContainerTests: XCTestCase {
         sync.replica.cloud = SyncCloudFiles(requestDownload: { _ in gate.waitForCancellation() }, isUploaded: { _ in true })
         sync.syncDebounce = nil
         sync.restore()
-        try await wait("the container") { sync.iCloud == .connected }
+        try await wait("the container") { sync.iCloud == .connected && sync.containerListed }
         // A journal entry still in iCloud: the pass waits on its download, as it would copying a long recording.
         try fm.createDirectory(at: journal.appendingPathComponent("Events"), withIntermediateDirectories: true)
         try Data().write(to: journal.appendingPathComponent("Events/.\(String(repeating: "b", count: 64)).json.icloud"))

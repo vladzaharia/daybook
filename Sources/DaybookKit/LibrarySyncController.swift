@@ -178,6 +178,8 @@ public final class LibrarySyncController: ObservableObject {
     private var migrationTask: Task<Void, Never>?
     private var containerGeneration = UUID()
     private var accountObserver: NSObjectProtocol?
+    /// iCloud has listed the connected folder once (its metadata query finished gathering).
+    private(set) var containerListed = false
 
     /// Unsigned and ad hoc development builds can't use the iCloud container. Setting this preference
     /// (`-DaybookDevelopmentFolderSync YES` as a launch argument, or `defaults write`) brings back the folder
@@ -307,7 +309,9 @@ public final class LibrarySyncController: ObservableObject {
         guard root != local, !root.path.hasPrefix(local.path + "/"), !local.path.hasPrefix(root.path + "/") else { throw SyncControllerError.overlappingLibrary }
         stopMonitoring()
         if url.startAccessingSecurityScopedResource() { scopedURL = url }
-        do { engine = try LibrarySyncEngine(localRoot: localRoot, remoteRoot: url, deviceID: deviceID, replica: replica) }
+        // In the container, a fresh device waits for iCloud's first listing before it starts a library of its own.
+        do { engine = try LibrarySyncEngine(localRoot: localRoot, remoteRoot: url, deviceID: deviceID, replica: replica,
+                                            waitsForListing: transport == .iCloudContainer && monitorChanges) }
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = "Connected · preparing sync"; configurationID = UUID()
         isICloudLocation = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true || root.path.contains("/Library/Mobile Documents/")
@@ -396,6 +400,11 @@ public final class LibrarySyncController: ObservableObject {
             hasMoreWork = result.hasMoreWork
             status = "Applying library changes…"
             return result
+        } catch LibrarySyncError.waitingForICloud {
+            // Not a failure: the pass runs again once iCloud has listed the container.
+            activeTask = nil; isSyncing = false; pendingReceipt = nil
+            status = LibrarySyncError.waitingForICloud.localizedDescription
+            return nil
         } catch {
             activeTask = nil; isSyncing = false; pendingReceipt = nil
             status = "Sync paused: \(error.localizedDescription)"; throw error
@@ -760,8 +769,12 @@ public final class LibrarySyncController: ObservableObject {
         query.predicate = NSPredicate(format: "%K BEGINSWITH %@", NSMetadataItemPathKey, root.path + "/")
         query.notificationBatchingInterval = 2
         for name in [Notification.Name.NSMetadataQueryDidFinishGathering, Notification.Name.NSMetadataQueryDidUpdate] {
+            let gathered = name == .NSMetadataQueryDidFinishGathering
             observers.append(NotificationCenter.default.addObserver(forName: name, object: query, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.requestSync() }
+                Task { @MainActor in
+                    if gathered, let engine = self?.engine { await engine.listingGathered(); self?.containerListed = true }
+                    self?.requestSync()
+                }
             })
         }
         self.query = query; query.start()
@@ -787,7 +800,7 @@ public final class LibrarySyncController: ObservableObject {
     }
 
     private func stopMonitoring() {
-        polling?.cancel(); polling = nil; debounce?.cancel(); debounce = nil
+        polling?.cancel(); polling = nil; debounce?.cancel(); debounce = nil; containerListed = false
         query?.stop(); query = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
         scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil

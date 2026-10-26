@@ -28,6 +28,8 @@ public struct SyncResult: Sendable {
 
 public enum LibrarySyncError: LocalizedError {
     case unsafeLocation, invalidManifest, manifestConflict, unsupportedVersion(Int), invalidEvent(String), invalidBlob(String), missingLocalAudio(String), corruptState, invalidCheckpoint
+    /// No library is visible in the sync folder yet, and iCloud hasn't finished listing it: one may be there.
+    case waitingForICloud
     public var errorDescription: String? {
         switch self {
         case .unsafeLocation: return "The sync folder must be separate from the local library and cannot contain symbolic links."
@@ -39,6 +41,7 @@ public enum LibrarySyncError: LocalizedError {
         case .missingLocalAudio(let name): return "The original recording is missing or changed: \(name)."
         case .corruptState: return "Sync stopped: this device’s sync record is unreadable."
         case .invalidCheckpoint: return "Sync again to finish."
+        case .waitingForICloud: return "Waiting for iCloud…"
         }
     }
 }
@@ -58,6 +61,7 @@ public actor LibrarySyncEngine {
     private let decoder = JSONDecoder()
     private var checkpointURL: URL?
     private var basesURL: URL?
+    private var mayCreateLibrary: Bool
     private var state = SyncCheckpoint()
     var verifiedAssets: [String: VerifiedAsset] = [:]
     // Journal records are immutable and content-addressed: once read and validated they never need
@@ -87,7 +91,12 @@ public actor LibrarySyncEngine {
     var audioIndexStorage: AudioCacheIndex?
     var audioIndexDirty = false
 
-    public init(localRoot: URL, remoteRoot: URL, deviceID: String, replica: SyncReplicaConfiguration = SyncReplicaConfiguration()) throws {
+    /// `waitsForListing`: in the iCloud container, a library (`daybook-sync.json`) isn't created until
+    /// `listingGathered()` says iCloud has listed what's there, so a fresh device doesn't start a second library
+    /// beside one it can't see yet.
+    public init(localRoot: URL, remoteRoot: URL, deviceID: String, replica: SyncReplicaConfiguration = SyncReplicaConfiguration(),
+                waitsForListing: Bool = false) throws {
+        mayCreateLibrary = !waitsForListing
         self.localRoot = localRoot.standardizedFileURL
         self.remoteRoot = remoteRoot.standardizedFileURL
         self.deviceID = deviceID
@@ -112,7 +121,7 @@ public actor LibrarySyncEngine {
         try Task.checkCancellation()
         let manifest = try prepareRemote()
         libraryID = manifest.libraryID
-        try loadCheckpoint(libraryID: manifest.libraryID)
+        try loadCheckpoint(libraryID: manifest.libraryID, superseding: manifest.supersedes ?? [])
         var budget = SyncPassBudget(limits)
         var warnings: [String] = []
         var pendingDownloads = 0
@@ -453,13 +462,16 @@ public actor LibrarySyncEngine {
         }
         let manifestURL = remoteRoot.appendingPathComponent("daybook-sync.json")
         try SyncFiles.available(manifestURL, cloud: cloud)
-        if !(NSFileVersion.unresolvedConflictVersionsOfItem(at: manifestURL) ?? []).isEmpty { throw LibrarySyncError.manifestConflict }
+        let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: manifestURL) ?? []
+        let copies = manifestCopies()
+        if !conflicts.isEmpty || !copies.isEmpty { return try resolveManifest(at: manifestURL, conflicts: conflicts, copies: copies) }
         if fm.fileExists(atPath: manifestURL.path) {
             let existing = try decoder.decode(SyncManifest.self, from: SyncFiles.read(manifestURL, below: remoteRoot, cloud: cloud))
             guard existing.format == "DaybookSync" else { throw LibrarySyncError.invalidManifest }
             guard existing.schemaVersion == 1 else { throw LibrarySyncError.unsupportedVersion(existing.schemaVersion) }
             return existing
         }
+        guard mayCreateLibrary else { throw LibrarySyncError.waitingForICloud }
         var result = SyncManifest(libraryID: UUID())
         try SyncFiles.coordinateWrite(manifestURL, below: remoteRoot) { url in
             if self.fm.fileExists(atPath: url.path) {
@@ -468,6 +480,55 @@ public actor LibrarySyncEngine {
         }
         guard result.format == "DaybookSync", result.schemaVersion == 1 else { throw LibrarySyncError.invalidManifest }
         return result
+    }
+
+    /// iCloud has listed the sync folder: if no library is there, this device may start one.
+    public func listingGathered() { mayCreateLibrary = true }
+
+    /// Copies iCloud made of the manifest when two devices wrote one (`daybook-sync 2.json`).
+    private func manifestCopies() -> [URL] {
+        let names = (try? fm.contentsOfDirectory(atPath: remoteRoot.path)) ?? []
+        return names.filter { $0 != "daybook-sync.json" && $0.hasPrefix("daybook-sync") && $0.hasSuffix(".json") }.sorted()
+            .map { remoteRoot.appendingPathComponent($0) }
+    }
+
+    /// Two devices each started a library here before seeing the other's (iCloud kept both: a conflict version
+    /// or a renamed copy). Every device resolves it the same way: the smallest library ID wins, and the manifest
+    /// names the others it supersedes, so each device continues from its checkpoint for whichever it had (see
+    /// `loadCheckpoint`). The journal is shared either way; only its identity changes.
+    private func resolveManifest(at url: URL, conflicts: [NSFileVersion], copies: [URL]) throws -> SyncManifest {
+        func decode(_ data: Data) -> SyncManifest? {
+            guard let manifest = try? decoder.decode(SyncManifest.self, from: data), manifest.format == "DaybookSync" else { return nil }
+            return manifest
+        }
+        var candidates: [SyncManifest] = []
+        var current: SyncManifest?
+        if fm.fileExists(atPath: url.path) {
+            guard let manifest = decode(try SyncFiles.read(url, below: remoteRoot, cloud: cloud)) else { throw LibrarySyncError.invalidManifest }
+            current = manifest; candidates.append(manifest)
+        }
+        for version in conflicts {
+            // A version that can't be read yet can't be resolved; the person sees the conflict.
+            guard let data = try? Data(contentsOf: version.url), let manifest = decode(data) else { throw LibrarySyncError.manifestConflict }
+            candidates.append(manifest)
+        }
+        for copy in copies {
+            guard SyncFiles.itemState(copy) == .local, let data = try? SyncFiles.read(copy, below: remoteRoot, cloud: cloud), let manifest = decode(data) else { continue }
+            candidates.append(manifest)
+        }
+        if let newer = candidates.first(where: { $0.schemaVersion != 1 }) { throw LibrarySyncError.unsupportedVersion(newer.schemaVersion) }
+        guard let winner = candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else { throw LibrarySyncError.manifestConflict }
+        let superseded = Set(candidates.map(\.libraryID) + candidates.flatMap { $0.supersedes ?? [] }).subtracting([winner])
+        var resolved = SyncManifest(libraryID: winner)
+        resolved.supersedes = superseded.isEmpty ? nil : superseded.sorted { $0.uuidString < $1.uuidString }
+        if current != resolved {
+            try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(SyncEncoding.data(resolved), to: $0) }
+        }
+        if !conflicts.isEmpty {
+            for version in conflicts { version.isResolved = true }
+            try? NSFileVersion.removeOtherVersionsOfItem(at: url)
+        }
+        return resolved
     }
 
     /// The library's ID from a manifest the sync folder already holds downloaded, without creating one or waiting.
@@ -482,11 +543,15 @@ public actor LibrarySyncEngine {
     /// The checkpoint (`Sync/<library>-<device>.json`) holds heads and what was published; the applied base of
     /// each conversation is its own file beside it (`Sync/Bases/<library>-<device>/<meeting>.json`), written only
     /// when it changes. Checkpoints from earlier versions held every base inline and are moved out once.
-    private func loadCheckpoint(libraryID: UUID) throws {
+    private func loadCheckpoint(libraryID: UUID, superseding: [UUID] = []) throws {
         let stem = Self.checkpointStem(libraryID: libraryID, deviceID: deviceID)
         let url = localRoot.appendingPathComponent("Sync/\(stem).json")
         try SyncFiles.noSymlinks(url, below: localRoot)
         if checkpointURL == url { return }
+        // The library this device synced was superseded by another identity for the same journal: carry on from it.
+        if !fm.fileExists(atPath: url.path) {
+            for old in superseding where try Self.adoptCheckpoint(localRoot: localRoot, deviceID: deviceID, from: old, to: libraryID) { break }
+        }
         let bases = localRoot.appendingPathComponent("Sync/Bases/\(stem)", isDirectory: true)
         try SyncFiles.noSymlinks(bases, below: localRoot)
         basesURL = bases
@@ -953,7 +1018,12 @@ public actor LibrarySyncEngine {
     }
 }
 
-struct SyncManifest: Codable { var format = "DaybookSync"; var schemaVersion = 1; var libraryID: UUID }
+struct SyncManifest: Codable, Equatable {
+    var format = "DaybookSync"; var schemaVersion = 1; var libraryID: UUID
+    /// Library IDs this one replaced when two devices started a library in the same folder (`resolveManifest`).
+    /// Additive: earlier versions ignore it.
+    var supersedes: [UUID]?
+}
 struct SyncAsset: Codable, Equatable { var relativePath: String; var sha256: String }
 private struct SyncEventRecord: Codable {
     var schemaVersion = 1

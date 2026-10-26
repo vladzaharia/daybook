@@ -161,4 +161,56 @@ final class LibrarySyncCompatibilityTests: XCTestCase {
         let onBAgain = try await pass(b, "B", [onB, fromB])
         XCTAssertEqual(onBAgain.meetings.first { $0.id == other.id }?.title, "Other, renamed on A")
     }
+
+    func testAFreshDeviceWaitsForTheListingBeforeStartingALibrary() async throws {
+        let fresh = try LibrarySyncEngine(localRoot: local("New Mac"), remoteRoot: remote, deviceID: "New Mac", waitsForListing: true)
+        do { _ = try await fresh.synchronize(meetings: [Meeting(title: "Local")]); XCTFail("started a library before iCloud listed the folder") }
+        catch LibrarySyncError.waitingForICloud { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: remote.appendingPathComponent("daybook-sync.json").path))
+        XCTAssertTrue(try eventNames().isEmpty, "nothing published into a library that might not be the one")
+        // Another device's library becomes visible: it's joined, not replaced.
+        let other = try engine("Other")
+        try await pass(other, "Other", [Meeting(title: "Shared")])
+        let joined = try await fresh.synchronize(meetings: [])
+        XCTAssertEqual(joined.meetings.map(\.title), ["Shared"])
+        // With nothing there once iCloud has listed the folder, the device starts one.
+        let elsewhere = root.appendingPathComponent("Empty")
+        let first = try LibrarySyncEngine(localRoot: local("First Mac"), remoteRoot: elsewhere, deviceID: "First Mac", waitsForListing: true)
+        await first.listingGathered()
+        _ = try await first.synchronize(meetings: [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: elsewhere.appendingPathComponent("daybook-sync.json").path))
+    }
+
+    /// Two devices each started a library in the folder before seeing the other's, and iCloud kept both manifests
+    /// (`daybook-sync 2.json`). Both settle on one identity and carry on from their own checkpoints.
+    func testTwoManifestsResolveToOneLibraryWithoutPublishingAgain() async throws {
+        let a = try engine("A")
+        try await pass(a, "A", [Meeting(title: "From A")])
+        let elsewhere = root.appendingPathComponent("B's view")
+        let b = try LibrarySyncEngine(localRoot: local("B"), remoteRoot: elsewhere, deviceID: "B")
+        let fromB = Meeting(title: "From B")
+        let first = try await b.synchronize(meetings: [fromB])
+        try await MeetingStore(rootURL: local("B")).save(fromB)
+        try await b.acknowledge(first.checkpointID)
+        // iCloud brings the two together: one journal, the second manifest renamed.
+        let fm = FileManager.default
+        for directory in ["Events", "Metadata", "Blobs"] {
+            for name in try fm.contentsOfDirectory(atPath: elsewhere.appendingPathComponent(directory).path) {
+                let target = remote.appendingPathComponent("\(directory)/\(name)")
+                if !fm.fileExists(atPath: target.path) { try fm.copyItem(at: elsewhere.appendingPathComponent("\(directory)/\(name)"), to: target) }
+            }
+        }
+        try fm.copyItem(at: elsewhere.appendingPathComponent("daybook-sync.json"), to: remote.appendingPathComponent("daybook-sync 2.json"))
+        let before = try eventNames()
+        let onA = try await pass(a, "A")
+        let rejoined = try engine("B")
+        let onB = try await pass(rejoined, "B", [fromB])
+        let idA = await a.libraryID, idB = await rejoined.libraryID
+        XCTAssertEqual(idA, idB, "one library")
+        XCTAssertEqual(try eventNames(), before, "nobody published again")
+        XCTAssertEqual(onB.publishedEvents, 0)
+        XCTAssertEqual(Set(onA.meetings.map(\.title)).union(onB.meetings.map(\.title)), ["From A", "From B"])
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: remote.appendingPathComponent("daybook-sync.json"))) as? [String: Any])
+        XCTAssertEqual((manifest["supersedes"] as? [String])?.count, 1)
+    }
 }
