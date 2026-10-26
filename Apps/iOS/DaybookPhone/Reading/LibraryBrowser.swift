@@ -216,7 +216,7 @@ private struct NotebookPlaceholder: View {
                 .foregroundStyle(PhoneStyle.brandGradient)
                 .accessibilityHidden(true)
             Text(isEmpty ? "Your conversations will open here" : "Choose a conversation")
-                .font(PhoneStyle.Typeface.title(22)).foregroundStyle(PhoneStyle.Ink.title)
+                .font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
                 .multilineTextAlignment(.center)
             if isEmpty {
                 Text("Record one with the button on the left, or on your Mac.")

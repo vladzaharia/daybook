@@ -100,7 +100,7 @@ private struct NotesPage: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(recorder.title.isEmpty ? "New conversation" : recorder.title)
-                    .font(PhoneStyle.Typeface.title(24))
+                    .font(PhoneStyle.Typeface.title(.title2))
                     .foregroundStyle(PhoneStyle.Ink.title)
                     .lineLimit(2)
                 Text(byline)

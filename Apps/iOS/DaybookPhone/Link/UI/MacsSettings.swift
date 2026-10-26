@@ -133,7 +133,7 @@ struct PairingSheet: View {
                             .font(.system(size: 40, weight: .light))
                             .foregroundStyle(PhoneStyle.accent)
                         Text("Pair with Your Mac")
-                            .font(PhoneStyle.Typeface.title(28))
+                            .font(PhoneStyle.Typeface.title(.title))
                             .foregroundStyle(PhoneStyle.Ink.title)
                         Text("On your Mac, open Daybook › Settings › Devices and add your iPhone. It shows a six-digit code.")
                             .font(.callout)

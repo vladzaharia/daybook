@@ -16,6 +16,9 @@ struct LiveCaptionsView: View {
 
     @Environment(PhoneAppModel.self) private var model
     var style: Style
+    /// The caption sizes at the default text size (strip 19/15, page 21/17, stage 34/24), scaled with
+    /// Dynamic Type like body text.
+    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
 
     var body: some View {
         let captions = model.captions
@@ -79,11 +82,13 @@ struct LiveCaptionsView: View {
     }
 
     private func lineFont(newest: Bool) -> Font {
+        let (large, small): (CGFloat, CGFloat)
         switch style {
-        case .strip: return newest ? .system(size: 19, weight: .medium) : .system(size: 15)
-        case .page: return newest ? .system(size: 21, weight: .medium) : .system(size: 17)
-        case .stage: return newest ? .system(size: 34, weight: .medium) : .system(size: 24)
+        case .strip: (large, small) = (19, 15)
+        case .page: (large, small) = (21, 17)
+        case .stage: (large, small) = (34, 24)
         }
+        return newest ? .system(size: large * scale, weight: .medium) : .system(size: small * scale)
     }
 
     private func stateLine(_ state: LiveCaptionState) -> String {

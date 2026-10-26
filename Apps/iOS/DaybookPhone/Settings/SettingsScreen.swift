@@ -198,7 +198,7 @@ struct AboutScreen: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Daybook").font(PhoneStyle.Typeface.title(30)).foregroundStyle(PhoneStyle.Ink.title)
+                    Text("Daybook").font(PhoneStyle.Typeface.title(.title)).foregroundStyle(PhoneStyle.Ink.title)
                     Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 6)

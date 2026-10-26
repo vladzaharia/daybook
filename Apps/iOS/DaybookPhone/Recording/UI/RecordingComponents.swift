@@ -85,7 +85,7 @@ struct RecordingStatusHeader: View {
             }
             if showsTitle {
                 Text(recorder.title.isEmpty ? "New conversation" : recorder.title)
-                    .font(PhoneStyle.Typeface.title(20))
+                    .font(PhoneStyle.Typeface.title(.title3))
                     .foregroundStyle(PhoneStyle.Ink.title)
                     .lineLimit(1)
             }

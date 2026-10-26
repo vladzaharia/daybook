@@ -200,7 +200,7 @@ private struct DevicePageContent: View {
         HStack(alignment: .center, spacing: 14) {
             DeviceGlyph(session: session, size: 56)
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.device.name).font(PhoneStyle.Typeface.title(26)).foregroundStyle(PhoneStyle.Ink.title)
+                Text(session.device.name).font(PhoneStyle.Typeface.title(.title)).foregroundStyle(PhoneStyle.Ink.title)
                 HStack(spacing: 6) {
                     Circle().fill(session.isLinked ? PhoneStyle.accent : Color(uiColor: .tertiaryLabel)).frame(width: 7, height: 7)
                     Text(PhoneDeviceCopy.line(for: session)).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
