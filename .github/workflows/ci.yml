@@ -73,7 +73,7 @@ jobs:
         # Also runs shellcheck (preinstalled) on every `run:` script.
         run: actionlint
       - name: shellcheck
-        run: shellcheck scripts/build-app.sh scripts/build-ios.sh scripts/ci/*.sh scripts/ci/tests/*.sh
+        run: shellcheck scripts/*.sh scripts/ci/*.sh scripts/ci/tests/*.sh
       - name: Release helper tests
         run: scripts/ci/tests/run-tests.sh
 
@@ -210,18 +210,25 @@ jobs:
           scripts/build-ios.sh --test --simulator "$UDID" \
             --test-arg -parallel-testing-enabled --test-arg NO \
             --test-arg -skip-testing:DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks \
+            --test-arg -skip-testing:DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval \
             --test-arg -resultBundlePath --test-arg build/test-results/DaybookPhoneTests.xcresult
-      # Waits up to 30 s for the encoder's utility queue to reach the disk, which a starved VM can
-      # miss. Alone, after the other tests, with one retry (xcodebuild reruns only a failed test).
-      - name: Crash-recovery timing test (alone, one retry)
+      # Both wait for the encoder's utility queue to reach the disk (crash recovery up to 30 s, the
+      # fragment test at each fragment interval), which a starved VM can miss. Alone, after the other
+      # tests, with one retry (xcodebuild reruns only a failed test). xcodebuild calls a pass on the
+      # retry a pass, so xcresult-retries.sh reads the result bundle and leaves a warning for it.
+      - name: Encoder timing tests (alone, one retry)
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
         run: |
+          status=0
           scripts/build-ios.sh --test --simulator "$UDID" \
             --test-arg -only-testing:DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks \
+            --test-arg -only-testing:DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval \
             --test-arg -retry-tests-on-failure --test-arg -test-iterations --test-arg 2 \
-            --test-arg -resultBundlePath --test-arg build/test-results/CrashRecovery.xcresult
+            --test-arg -resultBundlePath --test-arg build/test-results/EncoderTiming.xcresult || status=$?
+          scripts/ci/xcresult-retries.sh build/test-results/EncoderTiming.xcresult || true
+          exit "$status"
       - name: Save derived data
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true' && steps.test.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

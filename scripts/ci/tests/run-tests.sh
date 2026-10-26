@@ -15,6 +15,7 @@
 #   check-ref.sh          tags on and off main, manual runs, in a throwaway clone
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   prune-caches.sh       which caches go and which stay, against a fake gh
+#   xcresult-retries.sh   passes on retry and flaky iterations, from xcresulttool fixtures
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 #   select-xcode.sh       version and exact-build checks, SDKs, and the summary, with stand-in tools
@@ -321,6 +322,21 @@ expect_ok "says what it left alone" grep -q "mac-dd-macOS-27A9275-Debug-$hash_b 
 expect_ok "nothing to do is fine" prune "ios-dd-macOS-27A9275-$hash_a"
 expect_eq "(unchanged)" "3 4 5 6 7" "$(cache_ids)"
 expect_fail "a key without a hash is refused" prune "swiftpm-macOS-27A9275-"
+
+# --- xcresult-retries.sh on xcresulttool output (fixtures from real runs, names changed) -----------------
+echo "xcresult-retries.sh"
+fixtures="$here/fixtures"
+: > "$work/xc-summary"
+retried="$(GITHUB_STEP_SUMMARY="$work/xc-summary" "$ci/xcresult-retries.sh" --json "$fixtures/xcresult-retried.json")"
+expect_eq "a pass on retry is a warning" "::warning title=Passed on retry::PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks() failed, then passed on a retry (Failed, Passed)" \
+    "$(printf '%s\n' "$retried" | grep '^::')"
+expect_ok "and in the summary" grep -qF "Passed on retry: \`PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks()\`" "$work/xc-summary"
+expect_eq "a test that passed every attempt isn't" "0" "$(printf '%s\n' "$retried" | grep -c 'testRealTimeSegments' || true)"
+expect_eq "mixed iterations are flaky" "::warning title=Flaky test::PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks() passed some attempts and failed others (Failed, Passed, Passed)" \
+    "$("$ci/xcresult-retries.sh" --json "$fixtures/xcresult-iterations.json" | grep '^::')"
+jq 'walk(if type == "object" and .nodeType == "Repetition" then .result = "Passed" else . end)' "$fixtures/xcresult-retried.json" > "$work/all-passed.json"
+expect_eq "all passing: no warnings" "" "$("$ci/xcresult-retries.sh" --json "$work/all-passed.json" | grep '^::' || true)"
+expect_ok "no bundle (the run stopped early) is fine" "$ci/xcresult-retries.sh" "$work/none.xcresult"
 
 # --- check-ios-archive.sh -------------------------------------------------------------------------------
 echo "check-ios-archive.sh"

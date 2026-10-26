@@ -54,17 +54,18 @@ Keys combine the Xcode build with a hash of `Package.resolved`, `Package.swift`,
 
 After a push to `main`, the `caches` job (`scripts/ci/prune-caches.sh`) deletes the older caches of each family the run used: same key up to the hash, so `swiftpm-macOS-27A9275-…`, `ios-dd-macOS-27A9275-…`, and `mac-dd-macOS-27A9275-Debug-…`. It deletes them only when the run's own cache for that family is saved, so a failed run never removes the last good one. It's the only job with `actions: write`, and it builds nothing: it runs that one script. (When `release.yml` calls CI, its `validate` job grants `actions: write` as a ceiling only, because GitHub checks a called workflow's permissions before the run starts; the `caches` job never runs there.) Caches of an older Xcode build age out after 7 days unused. Run CI manually with `clean` ticked to build without caches.
 
-**Timing-sensitive tests.** Two tests have time budgets that an overloaded machine can miss:
+**Timing-sensitive tests.** Three tests depend on timing that an overloaded machine can miss:
 
 - `AudioAlignerTests.testThirtyMinutePairAlignsWithinBudget` must align a 30-minute pair within 15 s. On a development Mac at load average 50 it takes 1 to 4 s.
 - The iPhone test `testCrashRecoveryProducesAudioNotesAndBookmarks` waits up to 30 s for the encoder's utility queue to reach the disk.
+- The iPhone test `testRealTimeSegmentsReachTheDiskAtEachFragmentInterval` depends on the same encoder reaching the disk at each fragment interval.
 
-Neither test is disabled. Hosted runners are small shared VMs, so CI runs each one **on its own, after everything else has built and run, with one retry**:
+None is disabled. Hosted runners are small shared VMs, so CI runs them **on their own, after everything else has built and run, with one retry**:
 
 - The package test runs through `scripts/ci/retry.sh 2`. A pass on the second attempt leaves a "Passed on retry" warning on the run.
-- The iPhone test runs with `-retry-tests-on-failure -test-iterations 2`, which reruns only a failed test and records both attempts in the result bundle.
+- The two iPhone tests run together in "Encoder timing tests" with `-retry-tests-on-failure -test-iterations 2`, which reruns only a failed test and records both attempts in the result bundle. xcodebuild counts a pass on the retry as a pass, so `scripts/ci/xcresult-retries.sh` reads the bundle (`xcresulttool get test-results tests`) and leaves the same "Passed on retry" warning, in the run summary too.
 
-The main runs skip just these tests (`--skip` and `-skip-testing`), and the iPhone tests run with `-parallel-testing-enabled NO`. A real regression fails twice and fails the job. A retry warning that keeps coming back means the budget needs a look.
+The main runs skip just these tests (`--skip` and `-skip-testing`), and the iPhone tests run with `-parallel-testing-enabled NO`. A real regression fails twice and fails the job. A retry warning that keeps coming back means the budget needs a look. The nightly [CI under load](#ci-under-load) run shows how much margin they have.
 
 **Artifacts.** On failure, CI uploads the swift test logs, the iPhone `.xcresult` bundles and Xcode logs, or the Mac build logs. They're kept for 14 days.
 

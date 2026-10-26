@@ -1,0 +1,131 @@
+{
+  "devices": [
+    {
+      "architecture": "arm64",
+      "deviceId": "00000000-0000000000000000",
+      "deviceName": "iPhone 18 Pro",
+      "modelName": "iPhone 18 Pro",
+      "osBuildNumber": "27A000",
+      "osVersion": "27.0",
+      "platform": "iOS Simulator"
+    }
+  ],
+  "testNodes": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "duration": "0.001s",
+                      "durationInSeconds": 0.000995039939880371,
+                      "name": "Repetition 1",
+                      "nodeIdentifier": "1",
+                      "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval",
+                      "nodeType": "Repetition",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00057s",
+                      "durationInSeconds": 0.0005739927291870117,
+                      "name": "Repetition 2",
+                      "nodeIdentifier": "2",
+                      "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval",
+                      "nodeType": "Repetition",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00053s",
+                      "durationInSeconds": 0.0005279779434204102,
+                      "name": "Repetition 3",
+                      "nodeIdentifier": "3",
+                      "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval",
+                      "nodeType": "Repetition",
+                      "result": "Passed"
+                    }
+                  ],
+                  "duration": "0.0007s",
+                  "durationInSeconds": 0.000699003537495931,
+                  "name": "testRealTimeSegmentsReachTheDiskAtEachFragmentInterval()",
+                  "nodeIdentifier": "PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "name": "failed - XCTAssertTrue failed - the encoder did not reach the disk within 30 s",
+                          "nodeType": "Failure Message",
+                          "sourceLocation": {
+                            "filePath": "/Users/runner/work/daybook/daybook/Apps/iOS/DaybookPhoneTests/PhoneRecorderTests.swift",
+                            "lineNumber": 8
+                          }
+                        }
+                      ],
+                      "duration": "0.46s",
+                      "durationInSeconds": 0.45537805557250977,
+                      "name": "Repetition 1",
+                      "nodeIdentifier": "1",
+                      "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks",
+                      "nodeType": "Repetition",
+                      "result": "Failed"
+                    },
+                    {
+                      "duration": "0.00056s",
+                      "durationInSeconds": 0.0005620718002319336,
+                      "name": "Repetition 2",
+                      "nodeIdentifier": "2",
+                      "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks",
+                      "nodeType": "Repetition",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00046s",
+                      "durationInSeconds": 0.0004630088806152344,
+                      "name": "Repetition 3",
+                      "nodeIdentifier": "3",
+                      "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks",
+                      "nodeType": "Repetition",
+                      "result": "Passed"
+                    }
+                  ],
+                  "details": "2/3 (66%) passed, 1/3 (33%) failed",
+                  "duration": "0.15s",
+                  "durationInSeconds": 0.152134378751119,
+                  "name": "testCrashRecoveryProducesAudioNotesAndBookmarks()",
+                  "nodeIdentifier": "PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks",
+                  "nodeType": "Test Case",
+                  "result": "Failed"
+                }
+              ],
+              "name": "PhoneRecorderTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests",
+              "nodeType": "Test Suite",
+              "result": "Failed"
+            }
+          ],
+          "name": "PhoneRecorderTests",
+          "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/PhoneRecorderTests",
+          "nodeType": "Unit test bundle",
+          "result": "Failed"
+        }
+      ],
+      "name": "DaybookPhone",
+      "nodeType": "Test Plan",
+      "result": "Failed"
+    }
+  ],
+  "testPlanConfigurations": [
+    {
+      "configurationId": "1",
+      "configurationName": "Test Scheme Action"
+    }
+  ]
+}
