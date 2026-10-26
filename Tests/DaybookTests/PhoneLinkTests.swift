@@ -701,6 +701,54 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(library.library.meeting(id)?.highlights.count, 1)
     }
 
+    func testThePhonesOwnStartAndTheClockItMeasuredPlaceItsRecording() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let skew: TimeInterval = 2.5
+        let link = try await PhoneLinkRig.connect(state, clockOffset: skew)
+        defer { Task { await link.tearDown(state) } }
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        defer { library.tearDown() }
+        let expected = ExpectedOffsets()
+        state.sources.alignAudio = { _, _, prior, _ in expected.append(prior); return nil }
+        let recordingID = UUID()
+        // The phone's answer reports its start roughly (before its first sample arrived).
+        let phoneStart = Date().addingTimeInterval(skew + 1)
+        link.recorder.answer = { request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: phoneStart.addingTimeInterval(-0.4),
+                                    recordingID: recordingID.uuidString))
+        }
+        let macAudio = try rig.audio("mac-clock.wav", frequency: 315)
+        let phoneAudio = try rig.audio("iphone-clock.wav", frequency: 475)
+        try rig.inference.script(macAudio, [(0, "Clocks first.")])
+        try rig.inference.script(phoneAudio, [(0, "Clocks first.")])
+        let id = macStartsRecording(rig)
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        await state.sources.recorders.settle()
+        macStopsRecording(rig, id)
+        await state.sources.recorders.settle()
+        // The link kept no clock (the burst hadn't finished, say); the phone measured one while recording.
+        state.update(id) { $0.companions?[0].clock = nil }
+        try await storeMacRecording(rig, id, audio: macAudio, start: macStart)
+        await state.synchronizeLibrary()
+        await library.synchronize()
+        let measured = CapturePeerClock(deviceID: state.phoneLink.identity.deviceID.uuidString, name: "Mac", deviceClass: "mac",
+                                        offset: -skew, uncertainty: 0.004, sampleCount: 6, measuredAt: Date())
+        try await library.file(phoneAudio, recordingID: recordingID, into: id, start: phoneStart, duration: 0.5, peerClocks: [measured])
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitFor("processed", timeout: 20) { rig.meeting(id)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty }
+        let track = try XCTUnwrap(rig.meeting(id)?.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id })
+        // Its exact first sample, on this Mac's clock by the phone's measurement: 1 s after this Mac's start.
+        let prior = phoneStart.addingTimeInterval(-skew).timeIntervalSince(macStart)
+        XCTAssertEqual(try XCTUnwrap(track.alignment?.clockOffset), prior, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(expected.values.first ?? nil), prior, accuracy: 0.01)
+        // Its start on this Mac's clock, wherever a start is compared.
+        XCTAssertEqual(state.trackStart(track)?.timeIntervalSince(phoneStart.addingTimeInterval(-skew)) ?? 99, 0, accuracy: 0.01)
+    }
+
     func testAnUnlinkedPhoneRecordingJoinsByTimeThenSound() async throws {
         let rig = try await rig()
         let state = rig.state

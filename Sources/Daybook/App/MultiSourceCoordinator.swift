@@ -80,6 +80,8 @@ protocol AnsweringRecordControl: RecordControlConnection {
     func requestStop(conversationID: UUID, macEndedAt: Date?) async -> CompanionAnswer
     /// The conversation it says it's recording (or paused in), when it says.
     var recordingConversationID: UUID? { get }
+    /// Its clock against this Mac's, as measured now.
+    var clock: CompanionClock? { get }
 }
 
 /// What a device that answers is asked to record: the conversation as this Mac has it, so a device
@@ -213,6 +215,11 @@ final class CompanionRecorders: ObservableObject {
                 self.update(meetingID, link.id) { $0.macEndedAt = end }
                 guard let session = self.sessions().first(where: { $0.id == link.deviceID }),
                       let control = session.direct as? any RecordControlConnection else { continue }
+                // The clock prior its recording is placed by: the latest the link measured (the burst
+                // after connecting may not have finished when it was asked to record).
+                if let fresh = (control as? any AnsweringRecordControl)?.clock, fresh.measuredAt > (link.clock?.measuredAt ?? .distantPast) {
+                    self.update(meetingID, link.id) { $0.clock = fresh }
+                }
                 switch link.state {
                 case .recording:
                     if let answering = control as? any AnsweringRecordControl {

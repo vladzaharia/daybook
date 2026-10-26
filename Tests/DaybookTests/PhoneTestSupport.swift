@@ -146,14 +146,14 @@ struct PhoneLibrarySide {
     @discardableResult
     func file(_ audio: URL, recordingID: UUID, into conversation: UUID? = nil, start: Date, duration: TimeInterval,
               title: String = "iPhone recording", notes: [TimedNote] = [], bookmarks: [Highlight] = [],
-              shift: TimeInterval = 0) async throws -> UUID {
+              shift: TimeInterval = 0, peerClocks: [CapturePeerClock]? = nil) async throws -> UUID {
         let id = conversation ?? recordingID
         let joining = conversation != nil
         if library.meeting(id) == nil { library.add(Meeting(id: id, title: title, date: start, status: joining ? .draft : .imported)) }
         let identity = DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: phoneID.uuidString, recordingID: recordingID.uuidString)
         await library.acquireLock()
         var provenance = RecordingProvenance(source: .microphone, device: identity, offset: joining ? nil : 0, duration: duration,
-                                             startedAt: start, capture: TrackCaptureDetails(method: "iphone-microphone"))
+                                             startedAt: start, capture: TrackCaptureDetails(method: "iphone-microphone", peerClocks: peerClocks))
         provenance.joinsConversation = joining
         let ingested = try await library.ingest(audio, into: id, provenance: provenance)
         library.releaseLock()

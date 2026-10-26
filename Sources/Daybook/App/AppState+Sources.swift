@@ -152,12 +152,15 @@ extension AppState {
         var clockOffset = carried?.clockOffset
         if clockOffset == nil, let link {
             // The recorder's start on this Mac's clock: corrected by the clock the link measured, when
-            // one did (Daybook on iPhone), which is the prior the sound search starts from.
+            // one did (Daybook on iPhone), which is the prior the sound search starts from. A recording
+            // its own device timed (the phone's first sample) beats the start its answer reported.
             let zero = before.knownTimelineStart(startOf: trackStart) ?? link.macStartedAt
-            let recorderStart = link.recorderStartedAt ?? start.date
-            clockOffset = recorderStart.map { link.clock?.macDate(fromRecorder: $0) ?? $0 }?.timeIntervalSince(zero)
+            let ownStart = track.capture != nil ? track.startedAt ?? start.date : nil
+            let recorderStart = ownStart ?? link.recorderStartedAt ?? start.date
+            let clock = recorderClock(for: track, link: link)
+            clockOffset = recorderStart.map { clock?.macDate(fromRecorder: $0) ?? $0 }?.timeIntervalSince(zero)
         } else if clockOffset == nil, start.reliable, let date = start.date, let zero = before.knownTimelineStart(startOf: trackStart) {
-            clockOffset = date.timeIntervalSince(zero)
+            clockOffset = (recorderClock(for: track, link: nil)?.macDate(fromRecorder: date) ?? date).timeIntervalSince(zero)
         }
         let name = sourceName(track)
         let reliableStart = start.reliable ? start.date : nil
@@ -235,12 +238,35 @@ extension AppState {
         return ((try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate, false)
     }
 
-    /// When a recording started by the wall clock, when Daybook knows.
+    /// When a recording started by the wall clock, when Daybook knows, on this Mac's clock.
     func trackStart(_ track: RecordingTrack) -> Date? {
-        if let startedAt = track.startedAt { return startedAt }
+        if let startedAt = track.startedAt {
+            // Daybook on iPhone stamps its recordings by its own clock.
+            guard track.deviceKind == DaybookPhoneIntegration.id else { return startedAt }
+            let link = meetings.first { $0.tracks.contains { $0.id == track.id } }?.companions?.first {
+                $0.trackID == track.id || ($0.recordingID != nil && $0.recordingID == track.deviceRecordingID)
+            }
+            return recorderClock(for: track, link: link)?.macDate(fromRecorder: startedAt) ?? startedAt
+        }
         // Capture sets a Mac recording's creation date to when its first sample arrived.
         if track.source == .microphone || track.source == .systemAudio { return track.createdAt }
         return track.device.flatMap(deviceRecordingStart)
+    }
+
+    /// A recorder's clock against this Mac's, for placing its recording: the one its multipoint link
+    /// keeps, or the one Daybook on iPhone measured while recording and stored on its track
+    /// (`capture.peerClocks`), whichever was measured later. The track's entry for this Mac comes
+    /// first; another Mac's is only near this one's.
+    func recorderClock(for track: RecordingTrack, link: CompanionRecording?) -> CompanionClock? {
+        let peers = track.capture?.peerClocks ?? []
+        let entry = peers.first { $0.deviceID == phoneLink.identity.deviceID.uuidString }
+            ?? peers.filter { $0.peerRecordingStartedAt != nil }.max { $0.measuredAt < $1.measuredAt }
+        // Its offset is (peer − this recorder); the link's is (recorder − Mac).
+        let measured = entry.map { CompanionClock(offset: -$0.offset, uncertainty: $0.uncertainty, samples: $0.sampleCount,
+                                                  measuredAt: $0.measuredAt.addingTimeInterval($0.offset)) }
+        guard let linked = link?.clock else { return measured }
+        guard let measured else { return linked }
+        return measured.measuredAt > linked.measuredAt ? measured : linked
     }
 
     /// The identity of the whole recording, for a Listen Live portion too.

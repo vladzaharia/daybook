@@ -97,9 +97,13 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
         Task { _ = await requestStop(conversationID: conversation, macEndedAt: Date()) }
     }
 
+    /// Its clock against this Mac's, as the link measures it now.
+    var clock: CompanionClock? { peer?.clock.map(CompanionClock.init) }
+
     func requestStart(_ start: CompanionStart) async -> CompanionAnswer {
         guard peer != nil else { return .unavailable }
-        // A fresh sample now; the burst after connecting has usually settled the estimate already.
+        // A fresh sample now, so the estimate kept with the answer (and refreshed at Stop) rests on it;
+        // the request carries the estimate as it stands, usually settled by the burst after connecting.
         await link.sampleClock(of: phoneID)
         let clock = peer?.clock
         // `elapsed` counts the conversation's timeline, which for one recorded into again began earlier.
