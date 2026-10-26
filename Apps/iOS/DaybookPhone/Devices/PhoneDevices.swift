@@ -110,6 +110,13 @@ final class PhoneDevices {
 
     func shutDown() { hub.shutDown() }
 
+    /// Background app refresh: a recorder whose wait before the next automatic import ran out while
+    /// the app was suspended reaches for the recorder now (`SoundcoreConnection.automaticDueAt`).
+    func backgroundRefresh() {
+        guard started else { return }
+        hub.resumeAutomaticImportsIfDue()
+    }
+
     var sessions: [DeviceSession] { _ = revision; return hub.sessions }
 
     // MARK: Ownership

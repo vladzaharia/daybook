@@ -141,6 +141,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private var startedHereID: UInt32?
     /// Redraws a remembered recording as unknown once it's too old to show.
     private var expiry: Task<Void, Never>?
+    /// When the automatic-import wait ends, on the wall clock: a suspended iPhone app runs no timers,
+    /// so a background wake checks this instead (`resumeAutomaticImportIfDue`).
+    public private(set) var automaticDueAt: Date?
     private var names: [UUID: String] = [:]
     /// Listen Live's captioner, its listeners, and where the live audio has reached (16 kHz frames).
     private var captioner: (any LiveCaptioning)?
@@ -735,14 +738,27 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         origin = .automatic
         if let delay {
             phase = .idle
+            automaticDueAt = Date().addingTimeInterval(Self.seconds(delay))
             startTimer(delay) { [weak self] in self?.armAutomatic(after: nil) }
         } else {
+            automaticDueAt = nil
             begin(.automatic)
         }
     }
 
+    /// The app was woken in the background (iOS app refresh). A timer doesn't run while the app is
+    /// suspended, so a wait for the next automatic import that has run out starts its quiet
+    /// connection now; the system keeps that pending, and wakes the app when the recorder answers.
+    public func resumeAutomaticImportIfDue(now: Date = Date()) {
+        guard case .idle = phase, importsAutomatically, isEnabled, remembered != nil, managedElsewhere == nil else { return }
+        if let due = automaticDueAt, due > now { return }
+        cancelTimer()
+        armAutomatic(after: nil)
+    }
+
     private func stopAutomatic() {
         cancelTimer()
+        automaticDueAt = nil
         if case .waitingInRange(let id) = phase { transport?.disconnect(id); peripheral = nil }
         phase = .idle
         origin = .person

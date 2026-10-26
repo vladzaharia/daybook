@@ -67,6 +67,8 @@ struct DaybookPhoneApp: App {
         }
         .onChange(of: scenePhase) { _, phase in model.scenePhaseChanged(phase) }
         .backgroundTask(.appRefresh(PhoneSync.refreshIdentifier)) {
+            // Recorders first: their timers didn't run while the app was suspended.
+            await model.devices.backgroundRefresh()
             await model.sync.backgroundRefresh()
         }
     }

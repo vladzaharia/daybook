@@ -449,6 +449,34 @@ final class SoundcoreSimulatorTests: XCTestCase {
         try await waitUntil("letting the recorder go") { rig.connection.state == .notConnected && !rig.transport.connected }
     }
 
+    func testABackgroundWakeReachesForTheRecorderOnceTheWaitHasRunOut() async throws {
+        // On iPhone the wait between automatic imports is a timer, and a suspended app runs none.
+        let rig = rig(recorder(count: 1), automatic: true, since: .distantPast, remembered: true)
+        try await waitUntil("the import, then letting go") {
+            rig.library.imports.count == 1 && rig.connection.state == .notConnected && !rig.transport.connected
+        }
+        let due = try XCTUnwrap(rig.connection.automaticDueAt)
+        XCTAssertEqual(due.timeIntervalSinceNow, 60, accuracy: 5, "the cooldown, on the wall clock")
+        let attempts = rig.transport.connectAttempts
+
+        rig.connection.resumeAutomaticImportIfDue()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(rig.transport.connectAttempts, attempts, "not before the wait is over")
+
+        // App refresh wakes the app after the wait ran out: it reaches for the recorder at once.
+        rig.connection.resumeAutomaticImportIfDue(now: due.addingTimeInterval(1))
+        XCTAssertNil(rig.connection.automaticDueAt)
+        try await waitUntil("connecting again") { rig.transport.connectAttempts > attempts && rig.connection.state == .connected }
+
+        // Turned off, a wake does nothing.
+        rig.session.update { $0.importsAutomatically = false }
+        rig.connection.disconnect()
+        let after = rig.transport.connectAttempts
+        rig.connection.resumeAutomaticImportIfDue(now: .distantFuture)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(rig.transport.connectAttempts, after)
+    }
+
     func testTurningAutomaticImportOffStopsWaitingForTheRecorder() async throws {
         let device = recorder()
         device.advertises = false
