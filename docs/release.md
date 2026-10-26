@@ -25,7 +25,7 @@ Hardening:
 - Every workflow starts from `permissions: {}`, and each job asks for `contents: read` (or `write` in `publish` only).
 - Actions are pinned to commit SHAs, with the version in a comment. Checkouts don't persist credentials.
 - Nothing uses `pull_request_target`.
-- Concurrency groups cancel superseded pull request runs and never cancel a release.
+- Concurrency groups cancel superseded pull request runs and never cancel a release. CI's group includes the workflow's name, which is "Release" when `release.yml` calls it, so a push to `main` can't queue behind or replace a release's validation.
 - Secrets are environment secrets in `release`. Only jobs that a reviewer approved can read them, and only from `main` or a `v*` tag. Each secret is passed to the one step that needs it.
 - Secrets become files only in `$RUNNER_TEMP/daybook-secrets` (mode 700, files 600). A temporary keychain holds the `.p12`. `scripts/ci/secrets.sh cleanup` deletes both in an `always()` step.
 - Runners are GitHub-hosted only. The repository's `.github/actionlint.yaml` lists `xcode-27` under actionlint's `self-hosted-runner` key only because actionlint 1.7.12 predates the label. It's GitHub-hosted.

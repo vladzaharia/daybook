@@ -23,7 +23,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # github.workflow is "Release" when release.yml calls this workflow, so a push to main never queues
+  # behind, or replaces, a release's validation of the same ref.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   # Superseded pull request pushes stop; main keeps every run so its caches are saved.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
