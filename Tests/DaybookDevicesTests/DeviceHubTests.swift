@@ -159,7 +159,7 @@ final class DeviceHubTests: XCTestCase {
 
         try await waitUntil("the stable files") { meetings.count == 1 && session.failures.count == 1 }
         XCTAssertEqual(meetings[0].tracks[0].device?.kind, OtherRecorderIntegration.id)
-        XCTAssertEqual(meetings[0].tracks[0].device?.recordingID, ImportFolderWatcher.recordingID(name: "meeting.wav", size: try good.resourceValues(forKeys: [.fileSizeKey]).fileSize!))
+        XCTAssertEqual(meetings[0].tracks[0].device?.recordingID, ImportFolderWatcher.recordingID(sha256: try AudioDigest.sha256(fileURL: good)))
         XCTAssertEqual(session.failures[0].message, "Couldn’t read this file.")
         XCTAssertNil(session.transferProblem, "Folder failures live in Recently imported, not a banner")
         XCTAssertEqual(session.split.imported.count, 1)
@@ -182,6 +182,29 @@ final class DeviceHubTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertTrue(meetings.isEmpty)
         XCTAssertEqual(session.newRecordings.count, 2, "It's offered again, for the person to choose")
+    }
+
+    func testDifferentFoldersWithEqualFileNamesAndSizesUseContentIdentity() async throws {
+        let device = ConfiguredDevice(id: "collision", kind: OtherRecorderIntegration().kind)
+        let files = ImportFolderWatcher(storage: environment().storage(for: device, method: .files), interval: .seconds(3600))
+        defer { files.shutDown() }
+        var ids: [String] = []
+        for (folderName, bytes) in [("first", "aaaa"), ("second", "bbbb")] {
+            let folder = root.appendingPathComponent(folderName)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(bytes.utf8).write(to: folder.appendingPathComponent("recording.wav"))
+            try Data(bytes.utf8).write(to: folder.appendingPathComponent("copy.wav"))
+            try files.watch(folder)
+            await files.scan()
+            await files.scan()
+            let recording = try XCTUnwrap(files.recordings.first)
+            XCTAssertEqual(files.recordings.count, 1, "Copies of the same bytes share one recording identity")
+            XCTAssertFalse(files.wasImported(recording.id))
+            XCTAssertEqual(files.automaticImports(links: .init(), since: .distantPast, excluding: []).count, 1)
+            files.didImport(recording)
+            ids.append(recording.id)
+        }
+        XCTAssertNotEqual(ids[0], ids[1])
     }
 
     func testMissingFolderIsAProblemWithChooseFolder() async throws {
