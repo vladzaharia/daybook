@@ -94,9 +94,9 @@ sandboxed, and only it carries the manifest that moves the real library:
 | Build | Bundle ID | Sandboxed | Manifest | Library |
 |---|---|---|---|---|
 | Signed (Developer ID, Apple Development), the default | `local.daybook.app` | no | none | `~/Library/Application Support/Daybook` |
-| Signed with `--sandbox` / `DAYBOOK_SANDBOX=1` (release only) | `local.daybook.app` | yes | `Resources/container-migration.plist`: moves `${ApplicationSupport}/Daybook` | the container's |
+| Signed with `--sandbox` / `DAYBOOK_SANDBOX=1` (release only) | `local.daybook.app` | yes | `Resources/container-migration.plist`: moves `${ApplicationSupport}/Daybook` and `${Library}/Preferences/${BundleId}.plist` | the container's |
 | Ad hoc (`--ad-hoc`, or no team) | `local.daybook.app.adhoc` | yes | none | its own container's, empty at first |
-| Rehearsal (`--sandbox-rehearsal`) | `local.daybook.app.rehearsal` (or `DAYBOOK_REHEARSAL_BUNDLE_ID`) | yes | `Resources/container-migration-rehearsal.plist`: moves `${ApplicationSupport}/Daybook Rehearsal` to `${ApplicationSupport}/Daybook` | its own container's |
+| Rehearsal (`--sandbox-rehearsal`) | `local.daybook.app.rehearsal` (or `DAYBOOK_REHEARSAL_BUNDLE_ID`) | yes | `Resources/container-migration-rehearsal.plist`: moves `${ApplicationSupport}/Daybook Rehearsal` to `${ApplicationSupport}/Daybook`, and its preferences | its own container's |
 | `swift run`, `.build/debug/Daybook` | none | no | none | `~/Library/Application Support/Daybook Development` |
 
 `Apps/macOS/Config/Signing.xcconfig` derives all of it from `DAYBOOK_SIGNING` (`signed`, `local`, `rehearsal`) and
@@ -130,7 +130,10 @@ with `--sandbox`, so a release is never sandboxed by accident or sandboxed witho
 ### Moving the library
 
 macOS moves the library into the container once, through the manifest, when it creates the container. That's the
-expected path, and it's a rename on the same volume. Everything else is the launch check's (`SandboxMigration`, at the
+expected path, and it's a rename on the same volume. The manifest moves the preferences too: macOS doesn't move them
+by itself (the rehearsal showed it), and without them the first sandboxed launch would show Welcome and forget the
+devices, model choices, sync state, and folder bookmarks. Quit the unsandboxed app before the first sandboxed launch,
+so the preferences daemon isn't holding its copy. Everything else is the launch check's (`SandboxMigration`, at the
 top of `AppState.init`, before anything writes preferences or sync resolves its identity), for the app's own library
 in a sandboxed build:
 
@@ -155,7 +158,9 @@ once the person chooses it); an APFS clone of it into a hidden folder in the con
 kind, size) against the original, then renamed into place; an empty folder already there is replaced, one with
 anything in it never is; the old library is only read. Then **Move to Trash** or **Keep It** for the old copy, and the
 app starts over with the library in place. With nothing at the old place, **Start Fresh** opens a new library instead
-of **Quit**.
+of **Quit**. While a move is pending the library window opens instead of Welcome, so the question is always seen. In
+this case the preferences stay at the old place (the sandbox can't read them): settings start over, and the identity
+comes back from the keychain or `replica.json`.
 
 ### Folders chosen before the sandbox
 
@@ -188,13 +193,13 @@ Before the first sandboxed prerelease, on real hardware:
    real one at no cost: `cp -c -R`), and preferences in the rehearsal's domain
    (`defaults write local.daybook.app.rehearsal onboardingCompleted -bool YES`). Launch `dist/Daybook.app`: the
    library should be in `~/Library/Containers/local.daybook.app.rehearsal/Data/Library/Application Support/Daybook`,
-   gone from `Daybook Rehearsal`, and the app should open it without asking. Check whether the preferences came along
-   (`defaults read ~/Library/Containers/local.daybook.app.rehearsal/Data/Library/Preferences/local.daybook.app.rehearsal`);
-   if they didn't, add `${Library}/Preferences/${BundleId}.plist` to both manifests before shipping. Each further
-   rehearsal needs a new `DAYBOOK_REHEARSAL_BUNDLE_ID` (above). docs/validation.md records the last one.
-3. **A backup** of the real library, an APFS clone that costs no space:
-   `cp -c -R ~/Library/Application\ Support/Daybook ~/Library/Application\ Support/Daybook\ Backup\ $(date +%F)` (or a
-   Time Machine backup). Quit Daybook first.
+   gone from `Daybook Rehearsal`, the preferences in the container
+   (`plutil -p ~/Library/Containers/local.daybook.app.rehearsal/Data/Library/Preferences/local.daybook.app.rehearsal.plist`,
+   with `sandboxMigration` = `moved`), and the app should open the library without asking or showing Welcome. Each
+   further rehearsal needs a new `DAYBOOK_REHEARSAL_BUNDLE_ID` (above). docs/validation.md records the last ones.
+3. **A backup** of the real library and preferences, an APFS clone that costs no space:
+   `cp -c -R ~/Library/Application\ Support/Daybook ~/Library/Application\ Support/Daybook\ Backup\ $(date +%F)` and
+   `cp ~/Library/Preferences/local.daybook.app.plist ~/Desktop/` (or a Time Machine backup). Quit Daybook first.
 
 Then the prerelease:
 

@@ -8,7 +8,7 @@
 #   rehearsal       sandboxed, local.daybook.app.rehearsal…, the same exception, the rehearsal's manifest
 #   signed          local.daybook.app, not sandboxed, no manifest (the default until the switch)
 #   signed-sandbox  local.daybook.app, sandboxed, no temporary exceptions, the manifest that moves
-#                   ${ApplicationSupport}/Daybook
+#                   ${ApplicationSupport}/Daybook and the app's preferences
 #
 # Every sandboxed kind needs the capabilities Daybook uses: audio input, microphone, Bluetooth, network client and
 # server, user-selected files, and app-scoped bookmarks. Exits 1 with every problem listed.
@@ -100,7 +100,7 @@ case "$kind" in
         expect_sandboxed
         expect_scratch_exception_only
         # shellcheck disable=SC2016 # the manifest's own variables, never expanded here
-        expect_manifest '[["${ApplicationSupport}/Daybook Rehearsal","${ApplicationSupport}/Daybook"]]'
+        expect_manifest '[["${ApplicationSupport}/Daybook Rehearsal","${ApplicationSupport}/Daybook"],"${Library}/Preferences/${BundleId}.plist"]'
         ;;
     signed)
         expect_bundle local.daybook.app
@@ -113,7 +113,7 @@ case "$kind" in
         expect_sandboxed
         [[ -z "$exceptions" ]] || problem "signed builds carry no temporary exceptions: [${exceptions//$'\n'/, }]"
         # shellcheck disable=SC2016 # the manifest's own variables, never expanded here
-        expect_manifest '["${ApplicationSupport}/Daybook"]'
+        expect_manifest '["${ApplicationSupport}/Daybook","${Library}/Preferences/${BundleId}.plist"]'
         ;;
 esac
 

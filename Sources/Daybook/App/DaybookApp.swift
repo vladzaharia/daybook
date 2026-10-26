@@ -73,7 +73,9 @@ struct DaybookApp: App {
             .windowStyle(.hiddenTitleBar)
             .windowResizability(.contentSize)
             .restorationBehavior(.disabled)
-            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil ? .suppressed : .presented)
+            // A library to move first (docs/sandbox.md) is asked about in the library window, which opens instead.
+            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil || state.libraryMoveOffer?.holdsLibrary == true
+                                   ? .suppressed : .presented)
 
         Window("Vocabulary", id: WindowID.vocabulary) { GlossaryView(state: state).defaultAppStorage(LaunchOptions.defaults) }
             .defaultSize(width: 640, height: 440)

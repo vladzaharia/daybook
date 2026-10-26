@@ -11,5 +11,6 @@
         <string>${ApplicationSupport}/Daybook Rehearsal</string>
         <string>${ApplicationSupport}/Daybook</string>
     </array>
+    <string>${Library}/Preferences/${BundleId}.plist</string>
 </array>
 </dict></plist>

@@ -4,10 +4,13 @@
      (DAYBOOK_SANDBOX = YES, Apps/macOS/Config/Signing.xcconfig) as Contents/Resources/container-migration.plist.
      When the sandboxed app first launches and macOS creates its container, the library moves from
      ~/Library/Application Support/Daybook to the same place inside the container: once, and only if this build is
-     the one that creates the container. The app's launch check (SandboxMigration) handles every other case. -->
+     the one that creates the container. The app's launch check (SandboxMigration) handles every other case.
+     The preferences move too: macOS doesn't move them by itself (the rehearsal showed it, docs/validation.md), and
+     they hold the devices, model choices, sync state, and folder bookmarks. Quit the unsandboxed app first. -->
 <plist version="1.0"><dict>
 <key>Move</key>
 <array>
     <string>${ApplicationSupport}/Daybook</string>
+    <string>${Library}/Preferences/${BundleId}.plist</string>
 </array>
 </dict></plist>
