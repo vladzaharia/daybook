@@ -33,8 +33,9 @@ enum CaptureFinalizer {
         } else {
             result.derivedTracks = nil
         }
-        if report.outcome == .failed, let detail = report.detail {
-            result.warnings = Array(Set(result.warnings + ["Echo removal failed, so the original microphone will be transcribed: \(detail)"])).sorted()
+        if report.outcome == .failed, report.detail != nil {
+            // The detail stays in the echo removal report, which the capture details show.
+            result.warnings = Array(Set(result.warnings + ["Echo removal failed, so the original microphone recording is transcribed."])).sorted()
         }
         // Best effort: the in-memory result is still used if metadata can't be written.
         try? CaptureJSON.persist(result, at: result.directory.appendingPathComponent("capture-result.json"))

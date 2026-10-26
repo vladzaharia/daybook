@@ -45,6 +45,7 @@ enum SystemAudioSelector {
                       onBuffer: @escaping CaptureBufferHandler, onEvent: @escaping CaptureEventHandler)
     async throws -> (source: CaptureAudioSource, info: SystemAudioCaptureInfo) {
         var fallbackReason: String
+        var fallbackDetail: String?
         if let target {
             if provider.supportsProcessTaps {
                 var tap: CaptureAudioSource?
@@ -56,7 +57,8 @@ enum SystemAudioSelector {
                     return (created, SystemAudioCaptureInfo(method: .processTap, capturedApps: apps))
                 } catch {
                     if let tap { await tap.stop() }
-                    fallbackReason = "Couldn’t record \(target.displayName) on its own (\(error.localizedDescription)), so all Mac audio is recorded."
+                    fallbackReason = "Couldn’t record \(target.displayName) on its own, so all Mac audio is recorded."
+                    fallbackDetail = error.localizedDescription
                 }
             } else {
                 fallbackReason = "Recording only the call app needs macOS 14.2 or later, so all Mac audio is recorded."
@@ -66,7 +68,7 @@ enum SystemAudioSelector {
         }
         let screen = try await provider.makeScreenCapture()
         try await screen.start(onBuffer: onBuffer, onEvent: onEvent)
-        return (screen, SystemAudioCaptureInfo(method: .screenCaptureKit, fallbackReason: fallbackReason))
+        return (screen, SystemAudioCaptureInfo(method: .screenCaptureKit, fallbackReason: fallbackReason, fallbackDetail: fallbackDetail))
     }
 }
 
@@ -130,7 +132,7 @@ final class ScreenCaptureAudioSource: NSObject, CaptureAudioSource, SCStreamOutp
     func stop() async {
         if let stream {
             do { try await stream.stopCapture() }
-            catch { onEvent?(.failed(RecordingError.interrupted("System audio stopped with: \(error.localizedDescription)"))) }
+            catch { onEvent?(.failed(error)) }
         }
         stream = nil
         // Drain callbacks already queued before the writer closes.

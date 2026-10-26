@@ -104,7 +104,7 @@ final class PCMTrackWriter: @unchecked Sendable {
             guard !isFinished, errorMessage == nil, buffer.frameLength > 0 else { return }
             do { try write(buffer, hostTimeSeconds: hostTimeSeconds) }
             catch {
-                errorMessage = error.localizedDescription
+                recordFailure(error)
                 failure(error)
             }
         }
@@ -228,20 +228,28 @@ final class PCMTrackWriter: @unchecked Sendable {
         track.frameCount += Int64(output.frameLength)
     }
 
+    /// The first failure, as one plain sentence; the system's words go in the track's notes.
+    private func recordFailure(_ error: Error) {
+        guard errorMessage == nil else { return }
+        if CapturedTrackRole.speaksPlainly(error) { errorMessage = error.localizedDescription; return }
+        errorMessage = "The \(role.spokenName) recording stopped early. What was recorded is saved."
+        notes.append("Writing stopped early: \(error.localizedDescription)")
+    }
+
     func finish() async -> Outcome {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
                 isFinished = true
                 if let file, var current = track, errorMessage == nil {
                     do { try drainConverter(into: file, track: &current); track = current }
-                    catch { errorMessage = error.localizedDescription }
+                    catch { recordFailure(error) }
                 }
                 file = nil // Close the CAF before callers import/read it.
                 if var track {
                     track.notes = notes.isEmpty ? nil : notes
                     self.track = track
                     do { try persistTrack(track) }
-                    catch { errorMessage = errorMessage ?? error.localizedDescription }
+                    catch { errorMessage = errorMessage ?? "The \(role.spokenName) recording is saved, but its details couldn’t be." }
                 }
                 continuation.resume(returning: Outcome(track: track, error: errorMessage))
             }

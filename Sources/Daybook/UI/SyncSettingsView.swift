@@ -71,7 +71,8 @@ struct SyncSettingsView: View {
             if let problem { SyncWarning(text: problem.text, details: problem.details) }
             if let remaining = remainingMigration { SyncNote(text: remaining) }
             ForEach(Array(sync.warnings.enumerated()), id: \.offset) { _, warning in
-                SyncWarning(text: warning)
+                let words = SyncWarningWords.split(warning)
+                SyncWarning(text: words.text, details: words.details)
             }
             SyncEncryptionRows(state: state)
             Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
@@ -217,7 +218,8 @@ struct SyncSettingsView: View {
             }
             if let problem { SyncWarning(text: problem.text, details: problem.details) }
             ForEach(Array(sync.warnings.enumerated()), id: \.offset) { _, warning in
-                SyncWarning(text: warning)
+                let words = SyncWarningWords.split(warning)
+                SyncWarning(text: words.text, details: words.details)
             }
             SyncEncryptionRows(state: state)
             Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)

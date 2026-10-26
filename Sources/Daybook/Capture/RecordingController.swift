@@ -81,6 +81,8 @@ final class RecordingController: ObservableObject {
     private var manifest: CaptureSessionManifest?
     private var directory: URL?
     private var warnings: [String] = []
+    /// The system's own words for problems, kept for each track's capture notes.
+    private var technicalNotes: [CapturedTrackRole: [String]] = [:]
     private var routeEvents: [AudioRouteEvent] = []
     private var routeObservation: AnyObject?
     private var meterTimer: Timer?
@@ -121,6 +123,7 @@ final class RecordingController: ObservableObject {
         lastResult = nil
         cancelStart = false
         warnings = []
+        technicalNotes = [:]
         routeEvents = []
         systemAudioCapture = nil
         levels.reset()
@@ -154,7 +157,10 @@ final class RecordingController: ObservableObject {
                 system = source
                 systemAudioCapture = info
                 writer.setMethod(info.method.rawValue)
-                if let reason = info.fallbackReason, callApp != nil { warnings.append(reason) }
+                if let reason = info.fallbackReason, callApp != nil {
+                    warnings.append(reason)
+                    if let detail = info.fallbackDetail { technicalNotes[.systemAudio, default: []].append("\(reason) \(detail)") }
+                }
             }
             try checkStartCancellation()
             let micWriter = makeWriter(.microphone, manifest: manifest, directory: directory, method: "microphone")
@@ -168,8 +174,9 @@ final class RecordingController: ObservableObject {
             state = .recording
             startMetering()
         } catch {
-            lastError = error.localizedDescription
-            warnings.append(error.localizedDescription)
+            let message = CapturedTrackRole.speaksPlainly(error) ? error.localizedDescription : "Recording couldn’t start."
+            lastError = message
+            warn(message, error: error)
             state = .stopping
             _ = await finishCapture()
             throw error
@@ -227,13 +234,13 @@ final class RecordingController: ObservableObject {
     private func writerFailed(_ role: CapturedTrackRole, _ error: Error) {
         if role == .microphone || error is PCMTrackWriterError { captureFailed(error); return }
         guard state == .recording else { return }
-        Task { await stopCallTrack(reason: "Call audio stopped: \(error.localizedDescription) The microphone kept recording.") }
+        Task { await stopCallTrack(reason: "Call audio stopped. The microphone kept recording.", error: error) }
     }
 
     private func systemFailed(_ error: Error) async {
         guard state == .recording, let current = system else { return }
         guard current.method == "process-tap", let writer = systemWriter else {
-            await stopCallTrack(reason: "Call audio stopped: \(error.localizedDescription) The microphone kept recording.")
+            await stopCallTrack(reason: "Call audio stopped. The microphone kept recording.", error: error)
             return
         }
         if case ProcessTapError.silent = error, !environment.systemAudio.screenCaptureAuthorized {
@@ -253,27 +260,36 @@ final class RecordingController: ObservableObject {
             guard state == .recording else { await screen.stop(); return }
             system = screen
             writer.setMethod(SystemAudioCaptureInfo.Method.screenCaptureKit.rawValue)
-            let reason = "Recording only the call app stopped working (\(error.localizedDescription)), so all Mac audio is recorded from here on."
+            let reason = "Recording only the call app stopped working, so all Mac audio is recorded from here on."
             systemAudioCapture = SystemAudioCaptureInfo(method: .screenCaptureKit, capturedApps: systemAudioCapture?.capturedApps,
                                                         fallbackReason: reason, switchedAt: elapsedTime)
-            warnings.append(reason)
+            warn(reason, error: error, track: .systemAudio)
         } catch {
-            warnings.append("Call audio stopped and could not switch to all Mac audio: \(error.localizedDescription) The microphone kept recording.")
+            warn("Call audio stopped and couldn’t switch to all Mac audio. The microphone kept recording.", error: error, track: .systemAudio)
         }
     }
 
-    private func stopCallTrack(reason: String) async {
-        warnings.append(reason)
+    private func stopCallTrack(reason: String, error: Error? = nil) async {
+        warn(reason, error: error, track: .systemAudio)
         let current = system
         system = nil
         await current?.stop()
     }
 
+    /// One plain sentence for the person; when the error isn't one of Daybook's own, its words are
+    /// kept in that track's capture notes, which the conversation's capture details show.
+    private func warn(_ sentence: String, error: Error? = nil, track role: CapturedTrackRole = .microphone) {
+        warnings.append(sentence)
+        guard let error, !CapturedTrackRole.speaksPlainly(error) else { return }
+        technicalNotes[role, default: []].append("\(sentence) \(error.localizedDescription)")
+    }
+
     private func captureFailed(_ error: Error) {
         guard state == .recording || state == .starting else { return }
-        lastError = error.localizedDescription
+        let message = CapturedTrackRole.speaksPlainly(error) ? error.localizedDescription : "Recording stopped unexpectedly. What was recorded is saved."
+        lastError = message
         if state == .starting { return }
-        warnings.append(error.localizedDescription)
+        warn(message, error: error)
         state = .stopping
         Task {
             if let result = await finishCapture() { onUnexpectedStop?(result) }
@@ -330,6 +346,12 @@ final class RecordingController: ObservableObject {
             if let track = outcome.track { tracks.append(track) }
             if let error = outcome.error { warnings.append(error) }
         }
+        // The system's words for what went wrong, with the track they're about.
+        for index in tracks.indices {
+            guard let extra = technicalNotes[tracks[index].role], !extra.isEmpty else { continue }
+            tracks[index].notes = (tracks[index].notes ?? []) + extra
+        }
+        technicalNotes = [:]
         microphoneWriter = nil
         systemWriter = nil
         activeCaptionTap = nil
@@ -343,7 +365,7 @@ final class RecordingController: ObservableObject {
                                           warnings: Array(Set(warnings)).sorted(), directory: directory,
                                           systemAudio: systemAudioCapture, outputRoutes: routeEvents.isEmpty ? nil : routeEvents)
             do { try CaptureJSON.persist(completed, at: directory.appendingPathComponent("capture-result.json")) }
-            catch { lastError = "Audio was saved, but recording metadata could not be saved: \(error.localizedDescription)" }
+            catch { lastError = "The audio is saved, but its recording details couldn’t be." }
             lastResult = completed
             result = completed
         }

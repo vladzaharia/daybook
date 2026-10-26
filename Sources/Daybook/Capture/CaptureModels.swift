@@ -4,6 +4,13 @@ import Foundation
 enum CapturedTrackRole: String, Codable {
     case microphone
     case systemAudio
+
+    /// How a sentence for the person names it.
+    var spokenName: String { self == .microphone ? "microphone" : "call audio" }
+
+    /// Daybook's own recording errors already say what happened and what to do; anything else gets
+    /// a plain sentence, with the system's words kept in the track's capture notes.
+    static func speaksPlainly(_ error: Error) -> Bool { error is RecordingError || error is PCMTrackWriterError }
 }
 
 struct CapturedAudioTrack: Codable, Identifiable, Equatable {
@@ -58,8 +65,10 @@ struct SystemAudioCaptureInfo: Codable, Equatable {
     var method: Method
     /// Bundle IDs of the tapped app and its helpers.
     var capturedApps: [String]?
-    /// Why the process tap was not used, or why capture switched away from it.
+    /// Why the process tap was not used, or why capture switched away from it: one plain sentence.
     var fallbackReason: String?
+    /// The system's words for why the process tap failed, kept for the call audio's capture notes.
+    var fallbackDetail: String?
     /// Session seconds at which capture switched from the tap to ScreenCaptureKit.
     var switchedAt: TimeInterval?
 }

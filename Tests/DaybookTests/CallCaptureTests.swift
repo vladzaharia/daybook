@@ -196,13 +196,15 @@ final class SystemAudioSelectionTests: XCTestCase {
         creation.tapCreationError = FakeError(message: "tap refused")
         let (_, first) = try await SystemAudioSelector.start(target: zoom, provider: creation, onBuffer: noBuffers, onEvent: noEvents)
         XCTAssertEqual(first.method, .screenCaptureKit)
-        XCTAssertTrue(first.fallbackReason?.contains("tap refused") == true)
+        XCTAssertEqual(first.fallbackReason, "Couldn’t record Zoom on its own, so all Mac audio is recorded.", "one plain sentence")
+        XCTAssertEqual(first.fallbackDetail, "tap refused", "the system's words, for the capture notes")
 
         let starting = FakeSystemAudio()
         starting.tapStartError = FakeError(message: "aggregate failed")
         let (source, second) = try await SystemAudioSelector.start(target: zoom, provider: starting, onBuffer: noBuffers, onEvent: noEvents)
         XCTAssertEqual(source.method, "screen-capture-kit")
-        XCTAssertTrue(second.fallbackReason?.contains("aggregate failed") == true)
+        XCTAssertFalse(second.fallbackReason?.contains("aggregate failed") == true)
+        XCTAssertEqual(second.fallbackDetail, "aggregate failed")
         XCTAssertTrue(starting.taps[0].stopped, "a half-started tap is torn down")
     }
 
@@ -398,7 +400,10 @@ final class RecordingControllerTests: XCTestCase {
         mic.emit(CallSignals.tone(), at: 100.1)
         let result = try await XCTUnwrapAsync(await recorder.stop())
         XCTAssertEqual(result.tracks.first { $0.role == .microphone }?.frameCount, 9_600)
-        XCTAssertTrue(result.warnings.contains { $0.contains("stream stopped") })
+        XCTAssertTrue(result.warnings.contains("Call audio stopped. The microphone kept recording."))
+        XCTAssertFalse(result.warnings.contains { $0.contains("stream stopped") }, "the system's words stay out of the warning")
+        let callNotes = result.tracks.first { $0.role == .systemAudio }?.notes ?? []
+        XCTAssertTrue(callNotes.contains { $0.contains("stream stopped") }, "and go in the call audio's capture notes")
     }
 
     func testDeniedMicrophoneNeverStartsCallCapture() async throws {

@@ -145,12 +145,17 @@ every string in the same places found these, and fixed them:
     control, and Live Activity buttons say when recording couldn't start or resume.
   - Daybook's own sync sentences (`LibrarySyncError.isPlainSentence`) show as they are on both apps.
 
-Left as they are, for a later pass:
+Finished afterwards:
 
 - The Mac's capture warnings (`RecordingController`, `CaptureSources`, `CaptureRecovery`, `CaptureFinalizer`,
-  `PCMTrackWriter`), which reach the conversation's notice and provenance with the system's words.
-- The sync engine's per-pass warnings that carry an error's own text, listed in Settings › Library.
-- The iPhone's Details buttons, which have no ellipsis. They're consistent across the iPhone.
+  `PCMTrackWriter`) are one plain sentence each; the system's words go in the affected track's capture notes
+  (the call audio's `fallbackDetail`, the echo removal report), which the conversation's capture details show.
+  Daybook's own recording errors (`RecordingError`, `PCMTrackWriterError`) already read plainly and stay as written.
+- The sync engine's per-pass warnings use `SyncWarningWords`: a plain sentence, with the error's own text behind
+  Details in Settings › Library. Only warnings it composed are split, so a title with a colon is never cut.
+
+Left as is, by choice: the iPhone's Details buttons have no ellipsis. They show more of what's already there and
+ask for nothing, and they're consistent across the iPhone.
 
 ## Every change
 

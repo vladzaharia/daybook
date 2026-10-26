@@ -27,6 +27,7 @@ enum CaptureRecovery {
         guard FileManager.default.fileExists(atPath: manifestURL.path) else { return nil }
         let manifest = try decoder.decode(CaptureSessionManifest.self, from: Data(contentsOf: manifestURL))
         var warnings = ["Recovered an interrupted recording. The final seconds may be incomplete."]
+        var recoveryNotes: [String] = []
         var tracks: [CapturedAudioTrack] = []
         for role in [CapturedTrackRole.microphone, .systemAudio] {
             let audioURL = directory.appendingPathComponent(role.rawValue + ".caf")
@@ -52,9 +53,12 @@ enum CaptureRecovery {
                 track.channelCount = audio.processingFormat.channelCount
                 tracks.append(track)
             } catch {
-                warnings.append("Could not recover \(role.rawValue): \(error.localizedDescription)")
+                warnings.append("Couldn’t recover the \(role.spokenName) recording.")
+                recoveryNotes.append("The \(role.spokenName) recording couldn’t be recovered: \(error.localizedDescription)")
             }
         }
+        // The system's words for what couldn't be recovered go with what was.
+        if !recoveryNotes.isEmpty, !tracks.isEmpty { tracks[0].notes = (tracks[0].notes ?? []) + recoveryNotes }
         let endedAt = tracks.map { $0.startedAt.addingTimeInterval($0.duration) }.max() ?? manifest.startedAt
         return CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: endedAt,
                              tracks: tracks, warnings: warnings, directory: directory)

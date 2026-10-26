@@ -246,7 +246,7 @@ public actor LibrarySyncEngine {
                 // A sealed entry opened but unreadable (a newer format) is unreadable by its ID too, which parents name.
                 if entry.isSealed, let id = sealedNames[entry.path] { unreadableJournal[id] = unreadableJournal[unreadableKey] }
             }
-            catch { warnings.append(error.localizedDescription); pendingDownloads += 1; unreadJournalFiles += 1 }
+            catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.unreadHistory, error)); pendingDownloads += 1; unreadJournalFiles += 1 }
         }
         let metadataRead = try readMetadata(metadataEntries, budget: &budget, warnings: &warnings)
         metadata = metadataRead.records
@@ -312,7 +312,7 @@ public actor LibrarySyncEngine {
                     published += 1
                 } catch is SyncPendingDownload { pendingDownloads += 1; pendingUploads += 1; failedPublications.insert(supplied.id) }
                 catch let error as CancellationError { throw error }
-                catch { warnings.append(error.localizedDescription); pendingUploads += 1; failedPublications.insert(supplied.id) }
+                catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.unsavedChange, error)); pendingUploads += 1; failedPublications.insert(supplied.id) }
             }
             // A deletion this replica already knows about has an event in the journal. When part of the journal
             // is unread (still downloading, or deferred by limits), don't mistake that for a missing tombstone.
@@ -386,7 +386,7 @@ public actor LibrarySyncEngine {
                         }
                     } catch is SyncPendingDownload { pendingDownloads += 1; held.insert(meetingID); continue }
                     catch let error as CancellationError { throw error }
-                    catch { warnings.append(error.localizedDescription); held.insert(meetingID); continue }
+                    catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.unappliedConversation, error)); held.insert(meetingID); continue }
                 } else if output[meetingID] == nil {
                     trashOrphanFolder(meetingID)
                 }
@@ -433,7 +433,7 @@ public actor LibrarySyncEngine {
             } catch is SyncPendingDownload { pendingDownloads += 1 }
             catch is SyncDeferredWork { budget.deferred += 1 }
             catch let error as CancellationError { throw error }
-            catch { warnings.append(error.localizedDescription); pendingDownloads += 1 }
+            catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.undownloadedHistory, error)); pendingDownloads += 1 }
         }
         state.deletedIDs.formUnion(deletes)
         // A deleted conversation still here whose journal wasn't examined this pass (deferred by limits, or its
@@ -516,7 +516,7 @@ public actor LibrarySyncEngine {
                 warnings.append(markUnreadable(unreadableKey, error))
                 if entry.isSealed, let id = sealedNames[entry.path] { unreadableJournal[id] = unreadableJournal[unreadableKey] }
             }
-            catch { warnings.append(error.localizedDescription); downloading += 1; incomplete = true }
+            catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.undownloadedHistory, error)); downloading += 1; incomplete = true }
         }
         return (metadata, incomplete, downloading)
     }
