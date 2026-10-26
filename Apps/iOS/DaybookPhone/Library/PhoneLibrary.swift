@@ -93,6 +93,8 @@ final class PhoneLibrary {
     @discardableResult
     func fileRecording(_ recording: PhoneRecording, join: Join? = nil, requestTranscription: Bool = true) async throws -> Filed {
         try await reload()
+        // Filing waits for the lock even if its caller was cancelled: the staging folder is the
+        // recording's only copy until it's in the library.
         await controller.acquireLock()
         defer { controller.releaseLock() }
         let id = recording.id
@@ -130,7 +132,9 @@ final class PhoneLibrary {
         }
         try await addCapturedPhotos(recording, track: track.id)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
-        try await controller.flushDurably()
+        // This conversation is on disk before its staging goes; another one that can't be saved
+        // doesn't hold this recording up.
+        try await controller.flushDurably([id])
         try? FileManager.default.removeItem(at: recording.stagingDirectory)
         guard let meeting = controller.meeting(id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)
@@ -181,7 +185,8 @@ final class PhoneLibrary {
         let staged = try await stage(url)
         defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
         let duration = try await Self.duration(of: staged)
-        await controller.acquireLock()
+        // A cancelled import stops waiting for the lock it never got, and imports nothing.
+        try await controller.acquireLockUnlessCancelled()
         defer { controller.releaseLock() }
         if let existing = try await controller.existingMeeting(containingAudioAt: staged) {
             return Filed(meeting: existing, request: nil)
@@ -191,7 +196,7 @@ final class PhoneLibrary {
         let id = controller.newMeeting(title: title.isEmpty ? "Imported recording" : title, date: date)
         _ = try await controller.ingest(staged, into: id, provenance: .file(source: .imported, duration: duration))
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
-        await controller.flush()
+        try await controller.flushDurably([id])
         guard let meeting = controller.meeting(id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)
     }
@@ -203,7 +208,9 @@ final class PhoneLibrary {
                                requestTranscription: Bool) async throws -> Filed {
         try await reload()
         let duration = try await Self.duration(of: url)
-        await controller.acquireLock()
+        // A cancelled transfer (Stop on the device page) stops waiting for the lock and imports nothing;
+        // the recorder still has the recording.
+        try await controller.acquireLockUnlessCancelled()
         defer { controller.releaseLock() }
         // Another device's import of it may have arrived through sync meanwhile: keep that one.
         if let held = DeviceLibraryLinks.meeting(holding: identity, in: controller.meetings).flatMap(controller.meeting) { return Filed(meeting: held) }
@@ -213,7 +220,7 @@ final class PhoneLibrary {
         _ = try await controller.ingest(url, into: id, provenance: .file(source: source, device: identity, duration: duration,
                                                                         recorderClock: DeviceRecordingStart.clock(of: identity)))
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
-        await controller.flush()
+        try await controller.flushDurably([id])
         guard let meeting = controller.meeting(id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)
     }

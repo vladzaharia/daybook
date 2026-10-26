@@ -456,6 +456,84 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertTrue(PhoneRecorder.pendingCaptures(in: library.stagingURL).isEmpty)
     }
 
+    // MARK: Writing to disk
+
+    /// Filing and importing put their own conversation on disk before they report it done, and only
+    /// theirs counts: another conversation that can't be saved holds none of them up.
+    func testAnotherConversationsFailedSaveDoesNotStopFilingOrImporting() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        try await library.reload()
+        let broken = library.controller.newMeeting(title: "Can't be saved")
+        try await library.controller.flushDurably()
+        // Its file can't be replaced any more, so its next save fails.
+        let primary = root.appendingPathComponent("Meetings/\(broken.uuidString)/meeting.json")
+        try FileManager.default.moveItem(at: primary, to: primary.deletingLastPathComponent().appendingPathComponent("held.json"))
+        try FileManager.default.createDirectory(at: primary, withIntermediateDirectories: false)
+        library.controller.rename(broken, to: "Still can't be saved")
+        do { try await library.controller.flushDurably(); XCTFail("the broken conversation's save must fail") } catch {}
+
+        let (recording, _) = try await record(into: library)
+        let filed = try await library.fileRecording(recording, requestTranscription: false)
+        XCTAssertEqual(filed.meeting.tracks.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recording.stagingDirectory.path), "filed, so its staging is gone")
+
+        let memo = root.appendingPathComponent("Voice memo.wav")
+        try audioFile(at: memo)
+        let imported = try await library.importFile(memo, requestTranscription: false)
+        let transfer = root.appendingPathComponent("Soundcore.wav")
+        try audioFile(at: transfer, step: 0.27)
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: "SERIAL", recordingID: "1729000000")
+        let fromRecorder = try await library.importDeviceRecording(transfer, identity: identity, attachTo: nil, source: .soundcore,
+                                                                   requestTranscription: false)
+        XCTAssertEqual(fromRecorder.meeting.tracks.first?.device, identity)
+
+        // Each is on disk, as the Mac's store reads it.
+        let store = try MeetingStore(rootURL: root)
+        for meeting in [filed.meeting, imported.meeting, fromRecorder.meeting] {
+            let saved = try await store.load(meeting.id)
+            XCTAssertEqual(saved.tracks.map(\.sha256), meeting.tracks.map(\.sha256))
+        }
+        do { try await library.controller.flushDurably([broken]); XCTFail("the broken one still counts for itself") } catch {}
+    }
+
+    /// An import stopped while it waits for the library (another import holds it) stops waiting at
+    /// once, without the library, and brings nothing in: a recorder transfer stopped on the device
+    /// page, or an import from Files.
+    func testACancelledImportStopsWaitingForTheLibraryAndImportsNothing() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root.appendingPathComponent("Library"), installation: "INSTALL-1")
+        try await library.reload()
+        let transfer = root.appendingPathComponent("Soundcore.wav")
+        try audioFile(at: transfer)
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: "SERIAL", recordingID: "1729000000")
+        let memo = root.appendingPathComponent("Voice memo.wav")
+        try audioFile(at: memo, step: 0.27)
+
+        await library.controller.acquireLock()
+        let fromRecorder = Task {
+            try await library.importDeviceRecording(transfer, identity: identity, attachTo: nil, source: .soundcore, requestTranscription: false)
+        }
+        try await waitUntil("the transfer to wait for the library") { library.controller.lockWaiterCount == 1 }
+        fromRecorder.cancel()
+        let recorderOutcome = await fromRecorder.result
+        XCTAssertThrowsError(try recorderOutcome.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+        XCTAssertEqual(library.controller.lockWaiterCount, 0, "it stopped waiting")
+
+        let fromFiles = Task { try await library.importFile(memo, requestTranscription: false) }
+        try await waitUntil("the import to wait for the library") { library.controller.lockWaiterCount == 1 }
+        fromFiles.cancel()
+        let filesOutcome = await fromFiles.result
+        XCTAssertThrowsError(try filesOutcome.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+        library.controller.releaseLock()
+        XCTAssertTrue(library.conversations.isEmpty, "nothing was imported")
+
+        // The library is free: the next import takes it.
+        let filed = try await library.importDeviceRecording(transfer, identity: identity, attachTo: nil, source: .soundcore,
+                                                            requestTranscription: false)
+        XCTAssertEqual(library.conversations.map(\.id), [filed.meeting.id])
+    }
+
     // MARK: Files opened in Daybook
 
     /// A second of tone as a WAV file, as another app might hand over.

@@ -677,6 +677,9 @@ public final class LibraryController: ObservableObject {
         if lockWaiters.isEmpty { locked = false } else { lockWaiters.removeFirst().waiting.resume(returning: true) }
     }
 
+    /// How many callers are waiting for the lock now (diagnostics and tests).
+    public var lockWaiterCount: Int { lockWaiters.count }
+
     /// True once this task holds the lock; false when it stopped waiting because it was cancelled. A
     /// cancellation that arrives after the lock was handed over leaves it held: the caller releases it.
     private func waitForLock(cancellable: Bool) async -> Bool {
