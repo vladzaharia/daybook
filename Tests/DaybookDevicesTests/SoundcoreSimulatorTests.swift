@@ -392,17 +392,14 @@ final class SoundcoreSimulatorTests: XCTestCase {
 
     func testDisconnectMidTransferWaitsReconnectsAndResumes() async throws {
         let device = recorder()
-        device.fault = .disconnect(afterSlices: 12)
+        // One drop only: the transfer after the reconnect runs clean, however soon it starts.
+        device.fault = .once(.disconnect(afterSlices: 12))
         let rig = rig(device, configure: { $0.backoff = [.milliseconds(400), .milliseconds(400)] })
         try await connectThroughSetup(rig)
         let target = rig.session.newRecordings[0]
         rig.session.importRecordings([target])
-        // One drop only: a transfer takes the fault it starts with, so disarm it once this one has
-        // started. (Disarmed later, after the checks below, a starved machine could reconnect and
-        // start the retry first, which would drop again.)
-        try await waitUntil("the transfer to start") { device.received.contains { $0 == (0x1a, 0x07) } }
-        device.fault = nil
         try await waitUntil("the drop") { rig.session.queue.isSuspended }
+        XCTAssertNil(device.fault, "the first transfer took it")
         XCTAssertEqual(rig.session.transferProblem?.id, SoundcoreIssue.disconnectedDuringImport.rawValue)
         XCTAssertEqual(rig.session.queue.waiting.first?.id, target.id, "The recording waits at the front")
         XCTAssertTrue(rig.library.imports.isEmpty, "Nothing partial is saved")
