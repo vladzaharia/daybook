@@ -658,11 +658,19 @@ public actor LibrarySyncEngine {
                 decoded.pending?.bases = [:]
                 decoded.baseFiles = true
                 state = decoded; checkpointURL = url
-                try saveBases(Array(state.bases.keys), removing: [])
-                try saveCheckpoint()
+                do {
+                    try saveBases(Array(state.bases.keys), removing: [])
+                    try saveCheckpoint()
+                } catch {
+                    // Not moved yet: the next pass reads the earlier checkpoint again and retries.
+                    checkpointURL = nil
+                    throw error
+                }
             }
         } else {
             state = SyncCheckpoint(); state.baseFiles = true
+            // Bases left from an earlier checkpoint here would only be stale.
+            try? fm.removeItem(at: bases)
             checkpointURL = url
         }
     }

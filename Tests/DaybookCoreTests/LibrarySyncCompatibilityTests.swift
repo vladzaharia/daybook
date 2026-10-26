@@ -234,4 +234,35 @@ final class LibrarySyncCompatibilityTests: XCTestCase {
         XCTAssertTrue(complete.meetings.contains { $0.id == meeting.id }, "read again without relaunching")
         XCTAssertEqual(complete.pendingDownloads, 0)
     }
+
+    func testAnInterruptedCheckpointMoveIsRetriedAndStaleBasesAreDropped() async throws {
+        // The version 1 engine's checkpoint, with its bases inline.
+        let legacy = try LegacyLibrarySyncEngine(localRoot: local("A"), remoteRoot: remote, deviceID: "A")
+        let meeting = Meeting(title: "Kept")
+        let first = try await legacy.synchronize(meetings: [meeting])
+        try await legacy.acknowledge(first.checkpointID)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: remote.appendingPathComponent("daybook-sync.json"))) as? [String: Any])
+        let libraryID = try XCTUnwrap(manifest["libraryID"] as? String)
+        let stem = LibrarySyncEngine.checkpointStem(libraryID: try XCTUnwrap(UUID(uuidString: libraryID)), deviceID: "A")
+        // Something in the way of the bases folder: the move fails and the old checkpoint stays as it was.
+        let bases = local("A").appendingPathComponent("Sync/Bases/\(stem)")
+        try FileManager.default.createDirectory(at: bases.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("in the way".utf8).write(to: bases)
+        let current = try engine("A")
+        do { _ = try await current.synchronize(meetings: [meeting]); XCTFail("expected the move to fail") } catch { }
+        try FileManager.default.removeItem(at: bases)
+        let retried = try await current.synchronize(meetings: [meeting])
+        XCTAssertEqual(retried.publishedEvents, 0, "the retry moves the bases and publishes nothing")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bases.appendingPathComponent("\(meeting.id).json").path))
+
+        // A fresh checkpoint doesn't inherit bases someone left behind.
+        let fresh = root.appendingPathComponent("Fresh")
+        let freshStem = LibrarySyncEngine.checkpointStem(libraryID: try XCTUnwrap(UUID(uuidString: libraryID)), deviceID: "F")
+        let stale = fresh.appendingPathComponent("Sync/Bases/\(freshStem)")
+        try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+        try SyncEncoding.data(meeting).write(to: stale.appendingPathComponent("\(meeting.id).json"))
+        let newcomer = try LibrarySyncEngine(localRoot: fresh, remoteRoot: remote, deviceID: "F")
+        _ = try await newcomer.synchronize(meetings: [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.appendingPathComponent("\(meeting.id).json").path))
+    }
 }
