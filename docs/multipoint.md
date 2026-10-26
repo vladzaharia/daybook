@@ -222,7 +222,9 @@ that says it's recording this conversation after all (`stopped`). A stop the pho
 `stopFailed`: "Alex's iPhone didn't stop. Stop it on the iPhone." One that doesn't reach it is owed
 until it reconnects: "Couldn't reach Alex's iPhone to stop it. It stops when it reconnects." An owed
 stop is kept in this Mac's preferences (`multipoint.owedStops`, never synced) for a day, so it still
-goes if Daybook quits or restarts before the phone is back (`OwedStopsStore`).
+goes if Daybook quits or restarts before the phone is back (`OwedStopsStore`). A stop of a recorder
+the phone manages that doesn't name the recording (the phone's answer to the start didn't) is owed
+only until Daybook quits, since it would pause whatever the recorder records by then.
 
 The device page's **Start Recording on iPhone** asks for a conversation of the phone's own
 (`standalone`), which that Mac may stop.

@@ -465,6 +465,37 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertTrue(recorder.isRecording, "left to the person")
     }
 
+    /// What's followed is kept across a relaunch, and isn't given up while the recorder isn't known yet
+    /// (at launch, devices start after the library opens); handed on to another device, it's that one's.
+    func testFollowingSurvivesARelaunchAndEndsWhenTheRecorderIsHandedOn() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder, presence: true)
+        let phone = try await makeSide("Phone", .phone, recorder, presence: true)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+        let (_, id) = try await macRecordsAlong(mac, recorder)
+        let pair = try await link(mac, phone)
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone sees the Mac recording it") { phone.handoff.followed.first?.seenRecordingAt != nil }
+        await pair.tearDown()
+
+        // Relaunched: its devices haven't started, so the recorder's serial isn't known yet.
+        let staging = root.appendingPathComponent("relaunch-staging", isDirectory: true)
+        let devices = DeviceHub(environment: DeviceEnvironment(defaults: makeTestDefaults("daybook.handoff.relaunch"), stagingDirectory: staging))
+        let relaunched = RecorderHandoff(library: phone.library, devices: devices, deviceClass: .phone, defaults: phone.defaults,
+                                         timing: Self.handoffTiming, deviceName: "Alex’s iPhone")
+        XCTAssertEqual(relaunched.followed.map(\.recordingID), [id])
+        XCTAssertEqual(relaunched.followed.first?.seenRecordingAt, phone.handoff.followed.first?.seenRecordingAt)
+        await relaunched.checkFollowed()
+        XCTAssertEqual(relaunched.followed.map(\.recordingID), [id], "kept until the recorder is known")
+
+        // Another device takes it over: it's that device's to stop now.
+        phone.library.claimRecorder(kind: kind, serial: recorder.serial, deviceClass: .mac,
+                                    by: ProcessingRequest.Device(id: "office-imac", name: "Office iMac"))
+        await relaunched.checkFollowed()
+        XCTAssertTrue(relaunched.followed.isEmpty)
+    }
+
     func testOfferingItAndHandingItBackWhenTheMacArrives() async throws {
         let recorder = makeRecorder(count: 1)
         let mac = try await makeSide("Mac", .mac, recorder)

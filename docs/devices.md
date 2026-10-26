@@ -231,10 +231,12 @@ and hands over what was waiting.
   relaunches): once that device's presence has named the conversation (`SyncDeviceActivity`), a later
   presence record of that device's that no longer does means the recording ended; so does the
   conversation arriving with its link to the recorder ended (`macEndedAt`). It then pauses the
-  recorder only if it's still making that recording (by its ID), never one the person started since,
-  and imports it into the conversation. It gives up, leaving the recorder to the person, when the
-  recording ended another way, when that device's presence is more than 30 minutes old, or 12 hours
-  after the handoff. A recording the recorder was making already, or one from a build that doesn't
+  recorder only if a list read then says it's still making that recording (by its ID), never one the
+  person started since, and imports it into the conversation; out of range or not yet listed, it tries
+  again a minute later. It gives up, leaving the recorder to the person, when the recording ended
+  another way, when the recorder is handed on, when that device's presence is more than 30 minutes
+  old, or 12 hours after the handoff; until then it waits for a recorder this device doesn't know yet
+  (at launch). A recording the recorder was making already, or one from a build that doesn't
   say, is never stopped.
 
 **Hand back** (iPhone, off by default; the device page's "Hand Back to My Mac When It’s Nearby"):

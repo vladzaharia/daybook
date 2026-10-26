@@ -964,11 +964,15 @@ extension RecorderHandoff {
                 let outcome = await RecorderRemoteControl.answer(request, target: target, sessions: self.devices.sessions, timing: timing.remote)
                 switch outcome {
                 case .refused(let refusal) where refusal.reason == .recorderUnavailable:
-                    // Not nearby, or it didn't confirm: tried again later, while it's followed.
+                    // Not nearby, it didn't say what it's recording, or it didn't confirm: tried again
+                    // later, while it's followed.
                     break
                 default:
-                    // Stopped (and imported into the conversation), or no longer recording that recording.
-                    replaceFollowed(recorderID, with: nil)
+                    // Stopped (and imported into the conversation), or no longer recording that recording,
+                    // unless the recorder was handed away and back meanwhile and this is a new follow.
+                    if followed.first(where: { $0.recorderID == recorderID })?.since == updated.since {
+                        replaceFollowed(recorderID, with: nil)
+                    }
                 }
             }
         }
@@ -983,8 +987,11 @@ extension RecorderHandoff {
     }
 
     private func followVerdict(_ recording: FollowedRecording, devices: [KnownSyncDevice], now: Date) -> FollowVerdict {
-        guard now.timeIntervalSince(recording.since) <= timing.followLimit,
-              let session = session(kind: recording.kind, serial: recording.serial), isManagedHere(session) else { return .drop }
+        guard now.timeIntervalSince(recording.since) <= timing.followLimit else { return .drop }
+        // Handed on to another device: it's that device's to stop now.
+        if let owner = library.recorderOwner(kind: recording.kind, serial: recording.serial), owner.ownerID != thisDevice.id { return .drop }
+        // Not known here yet (at launch, the recorder's serial arrives once devices start): looked at again later.
+        guard let session = session(kind: recording.kind, serial: recording.serial), isManagedHere(session) else { return .keep(recording) }
         // It finished another way (the person stopped it): it imports as handed over; nothing to stop.
         if let direct = session.direct, direct.state.isConnected, direct.isInventoryCurrent,
            direct.recordings.contains(where: { $0.id == recording.recordingID && !$0.isInProgress }) { return .drop }

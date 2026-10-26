@@ -530,6 +530,25 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertNil(rig.defaults.data(forKey: MultiSourceCoordinator.owedStopsKey), "nothing left to keep")
     }
 
+    /// A stop of a recorder a phone manages that doesn't name the recording (its start never said) would
+    /// pause whatever the recorder records by then: it's owed until Daybook quits, never kept past it.
+    func testOnlyStopsThatNameTheirRecordingAreKeptAcrossRelaunches() throws {
+        let defaults = makeTestDefaults("daybook.owedStops")
+        let store = OwedStopsStore<CompanionRecorders.PendingStop>(defaults: defaults, key: MultiSourceCoordinator.owedStopsKey)
+        let recorders = CompanionRecorders(owed: store)
+        let meeting = UUID(), now = Date()
+        func stop(_ recorder: LinkRecorderTarget?) -> CompanionRecorders.PendingStop {
+            .init(sessionID: "phone", meetingID: meeting, linkID: UUID(), end: now, recorder: recorder, owedAt: now)
+        }
+        let phone = stop(nil)
+        let named = stop(LinkRecorderTarget(kind: SoundcoreWorkIntegration.id, serial: "S1", recordingID: "1729003600"))
+        let unnamed = stop(LinkRecorderTarget(kind: SoundcoreWorkIntegration.id, serial: "S1"))
+        for owed in [phone, named, unnamed] { recorders.owe(owed) }
+        XCTAssertEqual(Set(recorders.pendingStops["phone"]?.map(\.linkID) ?? []), [phone.linkID, named.linkID, unnamed.linkID], "all owed now")
+        XCTAssertEqual(Set(store.load().map(\.linkID)), [phone.linkID, named.linkID], "only those kept")
+        XCTAssertEqual(Set(CompanionRecorders(owed: store).pendingStops["phone"]?.map(\.linkID) ?? []), [phone.linkID, named.linkID])
+    }
+
     func testAPhoneThatRefusesOrDropsMidStopIsReportedQuietly() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state)

@@ -430,6 +430,41 @@ final class RecorderOwnerTests: XCTestCase {
 
     private static func inProgress(_ recorder: FakeRecorder) -> String? { recorder.recordings.first(where: \.isInProgress)?.id }
 
+    /// A stop naming a recording waits for the recorder's list read now: an older one may still name a
+    /// recording the person has stopped since, and pausing then would stop the person's own.
+    func testTheOwnerNeverStopsARecordingByAListItHasntReadAgain() async throws {
+        let rig = try await rig()
+        let recorder = FakeRecorder()
+        let session = recorderSession(recorder, defaults: rig.defaults)
+        var timing = RecorderRemoteControl.Timing()
+        timing.connect = .seconds(2); timing.confirm = .seconds(2); timing.inventory = .milliseconds(300); timing.listing = .seconds(1)
+        timing.poll = .milliseconds(10)
+        let target = LinkRecorderTarget(kind: SoundcoreWorkIntegration.id, serial: "FAKE1")
+        let conversation = UUID()
+        let start = await RecorderRemoteControl.answer(LinkRecordRequest(action: .start, conversationID: conversation, recorder: target),
+                                                       target: target, sessions: [session], timing: timing)
+        guard case .accepted(let ack) = start else { return XCTFail("\(start)") }
+        var named = target
+        named.recordingID = try XCTUnwrap(ack.recordingID)
+
+        // The person stopped it and started their own; the recorder is slow to list again.
+        recorder.personStartsAnother(at: Date().addingTimeInterval(1).rounded)
+        recorder.refreshDelay = .seconds(2)
+        let unsure = await RecorderRemoteControl.answer(LinkRecordRequest(action: .stop, conversationID: conversation, recorder: named),
+                                                        target: named, sessions: [session], timing: timing)
+        guard case .refused(let refusal) = unsure else { return XCTFail("\(unsure)") }
+        XCTAssertEqual(refusal.reason, .recorderUnavailable, "asked again later")
+        XCTAssertFalse(recorder.commands.contains("pause"), "the person's recording keeps going")
+
+        // Listed again, it says what it's recording: not that one.
+        recorder.refreshDelay = .milliseconds(30)
+        try await waitUntil("the slow list") { !recorder.isRefreshing }
+        let refused = await RecorderRemoteControl.answer(LinkRecordRequest(action: .stop, conversationID: conversation, recorder: named),
+                                                         target: named, sessions: [session], timing: timing)
+        XCTAssertEqual(refused, .refused(LinkRecordRefusal(reason: .notRecording)))
+        XCTAssertFalse(recorder.commands.contains("pause"))
+    }
+
     func testMultipointStartsAndStopsARecorderThePhoneManagesThroughThePhone() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state, features: [LinkCapabilities.recorderControlFeature])
