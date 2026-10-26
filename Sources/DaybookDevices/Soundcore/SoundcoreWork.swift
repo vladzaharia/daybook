@@ -37,7 +37,8 @@ public struct SoundcoreWorkIntegration: DeviceIntegration {
         technicalNotes: [
             "Daybook speaks the recorder’s Bluetooth protocol directly. It was implemented from community protocol research, not from an Anker SDK.",
             "Tested against a simulated recorder built from that research. Testing with a physical recorder is still pending, and a firmware update could change the protocol.",
-            "Imports are accepted only when every part arrives, in order and at the expected size, and the audio decodes. The audio key exchange checks that both sides agree; it doesn’t prove the recorder’s identity.",
+            "Direct Bluetooth audio is experimental: successful decoding does not guarantee an intact recording. Keep the originals on your recorder and verify important recordings through file export.",
+            "The recorder’s audio protocol exposes its encryption secret during setup. Wireless privacy depends on Bluetooth link protection that has not yet been verified on a physical recorder.",
             "The import folder works with every firmware version."
         ],
         emptyHint: "Press its button once to start recording, and again to stop."

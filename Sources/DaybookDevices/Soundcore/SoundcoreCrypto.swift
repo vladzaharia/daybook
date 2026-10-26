@@ -2,8 +2,10 @@ import CommonCrypto
 import CryptoKit
 import Foundation
 
-/// Ephemeral session keys are kept in memory and discarded on disconnect. The D3200 exchange checks
-/// that both sides agree on the key; it does not authenticate a manufacturer identity.
+/// Ephemeral session keys are kept in memory and discarded on disconnect. The D3200 firmware sends
+/// the raw shared secret in its reply: this exchange provides neither identity authentication nor
+/// confidentiality against an observer of characteristic traffic. Protection depends on BLE link
+/// security, which has not been verified on physical hardware. See docs/direct-soundcore.md.
 public final class SoundcoreCrypto {
     private var privateKey = P256.KeyAgreement.PrivateKey()
     private var sessionKey: SymmetricKey?
