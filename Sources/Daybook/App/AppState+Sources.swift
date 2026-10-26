@@ -284,6 +284,14 @@ extension AppState {
         sources.recorders.macRecordingStopped(id, at: end)
     }
 
+    /// At launch, once devices and the link are up: recordings an interrupted run recovered close their
+    /// links, stopping what Daybook started with them.
+    func closeRecoveredLinks() {
+        let recovered = sources.recovered
+        sources.recovered = []
+        for capture in recovered { sources.recorders.recordingRecovered(capture.meetingID, startedAt: capture.startedAt, endedAt: capture.endedAt) }
+    }
+
     /// This Mac's recording is in the library. Into a conversation that already had recordings (the
     /// other direction), the new ones join its existing timeline rather than replacing it: they wait
     /// to be lined up (sound, transcript, then clock), bookmarks made meanwhile follow the microphone

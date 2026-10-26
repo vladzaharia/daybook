@@ -283,6 +283,8 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
             // this one syncs again, or when their lease runs out if it never does.
             state.cancelDownload(); state.cancelProcessing()
             if state.isRecording || state.isStartingRecording { await state.stopRecording() }
+            // Recorders and phones that recorded along hear the stop before the link goes (briefly).
+            await state.sources.recorders.settle(within: .seconds(5))
             await state.flush()
             await state.phoneLink.shutDown()
             sender.reply(toApplicationShouldTerminate: true)

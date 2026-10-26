@@ -42,7 +42,11 @@ extension AppState {
             return await self.answerPhone(request, from: peer)
         }
         // Phones hear what this Mac records: when that changes, every 15 s meanwhile, and as they connect.
-        phoneLink.localRecordingState = { [weak self] in self?.macRecordingState() ?? LinkRecordingState(phase: .idle) }
+        phoneLink.localRecordingState = { [weak self] in
+            // Sent every 15 s while recording: also when a phone this Mac records for has been gone too long.
+            self?.checkPhoneLead()
+            return self?.macRecordingState() ?? LinkRecordingState(phase: .idle)
+        }
         Publishers.CombineLatest3($recordingID, $isStartingRecording, $isStoppingRecording)
             .map { RecordingPhaseKey(recording: $0, starting: $1, stopping: $2) }
             .removeDuplicates().dropFirst()
@@ -55,6 +59,8 @@ extension AppState {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in await self?.systemDidWake() }
         }
+        // Going to sleep while recording, the devices recording along hear the stop first.
+        recorder.beforeSleep = { [weak self] in await self?.prepareForSleep(within: RecordingController.sleepGrace) }
     }
 
     /// Paired phones, as devices.
@@ -102,6 +108,8 @@ extension AppState {
     private func phoneConnected(_ peer: LinkPeer) {
         // A phone that reconnects while this Mac processes sees where it is at once.
         if let id = processingID { reportToPhones(id, force: true) }
+        // A stop this Mac couldn't deliver goes now.
+        sources.recorders.reconnected(peer.deviceID.uuidString)
     }
 
     /// This Mac's recorder, as phones see it.
@@ -125,11 +133,54 @@ extension AppState {
             let clock = phoneLink.peers[phone]?.clock
             let when = clock?.localDate(fromPeer: mark.createdAt) ?? mark.createdAt
             library.addBookmark(id: mark.id, in: mark.conversationID, at: max(0, when.timeIntervalSince(start)))
-        case .recordingState, .processingProgress:
+        case .recordingState(let state):
+            phoneReported(state, from: phone)
+        case .processingProgress:
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             recorderHandoff.receive(message, from: phone)
         }
+    }
+
+    // MARK: Recording for a phone
+
+    /// A phone said what it's recording. When this Mac records because that phone asked, and the
+    /// phone has stopped (or moved on to another conversation), this Mac stops too and says so: the
+    /// phone's stop may never have arrived.
+    func phoneReported(_ state: LinkRecordingState, from phone: UUID) {
+        guard let id = recordingID, let lead = phoneLeads[id], lead.sessionID == phone.uuidString else { return }
+        guard state.conversationID != id || state.phase == .idle else { return }
+        stopFollowing(id, because: "\(lead.deviceName) stopped recording, so this Mac stopped too.")
+    }
+
+    /// A phone this Mac records for, not heard from for this long, is taken to have stopped.
+    static let phoneLeadSilenceLimit: TimeInterval = 30 * 60
+
+    /// While recording for a phone: one that has been unreachable for `phoneLeadSilenceLimit` won't
+    /// stop this recording itself, so this Mac does. Checked with every state this Mac sends.
+    func checkPhoneLead(now: Date = Date()) {
+        guard let id = recordingID, let lead = phoneLeads[id], let phone = UUID(uuidString: lead.sessionID),
+              phoneLink.peers[phone] == nil, let last = phoneLink.lastConnected[phone],
+              now.timeIntervalSince(last) > Self.phoneLeadSilenceLimit else { return }
+        stopFollowing(id, because: "\(lead.deviceName) couldn’t be reached for \(Int(Self.phoneLeadSilenceLimit / 60)) minutes, so this Mac stopped recording.")
+    }
+
+    private func stopFollowing(_ id: UUID, because message: String) {
+        guard !isStoppingRecording else { return }
+        Task {
+            if let stop = phoneCapture.stop { await stop(id) } else { await stopRecording(manual: false) }
+            notice = message
+        }
+    }
+
+    /// As the Mac goes to sleep: once its recording has stopped (capture stops on its own), the
+    /// devices recording along are told before the network goes, waiting at most `limit` in all.
+    func prepareForSleep(within limit: Duration = .seconds(5)) async {
+        let deadline = ContinuousClock.now.advanced(by: limit)
+        while recordingID != nil || isStoppingRecording, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        await sources.recorders.settle(within: ContinuousClock.now.duration(to: deadline))
     }
 
     // MARK: Live progress for phones

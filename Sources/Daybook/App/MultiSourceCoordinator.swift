@@ -54,6 +54,8 @@ final class MultiSourceCoordinator: ObservableObject {
     var captures: [UUID: CaptureContext] = [:]
     /// By the recording's SHA-256.
     var carried: [String: Carried] = [:]
+    /// Recordings recovered at launch whose links are closed once devices are available.
+    var recovered: [(meetingID: UUID, startedAt: Date, endedAt: Date)] = []
 
     static let matchesImportedFilesKey = "matchesImportedFilesToConversations"
     private let defaults: UserDefaults
@@ -72,14 +74,18 @@ final class MultiSourceCoordinator: ObservableObject {
 /// the phone's recording ID and start, its clock, or its reason for not recording.
 @MainActor
 protocol AnsweringRecordControl: RecordControlConnection {
-    /// Asks it to record a conversation too.
+    /// Asks it to record a conversation too. Asking again with the same `requestID` is safe: it
+    /// answers a repeat with its first answer.
     func requestStart(_ start: CompanionStart) async -> CompanionAnswer
     func requestStop(conversationID: UUID, macEndedAt: Date?) async -> CompanionAnswer
+    /// The conversation it says it's recording (or paused in), when it says.
+    var recordingConversationID: UUID? { get }
 }
 
 /// What a device that answers is asked to record: the conversation as this Mac has it, so a device
 /// that hasn't synced it yet makes the same record, and when this Mac's recording started.
 struct CompanionStart: Equatable {
+    var requestID = UUID()
     var conversationID: UUID
     var title: String?
     var date: Date?
@@ -135,6 +141,8 @@ final class CompanionRecorders: ObservableObject {
         /// How long to wait for the finished recording to appear in the recorder's list.
         var listing: Duration = .seconds(20)
         var poll: Duration = .milliseconds(100)
+        /// How long a device that answers (Daybook on iPhone) is asked again when its answer doesn't come.
+        var answer: Duration = .seconds(45)
     }
 
     /// One line for the recording surfaces: "Also recording on Soundcore Work."
@@ -151,6 +159,10 @@ final class CompanionRecorders: ObservableObject {
     private var starting: [UUID: Task<Void, Never>] = [:]
     private var stopping: [UUID: Task<Void, Never>] = [:]
     private var stopRequested: Set<UUID> = []
+    /// Links to devices that answer whose start never got an answer: they may be recording.
+    private var unanswered: Set<UUID> = []
+    /// Stops that didn't reach a device that answers, by device: sent again when it reconnects.
+    private(set) var pendingStops: [String: [(meetingID: UUID, linkID: UUID, end: Date)]] = [:]
     /// When each Mac recording in progress started, so only its own links are stopped.
     private var recordingSince: [UUID: Date] = [:]
 
@@ -208,10 +220,16 @@ final class CompanionRecorders: ObservableObject {
                     } else {
                         await self.stop(session, control, link: link, meetingID: meetingID)
                     }
-                case .failed where control is any AnsweringRecordControl:
-                    continue
-                case .failed where control.status?.isRecording == true
-                        && (control.status?.recordingStartedAt).map({ $0 >= link.macStartedAt.addingTimeInterval(-5) }) == true:
+                case .failed:
+                    if let answering = control as? any AnsweringRecordControl {
+                        // It never answered, or says it's recording this conversation after all: stop it.
+                        guard self.unanswered.contains(link.id) || answering.recordingConversationID == meetingID else { continue }
+                        await self.stop(session, answering, link: link, meetingID: meetingID, at: end)
+                        continue
+                    }
+                    // Only what it says live counts: a recorder not connected reports its last-known state.
+                    guard control.state.isConnected, control.status?.isRecording == true,
+                          (control.status?.recordingStartedAt).map({ $0 >= link.macStartedAt.addingTimeInterval(-5) }) == true else { continue }
                     // It started after all, from Daybook's command: stop it like one that confirmed.
                     self.update(meetingID, link.id) {
                         $0.state = .recording; $0.startedByDaybook = true
@@ -233,6 +251,52 @@ final class CompanionRecorders: ObservableObject {
     /// Waits for every start and stop in flight (tests, and quitting).
     func settle() async {
         for task in Array(starting.values) + Array(stopping.values) { await task.value }
+    }
+
+    /// The same, waiting at most `limit` (quitting, going to sleep): what can't reach a device by then won't.
+    func settle(within limit: Duration) async {
+        let done = OnceFlag()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            Task { await self.settle(); if done.set() { continuation.resume() } }
+            Task { try? await Task.sleep(for: limit); if done.set() { continuation.resume() } }
+        }
+    }
+
+    /// After a crash, once devices are available: a recovered recording's links are closed as its
+    /// stop would have closed them. One still starting is unknown, so a device that answers is asked to
+    /// stop (it says when it wasn't recording) and a recorder only if it is recording live since
+    /// Daybook's command; one Daybook didn't start is left running.
+    func recordingRecovered(_ meetingID: UUID, startedAt: Date, endedAt: Date) {
+        let since = startedAt.addingTimeInterval(-5)
+        let open = links(meetingID).filter { $0.macStartedAt >= since && $0.macEndedAt == nil }
+        guard !open.isEmpty, recordingSince[meetingID] == nil else { return }
+        for link in open where link.state == .starting {
+            update(meetingID, link.id) { $0.state = .failed }
+            if sessions().first(where: { $0.id == link.deviceID })?.direct is any AnsweringRecordControl { unanswered.insert(link.id) }
+        }
+        recordingSince[meetingID] = since
+        macRecordingStopped(meetingID, at: endedAt)
+    }
+
+    /// A device that answers connected again: stops that didn't reach it go now.
+    func reconnected(_ sessionID: String) {
+        guard let owed = pendingStops.removeValue(forKey: sessionID), !owed.isEmpty,
+              let session = sessions().first(where: { $0.id == sessionID }),
+              let control = session.direct as? any AnsweringRecordControl else { return }
+        let previous = stopping[owed[0].meetingID]
+        let task = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            for stop in owed {
+                guard let link = self.links(stop.meetingID).first(where: { $0.id == stop.linkID }), link.state != .attached else { continue }
+                await self.stop(session, control, link: link, meetingID: stop.meetingID, at: stop.end)
+            }
+        }
+        stopping[owed[0].meetingID] = task
+        Task { [weak self] in
+            await task.value
+            if self?.stopping[owed[0].meetingID] == task { self?.stopping[owed[0].meetingID] = nil }
+        }
     }
 
     // MARK: Start and stop
@@ -329,8 +393,19 @@ final class CompanionRecorders: ObservableObject {
         }
         status = "Asking \(name) to record…"
         let conversation = self.conversation(meetingID)
-        switch await control.requestStart(CompanionStart(conversationID: meetingID, title: conversation?.title, date: conversation?.date,
-                                                         macStartedAt: start, timelineStart: conversation?.timelineStart)) {
+        let request = CompanionStart(conversationID: meetingID, title: conversation?.title, date: conversation?.date,
+                                     macStartedAt: start, timelineStart: conversation?.timelineStart)
+        var answer = await control.requestStart(request)
+        // No answer yet (a microphone prompt, a reconnect): ask again with the same request, which it
+        // answers once, until this Mac stops or `timing.answer` passes.
+        let deadline = ContinuousClock.now.advanced(by: timing.answer)
+        while answer == .noAnswer, !stopRequested.contains(meetingID), ContinuousClock.now < deadline {
+            guard (try? await Task.sleep(for: timing.poll)) != nil else { break }
+            guard control.state.isConnected else { continue }
+            answer = await control.requestStart(request)
+        }
+        if answer == .noAnswer { unanswered.insert(link.id) }
+        switch answer {
         case .recording(let recordingID, let startedAt, let already, let clock):
             update(meetingID, link.id) {
                 $0.state = already ? .alreadyRecording : .recording
@@ -362,11 +437,18 @@ final class CompanionRecorders: ObservableObject {
         status = "Stopping \(name)…"
         switch await control.requestStop(conversationID: meetingID, macEndedAt: end) {
         case .stopped, .recording:
+            unanswered.remove(link.id)
             update(meetingID, link.id) { $0.state = .stopped }
             status = "\(name) stopped. Its recording will be added here."
-        case .refused, .unavailable, .noAnswer:
+        case .refused:
             update(meetingID, link.id) { $0.state = .stopFailed }
-            status = "Couldn’t reach \(name) to stop it. Stop it on the iPhone."
+            status = "\(name) didn’t stop. Stop it on the iPhone."
+        case .unavailable, .noAnswer:
+            // Owed until it reconnects (it connects to this Mac, never the reverse).
+            update(meetingID, link.id) { $0.state = .stopFailed }
+            pendingStops[session.id, default: []].removeAll { $0.linkID == link.id }
+            pendingStops[session.id, default: []].append((meetingID, link.id, end))
+            status = "Couldn’t reach \(name) to stop it. It stops when it reconnects."
         }
     }
 
@@ -405,4 +487,13 @@ final class CompanionRecorders: ObservableObject {
     private static func serial(_ session: DeviceSession, _ control: any DeviceConnection) -> String? {
         control.status?.serial ?? session.status?.serial ?? (control as? SoundcoreConnection)?.remembered?.serial
     }
+}
+
+/// Set once, from any task.
+final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isSet = false
+
+    /// True the first time only.
+    func set() -> Bool { lock.withLock { defer { isSet = true }; return !isSet } }
 }

@@ -52,7 +52,7 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
                             recordingStartedAt: start, updatedAt: peer.clock?.localDate(fromPeer: recording.sentAt) ?? Date())
     }
 
-    /// The conversation the phone is recording, when it's recording one.
+    /// The conversation the phone is recording (or paused in), when it says it's recording one.
     var recordingConversationID: UUID? {
         guard let recording = link.recordingStates[phoneID], recording.phase == .recording || recording.phase == .starting else { return nil }
         return recording.conversationID
@@ -107,7 +107,7 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
             LinkTiming(startedAt: $0, elapsed: start.timelineStart.map { max(0, Date().timeIntervalSince($0)) },
                        clockOffset: clock?.offset, clockUncertainty: clock?.uncertainty, timelineStart: start.timelineStart)
         }
-        return await send(LinkRecordRequest(action: .start, conversationID: start.conversationID, timing: timing,
+        return await send(LinkRecordRequest(id: start.requestID, action: .start, conversationID: start.conversationID, timing: timing,
                                             title: start.title, date: start.date, standalone: start.standalone ? true : nil))
     }
 

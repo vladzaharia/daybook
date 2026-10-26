@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import CoreMedia
 import Foundation
+import IOKit.pwr_mgt
 
 /// Everything the controller needs from the system, injectable so tests drive it with fakes
 /// instead of a real microphone, process tap, or ScreenCaptureKit stream.
@@ -88,11 +89,27 @@ final class RecordingController: ObservableObject {
     /// This recording's caption tap, on its session timeline.
     private var activeCaptionTap: CaptureCaptionTap?
 
+    /// Runs as the Mac goes to sleep, once the recording has stopped: what must reach other devices
+    /// first (stopping the recorders that recorded along). Sleep waits for it, at most `sleepGrace`.
+    var beforeSleep: (@MainActor () async -> Void)?
+    static let sleepGrace: Duration = .seconds(5)
+    private var sleepGate: SystemSleepGate?
+
     init(environment: CaptureEnvironment = .live) {
         self.environment = environment
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.captureFailed(RecordingError.interrupted("Recording stopped because the Mac went to sleep. Everything up to then is saved.")) }
+            Task { @MainActor in self?.stopForSleep() }
         })
+        // The notification doesn't hold sleep back; the power notification can, briefly, so stops
+        // sent to other devices leave before the network goes.
+        sleepGate = SystemSleepGate(grace: Self.sleepGrace) { [weak self] in
+            self?.stopForSleep()
+            await self?.beforeSleep?()
+        }
+    }
+
+    private func stopForSleep() {
+        captureFailed(RecordingError.interrupted("Recording stopped because the Mac went to sleep. Everything up to then is saved."))
     }
 
     /// `callApp` is the meeting app to record on its own (from `MeetingMonitor` or the running
@@ -337,5 +354,60 @@ final class RecordingController: ObservableObject {
         levels.reset()
         state = .idle
         return result
+    }
+}
+
+/// Holds system sleep back for at most `grace` while `prepare` runs (IOKit's will-sleep power
+/// notification, which waits for an acknowledgement; `NSWorkspace.willSleepNotification` doesn't).
+@MainActor
+final class SystemSleepGate {
+    private static let canSystemSleep: UInt32 = 0xE000_0270
+    private static let systemWillSleep: UInt32 = 0xE000_0280
+
+    private var rootPort: io_connect_t = 0
+    private var notifyPort: IONotificationPortRef?
+    private var notifier: io_object_t = 0
+    private let grace: Duration
+    private let prepare: @MainActor () async -> Void
+
+    init(grace: Duration, prepare: @escaping @MainActor () async -> Void) {
+        self.grace = grace
+        self.prepare = prepare
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        rootPort = IORegisterForSystemPower(context, &notifyPort, { context, _, message, argument in
+            guard let context else { return }
+            let token = Int(bitPattern: argument)
+            let gate = Unmanaged<SystemSleepGate>.fromOpaque(context).takeUnretainedValue()
+            MainActor.assumeIsolated { gate.received(message, token: token) }
+        }, &notifier)
+        if rootPort != 0, let notifyPort {
+            CFRunLoopAddSource(CFRunLoopGetMain(), IONotificationPortGetRunLoopSource(notifyPort).takeUnretainedValue(), .commonModes)
+        }
+    }
+
+    deinit {
+        guard rootPort != 0 else { return }
+        var notifier = self.notifier
+        IODeregisterForSystemPower(&notifier)
+        IOServiceClose(rootPort)
+        if let notifyPort { IONotificationPortDestroy(notifyPort) }
+    }
+
+    private func received(_ message: UInt32, token: Int) {
+        switch message {
+        case Self.canSystemSleep:
+            IOAllowPowerChange(rootPort, token)
+        case Self.systemWillSleep:
+            let port = rootPort, grace = self.grace, prepare = self.prepare
+            Task { @MainActor in
+                let done = OnceFlag()
+                let allow = { if done.set() { IOAllowPowerChange(port, token) } }
+                Task { @MainActor in try? await Task.sleep(for: grace); allow() }
+                await prepare()
+                allow()
+            }
+        default:
+            break
+        }
     }
 }

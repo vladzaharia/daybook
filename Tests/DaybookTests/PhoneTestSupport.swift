@@ -43,13 +43,18 @@ final class LinkEvents: @unchecked Sendable {
 final class PhoneRecorderScript: @unchecked Sendable {
     private let lock = NSLock()
     private var _requests: [LinkRecordRequest] = []
+    private var _delays: [LinkRecordRequest.Action: Duration] = [:]
     var requests: [LinkRecordRequest] { lock.withLock { _requests } }
     /// Answers each request; the default acknowledges with a recording ID.
     var answer: @Sendable (LinkRecordRequest) -> LinkRecordReply.Outcome = { request in
         .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "R-\(request.conversationID)"))
     }
-    func record(_ request: LinkRecordRequest) -> LinkRecordReply.Outcome {
-        lock.withLock { _requests.append(request) }
+    /// How long the phone takes to answer (a microphone prompt, say).
+    func delay(_ action: LinkRecordRequest.Action, by delay: Duration?) { lock.withLock { _delays[action] = delay } }
+
+    func record(_ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
+        let delay = lock.withLock { () -> Duration? in _requests.append(request); return _delays[request.action] }
+        if let delay { try? await Task.sleep(for: delay) }
         return answer(request)
     }
 }
@@ -95,7 +100,7 @@ struct PhoneLinkRig {
         let rig = PhoneLinkRig(phoneID: phoneID, macID: macID, client: client, events: LinkEvents(client.events()),
                                endpoint: LinkEndpoint(host: "127.0.0.1", port: port))
         let script = rig.recorder
-        await client.setRecordControlHandler { _, request in script.record(request) }
+        await client.setRecordControlHandler { _, request in await script.record(request) }
         try await client.connect(to: macID, via: rig.endpoint)
         try await waitFor("the phone to connect, with a clock estimate") { state.phoneLink.peers[phoneID]?.clock != nil }
         return rig
