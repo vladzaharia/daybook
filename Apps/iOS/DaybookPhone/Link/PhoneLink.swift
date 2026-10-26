@@ -193,7 +193,7 @@ final class PhoneLink {
         guard let error = error as? LinkPairingError else { return "Couldn't pair: \(error.localizedDescription)" }
         switch error {
         case .invalidCode: return "Type the six digits shown on your Mac."
-        case .codeAlreadyUsed: return "That code was already tried. Your Mac shows a new one; type that."
+        case .codeAlreadyUsed: return "That code was already tried. Type the code your Mac shows now, or close and reopen pairing there for a new one."
         case .codeRejected: return "That code didn't match. Your Mac now shows a new code; try that one."
         case .notPairing: return "The Mac isn't showing a code. On your Mac, open Daybook › Settings › Devices and add your iPhone."
         case .busy: return "Another device is pairing with this Mac. Try again in a minute."
