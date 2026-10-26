@@ -286,6 +286,7 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
             // Recorders and phones that recorded along hear the stop before the link goes (briefly).
             await state.sources.recorders.settle(within: .seconds(5))
             await state.flush()
+            state.recordReplicaIdentity()
             await state.phoneLink.shutDown()
             sender.reply(toApplicationShouldTerminate: true)
         }

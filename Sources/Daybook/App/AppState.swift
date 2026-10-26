@@ -205,6 +205,8 @@ final class AppState: ObservableObject {
         processingPreferences.speakerModelID = selections[.diarization] ?? processingPreferences.speakerModelID
         modelSelections = selections
         self.processingPreferences = processingPreferences
+        // A library that moved (into the App Sandbox's container, or back out) brings this Mac's identity with it.
+        ReplicaIdentity.restore(library: libraryURL, defaults: defaults, machine: ReplicaIdentity.currentMachine)
         let sync = LibrarySyncController(localRoot: libraryURL, defaults: defaults)
         // Presence: other devices see this Mac and whether it can process. Updated as models change.
         sync.replica = .mac(displayName: ProcessingRequest.Device.currentName, canProcess: false)
@@ -336,6 +338,7 @@ final class AppState: ObservableObject {
         guard !isReady else { return }
         do {
             try await library.load()
+            recordReplicaIdentity()
             // Installs from before the model system move into the store first, without downloading.
             let migration = await runtime.prepare()
             if !migration.failed.isEmpty {
@@ -354,6 +357,15 @@ final class AppState: ObservableObject {
             // Requests this Mac held when it last quit or crashed run again (or are given back).
             pickUpRequests()
         } catch { errorMessage = "Couldn’t open your library: \(error.localizedDescription)" }
+    }
+
+    /// Keeps this Mac's sync and link identity with the library (`ReplicaIdentity`), for when the library moves.
+    func recordReplicaIdentity() {
+        guard library.isLoaded else { return }
+        ReplicaIdentity.save(ReplicaIdentity(syncDeviceID: sync.deviceID, installation: sync.installation,
+                                             linkDeviceID: phoneLink.identity.deviceID.uuidString,
+                                             libraryPath: storageURL.standardizedFileURL.path,
+                                             machine: ReplicaIdentity.currentMachine ?? "", savedAt: Date()), in: storageURL)
     }
 
     /// A background import from a recorder (`selecting: false`) takes neither the place being viewed nor the selection.
