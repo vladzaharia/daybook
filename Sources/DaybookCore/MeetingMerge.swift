@@ -25,13 +25,16 @@ public enum MeetingMerge {
             warnings.append("Concurrent edits to \(field) in \(local.title) were preserved in History.")
             return a > b ? lhs : rhs
         }
-        func items<T: Codable & Equatable & Identifiable>(_ field: String, _ lhs: [T], _ rhs: [T], _ ancestor: [T]) -> [T] {
+        func items<T: Codable & Equatable & Identifiable>(_ field: String, _ lhs: [T], _ rhs: [T], _ ancestor: [T], allowsRemoval: Bool = false) -> [T] {
             var order: [T.ID] = []
             for item in ancestor where !order.contains(item.id) { order.append(item.id) }
             let added = Set((lhs + rhs).map(\.id)).subtracting(order).sorted { String(describing: $0) < String(describing: $1) }
             order += added
             return order.compactMap { id in
                 let a = lhs.first { $0.id == id }, b = rhs.first { $0.id == id }, old = ancestor.first { $0.id == id }
+                if allowsRemoval {
+                    return choose("\(field):\(id)", a, b, base == nil ? nil : .some(old))
+                }
                 if let a, let b { return choose("\(field):\(id)", a, b, old) }
                 return a ?? b ?? old
             }
@@ -52,7 +55,7 @@ public enum MeetingMerge {
         result.tracks = items("track", local.tracks, remote.tracks, base?.tracks ?? [])
         result.transcripts = items("transcript-run", local.transcripts, remote.transcripts, base?.transcripts ?? [])
         result.speakers = items("speaker", local.speakers, remote.speakers, base?.speakers ?? [])
-        result.highlights = items("highlight", local.highlights, remote.highlights, base?.highlights ?? [])
+        result.highlights = items("highlight", local.highlights, remote.highlights, base?.highlights ?? [], allowsRemoval: true)
         // Photos are originals: every copy's survive, merged field by field (Photos.swift).
         if local.photos != nil || remote.photos != nil {
             result.photos = MeetingPhoto.mergedList(base: base?.photos ?? [], local: local.photos ?? [], remote: remote.photos ?? []) { field, smaller, larger in

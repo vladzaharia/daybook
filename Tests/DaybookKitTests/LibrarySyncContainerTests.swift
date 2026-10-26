@@ -247,6 +247,46 @@ final class LibrarySyncContainerTests: XCTestCase {
         try await wait("signed out") { sync.iCloud == .signedOut }
         XCTAssertNil(sync.folder)
     }
+
+    func testCancellingAnActivePassReachesTheEngineAndLeavesItReadyToRetry() async throws {
+        let meeting = try await librarySyncedThroughFolder()
+        let event = try XCTUnwrap(try fm.contentsOfDirectory(at: folder.appendingPathComponent("Events"), includingPropertiesForKeys: nil).first)
+        let cloud = PlaceholderCloud()
+        try cloud.evict(event)
+        let gate = SyncReadGate()
+        defer { gate.release() }
+        let sync = controller(environment())
+        sync.replica.cloud = SyncCloudFiles(requestDownload: { _ in gate.waitForCancellation() }, isUploaded: { _ in true })
+        try sync.connect(to: folder, monitorChanges: false)
+        let pass = Task { try await sync.synchronize(meetings: [meeting], deletedMeetingIDs: [], metadata: Data()) }
+        try await wait("an active cloud read") { gate.entered }
+        pass.cancel()
+        gate.release()
+        do { _ = try await pass.value; XCTFail("The cancelled pass must not return a receipt") }
+        catch is CancellationError { }
+        XCTAssertTrue(gate.sawCancellation, "The engine task must receive its caller's cancellation")
+        XCTAssertFalse(sync.isSyncing)
+        try cloud.deliver(event)
+        let next = try await sync.synchronize(meetings: [meeting], deletedMeetingIDs: [], metadata: Data())
+        try await sync.acknowledge(XCTUnwrap(next))
+        XCTAssertNotNil(sync.lastSync)
+    }
+}
+
+/// Holds one synchronous cloud-provider read so the caller can cancel an already running pass.
+private final class SyncReadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var _entered = false
+    private var _sawCancellation = false
+    var entered: Bool { lock.withLock { _entered } }
+    var sawCancellation: Bool { lock.withLock { _sawCancellation } }
+    func release() { semaphore.signal() }
+    func waitForCancellation() {
+        lock.withLock { _entered = true }
+        _ = semaphore.wait(timeout: .now() + 10)
+        lock.withLock { _sawCancellation = Task.isCancelled }
+    }
 }
 
 /// The test's iCloud account and container.

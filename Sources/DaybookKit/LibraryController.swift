@@ -571,7 +571,7 @@ public final class LibraryController: ObservableObject {
     /// is a conversation this device is recording, which a remote deletion or status never touches.
     /// Returns what was applied, or nil when nothing was.
     public func synchronize(protecting active: UUID? = nil, limits: SyncPassLimits = .unlimited) async -> SyncApplied? {
-        guard isLoaded, let sync, sync.folder != nil, !isApplyingSync else { return nil }
+        guard !Task.isCancelled, isLoaded, let sync, sync.folder != nil, !isApplyingSync else { return nil }
         isApplyingSync = true
         await acquireLock()
         defer { releaseLock(); isApplyingSync = false }
@@ -579,14 +579,17 @@ public final class LibraryController: ObservableObject {
         guard let store else { return nil }
         var applied: SyncApplied?
         do {
+            try Task.checkCancellation()
             let snapshot = meetings
             let deleted = Set(trashedMeetingIDs())
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata), limits: limits) else { return nil }
             // Save edits made while iCloud hydrated files before applying a remote deletion.
             await flush()
+            try Task.checkCancellation()
             guard sync.canApply(result) else { return nil }
             for id in result.deletedMeetingIDs {
+                try Task.checkCancellation()
                 guard sync.canApply(result) else { return applied }
                 if meetings.contains(where: { $0.id == id }), id != active {
                     _ = try await store.moveToTrash(id)
@@ -598,6 +601,7 @@ public final class LibraryController: ObservableObject {
             }
             var mergeWarnings = result.warnings
             for remote in result.meetings where !result.deletedMeetingIDs.contains(remote.id) {
+                try Task.checkCancellation()
                 var merged = remote
                 let local = meetings.first(where: { $0.id == remote.id })
                 if let local {
@@ -631,6 +635,7 @@ public final class LibraryController: ObservableObject {
                                   hasMoreWork: result.hasMoreWork, notLocalAudio: result.notLocalAudio)
             if !mergeWarnings.isEmpty { notice = Array(Set(mergeWarnings)).sorted().joined(separator: "\n") }
             try await flushDurably()
+            try Task.checkCancellation()
             guard sync.canApply(result) else { return applied }
             try await sync.acknowledge(result)
             applied?.acknowledged = true
