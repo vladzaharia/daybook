@@ -14,6 +14,7 @@
 #   release-notes.sh      annotated and lightweight tags in a throwaway repository
 #   check-ref.sh          tags on and off main, manual runs, in a throwaway clone
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
+#   prune-caches.sh       which caches go and which stay, against a fake gh
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 #   select-xcode.sh       version and exact-build checks, SDKs, and the summary, with stand-in tools
@@ -298,6 +299,28 @@ echo missing > "$work/gh/state"
 expect_fail "there's nothing to publish without a draft" release publish --repo example/daybook --tag v1.4.0
 expect_fail "a branch isn't a release tag" release publish --repo example/daybook --tag main
 expect_fail "a draft needs its files" draft --prerelease false "$work/out/none.zip"
+
+# --- prune-caches.sh against a fake gh ------------------------------------------------------------------
+echo "prune-caches.sh"
+hash_a="$(printf 'a%.0s' $(seq 64))"
+hash_b="$(printf 'b%.0s' $(seq 64))"
+hash_c="$(printf 'c%.0s' $(seq 64))"
+printf '%s\t%s\t%s\n' \
+    1 "swiftpm-macOS-27A9275-$hash_a" refs/heads/main \
+    2 "swiftpm-macOS-27A9275-$hash_b" refs/heads/main \
+    3 "swiftpm-macOS-27A9275-$hash_c" refs/heads/main \
+    4 "mac-dd-macOS-27A9275-Debug-$hash_a" refs/heads/main \
+    5 "mac-dd-macOS-27A9275-Release-$hash_a" refs/heads/main \
+    6 "ios-dd-macOS-27A9275-$hash_a" refs/heads/main \
+    7 "swiftpm-macOS-27A9275-$hash_a" refs/pull/9/merge > "$work/gh/caches"
+prune() { PATH="$work/ghbin:$PATH" GH_STATE="$work/gh" "$ci/prune-caches.sh" --repo example/daybook "$@" > "$work/prune.out" 2>&1; }
+cache_ids() { cut -f1 "$work/gh/caches" | paste -sd ' ' -; }
+expect_ok "prunes the families this run saved" prune "swiftpm-macOS-27A9275-$hash_c" "mac-dd-macOS-27A9275-Debug-$hash_b"
+expect_eq "older swiftpm caches go; another ref's, other families', and an unsaved key's family stay" "3 4 5 6 7" "$(cache_ids)"
+expect_ok "says what it left alone" grep -q "mac-dd-macOS-27A9275-Debug-$hash_b isn't saved on refs/heads/main" "$work/prune.out"
+expect_ok "nothing to do is fine" prune "ios-dd-macOS-27A9275-$hash_a"
+expect_eq "(unchanged)" "3 4 5 6 7" "$(cache_ids)"
+expect_fail "a key without a hash is refused" prune "swiftpm-macOS-27A9275-"
 
 # --- check-ios-archive.sh -------------------------------------------------------------------------------
 echo "check-ios-archive.sh"

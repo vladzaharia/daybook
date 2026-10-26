@@ -52,8 +52,12 @@ jobs:
     with:
       # The full unsigned Release archive, as the mac job builds it, not CI's usual Debug build.
       mac_configuration: Release
+    # A ceiling, not a grant: the called jobs ask for contents: read. CI's cache-pruning job asks for
+    # actions: write and runs only for pushes to main, never here, but GitHub checks a called
+    # workflow's permissions against the caller's before the run starts.
     permissions:
       contents: read
+      actions: write
 
   prepare:
     name: Version and notes

@@ -83,6 +83,8 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+    outputs:
+      cache_key: ${{ steps.key.outputs.build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -164,6 +166,8 @@ jobs:
     timeout-minutes: 75
     permissions:
       contents: read
+    outputs:
+      cache_key: ${{ steps.key.outputs.build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -253,6 +257,8 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+    outputs:
+      cache_key: ${{ steps.key.outputs.build }}
     env:
       CONFIGURATION: ${{ inputs.mac_configuration || 'Debug' }}
     steps:
@@ -323,3 +329,29 @@ jobs:
           path: build/macOS/DerivedData/Logs/
           retention-days: 14
           if-no-files-found: ignore
+
+  # After a push to main has saved its caches, the older caches of the same families (superseded
+  # Package.resolved, Package.swift, or project hashes) go, so they don't crowd the 10 GB quota. A
+  # family whose new cache wasn't saved is left alone. The only job that can write to Actions; it
+  # builds nothing and runs only scripts/ci/prune-caches.sh.
+  caches:
+    name: Prune superseded caches
+    needs: [package, iphone, mac]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Delete older caches of this run's families
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEYS: ${{ needs.package.outputs.cache_key }} ${{ needs.iphone.outputs.cache_key }} ${{ needs.mac.outputs.cache_key }}
+        run: |
+          read -r -a keys <<< "$KEYS"
+          scripts/ci/prune-caches.sh --repo "$REPO" --ref refs/heads/main ${keys[@]+"${keys[@]}"}

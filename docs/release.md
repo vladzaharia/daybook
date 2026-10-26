@@ -50,7 +50,9 @@ Hardening:
 - `iphone` caches its derived data, without logs and the index.
 - `mac` caches its derived data and `SourcePackages`, per configuration.
 
-Keys combine the Xcode build with a hash of `Package.resolved`, `Package.swift`, and the project spec. Only pushes to `main` save a cache, and only when the key is new. Pull requests restore from the base branch and never save, so they can't fill or poison the 10 GB cache quota. A dependency or Xcode change starts a new cache. Older ones age out. Run CI manually with `clean` ticked to build without caches.
+Keys combine the Xcode build with a hash of `Package.resolved`, `Package.swift`, and the project spec. Only pushes to `main` save a cache, and only when the key is new. Pull requests restore from the base branch and never save, so they can't fill or poison the 10 GB cache quota. A dependency or Xcode change starts a new cache.
+
+After a push to `main`, the `caches` job (`scripts/ci/prune-caches.sh`) deletes the older caches of each family the run used: same key up to the hash, so `swiftpm-macOS-27A9275-…`, `ios-dd-macOS-27A9275-…`, and `mac-dd-macOS-27A9275-Debug-…`. It deletes them only when the run's own cache for that family is saved, so a failed run never removes the last good one. It's the only job with `actions: write`, and it builds nothing: it runs that one script. (When `release.yml` calls CI, its `validate` job grants `actions: write` as a ceiling only, because GitHub checks a called workflow's permissions before the run starts; the `caches` job never runs there.) Caches of an older Xcode build age out after 7 days unused. Run CI manually with `clean` ticked to build without caches.
 
 **Timing-sensitive tests.** Two tests have time budgets that an overloaded machine can miss:
 
@@ -369,7 +371,7 @@ The Mac job attests every file in `SHA256SUMS.txt` with `actions/attest-build-pr
 | `cannot execute tool 'metal' due to missing Metal Toolchain` | The download in `select-xcode.sh --metal` failed or was skipped. Re-run; it retries three times. |
 | `Unable to find a device matching the provided destination specifier` | The simulator set changed. `pick-simulator.sh` prints what it chose; run `xcrun simctl list devices available` in a step to see what's there. |
 | "Passed on retry" warning | A timing-budget test missed once on a slow VM. Occasional is expected. Every run means a real slowdown: compare the timings in the log with `docs/validation.md`. |
-| CI is slow after a dependency or Xcode change | The cache key changed. The first push to `main` saves a new cache. |
+| CI is slow after a dependency or Xcode change | The cache key changed. The first push to `main` saves a new cache, and its `caches` job then deletes the superseded one. |
 | Archive: "No signing certificate 'iOS Development' found" or "No Account for Team" | The API key isn't being used or lacks the role. Check the three `ASC_*` secrets and that the key is a **team** key with **Admin** access. |
 | Mac export: cloud signing permission error, or no "Developer ID Application" certificate | Cloud-managed Developer ID isn't available to the key. Add the [.p12 fallback](#fallback-a-developer-id-p12). |
 | `secrets.sh`: "the .p12 has no valid Developer ID Application identity" | The `.p12` lacks the certificate or the key. Export from Keychain Access › My Certificates, selecting the **certificate** row (not the key); the file is about 3 KB. |

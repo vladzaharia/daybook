@@ -1,10 +1,48 @@
 #!/bin/bash
-# A stand-in for gh's release commands, for scripts/ci/tests/run-tests.sh. Keeps one release's state in
-# $GH_STATE: `state` (missing, draft, or published), `assets` (one name per line), `title`, and
-# `prerelease`, and appends every call to `calls`. Never talks to GitHub.
+# A stand-in for gh, for scripts/ci/tests/run-tests.sh. Never talks to GitHub; appends every call to
+# $GH_STATE/calls.
+#   gh release ...   keeps one release's state in $GH_STATE: `state` (missing, draft, or published),
+#                    `assets` (one name per line), `title`, and `prerelease`
+#   gh api .../actions/caches[?ref=&key=] and -X DELETE .../actions/caches/<id>
+#                    over $GH_STATE/caches, one "id<TAB>key<TAB>ref" per line
 set -euo pipefail
 dir="${GH_STATE:?}"
 printf '%s\n' "$*" >> "$dir/calls"
+
+if [[ "${1-}" == api ]]; then
+    shift
+    method=GET
+    jq_filter="."
+    path=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -X) method="$2"; shift ;;
+            --jq) jq_filter="$2"; shift ;;
+            --silent) ;;
+            *) path="$1" ;;
+        esac
+        shift
+    done
+    case "$method $path" in
+        "GET "*/actions/caches\?*)
+            query="${path#*\?}"
+            want_ref="$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^ref=//p')"
+            want_key="$(printf '%s' "$query" | tr '&' '\n' | sed -n 's/^key=//p')"
+            jq -R -s --arg ref "$want_ref" --arg key "$want_key" '
+                {actions_caches: [split("\n")[] | select(length > 0) | split("\t")
+                    | {id: (.[0] | tonumber), key: .[1], ref: .[2]}
+                    | select(($ref == "" or .ref == $ref) and (.key | startswith($key)))]}' "$dir/caches" | jq -r "$jq_filter"
+            ;;
+        "DELETE "*/actions/caches/*)
+            id="${path##*/}"
+            grep -v "^$id"$'\t' "$dir/caches" > "$dir/caches.new" || true
+            mv "$dir/caches.new" "$dir/caches"
+            ;;
+        *) echo "fake gh: unsupported: api $method $path" >&2; exit 2 ;;
+    esac
+    exit 0
+fi
+
 state="$(cat "$dir/state")"
 [[ "${1-} ${2-}" == "release "* ]] || { echo "fake gh: unsupported: $*" >&2; exit 2; }
 sub="$2"
