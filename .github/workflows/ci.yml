@@ -6,6 +6,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
   workflow_dispatch:
     inputs:
       mac_configuration:
@@ -124,6 +125,9 @@ jobs:
       - name: Test DaybookIntelligence
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: swift test --skip-build --filter '^DaybookIntelligenceTests\.' 2>&1 | tee build/test-results/intelligence.log
+      - name: Test DaybookCaptions
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: swift test --skip-build --filter '^DaybookCaptionsTests\.' 2>&1 | tee build/test-results/captions.log
       - name: Test the Mac app target
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: swift test --skip-build --filter '^DaybookTests\.' 2>&1 | tee build/test-results/app.log
