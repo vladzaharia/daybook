@@ -240,6 +240,33 @@ final class DeviceHubTests: XCTestCase {
         XCTAssertEqual(files.problem?.actions, [.chooseFolder])
     }
 
+    /// In the App Sandbox a bookmark made before can stop working: the folder is still named, and Choose Folder… starts
+    /// where it was.
+    func testAFolderThatCantBeOpenedAnyMoreIsNamedAndOfferedAgain() throws {
+        let folder = root.appendingPathComponent("Recorder Exports", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let device = ConfiguredDevice(id: "regrant", kind: OtherRecorderIntegration().kind)
+        let storage = environment().storage(for: device, method: .files)
+        let first = ImportFolderWatcher(storage: storage, interval: .seconds(3600))
+        try first.watch(folder)
+        first.shutDown()
+        XCTAssertNotNil(storage.data(ImportFolderWatcher.Keys.location), "a plain bookmark beside the scoped one")
+
+        storage.set(Data("not a bookmark".utf8), ImportFolderWatcher.Keys.bookmark)
+        let relaunched = ImportFolderWatcher(storage: storage, interval: .seconds(3600))
+        relaunched.activate()
+        defer { relaunched.shutDown() }
+        XCTAssertEqual(relaunched.problem, ImportFolderWatcher.accessLost)
+        XCTAssertNil(relaunched.folder)
+        XCTAssertEqual(relaunched.lastKnownFolder?.resolvingSymlinksInPath().path, folder.resolvingSymlinksInPath().path)
+        XCTAssertEqual(relaunched.suggestedFolder?.lastPathComponent, "Recorder Exports")
+        XCTAssertTrue(relaunched.summary.contains("Recorder Exports"), relaunched.summary)
+
+        try relaunched.watch(folder)
+        XCTAssertNil(relaunched.problem)
+        XCTAssertNil(relaunched.lastKnownFolder)
+    }
+
     func testFolderHelpers() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         XCTAssertEqual(ImportFolderWatcher.displayPath(home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Daybook Import")),

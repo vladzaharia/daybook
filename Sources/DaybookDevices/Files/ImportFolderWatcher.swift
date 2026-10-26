@@ -23,6 +23,9 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     /// Files in iCloud Drive that haven't downloaded to this Mac yet.
     @Published public private(set) var waitingForICloud = 0
     @Published public private(set) var isWatching = false
+    /// Where the folder was, when it's no longer watched because this build can't open it: in the App Sandbox a
+    /// bookmark made before can stop working. Names the folder and starts Choose Folder… there (`suggestedFolder`).
+    @Published public private(set) var lastKnownFolder: URL?
     public var onChange: (() -> Void)?
 
     public var status: DeviceStatus? { nil }
@@ -52,6 +55,9 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
 
     public enum Keys {
         public static let bookmark = "bookmark"
+        /// A plain (not security-scoped) bookmark of the same folder: it still says where the folder is when the scoped
+        /// one can't be opened.
+        public static let location = "location"
         public static let completed = "completed"
         public static let lastImport = "lastImport"
     }
@@ -77,7 +83,10 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     }
 
     /// "iCloud Drive › Daybook Import".
-    public var folderDisplayName: String? { folder.map { Self.displayPath($0) } }
+    public var folderDisplayName: String? { (folder ?? lastKnownFolder).map { Self.displayPath($0) } }
+
+    /// Where Choose Folder… starts: the watched folder, or where it was.
+    public var suggestedFolder: URL? { folder ?? lastKnownFolder }
 
     // A sandboxed Mac keeps access with a security-scoped bookmark; on iPhone a folder picked in
     // Files is security-scoped already and keeps a minimal bookmark. Both are polled, not observed.
@@ -102,9 +111,17 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
                 storage.set(refreshed, Keys.bookmark)
             }
         } catch {
+            lastKnownFolder = storedLocation()
             problem = Self.accessLost
             publish()
         }
+    }
+
+    /// Where the folder was, from the plain bookmark.
+    private func storedLocation() -> URL? {
+        guard let data = storage.data(Keys.location) else { return nil }
+        var stale = false
+        return try? URL(resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting], bookmarkDataIsStale: &stale)
     }
 
     /// Starts watching a folder the person chose, and remembers it.
@@ -113,8 +130,12 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
         securityScope = url.startAccessingSecurityScopedResource()
         let bookmark = try url.bookmarkData(options: Self.bookmarkCreation, includingResourceValuesForKeys: nil, relativeTo: nil)
         storage.set(bookmark, Keys.bookmark)
+        #if os(macOS)
+        storage.set(try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil), Keys.location)
+        #endif
         completed = Set(storage.strings(Keys.completed))
         folder = url
+        lastKnownFolder = nil
         problem = nil
         observations = [:]
         startPolling()
@@ -142,6 +163,7 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     public func forget() {
         stopWatching()
         storage.removeAll()
+        lastKnownFolder = nil
         completed = []
         lastImportDate = nil
         recordings = []

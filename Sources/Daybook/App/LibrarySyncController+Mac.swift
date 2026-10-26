@@ -15,4 +15,16 @@ extension LibrarySyncController {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         connectChosenFolder(url)
     }
+
+    /// Choose Folder Again… for the folder this Mac synced through before, when this build can't open it
+    /// (`ICloudSyncState.previousFolderAccessLost`): an open panel where it was.
+    func choosePreviousFolderAgain(near location: URL?) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose the folder this Mac synced through"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = false
+        panel.prompt = "Choose"
+        panel.directoryURL = location?.deletingLastPathComponent() ?? UserHome.iCloudDrive
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        regrantPreviousFolder(url)
+    }
 }

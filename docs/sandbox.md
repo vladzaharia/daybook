@@ -150,9 +150,19 @@ anything in it never is; the old library is only read. Then **Move to Trash** or
 app starts over with the library in place. With nothing at the old place, **Start Fresh** opens a new library instead
 of **Quit**.
 
-### Still to come
+### Folders chosen before the sandbox
 
-Re-granting folders whose old bookmarks don't resolve.
+Folders Daybook keeps access to are remembered with security-scoped bookmarks. One made by an unsandboxed build may
+not open in the sandbox, so a plain bookmark of the same folder is kept beside it (release N writes it whenever the
+scoped one opens), and still says where the folder is:
+
+- **A recorder's import folder** (`ImportFolderWatcher`, key `location`): the device shows "Choose iCloud Drive ›
+  Daybook Import again to keep importing", and Choose Folder… starts beside it.
+- **The folder this Mac synced through before the iCloud container** (`LibrarySyncController`, `syncFolderLocation`):
+  a folder that's there but can't be opened is `previousFolderAccessLost`, not "can't be found". Settings › Library
+  offers **Choose Folder Again…** (an open panel where it was) or **Sync Without It…**; choosing it again replaces the
+  bookmark and the move to iCloud goes ahead.
+- The development sync folder (`-DaybookDevelopmentFolderSync YES`) says to reconnect it; Choose Folder… does.
 
 ## The process-tap probe
 

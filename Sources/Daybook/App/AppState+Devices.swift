@@ -64,6 +64,8 @@ extension AppState {
         // panel falls back on its own when iCloud Drive itself is missing.
         let suggested = UserHome.iCloudDrive.appendingPathComponent("Daybook Import", isDirectory: true)
         panel.directoryURL = FileManager.default.fileExists(atPath: suggested.path) ? suggested : UserHome.iCloudDrive
+        // Choosing again (in the App Sandbox a bookmark made before can stop working): start beside where it was.
+        if let known = session.files?.suggestedFolder { panel.directoryURL = known.deletingLastPathComponent() }
         guard panel.runModal() == .OK, let url = panel.url, let files = session.files else { return false }
         do {
             try files.watch(url)
