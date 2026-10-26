@@ -369,16 +369,17 @@ public final class LibraryController: ObservableObject {
         Task { await realign(id) }
     }
 
-    /// Fuses a conversation's transcripts again, off the main actor. Skipped if its recordings or
-    /// transcripts changed meanwhile.
+    /// Fuses a conversation's transcripts again, and carries saved corrections over, off the main
+    /// actor. Skipped if its recordings or transcripts changed meanwhile.
     public func realign(_ id: UUID) async {
         guard let snapshot = meeting(id) else { return }
-        let fusion = await Task.detached(priority: .userInitiated) {
-            SourceFusion.fuse(snapshot)
+        let (prepared, settled) = await Task.detached(priority: .userInitiated) {
+            let fusion = SourceFusion.fuse(snapshot)
+            return (snapshot.preparingFusion(fusion.fusion), fusion.settled)
         }.value
         guard let current = meeting(id), current.transcripts == snapshot.transcripts,
               current.tracks == snapshot.tracks, current.audioAlignments == snapshot.audioAlignments else { return }
-        update(id) { $0.applyFusion(fusion.fusion); $0.applyPlacements(fusion.settled) }
+        update(id) { $0.applyFusion(prepared); $0.applyPlacements(settled) }
     }
 
     // MARK: Folders and templates

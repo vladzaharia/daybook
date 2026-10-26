@@ -11,35 +11,76 @@ public struct CorrectionTransferIssue: Codable, Equatable, Identifiable, Sendabl
     }
 }
 
+/// A fusion result with saved corrections already carried over to it, worked out off the main actor
+/// (`Meeting.preparingFusion`) and applied with `Meeting.applyFusion(_:)`.
+public struct PreparedFusion: Sendable {
+    public let result: FusionResult
+    let transferred: CorrectionTransfer.Result
+    /// What the transfer read. Applied to a conversation where any of it changed since, the transfer
+    /// is worked out again there, so a correction made meanwhile is never lost.
+    let basis: CorrectionTransfer.Basis
+}
+
+extension Meeting {
+    /// Carries saved corrections over to a fusion result, for `applyFusion(_:)` later. Pure: run it
+    /// off the main actor on a snapshot.
+    public func preparingFusion(_ result: FusionResult) -> PreparedFusion {
+        PreparedFusion(result: result, transferred: CorrectionTransfer.apply(to: result.segments, in: self), basis: .init(self))
+    }
+
+    /// Applies a prepared fusion, as `applyFusion(_ result:)` does.
+    @discardableResult public mutating func applyFusion(_ prepared: PreparedFusion) -> [CorrectionTransferIssue] {
+        guard prepared.basis == .init(self) else { return applyFusion(prepared.result) }
+        return applyFusion(prepared.result, transferred: prepared.transferred)
+    }
+}
+
 enum CorrectionTransfer {
-    struct Result { var segments: [TranscriptSegment]; var issues: [CorrectionTransferIssue] }
+    struct Result: Sendable { var segments: [TranscriptSegment]; var issues: [CorrectionTransferIssue] }
     private struct Proposal { var original: TranscriptSegment; var candidates: [Int]; var reviewCandidates: [Int] }
+
+    /// Everything `apply` reads from the conversation.
+    struct Basis: Equatable, Sendable {
+        var revisions: [MeetingRevision]
+        var unifiedTranscript: [TranscriptSegment]
+        var issues: [CorrectionTransferIssue]?
+        var transcripts: [TrackTranscript]
+        init(_ meeting: Meeting) {
+            revisions = meeting.revisions; unifiedTranscript = meeting.unifiedTranscript
+            issues = meeting.correctionTransferIssues; transcripts = meeting.transcripts
+        }
+    }
 
     static func apply(to segments: [TranscriptSegment], in meeting: Meeting) -> Result {
         var seen = Set<UUID>()
         let edits = meeting.revisions.filter { $0.field.hasPrefix("segment:") }.sorted { $0.date > $1.date }
+        // Looked up by ID, once: each transcript run's passages are flattened a single time.
+        let transferred = Set(meeting.revisions.lazy.map(\.field).filter { $0.hasPrefix("correction-transfer:") })
+        let unified = Dictionary(meeting.unifiedTranscript.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let pending = Dictionary((meeting.correctionTransferIssues ?? []).map { ($0.id, $0.originalSegment) }, uniquingKeysWith: { first, _ in first })
+        let raw = Dictionary(meeting.transcripts.lazy.flatMap(\.segments).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var originals: [TranscriptSegment] = []
         for edit in edits {
             guard let id = UUID(uuidString: String(edit.field.dropFirst(8))), seen.insert(id).inserted else { continue }
-            guard !meeting.revisions.contains(where: { $0.field == "correction-transfer:\(id.uuidString)" }) else { continue }
-            if var original = meeting.unifiedTranscript.first(where: { $0.id == id })
-                ?? meeting.correctionTransferIssues?.first(where: { $0.id == id })?.originalSegment
-                ?? meeting.transcripts.flatMap(\.segments).first(where: { $0.id == id }) {
+            guard !transferred.contains("correction-transfer:\(id.uuidString)") else { continue }
+            if var original = unified[id] ?? pending[id] ?? raw[id] {
                 // The revision is authoritative even after a prior fusion no longer displays this passage.
                 original.text = edit.newValue
-                if original.provenance.isEmpty, let raw = meeting.transcripts.flatMap(\.segments).first(where: { $0.id == id }) {
-                    original.provenance = [provenance(raw)]
+                if original.provenance.isEmpty, let source = raw[id] {
+                    original.provenance = [provenance(source)]
                 }
                 originals.append(original)
             }
         }
 
+        // Passages by their own identity and by every source passage they cite.
+        var byIdentity: [UUID: [Int]] = [:]
+        for (index, candidate) in segments.enumerated() {
+            for identity in Set([candidate.id] + candidate.provenance.map(\.segmentID)) { byIdentity[identity, default: []].append(index) }
+        }
         let proposals = originals.map { original -> Proposal in
             let identities = Set(original.provenance.map(\.segmentID) + [original.id])
-            let exact = segments.indices.filter { index in
-                let candidate = segments[index]
-                return identities.contains(candidate.id) || !identities.isDisjoint(with: candidate.provenance.map(\.segmentID))
-            }
+            let exact = Set(identities.flatMap { byIdentity[$0] ?? [] }).sorted()
             if exact.count > 1 {
                 // A fused passage keeps the identity of its first source's segment, while another
                 // recording's segment can be cited by several passages. Prefer the passage with the
