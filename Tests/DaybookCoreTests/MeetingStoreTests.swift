@@ -316,4 +316,30 @@ final class MeetingStoreTests: XCTestCase {
         let backup = try Data(contentsOf: folder.appendingPathComponent("meeting.recovery.json"))
         XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: backup).notes, "Kept", "The earlier file became the recovery copy")
     }
+
+    func testALongImportDoesNotHoldUpOtherSavesAndStopsWhenCancelled() async throws {
+        let store = try MeetingStore(rootURL: root)
+        // A sparse two-gigabyte "recording": no disk space, but hashing it takes a while.
+        let source = root.appendingPathComponent("long.wav")
+        FileManager.default.createFile(atPath: source.path, contents: Data("RIFF".utf8))
+        let handle = try FileHandle(forWritingTo: source)
+        try handle.truncate(atOffset: 2 << 30)
+        try handle.close()
+        let target = Meeting(title: "Long import")
+        try await store.save(target)
+        let importing = Task { try await store.importAudio(from: source, into: target) }
+        try await Task.sleep(for: .milliseconds(100))
+        let started = Date()
+        var other = Meeting(title: "Edited meanwhile")
+        try await store.save(other)
+        other.notes = "Saved while the import hashed"
+        try await store.save(other)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "Saves don't wait for the import")
+        importing.cancel()
+        do { _ = try await importing.value; XCTFail("A cancelled import finished") } catch is CancellationError { }
+        let originals = root.appendingPathComponent("Meetings/\(target.id.uuidString)/Originals")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: originals.path), [], "Nothing staged is left behind")
+        let stored = try await store.load(target.id)
+        XCTAssertTrue(stored.tracks.isEmpty)
+    }
 }
