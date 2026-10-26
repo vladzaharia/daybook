@@ -74,8 +74,15 @@ final class AppState: ObservableObject {
     @Published var processingID: UUID?
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
-    @Published var processingProgress = IntelligenceProgress(0, "Ready") {
-        didSet { processingProgressChanged() }
+    /// Photos that couldn't be read wait before they're tried again (AppState+Photos.swift).
+    var photoBackoff = PhotoReadingBackoff()
+    var photoRetry: Task<Void, Never>?
+    /// The running job's progress, throttled (`ActivityProgress`). The window is redrawn when its
+    /// percent or message changes; views that draw it continuously observe `processingActivity`.
+    let processingActivity = ActivityProgress(IntelligenceProgress(0, "Ready"))
+    var processingProgress: IntelligenceProgress {
+        get { processingActivity.value }
+        set { processingActivity.set(newValue) }
     }
     @Published var processingQueue: [ProcessingJob] = []
     /// The job running now (`processingID`'s), with the request it carries out, if any.
@@ -110,7 +117,12 @@ final class AppState: ObservableObject {
         }
     }
     @Published var downloadingID: String?
-    @Published var downloadProgress = IntelligenceProgress(0, "")
+    /// The current download's progress, throttled like `processingActivity`.
+    let downloadActivity = ActivityProgress(IntelligenceProgress(0, ""))
+    var downloadProgress: IntelligenceProgress {
+        get { downloadActivity.value }
+        set { downloadActivity.set(newValue) }
+    }
     var glossary: [GlossaryTerm] { library.glossary }
     @Published var recordingID: UUID?
     @Published var isStartingRecording = false
@@ -181,6 +193,10 @@ final class AppState: ObservableObject {
     private var recordingWasAutomatic = false
     private var captureDirectory: URL?
     private var notesPanel: NotesPanelController?
+    /// Bumped whenever the library's conversations change: the key for what's derived from them.
+    private(set) var libraryRevision = 0
+    private var visibleMemo: (place: LibraryPlace, revision: Int, meetings: [Meeting])?
+    let searchMemo = LibrarySearchMemo()
 
     init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard) {
         let storedPreferences = defaults.data(forKey: "processingPreferences").flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
@@ -236,6 +252,13 @@ final class AppState: ObservableObject {
         for publisher in [library.objectWillChange.eraseToAnyPublisher(), recorder.objectWillChange.eraseToAnyPublisher(), monitor.objectWillChange.eraseToAnyPublisher(), sync.objectWillChange.eraseToAnyPublisher(), devices.objectWillChange.eraseToAnyPublisher(), sources.objectWillChange.eraseToAnyPublisher(), phoneLink.objectWillChange.eraseToAnyPublisher()] {
             publisher.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         }
+        library.$meetings.sink { [weak self] _ in self?.libraryRevision &+= 1 }.store(in: &subscriptions)
+        processingActivity.onChange = { [weak self] visible in
+            if visible { self?.objectWillChange.send() }
+            self?.processingProgressChanged()
+        }
+        downloadActivity.onChange = { [weak self] visible in if visible { self?.objectWillChange.send() } }
+        searchMemo.onUpdate = { [weak self] in self?.objectWillChange.send() }
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in
             guard let self, self.automaticRecording, self.recordingID == nil, !self.isStartingRecording else { return }
@@ -288,15 +311,24 @@ final class AppState: ObservableObject {
         if let data = try? JSONEncoder().encode(migrated) { defaults.set(data, forKey: "modelSelections") }
         return migrated
     }
-    /// Conversations in the selected place, newest first.
+    /// Conversations in the selected place, newest first. Kept until the place or the library changes.
     var visibleMeetings: [Meeting] {
-        meetings.filter { meeting in
+        if let memo = visibleMemo, memo.place == place, memo.revision == libraryRevision { return memo.meetings }
+        let visible = meetings.filter { meeting in
             switch place {
             case .section(let section): return section.contains(meeting)
             case .folder(let id): return meeting.folderID == id
             case .device: return false
             }
         }.sorted { $0.date > $1.date }
+        visibleMemo = (place, libraryRevision, visible)
+        return visible
+    }
+
+    /// The library search's results for the current query, kept until it or the library changes;
+    /// a large library is searched off the main actor (`LibrarySearchMemo`).
+    var searchHits: [SearchHit] {
+        searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
     }
     var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty || !searchTokens.isEmpty }
 
@@ -377,7 +409,8 @@ final class AppState: ObservableObject {
     /// the selection.
     func importAudio(_ urls: [URL], source: AudioSource, attachTo id: UUID?,
                      device: DeviceRecordingIdentity? = nil) async throws -> [UUID] {
-        await acquireImportLock()
+        // A cancelled import (a recorder that went away) stops waiting for the lock it never got.
+        try await library.acquireLockUnlessCancelled()
         defer { releaseImportLock() }
         guard library.isLoaded else { throw AppError.libraryUnavailable }
         var meetingIDs: [UUID] = []
@@ -568,9 +601,8 @@ final class AppState: ObservableObject {
         let engine = processingEngine(for: request)
         let terms = glossary.filter { $0.approved || $0.sourceMeetingIDs.contains(id) }.map(\.term)
         update(id) { $0.status = .transcribing; $0.errorMessage = nil }
-        let progress: ProcessingProgressHandler = { [weak self] value in
-            Task { @MainActor in self?.processingProgress = IntelligenceProgress(value.fraction, value.message) }
-        }
+        let activity = processingActivity
+        let progress: ProcessingProgressHandler = { value in activity.report(IntelligenceProgress(value.fraction, value.message)) }
         let matching = options.matchSpeakersAcrossSources
             ? SpeakerMatchingConfiguration(minimumSimilarity: options.speakerMatchThreshold, minimumMargin: options.speakerMatchMargin) : nil
         if request.mode != .summaryOnly {
@@ -586,7 +618,7 @@ final class AppState: ObservableObject {
             let url = try await library.audioURL(for: track, in: id)
             let output = try await engine.transcribe(TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: request.mode,
                                                                           previousTranscript: previous, vocabulary: terms), progress: progress)
-            for message in output.notices { notice = message }
+            post(output.notices)
             update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
         }
         try Task.checkCancellation()
@@ -639,10 +671,22 @@ final class AppState: ObservableObject {
             for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) { enqueue(id) }
         }
         pickUpRequests(start: false)
-        for meeting in meetings where meeting.visiblePhotos.contains(where: { $0.analysis == nil }) { readPhotosWhenIdle(meeting.id) }
+        requeueUnreadPhotos()
     }
 
     func realign(_ id: UUID) async { await library.realign(id) }
+
+    /// Adds notices to the one the window shows, keeping every distinct one (the newest last, at
+    /// most five) rather than letting each replace the one before.
+    func post(_ messages: [String]) {
+        var lines = (notice ?? "").components(separatedBy: "\n").filter { !$0.isEmpty }
+        for message in messages where !message.isEmpty {
+            lines.removeAll { $0 == message }
+            lines.append(message)
+        }
+        guard !lines.isEmpty else { return }
+        notice = lines.suffix(5).joined(separator: "\n")
+    }
 
     func setOffset(_ id: UUID, trackID: UUID, seconds: Double?) { library.setOffset(id, trackID: trackID, seconds: seconds) }
 
@@ -656,9 +700,8 @@ final class AppState: ObservableObject {
         downloadTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.runtime.download(modelID: modelID) { [weak self] progress in
-                    Task { @MainActor in self?.downloadProgress = progress }
-                }
+                let activity = self.downloadActivity
+                try await self.runtime.download(modelID: modelID) { progress in activity.report(progress) }
                 await self.refreshInstalledModels()
                 self.collectOldModelRevisions()
             } catch is CancellationError { self.notice = "Download cancelled." }
@@ -900,7 +943,7 @@ extension AppState {
         if result.echoRemoval == nil && result.tracks.contains(where: { $0.role == .systemAudio }) {
             update(id) { if $0.status == .recording { $0.status = .transcribing } }
         }
-        let result = await Task.detached(priority: .userInitiated) { CaptureFinalizer.finalize(result) }.value
+        let result = await detachedWork(priority: .userInitiated) { CaptureFinalizer.finalize(result) }
         await acquireImportLock()
         defer { releaseImportLock() }
         guard library.isLoaded, meetings.contains(where: { $0.id == id }) else { throw AppError.libraryUnavailable }
@@ -922,7 +965,7 @@ extension AppState {
                 meetingID: id, derivedFrom: original, processing: derived.processing)
             importedCount += 1
         }
-        try await library.flushDurably()
+        try await library.flushDurably([id])
         // Retain empty/failed captures for diagnosis; remove staging only after durable imports.
         if importedCount > 0 && linked { try FileManager.default.removeItem(at: result.directory) }
     }
@@ -977,12 +1020,6 @@ enum ActiveSheet: Identifiable, Equatable {
 struct NewFolderRequest: Identifiable, Equatable {
     let id = UUID()
     var moving: [UUID] = []
-}
-
-enum PageMode: String, CaseIterable, Identifiable {
-    case summary, transcript
-    var id: String { rawValue }
-    var title: String { self == .summary ? "Summary" : "Transcript" }
 }
 
 /// The library's errors, shared with the devices that import into it.

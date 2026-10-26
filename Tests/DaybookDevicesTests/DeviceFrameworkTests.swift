@@ -335,3 +335,11 @@ final class DeviceFrameworkTests: XCTestCase {
         }
     }
 }
+
+/// `DaybookError` lives in DaybookCore; DaybookDevices' name for it is the same type.
+final class DaybookErrorHomeTests: XCTestCase {
+    func testDevicesAndCoreNameTheSameError() {
+        let error: DaybookDevices.DaybookError = DaybookCore.DaybookError.saveFailed("Disk full")
+        XCTAssertEqual(error.localizedDescription, "Couldn’t save changes: Disk full")
+    }
+}

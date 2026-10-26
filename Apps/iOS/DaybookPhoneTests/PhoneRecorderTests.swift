@@ -424,6 +424,27 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertEqual(mac.map(\.time), [2, 5])
     }
 
+    func testAJournalThatCantBeWrittenIsReportedOnceAndRecordingContinues() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Full disk")
+        rig.pump(2)
+        var changes = 0
+        rig.recorder.onChange = { changes += 1 }
+        // The folder can't take another file, as when the iPhone is full.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        rig.recorder.editNotes("A note the journal can't hold")
+        await rig.recorder.flush()
+        await rig.recorder.flush()
+        let reported = try XCTUnwrap(rig.recorder.lastError)
+        XCTAssertTrue(reported.hasPrefix("Notes and bookmarks couldn’t be saved"), reported)
+        XCTAssertEqual(changes, 1, "Said once, not at every write")
+        XCTAssertEqual(rig.recorder.state, .recording)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        let recording = try await rig.stop()
+        XCTAssertEqual(recording.notes, "A note the journal can't hold")
+    }
+
     func testNotesOutsideARecordingHaveNoTime() {
         let rig = RecorderRig()
         rig.recorder.editNotes("Agenda")

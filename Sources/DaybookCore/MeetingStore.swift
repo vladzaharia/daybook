@@ -1,7 +1,9 @@
+import Darwin
 import Foundation
 
 public enum LibraryError: LocalizedError {
     case unsafePath(String), corruptMeeting(UUID), unsupportedSchema(Int), invalidAudio(String), invalidHighlight, invalidTranscript, trashedMeeting(UUID), missingMeeting(UUID), unsupportedHighlightSchema(Int), invalidHighlightSidecar
+    case unreadableLibrarySettings
     public var errorDescription: String? {
         switch self {
         case .unsafePath(let path): return "The library rejected an unsafe file path: \(path)"
@@ -14,6 +16,7 @@ public enum LibraryError: LocalizedError {
         case .missingMeeting: return "This conversation isn’t in the library."
         case .unsupportedHighlightSchema(let version): return "Highlight sidecar version \(version) is not supported. This version of Daybook reads version 1."
         case .invalidHighlightSidecar: return "The JSON sidecar is not a Daybook highlights file. It must contain a highlights array with time in seconds and text for each marker."
+        case .unreadableLibrarySettings: return "Your folders and templates can’t be saved until Daybook can read them."
         }
     }
 }
@@ -31,11 +34,23 @@ public actor MeetingStore {
     private let fm = FileManager.default
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    /// Each conversation as last read or written, with the stamp of the `meeting.json` it came from.
+    /// While the file keeps that stamp, saving and loading use this instead of reading and decoding
+    /// it again; a file anything else changed is read afresh.
+    private var cache: [UUID: (meeting: Meeting, stamp: FileStamp)] = [:]
+    /// Files and folders written since the last durability barrier (`synchronizeWrites`).
+    private var unsynchronized = Set<URL>()
+    /// `library.json`: whether it may be written, and whether it holds settings that were read.
+    var libraryFile = LibraryFileState.unknown
+    /// How many `meeting.json` files were read and decoded, and written (tests check the cache).
+    private(set) var metadataReads = 0
+    private(set) var metadataWrites = 0
 
     public init(rootURL: URL? = nil) throws {
         let root = (rootURL ?? LibraryLocation.defaultRoot).standardizedFileURL
         self.rootURL = root
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Compact: a long transcript is several megabytes either way, and every version reads both.
+        encoder.outputFormatting = [.sortedKeys]
         try LocalFiles.directory(root)
         try LocalFiles.directory(root.appendingPathComponent("Meetings", isDirectory: true))
     }
@@ -45,7 +60,10 @@ public actor MeetingStore {
         let meetings = rootURL.appendingPathComponent("Meetings", isDirectory: true)
         let directory = meetings.appendingPathComponent(id.uuidString, isDirectory: true)
         try LocalFiles.requireContained(directory, in: meetings)
-        try LocalFiles.directory(directory)
+        if !fm.fileExists(atPath: directory.path) {
+            try LocalFiles.directory(directory)
+            noteWrite(directory)
+        }
         return directory
     }
 
@@ -54,11 +72,14 @@ public actor MeetingStore {
         let directory = rootURL.appendingPathComponent("Meetings", isDirectory: true)
         let children = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
         var meetings: [Meeting] = []
+        var listed = Set<UUID>()
         for child in children {
             guard let id = UUID(uuidString: child.lastPathComponent) else { continue }
+            listed.insert(id)
             do { meetings.append(try load(id)) }
             catch { warnings.append(error.localizedDescription) }
         }
+        cache = cache.filter { listed.contains($0.key) }
         return meetings.sorted { $0.date > $1.date }
     }
 
@@ -66,69 +87,119 @@ public actor MeetingStore {
         let directory = try meetingDirectory(for: id)
         let primary = directory.appendingPathComponent("meeting.json")
         let backup = directory.appendingPathComponent("meeting.recovery.json")
-        if let bytes = try? Data(contentsOf: primary),
-           let header = try? decoder.decode(SchemaHeader.self, from: bytes), header.schemaVersion > 1 {
-            throw LibraryError.unsupportedSchema(header.schemaVersion)
-        }
-        if let bytes = try? Data(contentsOf: primary), let meeting = try? decoder.decode(Meeting.self, from: bytes) {
-            // Never silently roll a future schema back to an older snapshot.
-            if meeting.schemaVersion != 1 { throw LibraryError.unsupportedSchema(meeting.schemaVersion) }
-            if (try? validate(meeting, expectedID: id)) != nil { return meeting }
+        let stamp = FileStamp(primary)
+        if let stamp, let cached = cache[id], cached.stamp == stamp { return cached.meeting }
+        cache[id] = nil
+        if let stamp, let bytes = try? Data(contentsOf: primary) {
+            metadataReads += 1
+            // Decoded once; the schema header is read only when the whole file doesn't decode.
+            if let meeting = try? decoder.decode(Meeting.self, from: bytes) {
+                // Never silently roll a future schema back to an older snapshot.
+                if meeting.schemaVersion != 1 { throw LibraryError.unsupportedSchema(meeting.schemaVersion) }
+                if (try? validate(meeting, expectedID: id)) != nil {
+                    cache[id] = (meeting, stamp)
+                    return meeting
+                }
+            } else if let header = try? decoder.decode(SchemaHeader.self, from: bytes), header.schemaVersion > 1 {
+                throw LibraryError.unsupportedSchema(header.schemaVersion)
+            }
         }
         if let bytes = try? Data(contentsOf: backup), let meeting = try? decoder.decode(Meeting.self, from: bytes) {
+            metadataReads += 1
             try validate(meeting, expectedID: id)
             if fm.fileExists(atPath: primary.path) {
                 let damaged = directory.appendingPathComponent("meeting.corrupt-\(UUID().uuidString).json")
                 try fm.copyItem(at: primary, to: damaged)
             }
             try LocalFiles.atomicWrite(bytes, to: primary)
+            noteWrite(primary)
             warnings.append("Recovered “\(meeting.title)” from its last saved copy.")
+            if let stamp = FileStamp(primary) { cache[id] = (meeting, stamp) }
             return meeting
         }
         throw LibraryError.corruptMeeting(id)
     }
 
+    /// Saves a snapshot, keeping the previous one as `meeting.recovery.json`. Recordings, model runs,
+    /// correction history, and photos already stored are kept even when the snapshot lacks them. The
+    /// stored version comes from the cache while `meeting.json` is unchanged, so a save reads nothing;
+    /// a snapshot that changes nothing writes nothing.
     public func save(_ snapshot: Meeting) throws {
-        var meeting = snapshot
-        try validate(meeting, expectedID: meeting.id)
-        let directory = try meetingDirectory(for: meeting.id)
+        try validate(snapshot, expectedID: snapshot.id)
+        let directory = try meetingDirectory(for: snapshot.id)
         let primary = directory.appendingPathComponent("meeting.json")
         let backup = directory.appendingPathComponent("meeting.recovery.json")
-        if let old = try? Data(contentsOf: primary),
-           let header = try? decoder.decode(SchemaHeader.self, from: old), header.schemaVersion > 1 {
-            throw LibraryError.unsupportedSchema(header.schemaVersion)
-        }
+        var meeting = snapshot
+        var stored: Meeting?
         if fm.fileExists(atPath: primary.path) || fm.fileExists(atPath: backup.path) {
             // Recover and validate before accepting a new snapshot. A corrupt current file must not
             // cause an older queued save to detach originals described by the recovery snapshot.
-            let oldMeeting = try load(meeting.id)
+            let current = try load(snapshot.id)
             // Captured originals, model runs, and correction history are append-only. A notes snapshot
             // queued during a concurrent import must not detach a newly stored recording.
-            meeting = preservingArtifacts(from: oldMeeting, in: meeting)
-            try LocalFiles.atomicWrite(try encoder.encode(oldMeeting), to: backup)
+            meeting = preservingArtifacts(from: current, in: snapshot)
+            stored = current
         }
+        if let stored, stored == meeting, fm.fileExists(atPath: backup.path) { return }
         let bytes = try encoder.encode(meeting)
-        if !fm.fileExists(atPath: backup.path) {
-            // First-save recovery copy also protects newly imported originals.
-            try LocalFiles.atomicWrite(bytes, to: backup)
+        if stored != nil, FileStamp(primary) != nil {
+            // `load` validated what `meeting.json` holds (or rewrote it from the recovery copy), so
+            // it becomes the recovery copy by a rename instead of being encoded and written again.
+            try replaceKeepingPrevious(primary, backup: backup, with: bytes)
+        } else {
+            try LocalFiles.atomicWrite(bytes, to: primary)
+            if !fm.fileExists(atPath: backup.path) {
+                // First-save recovery copy also protects newly imported originals.
+                try LocalFiles.atomicWrite(bytes, to: backup)
+            }
         }
-        try LocalFiles.atomicWrite(bytes, to: primary)
+        metadataWrites += 1
+        noteWrite(primary); noteWrite(backup)
+        if let stamp = FileStamp(primary) { cache[snapshot.id] = (meeting, stamp) }
+    }
+
+    /// Puts `bytes` in `primary` and the file it replaces in `backup`. The swap is one step
+    /// (`RENAME_SWAP`), so `primary` always exists; an interruption before the second rename leaves
+    /// the previous recovery copy, which is older but valid.
+    private func replaceKeepingPrevious(_ primary: URL, backup: URL, with bytes: Data) throws {
+        let temporary = primary.deletingLastPathComponent().appendingPathComponent(".meeting-\(UUID().uuidString).json")
+        try bytes.write(to: temporary, options: .withoutOverwriting)
+        defer { try? fm.removeItem(at: temporary) }
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        if renamex_np(temporary.path, primary.path, UInt32(RENAME_SWAP)) == 0 {
+            // `temporary` now holds the previous snapshot.
+            guard rename(temporary.path, backup.path) == 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: backup.path]) }
+        } else {
+            // A file system without swaps: copy the previous snapshot, then replace.
+            try LocalFiles.atomicWrite(Data(contentsOf: primary), to: backup)
+            guard rename(temporary.path, primary.path) == 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: primary.path]) }
+        }
     }
 
     /// Advisory lookup before creating a new meeting, useful for repeated incoming-folder deliveries.
     /// Explicitly attaching an audio file to a different meeting remains possible.
-    public func existingMeeting(containingAudioAt url: URL) throws -> Meeting? {
-        let digest = try AudioDigest.sha256(fileURL: url)
-        return try list().first { verifiedTrack(withDigest: digest, in: $0) != nil }
+    public func existingMeeting(containingAudioAt url: URL) async throws -> Meeting? {
+        let digest = try await BlockingFileWork.sha256(url)
+        return await verifiedMeeting(withDigest: digest, among: try list())
     }
 
-    private func verifiedTrack(withDigest digest: String, in meeting: Meeting) -> RecordingTrack? {
-        meeting.tracks.first { track in
-            guard track.sha256 == digest, let url = try? audioURL(for: track, in: meeting.id),
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true else { return false }
-            // A stale metadata digest must not prevent restoring a missing or externally modified original.
-            return (try? AudioDigest.sha256(fileURL: url)) == digest
+    /// The first of `candidates` (the library's conversations, as the caller has them) holding a
+    /// recording with this digest, checked against the file itself: a stale digest in the metadata
+    /// must not hide a missing or changed original. Only recordings that claim the digest are read.
+    public func verifiedMeeting(withDigest digest: String, among candidates: [Meeting]) async -> Meeting? {
+        for meeting in candidates where meeting.tracks.contains(where: { $0.sha256 == digest }) {
+            for track in meeting.tracks where track.sha256 == digest {
+                if await isVerified(track, digest: digest, in: meeting.id) { return meeting }
+            }
         }
+        return nil
+    }
+
+    /// The original exists and its bytes still have `digest`. The hashing happens off the actor.
+    private func isVerified(_ track: RecordingTrack, digest: String, in meetingID: UUID) async -> Bool {
+        guard track.sha256 == digest, let url = try? audioURL(for: track, in: meetingID),
+              let values = try? url.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true else { return false }
+        return (try? await BlockingFileWork.sha256(url)) == digest
     }
 
     @discardableResult public func moveToTrash(_ id: UUID) throws -> URL {
@@ -142,6 +213,8 @@ public actor MeetingStore {
         try LocalFiles.requireContained(destination, in: trash)
         guard !fm.fileExists(atPath: destination.path) else { throw LibraryError.trashedMeeting(id) }
         try fm.moveItem(at: source, to: destination)
+        cache[id] = nil
+        noteWrite(meetings); noteWrite(destination)
         return destination
     }
 
@@ -152,6 +225,8 @@ public actor MeetingStore {
         let destination = rootURL.appendingPathComponent("Meetings/\(id.uuidString)", isDirectory: true)
         try LocalFiles.requireContained(destination, in: rootURL.appendingPathComponent("Meetings", isDirectory: true))
         try fm.moveItem(at: source, to: destination)
+        cache[id] = nil
+        noteWrite(source.deletingLastPathComponent()); noteWrite(destination)
         return try load(id)
     }
 
@@ -159,12 +234,20 @@ public actor MeetingStore {
 
     private func preservingArtifacts(from stored: Meeting, in snapshot: Meeting) -> Meeting {
         var result = snapshot
-        result.tracks += stored.tracks.filter { track in !result.tracks.contains { $0.id == track.id } }
-        result.transcripts += stored.transcripts.filter { transcript in !result.transcripts.contains { $0.id == transcript.id } }
-        result.revisions += stored.revisions.filter { revision in !result.revisions.contains { $0.id == revision.id } }
-        result.revisions.sort { $0.date < $1.date }
+        // Appended only when something is missing, so an unchanged snapshot shares its arrays.
+        let trackIDs = Set(result.tracks.map(\.id))
+        let tracks = stored.tracks.filter { !trackIDs.contains($0.id) }
+        if !tracks.isEmpty { result.tracks += tracks }
+        let transcriptIDs = Set(result.transcripts.map(\.id))
+        let transcripts = stored.transcripts.filter { !transcriptIDs.contains($0.id) }
+        if !transcripts.isEmpty { result.transcripts += transcripts }
+        let revisionIDs = Set(result.revisions.map(\.id))
+        let revisions = stored.revisions.filter { !revisionIDs.contains($0.id) }
+        if !revisions.isEmpty { result.revisions += revisions }
+        if !zip(result.revisions, result.revisions.dropFirst()).allSatisfy({ $0.date <= $1.date }) { result.revisions.sort { $0.date < $1.date } }
         // Photos are originals too: a stale snapshot can't drop one (deleting one marks it instead).
-        let missingPhotos = (stored.photos ?? []).filter { photo in !(result.photos ?? []).contains { $0.id == photo.id } }
+        let photoIDs = Set((result.photos ?? []).map(\.id))
+        let missingPhotos = (stored.photos ?? []).filter { !photoIDs.contains($0.id) }
         if !missingPhotos.isEmpty { result.photos = (result.photos ?? []) + missingPhotos }
         return result
     }
@@ -176,9 +259,11 @@ public actor MeetingStore {
 
     /// Import is explicit: callers choose a new meeting or an existing one. Dates never imply linking.
     /// Original bytes are copied, hashed, and retained; source files are never moved or modified.
+    /// Copying and hashing run off the actor, so other conversations' saves don't wait for a long
+    /// recording; merging and saving happen together afterwards, with nothing in between.
     public func importAudio(from sourceURL: URL, into meeting: Meeting, source: AudioSource = .imported,
                             sidecarURL: URL? = nil, offset: TimeInterval? = nil,
-                            device: DeviceRecordingIdentity? = nil) throws -> Meeting {
+                            device: DeviceRecordingIdentity? = nil) async throws -> Meeting {
         let resource = try sourceURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         guard resource.isRegularFile == true, (resource.fileSize ?? 0) > 0 else { throw LibraryError.invalidAudio(sourceURL.lastPathComponent) }
         if let offset, !offset.isFinite { throw LibraryError.invalidTranscript }
@@ -190,25 +275,38 @@ public actor MeetingStore {
             sidecarHighlights = decoded.highlights
         } else { sidecarHighlights = [] }
         guard sidecarHighlights.allSatisfy({ $0.time.isFinite && $0.time >= 0 }) else { throw LibraryError.invalidHighlight }
-        var result = meeting
         let directory = try meetingDirectory(for: meeting.id)
-        if fm.fileExists(atPath: directory.appendingPathComponent("meeting.json").path) || fm.fileExists(atPath: directory.appendingPathComponent("meeting.recovery.json").path) {
-            let stored = try load(meeting.id)
-            result = stored.updatedAt > meeting.updatedAt ? preservingArtifacts(from: meeting, in: stored) : preservingArtifacts(from: stored, in: meeting)
-            // Highlights may also have been added while a previous import was in flight.
-            let other = stored.updatedAt > meeting.updatedAt ? meeting : stored
-            result.highlights += other.highlights.filter { mark in !result.highlights.contains { $0.id == mark.id } }
-        }
         let originals = directory.appendingPathComponent("Originals", isDirectory: true)
         try LocalFiles.requireContained(originals, in: directory)
         try LocalFiles.directory(originals)
         let staged = originals.appendingPathComponent(".import-\(UUID().uuidString)")
-        try fm.copyItem(at: sourceURL, to: staged)
         defer { try? fm.removeItem(at: staged) }
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
-        let hash = try AudioDigest.sha256(fileURL: staged)
+        let hash = try await BlockingFileWork.run { isCancelled in
+            try FileManager.default.copyItem(at: sourceURL, to: staged)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
+            return try AudioDigest.sha256(fileURL: staged, isCancelled: isCancelled)
+        }
+        let primary = directory.appendingPathComponent("meeting.json"), backup = directory.appendingPathComponent("meeting.recovery.json")
+        let hasMetadata = { self.fm.fileExists(atPath: primary.path) || self.fm.fileExists(atPath: backup.path) }
+        // Recordings that already claim these bytes are checked against their files, off the actor too.
+        let storedTracks = hasMetadata() ? try load(meeting.id).tracks : []
+        let claimed = (meeting.tracks + storedTracks).filter { $0.sha256 == hash }
+        var verified = Set<UUID>(), checked = Set<UUID>()
+        for track in claimed where checked.insert(track.id).inserted {
+            if await isVerified(track, digest: hash, in: meeting.id) { verified.insert(track.id) }
+        }
+        var result = meeting
+        if hasMetadata() {
+            let stored = try load(meeting.id)
+            result = stored.updatedAt > meeting.updatedAt ? preservingArtifacts(from: meeting, in: stored) : preservingArtifacts(from: stored, in: meeting)
+            // Highlights may also have been added while a previous import was in flight.
+            let other = stored.updatedAt > meeting.updatedAt ? meeting : stored
+            let highlightIDs = Set(result.highlights.map(\.id))
+            result.highlights += other.highlights.filter { !highlightIDs.contains($0.id) }
+        }
         let track: RecordingTrack
-        if let duplicate = verifiedTrack(withDigest: hash, in: result) {
+        // A recording that claimed these bytes while the copy was hashed is checked here (rarely).
+        if let duplicate = result.tracks.first(where: { $0.sha256 == hash && (verified.contains($0.id) || (!checked.contains($0.id) && isVerifiedNow($0, digest: hash, in: meeting.id))) }) {
             track = duplicate
             // The same bytes arriving from a recorder teach the library where they came from.
             if let device, duplicate.device == nil, let index = result.tracks.firstIndex(where: { $0.id == duplicate.id }) {
@@ -221,6 +319,7 @@ public actor MeetingStore {
             let relativePath = "Originals/\(filename)"
             let destination = try LocalFiles.relativeURL(relativePath, in: directory)
             try fm.moveItem(at: staged, to: destination)
+            noteWrite(destination)
             track = RecordingTrack(id: id, source: source, relativePath: relativePath,
                                    fileName: sourceURL.lastPathComponent, offset: offset, sha256: hash, device: device)
             result.tracks.append(track)
@@ -228,7 +327,10 @@ public actor MeetingStore {
         if let sidecar {
             let sidecarDigest = AudioDigest.sha256(data: sidecar)
             let sidecarDestination = originals.appendingPathComponent("\(track.id.uuidString).highlights-\(sidecarDigest).json")
-            if !fm.fileExists(atPath: sidecarDestination.path) { try LocalFiles.atomicWrite(sidecar, to: sidecarDestination) }
+            if !fm.fileExists(atPath: sidecarDestination.path) {
+                try LocalFiles.atomicWrite(sidecar, to: sidecarDestination)
+                noteWrite(sidecarDestination)
+            }
         }
         for highlight in sidecarHighlights where !result.highlights.contains(where: { $0.trackID == track.id && $0.time == highlight.time && $0.text == highlight.text }) {
             result.highlights.append(Highlight(trackID: track.id, time: highlight.time, text: highlight.text))
@@ -238,12 +340,47 @@ public actor MeetingStore {
         return result
     }
 
+    /// The same check, on the actor: only for a recording that appeared during an import's await.
+    private func isVerifiedNow(_ track: RecordingTrack, digest: String, in meetingID: UUID) -> Bool {
+        guard let url = try? audioURL(for: track, in: meetingID),
+              let values = try? url.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true else { return false }
+        return (try? AudioDigest.sha256(fileURL: url)) == digest
+    }
+
     public func updateNotes(_ notes: String, for id: UUID) throws -> Meeting {
         var meeting = try load(id); meeting.setNotes(notes); try save(meeting); return meeting
     }
 
     public func correctSegment(_ segmentID: UUID, text: String, in meetingID: UUID) throws -> Meeting {
         var meeting = try load(meetingID); meeting.correctSegment(id: segmentID, text: text); try save(meeting); return meeting
+    }
+
+    // MARK: Durability
+
+    /// The durability barrier: flushes every file and folder this store wrote since the last barrier
+    /// to permanent storage (`DurableFiles.synchronize`). Run before deleting what could recover them
+    /// (a recording's staging folder) or acknowledging a sync pass; ordinary saves aren't flushed.
+    public func synchronizeWrites() async throws {
+        // Deepest first, so the library folder itself, flushed last, carries the drive-cache flush.
+        let pending = unsynchronized.sorted { $0.path.count > $1.path.count }
+        guard !pending.isEmpty else { return }
+        unsynchronized.removeAll()
+        do { try await BlockingFileWork.run { _ in try DurableFiles.synchronize(pending) } }
+        catch { unsynchronized.formUnion(pending); throw error }
+    }
+
+    /// What the next barrier will flush (tests).
+    var unsynchronizedWrites: Set<URL> { unsynchronized }
+
+    /// Remembers a file or folder this store wrote, and the folders above it within the library,
+    /// for the next barrier: a rename is durable only once its folder is.
+    func noteWrite(_ url: URL) {
+        var current = url.standardizedFileURL
+        unsynchronized.insert(current)
+        while current.path.count > rootURL.path.count, current.path.hasPrefix(rootURL.path) {
+            current.deleteLastPathComponent()
+            unsynchronized.insert(current)
+        }
     }
 
     private func validate(_ meeting: Meeting, expectedID: UUID) throws {
@@ -260,8 +397,10 @@ public actor MeetingStore {
             guard track.offset?.isFinite != false, track.duration?.isFinite != false,
                   track.duration == nil || track.duration! >= 0 else { throw LibraryError.invalidTranscript }
         }
-        for segment in meeting.transcripts.flatMap(\.segments) {
-            guard segment.start.isFinite, segment.end.isFinite, segment.start >= 0, segment.end >= segment.start else { throw LibraryError.invalidTranscript }
+        for transcript in meeting.transcripts {
+            for segment in transcript.segments {
+                guard segment.start.isFinite, segment.end.isFinite, segment.start >= 0, segment.end >= segment.start else { throw LibraryError.invalidTranscript }
+            }
         }
         for transcript in meeting.transcripts {
             guard transcript.knownOffset?.isFinite != false else { throw LibraryError.invalidTranscript }

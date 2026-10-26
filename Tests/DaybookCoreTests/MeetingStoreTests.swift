@@ -243,4 +243,103 @@ final class MeetingStoreTests: XCTestCase {
         let found = try await store.existingMeeting(containingAudioAt: source)
         XCTAssertEqual(found?.id, first.id)
     }
+
+    func testSavesReuseTheStoredVersionUntilAnotherWriterChangesTheFile() async throws {
+        let store = try MeetingStore(rootURL: root)
+        var meeting = Meeting(title: "Long conversation")
+        try await store.save(meeting)
+        for index in 0..<20 {
+            meeting.notes = "Typing \(index)"
+            try await store.save(meeting)
+        }
+        var reads = await store.metadataReads
+        XCTAssertEqual(reads, 0, "An unchanged meeting.json is never read back to save the next snapshot")
+        // Another writer (a second store, an older Daybook) changes the file: the next save reads it once.
+        let source = root.appendingPathComponent("voice.wav")
+        try Data("audio from elsewhere".utf8).write(to: source)
+        let imported = try await MeetingStore(rootURL: root).importAudio(from: source, into: meeting)
+        meeting.notes = "Typing continued"
+        try await store.save(meeting)
+        reads = await store.metadataReads
+        XCTAssertEqual(reads, 1)
+        let stored = try await store.load(meeting.id)
+        XCTAssertEqual(stored.tracks.map(\.id), imported.tracks.map(\.id), "The other writer's recording is kept")
+        XCTAssertEqual(stored.notes, "Typing continued")
+        reads = await store.metadataReads
+        XCTAssertEqual(reads, 1)
+    }
+
+    func testAnUnchangedSnapshotWritesNothing() async throws {
+        let store = try MeetingStore(rootURL: root)
+        let meeting = Meeting(title: "Quiet")
+        try await store.save(meeting)
+        let primary = root.appendingPathComponent("Meetings/\(meeting.id)/meeting.json")
+        let before = try FileManager.default.attributesOfItem(atPath: primary.path)[.systemFileNumber] as? Int
+        try await store.save(meeting)
+        try await store.save(meeting)
+        let writes = await store.metadataWrites
+        XCTAssertEqual(writes, 1)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: primary.path)[.systemFileNumber] as? Int, before)
+    }
+
+    func testTheRecoveryCopyIsThePreviousSnapshotAndFilesAreCompact() async throws {
+        let store = try MeetingStore(rootURL: root)
+        var meeting = Meeting(title: "Versions", notes: "First")
+        try await store.save(meeting)
+        meeting.notes = "Second"
+        try await store.save(meeting)
+        meeting.notes = "Third"
+        try await store.save(meeting)
+        let folder = root.appendingPathComponent("Meetings/\(meeting.id)")
+        let primary = try Data(contentsOf: folder.appendingPathComponent("meeting.json"))
+        let backup = try Data(contentsOf: folder.appendingPathComponent("meeting.recovery.json"))
+        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: primary).notes, "Third")
+        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: backup).notes, "Second")
+        XCTAssertFalse(String(decoding: primary, as: UTF8.self).contains("\n"), "Compact JSON")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix(".") }
+        XCTAssertEqual(leftovers, [], "No temporary files stay behind")
+    }
+
+    func testReadsThePrettyPrintedFilesEarlierVersionsWrote() async throws {
+        let meeting = Meeting(title: "Written by 0.3", notes: "Kept")
+        let folder = root.appendingPathComponent("Meetings/\(meeting.id)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(meeting).write(to: folder.appendingPathComponent("meeting.json"))
+        try encoder.encode(meeting).write(to: folder.appendingPathComponent("meeting.recovery.json"))
+        let store = try MeetingStore(rootURL: root)
+        let loaded = try await store.list()
+        XCTAssertEqual(loaded, [meeting])
+        var edited = meeting
+        edited.notes = "Edited here"
+        try await store.save(edited)
+        let backup = try Data(contentsOf: folder.appendingPathComponent("meeting.recovery.json"))
+        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: backup).notes, "Kept", "The earlier file became the recovery copy")
+    }
+
+    func testALongImportDoesNotHoldUpOtherSavesAndStopsWhenCancelled() async throws {
+        let store = try MeetingStore(rootURL: root)
+        // A sparse two-gigabyte "recording": no disk space, but hashing it takes a while.
+        let source = root.appendingPathComponent("long.wav")
+        FileManager.default.createFile(atPath: source.path, contents: Data("RIFF".utf8))
+        let handle = try FileHandle(forWritingTo: source)
+        try handle.truncate(atOffset: 2 << 30)
+        try handle.close()
+        let target = Meeting(title: "Long import")
+        try await store.save(target)
+        let importing = Task { try await store.importAudio(from: source, into: target) }
+        try await Task.sleep(for: .milliseconds(100))
+        let started = Date()
+        var other = Meeting(title: "Edited meanwhile")
+        try await store.save(other)
+        other.notes = "Saved while the import hashed"
+        try await store.save(other)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "Saves don't wait for the import")
+        importing.cancel()
+        do { _ = try await importing.value; XCTFail("A cancelled import finished") } catch is CancellationError { }
+        let originals = root.appendingPathComponent("Meetings/\(target.id.uuidString)/Originals")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: originals.path), [], "Nothing staged is left behind")
+        let stored = try await store.load(target.id)
+        XCTAssertTrue(stored.tracks.isEmpty)
+    }
 }

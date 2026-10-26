@@ -31,7 +31,9 @@ struct TranscriptPage: View {
 
     var body: some View {
         @Bindable var session = session
-        let marks = BookmarkMarks(meeting: meeting)
+        // Worked out once per version of the conversation, not at every redraw.
+        let layout = TranscriptLayout.cached(for: meeting)
+        let marks = layout.marks
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -46,7 +48,7 @@ struct TranscriptPage: View {
                             EmptyTranscript(library: library, meeting: meeting, play: play).id("empty")
                         }
                     }
-                    ForEach(TranscriptRow.rows(in: meeting)) { row in
+                    ForEach(TranscriptRow.rows(from: layout.blocks)) { row in
                         rowView(row, playing: playing, marks: marks)
                     }
                 }
@@ -193,7 +195,8 @@ struct TranscriptPage: View {
     /// The passage under the playhead, in the recording that is playing; state changes only when it does.
     private func followPlayhead() {
         let here = player.meetingID == meeting.id && player.phase == .ready
-        let id = here ? player.trackID.flatMap { TranscriptFollow.segmentID(at: player.position, trackID: $0, in: meeting) } : nil
+        let playhead = TranscriptLayout.cached(for: meeting).playhead
+        let id = here ? player.trackID.flatMap { playhead.segmentID(at: player.position, trackID: $0) } : nil
         if id != playing { playing = id }
         let caption = here ? SavedCaptions.shown(captions, for: meeting).flatMap {
             SavedCaptions.playing(at: player.position, trackID: player.trackID, captions: $0, in: meeting)
@@ -224,8 +227,10 @@ enum TranscriptRow: Identifiable, Equatable {
         }
     }
 
-    static func rows(in meeting: Meeting) -> [TranscriptRow] {
-        TranscriptBlock.blocks(in: meeting).flatMap { block -> [TranscriptRow] in
+    static func rows(in meeting: Meeting) -> [TranscriptRow] { rows(from: TranscriptBlock.blocks(in: meeting)) }
+
+    static func rows(from blocks: [TranscriptBlock]) -> [TranscriptRow] {
+        blocks.flatMap { block -> [TranscriptRow] in
             switch block {
             case .turn(_, let speakerID, let segments):
                 guard let first = segments.first else { return [] }

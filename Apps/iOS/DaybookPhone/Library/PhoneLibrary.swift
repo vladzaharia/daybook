@@ -197,7 +197,7 @@ final class PhoneLibrary {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         // Copy first: a file shared from another app may vanish when its provider says so.
-        let staged = try stage(url)
+        let staged = try await stage(url)
         defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
         let duration = try await Self.duration(of: staged)
         await controller.acquireLock()
@@ -236,18 +236,30 @@ final class PhoneLibrary {
         return Filed(meeting: meeting, request: request)
     }
 
-    private func stage(_ url: URL) throws -> URL {
+    /// Copies a shared file into staging. The coordinated read can wait on its File Provider (iCloud
+    /// Drive downloading it, another app writing it), and the copy can be long, so both happen on a
+    /// queue of their own, never the main actor.
+    private func stage(_ url: URL) async throws -> URL {
         let folder = importsURL.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let copy = folder.appendingPathComponent(url.lastPathComponent.isEmpty ? "Recording.m4a" : url.lastPathComponent)
-        var coordinationError: NSError?
-        var copyError: Error?
-        NSFileCoordinator().coordinate(readingItemAt: url, options: [.withoutChanges], error: &coordinationError) { readable in
-            do { try FileManager.default.copyItem(at: readable, to: copy) } catch { copyError = error }
+        let intent = NSFileAccessIntent.readingIntent(with: url, options: [.withoutChanges])
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            NSFileCoordinator().coordinate(with: [intent], queue: Self.stagingQueue) { error in
+                if let error { continuation.resume(throwing: error); return }
+                do { try FileManager.default.copyItem(at: intent.url, to: copy); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }
         }
-        if let error = coordinationError ?? copyError { throw error }
         return copy
     }
+
+    private static let stagingQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Daybook imports"
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
 
     /// The file's length, which also checks that it's audio iOS can read.
     static func duration(of url: URL) async throws -> TimeInterval {

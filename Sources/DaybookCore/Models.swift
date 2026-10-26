@@ -361,7 +361,9 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         summary = value; updatedAt = Date()
     }
     @discardableResult public mutating func applyFusion(_ result: FusionResult) -> [CorrectionTransferIssue] {
-        let transferred = CorrectionTransfer.apply(to: result.segments, in: self)
+        applyFusion(result, transferred: CorrectionTransfer.apply(to: result.segments, in: self))
+    }
+    @discardableResult mutating func applyFusion(_ result: FusionResult, transferred: CorrectionTransfer.Result) -> [CorrectionTransferIssue] {
         unifiedTranscript = transferred.segments
         correctionTransferIssues = transferred.issues.isEmpty ? nil : transferred.issues
         alignmentReports = result.alignments; updatedAt = Date()

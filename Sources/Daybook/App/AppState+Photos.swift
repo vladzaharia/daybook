@@ -135,20 +135,50 @@ extension AppState {
 
     // MARK: Reading photos
 
-    /// Returns how many photos it read.
+    /// Returns how many photos it read. A photo that couldn't be read waits before it's tried again
+    /// (`photoBackoff`), and is left out until then; the others are read.
     @discardableResult
     func readPhotos(_ id: UUID, engine: any ProcessingEngine, progress: @escaping ProcessingProgressHandler) async throws -> Int {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return 0 }
         let inputs = meeting.visiblePhotos.compactMap { photo -> PhotoProcessingInput? in
             let url = photoURL(photo, in: id)
-            return FileManager.default.fileExists(atPath: url.path) ? PhotoProcessingInput(photo: photo, url: url) : nil
+            guard photoBackoff.mayRead(photo.id), FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return PhotoProcessingInput(photo: photo, url: url)
         }
         guard !inputs.isEmpty else { return 0 }
         let output = try await engine.describePhotos(meeting, photos: inputs, progress: progress)
         try Task.checkCancellation()
+        for (photoID, reason) in output.failures { photoBackoff.failed(photoID, reason: reason) }
+        for photoID in output.analyses.keys { photoBackoff.read(photoID) }
         update(id) { $0.applyPhotoAnalyses(output.analyses) }
-        for message in output.notices { notice = message }
+        post(output.notices)
+        if !output.failures.isEmpty { schedulePhotoRetry() }
         return output.analyses.count
+    }
+
+    /// Whether a photo still needs reading now: it has no reading (or the chosen caption model's),
+    /// and it isn't waiting after a failure.
+    func needsPhotoReading(_ photo: MeetingPhoto) -> Bool {
+        InferenceProcessingEngine.needsReading(photo, captionModel: photoModel) && photoBackoff.mayRead(photo.id)
+    }
+
+    /// After a sync pass, or once a failed photo's wait is over: conversations with photos that were
+    /// never read, and may be now, queue a reading. Nothing else is read again.
+    func requeueUnreadPhotos() {
+        for meeting in meetings where meeting.visiblePhotos.contains(where: { $0.analysis == nil && photoBackoff.mayRead($0.id) }) {
+            readPhotosWhenIdle(meeting.id)
+        }
+    }
+
+    /// Wakes when the soonest failed photo may be tried again.
+    func schedulePhotoRetry() {
+        photoRetry?.cancel()
+        let waiting = meetings.flatMap { meeting in meeting.visiblePhotos.filter { $0.analysis == nil }.map(\.id) }
+        guard let next = photoBackoff.nextRetry(among: waiting) else { return }
+        photoRetry = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(max(1, next.timeIntervalSinceNow))) } catch { return }
+            self?.requeueUnreadPhotos()
+        }
     }
 
     /// Photos that arrive after a conversation was summarized (added here, or synced from the iPhone)
@@ -165,8 +195,7 @@ extension AppState {
               downloadingID == nil, readingPhotoID == nil else { return }
         guard let id = pendingPhotoReadings.sorted(by: { $0.uuidString < $1.uuidString }).first(where: { $0 != recordingID }) else { return }
         pendingPhotoReadings.remove(id)
-        guard let meeting = meetings.first(where: { $0.id == id }),
-              meeting.visiblePhotos.contains(where: { InferenceProcessingEngine.needsReading($0, captionModel: photoModel) }) else {
+        guard let meeting = meetings.first(where: { $0.id == id }), meeting.visiblePhotos.contains(where: needsPhotoReading) else {
             readNextPhotosWhenIdle()
             return
         }

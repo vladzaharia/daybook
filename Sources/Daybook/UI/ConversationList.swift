@@ -79,7 +79,8 @@ struct ConversationList: View {
     // MARK: Search
 
     private var results: some View {
-        let hits = LibrarySearch.hits(in: state.meetings, text: state.search, tokens: state.searchTokens, scope: state.searchScope)
+        let hits = state.searchHits
+        let byID = Dictionary(state.meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return List(selection: Binding(get: { state.selectedID }, set: { id in open(id, in: hits) })) {
             Picker("Search in", selection: $state.searchScope) {
                 Text("All").tag(SearchScope.all)
@@ -100,7 +101,7 @@ struct ConversationList: View {
             .listRowInsets(EdgeInsets())
             .padding(.horizontal, -6.5)
             ForEach(hits) { hit in
-                if let meeting = state.meetings.first(where: { $0.id == hit.meetingID }) {
+                if let meeting = byID[hit.meetingID] {
                     SearchResultRow(meeting: meeting, hit: hit).tag(hit.meetingID).listRowSeparator(.hidden)
                 }
             }
@@ -135,7 +136,7 @@ struct ConversationList: View {
     /// Says something only while work is happening.
     private var subtitle: String {
         if state.isSearching {
-            let count = LibrarySearch.hits(in: state.meetings, text: state.search, tokens: state.searchTokens, scope: state.searchScope).count
+            let count = state.searchHits.count
             return count == 1 ? "1 result" : "\(count) results"
         }
         if state.multiSelection.count > 1 { return "\(state.multiSelection.count) selected" }

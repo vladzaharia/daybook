@@ -4,22 +4,30 @@ import DaybookKit
 import SwiftUI
 
 /// The evidence behind the page: who said what, with your notes and bookmarks at their times.
+///
+/// The page doesn't observe the player, which publishes its position ten times a second: it keeps
+/// the passage under the playhead in its own state and redraws when that passage changes. Blocks,
+/// bookmark marks, and the playhead index are worked out once per version of the conversation
+/// (`TranscriptLayout`).
 struct TranscriptPage: View {
     @ObservedObject var state: AppState
-    @ObservedObject var player: AudioPlaybackController
+    let player: AudioPlaybackController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     @State private var editing: UUID?
     @State private var draft = ""
     @State private var lastUserScroll = Date.distantPast
     @State private var followSuspended = false
+    @State private var playing: UUID?
+    @State private var isPlaying = false
+    @State private var playerShown = false
     @Environment(\.readingScale) private var scale
 
     var body: some View {
-        let playing = playingSegmentID
-        let marks = BookmarkMarks(meeting: meeting)
+        let layout = TranscriptLayout.cached(for: meeting)
+        let marks = layout.marks
         ScrollViewReader { proxy in
-            PageScroll(lazy: true, bottomInset: player.meetingID == meeting.id && player.duration > 0 ? 56 : 0) {
+            PageScroll(lazy: true, bottomInset: playerShown ? 56 : 0) {
                 PageHeader(state: state, player: player, meeting: meeting, play: play)
                 notices
                 if meeting.unifiedTranscript.isEmpty {
@@ -29,7 +37,7 @@ struct TranscriptPage: View {
                     }
                     .padding(.top, Space.s5)
                 }
-                ForEach(TranscriptBlock.blocks(in: meeting)) { block in
+                ForEach(layout.blocks) { block in
                     switch block {
                     case .turn(_, let speakerID, let segments):
                         TurnView(state: state, meeting: meeting, speakerID: speakerID, segments: segments, playingID: playing,
@@ -47,11 +55,11 @@ struct TranscriptPage: View {
             .onScrollPhaseChange { _, phase in
                 if phase == .interacting || phase == .decelerating {
                     lastUserScroll = Date()
-                    if player.isPlaying && player.meetingID == meeting.id { followSuspended = true }
+                    if isPlaying { followSuspended = true }
                 }
             }
             .overlay(alignment: .topTrailing) {
-                if followSuspended && player.isPlaying, let playing {
+                if followSuspended && isPlaying, let playing {
                     Button {
                         lastUserScroll = .distantPast
                         followSuspended = false
@@ -74,12 +82,15 @@ struct TranscriptPage: View {
             .onChange(of: state.pageScrollTarget) { _, _ in scrollToTarget(proxy) }
             .onChange(of: playing) { _, id in
                 // Follow playback only while the person isn't reading elsewhere.
-                guard let id, player.isPlaying else { return }
+                guard let id, isPlaying else { return }
                 if Date().timeIntervalSince(lastUserScroll) > 5 { followSuspended = false }
                 guard !followSuspended else { return }
                 withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: 0.33)) }
             }
         }
+        .onReceive(player.objectWillChange.receive(on: RunLoop.main)) { _ in followPlayhead(layout) }
+        .onAppear { followPlayhead(layout) }
+        .onChange(of: meeting) { _, _ in followPlayhead(TranscriptLayout.cached(for: meeting)) }
     }
 
     @ViewBuilder private var notices: some View {
@@ -120,75 +131,13 @@ struct TranscriptPage: View {
         }
     }
 
-    /// The passage under the playhead, matched in the recording that is playing.
-    private var playingSegmentID: UUID? {
-        guard player.meetingID == meeting.id, let trackID = player.trackID, player.duration > 0 else { return nil }
-        let position = player.position
-        return meeting.unifiedTranscript.first { segment in
-            if let source = segment.provenance.first(where: { $0.trackID == trackID }) { return (source.start...max(source.start, source.end)).contains(position) }
-            guard segment.trackID == trackID else { return false }
-            let offset = meeting.tracks.first { $0.id == trackID }?.offset ?? 0
-            return (segment.start...max(segment.start, segment.end)).contains(position + offset)
-        }?.id
-    }
-}
-
-enum TranscriptBlock: Identifiable {
-    case turn(id: String, speakerID: String?, segments: [TranscriptSegment])
-    case note(TimedNote)
-    /// A photo at the moment it was taken.
-    case photo(MeetingPhoto, Double)
-
-    var id: String {
-        switch self {
-        case .turn(let id, _, _): return "turn:" + id
-        case .note(let note): return "note:\(note.id)"
-        case .photo(let photo, _): return "photo:\(photo.id)"
-        }
-    }
-
-    /// Consecutive passages from one speaker read as a single turn; timed notes sit at their times.
-    static func blocks(in meeting: Meeting) -> [TranscriptBlock] {
-        var blocks: [TranscriptBlock] = []
-        for item in MeetingTimelineItem.items(in: meeting) {
-            switch item {
-            case .speech(let segment):
-                if case .turn(let id, let speaker, var segments)? = blocks.last, speaker == segment.speakerID {
-                    segments.append(segment)
-                    blocks[blocks.count - 1] = .turn(id: id, speakerID: speaker, segments: segments)
-                } else {
-                    blocks.append(.turn(id: segment.id.uuidString, speakerID: segment.speakerID, segments: [segment]))
-                }
-            case .note(let note): blocks.append(.note(note))
-            case .photo(let photo, let time): blocks.append(.photo(photo, time))
-            case .highlight: break
-            }
-        }
-        return blocks
-    }
-}
-
-/// Where bookmarks fall: the passage that holds each one, and the label it shows above it.
-/// Only the holder is marked; a wash over the passages around it would cover a short conversation whole.
-struct BookmarkMarks {
-    var bookmarksBySegment: [UUID: [Highlight]] = [:]
-    var labelSegments: [UUID: String] = [:]
-    /// The passage that holds a bookmark gets the amber rule.
-    var holders: Set<UUID> { Set(bookmarksBySegment.keys) }
-
-    init(meeting: Meeting) {
-        let segments = meeting.unifiedTranscript
-        for highlight in meeting.highlights {
-            guard let time = meeting.alignedTime(for: highlight) else { continue }
-            if let holder = segments.last(where: { $0.start <= time + 0.01 }) ?? segments.first {
-                bookmarksBySegment[holder.id, default: []].append(highlight)
-            }
-            let label = highlight.text.trimmingCharacters(in: .whitespaces)
-            if let holder = segments.last(where: { $0.start <= time + 0.01 }) ?? segments.first,
-               !label.isEmpty, !["Marked moment", "Marked during review"].contains(label), labelSegments[holder.id] == nil {
-                labelSegments[holder.id] = label
-            }
-        }
+    /// The passage under the playhead, in the recording that is playing; state changes only when it does.
+    private func followPlayhead(_ layout: TranscriptLayout) {
+        let here = player.meetingID == meeting.id && player.duration > 0
+        let id = here ? player.trackID.flatMap { layout.playhead.segmentID(at: player.position, trackID: $0) } : nil
+        if id != playing { playing = id }
+        if (here && player.isPlaying) != isPlaying { isPlaying = here && player.isPlaying }
+        if here != playerShown { playerShown = here }
     }
 }
 

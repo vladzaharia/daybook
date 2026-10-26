@@ -94,6 +94,9 @@ extension AppState {
         case unavailable
         /// Compared; the aligner found no match.
         case noMatch
+        /// The comparison couldn't run (a recording unreadable, or the work cancelled): nothing was
+        /// learned, so it's tried again later rather than counted as no match.
+        case failed(String)
         /// The recording's placement on the conversation's timeline, with the aligner's confidence.
         case match(SourceAlignment)
     }
@@ -109,7 +112,9 @@ extension AppState {
         let radius = reliableClock && expected != nil ? sources.policy.clockSearchRadius
             : max(sources.policy.fileSearchRadius, duration ?? 0, reference.duration ?? 0)
         let align = sources.alignAudio
-        let result = await Task.detached(priority: .userInitiated) { try? align(url, referenceURL, expected, radius) }.value
+        let result: AudioAlignment?
+        do { result = try await detachedWork(priority: .userInitiated) { try align(url, referenceURL, expected, radius) } }
+        catch { return .failed(error.localizedDescription) }
         guard let sound = result, sound.offset.isFinite, sound.rate.isFinite, sound.rate > 0, sound.confidence.isFinite else { return .noMatch }
         let composed = SourcePlacement.compose(sound, onto: placement)
         return .match(SourceAlignment(method: .audio, offset: composed.offset, rate: composed.rate, confidence: sound.confidence,
@@ -332,7 +337,7 @@ extension AppState {
             if let url = await audioURL(for: track, meetingID: id) {
                 switch await compareSound(of: url, duration: track.duration, in: id, clockOffset: pending.clockOffset,
                                           reliableClock: pending.clockOffset != nil, excluding: unplaced.union([track.id])) {
-                case .unavailable: break
+                case .unavailable, .failed: break
                 case .noMatch: compared = true
                 case .match(let found):
                     compared = true

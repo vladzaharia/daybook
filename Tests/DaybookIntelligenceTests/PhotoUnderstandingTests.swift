@@ -254,6 +254,67 @@ final class PhotoUnderstandingTests: XCTestCase {
         XCTAssertTrue(InferenceProcessingEngine.needsReading(analysed, captionModel: "gemma-4/e2b-4bit"), "a new caption model reads it again")
     }
 
+    func testOneUnreadablePhotoIsAFailureOfItsOwnAndTheOthersAreRead() async throws {
+        let inference = Scripted()
+        inference.vision = [ImageDescription(caption: "Slide", recognizedText: "Q3", labels: ["slide"], sharpness: 0.7),
+                            ImageDescription(failure: "The file isn’t an image.")]
+        var meeting = Meeting(title: "Planning")
+        let photos = [photo(5), photo(9)]
+        meeting.photos = photos
+        let engine = InferenceProcessingEngine(inference: inference, configuration: configuration(photoModel: nil))
+        let output = try await engine.describePhotos(meeting, photos: photos.map { PhotoProcessingInput(photo: $0, url: folder) }, progress: { _ in })
+        XCTAssertEqual(Set(output.analyses.keys), [photos[0].id])
+        XCTAssertEqual(output.failures, [photos[1].id: "The file isn’t an image."])
+        XCTAssertEqual(output.notices, ["A photo couldn’t be read: The file isn’t an image."])
+
+        // Vision unable to run at all: every photo waiting is a failure, to be tried later.
+        struct Unavailable: LocalizedError { var errorDescription: String? { "Vision is unavailable" } }
+        final class Broken: MeetingInference, @unchecked Sendable {
+            func transcribe(url: URL, model: ModelReference, glossary: [String], progress: @escaping IntelligenceProgressHandler) async throws -> RecognitionResult { throw Unavailable() }
+            func diarize(url: URL, model: ModelReference, options: SpeakerAnalysisOptions, progress: @escaping IntelligenceProgressHandler) async throws -> SpeakerAnalysis { throw Unavailable() }
+            func summarize(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,
+                           templateInstructions: String?, highlightEvidence: String?, progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes { throw Unavailable() }
+            func describeImages(_ requests: [ImageDescriptionRequest], model: ModelReference,
+                                progress: @escaping IntelligenceProgressHandler) async throws -> [ImageDescription] { throw Unavailable() }
+        }
+        let none = try await InferenceProcessingEngine(inference: Broken(), configuration: configuration(photoModel: nil))
+            .describePhotos(meeting, photos: photos.map { PhotoProcessingInput(photo: $0, url: folder) }, progress: { _ in })
+        XCTAssertEqual(Set(none.failures.keys), Set(photos.map(\.id)))
+        XCTAssertTrue(none.analyses.isEmpty)
+    }
+
+    func testACaptionModelThatFailedIsntTriedAgainForThosePhotosUntilItChanges() async throws {
+        let inference = Scripted()
+        inference.captionFails = true
+        inference.vision = [ImageDescription(caption: "Document · “Agenda”", recognizedText: "Agenda", labels: ["document"], sharpness: 0.7)]
+        var meeting = Meeting(title: "Planning")
+        var only = photo(5)
+        meeting.photos = [only]
+        let model = ModelReference("gemma-4/e4b-4bit", revision: "abc")
+        let output = try await InferenceProcessingEngine(inference: inference, configuration: configuration(photoModel: model))
+            .describePhotos(meeting, photos: [PhotoProcessingInput(photo: only, url: folder)], progress: { _ in })
+        only.analysis = output.analyses[only.id]
+        XCTAssertEqual(only.analysis?.settings?.parameters["captionFailed"], "gemma-4/e4b-4bit@abc")
+        XCTAssertFalse(InferenceProcessingEngine.needsReading(only, captionModel: model), "Not at every pass")
+        XCTAssertTrue(InferenceProcessingEngine.needsReading(only, captionModel: ModelReference("gemma-4/e4b-4bit", revision: "newer")))
+        XCTAssertTrue(InferenceProcessingEngine.needsReading(only, captionModel: "gemma-4/e2b-4bit"))
+    }
+
+    func testAppleVisionReadsTheRestOfABatchAroundAnUnreadableFile() async throws {
+        let good = try file(whiteboard(["LAUNCH PLAN"]), "good.jpg")
+        let broken = folder.appendingPathComponent("broken.jpg")
+        try Data("not an image at all".utf8).write(to: broken)
+        let reader = try await AppleVisionEngine().load(ModelInstallation(receipt: ModelInstallReceipt(
+            model: try XCTUnwrap(ModelCatalog.builtIn.model("apple-vision/system")), revision: ModelRevisionEntry(id: "system", artifacts: []),
+            installedAt: Date()), directory: folder), role: .imageDescription, progress: { _ in })
+        let describer = try XCTUnwrap(reader as? any DescribingImages)
+        let results = try await describer.describe([broken, good].map { ImageDescriptionRequest(url: $0) }, progress: { _ in })
+        XCTAssertEqual(results.count, 2)
+        XCTAssertNotNil(results[0].failure)
+        XCTAssertNil(results[1].failure)
+        XCTAssertNotNil(results[1].sharpness)
+    }
+
     func testTheSummaryGetsTheCandidatesAndKeepsOnlyValidPlacementsWithTheTimeFallback() async throws {
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         let mic = RecordingTrack(source: .microphone, relativePath: "Originals/a.m4a", fileName: "a.m4a", duration: 600, offset: 0,

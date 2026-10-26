@@ -18,6 +18,37 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(library.rootURL.path, root.standardizedFileURL.path)
     }
 
+    func testImportingAFileThatsBusyElsewhereDoesNotHoldUpTheMainActor() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root.appendingPathComponent("library"), installation: "INSTALL-1")
+        try await library.reload()
+        let file = root.appendingPathComponent("Voice memo.caf")
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000)!
+        buffer.frameLength = 8_000
+        try AVAudioFile(forWriting: file, settings: format.settings).write(from: buffer)
+        // Another writer (a File Provider downloading it) holds the file for a moment.
+        let released = Date().addingTimeInterval(0.6)
+        let writing = expectation(description: "the writer took the file")
+        DispatchQueue.global().async {
+            NSFileCoordinator().coordinate(writingItemAt: file, options: [], error: nil) { _ in
+                writing.fulfill()
+                Thread.sleep(until: released)
+            }
+        }
+        await fulfillment(of: [writing], timeout: 5)
+        var mainActorRan: Date?
+        let ticker = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(100))
+            mainActorRan = Date()
+        }
+        let filed = try await library.importFile(file, requestTranscription: false)
+        await ticker.value
+        XCTAssertEqual(filed.meeting.tracks.count, 1)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(released), 0, "The import waited for the writer")
+        XCTAssertLessThan(try XCTUnwrap(mainActorRan), released, "The main actor kept running while the import waited")
+    }
+
     func testFilingRetainsRecoveryDataWhenJoinedNotesCannotBeSaved() async throws {
         let root = try temporaryDirectory()
         let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")

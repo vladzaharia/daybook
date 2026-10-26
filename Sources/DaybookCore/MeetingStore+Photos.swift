@@ -47,11 +47,11 @@ extension MeetingStore {
     /// Copies an image into a conversation's folder as an original (`Originals/Photos/<id>.<ext>`),
     /// hashing the copy. The source is never moved or changed. The same bytes already in the
     /// conversation return that photo instead of a second copy. The caller adds the returned photo
-    /// to the conversation (`Meeting.addPhoto`) and saves it.
+    /// to the conversation (`Meeting.addPhoto`) and saves it. Copying and hashing run off the actor.
     public func storePhoto(from sourceURL: URL, in meeting: Meeting, id: UUID = UUID(), fileName: String? = nil,
                            capturedAt: Date, capturedAtSource: PhotoCaptureDateSource, trackID: UUID? = nil,
                            time: TimeInterval? = nil, origin: PhotoOrigin? = nil,
-                           pixelSize: (width: Int, height: Int)? = nil) throws -> MeetingPhoto {
+                           pixelSize: (width: Int, height: Int)? = nil) async throws -> MeetingPhoto {
         let fm = FileManager.default
         let name = fileName ?? sourceURL.lastPathComponent
         let values = try sourceURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
@@ -64,20 +64,23 @@ extension MeetingStore {
         try LocalFiles.requireContained(folder, in: directory)
         try LocalFiles.directory(folder)
         let staged = folder.appendingPathComponent(".import-\(UUID().uuidString)")
-        try fm.copyItem(at: sourceURL, to: staged)
         defer { try? fm.removeItem(at: staged) }
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
-        let digest = try AudioDigest.sha256(fileURL: staged)
+        let digest = try await BlockingFileWork.run { isCancelled in
+            try FileManager.default.copyItem(at: sourceURL, to: staged)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
+            return try AudioDigest.sha256(fileURL: staged, isCancelled: isCancelled)
+        }
         if let existing = (meeting.photos ?? []).first(where: { $0.sha256 == digest }),
            let url = try? LocalFiles.relativeURL(existing.relativePath, in: directory),
            (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
-           (try? AudioDigest.sha256(fileURL: url)) == digest {
+           (try? await BlockingFileWork.sha256(url)) == digest {
             return existing
         }
         let relativePath = MeetingPhoto.relativePath(id: id, extension: format.fileExtension)
         let destination = try LocalFiles.relativeURL(relativePath, in: directory)
         guard !fm.fileExists(atPath: destination.path) else { throw LibraryError.unsafePath(relativePath) }
         try fm.moveItem(at: staged, to: destination)
+        noteWrite(destination)
         return MeetingPhoto(id: id, relativePath: relativePath, fileName: name, sha256: digest, contentType: format.contentType,
                             byteCount: values.fileSize, pixelWidth: pixelSize?.width, pixelHeight: pixelSize?.height,
                             capturedAt: capturedAt, capturedAtSource: capturedAtSource, trackID: trackID, time: time, origin: origin)
