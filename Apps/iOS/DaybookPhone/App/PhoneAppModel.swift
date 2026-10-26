@@ -412,7 +412,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         multipoint = session
         let timing = LinkTiming(startedAt: recorder.startedAt, elapsed: recorder.elapsedTime,
                                 clockOffset: mac.clock?.offset, clockUncertainty: mac.clock?.uncertainty)
-        let result = await link.request(.start, conversationID: id, timing: timing, from: macID)
+        // The conversation as this iPhone will file it, so a Mac that creates it makes the same one.
+        let result = await link.request(.start, conversationID: id, timing: timing, title: recorder.title, date: recorder.startedAt, from: macID)
         guard multipoint?.conversationID == id else { return }
         switch result {
         case .success(let ack):
@@ -458,8 +459,10 @@ final class PhoneAppModel: RecordingCommandHandling {
                 conversationID: request.conversationID, role: .macLed(macID: mac.id),
                 macs: [MultipointSession.Mac(id: mac.id, name: mac.name, state: .recording, startedAt: request.timing?.startedAt, startedByPhone: false)],
                 leadStartedAt: request.timing?.startedAt,
-                leadClockOffset: mac.clock?.offset ?? request.timing?.clockOffset.map { -$0 })
-            let title = library.controller.meeting(request.conversationID)?.title ?? "Conversation with \(mac.name)"
+                leadClockOffset: mac.clock?.offset ?? request.timing?.clockOffset.map { -$0 },
+                title: request.title, date: request.date)
+            // The title shown while recording; filing never writes it on the Mac's conversation.
+            let title = library.controller.meeting(request.conversationID)?.title ?? request.title
             do {
                 try await startRecording(into: request.conversationID, title: title, multipoint: session)
             } catch {
@@ -486,13 +489,18 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
     }
 
-    /// Where the phone's recording probably starts on a Mac-led conversation's timeline.
+    /// How a recording made with a Mac joins its conversation: always when a Mac leads it, and when
+    /// this iPhone led, once a Mac recorded it too (or may have). Its notes and bookmarks then stay
+    /// with its track until the Mac places it. Nil files it as a conversation of its own.
     private func join(for recording: PhoneRecording, session: MultipointSession?) -> PhoneLibrary.Join? {
-        guard let session, session.isMacLed else { return nil }
+        guard let session, session.conversationID == recording.id else { return nil }
+        guard session.isMacLed else {
+            return session.macs.contains(where: \.mayHaveRecorded) ? PhoneLibrary.Join() : nil
+        }
+        // Where the phone's recording probably starts on the Mac's timeline, by the link's clocks.
         let offset = session.leadClockOffset
-        let conversationStart = session.leadStartedAt.map { start in offset.map { start.addingTimeInterval(-$0) } ?? start }
-        let estimated = conversationStart.map { recording.startedAt.timeIntervalSince($0) }
-        return PhoneLibrary.Join(estimatedOffset: estimated, conversationStart: conversationStart, title: nil)
+        let zero = session.leadStartedAt.map { start in offset.map { start.addingTimeInterval(-$0) } ?? start }
+        return PhoneLibrary.Join(estimatedOffset: zero.map { recording.startedAt.timeIntervalSince($0) }, title: session.title, date: session.date)
     }
 
     // MARK: Importing
@@ -529,9 +537,11 @@ final class PhoneAppModel: RecordingCommandHandling {
     // MARK: Filing and recovery
 
     private func file(_ recording: PhoneRecording, session: MultipointSession? = nil) async {
+        let join = join(for: recording, session: session)
+        // A Mac's conversation that hasn't synced here yet: one pass first, so this files into its copy.
+        if join != nil, library.controller.meeting(recording.id) == nil, sync.isConnected { await sync.synchronize(.filed) }
         do {
-            let filed = try await library.fileRecording(recording, join: join(for: recording, session: session),
-                                                        requestTranscription: settings.requestsTranscription)
+            let filed = try await library.fileRecording(recording, join: join, requestTranscription: settings.requestsTranscription)
             lastFiledID = filed.meeting.id
             let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: library.installationID)
             if let track = filed.meeting.tracks.first(where: { $0.device == identity }) {

@@ -142,13 +142,21 @@ public struct LinkRecordRequest: Codable, Sendable, Equatable, Identifiable {
     public var timing: LinkTiming?
     /// When this was sent, on the requester's clock.
     public var sentAt: Date
+    /// The conversation's title and date as the requester has them (starts), so a receiver that
+    /// hasn't synced it yet creates the same record rather than one of its own. Optional: older
+    /// builds don't send them.
+    public var title: String?
+    public var date: Date?
 
-    public init(id: UUID = UUID(), action: Action, conversationID: UUID, timing: LinkTiming? = nil, sentAt: Date = Date()) {
+    public init(id: UUID = UUID(), action: Action, conversationID: UUID, timing: LinkTiming? = nil, sentAt: Date = Date(),
+                title: String? = nil, date: Date? = nil) {
         self.id = id
         self.action = action
         self.conversationID = conversationID
         self.timing = timing
         self.sentAt = sentAt
+        self.title = title
+        self.date = date
     }
 }
 

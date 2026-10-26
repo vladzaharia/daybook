@@ -226,6 +226,77 @@ final class PhoneLinkTests: XCTestCase {
         await state.sources.recorders.settle()
     }
 
+    func testAPhoneLedRecordingJoinsWithItsNotesHeldUntilItIsPlaced() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let link = try await PhoneLinkRig.connect(state)
+        defer { Task { await link.tearDown(state) } }
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        defer { library.tearDown() }
+        state.microphoneAccess = { .authorized }
+        state.phoneCapture = PhoneCapture(start: { id in _ = self.macStartsRecording(rig, into: id); return true },
+                                          stop: { id in self.macStopsRecording(rig, id) })
+        // The sound puts the phone's recording 2 s before this Mac's.
+        state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: -2, rate: 1, confidence: 0.9) }
+        let macAudio = try rig.audio("mac-led-by-phone.wav", frequency: 340)
+        let phoneAudio = try rig.audio("phone-leads.wav", frequency: 520)
+        try rig.inference.script(macAudio, [(0, "Walking over now.")])
+        try rig.inference.script(phoneAudio, [(0, "Walking over now.")])
+
+        // The phone records "Walk with Priya" and asks this Mac to record it too.
+        let conversation = UUID(), recordingID = UUID()
+        let phoneStart = Date().addingTimeInterval(-2).rounded
+        let reply = try await link.client.request(LinkRecordRequest(action: .start, conversationID: conversation,
+                                                                    timing: LinkTiming(startedAt: phoneStart, elapsed: 2),
+                                                                    title: "Walk with Priya", date: phoneStart), from: link.macID)
+        guard case .accepted = reply.outcome else { return XCTFail("\(reply.outcome)") }
+        XCTAssertEqual(rig.meeting(conversation)?.title, "Walk with Priya", "made as the phone files it")
+        XCTAssertEqual(rig.meeting(conversation)?.date, phoneStart, "with the phone's date, not this Mac's start")
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        let stop = try await link.client.request(LinkRecordRequest(action: .stop, conversationID: conversation), from: link.macID)
+        guard case .accepted = stop.outcome else { return XCTFail("\(stop.outcome)") }
+        await state.sources.recorders.settle()
+        try await storeMacRecording(rig, conversation, audio: macAudio, start: macStart)
+        state.sourcesAfterCapture(conversation, startedAt: macStart, captureID: UUID())
+        XCTAssertEqual(rig.meeting(conversation)?.date, phoneStart)
+        await state.synchronizeLibrary()
+        await library.synchronize()
+
+        // The phone files into this Mac's conversation: a note at 5 s by its own clock, a bookmark at 4 s.
+        let note = TimedNote(time: 5, text: "Budget agreed")
+        let mark = Highlight(time: 4)
+        try await library.file(phoneAudio, recordingID: recordingID, into: conversation, start: phoneStart, duration: 0.5,
+                               notes: [note], bookmarks: [mark])
+        let filed = try XCTUnwrap(library.library.meeting(conversation))
+        XCTAssertEqual(filed.title, "Walk with Priya")
+        XCTAssertEqual(filed.timedNotes?.first?.time, 5)
+        let held = try XCTUnwrap(filed.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id }?.alignment)
+        XCTAssertEqual(held.method, .pending)
+        XCTAssertEqual(held.heldNoteIDs, [note.id], "the note waits with the phone's recording")
+        await library.synchronize()
+        await state.synchronizeLibrary()
+
+        try await waitFor("the conversation to be processed with both recordings", timeout: 20) {
+            rig.meeting(conversation)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty
+        }
+        let meeting = try XCTUnwrap(rig.meeting(conversation))
+        let track = try XCTUnwrap(meeting.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id })
+        XCTAssertEqual(track.alignment?.method, .audio)
+        XCTAssertEqual(track.alignment?.offset ?? 99, -2, accuracy: 0.001)
+        XCTAssertNil(track.alignment?.heldNoteIDs)
+        XCTAssertEqual(meeting.timedNotes?.first { $0.id == note.id }?.time ?? -1, 3, accuracy: 0.001,
+                       "the note moved onto the timeline with the phone's recording")
+        XCTAssertEqual(meeting.notes, "Budget agreed")
+        XCTAssertEqual(meeting.highlights.map(\.id), [mark.id])
+        XCTAssertEqual(meeting.highlights.first?.trackID, track.id, "the bookmark follows the phone's recording")
+        XCTAssertEqual(meeting.title, "Walk with Priya")
+        XCTAssertEqual(meeting.date, phoneStart)
+        XCTAssertFalse(meeting.revisions.contains { $0.field.hasPrefix("sync:") }, "no competing title, date, or status")
+        XCTAssertEqual(meeting.companions?.first?.state, .attached)
+    }
+
     // MARK: Progress and nudges
 
     func testProgressMessagesReachThePhoneWhileProcessing() async throws {
@@ -459,4 +530,9 @@ final class PhoneStart: @unchecked Sendable {
     private var _value: Date?
     var value: Date? { lock.withLock { _value } }
     func set(_ date: Date) { lock.withLock { _value = date } }
+}
+
+private extension Date {
+    /// Whole milliseconds, as the library's JSON keeps dates.
+    var rounded: Date { Date(timeIntervalSince1970: (timeIntervalSince1970 * 1000).rounded(.down) / 1000) }
 }

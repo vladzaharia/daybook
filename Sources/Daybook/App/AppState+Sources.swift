@@ -31,6 +31,7 @@ extension AppState {
         let recorders = sources.recorders
         recorders.sessions = { [weak self] in self?.devices.sessions ?? [] }
         recorders.links = { [weak self] id in self?.meetings.first { $0.id == id }?.companions ?? [] }
+        recorders.conversation = { [weak self] id in self?.meetings.first { $0.id == id }.map { ($0.title, $0.date) } }
         recorders.write = { [weak self] id, change in
             self?.update(id) { meeting in
                 var links = meeting.companions ?? []
@@ -157,8 +158,10 @@ extension AppState {
             if isNewSource {
                 var alignment = placement ?? SourceAlignment(method: .pending, clockOffset: clockOffset)
                 if alignment.clockOffset == nil { alignment.clockOffset = clockOffset }
-                meeting.tracks[index].alignment = alignment
-                meeting.tracks[index].offset = alignment.isPlaced ? alignment.offset : nil
+                // Notes the recording's own device holds on it (Daybook on iPhone) stay held, or move
+                // onto the timeline now if the sound already placed it.
+                meeting.tracks[index].offset = nil
+                meeting.applyPlacements([track.id: alignment])
                 meeting.revisions.append(MeetingRevision(field: "source:\(track.id.uuidString)", oldValue: "", newValue: "Added \(name)"))
                 if let carried, let transcript = carried.transcript, !meeting.transcripts.contains(where: { $0.trackID == track.id }) {
                     Self.adopt(transcript, speakers: carried.speakers, for: track.id, into: &meeting, preferences: preferences)
@@ -250,14 +253,15 @@ extension AppState {
         guard let meeting = meetings.first(where: { $0.id == id }) else { sources.captures[id] = nil; return }
         sources.captures[id] = .init(preexistingTrackIDs: Set(meeting.tracks.map(\.id)), date: meeting.date,
                                      noteIDs: Set((meeting.timedNotes ?? []).map(\.id)), highlightIDs: Set(meeting.highlights.map(\.id)),
-                                     photoIDs: Set((meeting.photos ?? []).map(\.id)))
+                                     photoIDs: Set((meeting.photos ?? []).map(\.id)), keepsDate: phoneLeads[id] != nil)
     }
 
     /// This Mac is recording: recorders set to record alongside it start too. Their trouble only
     /// ever shows as a status line; it can't stop or delay this recording.
     func recordingDidStart(_ id: UUID) {
-        if let context = sources.captures[id], !context.preexistingTrackIDs.isEmpty {
-            // A conversation that already had recordings keeps its date and timeline.
+        if let context = sources.captures[id], !context.preexistingTrackIDs.isEmpty || context.keepsDate {
+            // A conversation that already had recordings keeps its date and timeline; one a phone
+            // started keeps the phone's date.
             update(id) { $0.date = context.date }
         }
         // A recording a phone asked for links that phone as already recording, rather than asking it.
@@ -274,8 +278,9 @@ extension AppState {
     /// to be lined up (sound, transcript, then clock), bookmarks made meanwhile follow the microphone
     /// recording, and notes made meanwhile move onto the timeline once it's placed.
     func sourcesAfterCapture(_ id: UUID, startedAt: Date, captureID: UUID) {
-        guard let context = sources.captures.removeValue(forKey: id), !context.preexistingTrackIDs.isEmpty,
-              let meeting = meetings.first(where: { $0.id == id }) else { return }
+        guard let context = sources.captures.removeValue(forKey: id) else { return }
+        if context.keepsDate, context.preexistingTrackIDs.isEmpty { update(id) { $0.date = context.date } }
+        guard !context.preexistingTrackIDs.isEmpty, let meeting = meetings.first(where: { $0.id == id }) else { return }
         var existing = meeting
         existing.tracks = meeting.tracks.filter { context.preexistingTrackIDs.contains($0.id) }
         let captured = meeting.tracks.filter {

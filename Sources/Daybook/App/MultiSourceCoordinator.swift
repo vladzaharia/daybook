@@ -24,6 +24,8 @@ final class MultiSourceCoordinator: ObservableObject {
         var highlightIDs: Set<UUID>
         /// Photos already there; ones taken while this Mac records follow its recording.
         var photoIDs: Set<UUID> = []
+        /// A phone started the conversation and asked this Mac to record: it keeps the phone's date.
+        var keepsDate = false
     }
 
     /// A recording moving into another conversation keeps its transcript, speakers, and placement,
@@ -70,9 +72,18 @@ final class MultiSourceCoordinator: ObservableObject {
 /// the phone's recording ID and start, its clock, or its reason for not recording.
 @MainActor
 protocol AnsweringRecordControl: RecordControlConnection {
-    /// Asks it to record `conversationID` too. `macStartedAt` is when this Mac's recording started.
-    func requestStart(conversationID: UUID, macStartedAt: Date?) async -> CompanionAnswer
+    /// Asks it to record a conversation too.
+    func requestStart(_ start: CompanionStart) async -> CompanionAnswer
     func requestStop(conversationID: UUID, macEndedAt: Date?) async -> CompanionAnswer
+}
+
+/// What a device that answers is asked to record: the conversation as this Mac has it, so a device
+/// that hasn't synced it yet makes the same record, and when this Mac's recording started.
+struct CompanionStart: Equatable {
+    var conversationID: UUID
+    var title: String?
+    var date: Date?
+    var macStartedAt: Date?
 }
 
 /// What a device with `AnsweringRecordControl` said.
@@ -120,6 +131,8 @@ final class CompanionRecorders: ObservableObject {
     var sessions: () -> [DeviceSession] = { [] }
     /// A conversation's links, and a way to change them.
     var links: (UUID) -> [CompanionRecording] = { _ in [] }
+    /// A conversation's title and date, which devices that answer are told when asked to record it.
+    var conversation: (UUID) -> (title: String, date: Date)? = { _ in nil }
     var write: (UUID, (inout [CompanionRecording]) -> Void) -> Void = { _, _ in }
     var timing = Timing()
 
@@ -303,7 +316,9 @@ final class CompanionRecorders: ObservableObject {
             return
         }
         status = "Asking \(name) to record…"
-        switch await control.requestStart(conversationID: meetingID, macStartedAt: start) {
+        let conversation = self.conversation(meetingID)
+        switch await control.requestStart(CompanionStart(conversationID: meetingID, title: conversation?.title, date: conversation?.date,
+                                                         macStartedAt: start)) {
         case .recording(let recordingID, let startedAt, let already, let clock):
             update(meetingID, link.id) {
                 $0.state = already ? .alreadyRecording : .recording

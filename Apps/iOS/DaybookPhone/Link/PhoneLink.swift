@@ -211,9 +211,11 @@ final class PhoneLink {
     var connectedMacs: [Mac] { macs.filter(\.isConnected) }
 
     /// Asks a Mac to start or stop recording this conversation too. The answer, or why there isn't one.
-    func request(_ action: LinkRecordRequest.Action, conversationID: UUID, timing: LinkTiming?, from macID: UUID) async -> Result<LinkRecordAck, RecordRequestFailure> {
+    func request(_ action: LinkRecordRequest.Action, conversationID: UUID, timing: LinkTiming?, title: String? = nil, date: Date? = nil,
+                 from macID: UUID) async -> Result<LinkRecordAck, RecordRequestFailure> {
         do {
-            let reply = try await client.request(LinkRecordRequest(action: action, conversationID: conversationID, timing: timing), from: macID)
+            let reply = try await client.request(LinkRecordRequest(action: action, conversationID: conversationID, timing: timing,
+                                                                   title: title, date: date), from: macID)
             switch reply.outcome {
             case .accepted(let ack): return .success(ack)
             case .refused(let refusal): return .failure(.refused(refusal))

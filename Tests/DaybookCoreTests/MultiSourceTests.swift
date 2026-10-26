@@ -247,4 +247,44 @@ final class MultiSourceTests: XCTestCase {
         XCTAssertEqual(wrapped.fusion.alignments, plain.alignments)
         XCTAssertTrue(wrapped.settled.isEmpty)
     }
+
+    func testAnotherDevicesNotesJoinOnceEachHeldByItsRecordingUntilPlaced() {
+        var meeting = macConversation()
+        meeting.notes = "Agenda"
+        meeting.timedNotes = [TimedNote(time: 1, text: "Agenda")]
+        let phone = RecordingTrack(id: recorder, source: .microphone, relativePath: "Originals/phone.m4a", fileName: "iPhone recording.m4a")
+        meeting.tracks.append(phone)
+        let notes = [TimedNote(time: 2, text: "Agenda"), TimedNote(time: 5, text: "Owners"), TimedNote(time: 9, text: "Owners"),
+                     TimedNote(text: "Untimed")]
+        let mark = Highlight(time: 4)
+        meeting.addRecordingWork(trackID: recorder, notes: notes, bookmarks: [mark], joining: true, shift: 10)
+        // A paragraph the Mac also typed is still the phone's own, and a repeat keeps its own time.
+        XCTAssertEqual(meeting.notes, "Agenda\nAgenda\nOwners\nOwners\nUntimed")
+        XCTAssertEqual(meeting.paragraphTimes(), [1, 12, 15, 19, nil])
+        XCTAssertEqual(meeting.tracks[1].alignment?.heldNoteIDs, notes.prefix(3).map(\.id))
+        XCTAssertEqual(meeting.tracks[1].alignment?.captureOffset, 10)
+        XCTAssertEqual(meeting.highlights.map(\.trackID), [recorder], "its bookmark follows its recording")
+
+        // Filing again adds nothing.
+        let once = meeting
+        meeting.addRecordingWork(trackID: recorder, notes: notes, bookmarks: [mark], joining: true, shift: 10)
+        XCTAssertEqual(meeting, once)
+
+        // Placed 7 s in (sound, then the Mac's own pending placement keeping the held notes), they follow it.
+        meeting.applyPlacements([recorder: SourceAlignment(method: .pending, clockOffset: 8)])
+        XCTAssertEqual(meeting.tracks[1].alignment?.heldNoteIDs?.count, 3)
+        XCTAssertEqual(meeting.tracks[1].alignment?.captureOffset, 10, "a pending placement keeps where the held notes were timed from")
+        meeting.applyPlacements([recorder: SourceAlignment(method: .audio, offset: 7, confidence: 0.9)])
+        XCTAssertEqual(meeting.paragraphTimes(), [1, 9, 12, 16, nil])
+        XCTAssertNil(meeting.tracks[1].alignment?.heldNoteIDs)
+    }
+
+    func testARecordingOfItsOwnConversationBringsItsNotesAsTheyWere() {
+        var meeting = Meeting(title: "Walk", date: start)
+        let mark = Highlight(time: 3)
+        meeting.addRecordingWork(trackID: recorder, notes: [TimedNote(time: 2, text: "Decisions")], bookmarks: [mark], joining: false, shift: 30)
+        XCTAssertEqual(meeting.notes, "Decisions")
+        XCTAssertEqual(meeting.paragraphTimes(), [2], "its own timeline: no shift, nothing held")
+        XCTAssertEqual(meeting.highlights, [mark])
+    }
 }

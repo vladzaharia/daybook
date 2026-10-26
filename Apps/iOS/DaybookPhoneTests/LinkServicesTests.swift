@@ -133,7 +133,8 @@ final class LinkServicesTests: XCTestCase {
         // The rig's clock stands in for this iPhone's; the Mac started 30 s before the phone.
         let macStart = rig.clock.now().addingTimeInterval(-30)
         let reply = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation,
-                                                                    timing: LinkTiming(startedAt: macStart, elapsed: 30)), from: phoneID)
+                                                                    timing: LinkTiming(startedAt: macStart, elapsed: 30),
+                                                                    title: "Design review", date: macStart), from: phoneID)
         guard case .accepted(let ack) = reply.outcome else { return XCTFail("expected the phone to record, got \(reply.outcome)") }
         XCTAssertEqual(ack.conversationID, conversation)
         XCTAssertFalse(ack.wasAlreadyRecording)
@@ -172,9 +173,12 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertLessThan(abs(clock.offset), 1, "same machine: the clocks agree")
         XCTAssertEqual(clock.peerRecordingStartedAt, macStart)
         XCTAssertEqual(meeting.highlights.first?.trackID, track.id, "a bookmark made here follows the phone recording's placement")
-        XCTAssertEqual(meeting.date.timeIntervalSince1970, macStart.timeIntervalSince1970, accuracy: 1, "the conversation keeps the Mac's start")
+        XCTAssertEqual(meeting.date.timeIntervalSince1970, macStart.timeIntervalSince1970, accuracy: 0.001, "made as the Mac has it, before it syncs")
+        XCTAssertEqual(meeting.title, "Design review", "the Mac's title, not a placeholder")
+        XCTAssertEqual(meeting.status, .draft, "its status is the Mac's to set")
         let note = try XCTUnwrap(meeting.timedNotes?.first { $0.text == "Budget agreed" })
-        XCTAssertEqual(note.time ?? 0, 31, accuracy: 1.5, "notes move onto the conversation's timeline by the clock")
+        XCTAssertEqual(note.time ?? 0, 31, accuracy: 1.5, "notes read about right by the clock until the Mac places the recording")
+        XCTAssertEqual(track.alignment?.heldNoteIDs, [note.id], "and follow it once it's placed")
         XCTAssertNil(model.multipoint)
     }
 
@@ -182,14 +186,23 @@ final class LinkServicesTests: XCTestCase {
         let mac = try await makeMac()
         let inbox = MacInbox(mac.service.events())
         let received = RequestLog()
-        await mac.service.setRecordControlHandler { _, request in
-            received.append(request)
-            return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "mac-1"))
-        }
-        var macRecording: [LinkRecordRequest] { received.all }
         let link = makeLink()
         let rig = RecorderRig()
         let model = try makeModel(link: link, rig: rig)
+        let phoneLibrary = model.library.controller
+        // Like the Mac: it records into the phone's conversation, made as the phone sent it, which
+        // syncs to the phone while both record.
+        await mac.service.setRecordControlHandler { _, request in
+            received.append(request)
+            if request.action == .start {
+                await MainActor.run {
+                    phoneLibrary.add(Meeting(id: request.conversationID, title: request.title ?? "?", date: request.date ?? .distantPast,
+                                             status: .recording))
+                }
+            }
+            return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "mac-1"))
+        }
+        var macRecording: [LinkRecordRequest] { received.all }
         try await pair(link, with: mac)
 
         try await model.startRecording()
@@ -203,6 +216,10 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertEqual(macRecording.first?.action, .start)
         XCTAssertEqual(macRecording.first?.conversationID, id)
         XCTAssertEqual(macRecording.first?.timing?.startedAt, model.recorder.startedAt)
+        XCTAssertEqual(macRecording.first?.title, model.recorder.title, "the conversation as the phone will file it")
+        XCTAssertEqual(macRecording.first?.date, model.recorder.startedAt)
+        rig.pump(1)
+        model.editNotes("Kickoff")
         let mark = try await model.addBookmark()
         try await waitUntil("the bookmark reaches the Mac") { inbox.bookmarks.first?.recordingTime == mark }
         try await waitUntil("recording state reaches the Mac") { inbox.states.contains { $0.phase == .recording && $0.conversationID == id } }
@@ -214,8 +231,14 @@ final class LinkServicesTests: XCTestCase {
         try await waitUntil("a nudge") { inbox.nudges.first?.meetingID == id }
         XCTAssertEqual(inbox.nudges.first?.mode, .transcribe)
         XCTAssertEqual(model.library.openRequests(for: id).first?.id, inbox.nudges.first?.requestID)
-        let track = try XCTUnwrap(model.library.controller.meeting(id)?.tracks.first)
-        XCTAssertEqual(track.offset, 0, "the phone led: its recording is the timeline's origin")
+        let meeting = try XCTUnwrap(model.library.controller.meeting(id))
+        let track = try XCTUnwrap(meeting.tracks.first)
+        XCTAssertNil(track.offset, "the Mac recorded too: the phone's recording joins its conversation, to be placed")
+        XCTAssertEqual(meeting.notes, "Kickoff", "the notes are written")
+        XCTAssertEqual(meeting.timedNotes?.first?.time, 2)
+        XCTAssertEqual(track.alignment?.heldNoteIDs, meeting.timedNotes?.map(\.id), "held by the phone's recording until it's placed")
+        XCTAssertEqual(meeting.highlights.first?.trackID, track.id)
+        XCTAssertEqual(meeting.status, .recording, "the conversation's status is the Mac's")
         XCTAssertEqual(track.capture?.peerClocks?.first?.name, "Studio Mac")
     }
 

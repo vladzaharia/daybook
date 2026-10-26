@@ -182,8 +182,11 @@ extension AppState {
             }
             let clock = peer.clock
             if !meetings.contains(where: { $0.id == id }) {
+                // Made as the phone files it (its title and date came with the request), so the two
+                // copies agree when they meet; it keeps that date while this Mac records into it.
                 let start = request.timing?.startedAt.map { clock?.localDate(fromPeer: $0) ?? $0 } ?? Date()
-                library.add(Meeting(id: id, title: "Conversation at \(start.formatted(date: .omitted, time: .shortened))", date: start))
+                library.add(Meeting(id: id, title: request.title ?? "Conversation at \(start.formatted(date: .omitted, time: .shortened))",
+                                    date: request.date ?? start))
             }
             guard canRecordInto(id) else {
                 return .refused(LinkRecordRefusal(reason: .busy, message: "This Mac is processing that conversation. Try again when it’s done."))
@@ -226,8 +229,12 @@ extension AppState {
     ///   be lined up, from the clock prior.
     func phoneRecordingsArrived(_ id: UUID, job: ProcessingJob) async -> Bool {
         guard let meeting = meetings.first(where: { $0.id == id }), job.requestID != nil || meeting.openProcessingRequests.isEmpty else { return false }
+        // Not yet seen here: no transcript, and not yet a source of this conversation (the phone may
+        // have filed it as one still to place, holding the notes typed on it).
         let arriving = meeting.tracks.filter { track in
-            track.deviceKind == DaybookPhoneIntegration.id && track.alignment == nil && !meeting.transcripts.contains { $0.trackID == track.id }
+            track.deviceKind == DaybookPhoneIntegration.id && !meeting.transcripts.contains { $0.trackID == track.id }
+                && (track.alignment == nil
+                    || (track.alignment?.isPending == true && !meeting.revisions.contains { $0.field == "source:\(track.id.uuidString)" }))
         }
         guard !arriving.isEmpty else { return false }
         if meeting.tracks.count == 1, let track = arriving.first {

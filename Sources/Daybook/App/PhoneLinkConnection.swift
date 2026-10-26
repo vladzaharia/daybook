@@ -88,7 +88,7 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
 
     /// The device page's Start Recording on iPhone: the phone records a new conversation of its own.
     func startRecording() {
-        Task { _ = await requestStart(conversationID: UUID(), macStartedAt: nil) }
+        Task { _ = await requestStart(CompanionStart(conversationID: UUID())) }
     }
 
     /// The device page's Pause Recording on iPhone: stops what the phone is recording.
@@ -97,15 +97,16 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
         Task { _ = await requestStop(conversationID: conversation, macEndedAt: Date()) }
     }
 
-    func requestStart(conversationID: UUID, macStartedAt: Date?) async -> CompanionAnswer {
+    func requestStart(_ start: CompanionStart) async -> CompanionAnswer {
         guard peer != nil else { return .unavailable }
         // A fresh sample now; the burst after connecting has usually settled the estimate already.
         await link.sampleClock(of: phoneID)
         let clock = peer?.clock
-        let timing = macStartedAt.map {
+        let timing = start.macStartedAt.map {
             LinkTiming(startedAt: $0, elapsed: max(0, Date().timeIntervalSince($0)), clockOffset: clock?.offset, clockUncertainty: clock?.uncertainty)
         }
-        return await send(LinkRecordRequest(action: .start, conversationID: conversationID, timing: timing))
+        return await send(LinkRecordRequest(action: .start, conversationID: start.conversationID, timing: timing,
+                                            title: start.title, date: start.date))
     }
 
     func requestStop(conversationID: UUID, macEndedAt: Date?) async -> CompanionAnswer {

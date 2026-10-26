@@ -22,6 +22,8 @@ final class LinkWireTests: XCTestCase {
             .app(.processingNudge(LinkProcessingNudge(requestID: UUID(), meetingID: id, mode: .transcribe, requestedAt: t0))),
             .recordRequest(LinkRecordRequest(action: .stop, conversationID: id, timing: LinkTiming(startedAt: t0, elapsed: 60),
                                              sentAt: t0)),
+            .recordRequest(LinkRecordRequest(action: .start, conversationID: id, timing: LinkTiming(startedAt: t0, elapsed: 0),
+                                             sentAt: t0, title: "Design review", date: t0)),
             .recordReply(LinkRecordReply(requestID: id, outcome: .accepted(LinkRecordAck(conversationID: id, startedAt: t0,
                                                                                           recordingID: "r1")), sentAt: t0)),
             .recordReply(LinkRecordReply(requestID: id, outcome: .refused(LinkRecordRefusal(reason: .storageFull, message: "Full")),
@@ -66,6 +68,11 @@ final class LinkWireTests: XCTestCase {
         let reply = try LinkWire.decode(Data(#"{"v":1,"type":"record.reply","body":{"requestID":"\#(UUID().uuidString)","deferred":{}}}"#.utf8))
         guard case .recordReply(let r) = reply.message, case .refused(let refusal) = r.outcome else { return XCTFail("\(reply)") }
         XCTAssertEqual(refusal.reason.rawValue, "unknown")
+        // A record request from before conversations travelled with it.
+        let conversation = UUID(), request = UUID()
+        let older = try LinkWire.decode(Data(#"{"v":1,"type":"record.request","body":{"id":"\#(request.uuidString)","action":"start","conversationID":"\#(conversation.uuidString)","sentAt":1800000000}}"#.utf8))
+        XCTAssertEqual(older.message, .recordRequest(LinkRecordRequest(id: request, action: .start, conversationID: conversation,
+                                                                       sentAt: Date(timeIntervalSince1970: 1_800_000_000))))
     }
 
     func testFrameHeaderIsBigEndianLength() {

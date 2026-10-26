@@ -257,6 +257,7 @@ extension Meeting {
                 alignment.heldNoteIDs = nil
             } else if alignment.heldNoteIDs == nil {
                 alignment.heldNoteIDs = held
+                if held != nil, alignment.captureOffset == nil { alignment.captureOffset = tracks[index].alignment?.captureOffset }
             }
             guard tracks[index].alignment != alignment else { continue }
             tracks[index].alignment = alignment
@@ -264,6 +265,39 @@ extension Meeting {
             changed = true
         }
         if changed { updatedAt = Date() }
+    }
+
+    /// What a recording made on another device (Daybook on iPhone) brings to its conversation: its
+    /// notes and bookmarks, each added once by its ID, so filing again, or a copy that synced first,
+    /// never doubles one, and a repeated paragraph keeps its own time.
+    ///
+    /// Joining a conversation another device leads, the recording is a source still to be placed:
+    /// its bookmarks stay on its track, and its notes, timed by its clock, are held by the track and
+    /// move onto the timeline once it's placed, whichever recording ends up setting the timeline.
+    /// `shift` is where it probably starts on the timeline (from the link's clocks), so the notes
+    /// read about right meanwhile.
+    public mutating func addRecordingWork(trackID: UUID, notes added: [TimedNote], bookmarks: [Highlight], joining: Bool,
+                                          shift: TimeInterval = 0) {
+        let shift = joining && shift.isFinite ? max(0, shift) : 0
+        for mark in bookmarks where !highlights.contains(where: { $0.id == mark.id }) {
+            var kept = mark
+            if joining { kept.trackID = trackID }
+            highlights.append(kept)
+        }
+        var anchors = timedNotes ?? NoteTimeline.reconcile(previous: [], text: notes, captureTime: nil)
+        let known = Set(anchors.map(\.id))
+        let fresh = added.filter { !known.contains($0.id) && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !fresh.isEmpty else { return }
+        anchors += fresh.map { TimedNote(id: $0.id, time: $0.time.map { $0 + shift }, text: $0.text) }
+        let text = fresh.map(\.text).joined(separator: "\n")
+        notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? text : notes + (notes.hasSuffix("\n") ? "" : "\n") + text
+        timedNotes = anchors
+        let held = fresh.filter { $0.time != nil }.map(\.id)
+        guard joining, !held.isEmpty, let index = tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        var alignment = tracks[index].alignment ?? SourceAlignment(method: .pending)
+        alignment.heldNoteIDs = (alignment.heldNoteIDs ?? []) + held
+        if alignment.captureOffset == nil { alignment.captureOffset = shift }
+        applyPlacements([trackID: alignment])
     }
 
     /// The person's own work in a conversation: notes, corrections, renamed speakers, bookmarks with

@@ -26,6 +26,14 @@ struct MultipointSession: Equatable, Sendable {
         var startedAt: Date?
         /// This iPhone started it, so this iPhone stops it.
         var startedByPhone: Bool
+
+        /// It recorded this conversation too, or may have, so this iPhone's recording joins it.
+        var mayHaveRecorded: Bool {
+            switch state {
+            case .asking, .recording, .stopped: return true
+            case .failed: return false
+            }
+        }
     }
 
     var conversationID: UUID
@@ -35,6 +43,9 @@ struct MultipointSession: Equatable, Sendable {
     var leadStartedAt: Date?
     /// Mac clock − iPhone clock, when the request carried one.
     var leadClockOffset: TimeInterval?
+    /// The conversation as the Mac leading it has it, for creating it here if it hasn't synced yet.
+    var title: String?
+    var date: Date?
 
     var isMacLed: Bool { if case .macLed = role { return true } else { return false } }
 

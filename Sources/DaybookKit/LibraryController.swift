@@ -560,8 +560,10 @@ public final class LibraryController: ObservableObject {
                 for highlight in imported.highlights where !current.highlights.contains(where: { $0.id == highlight.id }) { current.highlights.append(highlight) }
             }
             if let date = provenance.conversationDate { current.date = date }
-            current.status = .imported
-            current.errorMessage = provenance.message
+            if !provenance.joinsConversation {
+                current.status = .imported
+                current.errorMessage = provenance.message
+            }
         }
         return IngestedRecording(meetingID: id, track: stored, imported: imported)
     }
@@ -703,6 +705,9 @@ public struct RecordingProvenance: Sendable {
     public var conversationDate: Date?
     /// Shown on the conversation (capture warnings); nil clears an earlier message.
     public var message: String?
+    /// The recording joins a conversation another device leads (multipoint): the conversation's
+    /// status and message are that device's, so they're left as they are.
+    public var joinsConversation = false
 
     public init(source: AudioSource, device: DeviceRecordingIdentity? = nil, sidecarURL: URL? = nil, offset: TimeInterval? = nil,
                 duration: TimeInterval? = nil, startedAt: Date? = nil, capture: TrackCaptureDetails? = nil,

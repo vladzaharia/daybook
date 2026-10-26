@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookKit
 import XCTest
 @testable import DaybookPhone
 
@@ -26,7 +27,8 @@ final class PhoneLibraryTests: XCTestCase {
         try FileManager.default.copyItem(at: recording.stagingDirectory, to: spare)
         _ = try await library.file(recording)
         recording.stagingDirectory = spare
-        recording.notes = "A new joined note"
+        recording.notes += "\nA new joined note"
+        recording.timedNotes.append(TimedNote(time: 6, text: "A new joined note"))
         let folder = root.appendingPathComponent("Meetings/\(recording.id.uuidString)")
         let primary = folder.appendingPathComponent("meeting.json")
         try FileManager.default.moveItem(at: primary, to: folder.appendingPathComponent("held.json"))
@@ -230,6 +232,104 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(recording.recordingID, id)
         let meeting = try await library.file(recording)
         XCTAssertEqual(meeting.tracks.first?.deviceRecordingID, id.uuidString, "named as it was before")
+    }
+
+    // MARK: Joining a conversation a Mac leads
+
+    /// A recording made with notes at 2 s and 5 s (the second paragraph repeated at 7 s) and a bookmark at 5 s.
+    private func recordWithNotes(into library: PhoneLibrary, conversation: UUID) async throws -> PhoneRecording {
+        let rig = RecorderRig()
+        let recordingID = UUID()
+        try await rig.recorder.start(in: library.stagingURL.appendingPathComponent(recordingID.uuidString), id: conversation,
+                                     recordingID: recordingID, title: "Conversation at 10:02")
+        rig.pump(2)
+        rig.recorder.editNotes("Decisions")
+        rig.pump(3)
+        rig.recorder.editNotes("Decisions\nOwners")
+        rig.recorder.addBookmark()
+        rig.pump(2)
+        rig.recorder.editNotes("Decisions\nOwners\nOwners")
+        rig.pump(1)
+        return try await rig.stop()
+    }
+
+    func testJoiningTheMacsSyncedConversationKeepsItsOwnFieldsAndHoldsTheNotes() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        try await library.reload()
+        let conversation = UUID()
+        let macDate = Date(timeIntervalSince1970: 1_800_000_000)
+        // The Mac's conversation synced here while it records.
+        library.controller.add(Meeting(id: conversation, title: "Design review", date: macDate, status: .recording))
+        let recording = try await recordWithNotes(into: library, conversation: conversation)
+
+        let filed = try await library.fileRecording(recording, join: .init(estimatedOffset: 30, title: "Not this", date: Date()))
+        let meeting = filed.meeting
+        XCTAssertEqual(meeting.title, "Design review", "the Mac's title stays")
+        XCTAssertEqual(meeting.date, macDate)
+        XCTAssertEqual(meeting.status, .recording, "the conversation's status is the Mac's")
+        XCTAssertNil(meeting.errorMessage)
+        XCTAssertEqual(meeting.notes, "Decisions\nOwners\nOwners", "the notes are written")
+        XCTAssertEqual(meeting.paragraphTimes(), [32, 35, 37], "each paragraph keeps its own time, by the clock estimate")
+        let track = try XCTUnwrap(meeting.tracks.first)
+        XCTAssertNil(track.offset, "the Mac places it")
+        XCTAssertEqual(track.alignment?.method, .pending)
+        XCTAssertEqual(track.alignment?.heldNoteIDs, recording.timedNotes.map(\.id), "held by the phone's recording until it's placed")
+        XCTAssertEqual(track.alignment?.captureOffset, 30)
+        XCTAssertEqual(meeting.highlights.map(\.trackID), [track.id], "the bookmark follows the phone's recording")
+        XCTAssertEqual(meeting.highlights.map(\.time), [5])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recording.stagingDirectory.path))
+
+        // Once the Mac places the recording 28 s in, the notes follow it.
+        var placed = meeting
+        placed.applyPlacements([track.id: SourceAlignment(method: .audio, offset: 28, confidence: 0.9)])
+        XCTAssertEqual(placed.paragraphTimes(), [30, 33, 35])
+    }
+
+    func testJoiningAConversationWithTheMacsRecordingKeepsEveryNoteTimed() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        try await library.reload()
+        let conversation = UUID()
+        library.controller.add(Meeting(id: conversation, title: "Design review", date: Date(), notes: "Decisions",
+                                       status: .imported, timedNotes: [TimedNote(time: 1, text: "Decisions")]))
+        // The Mac's own recording is here already.
+        let macRig = RecorderRig()
+        try await macRig.recorder.start(in: try temporaryDirectory().appendingPathComponent("mac"), title: "Mac")
+        macRig.pump(4)
+        let macAudio = try await macRig.stop()
+        await library.controller.acquireLock()
+        _ = try await library.controller.ingest(macAudio.audioURL, into: conversation, provenance: RecordingProvenance(source: .microphone, offset: 0))
+        library.controller.releaseLock()
+
+        let recording = try await recordWithNotes(into: library, conversation: conversation)
+        // Without a join (filed again after a restart, say), the Mac's recording still makes it one.
+        let meeting = try await library.fileRecording(recording).meeting
+        XCTAssertEqual(meeting.tracks.count, 2)
+        XCTAssertEqual(meeting.notes, "Decisions\nDecisions\nOwners\nOwners", "a paragraph the Mac also typed is still the phone's own")
+        XCTAssertEqual(meeting.paragraphTimes(), [1, 2, 5, 7], "timed by the phone's clock, held until the phone's recording is placed")
+        let phoneTrack = try XCTUnwrap(meeting.tracks.first { $0.deviceKind == PhoneDevice.kind })
+        XCTAssertNil(phoneTrack.offset)
+        XCTAssertEqual(phoneTrack.alignment?.heldNoteIDs?.count, 3)
+        XCTAssertEqual(meeting.title, "Design review")
+
+        // Filed again (a retry after a failure), nothing doubles.
+        let twice = try await library.fileRecording(recording, join: .init()).meeting
+        XCTAssertEqual(twice.notes, meeting.notes)
+        XCTAssertEqual(twice.highlights.count, 1)
+    }
+
+    func testJoiningAConversationThatHasntSyncedMakesItAsTheMacHasIt() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        try await library.reload()
+        let conversation = UUID()
+        let macDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let recording = try await recordWithNotes(into: library, conversation: conversation)
+        let meeting = try await library.fileRecording(recording, join: .init(estimatedOffset: nil, title: "Design review", date: macDate)).meeting
+        XCTAssertEqual(meeting.title, "Design review", "the Mac's title, which came with its request, not a placeholder")
+        XCTAssertEqual(meeting.date, macDate)
+        XCTAssertEqual(meeting.status, .draft, "its status is left for the Mac's copy")
+        XCTAssertEqual(meeting.paragraphTimes(), [2, 5, 7])
+        XCTAssertEqual(meeting.tracks.first?.alignment?.heldNoteIDs?.count, 3)
     }
 
     func testAppModelRecordsAndFilesEndToEnd() async throws {
