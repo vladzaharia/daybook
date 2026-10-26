@@ -31,7 +31,7 @@ extension AppState {
         let recorders = sources.recorders
         recorders.sessions = { [weak self] in self?.devices.sessions ?? [] }
         recorders.links = { [weak self] id in self?.meetings.first { $0.id == id }?.companions ?? [] }
-        recorders.conversation = { [weak self] id in self?.meetings.first { $0.id == id }.map { ($0.title, $0.date) } }
+        recorders.conversation = { [weak self] id in self?.companionConversation(id) }
         recorders.write = { [weak self] id, change in
             self?.update(id) { meeting in
                 var links = meeting.companions ?? []
@@ -39,6 +39,17 @@ extension AppState {
                 meeting.companions = links.isEmpty ? nil : links
             }
         }
+    }
+
+    /// A conversation this Mac records, as a device asked to record along is told about it: its
+    /// timeline's zero is this Mac's start, or, recording into one that already had recordings, that
+    /// timeline's known start.
+    func companionConversation(_ id: UUID) -> CompanionConversation? {
+        guard let meeting = meetings.first(where: { $0.id == id }) else { return nil }
+        var existing = meeting
+        if let context = sources.captures[id] { existing.tracks = meeting.tracks.filter { context.preexistingTrackIDs.contains($0.id) } }
+        let zero = existing.tracks.isEmpty ? recordingStartedAt : existing.knownTimelineStart(startOf: trackStart)
+        return CompanionConversation(title: meeting.title, date: meeting.date, timelineStart: zero)
     }
 
     // MARK: Arrivals

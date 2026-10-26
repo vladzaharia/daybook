@@ -84,6 +84,16 @@ struct CompanionStart: Equatable {
     var title: String?
     var date: Date?
     var macStartedAt: Date?
+    /// When the conversation's timeline zero happened, on this Mac's clock: this Mac's start for a new
+    /// conversation, earlier for one recorded into again; nil when that isn't known.
+    var timelineStart: Date?
+}
+
+/// A conversation as a device that answers is told about it when asked to record.
+struct CompanionConversation: Equatable {
+    var title: String
+    var date: Date
+    var timelineStart: Date?
 }
 
 /// What a device with `AnsweringRecordControl` said.
@@ -131,8 +141,8 @@ final class CompanionRecorders: ObservableObject {
     var sessions: () -> [DeviceSession] = { [] }
     /// A conversation's links, and a way to change them.
     var links: (UUID) -> [CompanionRecording] = { _ in [] }
-    /// A conversation's title and date, which devices that answer are told when asked to record it.
-    var conversation: (UUID) -> (title: String, date: Date)? = { _ in nil }
+    /// A conversation as devices that answer are told about it when asked to record it.
+    var conversation: (UUID) -> CompanionConversation? = { _ in nil }
     var write: (UUID, (inout [CompanionRecording]) -> Void) -> Void = { _, _ in }
     var timing = Timing()
 
@@ -318,7 +328,7 @@ final class CompanionRecorders: ObservableObject {
         status = "Asking \(name) to record…"
         let conversation = self.conversation(meetingID)
         switch await control.requestStart(CompanionStart(conversationID: meetingID, title: conversation?.title, date: conversation?.date,
-                                                         macStartedAt: start)) {
+                                                         macStartedAt: start, timelineStart: conversation?.timelineStart)) {
         case .recording(let recordingID, let startedAt, let already, let clock):
             update(meetingID, link.id) {
                 $0.state = already ? .alreadyRecording : .recording

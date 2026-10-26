@@ -131,6 +131,8 @@ final class PhoneLinkTests: XCTestCase {
         let start = try XCTUnwrap(phone.recorder.requests.first)
         XCTAssertEqual(start.action, .start)
         XCTAssertEqual(start.conversationID, id)
+        XCTAssertEqual(start.title, "Design review")
+        XCTAssertEqual(start.timing?.timelineStart, start.timing?.startedAt, "a new conversation's timeline begins with this Mac's recording")
         XCTAssertEqual(start.timing?.clockOffset ?? 0, 2.5, accuracy: 0.05, "The Mac's prior travels with the request")
 
         macStopsRecording(rig, id)
@@ -147,6 +149,26 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertNil(rig.meeting(other)?.companions)
         XCTAssertEqual(phone.recorder.requests.count, 2)
         macStopsRecording(rig, other)
+    }
+
+    func testRecordingIntoAnEarlierConversationTellsThePhoneWhereItsTimelineBegan() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        // A conversation recorded ten minutes ago; this Mac records into it again (Record on This Mac).
+        let earlier = Date().addingTimeInterval(-600)
+        let id = try await rig.macConversation("Standup", at: earlier, seconds: 0.5, audio: try rig.audio("earlier.wav", frequency: 350))
+        _ = macStartsRecording(rig, into: id)
+        let macStart = try XCTUnwrap(rig.state.recordingStartedAt)
+        await rig.state.sources.recorders.settle()
+        let request = try XCTUnwrap(phone.recorder.requests.first)
+        XCTAssertEqual(request.title, "Standup", "the conversation as this Mac has it")
+        XCTAssertEqual(request.date, rig.meeting(id)?.date)
+        XCTAssertEqual(request.timing?.startedAt, macStart)
+        XCTAssertEqual(request.timing?.timelineStart?.timeIntervalSince1970 ?? 0, earlier.timeIntervalSince1970, accuracy: 0.001,
+                       "the timeline began with the earlier recording, not this Mac's start")
+        XCTAssertEqual(request.timing?.elapsed ?? 0, 600, accuracy: 2, "seconds of that timeline")
+        macStopsRecording(rig, id)
     }
 
     func testAPhoneThatSaysNoIsReportedQuietly() async throws {

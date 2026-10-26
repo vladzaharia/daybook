@@ -410,8 +410,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         session.macs.removeAll { $0.id == macID }
         session.macs.append(MultipointSession.Mac(id: macID, name: mac.name, state: .asking, startedAt: nil, startedByPhone: true))
         multipoint = session
+        // This iPhone's recording sets its conversation's timeline.
         let timing = LinkTiming(startedAt: recorder.startedAt, elapsed: recorder.elapsedTime,
-                                clockOffset: mac.clock?.offset, clockUncertainty: mac.clock?.uncertainty)
+                                clockOffset: mac.clock?.offset, clockUncertainty: mac.clock?.uncertainty, timelineStart: recorder.startedAt)
         // The conversation as this iPhone will file it, so a Mac that creates it makes the same one.
         let result = await link.request(.start, conversationID: id, timing: timing, title: recorder.title, date: recorder.startedAt, from: macID)
         guard multipoint?.conversationID == id else { return }
@@ -458,7 +459,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             let session = MultipointSession(
                 conversationID: request.conversationID, role: .macLed(macID: mac.id),
                 macs: [MultipointSession.Mac(id: mac.id, name: mac.name, state: .recording, startedAt: request.timing?.startedAt, startedByPhone: false)],
-                leadStartedAt: request.timing?.startedAt,
+                leadStartedAt: request.timing?.startedAt, timelineStart: request.timing?.timelineStart,
                 leadClockOffset: mac.clock?.offset ?? request.timing?.clockOffset.map { -$0 },
                 title: request.title, date: request.date)
             // The title shown while recording; filing never writes it on the Mac's conversation.
@@ -497,9 +498,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         guard session.isMacLed else {
             return session.macs.contains(where: \.mayHaveRecorded) ? PhoneLibrary.Join() : nil
         }
-        // Where the phone's recording probably starts on the Mac's timeline, by the link's clocks.
+        // Where the phone's recording probably starts on the Mac's timeline, by the link's clocks. A
+        // Mac that didn't say where its timeline began (an older one) began it with its own recording.
         let offset = session.leadClockOffset
-        let zero = session.leadStartedAt.map { start in offset.map { start.addingTimeInterval(-$0) } ?? start }
+        let zero = (session.timelineStart ?? session.leadStartedAt).map { start in offset.map { start.addingTimeInterval(-$0) } ?? start }
         return PhoneLibrary.Join(estimatedOffset: zero.map { recording.startedAt.timeIntervalSince($0) }, title: session.title, date: session.date)
     }
 

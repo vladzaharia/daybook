@@ -182,6 +182,29 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertNil(model.multipoint)
     }
 
+    func testNotesReadOnTheTimelineOfAConversationTheMacRecordsIntoAgain() async throws {
+        let mac = try await makeMac()
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        try await waitUntil("clock samples") { link.macs.first?.clock != nil }
+        let conversation = UUID()
+        // The conversation began 130 s before this iPhone starts; the Mac's own recording into it, 30 s before.
+        let zero = rig.clock.now().addingTimeInterval(-130), macStart = rig.clock.now().addingTimeInterval(-30)
+        let reply = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation,
+                                                                    timing: LinkTiming(startedAt: macStart, elapsed: 130, timelineStart: zero),
+                                                                    title: "Standup", date: zero), from: link.deviceID)
+        guard case .accepted = reply.outcome else { return XCTFail("\(reply.outcome)") }
+        rig.pump(1)
+        model.editNotes("Budget agreed")
+        rig.pump(1)
+        try await model.stopRecording()
+        let meeting = try XCTUnwrap(model.library.controller.meeting(conversation))
+        XCTAssertEqual(meeting.timedNotes?.first?.time ?? 0, 131, accuracy: 1.5, "on the conversation's timeline, not from the Mac's start")
+        XCTAssertEqual(meeting.tracks.first?.alignment?.captureOffset ?? 0, 130, accuracy: 1.5)
+    }
+
     func testRecordOnTheMacTooAndNudgeAfterFiling() async throws {
         let mac = try await makeMac()
         let inbox = MacInbox(mac.service.events())

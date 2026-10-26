@@ -41,6 +41,9 @@ struct MultipointSession: Equatable, Sendable {
     var macs: [Mac] = []
     /// The Mac's own recording started here, on its clock (from a request's timing).
     var leadStartedAt: Date?
+    /// The conversation's timeline zero, on the Mac's clock, when it said: earlier than its start
+    /// when it records into a conversation that already had recordings.
+    var timelineStart: Date?
     /// Mac clock − iPhone clock, when the request carried one.
     var leadClockOffset: TimeInterval?
     /// The conversation as the Mac leading it has it, for creating it here if it hasn't synced yet.

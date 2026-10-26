@@ -102,8 +102,10 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
         // A fresh sample now; the burst after connecting has usually settled the estimate already.
         await link.sampleClock(of: phoneID)
         let clock = peer?.clock
+        // `elapsed` counts the conversation's timeline, which for one recorded into again began earlier.
         let timing = start.macStartedAt.map {
-            LinkTiming(startedAt: $0, elapsed: max(0, Date().timeIntervalSince($0)), clockOffset: clock?.offset, clockUncertainty: clock?.uncertainty)
+            LinkTiming(startedAt: $0, elapsed: start.timelineStart.map { max(0, Date().timeIntervalSince($0)) },
+                       clockOffset: clock?.offset, clockUncertainty: clock?.uncertainty, timelineStart: start.timelineStart)
         }
         return await send(LinkRecordRequest(action: .start, conversationID: start.conversationID, timing: timing,
                                             title: start.title, date: start.date))

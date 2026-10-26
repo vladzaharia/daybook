@@ -110,19 +110,25 @@ public struct LinkRecordingState: Codable, Sendable, Equatable {
 public struct LinkTiming: Codable, Sendable, Equatable {
     /// When the requester's own recording of this conversation started, on the requester's clock.
     public var startedAt: Date?
-    /// Seconds of the conversation's timeline that had passed when the request was sent.
+    /// Seconds of the conversation's timeline that had passed when the request was sent (nil when
+    /// the timeline's zero isn't known).
     public var elapsed: TimeInterval?
     /// The requester's estimate of (receiver's clock − requester's clock), from clock samples.
     public var clockOffset: TimeInterval?
     /// How far `clockOffset` could be off (half the best round trip).
     public var clockUncertainty: TimeInterval?
+    /// When the conversation's timeline zero happened, on the requester's clock: its own
+    /// recording's start for a new conversation, earlier for one that already had recordings. Nil
+    /// when it isn't known, or from older builds (whose `elapsed` counted from `startedAt`).
+    public var timelineStart: Date?
 
     public init(startedAt: Date? = nil, elapsed: TimeInterval? = nil, clockOffset: TimeInterval? = nil,
-                clockUncertainty: TimeInterval? = nil) {
+                clockUncertainty: TimeInterval? = nil, timelineStart: Date? = nil) {
         self.startedAt = startedAt
         self.elapsed = elapsed
         self.clockOffset = clockOffset
         self.clockUncertainty = clockUncertainty
+        self.timelineStart = timelineStart
     }
 }
 
