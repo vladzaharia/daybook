@@ -488,6 +488,28 @@ final class LibrarySyncReplicaTests: XCTestCase {
         XCTAssertNil(tolerant.first { $0.id == "Mac" }?.activity)
     }
 
+    func testADeletionIsRecordedWithItsTombstoneEvenIfThePassStopsAfterwards() async throws {
+        let mac = try self.mac(), other = try self.mac("Other")
+        let doomed = Meeting(title: "Doomed")
+        try await pass(mac, "Mac", [doomed])
+        let incoming = try await record(audioBytes(3_000, seed: 4), on: "Other", into: Meeting(title: "Incoming"))
+        try await pass(other, "Other", [incoming])
+        // The next pass will stop while copying Other's audio.
+        try cloud.evict(blob(incoming.tracks[0]))
+        cloud.holdDownloads(true)
+        _ = try await MeetingStore(rootURL: local("Mac")).moveToTrash(doomed.id)
+        final class Box: @unchecked Sendable { var task: Task<SyncResult, Error>? }
+        let box = Box()
+        let ready = DispatchSemaphore(value: 0)
+        cloud.whenDownloadRequested { _ in ready.wait(); box.task?.cancel(); ready.signal() }
+        box.task = Task { try await mac.synchronize(meetings: []) }
+        ready.signal()
+        do { _ = try await box.task!.value; XCTFail("the pass was expected to stop") } catch is CancellationError { }
+        cloud.whenDownloadRequested(nil)
+        XCTAssertTrue(LibrarySyncEngine.recordsDeletion(of: doomed.id, localRoot: local("Mac"), deviceID: "Mac"),
+                      "a restore right now must know the deletion was published")
+    }
+
     func testASettingsOnlyPassAppliesRecorderOwnershipWithoutTouchingConversations() async throws {
         let mac = try mac(), phone = try phone()
         let meeting = Meeting(title: "Being recorded on the Mac")

@@ -256,7 +256,11 @@ public actor LibrarySyncEngine {
                     published += 1
                 }
             }
-            if published > 0 { state.sequence = passSequence; try saveCheckpoint() }
+            // Deletions made here are recorded as synced with their tombstones, so a restore can tell at once.
+            let newlyDeleted = deletedHere.subtracting(state.deletedIDs)
+            state.deletedIDs.formUnion(deletedHere)
+            if published > 0 { state.sequence = passSequence }
+            if published > 0 || !newlyDeleted.isEmpty { try saveCheckpoint() }
         } catch {
             // Keep what was published before the pass stopped, so the next one builds on it.
             if published > 0 { state.sequence = passSequence; try? saveCheckpoint() }
