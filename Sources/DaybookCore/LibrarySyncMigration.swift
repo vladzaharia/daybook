@@ -225,7 +225,7 @@ public actor LibrarySyncMigration {
         guard fm.fileExists(atPath: origin.path) else { return .skipped("\(item.path) is no longer in the old sync folder.") }
         if item.kind == .presence {
             let size = (try? fm.attributesOfItem(atPath: origin.path)[.size] as? NSNumber)?.intValue ?? .max
-            guard size <= 64 * 1024 else { return .skipped("\(item.path) is too large for a presence record. It wasn't copied.") }
+            guard size <= 64 * 1024 else { return .skipped("\(item.path) is too large for a presence record. It wasn’t copied.") }
         }
         guard try copy(from: origin, below: source, to: target, expecting: item.hash) else {
             return .skipped("\(item.path) in the old sync folder is damaged: its contents don’t match its name. It wasn’t copied.")

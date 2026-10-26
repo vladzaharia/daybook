@@ -4,9 +4,12 @@ import DaybookKit
 import SwiftUI
 
 /// Settings › Library › iCloud Sync › Encryption (docs/icloud-sync.md, "Encryption"): whether the library in iCloud is
-/// encrypted, turning it on, its recovery key, waiting for its key, and erasing deleted conversations.
+/// encrypted, turning it on, its recovery key, waiting for its key, and erasing deleted conversations. It observes the
+/// sync controller and the phone link itself, so it follows them whether or not the app state passes their changes on.
 struct SyncEncryptionRows: View {
-    @ObservedObject var state: AppState
+    let state: AppState
+    @ObservedObject var sync: LibrarySyncController
+    @ObservedObject var phoneLink: PhoneLink
     @State private var enabling = false
     @State private var shownKey: ShownRecoveryKey?
     @State private var enteringKey = false
@@ -14,7 +17,11 @@ struct SyncEncryptionRows: View {
     @State private var confirmingFolder = false
     @State private var problem: String?
 
-    private var sync: LibrarySyncController { state.sync }
+    init(state: AppState) {
+        self.state = state
+        sync = state.sync
+        phoneLink = state.phoneLink
+    }
 
     var body: some View {
         Group {
@@ -32,7 +39,7 @@ struct SyncEncryptionRows: View {
             case .waitingForKey:
                 EncryptionWarning(text: LibrarySyncError.keyUnavailable("").localizedDescription) {
                     HStack {
-                        ForEach(state.phoneLink.peers.values.sorted { $0.name < $1.name }) { phone in
+                        ForEach(phoneLink.peers.values.sorted { $0.name < $1.name }) { phone in
                             Button("Get Key from \(phone.name)") { Task { await state.requestLibraryKey(from: phone.deviceID) } }
                         }
                         Button("Enter Recovery Key…") { enteringKey = true }
