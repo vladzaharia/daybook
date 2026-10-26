@@ -66,8 +66,8 @@ final class LinkSession: @unchecked Sendable {
         self.record = record
         self.configuration = configuration
         self.delegate = delegate
-        localInterval = heartbeat.interval
-        localTimeout = heartbeat.timeout
+        localInterval = Self.validHeartbeatInterval(heartbeat.interval) ? heartbeat.interval : 5
+        localTimeout = heartbeat.timeout.isFinite && heartbeat.timeout > 0 ? min(heartbeat.timeout, 900) : 15
         channel.onFrame = { [weak self] frame, receivedAt in self?.receive(frame, at: receivedAt) }
         channel.onEnd = { [weak self] end in self?.channelEnded(end) }
         channel.onViabilityLost = { [weak self] in self?.probe() }
@@ -161,6 +161,9 @@ final class LinkSession: @unchecked Sendable {
             refuse(.init(reason: .authenticationFailed), as: .authenticationFailed)
             return
         }
+        guard hello.heartbeatInterval.map(Self.validHeartbeatInterval) ?? true else {
+            close(.protocolError("invalid heartbeat interval")); return
+        }
         self.record = record
         self.version = version
         peerInterval = hello.heartbeatInterval
@@ -191,6 +194,9 @@ final class LinkSession: @unchecked Sendable {
             return
         }
         version = welcome.version
+        guard welcome.heartbeatInterval.map(Self.validHeartbeatInterval) ?? true else {
+            close(.protocolError("invalid heartbeat interval")); return
+        }
         peerInterval = welcome.heartbeatInterval
         establish(peer: LinkPeer(deviceID: record.deviceID, capabilities: welcome.capabilities, protocolVersion: welcome.version,
                                  connectedAt: configuration.clock.now()))
@@ -210,10 +216,10 @@ final class LinkSession: @unchecked Sendable {
     private func established(_ message: WireMessage, receivedAt: Date) {
         switch message {
         case .ping(let beat):
-            adoptPeerInterval(beat.interval)
+            guard adoptPeerInterval(beat.interval) else { return }
             send(.pong(Heartbeat(sequence: beat.sequence, interval: localInterval)))
         case .pong(let beat):
-            adoptPeerInterval(beat.interval)
+            _ = adoptPeerInterval(beat.interval)
         case .clockRequest(let request):
             send(.clockReply(ClockReply(sequence: request.sequence, t1: request.t1, t2: receivedAt, t3: configuration.clock.now())))
         case .clockReply(let reply):
@@ -311,6 +317,7 @@ final class LinkSession: @unchecked Sendable {
 
     /// Changes this side's pace (foreground, background recording) and tells the peer.
     func setHeartbeat(interval: TimeInterval, timeout: TimeInterval) {
+        guard Self.validHeartbeatInterval(interval), timeout.isFinite, timeout > 0, timeout <= 900 else { return }
         localInterval = interval
         localTimeout = timeout
         guard state == .established else { return }
@@ -322,10 +329,20 @@ final class LinkSession: @unchecked Sendable {
     private var effectiveInterval: TimeInterval { max(localInterval, peerInterval ?? 0) }
     private var effectiveTimeout: TimeInterval { max(localTimeout, 3 * (peerInterval ?? 0)) }
 
-    private func adoptPeerInterval(_ interval: TimeInterval?) {
-        guard let interval, interval > 0, interval != peerInterval else { return }
+    private static func validHeartbeatInterval(_ interval: TimeInterval) -> Bool {
+        interval.isFinite && (0.001...300).contains(interval)
+    }
+
+    private func adoptPeerInterval(_ interval: TimeInterval?) -> Bool {
+        guard let interval else { return true }
+        guard Self.validHeartbeatInterval(interval) else {
+            close(.protocolError("invalid heartbeat interval"))
+            return false
+        }
+        guard interval != peerInterval else { return true }
         peerInterval = interval
         restartHeartbeat()
+        return true
     }
 
     private func restartHeartbeat() {

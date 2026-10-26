@@ -39,6 +39,7 @@ public actor LinkService {
         var expiry: DispatchWorkItem
     }
     private var pairing: PairingWindow?
+    private var pairingChannel: LinkChannel?
 
     public init(identity: LinkIdentity, keyStore: any LinkKeyStore, configuration: LinkConfiguration = LinkConfiguration()) {
         queue = DispatchSerialQueue(label: "local.daybook.link.service")
@@ -50,7 +51,8 @@ public actor LinkService {
     deinit {
         let listener = self.listener
         let sessions = Array(self.sessions.values)
-        let channels = Array(unrouted.values)
+        let channels = Array(unrouted.values) + [pairingChannel].compactMap { $0 }
+        pairing?.expiry.cancel()
         let hub = self.hub
         queue.async {
             listener?.cancel()
@@ -114,7 +116,12 @@ public actor LinkService {
     /// Opens pairing and returns the code to show. Calling it again replaces the code.
     @discardableResult
     public func beginPairing() -> LinkPairingCode {
+        let failures = pairing?.failures ?? 0
         pairing?.expiry.cancel()
+        let previousChannel = pairingChannel
+        pairingChannel = nil
+        pairing = nil
+        previousChannel?.close()
         let code = configuration.codeGenerator(configuration.pairingCodeLifetime, configuration.clock.now())
         let expiry = DispatchWorkItem { [weak self] in
             self?.assumeIsolated { service in
@@ -123,7 +130,7 @@ public actor LinkService {
             }
         }
         queue.asyncAfter(deadline: .now() + configuration.pairingCodeLifetime, execute: expiry)
-        pairing = PairingWindow(code: code, failures: pairing?.failures ?? 0, attempt: pairing?.attempt, expiry: expiry)
+        pairing = PairingWindow(code: code, failures: failures, expiry: expiry)
         hub.yield(.pairingCode(code))
         advertise()
         return code
@@ -417,6 +424,7 @@ public actor LinkService {
         let id = ObjectIdentifier(channel)
         window.attempt = id
         pairing = window
+        pairingChannel = channel
         let exchange = PasskeyExchange(role: .responder, code: window.code, local: identity.pairingDevice)
         var settled = false
 
@@ -458,6 +466,14 @@ public actor LinkService {
     }
 
     private func paired(_ outcome: PasskeyExchange.Outcome, attempt: ObjectIdentifier, channel: LinkChannel, replies: [Data]) {
+        guard isRunning, let window = pairing, window.attempt == attempt, pairingChannel === channel else {
+            channel.close(after: PasskeyExchange.refuseFrame(.notPairing))
+            return
+        }
+        guard window.code.expiresAt > configuration.clock.now() else {
+            closePairing(failure: .expired)
+            return
+        }
         let record = LinkPairingRecord(deviceID: outcome.peer.deviceID, name: outcome.peer.name,
                                        deviceClass: outcome.peer.deviceClass, pairedAt: configuration.clock.now(),
                                        linkKey: outcome.linkKey, pskIdentity: outcome.pskIdentity)
@@ -469,6 +485,7 @@ public actor LinkService {
             return
         }
         hub.yield(.paired(record.device))
+        pairingChannel = nil
         if pairing?.attempt == attempt {
             pairing?.expiry.cancel()
             pairing = nil
@@ -486,6 +503,7 @@ public actor LinkService {
     /// its bits.
     private func pairingAttemptFailed(_ attempt: ObjectIdentifier, failure: PasskeyExchange.Failure?) {
         guard var window = pairing, window.attempt == attempt else { return }
+        pairingChannel = nil
         window.attempt = nil
         window.failures += 1
         pairing = window
@@ -500,6 +518,9 @@ public actor LinkService {
     private func closePairing(failure: LinkPairingError?) {
         pairing?.expiry.cancel()
         pairing = nil
+        let channel = pairingChannel
+        pairingChannel = nil
+        channel?.close(after: PasskeyExchange.refuseFrame(.notPairing))
         if let failure { hub.yield(.pairingFailed(failure)) }
         hub.yield(.pairingCode(nil))
         advertise()
