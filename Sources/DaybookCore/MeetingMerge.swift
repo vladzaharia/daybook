@@ -154,6 +154,11 @@ public enum MeetingMerge {
             result.$status = ranked(local.$status, remote.$status) { $0.isKnown ? Self.statusRank($0.wrappedValue) : Self.statusRank(.imported) }
             result.errorMessage = ranked(local.errorMessage, remote.errorMessage) { $0 == nil ? 0 : 1 }
         }
+        // Fields a newer Daybook added, key by key. A conflict keeps the other value in History, as a
+        // known field's does, but without a notice: this version can't say what it is.
+        result.unknownFields = UnknownFields.merged(base: base?.unknownFields, local.unknownFields, remote.unknownFields) { key, smaller, larger in
+            record("unknown:\(key)", smaller, larger)
+        }
         var revisions: [UUID: MeetingRevision] = [:]
         for revision in (base?.revisions ?? []) + local.revisions + remote.revisions + conflicts {
             if let old = revisions[revision.id], SyncEncoding.string(old) > SyncEncoding.string(revision) { continue }

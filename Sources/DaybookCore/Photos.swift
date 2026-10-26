@@ -107,6 +107,8 @@ public struct MeetingPhoto: Codable, Equatable, Identifiable, Sendable {
     /// When it was deleted. A deleted photo keeps its file and its record, so Undo and Version History
     /// can put it back, and an older copy of the conversation can't bring it back by itself.
     public var removedAt: Date?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
 
     public init(id: UUID = UUID(), relativePath: String, fileName: String, sha256: String, contentType: String? = nil,
                 byteCount: Int? = nil, pixelWidth: Int? = nil, pixelHeight: Int? = nil, capturedAt: Date,
@@ -136,6 +138,58 @@ public struct MeetingPhoto: Codable, Equatable, Identifiable, Sendable {
     public static func relativePath(id: UUID, extension ext: String) -> String {
         let clean = ext.lowercased().filter { $0.isLetter || $0.isNumber }.prefix(8)
         return "\(folder)/\(id.uuidString)" + (clean.isEmpty ? "" : ".\(clean)")
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, relativePath, fileName, sha256, contentType, byteCount, pixelWidth, pixelHeight, capturedAt,
+            capturedAtSource, addedAt, trackID, time, origin, caption, analysis, hiddenFromSummary, removedAt
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        relativePath = try values.decode(String.self, forKey: .relativePath)
+        fileName = try values.decode(String.self, forKey: .fileName)
+        sha256 = try values.decode(String.self, forKey: .sha256)
+        contentType = try values.decodeIfPresent(String.self, forKey: .contentType)
+        byteCount = try values.decodeIfPresent(Int.self, forKey: .byteCount)
+        pixelWidth = try values.decodeIfPresent(Int.self, forKey: .pixelWidth)
+        pixelHeight = try values.decodeIfPresent(Int.self, forKey: .pixelHeight)
+        capturedAt = try values.decode(Date.self, forKey: .capturedAt)
+        _capturedAtSource = try values.decode(Extensible<PhotoCaptureDateSource>.self, forKey: .capturedAtSource)
+        addedAt = try values.decode(Date.self, forKey: .addedAt)
+        trackID = try values.decodeIfPresent(UUID.self, forKey: .trackID)
+        time = try values.decodeIfPresent(TimeInterval.self, forKey: .time)
+        origin = try values.decodeIfPresent(PhotoOrigin.self, forKey: .origin)
+        caption = try values.decodeIfPresent(String.self, forKey: .caption)
+        analysis = try values.decodeIfPresent(PhotoAnalysis.self, forKey: .analysis)
+        hiddenFromSummary = try values.decodeIfPresent(Bool.self, forKey: .hiddenFromSummary)
+        removedAt = try values.decodeIfPresent(Date.self, forKey: .removedAt)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(relativePath, forKey: .relativePath)
+        try values.encode(fileName, forKey: .fileName)
+        try values.encode(sha256, forKey: .sha256)
+        try values.encodeIfPresent(contentType, forKey: .contentType)
+        try values.encodeIfPresent(byteCount, forKey: .byteCount)
+        try values.encodeIfPresent(pixelWidth, forKey: .pixelWidth)
+        try values.encodeIfPresent(pixelHeight, forKey: .pixelHeight)
+        try values.encode(capturedAt, forKey: .capturedAt)
+        try values.encode(_capturedAtSource, forKey: .capturedAtSource)
+        try values.encode(addedAt, forKey: .addedAt)
+        try values.encodeIfPresent(trackID, forKey: .trackID)
+        try values.encodeIfPresent(time, forKey: .time)
+        try values.encodeIfPresent(origin, forKey: .origin)
+        try values.encodeIfPresent(caption, forKey: .caption)
+        try values.encodeIfPresent(analysis, forKey: .analysis)
+        try values.encodeIfPresent(hiddenFromSummary, forKey: .hiddenFromSummary)
+        try values.encodeIfPresent(removedAt, forKey: .removedAt)
+        try unknownFields.encode(to: encoder)
     }
 
     /// Field-wise merge of two copies of one photo (`MeetingMerge`): the person's caption, removal,
@@ -168,6 +222,10 @@ public struct MeetingPhoto: Codable, Equatable, Identifiable, Sendable {
         if local.trackID != remote.trackID || local.time != remote.time {
             let timing = pick("photo-time:\(local.id)", PhotoTiming(local), PhotoTiming(remote), base.map(PhotoTiming.init))
             result.trackID = timing.trackID; result.time = timing.time
+        }
+        // What a newer Daybook added to it, key by key.
+        result.unknownFields = UnknownFields.merged(base: base?.unknownFields, local.unknownFields, remote.unknownFields) { key, smaller, larger in
+            conflict("photo-unknown:\(local.id):\(key)", smaller, larger)
         }
         return result
     }

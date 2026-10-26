@@ -70,6 +70,8 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// How Daybook captured this track (capture path, measured clock rate, echo removal). Nil for
     /// imports, except a recorder's with its measured clock (`TrackCaptureDetails.recorderClock`).
     public var capture: TrackCaptureDetails?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
                 fileName: String, createdAt: Date = Date(), duration: TimeInterval? = nil,
                 offset: TimeInterval? = nil, sha256: String = "", device: DeviceRecordingIdentity? = nil,
@@ -89,6 +91,54 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
             return DeviceRecordingIdentity(kind: deviceKind, serial: deviceSerial, recordingID: deviceRecordingID)
         }
         set { deviceKind = newValue?.kind; deviceSerial = newValue?.serial; deviceRecordingID = newValue?.recordingID }
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, source, relativePath, fileName, createdAt, duration, offset, sha256, deviceKind, deviceSerial,
+            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        _source = try values.decode(Extensible<AudioSource>.self, forKey: .source)
+        relativePath = try values.decode(String.self, forKey: .relativePath)
+        fileName = try values.decode(String.self, forKey: .fileName)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        duration = try values.decodeIfPresent(TimeInterval.self, forKey: .duration)
+        offset = try values.decodeIfPresent(TimeInterval.self, forKey: .offset)
+        sha256 = try values.decode(String.self, forKey: .sha256)
+        deviceKind = try values.decodeIfPresent(String.self, forKey: .deviceKind)
+        deviceSerial = try values.decodeIfPresent(String.self, forKey: .deviceSerial)
+        deviceRecordingID = try values.decodeIfPresent(String.self, forKey: .deviceRecordingID)
+        derivedFrom = try values.decodeIfPresent(UUID.self, forKey: .derivedFrom)
+        processing = try values.decodeIfPresent(String.self, forKey: .processing)
+        startedAt = try values.decodeIfPresent(Date.self, forKey: .startedAt)
+        alignment = try values.decodeIfPresent(SourceAlignment.self, forKey: .alignment)
+        capture = try values.decodeIfPresent(TrackCaptureDetails.self, forKey: .capture)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(_source, forKey: .source)
+        try values.encode(relativePath, forKey: .relativePath)
+        try values.encode(fileName, forKey: .fileName)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encodeIfPresent(duration, forKey: .duration)
+        try values.encodeIfPresent(offset, forKey: .offset)
+        try values.encode(sha256, forKey: .sha256)
+        try values.encodeIfPresent(deviceKind, forKey: .deviceKind)
+        try values.encodeIfPresent(deviceSerial, forKey: .deviceSerial)
+        try values.encodeIfPresent(deviceRecordingID, forKey: .deviceRecordingID)
+        try values.encodeIfPresent(derivedFrom, forKey: .derivedFrom)
+        try values.encodeIfPresent(processing, forKey: .processing)
+        try values.encodeIfPresent(startedAt, forKey: .startedAt)
+        try values.encodeIfPresent(alignment, forKey: .alignment)
+        try values.encodeIfPresent(capture, forKey: .capture)
+        try unknownFields.encode(to: encoder)
     }
 }
 
@@ -213,9 +263,36 @@ public struct Highlight: Codable, Equatable, Identifiable, Sendable {
     public var time: TimeInterval
     public var text: String
     public var duration: TimeInterval?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), trackID: UUID? = nil, time: TimeInterval, text: String = "", duration: TimeInterval? = nil) {
         self.id = id; self.trackID = trackID; self.time = time; self.text = text
         self.duration = duration
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, trackID, time, text, duration
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        trackID = try values.decodeIfPresent(UUID.self, forKey: .trackID)
+        time = try values.decode(TimeInterval.self, forKey: .time)
+        text = try values.decode(String.self, forKey: .text)
+        duration = try values.decodeIfPresent(TimeInterval.self, forKey: .duration)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encodeIfPresent(trackID, forKey: .trackID)
+        try values.encode(time, forKey: .time)
+        try values.encode(text, forKey: .text)
+        try values.encodeIfPresent(duration, forKey: .duration)
+        try unknownFields.encode(to: encoder)
     }
 }
 
@@ -226,9 +303,34 @@ public struct SummarySection: Codable, Equatable, Identifiable, Sendable {
     /// Photos this section shows (`MeetingPhoto.id`), in order. Nil for none, and in summaries
     /// written before photos.
     public var photoIDs: [UUID]?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), heading: String, body: String, photoIDs: [UUID]? = nil) {
         self.id = id; self.heading = heading; self.body = body
         self.photoIDs = photoIDs?.isEmpty == true ? nil : photoIDs
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, heading, body, photoIDs
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        heading = try values.decode(String.self, forKey: .heading)
+        body = try values.decode(String.self, forKey: .body)
+        photoIDs = try values.decodeIfPresent([UUID].self, forKey: .photoIDs)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(heading, forKey: .heading)
+        try values.encode(body, forKey: .body)
+        try values.encodeIfPresent(photoIDs, forKey: .photoIDs)
+        try unknownFields.encode(to: encoder)
     }
 }
 
@@ -237,8 +339,33 @@ public struct ActionItem: Codable, Equatable, Identifiable, Sendable {
     public var text: String
     public var owner: String?
     public var completed: Bool
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), text: String, owner: String? = nil, completed: Bool = false) {
         self.id = id; self.text = text; self.owner = owner; self.completed = completed
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, text, owner, completed
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        text = try values.decode(String.self, forKey: .text)
+        owner = try values.decodeIfPresent(String.self, forKey: .owner)
+        completed = try values.decode(Bool.self, forKey: .completed)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(text, forKey: .text)
+        try values.encodeIfPresent(owner, forKey: .owner)
+        try values.encode(completed, forKey: .completed)
+        try unknownFields.encode(to: encoder)
     }
 }
 
@@ -251,12 +378,45 @@ public struct MeetingSummary: Codable, Equatable, Sendable {
     public var modelID: String
     public var createdAt: Date
     public var processingSettings: ProcessingSettings?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(kind: MeetingKind = .general, title: String = "", overview: String,
                 sections: [SummarySection] = [], actionItems: [ActionItem] = [],
                 modelID: String = "", createdAt: Date = Date(), processingSettings: ProcessingSettings? = nil) {
         self.kind = kind; self.title = title; self.overview = overview; self.sections = sections
         self.actionItems = actionItems; self.modelID = modelID; self.createdAt = createdAt
         self.processingSettings = processingSettings
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case kind, title, overview, sections, actionItems, modelID, createdAt, processingSettings
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        _kind = try values.decode(Extensible<MeetingKind>.self, forKey: .kind)
+        title = try values.decode(String.self, forKey: .title)
+        overview = try values.decode(String.self, forKey: .overview)
+        sections = try values.decode([SummarySection].self, forKey: .sections)
+        actionItems = try values.decode([ActionItem].self, forKey: .actionItems)
+        modelID = try values.decode(String.self, forKey: .modelID)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        processingSettings = try values.decodeIfPresent(ProcessingSettings.self, forKey: .processingSettings)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(_kind, forKey: .kind)
+        try values.encode(title, forKey: .title)
+        try values.encode(overview, forKey: .overview)
+        try values.encode(sections, forKey: .sections)
+        try values.encode(actionItems, forKey: .actionItems)
+        try values.encode(modelID, forKey: .modelID)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encodeIfPresent(processingSettings, forKey: .processingSettings)
+        try unknownFields.encode(to: encoder)
     }
 }
 
@@ -313,6 +473,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     /// Photos taken or added for the conversation (`Photos.swift`), deleted ones included. Nil until
     /// the first photo.
     public var photos: [MeetingPhoto]?
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
                 updatedAt: Date = Date(), kind: MeetingKind = .auto, notes: String = "",
                 tracks: [RecordingTrack] = [], transcripts: [TrackTranscript] = [],
@@ -392,6 +554,84 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         guard let alignment = alignmentReports.first(where: { $0.trackID == trackID }), alignment.method != .unaligned else { return nil }
         return highlight.time * alignment.rate + alignment.offset
     }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion, id, title, date, updatedAt, kind, notes, timedNotes, folderID, tags, templateID,
+            placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
+            speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
+            audioAlignments, fusionSummary, processingRequests, photos
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        id = try values.decode(UUID.self, forKey: .id)
+        title = try values.decode(String.self, forKey: .title)
+        date = try values.decode(Date.self, forKey: .date)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        _kind = try values.decode(Extensible<MeetingKind>.self, forKey: .kind)
+        notes = try values.decode(String.self, forKey: .notes)
+        timedNotes = try values.decodeIfPresent([TimedNote].self, forKey: .timedNotes)
+        folderID = try values.decodeIfPresent(UUID.self, forKey: .folderID)
+        tags = try values.decodeIfPresent([String].self, forKey: .tags)
+        templateID = try values.decodeIfPresent(String.self, forKey: .templateID)
+        _placement = try values.decode(ExtensibleOptional<LibraryPlacement>.self, forKey: .placement)
+        tracks = try values.decode([RecordingTrack].self, forKey: .tracks)
+        transcripts = try values.decode([TrackTranscript].self, forKey: .transcripts)
+        unifiedTranscript = try values.decode([TranscriptSegment].self, forKey: .unifiedTranscript)
+        alignmentReports = try values.decode([TrackAlignment].self, forKey: .alignmentReports)
+        summary = try values.decodeIfPresent(MeetingSummary.self, forKey: .summary)
+        revisions = try values.decode([MeetingRevision].self, forKey: .revisions)
+        highlights = try values.decode([Highlight].self, forKey: .highlights)
+        speakers = try values.decode([Speaker].self, forKey: .speakers)
+        _status = try values.decode(Extensible<MeetingStatus>.self, forKey: .status)
+        errorMessage = try values.decodeIfPresent(String.self, forKey: .errorMessage)
+        correctionTransferIssues = try values.decodeIfPresent([CorrectionTransferIssue].self, forKey: .correctionTransferIssues)
+        speakerMatches = try values.decodeIfPresent([SpeakerMatch].self, forKey: .speakerMatches)
+        companions = try values.decodeIfPresent([CompanionRecording].self, forKey: .companions)
+        sourceSuggestions = try values.decodeIfPresent([SourceSuggestion].self, forKey: .sourceSuggestions)
+        audioAlignments = try values.decodeIfPresent([TrackAudioAlignment].self, forKey: .audioAlignments)
+        fusionSummary = try values.decodeIfPresent(FusionSummary.self, forKey: .fusionSummary)
+        processingRequests = try values.decodeIfPresent([ProcessingRequest].self, forKey: .processingRequests)
+        photos = try values.decodeIfPresent([MeetingPhoto].self, forKey: .photos)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(schemaVersion, forKey: .schemaVersion)
+        try values.encode(id, forKey: .id)
+        try values.encode(title, forKey: .title)
+        try values.encode(date, forKey: .date)
+        try values.encode(updatedAt, forKey: .updatedAt)
+        try values.encode(_kind, forKey: .kind)
+        try values.encode(notes, forKey: .notes)
+        try values.encodeIfPresent(timedNotes, forKey: .timedNotes)
+        try values.encodeIfPresent(folderID, forKey: .folderID)
+        try values.encodeIfPresent(tags, forKey: .tags)
+        try values.encodeIfPresent(templateID, forKey: .templateID)
+        try values.encode(_placement, forKey: .placement)
+        try values.encode(tracks, forKey: .tracks)
+        try values.encode(transcripts, forKey: .transcripts)
+        try values.encode(unifiedTranscript, forKey: .unifiedTranscript)
+        try values.encode(alignmentReports, forKey: .alignmentReports)
+        try values.encodeIfPresent(summary, forKey: .summary)
+        try values.encode(revisions, forKey: .revisions)
+        try values.encode(highlights, forKey: .highlights)
+        try values.encode(speakers, forKey: .speakers)
+        try values.encode(_status, forKey: .status)
+        try values.encodeIfPresent(errorMessage, forKey: .errorMessage)
+        try values.encodeIfPresent(correctionTransferIssues, forKey: .correctionTransferIssues)
+        try values.encodeIfPresent(speakerMatches, forKey: .speakerMatches)
+        try values.encodeIfPresent(companions, forKey: .companions)
+        try values.encodeIfPresent(sourceSuggestions, forKey: .sourceSuggestions)
+        try values.encodeIfPresent(audioAlignments, forKey: .audioAlignments)
+        try values.encodeIfPresent(fusionSummary, forKey: .fusionSummary)
+        try values.encodeIfPresent(processingRequests, forKey: .processingRequests)
+        try values.encodeIfPresent(photos, forKey: .photos)
+        try unknownFields.encode(to: encoder)
+    }
 }
 
 public struct GlossaryTerm: Codable, Equatable, Identifiable, Sendable {
@@ -404,9 +644,42 @@ public struct GlossaryTerm: Codable, Equatable, Identifiable, Sendable {
     public var sourceMeetingIDs: [UUID]
     public var occurrences: Int
     public var updatedAt: Date
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), term: String, aliases: [String] = [], definition: String = "",
                 approved: Bool = false, sourceMeetingIDs: [UUID] = [], occurrences: Int = 1, updatedAt: Date = Date()) {
         self.id = id; self.term = term; self.aliases = aliases; self.definition = definition
         self.approved = approved; self.sourceMeetingIDs = sourceMeetingIDs; self.occurrences = occurrences; self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, term, aliases, definition, approved, sourceMeetingIDs, occurrences, updatedAt
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        term = try values.decode(String.self, forKey: .term)
+        aliases = try values.decode([String].self, forKey: .aliases)
+        definition = try values.decode(String.self, forKey: .definition)
+        approved = try values.decode(Bool.self, forKey: .approved)
+        sourceMeetingIDs = try values.decode([UUID].self, forKey: .sourceMeetingIDs)
+        occurrences = try values.decode(Int.self, forKey: .occurrences)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(term, forKey: .term)
+        try values.encode(aliases, forKey: .aliases)
+        try values.encode(definition, forKey: .definition)
+        try values.encode(approved, forKey: .approved)
+        try values.encode(sourceMeetingIDs, forKey: .sourceMeetingIDs)
+        try values.encode(occurrences, forKey: .occurrences)
+        try values.encode(updatedAt, forKey: .updatedAt)
+        try unknownFields.encode(to: encoder)
     }
 }

@@ -6,11 +6,38 @@ public struct SummaryTemplate: Codable, Equatable, Identifiable, Sendable {
     @Extensible public var kind: MeetingKind
     public var instructions: String
     public var updatedAt: Date
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
 
     public init(id: String = "custom-" + UUID().uuidString.lowercased(), name: String,
                 kind: MeetingKind = .general, instructions: String, updatedAt: Date = Date()) {
         self.id = id; self.name = name; self.kind = kind
         self.instructions = instructions; self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, name, kind, instructions, updatedAt
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        _kind = try values.decode(Extensible<MeetingKind>.self, forKey: .kind)
+        instructions = try values.decode(String.self, forKey: .instructions)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(name, forKey: .name)
+        try values.encode(_kind, forKey: .kind)
+        try values.encode(instructions, forKey: .instructions)
+        try values.encode(updatedAt, forKey: .updatedAt)
+        try unknownFields.encode(to: encoder)
     }
 
     /// Stable IDs allow a user's edited version to override the built-in format.

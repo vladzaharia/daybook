@@ -3,7 +3,28 @@ import Foundation
 public struct LibraryFolder: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), name: String) { self.id = id; self.name = name }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, name
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(name, forKey: .name)
+        try unknownFields.encode(to: encoder)
+    }
 }
 
 /// Per-item versions avoid losing an unrelated folder or template edited on another Mac.
@@ -15,6 +36,8 @@ public struct LibraryValue<Value: Codable & Equatable & Sendable>: Codable, Equa
     /// A value a newer Daybook wrote in a shape this version can't read. It isn't shown here (`value` is nil),
     /// isn't a deletion, and is written back exactly as it came, so this device never drops it for the others.
     public private(set) var unreadableValue: SyncJSONValue?
+    /// Keys a newer Daybook wrote beside the value that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
     public init(id: String, value: Value?, modifiedAt: Date = Date()) {
         self.id = id; self.value = value; self.modifiedAt = modifiedAt
     }
@@ -22,7 +45,7 @@ public struct LibraryValue<Value: Codable & Equatable & Sendable>: Codable, Equa
     /// A deletion marker, as opposed to a value this version can't read.
     public var isDeletion: Bool { value == nil && unreadableValue == nil }
 
-    private enum CodingKeys: String, CodingKey { case id, value, modifiedAt }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, value, modifiedAt }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -30,6 +53,7 @@ public struct LibraryValue<Value: Codable & Equatable & Sendable>: Codable, Equa
         modifiedAt = try values.decode(Date.self, forKey: .modifiedAt)
         do { value = try values.decodeIfPresent(Value.self, forKey: .value) }
         catch { value = nil; unreadableValue = try values.decode(SyncJSONValue.self, forKey: .value) }
+        unknownFields = try UnknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.rawValue)))
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -37,6 +61,7 @@ public struct LibraryValue<Value: Codable & Equatable & Sendable>: Codable, Equa
         try values.encode(id, forKey: .id)
         try values.encode(modifiedAt, forKey: .modifiedAt)
         if let unreadableValue { try values.encode(unreadableValue, forKey: .value) } else { try values.encodeIfPresent(value, forKey: .value) }
+        try unknownFields.encode(to: encoder)
     }
 }
 
@@ -56,6 +81,8 @@ public struct RecorderOwnership: Codable, Equatable, Sendable {
     public var ownerName: String
     @Extensible public var ownerClass: SyncDeviceClass
     public var claimedAt: Date
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
 
     public init(kind: String, serial: String, ownerID: String, ownerName: String, ownerClass: SyncDeviceClass, claimedAt: Date = Date()) {
         self.kind = kind; self.serial = serial; self.ownerID = ownerID; self.ownerName = ownerName
@@ -65,6 +92,33 @@ public struct RecorderOwnership: Codable, Equatable, Sendable {
     /// The record's key in `LibraryMetadata.recorders`.
     public static func id(kind: String, serial: String) -> String { "\(kind)|\(serial)" }
     public var id: String { Self.id(kind: kind, serial: serial) }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case kind, serial, ownerID, ownerName, ownerClass, claimedAt
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try values.decode(String.self, forKey: .kind)
+        serial = try values.decode(String.self, forKey: .serial)
+        ownerID = try values.decode(String.self, forKey: .ownerID)
+        ownerName = try values.decode(String.self, forKey: .ownerName)
+        _ownerClass = try values.decode(Extensible<SyncDeviceClass>.self, forKey: .ownerClass)
+        claimedAt = try values.decode(Date.self, forKey: .claimedAt)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(serial, forKey: .serial)
+        try values.encode(ownerID, forKey: .ownerID)
+        try values.encode(ownerName, forKey: .ownerName)
+        try values.encode(_ownerClass, forKey: .ownerClass)
+        try values.encode(claimedAt, forKey: .claimedAt)
+        try unknownFields.encode(to: encoder)
+    }
 }
 
 /// A recorder moving from one device to another through sync, when the two aren't on the local link
@@ -131,6 +185,8 @@ public struct RecorderHandoffRecord: Codable, Equatable, Sendable {
     public var recordingInProgress: PendingImport?
     public var requestedAt: Date
     public var updatedAt: Date
+    /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
+    public var unknownFields = UnknownFields()
 
     public init(id: UUID = UUID(), kind: String, serial: String, ownerID: String, ownerName: String, requesterID: String,
                 requesterName: String, requesterClass: SyncDeviceClass, phase: Phase = .requested, message: String? = nil,
@@ -147,6 +203,54 @@ public struct RecorderHandoffRecord: Codable, Equatable, Sendable {
 
     /// The record's key in `LibraryMetadata.handoffs`: the recorder's.
     public var recorderID: String { RecorderOwnership.id(kind: kind, serial: serial) }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, kind, serial, ownerID, ownerName, requesterID, requesterName, requesterClass, phase, message,
+            pendingImports, importedRecordingIDs, recorderIsRecording, recordingInProgress, requestedAt, updatedAt
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        kind = try values.decode(String.self, forKey: .kind)
+        serial = try values.decode(String.self, forKey: .serial)
+        ownerID = try values.decode(String.self, forKey: .ownerID)
+        ownerName = try values.decode(String.self, forKey: .ownerName)
+        requesterID = try values.decode(String.self, forKey: .requesterID)
+        requesterName = try values.decode(String.self, forKey: .requesterName)
+        _requesterClass = try values.decode(Extensible<SyncDeviceClass>.self, forKey: .requesterClass)
+        _phase = try values.decode(Extensible<Phase>.self, forKey: .phase)
+        message = try values.decodeIfPresent(String.self, forKey: .message)
+        pendingImports = try values.decodeIfPresent([PendingImport].self, forKey: .pendingImports)
+        importedRecordingIDs = try values.decodeIfPresent([String].self, forKey: .importedRecordingIDs)
+        recorderIsRecording = try values.decodeIfPresent(Bool.self, forKey: .recorderIsRecording)
+        recordingInProgress = try values.decodeIfPresent(PendingImport.self, forKey: .recordingInProgress)
+        requestedAt = try values.decode(Date.self, forKey: .requestedAt)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(serial, forKey: .serial)
+        try values.encode(ownerID, forKey: .ownerID)
+        try values.encode(ownerName, forKey: .ownerName)
+        try values.encode(requesterID, forKey: .requesterID)
+        try values.encode(requesterName, forKey: .requesterName)
+        try values.encode(_requesterClass, forKey: .requesterClass)
+        try values.encode(_phase, forKey: .phase)
+        try values.encodeIfPresent(message, forKey: .message)
+        try values.encodeIfPresent(pendingImports, forKey: .pendingImports)
+        try values.encodeIfPresent(importedRecordingIDs, forKey: .importedRecordingIDs)
+        try values.encodeIfPresent(recorderIsRecording, forKey: .recorderIsRecording)
+        try values.encodeIfPresent(recordingInProgress, forKey: .recordingInProgress)
+        try values.encode(requestedAt, forKey: .requestedAt)
+        try values.encode(updatedAt, forKey: .updatedAt)
+        try unknownFields.encode(to: encoder)
+    }
 }
 
 public struct LibraryMetadata: Codable, Equatable, Sendable {
@@ -160,6 +264,9 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
     /// Recorder handoffs travelling through sync, by recorder (`RecorderOwnership.id`). Optional, like
     /// `recorders`, so earlier files decode and earlier versions ignore it.
     public var handoffs: [LibraryValue<RecorderHandoffRecord>]?
+    /// Settings a newer Daybook keeps under keys this version doesn't know, written back as they came
+    /// and merged by `merging` (a list of per-item records item by item).
+    public var unknownFields = UnknownFields()
     public init() {}
 
     public func merging(_ other: Self) -> Self {
@@ -169,7 +276,42 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         value.vocabulary = Self.merge(vocabulary, other.vocabulary)
         if recorders != nil || other.recorders != nil { value.recorders = Self.merge(recorders ?? [], other.recorders ?? []) }
         if handoffs != nil || other.handoffs != nil { value.handoffs = Self.merge(handoffs ?? [], other.handoffs ?? []) }
+        var unknown: [String: SyncJSONValue] = [:]
+        for key in Set(unknownFields.values.keys).union(other.unknownFields.values.keys) {
+            switch (unknownFields[key], other.unknownFields[key]) {
+            case let (a?, b?): unknown[key] = SyncJSONValue.mergedLibrarySetting(a, b)
+            case let (a, b): unknown[key] = a ?? b
+            }
+        }
+        value.unknownFields = UnknownFields(unknown)
         return value
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion, folders, templates, vocabulary, recorders, handoffs
+    }
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        folders = try values.decode([LibraryValue<LibraryFolder>].self, forKey: .folders)
+        templates = try values.decode([LibraryValue<SummaryTemplate>].self, forKey: .templates)
+        vocabulary = try values.decode([LibraryValue<GlossaryTerm>].self, forKey: .vocabulary)
+        recorders = try values.decodeIfPresent([LibraryValue<RecorderOwnership>].self, forKey: .recorders)
+        handoffs = try values.decodeIfPresent([LibraryValue<RecorderHandoffRecord>].self, forKey: .handoffs)
+        unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(schemaVersion, forKey: .schemaVersion)
+        try values.encode(folders, forKey: .folders)
+        try values.encode(templates, forKey: .templates)
+        try values.encode(vocabulary, forKey: .vocabulary)
+        try values.encodeIfPresent(recorders, forKey: .recorders)
+        try values.encodeIfPresent(handoffs, forKey: .handoffs)
+        try unknownFields.encode(to: encoder)
     }
 
     /// Some settings were written by a newer Daybook in a shape this version can't read.
