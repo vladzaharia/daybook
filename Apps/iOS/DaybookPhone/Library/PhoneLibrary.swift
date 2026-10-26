@@ -210,7 +210,8 @@ final class PhoneLibrary {
         var target = attachTo.flatMap { controller.meeting($0) != nil ? $0 : nil }
         if target == nil { target = try await controller.existingMeeting(containingAudioAt: url)?.id }
         let id = target ?? controller.newMeeting(title: Self.deviceTitle(identity, fallback: url), date: Self.deviceStart(identity) ?? Date())
-        _ = try await controller.ingest(url, into: id, provenance: .file(source: source, device: identity, duration: duration))
+        _ = try await controller.ingest(url, into: id, provenance: .file(source: source, device: identity, duration: duration,
+                                                                        recorderClock: DeviceRecordingStart.clock(of: identity)))
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
         await controller.flush()
         guard let meeting = controller.meeting(id) else { throw DaybookError.libraryUnavailable }
