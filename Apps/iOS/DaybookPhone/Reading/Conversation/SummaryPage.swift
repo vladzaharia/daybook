@@ -15,6 +15,7 @@ struct SummaryPage: View {
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
     @Environment(\.macSighting) private var sightingOverride
+    @Environment(\.isTwoPage) private var twoPage
     @State private var consumedToken = 0
 
     var body: some View {
@@ -27,6 +28,15 @@ struct SummaryPage: View {
                     }
                     if let status {
                         StatusView(presentation: status, perform: perform).padding(.top, PhoneStyle.Space.s4).id("status")
+                    } else if meeting.tracks.isEmpty && !twoPage {
+                        // Only notes so far. Two pages show this on the transcript's page.
+                        HStack(alignment: .center, spacing: PhoneStyle.Space.s3) {
+                            Text("No recording yet").font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.secondary)
+                            Spacer(minLength: 0)
+                            RecordIntoButton(meeting: meeting)
+                        }
+                        .padding(.top, PhoneStyle.Space.s4)
+                        .id("status")
                     }
                     if let summary = meeting.summary {
                         SummaryBody(library: library, meeting: meeting, summary: summary, play: play)

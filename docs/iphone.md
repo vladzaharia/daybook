@@ -16,7 +16,7 @@ Everything below is in v1:
   - Photos from the camera at their moment in the recording ([photos](photos.md)).
   - Start, stop, and bookmark from the Lock Screen, Dynamic Island / Live Activity, Control Center, the Action button, and Siri (App Intents).
   - **Live captions while recording.** Tentative, on-device captions from the Speech framework's `SpeechTranscriber` (volatile results), shown like closed captions. They prove the audio pipeline is working and give something to read until the Mac's transcript arrives, and they are never the transcript: phone-local (`<library>/LiveCaptions/<id>.json`, never synced), never fused, summarized, or used as evidence, and hidden once the official transcript exists. If the language isn't available, the app says so and recording is unaffected.
-- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select. New Note starts a conversation that's only your notes (and any photos), with nothing to transcribe.
+- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select. New Note starts a conversation that's only your notes (and any photos), titled "Note at 10:15 AM", as on the Mac. Its page says "No recording yet" with Record, which records into it; the recording joins after the notes.
 - **Reading.**
   - The summary page: lede, next steps, sections, your notes, bookmarks, colophon.
   - The transcript: speakers, times, tap to play.

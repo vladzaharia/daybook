@@ -416,7 +416,9 @@ private struct EmptyTranscript: View {
                 Text(message).font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if !meeting.tracks.isEmpty {
+            if meeting.tracks.isEmpty {
+                RecordIntoButton(meeting: meeting).padding(.top, PhoneStyle.Space.s1)
+            } else {
                 Button { play(.timeline(0)) } label: {
                     Label("Play Recording", systemImage: "play.fill").font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
@@ -438,7 +440,6 @@ private struct EmptyTranscript: View {
     }
 
     private var message: String? {
-        if meeting.tracks.isEmpty { return "Record into it on your Mac to add a transcript." }
         if case .failed(let failure) = ProcessingStatus(meeting) {
             return FriendlyError.isNoSpeech(failure.reason) ? "No speech was found in this recording. The audio is saved." : "Your Mac couldn’t finish transcribing it. The audio is saved."
         }
@@ -451,5 +452,27 @@ private struct PageTitle: ViewModifier {
     let title: String?
     func body(content: Content) -> some View {
         if let title { content.navigationTitle(title) } else { content }
+    }
+}
+
+/// Record, into a conversation that's only notes so far: the recording joins it, after the notes.
+struct RecordIntoButton: View {
+    let meeting: Meeting
+    @Environment(PhoneAppModel.self) private var model
+
+    var body: some View {
+        Button {
+            Task { try? await model.startRecording(into: meeting.id, title: meeting.title, multipoint: nil) }
+        } label: {
+            HStack(spacing: PhoneStyle.Space.s2) {
+                Circle().fill(PhoneStyle.Ink.record).frame(width: 10, height: 10).accessibilityHidden(true)
+                Text("Record").font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(PhoneStyle.Ink.title)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+        }
+        .buttonStyle(.glass)
+        .disabled(model.recorder.state != .idle || model.isFiling)
+        .accessibilityHint("Records into this conversation")
     }
 }
