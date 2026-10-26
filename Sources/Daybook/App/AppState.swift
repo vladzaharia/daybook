@@ -77,8 +77,12 @@ final class AppState: ObservableObject {
     /// Photos that couldn't be read wait before they're tried again (AppState+Photos.swift).
     var photoBackoff = PhotoReadingBackoff()
     var photoRetry: Task<Void, Never>?
-    @Published var processingProgress = IntelligenceProgress(0, "Ready") {
-        didSet { processingProgressChanged() }
+    /// The running job's progress, throttled (`ActivityProgress`). The window is redrawn when its
+    /// percent or message changes; views that draw it continuously observe `processingActivity`.
+    let processingActivity = ActivityProgress(IntelligenceProgress(0, "Ready"))
+    var processingProgress: IntelligenceProgress {
+        get { processingActivity.value }
+        set { processingActivity.set(newValue) }
     }
     @Published var processingQueue: [ProcessingJob] = []
     /// The job running now (`processingID`'s), with the request it carries out, if any.
@@ -113,7 +117,12 @@ final class AppState: ObservableObject {
         }
     }
     @Published var downloadingID: String?
-    @Published var downloadProgress = IntelligenceProgress(0, "")
+    /// The current download's progress, throttled like `processingActivity`.
+    let downloadActivity = ActivityProgress(IntelligenceProgress(0, ""))
+    var downloadProgress: IntelligenceProgress {
+        get { downloadActivity.value }
+        set { downloadActivity.set(newValue) }
+    }
     var glossary: [GlossaryTerm] { library.glossary }
     @Published var recordingID: UUID?
     @Published var isStartingRecording = false
@@ -184,6 +193,10 @@ final class AppState: ObservableObject {
     private var recordingWasAutomatic = false
     private var captureDirectory: URL?
     private var notesPanel: NotesPanelController?
+    /// Bumped whenever the library's conversations change: the key for what's derived from them.
+    private(set) var libraryRevision = 0
+    private var visibleMemo: (place: LibraryPlace, revision: Int, meetings: [Meeting])?
+    let searchMemo = LibrarySearchMemo()
 
     init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard) {
         let storedPreferences = defaults.data(forKey: "processingPreferences").flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
@@ -239,6 +252,13 @@ final class AppState: ObservableObject {
         for publisher in [library.objectWillChange.eraseToAnyPublisher(), recorder.objectWillChange.eraseToAnyPublisher(), monitor.objectWillChange.eraseToAnyPublisher(), sync.objectWillChange.eraseToAnyPublisher(), devices.objectWillChange.eraseToAnyPublisher(), sources.objectWillChange.eraseToAnyPublisher(), phoneLink.objectWillChange.eraseToAnyPublisher()] {
             publisher.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         }
+        library.$meetings.sink { [weak self] _ in self?.libraryRevision &+= 1 }.store(in: &subscriptions)
+        processingActivity.onChange = { [weak self] visible in
+            if visible { self?.objectWillChange.send() }
+            self?.processingProgressChanged()
+        }
+        downloadActivity.onChange = { [weak self] visible in if visible { self?.objectWillChange.send() } }
+        searchMemo.onUpdate = { [weak self] in self?.objectWillChange.send() }
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in
             guard let self, self.automaticRecording, self.recordingID == nil, !self.isStartingRecording else { return }
@@ -291,15 +311,24 @@ final class AppState: ObservableObject {
         if let data = try? JSONEncoder().encode(migrated) { defaults.set(data, forKey: "modelSelections") }
         return migrated
     }
-    /// Conversations in the selected place, newest first.
+    /// Conversations in the selected place, newest first. Kept until the place or the library changes.
     var visibleMeetings: [Meeting] {
-        meetings.filter { meeting in
+        if let memo = visibleMemo, memo.place == place, memo.revision == libraryRevision { return memo.meetings }
+        let visible = meetings.filter { meeting in
             switch place {
             case .section(let section): return section.contains(meeting)
             case .folder(let id): return meeting.folderID == id
             case .device: return false
             }
         }.sorted { $0.date > $1.date }
+        visibleMemo = (place, libraryRevision, visible)
+        return visible
+    }
+
+    /// The library search's results for the current query, kept until it or the library changes;
+    /// a large library is searched off the main actor (`LibrarySearchMemo`).
+    var searchHits: [SearchHit] {
+        searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
     }
     var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty || !searchTokens.isEmpty }
 
@@ -571,9 +600,8 @@ final class AppState: ObservableObject {
         let engine = processingEngine(for: request)
         let terms = glossary.filter { $0.approved || $0.sourceMeetingIDs.contains(id) }.map(\.term)
         update(id) { $0.status = .transcribing; $0.errorMessage = nil }
-        let progress: ProcessingProgressHandler = { [weak self] value in
-            Task { @MainActor in self?.processingProgress = IntelligenceProgress(value.fraction, value.message) }
-        }
+        let activity = processingActivity
+        let progress: ProcessingProgressHandler = { value in activity.report(IntelligenceProgress(value.fraction, value.message)) }
         let matching = options.matchSpeakersAcrossSources
             ? SpeakerMatchingConfiguration(minimumSimilarity: options.speakerMatchThreshold, minimumMargin: options.speakerMatchMargin) : nil
         if request.mode != .summaryOnly {
@@ -659,9 +687,8 @@ final class AppState: ObservableObject {
         downloadTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.runtime.download(modelID: modelID) { [weak self] progress in
-                    Task { @MainActor in self?.downloadProgress = progress }
-                }
+                let activity = self.downloadActivity
+                try await self.runtime.download(modelID: modelID) { progress in activity.report(progress) }
                 await self.refreshInstalledModels()
                 self.collectOldModelRevisions()
             } catch is CancellationError { self.notice = "Download cancelled." }
