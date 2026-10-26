@@ -34,7 +34,7 @@ enum RecordingAssembler {
                 let file = try AVAudioFile(forReading: piece.url, commonFormat: .pcmFormatFloat32, interleaved: false)
                 if file.length > 0 { readable.append((piece, file)) }
             } catch {
-                warnings.append("Part of the recording couldn't be read and was left out (\(piece.url.lastPathComponent)).")
+                warnings.append("Part of the recording couldn’t be read and was left out (\(piece.url.lastPathComponent)).")
             }
         }
         guard !readable.isEmpty else { throw PhoneRecorderError.nothingRecorded }

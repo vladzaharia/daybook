@@ -102,11 +102,11 @@ final class CaptureRecoveryTests: XCTestCase {
         XCTAssertEqual(adopted.index, 1)
         XCTAssertEqual(adopted.startOffset, 3, accuracy: 1e-9, "straight after the previous part")
         XCTAssertFalse(adopted.closed)
-        XCTAssertEqual(adopted.notes, ["Placed after the previous part; its exact start wasn't saved."])
+        XCTAssertEqual(adopted.notes, ["Placed after the previous part; its exact start wasn’t saved."])
         XCTAssertEqual(after.finalFile?.frameCount, first + orphanFrames, "both parts, with no gap between them")
         XCTAssertEqual(after.finalFile?.joined, true)
-        XCTAssertTrue(recording.capture.notes?.contains("Placed after the previous part; its exact start wasn't saved.") == true)
-        XCTAssertTrue(recording.warnings.contains("Part of the recording couldn't be read and was left out (segment-002.m4a)."),
+        XCTAssertTrue(recording.capture.notes?.contains("Placed after the previous part; its exact start wasn’t saved.") == true)
+        XCTAssertTrue(recording.warnings.contains("Part of the recording couldn’t be read and was left out (segment-002.m4a)."),
                       "\(recording.warnings)")
 
         let audio = try DecodedAudio(url: recording.audioURL)

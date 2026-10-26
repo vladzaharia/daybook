@@ -712,7 +712,7 @@ final class AppState: ObservableObject {
                 try await self.runtime.download(modelID: modelID) { progress in activity.report(progress) }
                 await self.refreshInstalledModels()
                 self.collectOldModelRevisions()
-            } catch is CancellationError { self.notice = "Download cancelled." }
+            } catch is CancellationError { self.notice = "Download canceled." }
             catch { self.errorMessage = "Model download failed: \(error.localizedDescription)" }
             self.downloadingID = nil; self.downloadTask = nil
             if !Task.isCancelled, let next = self.pendingDownloads.first {

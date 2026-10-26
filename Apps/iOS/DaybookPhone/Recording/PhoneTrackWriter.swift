@@ -203,7 +203,7 @@ final class PhoneTrackWriter: @unchecked Sendable {
         } catch {
             // The fragments already on disk stay readable; recovery uses them.
             writer.cancel()
-            pendingNotes.append("The segment couldn't be finished: \(error.localizedDescription)")
+            pendingNotes.append("The segment couldn’t be finished: \(error.localizedDescription)")
         }
         converter = nil
         return lock.withLock { () -> CaptureSegment? in

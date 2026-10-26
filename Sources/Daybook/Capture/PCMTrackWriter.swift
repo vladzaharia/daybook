@@ -221,7 +221,7 @@ final class PCMTrackWriter: @unchecked Sendable {
             if input.format.channelCount > format.channelCount { created.downmix = true }
             converter = created
             pendingResync = true
-            notes.append("The \(role.rawValue) changed to \(Int(input.format.sampleRate)) Hz, \(input.format.channelCount) ch; converted to the recording's format.")
+            notes.append("The \(role.rawValue) changed to \(Int(input.format.sampleRate)) Hz, \(input.format.channelCount) ch; converted to the recording’s format.")
         }
         guard let converter else { throw RecordingError.audioFormatChanged }
         let capacity = AVAudioFrameCount(Double(input.frameLength) * format.sampleRate / input.format.sampleRate) + 64

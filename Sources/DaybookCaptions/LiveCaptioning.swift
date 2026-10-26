@@ -69,14 +69,14 @@ public enum LiveCaptionAvailability: Equatable, Sendable {
     }
 
     static func check(locale: Locale, asking system: Questions) async -> LiveCaptionAvailability {
-        guard system.deviceSupportsCaptions() else { return .unavailable("Live captions aren't available on this device.") }
+        guard system.deviceSupportsCaptions() else { return .unavailable("Live captions aren’t available on this device.") }
         guard let supported = await system.supportedLocale(locale) else {
-            return .unavailable("Captions aren't available for \(name(locale)).")
+            return .unavailable("Captions aren’t available for \(name(locale)).")
         }
         switch await system.modelStatus(supported) {
         case .installed: return .ready(supported)
         case .notInstalled: return .needsDownload(supported)
-        case .unsupported: return .unavailable("Captions aren't available for \(name(locale)).")
+        case .unsupported: return .unavailable("Captions aren’t available for \(name(locale)).")
         }
     }
 
@@ -197,7 +197,7 @@ public final class SpeechCaptioner: LiveCaptioning, @unchecked Sendable {
                 }
                 await run(locale: supported, sourceFormat: sourceFormat)
             } catch {
-                end(.failed("The captions download didn't finish: \(error.localizedDescription)"))
+                end(.failed("The captions download didn’t finish: \(error.localizedDescription)"))
             }
         case .ready(let supported):
             await run(locale: supported, sourceFormat: sourceFormat)
@@ -209,7 +209,7 @@ public final class SpeechCaptioner: LiveCaptioning, @unchecked Sendable {
         let modules: [any SpeechModule] = [transcriber]
         do {
             guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules, considering: sourceFormat) else {
-                end(.unavailable("Live captions can't use this audio."))
+                end(.unavailable("Live captions can’t use this audio."))
                 return
             }
             let analyzer = SpeechAnalyzer(modules: modules, options: SpeechAnalyzer.Options(priority: .utility, modelRetention: .whileInUse))
@@ -241,7 +241,7 @@ public final class SpeechCaptioner: LiveCaptioning, @unchecked Sendable {
             statesContinuation.yield(.listening)
         } catch {
             if await authorizeAfterFailure() { return await run(locale: locale, sourceFormat: sourceFormat) }
-            end(.failed("Captions couldn't start: \(error.localizedDescription)"))
+            end(.failed("Captions couldn’t start: \(error.localizedDescription)"))
         }
     }
 

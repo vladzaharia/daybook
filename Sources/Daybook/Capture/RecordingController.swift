@@ -337,7 +337,7 @@ final class RecordingController: ObservableObject {
         if let manifest, let directory {
             if tracks.isEmpty { warnings.append("No audio samples were received.") }
             if manifest.includeSystemAudio && !tracks.contains(where: { $0.role == .systemAudio }) {
-                warnings.append("No system audio was received. Check the meeting's output and recording permission.")
+                warnings.append("No system audio was received. Check the call’s output and recording permission.")
             }
             let completed = CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: Date(), tracks: tracks,
                                           warnings: Array(Set(warnings)).sorted(), directory: directory,

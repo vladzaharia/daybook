@@ -85,7 +85,7 @@ final class PhoneSync {
     init(library: LibraryController) {
         self.library = library
         controller = library.sync
-        if controller == nil { connection = .unavailable("Sync isn't set up for this library.") }
+        if controller == nil { connection = .unavailable("Sync isn’t set up for this library.") }
         controller?.onSyncRequested = { [weak self] in await self?.synchronize(.remote) }
         controller?.$courierStatus.sink { [weak self] status in self?.courier = status }.store(in: &subscriptions)
         // Count local changes as they happen, shortly after, so a burst of typing counts once.
@@ -126,7 +126,7 @@ final class PhoneSync {
             } else if case .containerUnavailable(let reason) = controller.iCloud {
                 connection = .unavailable(reason)
             } else {
-                connection = .unavailable("iCloud isn't available for Daybook right now. Try again in a moment.")
+                connection = .unavailable("iCloud isn’t available for Daybook right now. Try again in a moment.")
             }
         }
         watchAccount()

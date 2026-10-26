@@ -209,7 +209,7 @@ struct PairingSheet: View {
 
     private var macList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Macs on This Wi-Fi")
+            Text("Macs on This Wi‑Fi")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(PhoneStyle.Ink.meta)
                 .textCase(.uppercase)
@@ -218,7 +218,7 @@ struct PairingSheet: View {
                 if candidates.isEmpty {
                     HStack(spacing: 12) {
                         ProgressView()
-                        Text("Looking for Macs… Both need to be on the same Wi-Fi.")
+                        Text("Looking for Macs… Both need to be on the same Wi‑Fi.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }

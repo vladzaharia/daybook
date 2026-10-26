@@ -134,7 +134,7 @@ final class MultiSourceFusion {
             let derived = supersededBy[transcript.trackID]!
             var report = placements[derived] ?? TrackAlignment(trackID: derived, method: .unaligned)
             report.trackID = transcript.trackID
-            report.explanation = "Transcribed through its processed copy, which shares its timing; its own transcript isn't fused."
+            report.explanation = "Transcribed through its processed copy, which shares its timing; its own transcript isn’t fused."
             alignments.append(report)
         }
 

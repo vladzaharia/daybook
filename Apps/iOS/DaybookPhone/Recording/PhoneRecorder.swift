@@ -377,7 +377,7 @@ final class PhoneRecorder {
             let index = Int(file.dropFirst("segment-".count).dropLast(".m4a".count)) ?? (journal.segments.count)
             let previousEnd = journal.segments.map { $0.startOffset + Double($0.frameCount) / journal.sampleRate }.max() ?? 0
             journal.segments.append(CaptureSegment(index: index, fileName: file, startOffset: previousEnd, frameCount: 0, closed: false,
-                                                   firstSampleHostTime: 0, clockAnchors: [], notes: ["Placed after the previous part; its exact start wasn't saved."]))
+                                                   firstSampleHostTime: 0, clockAnchors: [], notes: ["Placed after the previous part; its exact start wasn’t saved."]))
         }
     }
 

@@ -138,7 +138,7 @@ final class LinkServicesTests: XCTestCase {
             try await link.pair(with: mac.endpoint, code: wrong)
             XCTFail("a wrong code pairs nothing")
         } catch {
-            XCTAssertEqual(PhoneLink.message(for: error), "That code didn't match. Your Mac now shows a new code; try that one.")
+            XCTAssertEqual(PhoneLink.message(for: error), "That code didn’t match. Your Mac now shows a new code; try that one.")
         }
         XCTAssertTrue(link.macs.isEmpty)
         let shown = await mac.service.pairingCode

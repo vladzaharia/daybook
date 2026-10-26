@@ -278,7 +278,7 @@ public enum ModelManifestError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .needsNewerDaybook: return "This model list needs a newer Daybook."
-        case .unreadable(let reason): return "The model list couldn't be read: \(reason)"
+        case .unreadable(let reason): return "The model list couldn’t be read: \(reason)"
         }
     }
 }

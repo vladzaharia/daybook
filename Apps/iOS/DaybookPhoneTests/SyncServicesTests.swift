@@ -74,7 +74,7 @@ final class SyncServicesTests: XCTestCase {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         let sync = PhoneSync(library: library.controller)
         XCTAssertFalse(sync.isConnected)
-        XCTAssertEqual(sync.statusLine, "Sync isn't set up for this library.")
+        XCTAssertEqual(sync.statusLine, "Sync isn’t set up for this library.")
         await sync.synchronize(.manual)
         XCTAssertEqual(sync.passes, 0)
         let presence = MacPresence.resolve(connectedMac: nil, devices: [], syncAvailable: false,

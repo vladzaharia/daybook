@@ -43,13 +43,13 @@ final class PhoneLink {
             case .connecting: return "Connecting…"
             case .searching: return "Looking for it on this network…"
             case .waitingToRetry: return "Not reachable right now · trying again"
-            case .waitingForNetwork: return "Waiting for Wi-Fi"
+            case .waitingForNetwork: return "Waiting for Wi‑Fi"
             case .suspended, .idle: return lastConnectedAt.map { "Last connected \(MacPresence.age(Date().timeIntervalSince($0)))" } ?? "Not connected"
             case .failed(let reason):
                 switch reason {
-                case .authenticationFailed, .notPaired: return "This Mac doesn't recognise this iPhone any more. Pair again."
+                case .authenticationFailed, .notPaired: return "This Mac doesn’t recognize this iPhone anymore. Pair again."
                 case .incompatibleVersion: return "Update Daybook on this iPhone or the Mac to connect."
-                default: return "Couldn't connect"
+                default: return "Couldn’t connect"
                 }
             }
         }
@@ -203,19 +203,19 @@ final class PhoneLink {
     }
 
     static func message(for error: Error) -> String {
-        guard let error = error as? LinkPairingError else { return "Couldn't pair: \(error.localizedDescription)" }
+        guard let error = error as? LinkPairingError else { return "Couldn’t pair with this Mac. Try again with the code it shows now." }
         switch error {
         case .invalidCode: return "Type the six digits shown on your Mac."
         case .codeAlreadyUsed: return "That code was already tried. Type the code your Mac shows now, or close and reopen pairing there for a new one."
-        case .codeRejected: return "That code didn't match. Your Mac now shows a new code; try that one."
-        case .notPairing: return "The Mac isn't showing a code. On your Mac, open Daybook › Settings › Devices and add your iPhone."
+        case .codeRejected: return "That code didn’t match. Your Mac now shows a new code; try that one."
+        case .notPairing: return "The Mac isn’t showing a code. On your Mac, open Daybook › Settings › Devices and add your iPhone."
         case .busy: return "Another device is pairing with this Mac. Try again in a minute."
         case .timedOut: return "Pairing took too long. Try again with the code your Mac shows now."
         case .tooManyAttempts: return "Too many tries. On your Mac, close and reopen pairing for a new code."
         case .unsupportedVersion: return "Update Daybook on this iPhone or the Mac to pair."
         case .expired: return "That code expired. Type the new code your Mac shows."
-        case .connectionFailed: return "Couldn't reach the Mac. Make sure both are on the same Wi-Fi."
-        case .protocolViolation: return "Couldn't pair with this Mac. Try again with the code it shows now."
+        case .connectionFailed: return "Couldn’t reach the Mac. Make sure both are on the same Wi‑Fi."
+        case .protocolViolation: return "Couldn’t pair with this Mac. Try again with the code it shows now."
         }
     }
 
@@ -245,18 +245,18 @@ final class PhoneLink {
 
         func message(mac: String) -> String {
             switch self {
-            case .unreachable: return "\(mac) didn't answer. Recording on this iPhone only."
+            case .unreachable: return "\(mac) didn’t answer. Recording on this iPhone only."
             case .refused(let refusal):
                 if let message = refusal.message { return message }
                 switch refusal.reason {
                 case .recordingSomethingElse: return "\(mac) is recording another conversation."
-                case .microphoneUnavailable: return "\(mac) can't use its microphone right now."
-                case .permissionDenied: return "\(mac) isn't allowed to record. Check its Privacy settings."
+                case .microphoneUnavailable: return "\(mac) can’t use its microphone right now."
+                case .permissionDenied: return "\(mac) isn’t allowed to record. Check its Privacy settings."
                 case .storageFull: return "\(mac) is out of space."
                 case .busy: return "\(mac) is busy. Try again in a moment."
                 case .declined: return "\(mac) declined to record."
-                case .notRecording: return "\(mac) isn't recording this conversation."
-                default: return "\(mac) can't record with this iPhone."
+                case .notRecording: return "\(mac) isn’t recording this conversation."
+                default: return "\(mac) can’t record with this iPhone."
                 }
             }
         }
