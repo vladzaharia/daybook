@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -9,7 +10,6 @@ import XCTest
 @MainActor
 final class SyncDeviceIdentityTests: XCTestCase {
     private var root: URL!
-    private var suites: [String] = []
     private var controllers: [LibrarySyncController] = []
     private var container: URL { root.appendingPathComponent("Container", isDirectory: true) }
 
@@ -21,15 +21,11 @@ final class SyncDeviceIdentityTests: XCTestCase {
     override func tearDown() async throws {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         try? FileManager.default.removeItem(at: root)
     }
 
     private func defaults() throws -> UserDefaults {
-        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
-        let suite = root.appendingPathComponent("Preferences-\(UUID().uuidString)").path
-        suites.append(suite)
-        return try XCTUnwrap(UserDefaults(suiteName: suite))
+        makeTestDefaults("daybook.sync.identity")
     }
 
     private func controller(_ library: URL, _ defaults: UserDefaults, _ store: SyncDeviceIdentityStore) -> LibrarySyncController {

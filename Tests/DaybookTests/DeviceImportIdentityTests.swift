@@ -13,7 +13,7 @@ final class DeviceImportIdentityTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_780_000_000)
 
     func testARecordingTheLibraryAlreadyHoldsIsNotImportedAgain() async throws {
-        let rig = try await MultiSourceRig.make(models: false)
+        let rig = try await MultiSourceRig.make(in: self, models: false)
         addTeardownBlock { await rig.tearDown() }
         let identity = MultiSourceRig.soundcore(start)
         let first = try await rig.state.importFromDevice(try rig.audio("phone-decoded.wav", frequency: 523), identity: identity,
@@ -44,7 +44,7 @@ final class DeviceImportIdentityTests: XCTestCase {
     /// there, dates that recording by this Mac's clock, and keeps the measured offset (and that it was
     /// applied) in the imported track's capture details.
     func testARecordingFromASkewedRecorderKeepsItsMeasuredClock() async throws {
-        let rig = try await MultiSourceRig.make(models: false)
+        let rig = try await MultiSourceRig.make(in: self, models: false)
         addTeardownBlock { await rig.tearDown() }
         let recorder = SimulatedSoundcore(recordings: [])
         recorder.serial = "D3200SKEWMAC0001"

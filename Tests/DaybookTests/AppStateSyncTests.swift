@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -10,13 +11,10 @@ final class AppStateSyncTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSyncApp-\(UUID())")
         let aURL = root.appendingPathComponent("MacA"), bURL = root.appendingPathComponent("MacB"), cloud = root.appendingPathComponent("Cloud")
         try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
-        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
-        let aSuite = root.appendingPathComponent("PreferencesA").path, bSuite = root.appendingPathComponent("PreferencesB").path
-        let aDefaults = UserDefaults(suiteName: aSuite)!, bDefaults = UserDefaults(suiteName: bSuite)!
+        let aDefaults = makeTestDefaults("daybook.sync.app.A"), bDefaults = makeTestDefaults("daybook.sync.app.B")
         let a = AppState(libraryURL: aURL, defaults: aDefaults), b = AppState(libraryURL: bURL, defaults: bDefaults)
         defer {
             a.sync.disconnect(); b.sync.disconnect()
-            aDefaults.removePersistentDomain(forName: aSuite); bDefaults.removePersistentDomain(forName: bSuite)
             try? FileManager.default.removeItem(at: root)
         }
         await a.initialize(); await b.initialize()

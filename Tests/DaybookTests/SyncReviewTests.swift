@@ -1,5 +1,6 @@
 import DaybookCore
 @testable import DaybookKit
+import DaybookTestSupport
 import XCTest
 @testable import Daybook
 
@@ -7,14 +8,11 @@ import XCTest
 final class SyncReviewTests: XCTestCase {
     func testIdleExchangeDoesNotRewriteLibraryOrScheduleAnotherExchange() async throws {
         let root = try makeRoot()
-        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
-        let suite = root.appendingPathComponent("Preferences").path
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = makeTestDefaults("daybook.sync.review")
         let local = root.appendingPathComponent("Local")
         let state = AppState(libraryURL: local, defaults: defaults)
         defer {
             state.sync.disconnect()
-            defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: root)
         }
         await state.initialize()
@@ -42,13 +40,10 @@ final class SyncReviewTests: XCTestCase {
 
     func testSyncConfigurationRemainsLockedUntilDurableAcknowledgement() async throws {
         let root = try makeRoot()
-        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
-        let suite = root.appendingPathComponent("Preferences").path
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = makeTestDefaults("daybook.sync.review")
         let controller = LibrarySyncController(localRoot: root.appendingPathComponent("Local"), defaults: defaults)
         defer {
             controller.reportFailure("Test cleanup"); controller.disconnect()
-            defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: root)
         }
         let remote = root.appendingPathComponent("Remote")
@@ -69,13 +64,10 @@ final class SyncReviewTests: XCTestCase {
 
     func testAccountChangeInvalidatesPendingReceiptAndAllowsExplicitReconnect() async throws {
         let root = try makeRoot()
-        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
-        let suite = root.appendingPathComponent("Preferences").path
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = makeTestDefaults("daybook.sync.review")
         let controller = LibrarySyncController(localRoot: root.appendingPathComponent("Local"), defaults: defaults)
         defer {
             controller.reportFailure("Test cleanup"); controller.disconnect()
-            defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: root)
         }
         try controller.connect(to: root.appendingPathComponent("Remote"))

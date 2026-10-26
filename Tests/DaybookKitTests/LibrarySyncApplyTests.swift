@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -8,7 +9,8 @@ import XCTest
 @MainActor
 final class LibrarySyncApplyTests: XCTestCase {
     private var root: URL!
-    private var suites: [String] = []
+    /// Each library's preferences, by name, so a library opened again by name is the same device.
+    private var suites: [String: String] = [:]
     private var controllers: [LibrarySyncController] = []
     private var container: URL { root.appendingPathComponent("Container", isDirectory: true) }
 
@@ -20,16 +22,14 @@ final class LibrarySyncApplyTests: XCTestCase {
     override func tearDown() async throws {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         try? FileManager.default.removeItem(at: root)
     }
 
     /// A library connected to the shared folder. Passes run only when a test asks.
     private func library(_ name: String, phone: Bool = false, cloud: SyncCloudFiles = .system) async throws -> LibraryController {
         let libraryRoot = root.appendingPathComponent(name, isDirectory: true)
-        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
-        let suite = root.appendingPathComponent("Preferences-\(name)").path
-        suites.append(suite)
+        let suite = suites[name] ?? makeTestSuite("daybook.sync.apply.\(name)")
+        suites[name] = suite
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(name, forKey: "syncDeviceID")
         let sync = LibrarySyncController(localRoot: libraryRoot, defaults: defaults)

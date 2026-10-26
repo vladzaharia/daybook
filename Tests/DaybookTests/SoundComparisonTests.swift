@@ -11,7 +11,7 @@ final class SoundComparisonTests: XCTestCase {
     private struct Unreadable: LocalizedError { var errorDescription: String? { "The recording can’t be read yet." } }
 
     func testAFailedOrCancelledComparisonIsNotNoMatch() async throws {
-        let rig = try await MultiSourceRig.make()
+        let rig = try await MultiSourceRig.make(in: self)
         addTeardownBlock { await rig.tearDown() }
         let reference = try rig.audio("reference.wav", frequency: 440)
         let id = try await rig.macConversation("Standup", at: Date(), seconds: 1, audio: reference)

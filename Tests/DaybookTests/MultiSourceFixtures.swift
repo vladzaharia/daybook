@@ -3,6 +3,7 @@ import Combine
 import DaybookCore
 @testable import DaybookIntelligence
 @testable import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -218,11 +219,10 @@ struct MultiSourceRig {
     let suite: String
     let inference = FakeInference()
 
-    static func make(models: Bool = true) async throws -> MultiSourceRig {
+    static func make(in test: XCTestCase, models: Bool = true) async throws -> MultiSourceRig {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookMultiSource-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        // A suite named by a path inside the test's folder keeps its plist there, not in ~/Library/Preferences.
-        let suite = root.appendingPathComponent("Preferences").path
+        let suite = test.makeTestSuite("daybook.multisource")
         let defaults = UserDefaults(suiteName: suite)!
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
@@ -243,7 +243,6 @@ struct MultiSourceRig {
     func tearDown() async {
         await state.sources.recorders.settle()
         await state.flush()
-        defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -282,14 +281,6 @@ struct MultiSourceRig {
     /// A Soundcore recording identity: its ID is its start time.
     static func soundcore(_ start: Date) -> DeviceRecordingIdentity {
         DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: "FAKE1", recordingID: String(UInt32(start.timeIntervalSince1970)))
-    }
-
-    func waitUntil(_ what: String, timeout: TimeInterval = 10, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { XCTFail("Timed out waiting for \(what)"); throw CancellationError() }
-            try await Task.sleep(for: .milliseconds(10))
-        }
     }
 
     /// Waits until the processing queue is idle.

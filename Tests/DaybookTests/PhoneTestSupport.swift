@@ -2,6 +2,7 @@ import AVFoundation
 import DaybookCore
 @testable import DaybookKit
 import DaybookLink
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -103,7 +104,7 @@ struct PhoneLinkRig {
         let script = rig.recorder
         await client.setRecordControlHandler { _, request in await script.record(request) }
         try await client.connect(to: macID, via: rig.endpoint)
-        try await waitFor("the phone to connect, with a clock estimate") { state.phoneLink.peers[phoneID]?.clock != nil }
+        try await waitUntil("the phone to connect, with a clock estimate") { state.phoneLink.peers[phoneID]?.clock != nil }
         return rig
     }
 
@@ -127,9 +128,8 @@ struct PhoneLibrarySide {
     let suite: String
     let phoneID: UUID
 
-    static func make(root: URL, cloud: URL, phoneID: UUID) async throws -> PhoneLibrarySide {
-        // A suite named by a path inside the test's folder keeps its plist there, not in ~/Library/Preferences.
-        let suite = root.appendingPathComponent("Preferences").path
+    static func make(in test: XCTestCase, root: URL, cloud: URL, phoneID: UUID) async throws -> PhoneLibrarySide {
+        let suite = test.makeTestSuite("daybook.multisource.phone")
         let defaults = UserDefaults(suiteName: suite)!
         let local = root.appendingPathComponent("Phone", isDirectory: true)
         try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
@@ -187,7 +187,6 @@ struct PhoneLibrarySide {
 
     func tearDown() {
         sync.disconnect()
-        defaults.removePersistentDomain(forName: suite)
     }
 }
 
@@ -216,16 +215,6 @@ extension XCTestCase {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
-    }
-}
-
-/// Waits on the main actor until `condition` holds.
-@MainActor
-func waitFor(_ what: String, timeout: TimeInterval = 10, _ condition: () -> Bool) async throws {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !condition() {
-        guard Date() < deadline else { XCTFail("Timed out waiting for \(what)"); throw CancellationError() }
-        try await Task.sleep(for: .milliseconds(10))
     }
 }
 
