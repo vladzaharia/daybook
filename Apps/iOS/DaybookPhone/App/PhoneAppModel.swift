@@ -46,6 +46,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     private(set) var lastImportedID: UUID?
     /// While a Mac records this conversation too, or asked this iPhone to.
     private(set) var multipoint: MultipointSession?
+    /// The Mac whose device page started this recording (a conversation of this iPhone's own).
+    @ObservationIgnored private var startedFromMac: UUID?
     private(set) var isForeground = true
 
     @ObservationIgnored private let activities = RecordingActivityController()
@@ -325,6 +327,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         }.value
         stopMacsStartedHere(session)
         multipoint = nil
+        startedFromMac = nil
         sendRecordingState(force: true)
         if !isForeground { Task { await link.setActivity(.background) } }
     }
@@ -456,7 +459,9 @@ final class PhoneAppModel: RecordingCommandHandling {
                 }
                 return .refused(LinkRecordRefusal(reason: .recordingSomethingElse, conversationID: recorder.captureID))
             }
-            let session = MultipointSession(
+            // A device page's Start Recording on iPhone: a conversation of this iPhone's own, which that
+            // Mac may stop. Otherwise this iPhone records the Mac's conversation alongside it.
+            let session = request.isStandalone ? nil : MultipointSession(
                 conversationID: request.conversationID, role: .macLed(macID: mac.id),
                 macs: [MultipointSession.Mac(id: mac.id, name: mac.name, state: .recording, startedAt: request.timing?.startedAt, startedByPhone: false)],
                 leadStartedAt: request.timing?.startedAt, timelineStart: request.timing?.timelineStart,
@@ -466,6 +471,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             let title = library.controller.meeting(request.conversationID)?.title ?? request.title
             do {
                 try await startRecording(into: request.conversationID, title: title, multipoint: session)
+                if session == nil { startedFromMac = mac.id }
             } catch {
                 let denied = recorder.lastError == PhoneRecorderError.microphoneDenied.localizedDescription
                 return .refused(LinkRecordRefusal(reason: denied ? .permissionDenied : .microphoneUnavailable, message: recorder.lastError))
@@ -564,6 +570,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         activities.end(final)
         let session = multipoint
         multipoint = nil
+        startedFromMac = nil
         recorder.audioTap = nil
         await captions.finish()
         if let recording { await Task { @MainActor in await self.file(recording, session: session) }.value }

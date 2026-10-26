@@ -87,6 +87,8 @@ struct CompanionStart: Equatable {
     /// When the conversation's timeline zero happened, on this Mac's clock: this Mac's start for a new
     /// conversation, earlier for one recorded into again; nil when that isn't known.
     var timelineStart: Date?
+    /// A conversation of the device's own (the device page's Start Recording), not one alongside this Mac.
+    var standalone = false
 }
 
 /// A conversation as a device that answers is told about it when asked to record.

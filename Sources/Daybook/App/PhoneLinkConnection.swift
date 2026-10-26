@@ -88,7 +88,7 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
 
     /// The device page's Start Recording on iPhone: the phone records a new conversation of its own.
     func startRecording() {
-        Task { _ = await requestStart(CompanionStart(conversationID: UUID())) }
+        Task { _ = await requestStart(CompanionStart(conversationID: UUID(), standalone: true)) }
     }
 
     /// The device page's Pause Recording on iPhone: stops what the phone is recording.
@@ -108,7 +108,7 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
                        clockOffset: clock?.offset, clockUncertainty: clock?.uncertainty, timelineStart: start.timelineStart)
         }
         return await send(LinkRecordRequest(action: .start, conversationID: start.conversationID, timing: timing,
-                                            title: start.title, date: start.date))
+                                            title: start.title, date: start.date, standalone: start.standalone ? true : nil))
     }
 
     func requestStop(conversationID: UUID, macEndedAt: Date?) async -> CompanionAnswer {

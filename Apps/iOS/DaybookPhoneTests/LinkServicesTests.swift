@@ -265,6 +265,35 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertEqual(track.capture?.peerClocks?.first?.name, "Studio Mac")
     }
 
+    func testADevicePageStartRecordsAConversationOfThePhonesOwn() async throws {
+        let mac = try await makeMac()
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        // From the Mac's device page (and from an older Mac, which sends no timing).
+        for request in [LinkRecordRequest(action: .start, conversationID: UUID(), standalone: true),
+                        LinkRecordRequest(action: .start, conversationID: UUID())] {
+            let reply = try await mac.service.request(request, from: link.deviceID)
+            guard case .accepted(let ack) = reply.outcome else { return XCTFail("\(reply.outcome)") }
+            XCTAssertFalse(ack.wasAlreadyRecording)
+            XCTAssertEqual(model.recorder.captureID, request.conversationID)
+            XCTAssertNil(model.multipoint, "not a recording alongside the Mac")
+            XCTAssertNil(model.multipointLine)
+            rig.pump(1)
+            model.editNotes("Note")
+            rig.pump(1)
+            let stop = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: request.conversationID), from: link.deviceID)
+            guard case .accepted = stop.outcome else { return XCTFail("the Mac that started it may stop it: \(stop.outcome)") }
+            try await waitUntil("filed") { model.library.controller.meeting(request.conversationID)?.tracks.isEmpty == false && !model.isFiling }
+            let meeting = try XCTUnwrap(model.library.controller.meeting(request.conversationID))
+            XCTAssertEqual(meeting.tracks.first?.offset, 0, "its own timeline")
+            XCTAssertNil(meeting.tracks.first?.alignment)
+            XCTAssertEqual(meeting.paragraphTimes(), [1])
+            XCTAssertEqual(meeting.status, .imported)
+        }
+    }
+
     func testRecordRequestsCanBeTurnedOff() async throws {
         let mac = try await makeMac()
         let link = makeLink()

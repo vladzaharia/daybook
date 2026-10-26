@@ -171,6 +171,20 @@ final class PhoneLinkTests: XCTestCase {
         macStopsRecording(rig, id)
     }
 
+    func testTheDevicePagesStartAsksThePhoneForAConversationOfItsOwn() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        let control = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString)?.direct as? PhoneLinkConnection)
+        control.startRecording()
+        try await waitFor("the request") { !phone.recorder.requests.isEmpty }
+        let request = try XCTUnwrap(phone.recorder.requests.first)
+        XCTAssertEqual(request.standalone, true)
+        XCTAssertTrue(request.isStandalone)
+        XCTAssertNil(request.timing, "nothing to line up with: this Mac isn't recording it")
+        XCTAssertNil(rig.meeting(request.conversationID), "not a conversation of this Mac's")
+    }
+
     func testAPhoneThatSaysNoIsReportedQuietly() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state)

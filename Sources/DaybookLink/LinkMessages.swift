@@ -153,9 +153,13 @@ public struct LinkRecordRequest: Codable, Sendable, Equatable, Identifiable {
     /// builds don't send them.
     public var title: String?
     public var date: Date?
+    /// Start a conversation of the receiver's own (a device page's Start Recording), not one
+    /// recorded alongside the requester. Older builds don't send it; their requests without timing
+    /// mean the same.
+    public var standalone: Bool?
 
     public init(id: UUID = UUID(), action: Action, conversationID: UUID, timing: LinkTiming? = nil, sentAt: Date = Date(),
-                title: String? = nil, date: Date? = nil) {
+                title: String? = nil, date: Date? = nil, standalone: Bool? = nil) {
         self.id = id
         self.action = action
         self.conversationID = conversationID
@@ -163,7 +167,11 @@ public struct LinkRecordRequest: Codable, Sendable, Equatable, Identifiable {
         self.sentAt = sentAt
         self.title = title
         self.date = date
+        self.standalone = standalone
     }
+
+    /// The receiver records a conversation of its own rather than alongside the requester.
+    public var isStandalone: Bool { standalone == true || (action == .start && timing?.startedAt == nil) }
 }
 
 /// The receiver did what was asked.
