@@ -92,14 +92,67 @@ public struct LinkRecordingState: Codable, Sendable, Equatable {
     public var elapsed: TimeInterval
     /// When this was sent, on the sender's clock, so the receiver can keep counting.
     public var sentAt: Date
+    /// The recorders the sender manages (Soundcore Work), as it last knew them. Optional: older builds
+    /// don't send it, and one this build can't read is dropped rather than the whole state.
+    public var recorders: [LinkRecorderState]?
 
     public init(phase: Phase, conversationID: UUID? = nil, startedAt: Date? = nil, elapsed: TimeInterval = 0,
-                sentAt: Date = Date()) {
+                sentAt: Date = Date(), recorders: [LinkRecorderState]? = nil) {
         self.phase = phase
         self.conversationID = conversationID
         self.startedAt = startedAt
         self.elapsed = elapsed
         self.sentAt = sentAt
+        self.recorders = recorders
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        phase = try c.decode(Phase.self, forKey: .phase)
+        conversationID = try c.decodeIfPresent(UUID.self, forKey: .conversationID)
+        startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt)
+        elapsed = try c.decodeIfPresent(TimeInterval.self, forKey: .elapsed) ?? 0
+        sentAt = try c.decode(Date.self, forKey: .sentAt)
+        recorders = try? c.decodeIfPresent([LinkRecorderState].self, forKey: .recorders)
+    }
+}
+
+/// A recorder a device manages (Soundcore Work over Bluetooth), as that device last knew it, so the
+/// other side can show it: "Soundcore Work · Recording since 10:02".
+public struct LinkRecorderState: Codable, Sendable, Equatable {
+    /// The device kind (`soundcore.work`) and its serial number, when known.
+    public var kind: String
+    public var serial: String?
+    /// What the sender calls it.
+    public var name: String?
+    public var isRecording: Bool
+    /// The recorder's ID for the recording it's making.
+    public var recordingID: String?
+    /// When that recording started, on the sender's clock.
+    public var startedAt: Date?
+    /// When the sender last confirmed this, on its clock.
+    public var asOf: Date
+    /// The conversation it records along with, when the sender knows.
+    public var conversationID: UUID?
+
+    public init(kind: String, serial: String? = nil, name: String? = nil, isRecording: Bool, recordingID: String? = nil,
+                startedAt: Date? = nil, asOf: Date, conversationID: UUID? = nil) {
+        self.kind = kind
+        self.serial = serial
+        self.name = name
+        self.isRecording = isRecording
+        self.recordingID = recordingID
+        self.startedAt = startedAt
+        self.asOf = asOf
+        self.conversationID = conversationID
+    }
+
+    /// The same, with its times moved onto another clock (the receiver's).
+    public func moved(by convert: (Date) -> Date) -> LinkRecorderState {
+        var moved = self
+        moved.startedAt = startedAt.map(convert)
+        moved.asOf = convert(asOf)
+        return moved
     }
 }
 
@@ -110,19 +163,25 @@ public struct LinkRecordingState: Codable, Sendable, Equatable {
 public struct LinkTiming: Codable, Sendable, Equatable {
     /// When the requester's own recording of this conversation started, on the requester's clock.
     public var startedAt: Date?
-    /// Seconds of the conversation's timeline that had passed when the request was sent.
+    /// Seconds of the conversation's timeline that had passed when the request was sent (nil when
+    /// the timeline's zero isn't known).
     public var elapsed: TimeInterval?
     /// The requester's estimate of (receiver's clock − requester's clock), from clock samples.
     public var clockOffset: TimeInterval?
     /// How far `clockOffset` could be off (half the best round trip).
     public var clockUncertainty: TimeInterval?
+    /// When the conversation's timeline zero happened, on the requester's clock: its own
+    /// recording's start for a new conversation, earlier for one that already had recordings. Nil
+    /// when it isn't known, or from older builds (whose `elapsed` counted from `startedAt`).
+    public var timelineStart: Date?
 
     public init(startedAt: Date? = nil, elapsed: TimeInterval? = nil, clockOffset: TimeInterval? = nil,
-                clockUncertainty: TimeInterval? = nil) {
+                clockUncertainty: TimeInterval? = nil, timelineStart: Date? = nil) {
         self.startedAt = startedAt
         self.elapsed = elapsed
         self.clockOffset = clockOffset
         self.clockUncertainty = clockUncertainty
+        self.timelineStart = timelineStart
     }
 }
 
@@ -142,14 +201,57 @@ public struct LinkRecordRequest: Codable, Sendable, Equatable, Identifiable {
     public var timing: LinkTiming?
     /// When this was sent, on the requester's clock.
     public var sentAt: Date
+    /// The conversation's title and date as the requester has them (starts), so a receiver that
+    /// hasn't synced it yet creates the same record rather than one of its own. Optional: older
+    /// builds don't send them.
+    public var title: String?
+    public var date: Date?
+    /// Start a conversation of the receiver's own (a device page's Start Recording), not one
+    /// recorded alongside the requester. Older builds don't send it; their requests without timing
+    /// mean the same.
+    public var standalone: Bool?
+    /// Start (or stop) a recorder the receiver manages (Soundcore Work), not the receiver's own
+    /// microphone. Sent only to a receiver whose capabilities list `recorderControlFeature`: an older
+    /// one would record its own microphone instead.
+    public var recorder: LinkRecorderTarget?
 
-    public init(id: UUID = UUID(), action: Action, conversationID: UUID, timing: LinkTiming? = nil, sentAt: Date = Date()) {
+    public init(id: UUID = UUID(), action: Action, conversationID: UUID, timing: LinkTiming? = nil, sentAt: Date = Date(),
+                title: String? = nil, date: Date? = nil, standalone: Bool? = nil, recorder: LinkRecorderTarget? = nil) {
         self.id = id
         self.action = action
         self.conversationID = conversationID
         self.timing = timing
         self.sentAt = sentAt
+        self.title = title
+        self.date = date
+        self.standalone = standalone
+        self.recorder = recorder
     }
+
+    /// The receiver records a conversation of its own rather than alongside the requester.
+    public var isStandalone: Bool { standalone == true || (action == .start && timing?.startedAt == nil && recorder == nil) }
+}
+
+/// A recorder a record request is about: one the receiver manages over Bluetooth.
+public struct LinkRecorderTarget: Codable, Sendable, Equatable {
+    /// The device kind (`soundcore.work`) and its serial number, when known.
+    public var kind: String
+    public var serial: String?
+    /// Stopping: the recording to stop, by the recorder's ID for it. One it's recording instead is left alone.
+    public var recordingID: String?
+
+    public init(kind: String, serial: String? = nil, recordingID: String? = nil) {
+        self.kind = kind
+        self.serial = serial
+        self.recordingID = recordingID
+    }
+}
+
+extension LinkCapabilities {
+    /// Starts and stops the recorders it manages when another device asks (`LinkRecordRequest.recorder`).
+    public static let recorderControlFeature = "recorderControl"
+
+    public var controlsRecorders: Bool { features.contains(Self.recorderControlFeature) }
 }
 
 /// The receiver did what was asked.
@@ -200,6 +302,8 @@ public struct LinkRecordRefusal: Codable, Sendable, Equatable {
         public static let declined: Self = "declined"
         /// This device doesn't take record requests.
         public static let unsupported: Self = "unsupported"
+        /// A recorder it was asked to start or stop isn't nearby or didn't confirm.
+        public static let recorderUnavailable: Self = "recorderUnavailable"
     }
 
     public var reason: Reason

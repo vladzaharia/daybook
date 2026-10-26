@@ -20,7 +20,8 @@ final class PhoneLink {
         /// From its capabilities once connected.
         var canProcess = false
         var appVersion: String?
-        /// Its recorder, from `recording.state`.
+        /// Its recorder, from `recording.state`, with `sentAt` on this iPhone's clock. Nil when it said
+        /// it's idle, or when it hasn't said for `recordingStateLifetime` (it repeats it while recording).
         var recording: LinkRecordingState?
         /// Its clock relative to this iPhone's, once samples are in (offset = Mac − iPhone).
         var clock: LinkClockEstimate?
@@ -28,6 +29,9 @@ final class PhoneLink {
         /// Its sync replica ID (a Mac's equals its link ID) and whether it hands recorders over.
         var syncDeviceID: String?
         var handsOffRecorders = false
+        /// The recorders it manages, as it last said, on this iPhone's clock; kept after it disconnects,
+        /// for as long as that can be trusted (`LinkRecorderState.lifetime`).
+        var recorders: [LinkRecorderState] = []
 
         var isConnected: Bool { state == .connected }
         var isRecording: Bool { recording?.phase == .recording || recording?.phase == .paused || recording?.phase == .starting }
@@ -90,6 +94,13 @@ final class PhoneLink {
     @ObservationIgnored var onHandoffMessage: ((LinkMessage, UUID) -> Void)?
     /// A Mac connected or went away.
     @ObservationIgnored var onMacsChanged: (() -> Void)?
+    /// A Mac connected (again): what's waiting for it (a stop) can go now.
+    @ObservationIgnored var onMacConnected: ((UUID) -> Void)?
+    /// A Mac said what it's recording, or that it's idle.
+    @ObservationIgnored var onMacRecordingState: ((UUID, LinkRecordingState) -> Void)?
+
+    /// A Mac's word on its recorder lasts this long; it repeats it every 15 s while recording.
+    static let recordingStateLifetime: TimeInterval = 45
 
     @ObservationIgnored let client: LinkClient
     @ObservationIgnored private var identity: LinkIdentity
@@ -110,7 +121,8 @@ final class PhoneLink {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
         return LinkIdentity(deviceID: UUID(uuidString: installation) ?? UUID(), name: name, deviceClass: .iPhone,
                             appVersion: version, libraryID: libraryID, canProcess: false,
-                            features: ["recordControl", "bookmarks", LinkCapabilities.recorderHandoffFeature], syncDeviceID: syncDeviceID)
+                            features: ["recordControl", "bookmarks", LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature],
+                            syncDeviceID: syncDeviceID)
     }
 
     var deviceID: UUID { identity.deviceID }
@@ -137,6 +149,7 @@ final class PhoneLink {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
                 self?.pruneProgress()
+                self?.pruneRecordingStates()
             }
         }
     }
@@ -211,9 +224,12 @@ final class PhoneLink {
     var connectedMacs: [Mac] { macs.filter(\.isConnected) }
 
     /// Asks a Mac to start or stop recording this conversation too. The answer, or why there isn't one.
-    func request(_ action: LinkRecordRequest.Action, conversationID: UUID, timing: LinkTiming?, from macID: UUID) async -> Result<LinkRecordAck, RecordRequestFailure> {
+    /// `id` names the request: sent again with the same ID (after a lost answer), the Mac answers once.
+    func request(_ action: LinkRecordRequest.Action, id: UUID = UUID(), conversationID: UUID, timing: LinkTiming?, title: String? = nil,
+                 date: Date? = nil, from macID: UUID) async -> Result<LinkRecordAck, RecordRequestFailure> {
         do {
-            let reply = try await client.request(LinkRecordRequest(action: action, conversationID: conversationID, timing: timing), from: macID)
+            let reply = try await client.request(LinkRecordRequest(id: id, action: action, conversationID: conversationID, timing: timing,
+                                                                   title: title, date: date), from: macID)
             switch reply.outcome {
             case .accepted(let ack): return .success(ack)
             case .refused(let refusal): return .failure(.refused(refusal))
@@ -275,6 +291,13 @@ final class PhoneLink {
         Task { try? await client.send(.bookmark(bookmark)) }
     }
 
+    /// What the Mac managing a recorder last said about it, and that Mac's name; nil once too old to say.
+    func recorderReport(kind: String, serial: String?, now: Date = Date()) -> (mac: String, state: LinkRecorderState)? {
+        macs.flatMap { mac in mac.recorders.filter { $0.describes(kind: kind, serial: serial) }.map { (mac.name, $0) } }
+            .filter { $0.1.summary(now: now) != nil }
+            .max { $0.1.asOf < $1.1.asOf }
+    }
+
     /// Fresh clock samples from every connected Mac (at the start of a recording).
     func sampleClocks() {
         for mac in connectedMacs { Task { await client.sampleClock(of: mac.id) } }
@@ -328,6 +351,7 @@ final class PhoneLink {
                 mac.handsOffRecorders = peer.capabilities.handsOffRecorders
             }
             onMacsChanged?()
+            if case .connected = event { onMacConnected?(peer.deviceID) }
         case .disconnected(let id, _):
             update(id) { mac in
                 mac.lastConnectedAt = Date()
@@ -353,7 +377,14 @@ final class PhoneLink {
                 liveProgress[progress.meetingID] = live
             }
         case .recordingState(let state):
-            update(macID) { $0.recording = state.phase == .idle ? nil : state }
+            var heard = state
+            let clock = macs.first(where: { $0.id == macID })?.clock
+            heard.sentAt = clock?.localDate(fromPeer: state.sentAt) ?? Date()
+            update(macID) { mac in
+                mac.recording = state.phase == .idle ? nil : heard
+                if let recorders = state.recorders { mac.recorders = recorders.map { $0.moved { clock?.localDate(fromPeer: $0) ?? $0 } } }
+            }
+            onMacRecordingState?(macID, heard)
         case .bookmark, .processingNudge:
             // A Mac's bookmarks are on its own recording and arrive with it through sync.
             break
@@ -374,6 +405,14 @@ final class PhoneLink {
     private func pruneProgress(now: Date = Date()) {
         let fresh = liveProgress.filter { now.timeIntervalSince($0.value.receivedAt) < LiveProgress.staleAfter }
         if fresh.count != liveProgress.count { liveProgress = fresh }
+    }
+
+    /// A Mac that stopped saying it's recording may have stopped (or gone): what it said no longer counts.
+    func pruneRecordingStates(now: Date = Date()) {
+        for mac in macs {
+            guard let state = mac.recording, now.timeIntervalSince(state.sentAt) > Self.recordingStateLifetime else { continue }
+            update(mac.id) { $0.recording = nil }
+        }
     }
 
     private func reloadPaired() {

@@ -11,7 +11,9 @@ struct SourceHooks: View {
 
     var body: some View {
         ForEach(meeting.companions ?? []) { link in
-            if let line = Self.companionLine(link) { Text(line).font(.caption).foregroundStyle(.secondary) }
+            if let line = Self.companionLine(link, recordingNow: state.recordingID == meeting.id) {
+                Text(line).font(.caption).foregroundStyle(.secondary)
+            }
         }
         ForEach(meeting.sourceSuggestions ?? []) { suggestion in
             VStack(alignment: .leading, spacing: 4) {
@@ -41,12 +43,20 @@ struct SourceHooks: View {
         }
     }
 
-    static func companionLine(_ link: CompanionRecording) -> String? {
+    /// A recording a link waits for that hasn't come in this long is let go (it may never arrive).
+    static let waitingLineLifetime: TimeInterval = 2 * 86_400
+
+    /// The link's line, while this Mac records the conversation (`recordingNow`) or after. A link an
+    /// interrupted recording left open reads as waiting, and every waiting line goes after a while.
+    static func companionLine(_ link: CompanionRecording, recordingNow: Bool, now: Date = Date()) -> String? {
+        let live = recordingNow && link.macEndedAt == nil
+        if !live, now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) > waitingLineLifetime { return nil }
+        let waiting = "Waiting for the \(link.deviceName) recording."
         switch link.state {
-        case .starting: return "Starting \(link.deviceName)…"
-        case .recording, .alreadyRecording: return "Also recording on \(link.deviceName)."
-        case .stopping: return "Stopping \(link.deviceName)…"
-        case .stopped, .stopFailed: return "Waiting for the \(link.deviceName) recording."
+        case .starting: return live ? "Starting \(link.deviceName)…" : nil
+        case .recording, .alreadyRecording: return live ? "Also recording on \(link.deviceName)." : waiting
+        case .stopping: return live ? "Stopping \(link.deviceName)…" : waiting
+        case .stopped, .stopFailed: return waiting
         case .unavailable, .failed, .attached: return nil
         }
     }

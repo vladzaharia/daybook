@@ -67,7 +67,10 @@ final class PhoneRecorder {
     private(set) var level = AudioLevel.silent
     /// Several seconds without a single non-zero sample: muted, unplugged, or blocked.
     private(set) var isMicrophoneSilent = false
+    /// The conversation being recorded.
     private(set) var captureID: UUID?
+    /// This recording's own ID (one conversation can hold several of this iPhone's recordings).
+    private(set) var recordingID: UUID?
     private(set) var title = ""
     /// The conversation's first sample on the wall clock, once audio arrives.
     private(set) var startedAt: Date?
@@ -137,12 +140,12 @@ final class PhoneRecorder {
 
     // MARK: Start, pause, resume, stop
 
-    func start(in directory: URL, id: UUID = UUID(), title: String) async throws {
+    func start(in directory: URL, id: UUID = UUID(), recordingID: UUID = UUID(), title: String) async throws {
         guard state == .idle else { throw PhoneRecorderError.alreadyRecording }
         state = .starting
         cancelStart = false
         lastError = nil; canResume = false; pauseMessage = nil
-        captureID = id; self.title = title; startedAt = nil
+        captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
         notes = ""; timedNotes = []; highlights = []; photos = []
         level = .silent; isMicrophoneSilent = false
         do {
@@ -160,6 +163,7 @@ final class PhoneRecorder {
             try environment.session.activate()
             inputRoute = environment.session.currentInput
             var journal = PhoneCaptureJournal(id: id, title: title, createdAt: environment.clock.now(), format: environment.format)
+            journal.recordingID = recordingID
             journal.routes.append(CaptureRouteEvent(time: 0, input: inputRoute, reason: "start"))
             try journal.write(to: directory)
             self.journal = journal
@@ -327,6 +331,13 @@ final class PhoneRecorder {
         return entry
     }
 
+    /// The Macs this recording is made with, kept in the journal for recovery.
+    func setMultipoint(_ multipoint: CaptureMultipoint?) {
+        guard isActive, journal != nil, journal?.multipoint != multipoint else { return }
+        journal?.multipoint = multipoint
+        persistJournal()
+    }
+
     /// A shutter moment further back than this is a clock problem, not a slow review.
     static let photoReviewLimit: TimeInterval = 600
 
@@ -346,11 +357,11 @@ final class PhoneRecorder {
             var journal = try PhoneCaptureJournal.load(from: directory)
             let crashed = journal.state != .stopped
             Self.adoptOrphanSegments(&journal, in: directory)
-            if crashed, journal.endedAt == nil {
-                let audio = journal.segments.map { $0.startOffset + Double($0.frameCount) / journal.sampleRate }.max() ?? 0
-                journal.endedAt = (journal.startedAt ?? journal.createdAt).addingTimeInterval(audio)
-            }
-            return try PhoneCaptureFinisher.finish(&journal, in: directory, recovered: crashed)
+            var recording = try PhoneCaptureFinisher.finish(&journal, in: directory, recovered: crashed)
+            // Cut short, it ended where its assembled audio does: counted frames can trail or lead what
+            // reached the disk, and a segment the journal never heard of counts none.
+            if crashed, journal.endedAt == nil { recording.endedAt = recording.startedAt.addingTimeInterval(recording.duration) }
+            return recording
         }.value
     }
 
@@ -525,6 +536,7 @@ final class PhoneRecorder {
         journal = nil
         directory = nil
         captureID = nil
+        recordingID = nil
         startedAt = nil
         canResume = false
         pauseMessage = nil

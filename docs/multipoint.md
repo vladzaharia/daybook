@@ -15,7 +15,8 @@ belongs to, and enhancing a conversation when a source is added. The sound align
 | Matching | Multipoint links, overlap in time, the decision after comparing sound, the transcript check | [SourceMatcher.swift](../Sources/DaybookCore/SourceMatcher.swift) |
 | Fusion with placements | Applies stored placements (with drift), settles waiting recordings by transcript then clock, keeps named speakers on merged passages | [SourceFusion.swift](../Sources/DaybookCore/SourceFusion.swift) |
 | Record control | Starts and stops recorders with this Mac; one status line. Devices that answer each command (Daybook on iPhone, `AnsweringRecordControl`) report the answer directly | `CompanionRecorders` in [MultiSourceCoordinator.swift](../Sources/Daybook/App/MultiSourceCoordinator.swift) |
-| Daybook on iPhone | Record control both ways over the local link, the clock prior, and the phone's synced recordings joining conversations | [AppState+Phone.swift](../Sources/Daybook/App/AppState+Phone.swift), [PhoneLinkConnection.swift](../Sources/Daybook/App/PhoneLinkConnection.swift) |
+| Daybook on iPhone | Record control both ways over the local link, recording state and following the leader, the clock prior, and the phone's synced recordings joining conversations | [AppState+Phone.swift](../Sources/Daybook/App/AppState+Phone.swift), [PhoneLinkConnection.swift](../Sources/Daybook/App/PhoneLinkConnection.swift); on the phone, [PhoneAppModel.swift](../Apps/iOS/DaybookPhone/App/PhoneAppModel.swift) and [PhoneLibrary.swift](../Apps/iOS/DaybookPhone/Library/PhoneLibrary.swift) |
+| Another device's work | A joining recording's notes and bookmarks, added once and held by its track (`Meeting.addRecordingWork`); recorders on the link and through their owner (`RecorderRemoteControl`) | [MultiSource.swift](../Sources/DaybookCore/MultiSource.swift), [LinkRecorders.swift](../Sources/DaybookKit/LinkRecorders.swift) |
 | Orchestration | Arrival planning, attach and enhancement, the processing steps, suggestions, interface words | [AppState+Sources.swift](../Sources/Daybook/App/AppState+Sources.swift) |
 | Interface hooks | Inspector › Audio rows, suggestion buttons, status lines (unstyled) | [SourceHooks.swift](../Sources/Daybook/UI/SourceHooks.swift) |
 
@@ -62,21 +63,43 @@ records** preference is on (the default), starts too:
 
 1. A `CompanionRecording` link is stored on the conversation right away (`starting`).
 2. Daybook connects if needed (giving up when the connection does, or after 20 s): out of range →
-   `unavailable`, "Soundcore Work isn't nearby. Recording on this Mac only."
+   `unavailable`, "Soundcore Work isn't nearby. Recording on this Mac only." Having connected, it
+   waits (up to 5 s) for the recorder's list read on this connection before deciding anything from
+   it, since whether it's recording, and what, arrives after the connection does.
 3. Already recording → `alreadyRecording`, with the recorder's start and recording ID. Daybook
    didn't start it, so it doesn't stop it.
 4. Otherwise Start; the recorder must confirm within 15 s → `recording` with its recording ID and
    start, "Also recording on Soundcore Work." No confirmation → `failed`, "Soundcore Work didn't start
    recording. Recording on this Mac only."
 
+A recorder another device manages (Settings › Devices, "One owner per recorder") is never reached
+for. When that device is an iPhone connected over the link that says it controls its recorders,
+this Mac asks it to start the recorder instead (`LinkRecordRequest.recorder`): the phone answers
+from its own device session, as above, with the recording's ID and start, and the link is stored as
+if this Mac had started it. Otherwise → `unavailable`, "Soundcore Work is managed by Alex's iPhone.
+Recording on this Mac only."
+
 When this Mac stops, recorders Daybook started get Pause (after their start finishes), must confirm
 (`stopped` or `stopFailed`), and the finished recording is queued for import into this
-conversation. A recorder that reported `failed` but turns out to be recording since Daybook's
-command is stopped too. Only links made by this recording are acted on; a link an interrupted
-session left behind never stops a recorder.
+conversation. Pause goes only to the recording Daybook started: the list is read again first, and
+a recorder now recording something else (the person stopped Daybook's recording and started their
+own) is left alone; Daybook's recording has ended, so it's imported. A recorder that reported
+`failed` but turns out to be recording, live, since Daybook's command is stopped too. One that a
+phone now manages (handed over mid-recording) is stopped through that phone, by the recording's ID;
+when it can't be, the line names it: "Couldn't reach Soundcore Work to stop it. Stop it on Alex's
+iPhone." Only links made by this recording are acted on; a link an interrupted session left behind
+never stops a recorder.
+
+Quitting waits up to 5 s for these stops to leave; going to sleep stops the recording (as before)
+and holds sleep back, through the power notification, for up to 5 s while they do. After a crash,
+once a recording is recovered at launch, its links are closed as its stop would have: recorders
+Daybook started are stopped (only the recording it started), a recorder still `starting` is stopped
+only if it is recording, live, since Daybook's command, and one that was already recording is left.
 
 None of this can touch the Mac recording: it begins after capture started, runs in its own tasks,
 never throws, and reports only through `CompanionRecorders.status` (one line) and the link's state.
+The inspector's line for a link reads "Also recording on …" only while this Mac records the
+conversation; after, "Waiting for the … recording." until it arrives, and not at all two days on.
 
 The link makes the recorder's recording join this conversation however it arrives: the import
 queued at stop, automatic import, an import the person starts later, or sync from another Mac
@@ -160,47 +183,93 @@ this Mac's start, because the link records it.
 
 A paired iPhone is a recorder with record control ([devices.md](devices.md)), reached over
 Daybook's local link ([link.md](link.md)). Its recordings never travel over the link: the phone files
-each one as a conversation with a `daybook.iphone` microphone track, and it arrives through sync.
+each one into its conversation with a `daybook.iphone` microphone track, and it arrives through sync.
+Each recording has its own ID (the track's device recording ID and the one the link reports), so a
+second recording into the same conversation is a track of its own.
+
+**Recording state.** Each side tells the other what it's recording (`recording.state`): when that
+changes, every 15 s while recording, and as the phone connects. With it go the recorders the side
+manages, as its device sessions last knew them. The phone keeps a Mac's word for 45 s (on its own
+clock); the recording screen shows a Mac it records with as stopped when it says so, and doesn't
+offer to record on a Mac busy with another conversation. A recorder the other side manages shows as
+"Soundcore Work · Recording since 10:02" (with "as of" once it isn't fresh) on the Mac's iPhone page
+and the phone's status sheet, for up to 20 minutes past when it was known. A phone recording paused
+by a call is still its recording on the Mac (Paused, and Stop on iPhone ends it).
 
 **This Mac records, and asks the phone.** When this Mac starts recording (by hand or
 automatically), each paired phone that is connected and whose **Also record on <iPhone> when this
-Mac records** is on (the default) is asked to record the same conversation. The request carries this
-Mac's start, the elapsed time, and its estimate of the phone's clock. The phone answers straight
-away, so there's no polling:
+Mac records** is on (the default) is asked to record the same conversation. The request carries the
+conversation's title and date (so a phone it hasn't synced to makes the same record), this Mac's
+start, where the conversation's timeline began (earlier than this Mac's start when it records into a
+conversation that already had recordings) and how much of it has passed, and its estimate of the
+phone's clock. The phone answers straight away, so there's no polling:
 
 - yes → `recording`, with the phone's recording ID, its start on its own clock, and the link's
-  clock estimate stored on the link (`CompanionRecording.clock`): "Also recording on Alex's iPhone."
+  clock estimate stored on the link (`CompanionRecording.clock`, measured again at Stop): "Also
+  recording on Alex's iPhone."
 - already recording this conversation → `alreadyRecording`; this Mac won't stop it.
 - no → `failed`, with the phone's reason: "Alex's iPhone didn't record. Its microphone isn't
   available. Recording on this Mac only."
 - not connected → `unavailable`, at once (the phone connects to this Mac, never the reverse).
+- no answer yet (a microphone prompt, a reconnect) → asked again with the same request for up to
+  45 s; the phone answers a repeat with its first answer, even on a new connection, so a start it
+  made is never mistaken for one it didn't.
 
-When this Mac stops, phones it started are asked to stop (`stopped`, or `stopFailed` when they
-can't be reached: "Stop it on the iPhone; its recording will still be added here").
+When this Mac stops, it asks to stop the phones it started, a phone that never answered, and one
+that says it's recording this conversation after all (`stopped`). A stop the phone refuses is
+`stopFailed`: "Alex's iPhone didn't stop. Stop it on the iPhone." One that doesn't reach it is owed
+until it reconnects: "Couldn't reach Alex's iPhone to stop it. It stops when it reconnects."
+
+The device page's **Start Recording on iPhone** asks for a conversation of the phone's own
+(`standalone`), which that Mac may stop.
 
 **The phone records, and asks this Mac.** This Mac records into the phone's conversation ID,
-creating the conversation here if it hasn't synced yet, and links the phone as already recording,
-with the phone's start and the clock estimate, rather than asking it back. It refuses with a reason
-when it's recording another conversation (`recordingSomethingElse`, naming it), starting or stopping
+creating the conversation here if it hasn't synced yet, with the title and date the phone sent (and
+keeping that date while it records), and links the phone as already recording, with the phone's
+start and the clock estimate, rather than asking it back. It refuses with a reason when it's
+recording another conversation (`recordingSomethingElse`, naming it), starting or stopping
 (`busy`), or isn't allowed the microphone (`permissionDenied`; an undecided permission is refused
 too, since nobody may be at the Mac to answer the prompt). The phone may stop a recording it asked
-for, not one started on the Mac (`declined`).
+for, not one started on the Mac (`declined`); it stops each Mac it started when it stops, including
+one still being asked and one whose answer never came, and owes a stop that didn't arrive until that
+Mac reconnects. A start that comes back after the phone stopped is stopped too.
+
+**Who stops whom.** A device that records because the other asked follows it: when the one that
+asked says it isn't recording that conversation any more (as it does on every reconnection), or
+hasn't been reachable for 30 minutes, the follower stops too and says so ("Studio Mac stopped
+recording, so this iPhone stopped too."). The phone accepts a stop only from the Mac its recording is
+with: the one that started it, or one it asked to record along; the person can always stop it.
 
 **The clock prior.** The link measures the phone's clock against this Mac's (NTP-style, good to a
-few milliseconds on a quiet network). The phone's start, corrected by that offset, is the
-recording's `clockOffset`, which is `AudioAligner`'s expected offset when the sound is compared.
+few milliseconds on a quiet network); the phone also stores what it measured while recording on its
+track (`capture.peerClocks`). The phone's first sample (the track's own start), on this Mac's clock by
+the later of the two measurements, is the recording's `clockOffset`, which is `AudioAligner`'s
+expected offset when the sound is compared. A phone track's start is converted this way wherever
+starts are compared.
 
-**Its recording arrives.** The phone's recording joins the multipoint pipeline when it is first
-processed, as the first step of the job, so only the Mac that carries out the phone's request does
-this (any Mac, for a recording without one):
+**Its recording arrives.** A recording made with a Mac (one that recorded, or may have: it never
+answered) is filed into that conversation as a source to place: offset unknown, its bookmarks on its
+track, and its notes, matched by ID so nothing doubles, timed by its own clock and held by its track
+(`SourceAlignment.heldNoteIDs`, as for **Record on This Mac**) until it's placed, when they move with
+it. The phone never writes the conversation's title, date, status or message; one that hasn't
+synced to it yet is made as its leader sent it. A recording made alone is a conversation of its own,
+as before. A recording the phone was killed while making is recovered with the Macs it was made
+with (its journal keeps them): it joins the same way, and the phone stops the Macs it started.
 
-- **In a conversation of its own**, it goes through `planArrival`: the link by recording ID, then
-  overlap in time, then the sound. A match moves it into that conversation like any recording that
-  finds its conversation later (with its bookmarks, and the clock prior), and its own conversation
-  goes to the Trash unless the person worked in it (notes taken on the phone, say), in which case it
-  stays and is processed too. Anything less becomes a suggestion, settled by the transcript.
-- **In a conversation that has this Mac's recordings** (the phone recorded into it), it waits to be
-  lined up, `pending` with the clock prior, and the link is marked `attached`.
+The phone's recording, and a recorder's recording another device imported (the phone, after taking
+the recorder over), join the multipoint pipeline when first processed, as the first step of the job,
+so only the Mac that carries out the request does this (any Mac, for a recording without one):
+
+- **In a conversation of its own**, the phone's goes through `planArrival`: the link by recording
+  ID, then overlap in time, then the sound; a recorder's, by its link only. A match moves it into
+  that conversation like any recording that finds its conversation later (with its bookmarks, and the
+  clock prior), and its own conversation goes to the Trash unless the person worked in it (notes
+  taken on the phone, say), in which case it stays and is processed too. Anything less becomes a
+  suggestion, settled by the transcript. A phone recording filed to be placed that turns out to be
+  alone sets its conversation's timeline. One in a conversation a Mac recorded with this phone (its
+  link is there) waits for that Mac's recording instead.
+- **In a conversation that has this Mac's recordings**, it waits to be lined up, `pending` with the
+  clock prior (keeping the notes it holds), and the link is marked `attached`.
 
 ## Preferences
 
@@ -225,7 +294,14 @@ this (any Mac, for a recording without one):
   conversation goes to the Trash (it can be restored from there).
 - A phone recording that moves into this Mac's conversation brings its bookmarks, not the notes
   typed on the phone; its own conversation keeps them and stays.
-- When the phone asks this Mac to record a conversation that hasn't synced here yet, the two
-  copies meet without a common ancestor, so differing titles or dates are kept in Version History.
+- When either device makes the other's conversation before it has synced, both copies carry the
+  same title and date, but they meet without a common ancestor: until sync treats that case, a
+  differing status is kept in Version History.
+- When the phone led and this Mac joined later, this Mac's recording sets the timeline, so notes the
+  phone took before this Mac started land at its start once the phone's recording is placed.
+- Stops owed to a device that's away, and starts still being asked, are kept in memory: quitting
+  drops them, and the device's own follow-the-leader check (or the next launch) stops it instead.
+- A Mac reached through a phone's recorder can't measure the recorder's clock; its recording is
+  placed by the recorder's own start, then sound and transcript.
 - Record control with the phone, the clock prior on real Wi‑Fi, and a phone that loses the link
   mid-recording need a real iPhone on a real network; tests use loopback.

@@ -100,6 +100,9 @@ struct StatusInputs: Equatable {
         var importing: Importing?
         /// Another device manages it.
         var managedBy: String?
+        /// What it was last known to be doing, when it isn't live here: "Recording since 10:02, as of 10:14"
+        /// (from the Mac that manages it, or its last state here).
+        var lastKnown: String?
         var handoff: RecorderHandoff.State = .idle
         var isRecording = false
         var isListeningLive = false
@@ -174,7 +177,9 @@ enum StatusSheetModel {
                 return line(Self.handoffLine(recorder.handoff, headline: headline), .working, short: Self.shortHandoff(recorder.handoff))
             }
         }
-        if let owner = recorder.managedBy { return line("Managed by \(owner)", .calm) }
+        if let owner = recorder.managedBy {
+            return line(recorder.lastKnown.map { "Managed by \(owner) · \($0)" } ?? "Managed by \(owner)", .calm)
+        }
         if recorder.isListeningLive { return line("Listening live", .recording) }
         if let importing = recorder.importing {
             if importing.suspended {
@@ -198,7 +203,7 @@ enum StatusSheetModel {
         case .notSetUp:
             return line("Not set up", .calm)
         case .notConnected:
-            var parts: [String] = []
+            var parts: [String] = recorder.lastKnown.map { [$0] } ?? []
             if recorder.newCount > 0 { parts.append("\(recorder.newCount) new") }
             if let last = recorder.lastConnected { parts.append("Last seen \(DeviceDateFormat.lastSeen(last, now: now))") }
             return line(parts.isEmpty ? "Not connected" : parts.joined(separator: " · "), .calm)

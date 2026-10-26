@@ -350,6 +350,7 @@ final class AppState: ObservableObject {
             sync.restore()
             if automaticRecording { monitor.startMonitoring() }
             await startPhoneLinkIfPaired()
+            closeRecoveredLinks()
             // Requests this Mac held when it last quit or crashed run again (or are given back).
             pickUpRequests()
         } catch { errorMessage = "Couldn’t open your library: \(error.localizedDescription)" }
@@ -1003,6 +1004,7 @@ extension AppState {
                     library.add(Meeting(id: id, title: "Recovered recording", date: result.startedAt))
                 }
                 try await ingestCapture(result, meetingID: id)
+                sources.recovered.append((id, result.startedAt, result.endedAt))
                 notice = "Recovered an interrupted recording."
             } catch { notice = "Couldn’t recover a recording: \(error.localizedDescription)" }
         }

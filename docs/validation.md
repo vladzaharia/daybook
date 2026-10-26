@@ -214,6 +214,44 @@ Not exercised, needing signed builds and real accounts:
 - A courier delivery promoted into iCloud Drive after a day, observed from a second Mac or a new iPhone.
 - Presence activity seen by the iPhone during a long Mac recording, and a handoff answered during one.
 
+## Multipoint review fixes (2026-10-26)
+
+Recording with an iPhone and with recorders, and the link's recording messages ([multipoint.md](multipoint.md),
+[link.md](link.md)). Temporary libraries and sync folders, synthetic audio, fake recorders, and
+DaybookLink over loopback with keys in memory; no Bluetooth, microphone, network beyond 127.0.0.1, or
+model. The test doubles now behave like the apps: the Mac's test phone files into the shared
+conversation as the phone does, and the phone's test Mac records the conversation it's asked to and
+makes it on the phone as sync would.
+
+- `swift test`: 729 XCTest cases passed across all seven bundles, 30 of them new: `PhoneLinkTests`
+  (27: phone-led and Mac-led filing with notes held until placed and no placeholder fields, one
+  bookmark after sync, the device page's start, the timeline's zero for a conversation recorded into
+  again, the Mac's state and recorders reaching the phone, a slow or missing start answer, stopping
+  before the phone answers, a refused, dropped, or undelivered stop sent again on reconnecting, a
+  Mac following the phone that led, sleep holding briefly for the stop, a recovered recording closing
+  its links, the clock prior from the phone's own start and stored clock, a linked phone recording
+  staying put, a lone one setting its timeline, a paused phone recording, and a Soundcore recording
+  the phone imported joining by its link), `MultipointRecordingTests` and `RecorderOwnerTests` (16:
+  an already-recording recorder found only once its list arrives, a recording the person started
+  since left alone at Stop, the late start, an unreachable or unconfirming recorder reported quietly
+  with its recording still joining, and recorders driven through the phone that manages them),
+  `MultiSourceTests` (another device's notes added once, held, and moved), and `LinkSessionTests` (a
+  request repeated on a new connection while still being answered reaches the app once).
+- `scripts/build-ios.sh --test` on an iPhone 17 Pro simulator (iOS 27.0; no device type pairs with
+  the 27.1 runtime here): 106 tests passed, 20 of them new: `LinkServicesTests` (16), `PhoneLibraryTests`
+  (15), `PhoneRecorderTests` (a recovered recording ends where its audio does), and
+  `StatusSheetModelTests` (a recorder another device manages, with its age).
+
+**Still to check with real devices:** that a stop sent while the power notification holds sleep
+back (up to 5 s) reaches the phone before the Wi‑Fi goes; the phone's 15 s state over a Lock Screen
+recording's slow heartbeats; a real microphone prompt on the Mac or phone outlasting the request,
+answered once; the phone starting and stopping a Soundcore Work it manages for a Mac (start
+confirmation and Pause timing over Bluetooth, and the finished recording importing into the Mac's
+conversation); a recorder handed over mid-recording and stopped through its new owner; a recorder's
+list arriving after connecting on real hardware (within the 5 s waited for); the clock stored on the
+phone's track against the link's on real Wi‑Fi; and quitting with a phone out of reach (its stop is
+dropped, and it follows the Mac's idle state on reconnecting).
+
 ## Project review fixes (2026-10-25)
 
 The review covered persistence and sync, local pairing, model downloads, recorder integration,

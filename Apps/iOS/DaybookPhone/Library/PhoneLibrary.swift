@@ -56,16 +56,17 @@ final class PhoneLibrary {
 
     // MARK: Filing a recording
 
-    /// How a recording joins a conversation another device leads (multipoint: the Mac asked this
-    /// iPhone to record, or the conversation already exists here). Its timeline belongs to the
+    /// How a recording joins a conversation another device leads (multipoint: a Mac asked this
+    /// iPhone to record, or recorded along when this iPhone asked). Its timeline belongs to the
     /// conversation's own origin, so the phone's recording is a source to place, not the origin.
     struct Join: Equatable, Sendable {
         /// Where the phone's recording probably starts on the conversation's timeline, from the link's
-        /// clock comparison; nil when unknown. Notes typed here move by it.
+        /// clock comparison; nil when unknown. Notes typed here read about right by it until the
+        /// recording is placed.
         var estimatedOffset: TimeInterval?
-        /// When the conversation began, on this iPhone's clock, for a conversation not synced here yet.
-        var conversationStart: Date?
+        /// The conversation as the device leading it has it, for a conversation not synced here yet.
         var title: String?
+        var date: Date?
     }
 
     /// What filing produced: the conversation, and the Transcribe request it wrote (if any).
@@ -76,11 +77,14 @@ final class PhoneLibrary {
 
     /// Files a finished phone recording as a conversation with one phone-microphone track, its notes
     /// and bookmarks, and (when `requestTranscription`) a Transcribe request for a Mac, then removes
-    /// its staging folder. Safe to repeat after a failure: the same recording is never filed twice.
+    /// its staging folder. Safe to repeat after a failure: the same recording is never filed twice,
+    /// and nothing it brings is added twice.
     ///
-    /// With `join` (multipoint), the conversation keeps its date and timeline: the phone's track is a
-    /// source the Mac places (offset unknown), its bookmarks stay on that track so they follow its
-    /// placement, and its notes are added at their estimated times.
+    /// With `join` (multipoint), or into a conversation that already has other recordings, the
+    /// conversation keeps its title, date, and timeline: the phone's track is a source the Mac places
+    /// (offset unknown), and its bookmarks and notes stay with that track until it's placed
+    /// (`Meeting.addRecordingWork`). The conversation's status and message are left to the device
+    /// leading it.
     @discardableResult
     func file(_ recording: PhoneRecording) async throws -> Meeting {
         try await fileRecording(recording).meeting
@@ -91,39 +95,44 @@ final class PhoneLibrary {
         try await reload()
         await controller.acquireLock()
         defer { controller.releaseLock() }
-        let identity = PhoneDevice.identity(recordingID: recording.id, installation: installation)
-        let joining = join != nil || controller.meeting(recording.id)?.tracks.contains(where: { $0.device != identity }) == true
-        if controller.meeting(recording.id) == nil {
-            if let join {
-                controller.add(Meeting(id: recording.id, title: join.title ?? recording.title,
-                                       date: join.conversationStart ?? recording.startedAt, status: .imported))
-            } else {
-                controller.add(Meeting(id: recording.id, title: recording.title, date: recording.startedAt, notes: recording.notes,
-                                       highlights: recording.highlights, status: .imported,
-                                       timedNotes: recording.timedNotes.isEmpty ? nil : recording.timedNotes))
-            }
-        } else if !joining {
-            controller.update(recording.id) { meeting in
-                for mark in recording.highlights where !meeting.highlights.contains(where: { $0.id == mark.id }) {
-                    meeting.highlights.append(mark)
-                }
-            }
+        let id = recording.id
+        // Named by this recording's own ID: a second recording into the same conversation is a new track.
+        let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: installation)
+        let joining = join != nil || controller.meeting(id)?.tracks.contains(where: { $0.device != identity }) == true
+        if controller.meeting(id) == nil {
+            // One a Mac leads that hasn't synced here yet is made as that Mac has it (its title and date
+            // came with its request), so the two copies agree when they meet; its status stays the
+            // Mac's to set.
+            controller.add(Meeting(id: id, title: join?.title ?? recording.title, date: join?.date ?? recording.startedAt,
+                                   status: joining ? .draft : .imported))
         }
-        var track = controller.meeting(recording.id)?.tracks.first { $0.device == identity }
+        var track = controller.meeting(id)?.tracks.first { $0.device == identity }
         if track == nil {
-            let warnings = recording.warnings.isEmpty ? nil : recording.warnings.joined(separator: "\n")
-            let ingested = try await controller.ingest(recording.audioURL, into: recording.id, provenance: RecordingProvenance(
-                source: .microphone, device: identity, offset: joining ? nil : 0, duration: recording.duration, startedAt: recording.startedAt,
-                capture: recording.capture, conversationDate: joining ? nil : recording.startedAt, message: warnings))
-            track = ingested.track ?? controller.meeting(recording.id)?.tracks.first { $0.device == identity }
+            var capture = recording.capture
+            var message = recording.warnings.isEmpty ? nil : recording.warnings.joined(separator: "\n")
+            if joining, message != nil {
+                // The conversation's message is its leader's; the recording's own warnings stay on its track.
+                capture.notes = (capture.notes ?? []) + recording.warnings
+                message = nil
+            }
+            var provenance = RecordingProvenance(source: .microphone, device: identity, offset: joining ? nil : 0, duration: recording.duration,
+                                                 startedAt: recording.startedAt, capture: capture, message: message)
+            provenance.joinsConversation = joining
+            let ingested = try await controller.ingest(recording.audioURL, into: id, provenance: provenance)
+            track = ingested.track ?? controller.meeting(id)?.tracks.first { $0.device == identity }
         }
-        if joining, let track { addJoinedWork(recording, track: track.id, offset: join?.estimatedOffset) }
-        if let track { try await addCapturedPhotos(recording, track: track.id) }
-        controller.update(recording.id) { $0.status = .imported }
-        let request = requestTranscription ? controller.requestProcessing(recording.id, mode: .newAudio) : nil
+        // The staging folder is the only copy until this recording's bytes are in the library.
+        guard let track else { throw DaybookError.saveFailed("The recording wasn’t added to its conversation.") }
+        let notes = recording.timedNotes.isEmpty ? NoteTimeline.reconcile(previous: [], text: recording.notes, captureTime: nil) : recording.timedNotes
+        controller.update(id) { meeting in
+            meeting.addRecordingWork(trackID: track.id, notes: notes, bookmarks: recording.highlights, joining: joining,
+                                     shift: join?.estimatedOffset ?? 0)
+        }
+        try await addCapturedPhotos(recording, track: track.id)
+        let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
         try await controller.flushDurably()
         try? FileManager.default.removeItem(at: recording.stagingDirectory)
-        guard let meeting = controller.meeting(recording.id) else { throw DaybookError.libraryUnavailable }
+        guard let meeting = controller.meeting(id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)
     }
 
@@ -140,34 +149,6 @@ final class PhoneLibrary {
             } catch PhotoStoreError.unsupportedImage {
                 continue
             }
-        }
-    }
-
-    /// A joined recording's bookmarks stay on its track (they follow its placement); its notes are
-    /// appended at their estimated conversation times, or untimed when the offset isn't known.
-    private func addJoinedWork(_ recording: PhoneRecording, track: UUID, offset: TimeInterval?) {
-        controller.update(recording.id) { meeting in
-            for mark in recording.highlights where !meeting.highlights.contains(where: { $0.id == mark.id }) {
-                var placed = mark
-                placed.trackID = track
-                meeting.highlights.append(placed)
-            }
-        }
-        let added = NoteTimeline.paragraphs(of: recording.notes)
-        guard let current = controller.meeting(recording.id), !added.isEmpty else { return }
-        let existing = Set(NoteTimeline.paragraphs(of: current.notes))
-        let fresh = added.filter { !existing.contains($0) }
-        guard !fresh.isEmpty else { return }
-        let text = current.notes.isEmpty ? fresh.joined(separator: "\n") : current.notes + "\n" + fresh.joined(separator: "\n")
-        let times = Dictionary(recording.timedNotes.compactMap { note in note.time.map { (note.text, $0) } }, uniquingKeysWith: { a, _ in a })
-        controller.update(recording.id) { meeting in
-            var anchors = meeting.timedNotes ?? NoteTimeline.reconcile(previous: [], text: meeting.notes, captureTime: nil)
-            for paragraph in fresh {
-                let time = offset.flatMap { offset in times[paragraph].map { max(0, $0 + offset) } }
-                anchors.append(TimedNote(time: time, text: paragraph))
-            }
-            meeting.notes = text
-            meeting.timedNotes = anchors
         }
     }
 

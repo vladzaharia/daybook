@@ -17,7 +17,12 @@ struct MultipointSession: Equatable, Sendable {
             case asking
             case recording
             case stopped
+            /// It said no, and why.
             case failed(String)
+            /// It never answered: it may be recording, so it's stopped with this iPhone's recording.
+            case noAnswer(String)
+
+            var isUnanswered: Bool { if case .noAnswer = self { return true } else { return false } }
         }
         var id: UUID
         var name: String
@@ -26,6 +31,26 @@ struct MultipointSession: Equatable, Sendable {
         var startedAt: Date?
         /// This iPhone started it, so this iPhone stops it.
         var startedByPhone: Bool
+        /// The start this iPhone sent it. Asked again with the same request, the Mac answers once, so a
+        /// start whose answer was lost is never mistaken for one the Mac made itself.
+        var startRequestID: UUID?
+
+        /// It recorded this conversation too, or may have, so this iPhone's recording joins it.
+        var mayHaveRecorded: Bool {
+            switch state {
+            case .asking, .recording, .stopped, .noAnswer: return true
+            case .failed: return false
+            }
+        }
+
+        /// This iPhone asked it to record and it may be recording, so this iPhone stops it.
+        var needsStop: Bool {
+            guard startedByPhone else { return false }
+            switch state {
+            case .asking, .recording, .noAnswer: return true
+            case .stopped, .failed: return false
+            }
+        }
     }
 
     var conversationID: UUID
@@ -33,10 +58,19 @@ struct MultipointSession: Equatable, Sendable {
     var macs: [Mac] = []
     /// The Mac's own recording started here, on its clock (from a request's timing).
     var leadStartedAt: Date?
+    /// The conversation's timeline zero, on the Mac's clock, when it said: earlier than its start
+    /// when it records into a conversation that already had recordings.
+    var timelineStart: Date?
     /// Mac clock − iPhone clock, when the request carried one.
     var leadClockOffset: TimeInterval?
+    /// The conversation as the Mac leading it has it, for creating it here if it hasn't synced yet.
+    var title: String?
+    var date: Date?
 
     var isMacLed: Bool { if case .macLed = role { return true } else { return false } }
+
+    /// The Macs this iPhone owes a stop when its recording ends.
+    var macsToStop: [Mac] { isMacLed ? [] : macs.filter(\.needsStop) }
 
     var recordingMacs: [Mac] { macs.filter { $0.state == .recording } }
 
@@ -61,5 +95,30 @@ struct MultipointSession: Equatable, Sendable {
     mutating func update(_ id: UUID, _ change: (inout Mac) -> Void) {
         guard let index = macs.firstIndex(where: { $0.id == id }) else { return }
         change(&macs[index])
+    }
+}
+
+extension MultipointSession {
+    /// As the recording's journal keeps it.
+    var journaled: CaptureMultipoint {
+        var lead: UUID?
+        if case .macLed(let mac) = role { lead = mac }
+        return CaptureMultipoint(role: isMacLed ? "macLed" : "phoneLed", leadMacID: lead, leadStartedAt: leadStartedAt,
+                                 timelineStart: timelineStart, leadClockOffset: leadClockOffset, title: title, date: date,
+                                 macs: macs.map { CaptureMultipoint.Mac(id: $0.id, name: $0.name, startedByPhone: $0.startedByPhone,
+                                                                        mayHaveRecorded: $0.mayHaveRecorded) })
+    }
+
+    /// Rebuilt from a recovered recording's journal: how it joins its conversation, and which Macs
+    /// this iPhone still owes a stop.
+    init?(conversationID: UUID, journaled: CaptureMultipoint?) {
+        guard let journaled else { return nil }
+        let role: Role
+        if journaled.role == "macLed", let lead = journaled.leadMacID { role = .macLed(macID: lead) } else { role = .phoneLed }
+        self.init(conversationID: conversationID, role: role,
+                  macs: journaled.macs.map { Mac(id: $0.id, name: $0.name, state: $0.mayHaveRecorded ? .recording : .failed(""),
+                                                 startedAt: nil, startedByPhone: $0.startedByPhone) },
+                  leadStartedAt: journaled.leadStartedAt, timelineStart: journaled.timelineStart,
+                  leadClockOffset: journaled.leadClockOffset, title: journaled.title, date: journaled.date)
     }
 }

@@ -34,6 +34,8 @@ public actor LinkClient {
 
     private var links: [UUID: MacLink] = [:]
     private var answeredByMac: [UUID: [UUID: LinkRecordReply]] = [:]
+    /// Record requests the app is still answering, by Mac, with every connection waiting for the answer.
+    private var answering: [UUID: [UUID: [(LinkRecordReply.Outcome) -> Void]]] = [:]
     private var recordHandler: LinkRecordControlHandler?
     private var activity: LinkActivity = .foreground
     private var networkAvailable = true
@@ -416,9 +418,17 @@ public actor LinkClient {
             reply(.refused(LinkRecordRefusal(reason: .unsupported)))
             return
         }
+        // As on the Mac: a repeat on a new connection gets the first answer, and the app hears it once.
+        let mac = peer.deviceID
+        if let earlier = answeredByMac[mac]?[request.id] { reply(earlier.outcome); return }
+        if answering[mac]?[request.id] != nil { answering[mac]?[request.id]?.append(reply); return }
+        answering[mac, default: [:]][request.id] = [reply]
         Task {
             let outcome = await handler(peer, request)
-            reply(outcome)
+            let waiting = answering[mac]?.removeValue(forKey: request.id) ?? []
+            LinkRecordReply.remember(LinkRecordReply(requestID: request.id, outcome: outcome, sentAt: configuration.clock.now()),
+                                     in: &answeredByMac[mac, default: [:]])
+            for reply in waiting { reply(outcome) }
         }
     }
 

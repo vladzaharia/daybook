@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Combine
 import DaybookCore
 import DaybookKit
 import DaybookLink
@@ -40,6 +41,21 @@ extension AppState {
             guard let self else { return .refused(LinkRecordRefusal(reason: .unsupported)) }
             return await self.answerPhone(request, from: peer)
         }
+        // Phones hear what this Mac records: when that changes, every 15 s meanwhile, and as they connect.
+        phoneLink.localRecordingState = { [weak self] in
+            // Sent every 15 s while recording: also when a phone this Mac records for has been gone too long.
+            self?.checkPhoneLead()
+            return self?.macRecordingState() ?? LinkRecordingState(phase: .idle)
+        }
+        Publishers.CombineLatest3($recordingID, $isStartingRecording, $isStoppingRecording)
+            .map { RecordingPhaseKey(recording: $0, starting: $1, stopping: $2) }
+            .removeDuplicates().dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.phoneLink.sendRecordingState() } }
+            .store(in: &subscriptions)
+        // And what the recorders this Mac manages are doing, when that changes.
+        devices.recorderChanges()
+            .sink { [weak self] in self?.phoneLink.sendRecordingState(onlyIfRecordersChanged: true) }
+            .store(in: &subscriptions)
         // The phone's synced recordings list follows sync being on or off.
         sync.$folder.dropFirst().sink { [weak self] _ in
             Task { @MainActor in self?.phoneSessions.forEach { $0.connection(.files)?.refresh() } }
@@ -47,6 +63,8 @@ extension AppState {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in await self?.systemDidWake() }
         }
+        // Going to sleep while recording, the devices recording along hear the stop first.
+        recorder.beforeSleep = { [weak self] in await self?.prepareForSleep(within: RecordingController.sleepGrace) }
     }
 
     /// Paired phones, as devices.
@@ -94,6 +112,21 @@ extension AppState {
     private func phoneConnected(_ peer: LinkPeer) {
         // A phone that reconnects while this Mac processes sees where it is at once.
         if let id = processingID { reportToPhones(id, force: true) }
+        // A stop this Mac couldn't deliver goes now.
+        sources.recorders.reconnected(peer.deviceID.uuidString)
+    }
+
+    /// This Mac's recorder, as phones see it.
+    func macRecordingState(now: Date = Date()) -> LinkRecordingState {
+        let phase: LinkRecordingState.Phase = isStoppingRecording ? .stopping : recordingID != nil ? .recording : isStartingRecording ? .starting : .idle
+        // A recorder recording along with this Mac's recording says which conversation.
+        let links = recordingID.flatMap { id in meetings.first { $0.id == id }?.companions } ?? []
+        let recorders = LinkRecorderState.states(of: sources.recorders.sessions()) { session in
+            links.contains { $0.deviceID == session.id && $0.macEndedAt == nil && [.recording, .alreadyRecording].contains($0.state) } ? self.recordingID : nil
+        }
+        return LinkRecordingState(phase: phase, conversationID: recordingID, startedAt: recordingStartedAt,
+                                  elapsed: recordingStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0, sentAt: now,
+                                  recorders: recorders)
     }
 
     // MARK: Messages from phones
@@ -105,15 +138,68 @@ extension AppState {
             Task { await synchronizeLibrary(); pickUpRequests() }
         case .bookmark(let mark):
             // A bookmark on the phone while this Mac records the same conversation, at this Mac's time.
+            // It keeps the phone's ID, so the phone's own copy, arriving with its recording, is the same bookmark.
             guard recordingID == mark.conversationID, let start = recordingStartedAt else { return }
             let clock = phoneLink.peers[phone]?.clock
             let when = clock?.localDate(fromPeer: mark.createdAt) ?? mark.createdAt
-            library.addBookmark(in: mark.conversationID, at: max(0, when.timeIntervalSince(start)))
-        case .recordingState, .processingProgress:
+            library.addBookmark(id: mark.id, in: mark.conversationID, at: max(0, when.timeIntervalSince(start)))
+        case .recordingState(let state):
+            phoneReported(state, from: phone)
+        case .processingProgress:
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             recorderHandoff.receive(message, from: phone)
         }
+    }
+
+    /// The connected phone that manages a recorder (by its synced ownership), when it starts and stops
+    /// its recorders when asked: multipoint asks it rather than reaching for the recorder.
+    func phoneManaging(_ ownership: RecorderOwnership) -> (session: DeviceSession, control: any AnsweringRecordControl)? {
+        guard let peer = phoneLink.peers.values.first(where: { ($0.capabilities.syncDeviceID ?? $0.deviceID.uuidString) == ownership.ownerID }),
+              peer.capabilities.controlsRecorders, let session = devices.session(peer.deviceID.uuidString),
+              let control = session.direct as? PhoneLinkConnection else { return nil }
+        return (session, control)
+    }
+
+    // MARK: Recording for a phone
+
+    /// A phone said what it's recording. When this Mac records because that phone asked, and the
+    /// phone has stopped (or moved on to another conversation), this Mac stops too and says so: the
+    /// phone's stop may never have arrived.
+    func phoneReported(_ state: LinkRecordingState, from phone: UUID) {
+        guard let id = recordingID, let lead = phoneLeads[id], lead.sessionID == phone.uuidString else { return }
+        guard state.conversationID != id || state.phase == .idle else { return }
+        stopFollowing(id, because: "\(lead.deviceName) stopped recording, so this Mac stopped too.")
+    }
+
+    /// A phone this Mac records for, not heard from for this long, is taken to have stopped.
+    static let phoneLeadSilenceLimit: TimeInterval = 30 * 60
+
+    /// While recording for a phone: one that has been unreachable for `phoneLeadSilenceLimit` won't
+    /// stop this recording itself, so this Mac does. Checked with every state this Mac sends.
+    func checkPhoneLead(now: Date = Date()) {
+        guard let id = recordingID, let lead = phoneLeads[id], let phone = UUID(uuidString: lead.sessionID),
+              phoneLink.peers[phone] == nil, let last = phoneLink.lastConnected[phone],
+              now.timeIntervalSince(last) > Self.phoneLeadSilenceLimit else { return }
+        stopFollowing(id, because: "\(lead.deviceName) couldn’t be reached for \(Int(Self.phoneLeadSilenceLimit / 60)) minutes, so this Mac stopped recording.")
+    }
+
+    private func stopFollowing(_ id: UUID, because message: String) {
+        guard !isStoppingRecording else { return }
+        Task {
+            if let stop = phoneCapture.stop { await stop(id) } else { await stopRecording(manual: false) }
+            notice = message
+        }
+    }
+
+    /// As the Mac goes to sleep: once its recording has stopped (capture stops on its own), the
+    /// devices recording along are told before the network goes, waiting at most `limit` in all.
+    func prepareForSleep(within limit: Duration = .seconds(5)) async {
+        let deadline = ContinuousClock.now.advanced(by: limit)
+        while recordingID != nil || isStoppingRecording, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        await sources.recorders.settle(within: ContinuousClock.now.duration(to: deadline))
     }
 
     // MARK: Live progress for phones
@@ -181,8 +267,11 @@ extension AppState {
             }
             let clock = peer.clock
             if !meetings.contains(where: { $0.id == id }) {
+                // Made as the phone files it (its title and date came with the request), so the two
+                // copies agree when they meet; it keeps that date while this Mac records into it.
                 let start = request.timing?.startedAt.map { clock?.localDate(fromPeer: $0) ?? $0 } ?? Date()
-                library.add(Meeting(id: id, title: "Conversation at \(start.formatted(date: .omitted, time: .shortened))", date: start))
+                library.add(Meeting(id: id, title: request.title ?? "Conversation at \(start.formatted(date: .omitted, time: .shortened))",
+                                    date: request.date ?? start))
             }
             guard canRecordInto(id) else {
                 return .refused(LinkRecordRefusal(reason: .busy, message: "This Mac is processing that conversation. Try again when it’s done."))
@@ -225,12 +314,22 @@ extension AppState {
     ///   be lined up, from the clock prior.
     func phoneRecordingsArrived(_ id: UUID, job: ProcessingJob) async -> Bool {
         guard let meeting = meetings.first(where: { $0.id == id }), job.requestID != nil || meeting.openProcessingRequests.isEmpty else { return false }
+        // Not yet seen here: from a device (the phone, or a recorder another device imported), no
+        // transcript, and not yet a source of this conversation (the phone may have filed it as one
+        // still to place, holding the notes typed on it). Recordings this Mac imported were placed then.
         let arriving = meeting.tracks.filter { track in
-            track.deviceKind == DaybookPhoneIntegration.id && track.alignment == nil && !meeting.transcripts.contains { $0.trackID == track.id }
+            track.deviceKind != nil && !meeting.transcripts.contains { $0.trackID == track.id }
+                && (track.alignment == nil
+                    || (track.alignment?.isPending == true && !meeting.revisions.contains { $0.field == "source:\(track.id.uuidString)" }))
         }
         guard !arriving.isEmpty else { return false }
         if meeting.tracks.count == 1, let track = arriving.first {
-            return await phoneRecordingArrivedAlone(track, in: meeting)
+            // A conversation a Mac recorded with this phone (its link is here) waits for that Mac's
+            // recording, rather than letting the phone's move to another conversation.
+            if meeting.companions?.contains(where: { $0.deviceKind == DaybookPhoneIntegration.id && $0.deviceID == track.deviceSerial }) == true {
+                return false
+            }
+            return await deviceRecordingArrivedAlone(track, in: meeting)
         }
         // With recordings of this Mac's placed already, the phone's waits to be lined up.
         let placed = meeting.tracks.contains { $0.deviceKind != DaybookPhoneIntegration.id && meeting.timelinePlacement(of: $0.id) != nil }
@@ -247,9 +346,20 @@ extension AppState {
         return false
     }
 
-    private func phoneRecordingArrivedAlone(_ track: RecordingTrack, in meeting: Meeting) async -> Bool {
-        guard let identity = track.device, let url = await audioURL(for: track, meetingID: meeting.id) else { return false }
-        let start = (date: track.startedAt ?? track.createdAt as Date?, reliable: true)
+    /// A recording from Daybook on iPhone finds its conversation by its link, then overlap in time,
+    /// then the sound. A recorder's recording another device imported (the phone, after a handoff)
+    /// joins only by its multipoint link: this Mac would have matched it by time and sound if it had
+    /// imported it itself, and its link waits for it here.
+    private func deviceRecordingArrivedAlone(_ track: RecordingTrack, in meeting: Meeting) async -> Bool {
+        guard let identity = track.device else { return false }
+        let fromPhone = track.deviceKind == DaybookPhoneIntegration.id
+        // Its start on this Mac's clock (the phone stamps it by its own).
+        let start = (date: trackStart(track) ?? track.createdAt as Date?, reliable: true)
+        if !fromPhone {
+            let others = meetings.filter { $0.id != meeting.id }
+            guard SourceMatcher.linked(Self.fullRecording(identity), start: start.date, in: others, policy: sources.policy) != nil else { return false }
+        }
+        guard let url = await audioURL(for: track, meetingID: meeting.id) else { return false }
         guard let plan = await planArrival(url: url, duration: track.duration ?? 0, device: identity, start: start, excluding: [meeting.id]) else { return false }
         if let target = plan.attachTo, canMoveSource(into: target), let title = meetings.first(where: { $0.id == target })?.title {
             let stays = meeting.hasPersonMadeContent
@@ -260,12 +370,16 @@ extension AppState {
             do { _ = try await importAudio([url], source: track.source, attachTo: target, device: identity) }
             catch { movedPhoneRecordings.remove(meeting.id); errorMessage = error.localizedDescription; return false }
             guard !stays else {
-                notice = "Added the iPhone recording to “\(title)”. “\(meeting.title)” stays, with your notes."
+                notice = "Added the \(sourceName(track)) to “\(title)”. “\(meeting.title)” stays, with your notes."
                 return false
             }
             trashWhenIdle(meeting.id, addedTo: title)
             return true
         }
+        guard fromPhone else { return false }
+        // It stays: filed as a source to place (it may have joined a Mac's recording that never came),
+        // it's this conversation's own recording after all, and sets its timeline.
+        update(meeting.id) { $0.makeTimelineOrigin(track.id) }
         if let suggestion = plan.suggestion {
             update(meeting.id) { current in
                 guard !(current.sourceSuggestions ?? []).contains(where: { $0.trackID == track.id }) else { return }
@@ -276,4 +390,11 @@ extension AppState {
         }
         return false
     }
+}
+
+/// What a phone's view of this Mac's recorder changes with.
+private struct RecordingPhaseKey: Equatable {
+    var recording: UUID?
+    var starting: Bool
+    var stopping: Bool
 }

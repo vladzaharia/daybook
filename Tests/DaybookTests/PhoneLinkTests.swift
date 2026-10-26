@@ -131,6 +131,9 @@ final class PhoneLinkTests: XCTestCase {
         let start = try XCTUnwrap(phone.recorder.requests.first)
         XCTAssertEqual(start.action, .start)
         XCTAssertEqual(start.conversationID, id)
+        XCTAssertEqual(start.title, "Design review")
+        XCTAssertEqual(start.timing?.timelineStart?.timeIntervalSince1970 ?? 0, start.timing?.startedAt?.timeIntervalSince1970 ?? 1, accuracy: 0.001,
+                       "a new conversation's timeline begins with this Mac's recording")
         XCTAssertEqual(start.timing?.clockOffset ?? 0, 2.5, accuracy: 0.05, "The Mac's prior travels with the request")
 
         macStopsRecording(rig, id)
@@ -147,6 +150,123 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertNil(rig.meeting(other)?.companions)
         XCTAssertEqual(phone.recorder.requests.count, 2)
         macStopsRecording(rig, other)
+    }
+
+    func testTheMacTellsPhonesWhatItRecordsAsItChangesWhileItRecordsAndAsTheyConnect() async throws {
+        let rig = try await rig()
+        rig.state.phoneLink.recordingStateInterval = .milliseconds(150)
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        try await waitFor("the state as the phone connects") { phone.events.states.first?.phase == .idle }
+
+        let id = macStartsRecording(rig)
+        try await waitFor("recording") { phone.events.states.contains { $0.phase == .recording && $0.conversationID == id } }
+        let started = try XCTUnwrap(phone.events.states.first { $0.phase == .recording })
+        XCTAssertEqual(started.startedAt?.timeIntervalSince1970 ?? 0, rig.state.recordingStartedAt?.timeIntervalSince1970 ?? 1, accuracy: 0.001)
+        // Repeated while it records, so the phone can tell it's still at it.
+        try await waitFor("the state again") { phone.events.states.filter { $0.phase == .recording }.count >= 3 }
+
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        try await waitFor("idle") { phone.events.states.last?.phase == .idle }
+        let count = phone.events.states.count
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(phone.events.states.count, count, "nothing more while idle")
+    }
+
+    func testTheRecordersEachSideManagesTravelWithItsState() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        // A recorder this Mac manages, recording along with this Mac's recording.
+        let recorder = FakeRecorder()
+        let session = DeviceSession(device: ConfiguredDevice(id: "recorder", kind: SoundcoreWorkIntegration().kind),
+                                    kind: SoundcoreWorkIntegration().kind, connections: [recorder], defaults: rig.defaults)
+        addTeardownBlock { session.shutDown() }
+        let phoneSession = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString))
+        rig.state.sources.recorders.sessions = { [session, phoneSession] }
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        try await waitFor("the recorder in this Mac's state") {
+            phone.events.states.last?.recorders?.first?.isRecording == true
+        }
+        let sent = try XCTUnwrap(phone.events.states.last?.recorders)
+        XCTAssertEqual(sent.count, 1, "only recorders this Mac manages, not the phone itself")
+        XCTAssertEqual(sent.first?.kind, SoundcoreWorkIntegration.id)
+        XCTAssertEqual(sent.first?.serial, "FAKE1")
+        XCTAssertEqual(sent.first?.name, "Soundcore Work")
+        XCTAssertEqual(sent.first?.recordingID, rig.meeting(id)?.companions?.first?.recordingID)
+        XCTAssertEqual(sent.first?.conversationID, id)
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+
+        // The phone's recorders, on this Mac's iPhone page, with their age; unknown after 20 minutes.
+        let started = Date().addingTimeInterval(-300)
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle, recorders: [
+            LinkRecorderState(kind: SoundcoreWorkIntegration.id, serial: "S2", name: "Soundcore Work", isRecording: true, recordingID: "1", startedAt: started,
+                              asOf: Date().addingTimeInterval(-120))])))
+        let control = try XCTUnwrap(phoneSession.direct as? PhoneLinkConnection)
+        try await waitFor("the phone's recorders") { !control.recorders().isEmpty }
+        let shown = try XCTUnwrap(control.recorders().first)
+        XCTAssertEqual(shown.summary(), "Recording since \(started.formatted(date: .omitted, time: .shortened)), as of \(Date().addingTimeInterval(-120).formatted(date: .omitted, time: .shortened))")
+        XCTAssertEqual(control.recorders(now: Date().addingTimeInterval(17 * 60)).count, 1)
+        XCTAssertTrue(control.recorders(now: Date().addingTimeInterval(19 * 60)).isEmpty, "too old to say: 20 minutes past its as-of")
+        // Still known after the phone disconnects, for as long as it can be trusted.
+        await phone.client.disconnect(from: phone.macID)
+        try await waitFor("disconnected") { rig.state.phoneLink.peers[phone.phoneID] == nil }
+        XCTAssertEqual(control.recorders().count, 1)
+    }
+
+    func testRecordingIntoAnEarlierConversationTellsThePhoneWhereItsTimelineBegan() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        // A conversation recorded ten minutes ago; this Mac records into it again (Record on This Mac).
+        let earlier = Date().addingTimeInterval(-600)
+        let id = try await rig.macConversation("Standup", at: earlier, seconds: 0.5, audio: try rig.audio("earlier.wav", frequency: 350))
+        _ = macStartsRecording(rig, into: id)
+        let macStart = try XCTUnwrap(rig.state.recordingStartedAt)
+        await rig.state.sources.recorders.settle()
+        let request = try XCTUnwrap(phone.recorder.requests.first)
+        XCTAssertEqual(request.title, "Standup", "the conversation as this Mac has it")
+        XCTAssertEqual(request.date?.timeIntervalSince1970 ?? 0, rig.meeting(id)?.date.timeIntervalSince1970 ?? 1, accuracy: 0.001)
+        XCTAssertEqual(request.timing?.startedAt?.timeIntervalSince1970 ?? 0, macStart.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(request.timing?.timelineStart?.timeIntervalSince1970 ?? 0, earlier.timeIntervalSince1970, accuracy: 0.001,
+                       "the timeline began with the earlier recording, not this Mac's start")
+        XCTAssertEqual(request.timing?.elapsed ?? 0, 600, accuracy: 2, "seconds of that timeline")
+        macStopsRecording(rig, id)
+    }
+
+    func testTheDevicePagesStartAsksThePhoneForAConversationOfItsOwn() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        let control = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString)?.direct as? PhoneLinkConnection)
+        control.startRecording()
+        try await waitFor("the request") { !phone.recorder.requests.isEmpty }
+        let request = try XCTUnwrap(phone.recorder.requests.first)
+        XCTAssertEqual(request.standalone, true)
+        XCTAssertTrue(request.isStandalone)
+        XCTAssertNil(request.timing, "nothing to line up with: this Mac isn't recording it")
+        XCTAssertNil(rig.meeting(request.conversationID), "not a conversation of this Mac's")
+    }
+
+    func testAPausedPhoneRecordingIsStillItsRecordingAndCanBeStopped() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        let control = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString)?.direct as? PhoneLinkConnection)
+        let conversation = UUID()
+        // A call interrupted the phone's recording.
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .paused, conversationID: conversation, startedAt: Date())))
+        try await waitFor("its state") { control.recordingPhase == .paused }
+        XCTAssertEqual(control.status?.isRecording, true, "paused, it's still recording that conversation")
+        XCTAssertEqual(control.recordingConversationID, conversation)
+        control.pauseRecording()
+        try await waitFor("Stop on iPhone") { phone.recorder.requests.contains { $0.action == .stop && $0.conversationID == conversation } }
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle)))
+        try await waitFor("idle") { control.recordingPhase == nil }
+        XCTAssertEqual(control.status?.isRecording, false)
     }
 
     func testAPhoneThatSaysNoIsReportedQuietly() async throws {
@@ -226,6 +346,268 @@ final class PhoneLinkTests: XCTestCase {
         await state.sources.recorders.settle()
     }
 
+    func testAPhoneLedRecordingJoinsWithItsNotesHeldUntilItIsPlaced() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let link = try await PhoneLinkRig.connect(state)
+        defer { Task { await link.tearDown(state) } }
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        defer { library.tearDown() }
+        state.microphoneAccess = { .authorized }
+        state.phoneCapture = PhoneCapture(start: { id in _ = self.macStartsRecording(rig, into: id); return true },
+                                          stop: { id in self.macStopsRecording(rig, id) })
+        // The sound puts the phone's recording 2 s before this Mac's.
+        state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: -2, rate: 1, confidence: 0.9) }
+        let macAudio = try rig.audio("mac-led-by-phone.wav", frequency: 340)
+        let phoneAudio = try rig.audio("phone-leads.wav", frequency: 520)
+        try rig.inference.script(macAudio, [(0, "Walking over now.")])
+        try rig.inference.script(phoneAudio, [(0, "Walking over now.")])
+
+        // The phone records "Walk with Priya" and asks this Mac to record it too.
+        let conversation = UUID(), recordingID = UUID()
+        let phoneStart = Date().addingTimeInterval(-2).rounded
+        let reply = try await link.client.request(LinkRecordRequest(action: .start, conversationID: conversation,
+                                                                    timing: LinkTiming(startedAt: phoneStart, elapsed: 2),
+                                                                    title: "Walk with Priya", date: phoneStart), from: link.macID)
+        guard case .accepted = reply.outcome else { return XCTFail("\(reply.outcome)") }
+        XCTAssertEqual(rig.meeting(conversation)?.title, "Walk with Priya", "made as the phone files it")
+        XCTAssertEqual(rig.meeting(conversation)?.date, phoneStart, "with the phone's date, not this Mac's start")
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        let stop = try await link.client.request(LinkRecordRequest(action: .stop, conversationID: conversation), from: link.macID)
+        guard case .accepted = stop.outcome else { return XCTFail("\(stop.outcome)") }
+        await state.sources.recorders.settle()
+        try await storeMacRecording(rig, conversation, audio: macAudio, start: macStart)
+        state.sourcesAfterCapture(conversation, startedAt: macStart, captureID: UUID())
+        XCTAssertEqual(rig.meeting(conversation)?.date, phoneStart)
+        await state.synchronizeLibrary()
+        await library.synchronize()
+
+        // The phone files into this Mac's conversation: a note at 5 s by its own clock, a bookmark at 4 s.
+        let note = TimedNote(time: 5, text: "Budget agreed")
+        let mark = Highlight(time: 4)
+        try await library.file(phoneAudio, recordingID: recordingID, into: conversation, start: phoneStart, duration: 0.5,
+                               notes: [note], bookmarks: [mark])
+        let filed = try XCTUnwrap(library.library.meeting(conversation))
+        XCTAssertEqual(filed.title, "Walk with Priya")
+        XCTAssertEqual(filed.timedNotes?.first?.time, 5)
+        let held = try XCTUnwrap(filed.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id }?.alignment)
+        XCTAssertEqual(held.method, .pending)
+        XCTAssertEqual(held.heldNoteIDs, [note.id], "the note waits with the phone's recording")
+        await library.synchronize()
+        await state.synchronizeLibrary()
+
+        try await waitFor("the conversation to be processed with both recordings", timeout: 20) {
+            rig.meeting(conversation)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty
+        }
+        let meeting = try XCTUnwrap(rig.meeting(conversation))
+        let track = try XCTUnwrap(meeting.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id })
+        XCTAssertEqual(track.alignment?.method, .audio)
+        XCTAssertEqual(track.alignment?.offset ?? 99, -2, accuracy: 0.001)
+        XCTAssertNil(track.alignment?.heldNoteIDs)
+        XCTAssertEqual(meeting.timedNotes?.first { $0.id == note.id }?.time ?? -1, 3, accuracy: 0.001,
+                       "the note moved onto the timeline with the phone's recording")
+        XCTAssertEqual(meeting.notes, "Budget agreed")
+        XCTAssertEqual(meeting.highlights.map(\.id), [mark.id])
+        XCTAssertEqual(meeting.highlights.first?.trackID, track.id, "the bookmark follows the phone's recording")
+        XCTAssertEqual(meeting.title, "Walk with Priya")
+        XCTAssertEqual(meeting.date, phoneStart)
+        XCTAssertFalse(meeting.revisions.contains { $0.field.hasPrefix("sync:") }, "no competing title, date, or status")
+        XCTAssertEqual(meeting.companions?.first?.state, .attached)
+    }
+
+    // MARK: Lost answers, stops, sleep, and crashes
+
+    func testAStartWhoseAnswerIsSlowIsAskedAgainAndStillCountsAsThisMacs() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        // Longer than a request waits (3 s on loopback), as a microphone prompt on the phone can be.
+        phone.recorder.delay(.start, by: .milliseconds(3_500))
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        let link = try XCTUnwrap(rig.meeting(id)?.companions?.first)
+        XCTAssertEqual(link.state, .recording, "asked again with the same request, it got the first answer")
+        XCTAssertTrue(link.startedByDaybook, "so this Mac stops it")
+        XCTAssertEqual(phone.recorder.requests.count, 1, "the phone heard it once")
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop])
+    }
+
+    func testStoppingBeforeThePhoneAnswersStillStopsIt() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        phone.recorder.delay(.start, by: .seconds(5))
+        let id = macStartsRecording(rig)
+        try await waitFor("the phone is asked") { !phone.recorder.requests.isEmpty }
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop], "it never answered, so it may be recording: it's stopped")
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
+    }
+
+    func testAPhoneThatSaysItRecordsAfterAnAnswerThisMacCouldntReadIsStopped() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        phone.recorder.answer = { _ in .refused(LinkRecordRefusal(reason: "unknown")) }
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .failed)
+        // Yet it reports recording this conversation.
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: id, startedAt: Date())))
+        let control = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString)?.direct as? PhoneLinkConnection)
+        try await waitFor("its state") { control.recordingConversationID == id }
+        phone.recorder.answer = { request in .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: Date())) }
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop])
+    }
+
+    func testAStopThatDidntReachThePhoneGoesWhenItReconnects() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .recording)
+        await phone.client.disconnect(from: phone.macID)
+        try await waitFor("the phone is gone") { rig.state.phoneLink.peers[phone.phoneID] == nil }
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopFailed)
+        XCTAssertEqual(rig.state.sources.recorders.status, "Couldn’t reach \(PhoneLinkRig.phoneName) to stop it. It stops when it reconnects.")
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start])
+
+        try await phone.client.connect(to: phone.macID, via: phone.endpoint)
+        try await waitFor("the stop on reconnecting") { phone.recorder.requests.map(\.action) == [.start, .stop] }
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
+        XCTAssertTrue(rig.state.sources.recorders.pendingStops.isEmpty)
+    }
+
+    func testAPhoneThatRefusesOrDropsMidStopIsReportedQuietly() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        // It won't stop (the person turned recording with this Mac off, say).
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        phone.recorder.answer = { request in
+            request.action == .stop ? .refused(LinkRecordRefusal(reason: .declined))
+                : .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "R-\(request.conversationID)"))
+        }
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopFailed)
+        XCTAssertEqual(rig.state.sources.recorders.status, "\(PhoneLinkRig.phoneName) didn’t stop. Stop it on the iPhone.")
+        XCTAssertNil(rig.state.recordingID)
+        XCTAssertNil(rig.state.errorMessage)
+
+        // The link drops while it's being stopped: the stop goes again when it's back.
+        phone.recorder.answer = { request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "R-\(request.conversationID)"))
+        }
+        let other = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        phone.recorder.delay(.stop, by: .seconds(1))
+        macStopsRecording(rig, other)
+        try await waitFor("the stop reaches the phone") { phone.recorder.requests.filter { $0.action == .stop && $0.conversationID == other }.count == 1 }
+        await phone.client.disconnect(from: phone.macID)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(other)?.companions?.first?.state, .stopFailed)
+        phone.recorder.delay(.stop, by: nil)
+        try await phone.client.connect(to: phone.macID, via: phone.endpoint)
+        try await waitFor("stopped once it's back") { rig.meeting(other)?.companions?.first?.state == .stopped }
+        XCTAssertNil(rig.state.errorMessage)
+    }
+
+    func testRecordingForAPhoneStopsWhenItSaysItStoppedOrCantBeReached() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let phone = try await PhoneLinkRig.connect(state)
+        defer { Task { await phone.tearDown(state) } }
+        state.microphoneAccess = { .authorized }
+        state.phoneCapture = PhoneCapture(start: { id in _ = self.macStartsRecording(rig, into: id); return true },
+                                          stop: { id in self.macStopsRecording(rig, id) })
+        func phoneLeads() async throws -> UUID {
+            let conversation = UUID()
+            let reply = try await phone.client.request(LinkRecordRequest(action: .start, conversationID: conversation,
+                                                                         timing: LinkTiming(startedAt: Date(), elapsed: 0)), from: phone.macID)
+            guard case .accepted = reply.outcome else { XCTFail("\(reply.outcome)"); throw CancellationError() }
+            return conversation
+        }
+        // Its stop was lost; then it says it's idle (as it does on every reconnection).
+        let first = try await phoneLeads()
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: first, startedAt: Date())))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(state.recordingID, first, "still recording what the phone records")
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle)))
+        try await waitFor("this Mac stops too") { state.recordingID == nil }
+        XCTAssertEqual(state.notice, "\(PhoneLinkRig.phoneName) stopped recording, so this Mac stopped too.")
+
+        // Gone for half an hour: this Mac stops on its own.
+        _ = try await phoneLeads()
+        await phone.client.disconnect(from: phone.macID)
+        try await waitFor("the phone is gone") { state.phoneLink.peers[phone.phoneID] == nil }
+        state.checkPhoneLead(now: Date().addingTimeInterval(10 * 60))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNotNil(state.recordingID)
+        state.checkPhoneLead(now: Date().addingTimeInterval(31 * 60))
+        try await waitFor("stopped on its own") { state.recordingID == nil }
+        XCTAssertEqual(state.notice, "\(PhoneLinkRig.phoneName) couldn’t be reached for 30 minutes, so this Mac stopped recording.")
+    }
+
+    func testGoingToSleepGivesThePhoneItsStopFirstButNotForLong() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        // Capture stops on its own as the Mac goes to sleep; sleep waits for the phone's stop.
+        Task { try? await Task.sleep(for: .milliseconds(100)); self.macStopsRecording(rig, id) }
+        await rig.state.prepareForSleep(within: .seconds(3))
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop])
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
+
+        // A phone that doesn't answer doesn't keep the Mac awake.
+        phone.recorder.delay(.stop, by: .seconds(10))
+        let other = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        macStopsRecording(rig, other)
+        let clock = ContinuousClock()
+        let waited = await clock.measure { await rig.state.prepareForSleep(within: .milliseconds(500)) }
+        XCTAssertLessThan(waited, .seconds(2))
+    }
+
+    func testARecoveredRecordingClosesItsLinksAndStopsThePhoneItStarted() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        // Daybook quit while recording with the phone; at the next launch its capture is recovered.
+        let start = Date().addingTimeInterval(-120)
+        let id = rig.state.newMeeting(title: "Interrupted", date: start)
+        var link = CompanionRecording(deviceID: phone.phoneID.uuidString, deviceKind: DaybookPhoneIntegration.id,
+                                      deviceName: PhoneLinkRig.phoneName, macStartedAt: start, state: .recording, startedByDaybook: true)
+        link.recordingID = "R-1"
+        rig.state.update(id) { $0.companions = [link] }
+        XCTAssertEqual(SourceHooks.companionLine(link, recordingNow: false), "Waiting for the \(PhoneLinkRig.phoneName) recording.",
+                       "not \"Also recording\" once this Mac isn't")
+        rig.state.sources.recovered.append((id, start, start.addingTimeInterval(60)))
+        rig.state.closeRecoveredLinks()
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.stop])
+        let closed = try XCTUnwrap(rig.meeting(id)?.companions?.first)
+        XCTAssertEqual(closed.state, .stopped)
+        XCTAssertNotNil(closed.macEndedAt)
+        // A line waiting for a recording that never comes goes after two days.
+        XCTAssertNotNil(SourceHooks.companionLine(closed, recordingNow: false))
+        XCTAssertNil(SourceHooks.companionLine(closed, recordingNow: false, now: Date().addingTimeInterval(3 * 86_400)))
+    }
+
     // MARK: Progress and nudges
 
     func testProgressMessagesReachThePhoneWhileProcessing() async throws {
@@ -236,7 +618,7 @@ final class PhoneLinkTests: XCTestCase {
         let id = try await rig.waitingConversation("Progress", audio: audio, script: [(0, "Hello from the Mac.")])
 
         rig.state.enqueue(id)
-        try await rig.processed()
+        try await rig.processed(id)
         try await waitFor("the last message") { phone.events.progress.contains { $0.meetingID == id && $0.phase == .finished } }
         // It waited for models while its recording was stored; from the queue on, the phone hears each step.
         let all = phone.events.progress.filter { $0.meetingID == id }
@@ -375,6 +757,195 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(state.meetings.count, 1)
     }
 
+    func testABookmarkMadeOnThePhoneIsOneBookmarkAfterSync() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let link = try await PhoneLinkRig.connect(state)
+        defer { Task { await link.tearDown(state) } }
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        defer { library.tearDown() }
+        let recordingID = UUID()
+        link.recorder.answer = { request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: recordingID.uuidString))
+        }
+        let id = macStartsRecording(rig)
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        await state.sources.recorders.settle()
+
+        // The phone marks a moment: the Mac shows it at once, and the phone keeps it with its recording.
+        let mark = Highlight(time: 1.5)
+        try await link.client.send(.bookmark(LinkBookmark(id: mark.id, conversationID: id, recordingTime: mark.time)))
+        try await waitFor("the Mac's copy") { rig.meeting(id)?.highlights.contains { $0.id == mark.id } == true }
+        // The same bookmark again (a resend) doesn't add a second.
+        try await link.client.send(.bookmark(LinkBookmark(id: mark.id, conversationID: id, recordingTime: mark.time)))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(rig.meeting(id)?.highlights.count, 1)
+
+        macStopsRecording(rig, id)
+        await state.sources.recorders.settle()
+        try await storeMacRecording(rig, id, audio: try rig.audio("mac-mark.wav", frequency: 330), start: macStart)
+        await state.synchronizeLibrary()
+        await library.synchronize()
+        try await library.file(try rig.audio("iphone-mark.wav", frequency: 490), recordingID: recordingID, into: id, start: Date(),
+                               duration: 0.5, bookmarks: [mark])
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        XCTAssertEqual(rig.meeting(id)?.highlights.filter { $0.id == mark.id }.count, 1)
+        XCTAssertEqual(rig.meeting(id)?.highlights.count, 1, "One bookmark, not one from each device")
+        await library.synchronize()
+        XCTAssertEqual(library.library.meeting(id)?.highlights.count, 1)
+    }
+
+    func testThePhonesOwnStartAndTheClockItMeasuredPlaceItsRecording() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let skew: TimeInterval = 2.5
+        let link = try await PhoneLinkRig.connect(state, clockOffset: skew)
+        defer { Task { await link.tearDown(state) } }
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        defer { library.tearDown() }
+        let expected = ExpectedOffsets()
+        state.sources.alignAudio = { _, _, prior, _ in expected.append(prior); return nil }
+        let recordingID = UUID()
+        // The phone's answer reports its start roughly (before its first sample arrived).
+        let phoneStart = Date().addingTimeInterval(skew + 1)
+        link.recorder.answer = { request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: phoneStart.addingTimeInterval(-0.4),
+                                    recordingID: recordingID.uuidString))
+        }
+        let macAudio = try rig.audio("mac-clock.wav", frequency: 315)
+        let phoneAudio = try rig.audio("iphone-clock.wav", frequency: 475)
+        try rig.inference.script(macAudio, [(0, "Clocks first.")])
+        try rig.inference.script(phoneAudio, [(0, "Clocks first.")])
+        let id = macStartsRecording(rig)
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        await state.sources.recorders.settle()
+        macStopsRecording(rig, id)
+        await state.sources.recorders.settle()
+        // The link kept no clock (the burst hadn't finished, say); the phone measured one while recording.
+        state.update(id) { $0.companions?[0].clock = nil }
+        try await storeMacRecording(rig, id, audio: macAudio, start: macStart)
+        await state.synchronizeLibrary()
+        await library.synchronize()
+        let measured = CapturePeerClock(deviceID: state.phoneLink.identity.deviceID.uuidString, name: "Mac", deviceClass: "mac",
+                                        offset: -skew, uncertainty: 0.004, sampleCount: 6, measuredAt: Date())
+        try await library.file(phoneAudio, recordingID: recordingID, into: id, start: phoneStart, duration: 0.5, peerClocks: [measured])
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitFor("processed", timeout: 20) { rig.meeting(id)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty }
+        let track = try XCTUnwrap(rig.meeting(id)?.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id })
+        // Its exact first sample, on this Mac's clock by the phone's measurement: 1 s after this Mac's start.
+        let prior = phoneStart.addingTimeInterval(-skew).timeIntervalSince(macStart)
+        XCTAssertEqual(try XCTUnwrap(track.alignment?.clockOffset), prior, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(expected.values.first ?? nil), prior, accuracy: 0.01)
+        // Its start on this Mac's clock, wherever a start is compared.
+        XCTAssertEqual(state.trackStart(track)?.timeIntervalSince(phoneStart.addingTimeInterval(-skew)) ?? 99, 0, accuracy: 0.01)
+    }
+
+    func testAPhoneRecordingInAConversationAMacRecordedWithItStaysThere() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let phoneID = UUID()
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: phoneID)
+        defer { library.tearDown() }
+        // The sound would put the phone's recording in this Mac's conversation, which overlaps it.
+        state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: 0.1, rate: 1, confidence: 0.9) }
+        let macAudio = try rig.audio("standup.wav", frequency: 325)
+        let phoneAudio = try rig.audio("iphone-linked.wav", frequency: 485)
+        try rig.inference.script(macAudio, [(0, "Standup notes.")])
+        try rig.inference.script(phoneAudio, [(0, "Design notes.")])
+        let start = Date().addingTimeInterval(-300)
+        let other = try await rig.macConversation("Standup", at: start, seconds: 0.5, audio: macAudio)
+        state.awaitingModels.remove(other)
+        // Another Mac recorded this conversation with the phone; only the phone's recording has synced yet.
+        let conversation = UUID()
+        library.library.add(Meeting(id: conversation, title: "Design review", date: start, status: .imported))
+        library.library.update(conversation) {
+            $0.companions = [CompanionRecording(deviceID: phoneID.uuidString, deviceKind: DaybookPhoneIntegration.id, deviceName: "Pocket iPhone",
+                                                macStartedAt: start, state: .recording, startedByDaybook: true)]
+        }
+        try await library.file(phoneAudio, recordingID: UUID(), into: conversation, start: start.addingTimeInterval(0.1), duration: 0.5)
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitFor("processed", timeout: 20) {
+            rig.meeting(conversation)?.transcripts.isEmpty == false && state.processingID == nil && state.queuedIDs.isEmpty
+        }
+        XCTAssertEqual(rig.meeting(conversation)?.tracks.count, 1, "it waits for that Mac's recording")
+        XCTAssertEqual(rig.meeting(other)?.tracks.count, 1, "never moved into another conversation")
+    }
+
+    func testAJoinedPhoneRecordingThatTurnsOutAloneSetsItsConversationsTimeline() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { library.tearDown() }
+        let phoneAudio = try rig.audio("iphone-alone.wav", frequency: 495)
+        try rig.inference.script(phoneAudio, [(0, "Nobody else recorded this.")])
+        // The phone asked a Mac that never answered, so it filed its recording to be placed; no Mac recording comes.
+        let conversation = UUID(), note = TimedNote(time: 3, text: "Kickoff")
+        try await library.file(phoneAudio, recordingID: UUID(), into: conversation, start: Date().addingTimeInterval(-600), duration: 0.5,
+                               notes: [note])
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitFor("processed", timeout: 20) { rig.meeting(conversation)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty }
+        let meeting = try XCTUnwrap(rig.meeting(conversation))
+        XCTAssertEqual(meeting.tracks.first?.offset, 0, "its own recording sets the timeline")
+        XCTAssertNil(meeting.tracks.first?.alignment)
+        XCTAssertEqual(meeting.timedNotes?.first?.time, 3)
+    }
+
+    func testARecorderRecordingThePhoneImportedJoinsTheMacsConversationByItsLink() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { library.tearDown() }
+        // Soundcore Work records along with this Mac.
+        let recorder = FakeRecorder()
+        let session = DeviceSession(device: ConfiguredDevice(id: "recorder", kind: SoundcoreWorkIntegration().kind),
+                                    kind: SoundcoreWorkIntegration().kind, connections: [recorder], defaults: rig.defaults)
+        addTeardownBlock { session.shutDown() }
+        state.sources.recorders.sessions = { [session] }
+        let macAudio = try rig.audio("mac-handoff.wav", frequency: 345)
+        let recorderAudio = try rig.audio("soundcore-handoff.wav", frequency: 545)
+        try rig.inference.script(macAudio, [(0, "Handing it over.")])
+        try rig.inference.script(recorderAudio, [(0, "Handing it over.")])
+        let id = macStartsRecording(rig)
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        await state.sources.recorders.settle()
+        let link = try XCTUnwrap(rig.meeting(id)?.companions?.first)
+        XCTAssertEqual(link.state, .recording)
+        // The recorder moves to the phone mid-recording; this Mac can't reach it to stop it.
+        recorder.disconnect()
+        recorder.reachable = false
+        macStopsRecording(rig, id)
+        await state.sources.recorders.settle()
+        try await storeMacRecording(rig, id, audio: macAudio, start: macStart)
+        await state.synchronizeLibrary()
+        // The phone imports its recording into a conversation of its own, which syncs here.
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: "FAKE1", recordingID: try XCTUnwrap(link.recordingID))
+        let own = try await library.fileFromRecorder(recorderAudio, identity: identity, start: try XCTUnwrap(link.recorderStartedAt))
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitFor("the recorder's recording to join by its link", timeout: 20) {
+            rig.meeting(id)?.tracks.count == 2 && rig.meeting(own) == nil && state.processingID == nil && state.queuedIDs.isEmpty
+        }
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let track = try XCTUnwrap(meeting.tracks.first { $0.deviceKind == SoundcoreWorkIntegration.id })
+        XCTAssertEqual(track.deviceRecordingID, link.recordingID)
+        XCTAssertEqual(meeting.companions?.first?.state, .attached, "no longer waiting for it")
+        XCTAssertEqual(meeting.companions?.first?.trackID, track.id)
+    }
+
     func testAnUnlinkedPhoneRecordingJoinsByTimeThenSound() async throws {
         let rig = try await rig()
         let state = rig.state
@@ -418,4 +989,9 @@ final class PhoneStart: @unchecked Sendable {
     private var _value: Date?
     var value: Date? { lock.withLock { _value } }
     func set(_ date: Date) { lock.withLock { _value = date } }
+}
+
+private extension Date {
+    /// Whole milliseconds, as the library's JSON keeps dates.
+    var rounded: Date { Date(timeIntervalSince1970: (timeIntervalSince1970 * 1000).rounded(.down) / 1000) }
 }

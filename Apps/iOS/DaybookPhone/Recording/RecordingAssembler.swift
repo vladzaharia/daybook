@@ -145,12 +145,13 @@ enum PhoneCaptureFinisher {
         let duration = Double(final.frameCount) / format.sampleRate
         let startedAt = journal.startedAt ?? journal.createdAt
         return PhoneRecording(
-            id: journal.id, title: journal.title, audioURL: directory.appendingPathComponent(final.fileName),
+            id: journal.id, recordingID: journal.recordingID ?? journal.id, title: journal.title,
+            audioURL: directory.appendingPathComponent(final.fileName),
             startedAt: startedAt, endedAt: journal.endedAt ?? startedAt.addingTimeInterval(duration), duration: duration,
             hostTimeSeconds: journal.hostTimeSeconds, notes: journal.notes, timedNotes: journal.timedNotes,
             highlights: journal.highlights, capture: captureDetails(journal, joined: final.joined),
             warnings: journal.warnings.uniqued(),
-            stagingDirectory: directory, recovered: recovered, photos: journal.photos ?? [])
+            stagingDirectory: directory, recovered: recovered, photos: journal.photos ?? [], multipoint: journal.multipoint)
     }
 
     /// How the phone captured the track, in the library's terms.

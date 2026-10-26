@@ -33,19 +33,28 @@ final class LinkEvents: @unchecked Sendable {
         all.compactMap { if case .received(.processingProgress(let progress), _) = $0 { return progress }; return nil }
     }
     var unpaired: Bool { all.contains { if case .unpaired = $0 { return true }; return false } }
+    /// What the Mac said about its own recorder, in order.
+    var states: [LinkRecordingState] {
+        all.compactMap { if case .received(.recordingState(let state), _) = $0 { return state }; return nil }
+    }
 }
 
 /// What the phone's record-control handler was asked, and how it answers.
 final class PhoneRecorderScript: @unchecked Sendable {
     private let lock = NSLock()
     private var _requests: [LinkRecordRequest] = []
+    private var _delays: [LinkRecordRequest.Action: Duration] = [:]
     var requests: [LinkRecordRequest] { lock.withLock { _requests } }
     /// Answers each request; the default acknowledges with a recording ID.
     var answer: @Sendable (LinkRecordRequest) -> LinkRecordReply.Outcome = { request in
         .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "R-\(request.conversationID)"))
     }
-    func record(_ request: LinkRecordRequest) -> LinkRecordReply.Outcome {
-        lock.withLock { _requests.append(request) }
+    /// How long the phone takes to answer (a microphone prompt, say).
+    func delay(_ action: LinkRecordRequest.Action, by delay: Duration?) { lock.withLock { _delays[action] = delay } }
+
+    func record(_ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
+        let delay = lock.withLock { () -> Duration? in _requests.append(request); return _delays[request.action] }
+        if let delay { try? await Task.sleep(for: delay) }
         return answer(request)
     }
 }
@@ -71,7 +80,7 @@ struct PhoneLinkRig {
 
     /// Pairs a phone without the code (as if it had paired before), adds it as a device, starts the
     /// Mac's link, and connects the phone. `clockOffset` is how far the phone's clock is ahead.
-    static func connect(_ state: AppState, clockOffset: TimeInterval = 0) async throws -> PhoneLinkRig {
+    static func connect(_ state: AppState, clockOffset: TimeInterval = 0, features: [String] = []) async throws -> PhoneLinkRig {
         let phoneID = UUID(), macID = state.phoneLink.identity.deviceID
         let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         let psk = Data((0..<16).map { _ in UInt8.random(in: 1...255) })
@@ -86,12 +95,13 @@ struct PhoneLinkRig {
         let port = try XCTUnwrap(listening)
         var configuration = LinkConfiguration.loopback()
         configuration.clock = SkewedClock(offset: clockOffset)
-        let client = LinkClient(identity: LinkIdentity(deviceID: phoneID, name: phoneName, deviceClass: .iPhone, appVersion: "2.0"),
+        let client = LinkClient(identity: LinkIdentity(deviceID: phoneID, name: phoneName, deviceClass: .iPhone, appVersion: "2.0",
+                                                       features: features, syncDeviceID: syncID(phoneID)),
                                 keyStore: phoneStore, configuration: configuration)
         let rig = PhoneLinkRig(phoneID: phoneID, macID: macID, client: client, events: LinkEvents(client.events()),
                                endpoint: LinkEndpoint(host: "127.0.0.1", port: port))
         let script = rig.recorder
-        await client.setRecordControlHandler { _, request in script.record(request) }
+        await client.setRecordControlHandler { _, request in await script.record(request) }
         try await client.connect(to: macID, via: rig.endpoint)
         try await waitFor("the phone to connect, with a clock estimate") { state.phoneLink.peers[phoneID]?.clock != nil }
         return rig
@@ -101,6 +111,10 @@ struct PhoneLinkRig {
         await client.disconnect(from: macID)
         await state.phoneLink.shutDown()
     }
+
+    /// The phone's sync replica ID, which recorder ownership names it by (it differs from its link ID).
+    nonisolated static func syncID(_ phoneID: UUID) -> String { "phone-replica-\(phoneID.uuidString)" }
+    var syncID: String { Self.syncID(phoneID) }
 }
 
 /// The iPhone's library: DaybookKit on an on-demand phone replica of the same sync folder, filing
@@ -114,7 +128,8 @@ struct PhoneLibrarySide {
     let phoneID: UUID
 
     static func make(root: URL, cloud: URL, phoneID: UUID) async throws -> PhoneLibrarySide {
-        let suite = "local.daybook.tests.phone.\(UUID().uuidString)"
+        // A suite named by a path inside the test's folder keeps its plist there, not in ~/Library/Preferences.
+        let suite = root.appendingPathComponent("Preferences").path
         let defaults = UserDefaults(suiteName: suite)!
         let local = root.appendingPathComponent("Phone", isDirectory: true)
         try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
@@ -129,21 +144,40 @@ struct PhoneLibrarySide {
 
     var device: ProcessingRequest.Device { ProcessingRequest.Device(id: sync.deviceID, name: PhoneLinkRig.phoneName) }
 
-    /// Files a phone recording: a conversation (its ID is the recording's), one microphone track
-    /// tagged as Daybook on iPhone and started at `start` by the phone's clock, and a Transcribe
-    /// request for a Mac.
+    /// Files a phone recording as the iPhone app does (`PhoneLibrary.fileRecording`): on its own, a
+    /// conversation whose ID is the recording's, with one microphone track tagged as Daybook on iPhone
+    /// at offset 0; into a conversation a Mac leads (`into`), a track still to be placed, with its
+    /// bookmarks on it and its notes held by it (`Meeting.addRecordingWork`). Then a Transcribe
+    /// request for a Mac. `start` is by the phone's clock.
     @discardableResult
     func file(_ audio: URL, recordingID: UUID, into conversation: UUID? = nil, start: Date, duration: TimeInterval,
-              title: String = "iPhone recording", notes: String = "") async throws -> UUID {
+              title: String = "iPhone recording", notes: [TimedNote] = [], bookmarks: [Highlight] = [],
+              shift: TimeInterval = 0, peerClocks: [CapturePeerClock]? = nil) async throws -> UUID {
         let id = conversation ?? recordingID
-        if library.meeting(id) == nil { library.add(Meeting(id: id, title: title, date: start, notes: notes, status: .imported)) }
+        let joining = conversation != nil
+        if library.meeting(id) == nil { library.add(Meeting(id: id, title: title, date: start, status: joining ? .draft : .imported)) }
         let identity = DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: phoneID.uuidString, recordingID: recordingID.uuidString)
         await library.acquireLock()
-        _ = try await library.ingest(audio, into: id, provenance: RecordingProvenance(
-            source: .microphone, device: identity, offset: 0, duration: duration, startedAt: start,
-            capture: TrackCaptureDetails(method: "microphone"), conversationDate: conversation == nil ? start : nil))
+        var provenance = RecordingProvenance(source: .microphone, device: identity, offset: joining ? nil : 0, duration: duration,
+                                             startedAt: start, capture: TrackCaptureDetails(method: "iphone-microphone", peerClocks: peerClocks))
+        provenance.joinsConversation = joining
+        let ingested = try await library.ingest(audio, into: id, provenance: provenance)
         library.releaseLock()
-        library.update(id) { $0.status = .imported }
+        let track = try XCTUnwrap(ingested.track?.id)
+        library.update(id) { $0.addRecordingWork(trackID: track, notes: notes, bookmarks: bookmarks, joining: joining, shift: shift) }
+        library.requestProcessing(id, mode: .newAudio, by: device)
+        await library.flush()
+        return id
+    }
+
+    /// A recorder's recording the phone imported (it manages the recorder now), into a conversation
+    /// of its own, with a Transcribe request for a Mac, as the phone's device hub files it.
+    @discardableResult
+    func fileFromRecorder(_ audio: URL, identity: DeviceRecordingIdentity, start: Date) async throws -> UUID {
+        let id = library.newMeeting(title: "Soundcore Work at \(start.formatted(date: .omitted, time: .shortened))", date: start)
+        await library.acquireLock()
+        _ = try await library.ingest(audio, into: id, provenance: .file(source: .soundcore, device: identity, duration: 0.5))
+        library.releaseLock()
         library.requestProcessing(id, mode: .newAudio, by: device)
         await library.flush()
         return id

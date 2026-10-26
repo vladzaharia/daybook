@@ -50,6 +50,33 @@ struct CapturePhoto: Codable, Equatable, Sendable {
     var time: TimeInterval
 }
 
+/// The Macs a recording is made with (docs/multipoint.md), kept in its journal so that one
+/// recovered after Daybook was killed still joins its conversation and its Macs are still stopped.
+struct CaptureMultipoint: Codable, Equatable, Sendable {
+    struct Mac: Codable, Equatable, Sendable {
+        var id: UUID
+        var name: String
+        /// This iPhone asked it to record, so this iPhone stops it.
+        var startedByPhone: Bool
+        /// It recorded too, or may have (it never answered).
+        var mayHaveRecorded: Bool
+    }
+
+    /// `macLed` (a Mac asked this iPhone to record its conversation) or `phoneLed`.
+    var role: String
+    /// The Mac that leads, when one does.
+    var leadMacID: UUID?
+    /// When that Mac's recording started, and the conversation's timeline zero, on its clock.
+    var leadStartedAt: Date?
+    var timelineStart: Date?
+    /// That Mac's clock − this iPhone's.
+    var leadClockOffset: TimeInterval?
+    /// The conversation as that Mac has it.
+    var title: String?
+    var date: Date?
+    var macs: [Mac] = []
+}
+
 /// The recording's crash-safe sidecar, rewritten atomically as it changes: everything needed to
 /// rebuild the recording, with its notes and bookmarks, if Daybook is killed. The phone's
 /// counterpart of the Mac's capture-session.json and per-track sidecars.
@@ -67,8 +94,12 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     static let finalFileName = "iPhone recording.m4a"
 
     var schemaVersion = 1
-    /// The capture's ID, which is also the conversation's.
+    /// The conversation's ID.
     var id: UUID
+    /// This recording's own ID, the one its track and the link name it by: one conversation can hold
+    /// several of this iPhone's recordings (a Mac recording into it again). Nil in journals written
+    /// before it, whose recordings were named by the conversation's ID.
+    var recordingID: UUID?
     var title: String
     /// When Record was pressed.
     var createdAt: Date
@@ -91,6 +122,8 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     var highlights: [Highlight] = []
     /// Optional, so journals written before photos still load.
     var photos: [CapturePhoto]?
+    /// The Macs it's recorded with; nil when none (and in journals written before multipoint was kept).
+    var multipoint: CaptureMultipoint?
     var finalFile: FinalFile?
 
     init(id: UUID, title: String, createdAt: Date, format: RecordingFormat) {
@@ -136,7 +169,10 @@ enum JournalCoding {
 
 /// A finished phone recording, ready to be filed in the library as a new conversation.
 struct PhoneRecording: Sendable, Equatable {
+    /// The conversation's ID.
     var id: UUID
+    /// This recording's own ID (`PhoneCaptureJournal.recordingID`): its track's device recording ID.
+    var recordingID: UUID
     var title: String
     /// One AAC M4A whose timeline is the conversation's: interruptions are silent gaps.
     var audioURL: URL
@@ -155,6 +191,8 @@ struct PhoneRecording: Sendable, Equatable {
     var recovered: Bool
     /// Photos taken while recording; their files are in `stagingDirectory`.
     var photos: [CapturePhoto] = []
+    /// The Macs it was recorded with, as the journal kept them (for a recovered recording).
+    var multipoint: CaptureMultipoint?
 }
 
 enum PhoneRecorderError: LocalizedError, Equatable {

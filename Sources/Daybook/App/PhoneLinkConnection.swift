@@ -44,18 +44,31 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
     var problem: DeviceProblem? { nil }
     var lastConnectedAt: Date? { link.lastConnected[phoneID] }
 
-    /// The phone's recorder as it last said, with its start on this Mac's clock.
+    /// What the phone's recorder is doing, as it last said: recording, paused (a call interrupted it;
+    /// still its recording, which Stop ends), or nil when idle or not connected.
+    var recordingPhase: LinkRecordingState.Phase? {
+        guard peer != nil, let phase = link.recordingStates[phoneID]?.phase, [.starting, .recording, .paused, .stopping].contains(phase) else { return nil }
+        return phase
+    }
+
+    /// The phone's recorder as it last said, with its start on this Mac's clock. A paused recording is
+    /// still recording (`recordingPhase` says which).
     var status: DeviceStatus? {
         guard let peer, let recording = link.recordingStates[phoneID] else { return nil }
         let start = recording.startedAt.map { peer.clock?.localDate(fromPeer: $0) ?? $0 }
-        return DeviceStatus(isRecording: recording.phase == .recording || recording.phase == .starting,
-                            recordingStartedAt: start, updatedAt: peer.clock?.localDate(fromPeer: recording.sentAt) ?? Date())
+        return DeviceStatus(isRecording: recordingPhase != nil, recordingStartedAt: start,
+                            updatedAt: peer.clock?.localDate(fromPeer: recording.sentAt) ?? Date())
     }
 
-    /// The conversation the phone is recording, when it's recording one.
+    /// The recorders the phone manages, as it last said (on this Mac's clock), still within their lifetime.
+    func recorders(now: Date = Date()) -> [LinkRecorderState] {
+        (link.phoneRecorders[phoneID] ?? []).filter { $0.summary(now: now) != nil }
+    }
+
+    /// The conversation the phone is recording (or paused in), when it says it's recording one.
     var recordingConversationID: UUID? {
-        guard let recording = link.recordingStates[phoneID], recording.phase == .recording || recording.phase == .starting else { return nil }
-        return recording.conversationID
+        guard recordingPhase != nil else { return nil }
+        return link.recordingStates[phoneID]?.conversationID
     }
 
     var summary: String {
@@ -88,30 +101,41 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
 
     /// The device page's Start Recording on iPhone: the phone records a new conversation of its own.
     func startRecording() {
-        Task { _ = await requestStart(conversationID: UUID(), macStartedAt: nil) }
+        Task { _ = await requestStart(CompanionStart(conversationID: UUID(), standalone: true)) }
     }
 
     /// The device page's Pause Recording on iPhone: stops what the phone is recording.
     func pauseRecording() {
         guard let conversation = recordingConversationID else { return }
-        Task { _ = await requestStop(conversationID: conversation, macEndedAt: Date()) }
+        Task { _ = await requestStop(conversationID: conversation, macEndedAt: Date(), recorder: nil) }
     }
 
-    func requestStart(conversationID: UUID, macStartedAt: Date?) async -> CompanionAnswer {
+    /// Its clock against this Mac's, as the link measures it now.
+    var clock: CompanionClock? { peer?.clock.map(CompanionClock.init) }
+
+    func requestStart(_ start: CompanionStart) async -> CompanionAnswer {
         guard peer != nil else { return .unavailable }
-        // A fresh sample now; the burst after connecting has usually settled the estimate already.
+        // A fresh sample now, so the estimate kept with the answer (and refreshed at Stop) rests on it;
+        // the request carries the estimate as it stands, usually settled by the burst after connecting.
         await link.sampleClock(of: phoneID)
         let clock = peer?.clock
-        let timing = macStartedAt.map {
-            LinkTiming(startedAt: $0, elapsed: max(0, Date().timeIntervalSince($0)), clockOffset: clock?.offset, clockUncertainty: clock?.uncertainty)
+        // `elapsed` counts the conversation's timeline, which for one recorded into again began earlier.
+        let timing = start.macStartedAt.map {
+            LinkTiming(startedAt: $0, elapsed: start.timelineStart.map { max(0, Date().timeIntervalSince($0)) },
+                       clockOffset: clock?.offset, clockUncertainty: clock?.uncertainty, timelineStart: start.timelineStart)
         }
-        return await send(LinkRecordRequest(action: .start, conversationID: conversationID, timing: timing))
+        return await send(LinkRecordRequest(id: start.requestID, action: .start, conversationID: start.conversationID, timing: timing,
+                                            title: start.title, date: start.date, standalone: start.standalone ? true : nil,
+                                            recorder: start.recorder))
     }
 
-    func requestStop(conversationID: UUID, macEndedAt: Date?) async -> CompanionAnswer {
+    func requestStop(conversationID: UUID, macEndedAt: Date?, recorder: LinkRecorderTarget?) async -> CompanionAnswer {
         guard peer != nil else { return .unavailable }
-        return await send(LinkRecordRequest(action: .stop, conversationID: conversationID))
+        return await send(LinkRecordRequest(action: .stop, conversationID: conversationID, recorder: recorder))
     }
+
+    /// It starts and stops the recorders it manages when asked (multipoint through their owner).
+    var controlsRecorders: Bool { peer?.capabilities.controlsRecorders == true }
 
     private func send(_ request: LinkRecordRequest) async -> CompanionAnswer {
         recordCommandPending = true

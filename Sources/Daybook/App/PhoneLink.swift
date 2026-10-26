@@ -44,6 +44,10 @@ final class PhoneLink: ObservableObject {
     @Published private(set) var peers: [UUID: LinkPeer] = [:]
     /// What each connected phone last said about its recorder.
     @Published private(set) var recordingStates: [UUID: LinkRecordingState] = [:]
+    /// What each phone last said about the recorders it manages, on this Mac's clock; kept after it
+    /// disconnects, for as long as it can be trusted (`LinkRecorderState.lifetime`).
+    @Published private(set) var phoneRecorders: [UUID: [LinkRecorderState]] = [:]
+    private var lastSentRecorders: [LinkRecorderState]?
     @Published private(set) var lastConnected: [UUID: Date] = [:]
     @Published private(set) var isRunning = false
     /// Sent after anything about a phone changed (nil: possibly every phone), so its device
@@ -64,6 +68,12 @@ final class PhoneLink: ObservableObject {
     var onMessage: ((LinkMessage, UUID) -> Void)?
     /// Answers a phone asking this Mac to start or stop recording.
     var recordHandler: (@MainActor (LinkPeer, LinkRecordRequest) async -> LinkRecordReply.Outcome)?
+    /// This Mac's own recorder as phones should see it (`recording.state`), read each time it's sent.
+    var localRecordingState: (() -> LinkRecordingState)?
+    /// How often this Mac's state is sent again while it records, so a phone can tell it's still at it.
+    var recordingStateInterval: Duration = .seconds(15)
+    private var stateBeat: Task<Void, Never>?
+    private var stateSend: Task<Void, Never>?
 
     init(identity: LinkIdentity, environment: Environment = .app) {
         self.identity = identity
@@ -122,6 +132,7 @@ final class PhoneLink: ObservableObject {
 
     /// Stops for good (tests, and quitting).
     func shutDown() async {
+        stateBeat?.cancel(); stateBeat = nil
         guard let service else { return }
         self.service = nil
         await service.stop()
@@ -206,6 +217,31 @@ final class PhoneLink: ObservableObject {
 
     func sampleClock(of phoneID: UUID) async { await service?.sampleClock(of: phoneID) }
 
+    /// Sends this Mac's recording state to every connected phone (or one that just connected), and
+    /// again every `recordingStateInterval` while it records. Sends go out one after another, in order.
+    func sendRecordingState(to phoneID: UUID? = nil, onlyIfRecordersChanged: Bool = false) {
+        guard let state = localRecordingState?() else { return }
+        if onlyIfRecordersChanged, state.recorders == lastSentRecorders { return }
+        if phoneID == nil { lastSentRecorders = state.recorders }
+        let recording = state.phase != .idle
+        if !recording { stateBeat?.cancel(); stateBeat = nil }
+        else if stateBeat == nil {
+            stateBeat = Task { [weak self] in
+                while let interval = self?.recordingStateInterval, (try? await Task.sleep(for: interval)) != nil {
+                    guard let self, !Task.isCancelled else { return }
+                    self.sendRecordingState()
+                }
+            }
+        }
+        guard service != nil, !peers.isEmpty else { return }
+        let previous = stateSend
+        stateSend = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            if let phoneID { try? await self.send(.recordingState(state), to: phoneID) } else { await self.broadcast(.recordingState(state)) }
+        }
+    }
+
     private func answer(_ peer: LinkPeer, _ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
         guard let recordHandler else { return .refused(LinkRecordRefusal(reason: .unsupported)) }
         return await recordHandler(peer, request)
@@ -243,6 +279,8 @@ final class PhoneLink: ObservableObject {
             peers[peer.deviceID] = peer
             lastConnected[peer.deviceID] = Date()
             changes.send(peer.deviceID)
+            // A phone that (re)connects hears at once whether this Mac is recording, and what.
+            sendRecordingState(to: peer.deviceID)
             onConnected?(peer)
         case .peerUpdated(let peer):
             guard peers[peer.deviceID] != nil else { return }
@@ -256,6 +294,10 @@ final class PhoneLink: ObservableObject {
         case .received(let message, let from):
             if case .recordingState(let state) = message {
                 recordingStates[from] = state
+                if let recorders = state.recorders {
+                    let clock = peers[from]?.clock
+                    phoneRecorders[from] = recorders.map { $0.moved { clock?.localDate(fromPeer: $0) ?? $0 } }
+                }
                 changes.send(from)
             }
             onMessage?(message, from)

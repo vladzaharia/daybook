@@ -172,8 +172,8 @@ can copy the tags, but it can't complete TLS without the key.
 | --- | --- | --- | --- |
 | `hello` / `welcome` / `refused` | handshake | phone → Mac / Mac → phone | always written at version 1 |
 | `capabilities` | `LinkCapabilities` | both | device class, name, app version, library ID, `canProcess`, features, `syncDeviceID` (optional) |
-| `recording.state` | `LinkRecordingState` | both | phase, conversation, start, elapsed, sent-at |
-| `record.request` / `record.reply` | `LinkRecordRequest` / `LinkRecordReply` | both | start or stop, conversation, prior timing; reply is an ack or a refusal with a reason |
+| `recording.state` | `LinkRecordingState` | both | phase, conversation, start, elapsed, sent-at; the recorders the sender manages (optional) |
+| `record.request` / `record.reply` | `LinkRecordRequest` / `LinkRecordReply` | both | start or stop, conversation, prior timing (with where the timeline began), the conversation's title and date, standalone, a recorder the receiver manages (all optional but the first two); reply is an ack or a refusal with a reason |
 | `bookmark` | `LinkBookmark` | both | conversation, recording time, created-at, label |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail |
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
@@ -219,17 +219,44 @@ change take seconds instead of a sync round trip. They're app messages, added wi
 `request(_:from:)` sends a `LinkRecordRequest` and waits up to 10 s for the reply. The receiver's
 `LinkRecordControlHandler` decides the answer:
 - `.accepted(LinkRecordAck)`: start or stop time on the receiver's clock, the receiver's
-  recording ID, and `wasAlreadyRecording`.
+  recording ID (each recording's own, not the conversation's), and `wasAlreadyRecording`.
 - `.refused(LinkRecordRefusal)`: one of `recordingSomethingElse` (with that conversation),
-  `notRecording`, `microphoneUnavailable`, `permissionDenied`, `storageFull`, `busy`, `declined`
-  or `unsupported`.
+  `notRecording`, `microphoneUnavailable`, `permissionDenied`, `storageFull`, `busy`, `declined`,
+  `recorderUnavailable` or `unsupported`.
 
 Without a handler, every request is refused as `unsupported`. The iPhone's handler refuses a start
 from a Mac the person hasn't allowed to start recording there (asked once per pairing;
 docs/iphone.md, "Local link") as `declined`, with a sentence the Mac shows. Requests are idempotent by ID: a
 retry after a lost reply, even on a new connection, gets the first answer and never starts a
-second recording. `LinkTiming` carries the requester's prior: its own start, elapsed timeline,
-and its clock-offset estimate with uncertainty.
+second recording, and a request repeated while the first is still being answered (a microphone
+prompt that outlasts the timeout) reaches the app once, with every connection that asked getting
+its answer. Both apps therefore ask again with the same ID when an answer doesn't come, rather than
+giving up. `LinkTiming` carries the requester's prior: its own start, where the conversation's
+timeline began and how much of it has passed, and its clock-offset estimate with uncertainty.
+
+Additions within version 1, all optional, which older builds ignore:
+- `title` and `date`: the conversation as the requester has it, so a receiver that hasn't synced it
+  makes the same record rather than a placeholder.
+- `standalone`: record a conversation of the receiver's own (a device page's Start Recording). A
+  start without timing, from an older Mac, means the same.
+- `recorder` (`LinkRecorderTarget`: kind, serial, and for a stop the recording's ID): start or stop
+  a recorder the receiver manages instead of its microphone. Sent only to a peer that lists
+  `recorderControl` in its features, since an older one would record its own microphone; a stop
+  pauses only the named recording.
+- `LinkTiming.timelineStart`: from an older build, `elapsed` counted from the requester's own start.
+
+## Recording state
+
+`recording.state` says what the sender is recording: when that changes, every 15 s while
+recording, and as the phone connects (each side sends its own then). It carries the recorders the
+sender manages (`LinkRecorderState`: kind, serial, name, recording or not, the recording's ID and
+start, the conversation it records along with, and when that was last confirmed), filled from what
+its device sessions know and sent again when they change. A receiver moves the times onto its own
+clock, keeps a phase for 45 s (it's repeated while recording), and a recorder's state until 20
+minutes past its as-of time. A recorder entry it can't read is dropped, never the whole state.
+
+A device recording because the other asked follows it: when the one that asked says it isn't
+recording that conversation any more, or has been unreachable for 30 minutes, it stops too.
 
 ## Clock samples
 
@@ -374,7 +401,7 @@ Both apps' Info.plist:
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 66 tests, about 8 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: LINKTESTCOUNT tests, about 8 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
@@ -400,7 +427,8 @@ the test process, and nothing is advertised.
   - clock offset of +2.5 s through a 40 ms + 40 ms relay is within 20 ms, and a lopsided
     60/10 ms path stays within the reported uncertainty;
   - record control: acknowledged, refused with a reason, idempotent repeat, unsupported, and
-    timeout;
+    timeout; a repeat on a new connection while the first is still being answered reaches the app
+    once and gets that answer;
   - unpairing from either side, and a phone the Mac forgot while it was away;
   - pairing identities containing zero bytes.
 - **Recorder handoff:** round trips of the request (take and give), both replies and the release;
@@ -410,7 +438,8 @@ the test process, and nothing is advertised.
   DaybookKit.
 - **Local network:** which addresses count as local (IPv4, IPv6, IPv4-mapped, attached subnets,
   names), and that the listener drops a connection from elsewhere before any pairing attempt.
-- **Units:** wire round trips, frames, TXT tags, backoff, clock filter, key store (memory, and
+- **Units:** wire round trips (with the optional request fields and recorders), older requests and
+  unreadable recorders decoding, frames, TXT tags, backoff, clock filter, key store (memory, and
   the keychain store's move to the data-protection keychain against a keychain in memory).
 
 The relay in `LinkTestSupport.swift` is a loopback TCP proxy with per-direction delay that can
@@ -424,8 +453,9 @@ freeze (hold connections open, pass nothing) or drop every connection.
   - joining another network;
   - café networks with client isolation, where the link can't work and sync is the fallback;
   - AWDL (`allowPeerToPeer`, off by default).
-- **Sleep and wake.** The Mac's listener and sessions across sleep, and the phone's probe and
-  reconnect timing after the Mac wakes.
+- **Sleep and wake.** The Mac's listener and sessions across sleep, the phone's probe and
+  reconnect timing after the Mac wakes, and whether a stop sent while sleep is held back (up to 5 s)
+  reaches the phone before the network goes.
 - **iOS background limits:**
   - that `.backgroundRecording` keeps the connection alive with the audio background mode and a
     Live Activity, including on the Lock Screen and across calls and interruptions;

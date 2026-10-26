@@ -391,13 +391,15 @@ public final class LibraryController: ObservableObject {
 
     /// A bookmark at a moment of the conversation (while recording, `trackID` is nil and the time
     /// is the recording's elapsed time) or of one recording (during playback).
-    public func addBookmark(in id: UUID, trackID: UUID? = nil, at seconds: Double) {
-        guard seconds.isFinite, let meeting = meeting(id) else { return }
+    /// `bookmarkID` is the bookmark's own ID, when another device made it (Daybook on iPhone over the
+    /// link), so its copy and this one are one bookmark once they sync. A bookmark already here is kept.
+    public func addBookmark(id bookmarkID: UUID = UUID(), in id: UUID, trackID: UUID? = nil, at seconds: Double) {
+        guard seconds.isFinite, let meeting = meeting(id), !meeting.highlights.contains(where: { $0.id == bookmarkID }) else { return }
         if let trackID {
             guard seconds >= 0, meeting.tracks.contains(where: { $0.id == trackID }) else { return }
-            update(id) { $0.highlights.append(Highlight(trackID: trackID, time: seconds, text: "")) }
+            update(id) { $0.highlights.append(Highlight(id: bookmarkID, trackID: trackID, time: seconds, text: "")) }
         } else {
-            update(id) { $0.highlights.append(Highlight(time: max(0, seconds), text: "")) }
+            update(id) { $0.highlights.append(Highlight(id: bookmarkID, time: max(0, seconds), text: "")) }
         }
     }
 
@@ -741,8 +743,10 @@ public final class LibraryController: ObservableObject {
                 for highlight in imported.highlights where !current.highlights.contains(where: { $0.id == highlight.id }) { current.highlights.append(highlight) }
             }
             if let date = provenance.conversationDate { current.date = date }
-            current.status = .imported
-            current.errorMessage = provenance.message
+            if !provenance.joinsConversation {
+                current.status = .imported
+                current.errorMessage = provenance.message
+            }
         }
         return IngestedRecording(meetingID: id, track: stored, imported: imported)
     }
@@ -921,6 +925,9 @@ public struct RecordingProvenance: Sendable {
     public var conversationDate: Date?
     /// Shown on the conversation (capture warnings); nil clears an earlier message.
     public var message: String?
+    /// The recording joins a conversation another device leads (multipoint): the conversation's
+    /// status and message are that device's, so they're left as they are.
+    public var joinsConversation = false
 
     public init(source: AudioSource, device: DeviceRecordingIdentity? = nil, sidecarURL: URL? = nil, offset: TimeInterval? = nil,
                 duration: TimeInterval? = nil, startedAt: Date? = nil, capture: TrackCaptureDetails? = nil,

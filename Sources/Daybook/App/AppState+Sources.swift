@@ -31,6 +31,8 @@ extension AppState {
         let recorders = sources.recorders
         recorders.sessions = { [weak self] in self?.devices.sessions ?? [] }
         recorders.links = { [weak self] id in self?.meetings.first { $0.id == id }?.companions ?? [] }
+        recorders.conversation = { [weak self] id in self?.companionConversation(id) }
+        recorders.owner = { [weak self] ownership in self?.phoneManaging(ownership) }
         recorders.write = { [weak self] id, change in
             self?.update(id) { meeting in
                 var links = meeting.companions ?? []
@@ -38,6 +40,17 @@ extension AppState {
                 meeting.companions = links.isEmpty ? nil : links
             }
         }
+    }
+
+    /// A conversation this Mac records, as a device asked to record along is told about it: its
+    /// timeline's zero is this Mac's start, or, recording into one that already had recordings, that
+    /// timeline's known start.
+    func companionConversation(_ id: UUID) -> CompanionConversation? {
+        guard let meeting = meetings.first(where: { $0.id == id }) else { return nil }
+        var existing = meeting
+        if let context = sources.captures[id] { existing.tracks = meeting.tracks.filter { context.preexistingTrackIDs.contains($0.id) } }
+        let zero = existing.tracks.isEmpty ? recordingStartedAt : existing.knownTimelineStart(startOf: trackStart)
+        return CompanionConversation(title: meeting.title, date: meeting.date, timelineStart: zero)
     }
 
     // MARK: Arrivals
@@ -145,12 +158,15 @@ extension AppState {
         var clockOffset = carried?.clockOffset
         if clockOffset == nil, let link {
             // The recorder's start on this Mac's clock: corrected by the clock the link measured, when
-            // one did (Daybook on iPhone), which is the prior the sound search starts from.
+            // one did (Daybook on iPhone), which is the prior the sound search starts from. A recording
+            // its own device timed (the phone's first sample) beats the start its answer reported.
             let zero = before.knownTimelineStart(startOf: trackStart) ?? link.macStartedAt
-            let recorderStart = link.recorderStartedAt ?? start.date
-            clockOffset = recorderStart.map { link.clock?.macDate(fromRecorder: $0) ?? $0 }?.timeIntervalSince(zero)
+            let ownStart = track.capture != nil ? track.startedAt ?? start.date : nil
+            let recorderStart = ownStart ?? link.recorderStartedAt ?? start.date
+            let clock = recorderClock(for: track, link: link)
+            clockOffset = recorderStart.map { clock?.macDate(fromRecorder: $0) ?? $0 }?.timeIntervalSince(zero)
         } else if clockOffset == nil, start.reliable, let date = start.date, let zero = before.knownTimelineStart(startOf: trackStart) {
-            clockOffset = date.timeIntervalSince(zero)
+            clockOffset = (recorderClock(for: track, link: nil)?.macDate(fromRecorder: date) ?? date).timeIntervalSince(zero)
         }
         let name = sourceName(track)
         let reliableStart = start.reliable ? start.date : nil
@@ -162,8 +178,10 @@ extension AppState {
             if isNewSource {
                 var alignment = placement ?? SourceAlignment(method: .pending, clockOffset: clockOffset)
                 if alignment.clockOffset == nil { alignment.clockOffset = clockOffset }
-                meeting.tracks[index].alignment = alignment
-                meeting.tracks[index].offset = alignment.isPlaced ? alignment.offset : nil
+                // Notes the recording's own device holds on it (Daybook on iPhone) stay held, or move
+                // onto the timeline now if the sound already placed it.
+                meeting.tracks[index].offset = nil
+                meeting.applyPlacements([track.id: alignment])
                 meeting.revisions.append(MeetingRevision(field: "source:\(track.id.uuidString)", oldValue: "", newValue: "Added \(name)"))
                 if let carried, let transcript = carried.transcript, !meeting.transcripts.contains(where: { $0.trackID == track.id }) {
                     Self.adopt(transcript, speakers: carried.speakers, for: track.id, into: &meeting, preferences: preferences)
@@ -226,12 +244,35 @@ extension AppState {
         return ((try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate, false)
     }
 
-    /// When a recording started by the wall clock, when Daybook knows.
+    /// When a recording started by the wall clock, when Daybook knows, on this Mac's clock.
     func trackStart(_ track: RecordingTrack) -> Date? {
-        if let startedAt = track.startedAt { return startedAt }
+        if let startedAt = track.startedAt {
+            // Daybook on iPhone stamps its recordings by its own clock.
+            guard track.deviceKind == DaybookPhoneIntegration.id else { return startedAt }
+            let link = meetings.first { $0.tracks.contains { $0.id == track.id } }?.companions?.first {
+                $0.trackID == track.id || ($0.recordingID != nil && $0.recordingID == track.deviceRecordingID)
+            }
+            return recorderClock(for: track, link: link)?.macDate(fromRecorder: startedAt) ?? startedAt
+        }
         // Capture sets a Mac recording's creation date to when its first sample arrived.
         if track.source == .microphone || track.source == .systemAudio { return track.createdAt }
         return track.device.flatMap(deviceRecordingStart)
+    }
+
+    /// A recorder's clock against this Mac's, for placing its recording: the one its multipoint link
+    /// keeps, or the one Daybook on iPhone measured while recording and stored on its track
+    /// (`capture.peerClocks`), whichever was measured later. The track's entry for this Mac comes
+    /// first; another Mac's is only near this one's.
+    func recorderClock(for track: RecordingTrack, link: CompanionRecording?) -> CompanionClock? {
+        let peers = track.capture?.peerClocks ?? []
+        let entry = peers.first { $0.deviceID == phoneLink.identity.deviceID.uuidString }
+            ?? peers.filter { $0.peerRecordingStartedAt != nil }.max { $0.measuredAt < $1.measuredAt }
+        // Its offset is (peer − this recorder); the link's is (recorder − Mac).
+        let measured = entry.map { CompanionClock(offset: -$0.offset, uncertainty: $0.uncertainty, samples: $0.sampleCount,
+                                                  measuredAt: $0.measuredAt.addingTimeInterval($0.offset)) }
+        guard let linked = link?.clock else { return measured }
+        guard let measured else { return linked }
+        return measured.measuredAt > linked.measuredAt ? measured : linked
     }
 
     /// The identity of the whole recording, for a Listen Live portion too.
@@ -255,14 +296,15 @@ extension AppState {
         guard let meeting = meetings.first(where: { $0.id == id }) else { sources.captures[id] = nil; return }
         sources.captures[id] = .init(preexistingTrackIDs: Set(meeting.tracks.map(\.id)), date: meeting.date,
                                      noteIDs: Set((meeting.timedNotes ?? []).map(\.id)), highlightIDs: Set(meeting.highlights.map(\.id)),
-                                     photoIDs: Set((meeting.photos ?? []).map(\.id)))
+                                     photoIDs: Set((meeting.photos ?? []).map(\.id)), keepsDate: phoneLeads[id] != nil)
     }
 
     /// This Mac is recording: recorders set to record alongside it start too. Their trouble only
     /// ever shows as a status line; it can't stop or delay this recording.
     func recordingDidStart(_ id: UUID) {
-        if let context = sources.captures[id], !context.preexistingTrackIDs.isEmpty {
-            // A conversation that already had recordings keeps its date and timeline.
+        if let context = sources.captures[id], !context.preexistingTrackIDs.isEmpty || context.keepsDate {
+            // A conversation that already had recordings keeps its date and timeline; one a phone
+            // started keeps the phone's date.
             update(id) { $0.date = context.date }
         }
         // A recording a phone asked for links that phone as already recording, rather than asking it.
@@ -274,13 +316,22 @@ extension AppState {
         sources.recorders.macRecordingStopped(id, at: end)
     }
 
+    /// At launch, once devices and the link are up: recordings an interrupted run recovered close their
+    /// links, stopping what Daybook started with them.
+    func closeRecoveredLinks() {
+        let recovered = sources.recovered
+        sources.recovered = []
+        for capture in recovered { sources.recorders.recordingRecovered(capture.meetingID, startedAt: capture.startedAt, endedAt: capture.endedAt) }
+    }
+
     /// This Mac's recording is in the library. Into a conversation that already had recordings (the
     /// other direction), the new ones join its existing timeline rather than replacing it: they wait
     /// to be lined up (sound, transcript, then clock), bookmarks made meanwhile follow the microphone
     /// recording, and notes made meanwhile move onto the timeline once it's placed.
     func sourcesAfterCapture(_ id: UUID, startedAt: Date, captureID: UUID) {
-        guard let context = sources.captures.removeValue(forKey: id), !context.preexistingTrackIDs.isEmpty,
-              let meeting = meetings.first(where: { $0.id == id }) else { return }
+        guard let context = sources.captures.removeValue(forKey: id) else { return }
+        if context.keepsDate, context.preexistingTrackIDs.isEmpty { update(id) { $0.date = context.date } }
+        guard !context.preexistingTrackIDs.isEmpty, let meeting = meetings.first(where: { $0.id == id }) else { return }
         var existing = meeting
         existing.tracks = meeting.tracks.filter { context.preexistingTrackIDs.contains($0.id) }
         let captured = meeting.tracks.filter {

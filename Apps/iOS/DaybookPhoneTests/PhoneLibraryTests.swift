@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookKit
 import XCTest
 @testable import DaybookPhone
 
@@ -57,7 +58,8 @@ final class PhoneLibraryTests: XCTestCase {
         try FileManager.default.copyItem(at: recording.stagingDirectory, to: spare)
         _ = try await library.file(recording)
         recording.stagingDirectory = spare
-        recording.notes = "A new joined note"
+        recording.notes += "\nA new joined note"
+        recording.timedNotes.append(TimedNote(time: 6, text: "A new joined note"))
         let folder = root.appendingPathComponent("Meetings/\(recording.id.uuidString)")
         let primary = folder.appendingPathComponent("meeting.json")
         try FileManager.default.moveItem(at: primary, to: folder.appendingPathComponent("held.json"))
@@ -102,7 +104,8 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(meeting.tracks.count, 1)
         let track = try XCTUnwrap(meeting.tracks.first)
         XCTAssertEqual(track.source, .microphone)
-        XCTAssertEqual(track.device, DeviceRecordingIdentity(kind: "daybook.iphone", serial: "INSTALL-1", recordingID: recording.id.uuidString))
+        XCTAssertEqual(track.device, DeviceRecordingIdentity(kind: "daybook.iphone", serial: "INSTALL-1", recordingID: recording.recordingID.uuidString))
+        XCTAssertNotEqual(recording.recordingID, recording.id, "the recording has its own ID, apart from its conversation's")
         XCTAssertEqual(track.duration ?? 0, 6, accuracy: 0.001)
         XCTAssertEqual(track.offset, 0)
         XCTAssertEqual(track.startedAt, recording.startedAt)
@@ -212,6 +215,154 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(reopened.openRequests(for: again.id).count, 1)
     }
 
+    func testASecondRecordingIntoTheSameConversationKeepsItsAudio() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let conversation = UUID()
+        func record(seconds: TimeInterval) async throws -> PhoneRecording {
+            let rig = RecorderRig()
+            let recordingID = UUID()
+            try await rig.recorder.start(in: library.stagingURL.appendingPathComponent(recordingID.uuidString), id: conversation,
+                                         recordingID: recordingID, title: "Design review")
+            rig.pump(seconds)
+            return try await rig.stop()
+        }
+        let first = try await record(seconds: 2)
+        _ = try await library.fileRecording(first, join: .init())
+        // A Mac records into the same conversation later and asks this iPhone again.
+        let second = try await record(seconds: 3)
+        XCTAssertEqual(second.id, first.id)
+        XCTAssertNotEqual(second.recordingID, first.recordingID)
+        let filed = try await library.fileRecording(second, join: .init())
+        XCTAssertEqual(filed.meeting.tracks.count, 2, "the second recording is a track of its own")
+        let tracks = filed.meeting.tracks.sorted { ($0.duration ?? 0) < ($1.duration ?? 0) }
+        XCTAssertEqual(tracks.map(\.deviceRecordingID), [first.recordingID.uuidString, second.recordingID.uuidString])
+        XCTAssertEqual(tracks.last?.duration ?? 0, 3, accuracy: 0.001)
+        let stored = try await library.audioURL(for: try XCTUnwrap(tracks.last), in: conversation)
+        XCTAssertEqual(try AVAudioFile(forReading: stored).length, 3 * 48_000, "its own audio, not the first recording's")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.stagingDirectory.path))
+    }
+
+    func testAJournalFromBeforeRecordingIDsRecoversUnderItsConversationsID() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let rig = RecorderRig()
+        let id = UUID()
+        let folder = library.stagingURL.appendingPathComponent(id.uuidString)
+        try await rig.recorder.start(in: folder, id: id, title: "Older")
+        rig.pump(2)
+        await rig.recorder.flush()
+        rig.recorder.prepareForTermination()
+        // As v0.3.0 wrote it: no recording ID.
+        let url = PhoneCaptureJournal.url(in: folder)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        json["recordingID"] = nil
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+
+        let recording = try await PhoneRecorder.recover(in: folder)
+        XCTAssertEqual(recording.recordingID, id)
+        let meeting = try await library.file(recording)
+        XCTAssertEqual(meeting.tracks.first?.deviceRecordingID, id.uuidString, "named as it was before")
+    }
+
+    // MARK: Joining a conversation a Mac leads
+
+    /// A recording made with notes at 2 s and 5 s (the second paragraph repeated at 7 s) and a bookmark at 5 s.
+    private func recordWithNotes(into library: PhoneLibrary, conversation: UUID) async throws -> PhoneRecording {
+        let rig = RecorderRig()
+        let recordingID = UUID()
+        try await rig.recorder.start(in: library.stagingURL.appendingPathComponent(recordingID.uuidString), id: conversation,
+                                     recordingID: recordingID, title: "Conversation at 10:02")
+        rig.pump(2)
+        rig.recorder.editNotes("Decisions")
+        rig.pump(3)
+        rig.recorder.editNotes("Decisions\nOwners")
+        rig.recorder.addBookmark()
+        rig.pump(2)
+        rig.recorder.editNotes("Decisions\nOwners\nOwners")
+        rig.pump(1)
+        return try await rig.stop()
+    }
+
+    func testJoiningTheMacsSyncedConversationKeepsItsOwnFieldsAndHoldsTheNotes() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        try await library.reload()
+        let conversation = UUID()
+        let macDate = Date(timeIntervalSince1970: 1_800_000_000)
+        // The Mac's conversation synced here while it records.
+        library.controller.add(Meeting(id: conversation, title: "Design review", date: macDate, status: .recording))
+        let recording = try await recordWithNotes(into: library, conversation: conversation)
+
+        let filed = try await library.fileRecording(recording, join: .init(estimatedOffset: 30, title: "Not this", date: Date()))
+        let meeting = filed.meeting
+        XCTAssertEqual(meeting.title, "Design review", "the Mac's title stays")
+        XCTAssertEqual(meeting.date, macDate)
+        XCTAssertEqual(meeting.status, .recording, "the conversation's status is the Mac's")
+        XCTAssertNil(meeting.errorMessage)
+        XCTAssertEqual(meeting.notes, "Decisions\nOwners\nOwners", "the notes are written")
+        XCTAssertEqual(meeting.paragraphTimes(), [32, 35, 37], "each paragraph keeps its own time, by the clock estimate")
+        let track = try XCTUnwrap(meeting.tracks.first)
+        XCTAssertNil(track.offset, "the Mac places it")
+        XCTAssertEqual(track.alignment?.method, .pending)
+        XCTAssertEqual(track.alignment?.heldNoteIDs, recording.timedNotes.map(\.id), "held by the phone's recording until it's placed")
+        XCTAssertEqual(track.alignment?.captureOffset, 30)
+        XCTAssertEqual(meeting.highlights.map(\.trackID), [track.id], "the bookmark follows the phone's recording")
+        XCTAssertEqual(meeting.highlights.map(\.time), [5])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recording.stagingDirectory.path))
+
+        // Once the Mac places the recording 28 s in, the notes follow it.
+        var placed = meeting
+        placed.applyPlacements([track.id: SourceAlignment(method: .audio, offset: 28, confidence: 0.9)])
+        XCTAssertEqual(placed.paragraphTimes(), [30, 33, 35])
+    }
+
+    func testJoiningAConversationWithTheMacsRecordingKeepsEveryNoteTimed() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        try await library.reload()
+        let conversation = UUID()
+        library.controller.add(Meeting(id: conversation, title: "Design review", date: Date(), notes: "Decisions",
+                                       status: .imported, timedNotes: [TimedNote(time: 1, text: "Decisions")]))
+        // The Mac's own recording is here already.
+        let macRig = RecorderRig()
+        try await macRig.recorder.start(in: try temporaryDirectory().appendingPathComponent("mac"), title: "Mac")
+        macRig.pump(4)
+        let macAudio = try await macRig.stop()
+        await library.controller.acquireLock()
+        _ = try await library.controller.ingest(macAudio.audioURL, into: conversation, provenance: RecordingProvenance(source: .microphone, offset: 0))
+        library.controller.releaseLock()
+
+        let recording = try await recordWithNotes(into: library, conversation: conversation)
+        // Without a join (filed again after a restart, say), the Mac's recording still makes it one.
+        let meeting = try await library.fileRecording(recording).meeting
+        XCTAssertEqual(meeting.tracks.count, 2)
+        XCTAssertEqual(meeting.notes, "Decisions\nDecisions\nOwners\nOwners", "a paragraph the Mac also typed is still the phone's own")
+        XCTAssertEqual(meeting.paragraphTimes(), [1, 2, 5, 7], "timed by the phone's clock, held until the phone's recording is placed")
+        let phoneTrack = try XCTUnwrap(meeting.tracks.first { $0.deviceKind == PhoneDevice.kind })
+        XCTAssertNil(phoneTrack.offset)
+        XCTAssertEqual(phoneTrack.alignment?.heldNoteIDs?.count, 3)
+        XCTAssertEqual(meeting.title, "Design review")
+
+        // Filed again (a retry after a failure), nothing doubles.
+        let twice = try await library.fileRecording(recording, join: .init()).meeting
+        XCTAssertEqual(twice.notes, meeting.notes)
+        XCTAssertEqual(twice.highlights.count, 1)
+    }
+
+    func testJoiningAConversationThatHasntSyncedMakesItAsTheMacHasIt() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        try await library.reload()
+        let conversation = UUID()
+        let macDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let recording = try await recordWithNotes(into: library, conversation: conversation)
+        let meeting = try await library.fileRecording(recording, join: .init(estimatedOffset: nil, title: "Design review", date: macDate)).meeting
+        XCTAssertEqual(meeting.title, "Design review", "the Mac's title, which came with its request, not a placeholder")
+        XCTAssertEqual(meeting.date, macDate)
+        XCTAssertEqual(meeting.status, .draft, "its status is left for the Mac's copy")
+        XCTAssertEqual(meeting.paragraphTimes(), [2, 5, 7])
+        XCTAssertEqual(meeting.tracks.first?.alignment?.heldNoteIDs?.count, 3)
+    }
+
     func testAppModelRecordsAndFilesEndToEnd() async throws {
         let root = try temporaryDirectory()
         let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
@@ -236,6 +387,33 @@ final class PhoneLibraryTests: XCTestCase {
             try await model.stopRecording()
             XCTFail("stopping twice should say nothing is recording")
         } catch {}
+    }
+
+    func testTwoStartsAtOnceLeaveTheOneThatWonAlone() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        let rig = RecorderRig()
+        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        // A Mac's request and an intent arrive together.
+        let conversation = UUID()
+        let session = MultipointSession(conversationID: conversation, role: .macLed(macID: UUID()),
+                                        macs: [MultipointSession.Mac(id: UUID(), name: "Studio Mac", state: .recording, startedAt: nil, startedByPhone: false)])
+        let led = Task { try await model.startRecording(into: conversation, title: "Design review", multipoint: session) }
+        let intent = Task { try await model.startRecording() }
+        let ledFailed: Bool
+        do { try await led.value; ledFailed = false } catch { ledFailed = true }
+        try await intent.value
+        XCTAssertTrue(model.recorder.isActive)
+        if model.recorder.captureID == conversation {
+            XCTAssertFalse(ledFailed)
+            XCTAssertEqual(model.multipoint?.conversationID, conversation, "the loser didn't clear the winner's session")
+        } else {
+            XCTAssertTrue(ledFailed, "the Mac's conversation can't start while another records")
+            XCTAssertNil(model.multipoint)
+        }
+        rig.pump(1)
+        try await model.stopRecording()
+        XCTAssertEqual(library.conversations.count, 1)
     }
 
     func testStopFilesTheRecordingEvenWhenTheCallerIsCancelled() async throws {
