@@ -15,7 +15,7 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 | CI | `package` | `xcode-27` | `swift build --build-tests` once, then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
 | CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --test` on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), the crash-recovery test alone, then an unsigned Release device archive checked the way a release would be |
 | CI | `mac` | `xcode-27` | `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
-| Release | `prepare` | `ubuntu-24.04` | checks the ref, works out the version and build number (`scripts/ci/version.sh`), and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
+| Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version and build number (`scripts/ci/version.sh`), and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
 | Release | `iphone` | `xcode-27`, environment `release` | archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
 | Release | `mac` | `xcode-27`, environment `release` | archives and exports with `developer-id` (`build-app.sh`), then notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`) |
 | Release | `publish` | `ubuntu-24.04` | tags only: verifies the checksums and creates (or updates) the GitHub Release. It's the only job with `contents: write`, and it holds no Apple secrets |
@@ -233,7 +233,7 @@ The Mac app is distributed outside the App Store, so the key doesn't apply to it
 
 ## Cutting a release
 
-From an up-to-date `main` whose CI is green:
+From an up-to-date `main` whose CI is green. The tag must point at a commit that's on `main`: `prepare` checks it with `git merge-base --is-ancestor` and refuses anything else, so a tag on an unmerged branch never releases. (That guards against mistakes; the tag ruleset and the approval guard against people, because a tag's run uses the workflow files at that tag.)
 
 ```sh
 git tag -a v1.4.0 -m "Daybook 1.4.0: two-page reading on iPhone Duo"
@@ -314,6 +314,7 @@ xcrun stapler validate /Applications/Daybook.app
 | Build not processed within the timeout | App Store Connect is slow. The build usually finishes later; set What to Test and the group in App Store Connect. |
 | The account fills with "Apple Development: Created via API" certificates | Each fresh runner's archive creates one. Revoke old ones in Certificates, Identifiers & Profiles; nothing shipped depends on them. |
 | The tag was pushed and nothing ran | Check Actions › Release: the run is waiting for approval in `release`. A tag that isn't `vX.Y.Z[-suffix]` fails in `prepare`. |
+| `prepare`: "v1.4.0 points at …, which isn't on main" | The tag is on a commit that isn't merged. Delete the tag (an admin, with the ruleset), merge, and tag the merged commit. |
 
 ## Checking the pipeline locally
 

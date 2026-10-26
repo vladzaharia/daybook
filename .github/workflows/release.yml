@@ -65,24 +65,22 @@ jobs:
       mac: ${{ steps.apps.outputs.mac }}
       testflight_group: ${{ steps.apps.outputs.testflight_group }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A v* tag must point at a commit on main (pushed or picked in a manual run); a manual run from a
+      # branch must be from main. Nothing else releases.
       - name: Check the ref
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          case "$REF" in
-            refs/tags/v*) ;;
-            "refs/heads/$DEFAULT_BRANCH")
-              if [[ "$EVENT" != workflow_dispatch ]]; then
-                echo "::error::Only a v* tag push or a manual run starts a release."; exit 1
-              fi ;;
-            *) echo "::error::Releases run from a v* tag or from $DEFAULT_BRANCH, not $REF."; exit 1 ;;
-          esac
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+          if ! scripts/ci/check-ref.sh --event "$EVENT" --ref "$REF" --sha "$GITHUB_SHA" --default-branch "$DEFAULT_BRANCH" 2> "$RUNNER_TEMP/ref.txt"; then
+            echo "::error::$(cat "$RUNNER_TEMP/ref.txt")"
+            exit 1
+          fi
       - name: Version and build number
         id: version
         env:

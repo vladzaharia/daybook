@@ -8,6 +8,7 @@
 #                         macOS, by CryptoKit (an independent implementation)
 #   asc-testflight.sh     the full request sequence against a local mock of the App Store Connect API
 #   release-notes.sh      annotated and lightweight tags in a throwaway repository
+#   check-ref.sh          tags on and off main, manual runs, in a throwaway clone
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 # Runs on macOS (bash 3.2) and Linux.
@@ -160,6 +161,32 @@ expect_eq "lists only the new commits" "2" "$(grep -c '^- ' <<< "$notes")"
 text="$(cd "$repo" && "$ci/release-notes.sh" --ref v0.1.0 --format text)"
 expect_eq "first release, text" "Changes:
 - Build the first version" "$text"
+
+# --- check-ref.sh ---------------------------------------------------------------------------------------
+echo "check-ref.sh"
+upstream="$work/upstream"
+git init -q -b main "$upstream"
+git_u() { git -C "$upstream" -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
+git_u commit -q --allow-empty -m "Release one"
+git_u tag -a v1.0.0 -m "One"
+git_u checkout -q -b side
+git_u commit -q --allow-empty -m "Unreviewed change"
+git_u tag -a v1.0.1 -m "Off main"
+git_u checkout -q main
+git_u commit -q --allow-empty -m "Release two"
+git clone -q "$upstream" "$work/checkout"
+on_main="$(git -C "$work/checkout" rev-parse 'v1.0.0^{commit}')"
+off_main="$(git -C "$work/checkout" rev-parse 'v1.0.1^{commit}')"
+check_ref() { (cd "$work/checkout" && "$ci/check-ref.sh" "$@"); }
+expect_ok "a tag on main passes" check_ref --event push --ref refs/tags/v1.0.0 --sha "$on_main"
+expect_ok "an annotated tag object peels to its commit" check_ref --event push --ref refs/tags/v1.0.0 --sha "$(git -C "$work/checkout" rev-parse v1.0.0)"
+expect_fail "a tag off main fails" check_ref --event push --ref refs/tags/v1.0.1 --sha "$off_main"
+expect_ok "the refusal names the commit" grep -q "isn't on main" <<< "$(check_ref --event push --ref refs/tags/v1.0.1 --sha "$off_main" 2>&1 || true)"
+expect_fail "a manual run on a tag off main fails" check_ref --event workflow_dispatch --ref refs/tags/v1.0.1 --sha "$off_main"
+expect_ok "a manual run from main passes" check_ref --event workflow_dispatch --ref refs/heads/main --sha "$on_main"
+expect_fail "a push to main doesn't release" check_ref --event push --ref refs/heads/main --sha "$on_main"
+expect_fail "a manual run from another branch fails" check_ref --event workflow_dispatch --ref refs/heads/side --sha "$off_main"
+expect_fail "an unknown commit fails" check_ref --event push --ref refs/tags/v1.0.0 --sha 0123456789abcdef0123456789abcdef01234567
 
 # --- check-ios-archive.sh -------------------------------------------------------------------------------
 echo "check-ios-archive.sh"
