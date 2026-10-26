@@ -605,5 +605,35 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertTrue(files("Events").isEmpty)
         try assertNoPlaintext()
     }
+
+    func testAnOldKeysFilesStayUntilEveryRecentDeviceHoldsTheNewKey() async throws {
+        let macKeys = MemoryLibraryKeyStore(), phoneKeys = MemoryLibraryKeyStore()
+        let mac = try mac(keys: macKeys), phone = try phone(keys: phoneKeys)
+        try await pass(mac, "Mac", [Meeting(title: "Kept")])
+        let first = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try phoneKeys.store(first)
+        try await pass(mac, "Mac")
+        try await pass(phone, "Phone")
+        let start = Date()
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace * 3) }
+        let second = try await mac.rotateKey(now: start)
+        try await pass(mac, "Mac")
+        // The phone hasn't got the new key: it waits, and says so.
+        do { _ = try await phone.synchronize(meetings: []); XCTFail() } catch LibrarySyncError.keyUnavailable {}
+        try await pass(mac, "Mac")
+        let waitingValue = await mac.sealerProgress
+        let waiting = try XCTUnwrap(waitingValue)
+        XCTAssertFalse(waiting.oldKeysRetired)
+        XCTAssertTrue(waiting.waitingFor.contains(.devicesWithCurrentKey), "\(waiting)")
+        XCTAssertEqual(try manifest().sealing?.keys.count, 2)
+        // It arrives.
+        try phoneKeys.store(second)
+        try await pass(phone, "Phone")
+        try await pass(mac, "Mac")
+        let doneValue = await mac.sealerProgress
+        let done = try XCTUnwrap(doneValue)
+        XCTAssertTrue(done.oldKeysRetired, "\(done)")
+        XCTAssertEqual(try manifest().sealing?.keys.map(\.id), [second.idHex])
+    }
 }
 

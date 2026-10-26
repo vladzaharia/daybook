@@ -374,7 +374,11 @@ extension LibrarySyncEngine {
         progress.oldKeysRetired = false
         var ready = true
         if now.timeIntervalSince(current.createdAt) < Self.retirementGrace { ready = false; progress.waitingFor.append(.gracePeriod) }
-        let recent = presenceRecords().filter { $0.deviceID != deviceID && now.timeIntervalSince($0.lastSeen) < Self.recentDevice }
+        // Devices seen recently that read encrypted libraries; a Daybook that doesn't can't sync this library under any
+        // key, and gets the current one from iCloud Keychain once it's updated.
+        let recent = presenceRecords().filter {
+            $0.deviceID != deviceID && now.timeIntervalSince($0.lastSeen) < Self.recentDevice && ($0.features ?? []).contains(Self.sealingFeature)
+        }
         if recent.contains(where: { $0.key != SyncDeviceKeyState(state: .ready, id: current.idHex) }) { ready = false; progress.waitingFor.append(.devicesWithCurrentKey) }
         guard ready else { return }
         let oldEntries = (input.eventEntries + input.metadataEntries).filter { $0.isSealed && sealedKeys[$0.path] != current.id }
