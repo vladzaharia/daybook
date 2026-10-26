@@ -151,7 +151,7 @@ extension AppState {
         for (photoID, reason) in output.failures { photoBackoff.failed(photoID, reason: reason) }
         for photoID in output.analyses.keys { photoBackoff.read(photoID) }
         update(id) { $0.applyPhotoAnalyses(output.analyses) }
-        for message in output.notices { notice = message }
+        post(output.notices)
         if !output.failures.isEmpty { schedulePhotoRetry() }
         return output.analyses.count
     }

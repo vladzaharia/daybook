@@ -618,7 +618,7 @@ final class AppState: ObservableObject {
             let url = try await library.audioURL(for: track, in: id)
             let output = try await engine.transcribe(TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: request.mode,
                                                                           previousTranscript: previous, vocabulary: terms), progress: progress)
-            for message in output.notices { notice = message }
+            post(output.notices)
             update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
         }
         try Task.checkCancellation()
@@ -675,6 +675,18 @@ final class AppState: ObservableObject {
     }
 
     func realign(_ id: UUID) async { await library.realign(id) }
+
+    /// Adds notices to the one the window shows, keeping every distinct one (the newest last, at
+    /// most five) rather than letting each replace the one before.
+    func post(_ messages: [String]) {
+        var lines = (notice ?? "").components(separatedBy: "\n").filter { !$0.isEmpty }
+        for message in messages where !message.isEmpty {
+            lines.removeAll { $0 == message }
+            lines.append(message)
+        }
+        guard !lines.isEmpty else { return }
+        notice = lines.suffix(5).joined(separator: "\n")
+    }
 
     func setOffset(_ id: UUID, trackID: UUID, seconds: Double?) { library.setOffset(id, trackID: trackID, seconds: seconds) }
 
