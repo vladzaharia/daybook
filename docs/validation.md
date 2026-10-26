@@ -18,6 +18,10 @@ Still requires real devices:
   HEIC taken by an iPhone camera and a portrait JPEG: `exiftool` shows no GPS, MakerApple, Make,
   Model, or Software in the exported files, the portrait one still opens upright, the capture date
   is kept, and the library's originals are unchanged (same digest).
+- **iPhone backups.** With a few recordings and some downloaded audio, Settings › [your name] ›
+  iCloud › Manage Storage › Backups lists Daybook at the library's size without the downloaded
+  audio; with Include in iPhone Backups off, near zero. Restoring a backup made with it on brings
+  back the library, and played audio downloads again.
 - **Mac keychain move.** With a signed build of the previous version paired to a phone, install the
   new build: the pairing keeps connecting with no keychain prompt, and Keychain Access no longer
   lists a "Daybook link" item in the login keychain. An ad hoc build keeps using the login keychain.

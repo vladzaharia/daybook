@@ -185,11 +185,17 @@ struct StorageScreen: View {
                     Text("Only downloaded audio is removed.")
                 }
             }
+            Section {
+                Toggle("Include in iPhone Backups", isOn: $settings.includesLibraryInBackups)
+            }
         }
         .navigationTitle("Storage")
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.audio.refreshUsage() }
         .onChange(of: settings.audioCacheBudget) { _, budget in Task { await model.audio.setBudget(budget) } }
+        .onChange(of: settings.includesLibraryInBackups) { _, included in
+            BackupExclusion.apply(libraryRoot: model.library.rootURL, inbox: model.library.inboxURL, includesLibrary: included)
+        }
     }
 
     private func bytes(_ value: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file) }

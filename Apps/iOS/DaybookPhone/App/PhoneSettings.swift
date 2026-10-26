@@ -24,6 +24,9 @@ final class PhoneSettings {
     /// Off by default: a recorder this iPhone took from a Mac goes back to that Mac when it connects
     /// over Wi‑Fi and the recorder is idle here (docs/devices.md, "Hand back").
     var handsRecorderBackToMac: Bool { didSet { defaults.set(handsRecorderBackToMac, forKey: Keys.handsRecorderBackToMac) } }
+    /// The library goes into iPhone backups (Settings › Storage). Copies Daybook can rebuild never do
+    /// (`BackupExclusion`).
+    var includesLibraryInBackups: Bool { didSet { defaults.set(includesLibraryInBackups, forKey: Keys.includesLibraryInBackups) } }
 
     var captionLocale: Locale { captionLocaleIdentifier.map(Locale.init(identifier:)) ?? .current }
 
@@ -42,6 +45,7 @@ final class PhoneSettings {
         liveCaptions = defaults.object(forKey: Keys.liveCaptions) as? Bool ?? true
         captionLocaleIdentifier = defaults.string(forKey: Keys.captionLocale)
         handsRecorderBackToMac = defaults.object(forKey: Keys.handsRecorderBackToMac) as? Bool ?? false
+        includesLibraryInBackups = defaults.object(forKey: Keys.includesLibraryInBackups) as? Bool ?? true
     }
 
     enum Keys {
@@ -52,5 +56,6 @@ final class PhoneSettings {
         static let liveCaptions = "phone.liveCaptions"
         static let captionLocale = "phone.captionLocale"
         static let handsRecorderBackToMac = "phone.handsRecorderBackToMac"
+        static let includesLibraryInBackups = "phone.includesLibraryInBackups"
     }
 }

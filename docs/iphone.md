@@ -32,6 +32,7 @@ Everything below is in v1:
   - Other recorders through Files.
 - **Multipoint.** When the Mac records, the phone can record too, and the reverse. Recordings join one conversation through the existing multipoint pipeline.
 - **Settings.** Sync folder, devices, recording, Mac pairing, appearance and text size.
+- **Backups.** iPhone backups (iCloud and computer) never hold copies Daybook can rebuild: the courier's inbox and outbox (`Sync/Inbox`, `Sync/Courier`; iCloud Drive carries the same files), audio downloaded for playback, imports being copied in, and `Documents/Inbox` (`BackupExclusion`, applied at launch and after each download). The library itself goes in unless Settings › Storage › Include in iPhone Backups is off (default on), which keeps the whole library folder out, for someone who doesn't want recordings in a backup, with or without sync.
 - **Export.** Markdown and audio through the share sheet. Copy (a passage, a summary line, Copy Summary) stays on the device that copied it, on the Mac too: never Universal Clipboard (`LocalPasteboard`). Exports wait in `tmp/Daybook Export/` only until the share sheet is done with them, and anything left there is cleared at launch. A file another app opens in Daybook (iOS copies it to `Documents/Inbox/`) is removed once it's imported; a failed import keeps it.
 
 **Not possible on iOS, by design**
