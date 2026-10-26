@@ -922,7 +922,7 @@ extension AppState {
                 meetingID: id, derivedFrom: original, processing: derived.processing)
             importedCount += 1
         }
-        await flush()
+        try await library.flushDurably()
         // Retain empty/failed captures for diagnosis; remove staging only after durable imports.
         if importedCount > 0 && linked { try FileManager.default.removeItem(at: result.directory) }
     }

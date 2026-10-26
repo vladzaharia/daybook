@@ -170,6 +170,15 @@ public final class LibraryController: ObservableObject {
         await persistence?.value
     }
 
+    /// A durability barrier for operations that discard recovery data or acknowledge a sync pull.
+    /// Waiting for the save queue alone does not mean its writes succeeded.
+    public func flushDurably() async throws {
+        await flush()
+        guard persistenceErrors.isEmpty else {
+            throw DaybookError.saveFailed(persistenceErrors.values.sorted().joined(separator: "\n"))
+        }
+    }
+
     // MARK: Editing a conversation
 
     /// The notes as typed. The text saves at once; a Version History entry is written once typing
@@ -509,7 +518,7 @@ public final class LibraryController: ObservableObject {
     /// Callers hold the lock (`acquireLock()`).
     public func ingest(_ url: URL, into id: UUID, provenance: RecordingProvenance) async throws -> IngestedRecording {
         guard let store else { throw DaybookError.libraryUnavailable }
-        await flush()
+        try await flushDurably()
         guard let meeting = meeting(id) else { throw DaybookError.libraryUnavailable }
         let imported = try await store.importAudio(from: url, into: meeting, source: provenance.source,
                                                    sidecarURL: provenance.sidecarURL, offset: provenance.offset, device: provenance.device)
@@ -621,9 +630,8 @@ public final class LibraryController: ObservableObject {
                                   changed: result.changedMeetingIDs.union(result.deletedMeetingIDs), published: result.publishedEvents,
                                   hasMoreWork: result.hasMoreWork, notLocalAudio: result.notLocalAudio)
             if !mergeWarnings.isEmpty { notice = Array(Set(mergeWarnings)).sorted().joined(separator: "\n") }
-            await flush()
+            try await flushDurably()
             guard sync.canApply(result) else { return applied }
-            guard persistenceErrors.isEmpty else { throw DaybookError.saveFailed(persistenceErrors.values.sorted().joined(separator: "\n")) }
             try await sync.acknowledge(result)
             applied?.acknowledged = true
         } catch { sync.reportFailure(error.localizedDescription) }

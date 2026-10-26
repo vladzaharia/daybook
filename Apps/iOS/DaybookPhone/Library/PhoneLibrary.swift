@@ -22,11 +22,10 @@ final class PhoneLibrary {
     @ObservationIgnored private var subscription: AnyCancellable?
 
     init(rootURL: URL = LibraryLocation.defaultRoot, sync: LibrarySyncController? = nil,
-         installation: String = PhoneDevice.installationID()) throws {
+         installation: String = PhoneDevice.installationID()) {
         self.rootURL = rootURL.standardizedFileURL
         self.installation = installation
         controller = LibraryController(rootURL: self.rootURL, sync: sync)
-        try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // objectWillChange fires before the change lands; count it on the next turn.
         subscription = controller.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.revision &+= 1 }
@@ -46,7 +45,10 @@ final class PhoneLibrary {
 
     var installationID: String { installation }
 
-    func reload() async throws { try await controller.load() }
+    func reload() async throws {
+        try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try await controller.load()
+    }
 
     // MARK: Filing a recording
 
@@ -114,7 +116,7 @@ final class PhoneLibrary {
         if joining, let track { addJoinedWork(recording, track: track.id, offset: join?.estimatedOffset) }
         controller.update(recording.id) { $0.status = .imported }
         let request = requestTranscription ? controller.requestProcessing(recording.id, mode: .newAudio) : nil
-        await controller.flush()
+        try await controller.flushDurably()
         try? FileManager.default.removeItem(at: recording.stagingDirectory)
         guard let meeting = controller.meeting(recording.id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)

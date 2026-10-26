@@ -27,7 +27,7 @@ final class LiveCaptionsTests: XCTestCase {
     }
 
     private func makeModel(rig: RecorderRig, captioner: any LiveCaptioning) throws -> PhoneAppModel {
-        let library = try PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
+        let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
         let settings = PhoneSettings(defaults: UserDefaults(suiteName: "LiveCaptionsTests-\(UUID().uuidString)")!)
         let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
                                   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),

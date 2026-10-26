@@ -195,7 +195,12 @@ final class PhoneAppModel: RecordingCommandHandling {
     func launch() async {
         guard !launched else { return }
         launched = true
-        try? await library.reload()
+        do { try await library.reload() }
+        catch {
+            launched = false
+            notice = "Couldn’t open your library: \(error.localizedDescription)"
+            return
+        }
         if let folder = options.syncFolder {
             try? sync.connect(toFolder: URL(fileURLWithPath: folder, isDirectory: true), monitor: true)
             if let mac = options.demoMac { Self.writeDemoPresence(name: mac.name, hoursAgo: mac.hoursAgo, in: URL(fileURLWithPath: folder)) }
@@ -258,6 +263,9 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// Starts recording, into a given conversation ID when a Mac asked (multipoint).
     func startRecording(into requestedID: UUID?, title requestedTitle: String?, multipoint session: MultipointSession?) async throws {
         guard !recorder.isActive else { return }
+        // Intents can start before the first scene loads. Never record into an unopenable library.
+        do { try await library.reload() }
+        catch { notice = "Couldn’t open your library: \(error.localizedDescription)"; throw error }
         let id = requestedID ?? UUID()
         let title = requestedTitle ?? "Conversation at \(Date().formatted(date: .omitted, time: .shortened))"
         let directory = library.stagingURL.appendingPathComponent(id.uuidString, isDirectory: true)

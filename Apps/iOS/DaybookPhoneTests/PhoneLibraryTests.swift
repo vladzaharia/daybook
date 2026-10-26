@@ -6,6 +6,39 @@ import XCTest
 /// Filing a phone recording through the `PhoneLibrary` (DaybookKit's `LibraryController`).
 @MainActor
 final class PhoneLibraryTests: XCTestCase {
+    func testAnUnavailableLibraryReportsFailureAndRetriesTheSameLocation() async throws {
+        let root = try temporaryDirectory().appendingPathComponent("library")
+        try Data("blocked".utf8).write(to: root)
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        do { try await library.reload(); XCTFail("An unopenable library must fail") }
+        catch { XCTAssertEqual(library.rootURL.path, root.standardizedFileURL.path) }
+        try FileManager.default.removeItem(at: root)
+        try await library.reload()
+        XCTAssertTrue(library.controller.isLoaded)
+        XCTAssertEqual(library.rootURL.path, root.standardizedFileURL.path)
+    }
+
+    func testFilingRetainsRecoveryDataWhenJoinedNotesCannotBeSaved() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        var (recording, _) = try await record(into: library)
+        let spare = try temporaryDirectory().appendingPathComponent("recovery")
+        try FileManager.default.copyItem(at: recording.stagingDirectory, to: spare)
+        _ = try await library.file(recording)
+        recording.stagingDirectory = spare
+        recording.notes = "A new joined note"
+        let folder = root.appendingPathComponent("Meetings/\(recording.id.uuidString)")
+        let primary = folder.appendingPathComponent("meeting.json")
+        try FileManager.default.moveItem(at: primary, to: folder.appendingPathComponent("held.json"))
+        try FileManager.default.createDirectory(at: primary, withIntermediateDirectories: false)
+        do {
+            _ = try await library.fileRecording(recording, join: .init())
+            XCTFail("A failed save must not finish filing")
+        } catch {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: spare.path))
+            XCTAssertTrue(library.controller.meeting(recording.id)?.notes.contains("A new joined note") == true)
+        }
+    }
     private func record(into library: PhoneLibrary, seconds: TimeInterval = 6) async throws -> (PhoneRecording, RecorderRig) {
         let rig = RecorderRig()
         let id = UUID()
@@ -21,7 +54,7 @@ final class PhoneLibraryTests: XCTestCase {
 
     func testFilingCreatesAConversationWithAPhoneMicrophoneTrackAndATranscribeRequest() async throws {
         let root = try temporaryDirectory()
-        let library = try PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         let (recording, _) = try await record(into: library)
         XCTAssertTrue(FileManager.default.fileExists(atPath: recording.stagingDirectory.path))
 
@@ -64,7 +97,7 @@ final class PhoneLibraryTests: XCTestCase {
 
     func testFilingAgainNeverDuplicates() async throws {
         let root = try temporaryDirectory()
-        let library = try PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         var (recording, _) = try await record(into: library)
         // Keep a copy, as if filing were interrupted after the import and retried.
         let spare = try temporaryDirectory().appendingPathComponent("spare")
@@ -80,14 +113,14 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(library.conversations.count, 1)
 
         // A fresh library instance reads the same requests from disk.
-        let reopened = try PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let reopened = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         try await reopened.reload()
         XCTAssertEqual(reopened.openRequests(for: again.id).count, 1)
     }
 
     func testAppModelRecordsAndFilesEndToEnd() async throws {
         let root = try temporaryDirectory()
-        let library = try PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         let rig = RecorderRig()
         let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
                                   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
@@ -113,7 +146,7 @@ final class PhoneLibraryTests: XCTestCase {
 
     func testStopFilesTheRecordingEvenWhenTheCallerIsCancelled() async throws {
         let root = try temporaryDirectory()
-        let library = try PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         let rig = RecorderRig()
         let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
                                   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
@@ -132,7 +165,7 @@ final class PhoneLibraryTests: XCTestCase {
 
     func testLaunchFilesWhatAPreviousRunLeftInStaging() async throws {
         let root = try temporaryDirectory()
-        let library = try PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         let rig = RecorderRig()
         let id = UUID()
         try await rig.recorder.start(in: library.stagingURL.appendingPathComponent(id.uuidString), id: id, title: "Killed")
