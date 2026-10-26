@@ -25,7 +25,7 @@ final class LibrarySyncApplyTests: XCTestCase {
     }
 
     /// A library connected to the shared folder. Passes run only when a test asks.
-    private func library(_ name: String, phone: Bool = false) async throws -> LibraryController {
+    private func library(_ name: String, phone: Bool = false, cloud: SyncCloudFiles = .system) async throws -> LibraryController {
         let libraryRoot = root.appendingPathComponent(name, isDirectory: true)
         let suite = "daybook.apply.\(UUID())"
         suites.append(suite)
@@ -34,6 +34,8 @@ final class LibrarySyncApplyTests: XCTestCase {
         let sync = LibrarySyncController(localRoot: libraryRoot, defaults: defaults)
         controllers.append(sync)
         sync.replica = phone ? .phone(displayName: name) : .mac(displayName: name, canProcess: true)
+        sync.replica.cloud = cloud
+        sync.syncDebounce = nil
         let library = LibraryController(rootURL: libraryRoot, sync: sync)
         try await library.load()
         try sync.connect(to: container, monitorChanges: false)

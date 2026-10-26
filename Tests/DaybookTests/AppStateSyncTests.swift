@@ -19,6 +19,8 @@ final class AppStateSyncTests: XCTestCase {
             try? FileManager.default.removeItem(at: root)
         }
         await a.initialize(); await b.initialize()
+        // The test runs every pass itself; an edit's automatic pass would race it.
+        a.sync.syncDebounce = nil; b.sync.syncDebounce = nil
         let source = root.appendingPathComponent("source.wav")
         try writeAudio(source)
         try await a.importFiles([source], source: .soundcore, attachTo: nil)

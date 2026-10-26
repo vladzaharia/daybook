@@ -75,10 +75,18 @@ final class LibrarySyncCourierTests: XCTestCase {
         }
     }
 
-    /// Waits out a pass the courier asked for, so the next `synchronize()` runs one of its own
-    /// rather than finding a pass already applying.
+    /// Waits out a pass the courier asked for (its debounce and the pass itself), so the next `synchronize()`
+    /// runs one of its own rather than finding a pass already applying.
     private func settle(_ device: Device) async throws {
-        try await wait("the courier's pass to finish") { !device.library.isApplyingSync }
+        await device.sync.awaitIdle()
+    }
+
+    /// One pass on `library`, which must apply and acknowledge.
+    @discardableResult
+    private func pass(_ library: LibraryController, file: StaticString = #filePath, line: UInt = #line) async -> SyncApplied? {
+        let applied = await library.synchronize()
+        XCTAssertEqual(applied?.acknowledged, true, library.sync?.status ?? "", file: file, line: line)
+        return applied
     }
 
     /// A recording filed on `device`, then one pass, and the courier given what it wrote.
@@ -143,7 +151,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         XCTAssertEqual(staged.count, written.count, "Each file is staged, so iCloud evicting the original can't change what's sent")
 
         // A pass with nothing new hands nothing more over.
-        _ = await phone.library.synchronize()
+        await pass(phone.library)
         await phone.sync.finishCourierSends()
         let waiting = await phone.courier.status().waitingToSend
         XCTAssertEqual(waiting, written.count)
@@ -160,7 +168,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         XCTAssertEqual(service.file(blobID)?.deviceID, "Phone")
         XCTAssertEqual(service.file(blobID)?.journal.size, 8_000)
         await phone.courier.flush()
-        _ = await phone.library.synchronize()
+        await pass(phone.library)
         await phone.sync.finishCourierSends()
         XCTAssertEqual(service.saveCount, written.count, "Nothing is sent twice")
         try await wait("the status") { phone.sync.courierStatus.waitingToSend == 0 }
@@ -208,9 +216,9 @@ final class LibrarySyncCourierTests: XCTestCase {
     func testTheMacStoresVerifiedFilesAppliesThemBeforeICloudDriveThenDeletesThemFromTheCourier() async throws {
         let phone = try await device("Phone", phone: true, role: .send)
         let mac = try await device("Mac", phone: false, role: .receive)
-        _ = await phone.library.synchronize()
+        await pass(phone.library)
         await phone.sync.finishCourierSends()
-        _ = await mac.library.synchronize()
+        await pass(mac.library)
         let known = await phone.sync.engine?.libraryID
         let libraryID = try XCTUnwrap(known)
         // What the phone's first pass sent (its library settings) is in the Mac's container already: nothing to keep.
@@ -254,8 +262,8 @@ final class LibrarySyncCourierTests: XCTestCase {
     func testADamagedCourierFileIsDiscardedAndICloudDriveStillDeliversIt() async throws {
         let phone = try await device("Phone", phone: true, role: .send)
         let mac = try await device("Mac", phone: false, role: .receive)
-        _ = await phone.library.synchronize()
-        _ = await mac.library.synchronize()
+        await pass(phone.library)
+        await pass(mac.library)
         let known = await phone.sync.engine?.libraryID
         let libraryID = try XCTUnwrap(known)
         let bytes = audioBytes(5_000, seed: 5)
@@ -272,11 +280,11 @@ final class LibrarySyncCourierTests: XCTestCase {
         try await settle(mac)
         let inbox = await mac.sync.engine?.courierInboxCount()
         XCTAssertEqual(inbox, written.count - 1, "Everything but the damaged audio")
-        _ = await mac.library.synchronize()
+        await pass(mac.library)
         XCTAssertNil(mac.library.meeting(meeting.id), "A conversation waits for audio that matches")
 
         try release(written)
-        _ = await mac.library.synchronize()
+        await pass(mac.library)
         let onMac = try XCTUnwrap(mac.library.meeting(meeting.id))
         let audio = try await mac.library.audioURL(for: onMac.tracks[0], in: onMac.id)
         XCTAssertEqual(try Data(contentsOf: audio), bytes)
@@ -332,7 +340,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         XCTAssertTrue(delivered.isEmpty)
         try await settle(mac)
         // iCloud Drive carries it regardless.
-        _ = await mac.library.synchronize()
+        await pass(mac.library)
         XCTAssertNotNil(mac.library.meeting(newer.id))
     }
 }

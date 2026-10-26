@@ -43,7 +43,7 @@ final class SyncServicesTests: XCTestCase {
         // The Mac renames it; the phone's next pass applies it, and views reading the library follow.
         mac.rename(onMac.id, to: "Design review, agreed")
         await mac.flush()
-        _ = await mac.synchronize()
+        await assertPass(mac)
         let revision = phone.library.revision
         await phone.sync.synchronize(.remote)
         XCTAssertEqual(phone.library.conversations.first?.title, "Design review, agreed")
@@ -64,7 +64,7 @@ final class SyncServicesTests: XCTestCase {
         // A change on the Mac is noticed by the same check.
         mac.setTags(onMac.id, text: "design")
         await mac.flush()
-        _ = await mac.synchronize()
+        await assertPass(mac)
         await phone.sync.synchronize(.timer)
         XCTAssertEqual(phone.sync.passes, passes + 1)
         XCTAssertEqual(phone.library.controller.meeting(onMac.id)?.tags, ["design"])
@@ -111,7 +111,7 @@ final class SyncServicesTests: XCTestCase {
         let mac = try await makeMac(container)
         for index in 0..<5 { mac.newMeeting(title: "Meeting \(index)") }
         await mac.flush()
-        _ = await mac.synchronize()
+        await assertPass(mac)
         let phone = try await makePhone(container)
         phone.sync.isForeground = false   // no automatic continuation; drive it here
         // A pass that may read only two journal entries at a time leaves work for the next.
@@ -249,12 +249,14 @@ struct PhoneRig {
 @MainActor
 extension XCTestCase {
     /// `courier` makes it send what its passes write, as the app does with CloudKit (tests use `InMemoryCourier`).
-    func makePhone(_ container: URL, name: String = "Test iPhone", budget: UInt64 = 1_000_000_000,
+    func makePhone(_ container: URL, name: String = "Test iPhone", budget: UInt64 = 1_000_000_000, cloud: SyncCloudFiles = .system,
                    courier: ((URL) -> any SyncCourier)? = nil) async throws -> PhoneRig {
         let root = try temporaryDirectory("phone-\(name)")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
         let controller = LibrarySyncController(localRoot: root, defaults: defaults)
-        controller.replica = PhoneSync.replica(displayName: name, budget: budget)
+        controller.replica = PhoneSync.replica(displayName: name, budget: budget, cloud: cloud)
+        // Tests run every pass themselves; an edit's automatic pass would race them.
+        controller.syncDebounce = nil
         if let courier {
             controller.courier = courier(root.appendingPathComponent("Sync/Courier", isDirectory: true))
             controller.courierRole = .send
@@ -268,12 +270,19 @@ extension XCTestCase {
         return PhoneRig(library: library, sync: sync, audio: audio)
     }
 
+    /// One pass on a test Mac's library, which must apply and acknowledge.
+    func assertPass(_ library: LibraryController, file: StaticString = #filePath, line: UInt = #line) async {
+        let applied = await library.synchronize()
+        XCTAssertEqual(applied?.acknowledged, true, library.sync?.status ?? "", file: file, line: line)
+    }
+
     /// A Mac with models: an eager replica that writes presence.
     func makeMac(_ container: URL, name: String = "Studio Mac") async throws -> LibraryController {
         let root = try temporaryDirectory("mac-\(name)")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
         let controller = LibrarySyncController(localRoot: root, defaults: defaults)
         controller.replica = .mac(displayName: name, canProcess: true)
+        controller.syncDebounce = nil
         let library = LibraryController(rootURL: root, sync: controller)
         try await library.load()
         try controller.connect(to: container, monitorChanges: false)

@@ -135,7 +135,7 @@ public final class LibrarySyncController: ObservableObject {
     @Published public private(set) var folder: URL?
     @Published public private(set) var isICloudLocation = false
     @Published public private(set) var status = "iCloud sync is off"
-    @Published public private(set) var isSyncing = false
+    @Published public private(set) var isSyncing = false { didSet { if oldValue && !isSyncing { passEnded() } } }
     @Published public private(set) var lastSync: Date?
     @Published public private(set) var warnings: [String] = []
     @Published public private(set) var pendingDownloads = 0
@@ -163,6 +163,13 @@ public final class LibrarySyncController: ObservableObject {
     private var pendingReceipt: UUID?
     private var polling: Task<Void, Never>?
     private var debounce: Task<Void, Never>?
+    private var debounceToken = UUID()
+    private var passEndWaiters: [CheckedContinuation<Void, Never>] = []
+    /// How long a request waits before it runs a pass, so a burst of edits makes one. Nil: requests never run a
+    /// pass on their own; test rigs drive passes themselves.
+    public var syncDebounce: Duration? = .seconds(2)
+    /// A requested pass is waiting out `syncDebounce` or running.
+    public var hasPendingSyncRequest: Bool { debounce != nil }
     private var query: NSMetadataQuery?
     private var observers: [NSObjectProtocol] = []
     private var scopedURL: URL?
@@ -332,11 +339,35 @@ public final class LibrarySyncController: ObservableObject {
 
     public func requestSync() {
         guard folder != nil else { return }
-        debounce?.cancel()
+        debounce?.cancel(); debounce = nil
+        guard let delay = syncDebounce else { return }
+        let token = UUID()
+        debounceToken = token
         debounce = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(2)); guard !Task.isCancelled else { return }; await self?.onSyncRequested?() }
-            catch { }
+            if (try? await Task.sleep(for: delay)) != nil, !Task.isCancelled { await self?.onSyncRequested?() }
+            if self?.debounceToken == token { self?.debounce = nil }
         }
+    }
+
+    /// Returns once no requested pass is waiting or running: for tests, and for anything that must not overlap one.
+    public func awaitIdle() async {
+        while true {
+            if let task = debounce { await task.value; if debounce == task { debounce = nil }; continue }
+            if isSyncing { await waitForPassToEnd(); continue }
+            return
+        }
+    }
+
+    /// Returns when the pass in flight (if any) has ended: acknowledged, failed, or cancelled and unwound.
+    private func waitForPassToEnd() async {
+        guard isSyncing else { return }
+        await withCheckedContinuation { passEndWaiters.append($0) }
+    }
+
+    private func passEnded() {
+        let waiters = passEndWaiters
+        passEndWaiters = []
+        waiters.forEach { $0.resume() }
     }
 
     public func deferUntilIdle() { if folder != nil && !isSyncing { status = "Waiting for recording or local processing to finish" } }
