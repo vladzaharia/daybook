@@ -81,10 +81,24 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
 The protocol has no per-slice message authentication code, and macOS's Opus decoder conceals
 malformed packets rather than reporting them. So audio corrupted inside an otherwise complete,
 in-order transfer of the right size can't be detected; the checks above catch loss, reordering,
-truncation, mismatched keys, and size mismatches. The key-agreement check confirms both sides
-agree on the session key; it does **not** authenticate a manufacturer identity, so it must not
-be described as authenticated end-to-end encryption. Keys stay in memory and are replaced on
-every connection; the app never imports undeciphered bytes as audio.
+truncation, mismatched keys, and size mismatches.
+
+The firmware handshake sends the raw ECDH shared secret in its reply. Anyone who can read that
+characteristic traffic can derive the session key using the public HKDF parameters, unwrap the
+file keys, and decrypt the audio. It also does not authenticate the recorder's identity. Privacy
+therefore depends on independently verified BLE link encryption and pairing; the app has not
+established those properties on physical hardware. This must not be described as secure or
+authenticated end-to-end encryption. Replacing the handshake unilaterally would break firmware
+compatibility. Keys stay in memory and are replaced on every connection.
+
+There is also an unresolved packet-boundary problem: the current decoder strips trailing zero
+bytes from each 160-byte slot. Valid Opus packets can end in zero, so this can silently alter audio.
+Simply passing all 160 bytes to the codec also changes decoded audio when the sender appended
+unframed zeros. The missing length cannot be inferred reliably from those bytes. Native-codec
+probes confirmed both failures; properly signaled RFC 6716 padding preserves the samples, but
+that does not establish what physical firmware sends. Direct audio remains experimental until
+real captures establish packet framing. Keep recorder originals and use file export for important
+recordings; neither simulator success nor successful decoding establishes audio fidelity.
 
 ## Listen Live and record control
 
