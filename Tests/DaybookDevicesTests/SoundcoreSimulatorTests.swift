@@ -315,6 +315,28 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(rig.device.received.filter { $0 == (0x1a, 0x07) }.count, 2)
     }
 
+    func testARecordingThatArrivesThroughSyncWhileItTransfersIsNotImportedAgain() async throws {
+        let device = recorder(count: 1)
+        device.pace = .milliseconds(15)
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        let target = try XCTUnwrap(rig.session.newRecordings.first)
+        rig.session.importRecordings([target])
+        try await waitUntil("the transfer") { if case .receiving = rig.session.phase { return true } else { return false } }
+        // Meanwhile another device's import of it reaches this library.
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: device.serial, recordingID: target.id)
+        let synced = Meeting(title: "From Alex’s iPhone", tracks: [RecordingTrack(source: .soundcore, relativePath: "Originals/p.wav",
+                                                                                   fileName: "p.wav", device: identity)])
+        rig.library.meetings.append(synced)
+        rig.session.libraryChanged(rig.library.meetings, ready: true)
+        try await waitUntil("the transfer to end") { !rig.session.queue.isActive }
+        XCTAssertTrue(rig.library.imports.isEmpty, "the importer isn't asked for a second copy")
+        XCTAssertTrue(rig.session.failures.isEmpty)
+        XCTAssertNil(rig.session.transferProblem)
+        XCTAssertEqual(rig.session.links.imported[target.id], synced.id)
+        XCTAssertTrue(stagedFiles.isEmpty)
+    }
+
     func testIntegrityFailuresSaveNothingAfterOneQuietRetry() async throws {
         for fault in [SimulatedSoundcore.Fault.skipSlice(at: 10), .skipSlice(at: 48), .wrongSize] {
             let device = recorder()
@@ -427,6 +449,34 @@ final class SoundcoreSimulatorTests: XCTestCase {
         try await waitUntil("letting the recorder go") { rig.connection.state == .notConnected && !rig.transport.connected }
     }
 
+    func testABackgroundWakeReachesForTheRecorderOnceTheWaitHasRunOut() async throws {
+        // On iPhone the wait between automatic imports is a timer, and a suspended app runs none.
+        let rig = rig(recorder(count: 1), automatic: true, since: .distantPast, remembered: true)
+        try await waitUntil("the import, then letting go") {
+            rig.library.imports.count == 1 && rig.connection.state == .notConnected && !rig.transport.connected
+        }
+        let due = try XCTUnwrap(rig.connection.automaticDueAt)
+        XCTAssertEqual(due.timeIntervalSinceNow, 60, accuracy: 5, "the cooldown, on the wall clock")
+        let attempts = rig.transport.connectAttempts
+
+        rig.connection.resumeAutomaticImportIfDue()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(rig.transport.connectAttempts, attempts, "not before the wait is over")
+
+        // App refresh wakes the app after the wait ran out: it reaches for the recorder at once.
+        rig.connection.resumeAutomaticImportIfDue(now: due.addingTimeInterval(1))
+        XCTAssertNil(rig.connection.automaticDueAt)
+        try await waitUntil("connecting again") { rig.transport.connectAttempts > attempts && rig.connection.state == .connected }
+
+        // Turned off, a wake does nothing.
+        rig.session.update { $0.importsAutomatically = false }
+        rig.connection.disconnect()
+        let after = rig.transport.connectAttempts
+        rig.connection.resumeAutomaticImportIfDue(now: .distantFuture)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(rig.transport.connectAttempts, after)
+    }
+
     func testTurningAutomaticImportOffStopsWaitingForTheRecorder() async throws {
         let device = recorder()
         device.advertises = false
@@ -472,6 +522,94 @@ final class SoundcoreSimulatorTests: XCTestCase {
         connection.shutDown()
     }
 
+    func testAReconnectNeverImportsFromTheRememberedListBeforeListingAgain() async throws {
+        // A remembered list from an earlier run (as v0.3.0 saved it, with no active recording): the
+        // newest entry was being recorded then, and still is. Firmware that lists the active file
+        // names it among the entries too.
+        let device = recorder(count: 1)
+        let active = SimulatedSoundcore.Recording(id: base + 600, frames: Self.frames)
+        device.isRecording = true
+        device.activeRecording = active
+        device.listsActiveRecording = true
+        device.advertises = false
+        let transport = SimulatedSoundcoreTransport(device: device)
+        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
+        environment.soundcoreTransport = { transport }
+        environment.liveCaptions = Self.noCaptions()
+        var timing = self.timing
+        timing.automaticIdleRelease = .seconds(30)
+        environment.soundcoreTiming = timing
+        var configured = ConfiguredDevice(id: "stale", kind: SoundcoreWorkIntegration().kind)
+        configured.importsAutomatically = true
+        configured.automaticImportsSince = .distantPast
+        let snapshot = SoundcoreSnapshot(deviceID: transport.peripheralID, name: device.name, serial: device.serial,
+                                         lastConnectedAt: Date().addingTimeInterval(-600),
+                                         recordings: [SoundcoreRecording(id: active.id, size: 8_000), SoundcoreRecording(id: base, size: 8_000)],
+                                         recordingsUpdatedAt: Date().addingTimeInterval(-600))
+        environment.storage(for: configured, method: .direct).encode(snapshot, "recorder")
+        let connection = SoundcoreConnection(device: configured, environment: environment)
+        let session = DeviceSession(device: configured, kind: SoundcoreWorkIntegration().kind, connections: [connection], defaults: defaults)
+        var imported: [String] = []
+        var meetings: [Meeting] = []
+        session.importer = { [weak session] url, identity, _, source in
+            imported.append(identity.recordingID)
+            meetings.append(Meeting(title: "Imported", tracks: [RecordingTrack(source: source, relativePath: "Originals/x.wav",
+                                                                                fileName: url.lastPathComponent, device: identity)]))
+            session?.libraryChanged(meetings, ready: true)
+            return meetings.last!.id
+        }
+        session.activate()
+        session.libraryChanged([], ready: true)
+        XCTAssertFalse(connection.isInventoryCurrent)
+        XCTAssertTrue(connection.automaticImports(links: session.links, since: .distantPast, excluding: []).isEmpty)
+
+        transport.comeIntoRange()
+        try await waitUntil("the import of the finished recording") { imported == [String(base)] && !session.queue.isActive }
+        XCTAssertTrue(connection.isInventoryCurrent)
+        XCTAssertEqual(session.split.inProgress?.id, String(active.id), "the active file is Recording now")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(imported, [String(base)], "the recording in progress is never imported early")
+        XCTAssertEqual(device.received.filter { $0 == (0x1a, 0x07) }.count, 1, "and never even requested")
+        XCTAssertEqual(connection.remembered?.activeRecordingID, active.id, "remembered for the next launch")
+
+        // Once it's finished, it imports.
+        device.finishRecording()
+        connection.refresh()
+        try await waitUntil("the finished recording's import") { imported.count == 2 }
+        XCTAssertEqual(imported.last, String(active.id))
+        connection.shutDown()
+    }
+
+    func testARecordingKeptOpenWhilePausedIsNeitherImportedNorQueued() async throws {
+        let device = recorder(count: 1)
+        device.keepsActiveWhilePaused = true
+        device.listsActiveRecording = true
+        let rig = rig(device, automatic: true, since: .distantPast, configure: { $0.automaticIdleRelease = .seconds(30) }, remembered: true)
+        try await waitUntil("the first import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        rig.connection.startRecording()
+        try await waitUntil("recording") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == true }
+        let open = try XCTUnwrap(device.activeRecording?.id)
+        rig.connection.pauseRecording()
+        try await waitUntil("paused") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == false }
+        rig.connection.refresh()
+        try await waitUntil("listed") { rig.connection.isInventoryCurrent }
+        XCTAssertEqual(rig.session.split.inProgress?.id, String(open), "paused but open: still in progress")
+        XCTAssertFalse(rig.session.newRecordings.contains { $0.id == String(open) })
+
+        // Queued by hand from an older list, it leaves the queue instead of importing part of it.
+        let stale = DeviceRecording(id: String(open), startedAt: Date(), length: .estimated(1), byteCount: 8_000)
+        rig.session.importRecordings([stale])
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(rig.session.queue.contains(String(open)))
+        XCTAssertEqual(rig.library.imports.count, 1)
+        XCTAssertEqual(device.received.filter { $0 == (0x1a, 0x07) }.count, 1, "no transfer of the open recording")
+
+        device.finishRecording()
+        rig.connection.refresh()
+        try await waitUntil("imported once it's closed") { rig.library.imports.count == 2 }
+        XCTAssertEqual(rig.library.imports.last?.identity.recordingID, String(open))
+    }
+
     // MARK: Record control and Listen Live
 
     func testRecordControlWaitsForTheRecorderToConfirm() async throws {
@@ -490,6 +628,126 @@ final class SoundcoreSimulatorTests: XCTestCase {
         rig.connection.startRecording()
         try await waitUntil("giving up on confirmation") { !rig.connection.recordCommandPending }
         XCTAssertEqual(rig.connection.problem?.id, SoundcoreIssue.didNotConfirm.rawValue)
+    }
+
+    func testARecordingSeenBeforeTheLinkWentShowsWithItsTimeUntilItExpires() async throws {
+        let device = recorder(count: 1)
+        let rig = rig(device, configure: { $0.lastKnownRecording = .milliseconds(1_500) })
+        try await connectThroughSetup(rig)
+        rig.connection.startRecording()
+        try await waitUntil("recording") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == true }
+        let id = try XCTUnwrap(device.activeRecording?.id)
+        XCTAssertEqual(rig.connection.recordingState?.isLive, true)
+        XCTAssertEqual(rig.connection.recordingState?.startedHere, true, "Daybook started it")
+
+        // Let go (as the idle release does): the recorder keeps recording, and the page says so with its time.
+        rig.connection.disconnect()
+        let status = try XCTUnwrap(rig.connection.status)
+        XCTAssertEqual(status.isRecording, true)
+        XCTAssertEqual(status.recordingStartedAt, SoundcoreRecording(id: id, size: 0).date)
+        let known = try XCTUnwrap(rig.connection.recordingState)
+        XCTAssertFalse(known.isLive)
+        XCTAssertEqual(known.activeRecordingID, id)
+        XCTAssertTrue(known.startedHere)
+        XCTAssertEqual(DeviceDateFormat.recordingAsOf(status.updatedAt),
+                       "Recording · as of \(status.updatedAt.formatted(date: .omitted, time: .shortened))")
+        XCTAssertEqual(rig.session.split.inProgress?.id, String(id), "still Recording now, never offered")
+        XCTAssertTrue(rig.connection.details.contains { $0.label == "Recording" && $0.value.hasPrefix("Recording, as of") })
+
+        // A relaunch remembers it too.
+        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
+        environment.soundcoreTransport = { InertSoundcoreTransport() }
+        environment.soundcoreTiming.lastKnownRecording = .milliseconds(1_500)
+        var configured = rig.configured
+        configured.importsAutomatically = false
+        let relaunched = SoundcoreConnection(device: configured, environment: environment)
+        relaunched.activate()
+        XCTAssertEqual(relaunched.status?.isRecording, true)
+        XCTAssertEqual(relaunched.recordingState?.activeRecordingID, id)
+        XCTAssertEqual(relaunched.recordings.first { $0.id == String(id) }?.isInProgress, true)
+
+        // Nobody can see it stop: after a while it's unknown again, and the page redraws.
+        var redrawn = false
+        let watching = rig.connection.objectWillChange.sink { redrawn = true }
+        try await waitUntil("the remembered recording to expire", timeout: 4) { rig.connection.recordingState == nil }
+        try await waitUntil("the page to redraw") { redrawn && rig.session.split.inProgress == nil }
+        XCTAssertNil(rig.connection.status?.isRecording)
+        XCTAssertNil(relaunched.status?.isRecording)
+        watching.cancel()
+    }
+
+    func testAStartDaybookSendsMeasuresTheRecordersClockAndDatesItsRecordingsByIt() async throws {
+        // A recorder whose clock runs five minutes fast (or was set in another time zone).
+        let device = recorder(count: 1)
+        device.serial = "D3200SKEW0000005"
+        device.clockOffset = 300
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        XCTAssertNil(rig.connection.clock, "nothing measured until Daybook starts a recording")
+        let sent = Date()
+        rig.connection.startRecording()
+        try await waitUntil("recording") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == true }
+        let clock = try XCTUnwrap(rig.connection.clock)
+        XCTAssertEqual(clock.offset, 300, accuracy: SoundcoreClock.resolution)
+        XCTAssertTrue(clock.isFlagged)
+        XCTAssertEqual(clock.serial, device.serial)
+        XCTAssertTrue(rig.connection.technicalDetails.contains { $0.label == "Recorder clock" && $0.value.hasSuffix("ahead") })
+        // Its recording in progress is dated on this device's clock, not five minutes ahead.
+        let started = try XCTUnwrap(rig.connection.status?.recordingStartedAt)
+        XCTAssertEqual(started.timeIntervalSince(sent), 0, accuracy: 3)
+        XCTAssertEqual(rig.connection.recordingState?.startedAt, started)
+
+        rig.connection.pauseRecording()
+        try await waitUntil("its recording, listed") { rig.session.split.inProgress == nil && rig.session.newRecordings.count == 2 }
+        let finished = try XCTUnwrap(rig.session.newRecordings.first)
+        XCTAssertEqual(try XCTUnwrap(finished.startedAt).timeIntervalSince(sent), 0, accuracy: 3)
+        // What dates an import from its identity alone uses the same clock.
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: device.serial, recordingID: finished.id)
+        XCTAssertEqual(DeviceRecordingStart.date(of: identity), finished.startedAt)
+
+        // It's remembered with the recorder.
+        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
+        environment.soundcoreTransport = { InertSoundcoreTransport() }
+        let relaunched = SoundcoreConnection(device: rig.configured, environment: environment)
+        relaunched.activate()
+        XCTAssertEqual(relaunched.clock, clock)
+        relaunched.shutDown()
+    }
+
+    func testARecorderInStepIsNotCorrected() async throws {
+        let device = recorder(count: 1)
+        device.serial = "D3200INSTEP00001"
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        rig.connection.startRecording()
+        try await waitUntil("recording") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == true }
+        let clock = try XCTUnwrap(rig.connection.clock)
+        XCTAssertFalse(clock.isFlagged)
+        XCTAssertEqual(clock.correction, 0, "within the measurement's resolution")
+        XCTAssertEqual(clock.summary, "In step")
+        let id = try XCTUnwrap(device.activeRecording?.id)
+        XCTAssertEqual(rig.connection.status?.recordingStartedAt, SoundcoreRecording(id: id, size: 0).date)
+    }
+
+    func testTheRecordersButtonListsItAgainOnStartAndOnStop() async throws {
+        let rig = rig(recorder(count: 1))
+        try await connectThroughSetup(rig)
+        let listings = { rig.device.received.filter { $0 == (0x1b, 0x0e) }.count }
+        let before = listings()
+
+        rig.device.pressButton()
+        try await waitUntil("recording now") { rig.connection.status?.isRecording == true && rig.session.split.inProgress != nil }
+        XCTAssertGreaterThan(listings(), before)
+        let id = try XCTUnwrap(rig.session.split.inProgress?.id)
+
+        let afterStart = listings()
+        rig.device.pressButton()
+        try await waitUntil("the finished recording, listed") {
+            !rig.connection.isRefreshing && rig.session.split.inProgress == nil && rig.session.newRecordings.contains { $0.id == id }
+        }
+        XCTAssertGreaterThan(listings(), afterStart, "a stop lists it again too")
+        XCTAssertEqual(rig.connection.status?.isRecording, false)
+        XCTAssertEqual(rig.session.newRecordings.first { $0.id == id }?.byteCount, UInt64(rig.device.recordings[0].size), "with its final size")
     }
 
     func testListenLiveSavesWhatArrivedAsAPartOfTheRecording() async throws {

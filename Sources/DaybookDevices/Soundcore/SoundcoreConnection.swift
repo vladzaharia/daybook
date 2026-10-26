@@ -132,6 +132,18 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private var activity = 0
     private var listing: [SoundcoreRecording] = []
     private var activeRecordingID: UInt32?
+    /// The recorder has been listed since this connection was confirmed. Until then `recordings` is
+    /// the remembered list, which can name a recording that has since started, grown, or finished.
+    private var listedThisConnection = false
+    /// Listings under way (a refresh, or one after the recorder's button), for `isRefreshing`.
+    private var listingsInFlight = 0
+    /// The recording this device asked the recorder to start.
+    private var startedHereID: UInt32?
+    /// Redraws a remembered recording as unknown once it's too old to show.
+    private var expiry: Task<Void, Never>?
+    /// When the automatic-import wait ends, on the wall clock: a suspended iPhone app runs no timers,
+    /// so a background wake checks this instead (`resumeAutomaticImportIfDue`).
+    public private(set) var automaticDueAt: Date?
     private var names: [UUID: String] = [:]
     /// Listen Live's captioner, its listeners, and where the live audio has reached (16 kHz frames).
     private var captioner: (any LiveCaptioning)?
@@ -177,13 +189,67 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     public var isSetUp: Bool { remembered != nil }
     public var lastConnectedAt: Date? { remembered?.lastConnectedAt }
 
+    /// Live while connected. Otherwise the last confirmed values with their time; recording only while
+    /// a recording seen then is recent enough to show as "Recording · as of 10:07", else unknown.
     public var status: DeviceStatus? {
-        let start = activeRecordingID.flatMap { SoundcoreRecording(id: $0, size: 0).date }
-        if case .connected = phase, let info { return info.status(at: statusUpdatedAt ?? Date(), activeRecordingStart: start) }
+        if case .connected = phase, let info {
+            return info.status(at: statusUpdatedAt ?? Date(), activeRecordingStart: startDate(of: activeRecordingID))
+        }
         guard let snapshot = remembered, let info = snapshot.info, let date = snapshot.statusUpdatedAt else { return nil }
         var status = info.status(at: date, activeRecordingStart: nil)
-        status.isRecording = nil
+        if let known = recordingState, known.isRecording {
+            status.isRecording = true
+            status.recordingStartedAt = known.startedAt
+        } else {
+            status.isRecording = nil
+        }
         return status
+    }
+
+    /// What the recorder is recording: live while connected; otherwise as last confirmed, for at most
+    /// `SoundcoreTiming.lastKnownRecording` (nobody can see it stop meanwhile), then unknown (nil).
+    /// Nil too when it wasn't recording when last seen.
+    public var recordingState: SoundcoreRecordingState? { recordingState(at: Date()) }
+
+    public func recordingState(at now: Date) -> SoundcoreRecordingState? {
+        if case .connected = phase, let info {
+            let active = listedThisConnection ? activeRecordingID : remembered?.activeRecordingID
+            return SoundcoreRecordingState(isRecording: info.isRecording, activeRecordingID: active, startedAt: startDate(of: active),
+                                           asOf: statusUpdatedAt ?? now, isLive: true, startedHere: active != nil && active == startedHereID)
+        }
+        guard let snapshot = remembered, let info = snapshot.info, let asOf = snapshot.statusUpdatedAt,
+              info.isRecording || snapshot.activeRecordingID != nil,
+              now.timeIntervalSince(asOf) < Self.seconds(timing.lastKnownRecording) else { return nil }
+        let active = snapshot.activeRecordingID
+        return SoundcoreRecordingState(isRecording: info.isRecording, activeRecordingID: active, startedAt: startDate(of: active),
+                                       asOf: asOf, isLive: false, startedHere: active != nil && active == startedHereID)
+    }
+
+    private func startDate(of id: UInt32?) -> Date? {
+        id.flatMap { SoundcoreRecording(id: $0, size: 0).start(correction: clockCorrection) }
+    }
+
+    /// The recorder's clock as last measured, when it was this recorder.
+    public var clock: SoundcoreClock? {
+        guard let clock = remembered?.clock, clock.serial == recorderSerial else { return nil }
+        return clock
+    }
+
+    private var clockCorrection: TimeInterval { clock?.correction ?? 0 }
+
+    /// A Start the recorder confirmed: its new recording's ID is when it started by its own clock.
+    private func measureClock(recordingID: UInt32, sentAt: Date) {
+        guard let serial = recorderSerial, var snapshot = remembered else { return }
+        let measured = SoundcoreClock(serial: serial, recordingID: recordingID, sentAt: sentAt)
+        snapshot.clock = measured
+        remembered = snapshot
+        persist()
+        SoundcoreClocks.record(measured)
+        rebuildRecordings()
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
     }
 
     public var summary: String {
@@ -207,11 +273,13 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     public func activate() {
         guard !isDemo else { return }
         remembered = storage.decode(SoundcoreSnapshot.self, "recorder")
+        if let clock { SoundcoreClocks.record(clock) }
         if let remembered {
             listing = remembered.recordings
             inventoryUpdatedAt = remembered.recordingsUpdatedAt
             rebuildRecordings()
         }
+        scheduleRecordingExpiry()
         // Publishing first lets the session apply ownership now that the serial is known, so a
         // recorder another device manages is never reached for.
         publish()
@@ -248,16 +316,37 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     public func refresh() {
         guard case .connected = phase, let session, !isRefreshing, !live.isListening else { return }
-        isRefreshing = true
-        publish()
+        beginListing()
         Task {
             await perform {
                 self.applyStatus(try await session.readStatus())
                 self.applyListing(try await session.listRecordings())
             }
-            self.isRefreshing = false
-            self.publish()
+            self.endListing()
         }
+    }
+
+    /// The recorder started or stopped on its own (its button): list it again, so a new recording
+    /// shows as in progress and a finished one appears with its final size. Imports wait meanwhile.
+    private func relist() {
+        guard let session else { return }
+        beginListing()
+        Task {
+            await perform { self.applyListing(try await session.listRecordings()) }
+            self.endListing()
+        }
+    }
+
+    private func beginListing() {
+        listingsInFlight += 1
+        if !isRefreshing { isRefreshing = true }
+        publish()
+    }
+
+    private func endListing() {
+        listingsInFlight = max(0, listingsInFlight - 1)
+        if listingsInFlight == 0 { isRefreshing = false }
+        publish()
     }
 
     public func refreshIfStale() {
@@ -276,6 +365,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         remembered = nil
         listing = []
         activeRecordingID = nil
+        startedHereID = nil
+        expiry?.cancel()
         recordings = []
         inventoryUpdatedAt = nil
         statusUpdatedAt = nil
@@ -312,9 +403,17 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         }
     }
 
+    /// Listed since this connection was confirmed, and not being listed again.
+    public var isInventoryCurrent: Bool {
+        guard case .connected = phase else { return false }
+        return listedThisConnection && !isRefreshing
+    }
+
     public func automaticImports(links: DeviceLibraryLinks, since: Date, excluding: Set<String>) -> [DeviceRecording] {
         // The device that manages the recorder imports; its recordings arrive here through sync.
-        guard case .connected = phase, importsAutomatically, managedElsewhere == nil else { return [] }
+        // Only from a listing made on this connection: the remembered one may still show a recording
+        // in progress as finished, and importing it early under its final ID would block the rest.
+        guard case .connected = phase, importsAutomatically, managedElsewhere == nil, isInventoryCurrent else { return [] }
         return recordings.filter { recording in
             !recording.isInProgress && links.imported[recording.id] == nil && !excluding.contains(recording.id)
                 && (recording.startedAt ?? .distantPast) >= since
@@ -371,9 +470,11 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         origin = .person
         recordCommandPending = true
         publish()
+        let before = activeRecordingID
         Task {
             var confirmed = false
             await perform {
+                let sentAt = Date()
                 _ = try await session.setRecording(on)
                 let deadline = ContinuousClock.now.advanced(by: self.timing.recordConfirm)
                 while !confirmed, ContinuousClock.now < deadline {
@@ -381,7 +482,14 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
                     self.applyStatus(status)
                     if status.isRecording == on { confirmed = true } else { try await Task.sleep(for: .milliseconds(500)) }
                 }
-                if confirmed { self.applyListing(try await session.listRecordings()) }
+                if confirmed {
+                    self.applyListing(try await session.listRecordings())
+                    if on, let started = self.activeRecordingID {
+                        self.startedHereID = started
+                        // A new recording (not one resumed on firmware that keeps it open) dates the clock.
+                        if started != before { self.measureClock(recordingID: started, sentAt: sentAt) }
+                    }
+                }
             }
             if !confirmed, self.session === session { self.problem = SoundcoreIssue.didNotConfirm.problem }
             self.recordCommandPending = false
@@ -503,7 +611,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             DeviceDetail(label: "Recorder battery", value: BatteryFormat.label(status?.battery) + (status?.battery?.level == nil ? "" : asOf)),
             DeviceDetail(label: "Case battery", value: BatteryFormat.label(status?.caseBattery) + (status?.caseBattery?.level == nil ? "" : asOf)),
             DeviceDetail(label: "Storage", value: status?.storage.map(StorageFormat.detail) ?? "Unknown"),
-            DeviceDetail(label: "Recording", value: connected ? (info?.isRecording == true ? "Recording" : "Not recording") : "Unknown while not connected"),
+            DeviceDetail(label: "Recording", value: connected ? (info?.isRecording == true ? "Recording" : "Not recording")
+                         : status?.isRecording == true ? "Recording, as of " + (status?.updatedAt.formatted(date: .omitted, time: .shortened) ?? "")
+                         : "Unknown while not connected"),
             DeviceDetail(label: "Recorder firmware", value: status?.firmware ?? "Unknown"),
             DeviceDetail(label: "Case firmware", value: status?.caseFirmware ?? "Unknown")
         ]
@@ -522,6 +632,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         ]
         if let session, session.rejectedFrames > 0 {
             rows.append(DeviceDetail(label: "Malformed frames ignored", value: "\(session.rejectedFrames)"))
+        }
+        if let clock {
+            rows.append(DeviceDetail(label: "Recorder clock", value: clock.summary))
         }
         return rows
     }
@@ -625,14 +738,27 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         origin = .automatic
         if let delay {
             phase = .idle
+            automaticDueAt = Date().addingTimeInterval(Self.seconds(delay))
             startTimer(delay) { [weak self] in self?.armAutomatic(after: nil) }
         } else {
+            automaticDueAt = nil
             begin(.automatic)
         }
     }
 
+    /// The app was woken in the background (iOS app refresh). A timer doesn't run while the app is
+    /// suspended, so a wait for the next automatic import that has run out starts its quiet
+    /// connection now; the system keeps that pending, and wakes the app when the recorder answers.
+    public func resumeAutomaticImportIfDue(now: Date = Date()) {
+        guard case .idle = phase, importsAutomatically, isEnabled, remembered != nil, managedElsewhere == nil else { return }
+        if let due = automaticDueAt, due > now { return }
+        cancelTimer()
+        armAutomatic(after: nil)
+    }
+
     private func stopAutomatic() {
         cancelTimer()
+        automaticDueAt = nil
         if case .waitingInRange(let id) = phase { transport?.disconnect(id); peripheral = nil }
         phase = .idle
         origin = .person
@@ -666,9 +792,26 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         peripheral = nil
         info = nil
         activeRecordingID = nil
+        listedThisConnection = false
         recordCommandPending = false
         keyExchangeComplete = false
         rebuildRecordings()
+        scheduleRecordingExpiry()
+    }
+
+    /// A recording seen before the link went is shown with its time until it's too old to show;
+    /// then the page redraws it as unknown.
+    private func scheduleRecordingExpiry() {
+        expiry?.cancel()
+        guard let known = recordingState, !known.isLive else { return }
+        let remaining = known.asOf.addingTimeInterval(Self.seconds(timing.lastKnownRecording)).timeIntervalSinceNow
+        expiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, remaining) + 0.01))
+            guard !Task.isCancelled, let self else { return }
+            self.objectWillChange.send()
+            self.rebuildRecordings()
+            self.publish()
+        }
     }
 
     private func applyRadio(_ radio: RadioState) {
@@ -730,6 +873,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         do {
             let status = try await session.readStatus()
             guard self.session === session else { return }
+            listedThisConnection = false
             phase = .connected(id)
             reconnectAttempt = 0
             connectingTo = nil
@@ -772,10 +916,12 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private func applyListing(_ result: SoundcoreSession.Listing) {
         listing = result.recordings.sorted { $0.id > $1.id }
         activeRecordingID = result.activeRecordingID
+        listedThisConnection = true
         inventoryUpdatedAt = Date()
         if var snapshot = remembered {
             snapshot.recordings = Array(listing.prefix(1_000))
             snapshot.recordingsUpdatedAt = inventoryUpdatedAt
+            snapshot.activeRecordingID = activeRecordingID
             remembered = snapshot
             persist()
         }
@@ -794,18 +940,28 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             current.caseCharging = caseCharging
         case .recording(let on):
             current.isRecording = on
-            if on { Task { await perform { if let session = self.session { self.applyListing(try await session.listRecordings()) } } } }
+            // Either way the list changes: a recording appears in progress, or one is finished.
+            relist()
         }
         applyStatus(current)
         publish()
     }
 
-    /// The recording in progress is shown as "Recording now" and never offered for import.
+    /// The recording in progress is shown as "Recording now" and never offered for import. It's the
+    /// one the recorder names as active, whether or not it says it's recording: firmware may list the
+    /// file while it grows, or keep it open while paused. Until this connection has listed it, it's
+    /// the one named at the last listing (while that's recent enough to show, when not connected).
     private func rebuildRecordings() {
-        let recordingNow = info?.isRecording == true ? activeRecordingID : nil
-        var result = listing.map { $0.deviceRecording(inProgress: $0.id == recordingNow) }
+        let recordingNow: UInt32?
+        if case .connected = phase {
+            recordingNow = listedThisConnection ? activeRecordingID : remembered?.activeRecordingID
+        } else {
+            recordingNow = recordingState?.activeRecordingID
+        }
+        let correction = clockCorrection
+        var result = listing.map { $0.deviceRecording(inProgress: $0.id == recordingNow, clockCorrection: correction) }
         if let recordingNow, !listing.contains(where: { $0.id == recordingNow }) {
-            result.insert(SoundcoreRecording(id: recordingNow, size: 0).deviceRecording(inProgress: true), at: 0)
+            result.insert(SoundcoreRecording(id: recordingNow, size: 0).deviceRecording(inProgress: true, clockCorrection: correction), at: 0)
         }
         if result != recordings { recordings = result }
     }

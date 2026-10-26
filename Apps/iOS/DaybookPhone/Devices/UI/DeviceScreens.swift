@@ -239,7 +239,14 @@ private struct DevicePageContent: View {
                 if let now = split.inProgress {
                     HStack {
                         Circle().fill(PhoneStyle.Ink.record).frame(width: 8, height: 8)
-                        Text("Recording now · started \(now.title)").font(.subheadline)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Recording now · started \(now.title)").font(.subheadline)
+                            // Handed over mid-recording: the conversation it goes into once it's finished.
+                            if let waiting = session.conversationWaiting(for: now.id),
+                               let title = model.library.controller.meeting(waiting)?.title {
+                                Text("For \(title)").font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
                 ForEach(new) { recording in
@@ -519,6 +526,7 @@ enum PhoneDeviceCopy {
         case .unavailable: return session.problem.map { problem(for: $0.id)?.title ?? $0.title } ?? "Bluetooth isn't available"
         case .notSetUp: return "Not set up"
         case .notConnected:
+            if let status = session.status, status.isRecording == true { return DeviceDateFormat.recordingAsOf(status.updatedAt) }
             if let last = session.direct?.lastConnectedAt { return DeviceDateFormat.lastSeen(last) }
             return session.files != nil ? "Watching a folder" : "Not connected"
         }

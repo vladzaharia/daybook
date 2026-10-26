@@ -47,6 +47,8 @@ final class PhoneDevices {
     @ObservationIgnored private var subscriptions: Set<AnyCancellable> = []
     @ObservationIgnored private var sessionSubscriptions: [String: AnyCancellable] = [:]
     @ObservationIgnored private var started = false
+    /// The recorder's Live Activity: Listen Live, or a recording this iPhone started on it. None in tests.
+    @ObservationIgnored private var recorderActivity: RecorderActivityController?
 
     static let restoreIdentifier = "local.daybook.phone.soundcore"
 
@@ -92,6 +94,12 @@ final class PhoneDevices {
         }
         hub.objectWillChange.sink { [weak self] _ in self?.changed() }.store(in: &subscriptions)
         handoff.objectWillChange.sink { [weak self] _ in self?.changed() }.store(in: &subscriptions)
+        if !LaunchOptions.isTestHost {
+            let activity = RecorderActivityController { [weak self] in self?.hub.sessions ?? [] }
+            recorderActivity = activity
+            // Its Stop Listening runs in this process, launching the app in the background if needed.
+            RecorderCommands.handler = activity
+        }
     }
 
     /// Restores remembered recorders and, where allowed, reconnects. Call once, at launch.
@@ -109,6 +117,13 @@ final class PhoneDevices {
     }
 
     func shutDown() { hub.shutDown() }
+
+    /// Background app refresh: a recorder whose wait before the next automatic import ran out while
+    /// the app was suspended reaches for the recorder now (`SoundcoreConnection.automaticDueAt`).
+    func backgroundRefresh() {
+        guard started else { return }
+        hub.resumeAutomaticImportsIfDue()
+    }
 
     var sessions: [DeviceSession] { _ = revision; return hub.sessions }
 
@@ -215,6 +230,7 @@ final class PhoneDevices {
             guard let self else { return }
             self.pendingChange = false
             self.revision &+= 1
+            self.recorderActivity?.follow()
         }
     }
 }

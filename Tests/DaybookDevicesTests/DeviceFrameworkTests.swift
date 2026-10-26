@@ -268,6 +268,56 @@ final class DeviceFrameworkTests: XCTestCase {
         XCTAssertEqual(snapshot.displayName, "soundcore Work ··7F3A")
     }
 
+    @MainActor
+    func testLinksAreRebuiltOnlyWhenTheDevicesTracksChange() {
+        let kind = SoundcoreWorkIntegration().kind
+        let session = DeviceSession(device: ConfiguredDevice(id: "links", kind: kind), kind: kind, connections: [],
+                                    defaults: UserDefaults(suiteName: "links-\(UUID().uuidString)")!)
+        let soundcore = DeviceRecordingIdentity(kind: kind.id, serial: "AAAA", recordingID: "1780000000")
+        var meetings = [
+            Meeting(title: "Soundcore", tracks: [RecordingTrack(source: .soundcore, relativePath: "a", fileName: "a.wav", device: soundcore)]),
+            Meeting(title: "Mac", tracks: [RecordingTrack(source: .microphone, relativePath: "b", fileName: "b.m4a")])
+        ]
+        session.libraryChanged(meetings, ready: true)
+        XCTAssertEqual(session.links.imported["1780000000"], meetings[0].id)
+        let rebuilds = session.linkRebuilds
+
+        // Edits elsewhere in the library (a title, notes, another conversation's audio) cost nothing.
+        meetings[1].title = "Renamed"
+        meetings[0].title = "Also renamed"
+        meetings.append(Meeting(title: "Another", tracks: [RecordingTrack(source: .microphone, relativePath: "c", fileName: "c.m4a")]))
+        let index = DeviceLibraryIndex(meetings: meetings)
+        session.libraryChanged(meetings, index: index, ready: true)
+        XCTAssertEqual(session.linkRebuilds, rebuilds)
+        XCTAssertEqual(session.links.imported["1780000000"], meetings[0].id)
+
+        // Its own recordings arriving, or leaving, rebuild them.
+        let next = DeviceRecordingIdentity(kind: kind.id, serial: "AAAA", recordingID: "1780003600")
+        meetings[2].tracks.append(RecordingTrack(source: .soundcore, relativePath: "d", fileName: "d.wav", device: next))
+        session.libraryChanged(meetings, ready: true)
+        XCTAssertEqual(session.linkRebuilds, rebuilds + 1)
+        XCTAssertEqual(session.links.imported["1780003600"], meetings[2].id)
+        meetings.remove(at: 0)
+        session.libraryChanged(meetings, ready: true)
+        XCTAssertNil(session.links.imported["1780000000"])
+        XCTAssertEqual(DeviceLibraryLinks(tracks: DeviceLibraryIndex(meetings: meetings).tracks(kind: kind.id)),
+                       DeviceLibraryLinks(meetings: meetings, kind: kind.id))
+    }
+
+    @MainActor
+    func testARecordingsStartIsReadFromItsIdentityInOnePlace() {
+        let kind = SoundcoreWorkIntegration.id
+        XCTAssertEqual(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: kind, recordingID: "1780000000")),
+                       Date(timeIntervalSince1970: 1_780_000_000))
+        XCTAssertEqual(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: kind, recordingID: "1780000000~live")),
+                       Date(timeIntervalSince1970: 1_780_000_000), "a Listen Live portion starts with its recording")
+        XCTAssertNil(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: kind, recordingID: "12")), "not a plausible time")
+        XCTAssertNil(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: OtherRecorderIntegration.id, recordingID: "1780000000")))
+        XCTAssertNil(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: kind, recordingID: "file:ZOOM0009.WAV|58200000")))
+        XCTAssertEqual(DeviceLibraryLinks.wholeRecordingID("1780000000~live"), "1780000000")
+        XCTAssertEqual(DeviceLibraryLinks.wholeRecordingID("1780000000"), "1780000000")
+    }
+
     func testCatalogDeclaresMethodsInPreferenceOrder() async {
         await MainActor.run {
             let soundcore = DeviceCatalog.kind(SoundcoreWorkIntegration.id)

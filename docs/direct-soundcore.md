@@ -56,17 +56,26 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
 - **Letting go.** A connection made for automatic import is released 30 seconds after its
   imports finish, and the next automatic attempt waits 15 minutes. A connection the person made
   is released after 5 idle minutes (or when they disconnect). The recorder talks to one host at
-  a time, so holding it would block the phone app.
+  a time, so holding it would block the phone app. On iPhone the wait is kept on the wall clock
+  (`automaticDueAt`) and background app refresh resumes it, since a suspended app runs no timers.
+- **After letting go.** A recording the recorder was making stays "Recording · as of 10:07 AM" for
+  20 minutes (`lastKnownRecording`), then is unknown: `recordingState` ([devices](devices.md#what-the-recorder-is-recording)).
 
 ## Importing
 
 - The session's queue runs one transfer at a time (Waiting, Stop current, Stop all). The Mac is
   kept from idle-sleeping while it transfers.
+- Nothing transfers from the remembered list: imports wait until the recorder has been listed on
+  this connection (`isInventoryCurrent`). The recording it names as active (after the list's
+  entries) is in progress whether or not its status says it's recording, kept in the snapshot
+  across disconnects, and never imported until it's finished. Whether firmware lists the growing
+  file among the entries, and whether Pause keeps it open, is unverified; both are handled.
 - A transfer is accepted only when: the file key unwraps to the expected prefix for that
   recording ID; every slice arrives in sequence (an exact repeat of the last slice is ignored;
   a gap or conflict fails); the byte count matches the size the recorder reported; and the
   audio decodes to a non-empty, finite WAV. Anything else removes the partial file and throws.
-  The staged WAV is deleted once the library has copied it.
+  The staged WAV is deleted once the library has copied it, and what a killed run left staged is
+  removed at the next launch.
 - **Disconnect mid-transfer:** nothing partial is saved; the recording goes back to the front of
   the queue, which waits and resumes after the reconnect.
 - **Retry policy:** a stall or integrity failure gets one quiet retry, then shows "This
@@ -109,6 +118,20 @@ recordings; neither simulator success nor successful decoding establishes audio 
   conversation when it's imported later. It never stops the device's recording.
 - Start and Pause are sent only when the person chooses them. The state changes only when the
   recorder reports it; after 10 seconds without confirmation the page says so.
+- The recorder's own button reports the new state unasked (`18 82`, per the protocol notes); either
+  way, Daybook lists it again, so a new recording appears in progress and a finished one with its
+  final size.
+
+## The recorder's clock
+
+Recording IDs are Unix start times by the recorder's own clock, which nothing keeps right. When the
+recorder confirms a Start Daybook sent, the new recording's ID against the send time is its offset
+(`SoundcoreClock`; a resume of a recording kept open isn't a measurement). It's kept with the
+remembered recorder, per serial, and in `SoundcoreClocks` for the importers. Offsets beyond the
+measurement's two-second resolution are taken off every start date: the list, Recording now, the
+status, and a new conversation's date and title (`DeviceRecordingStart`). Device Details'
+technical rows say "In step", or "5 min ahead" past a minute. The offset isn't yet written into the
+imported track's provenance.
 
 ## What it never does
 
@@ -130,8 +153,15 @@ wrong sizes) with one retry, stalls, Try Again, Stop, disconnect mid-transfer wi
 the reconnect, Bluetooth off mid-import, Bluetooth off and denied at setup, idle release,
 automatic import since setup and its release, no automatic import before the library loads,
 record control with and without confirmation, Listen Live portions, and the read-only command
-set. No microphone, real Bluetooth, or downloads are used.
+set. The simulator also has firmware variants that list the active file and keep a paused one
+open, a button press, and a skewed clock, for: no import from a remembered list on reconnect, a
+paused-open recording neither imported nor queued, listing again on the button's start and stop,
+the last-known recording as of its time and its expiry, the clock measured on Start and applied to
+start dates, a recording arriving through sync during its transfer, and a background wake after
+the cooldown. No microphone, real Bluetooth, or downloads are used.
 
 **Not yet verified on hardware:** discovery and permissions on current firmware, actual battery
-and storage values, the active recording's place in the list, transfer throughput and packet
-loss, reconnect timing, live reception, and automatic import alongside the phone app.
+and storage values, the active recording's place in the list (among the entries or only after
+them) and whether Pause keeps it open, whether the button reports `18 82`, how far real recorder
+clocks drift, transfer throughput and packet loss, reconnect timing, live reception, and automatic
+import alongside the phone app.

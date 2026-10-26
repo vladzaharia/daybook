@@ -49,6 +49,49 @@ Still requires real devices:
   new build: the pairing keeps connecting with no keychain prompt, and Keychain Access no longer
   lists a "Daybook link" item in the login keychain. An ad hoc build keeps using the login keychain.
 
+## Hardware review fixes: Soundcore, handoff, and the iPhone's Lock Screen (2026-10-25)
+
+Fixes from the review of recorder sessions, the recorder handoff, and the iPhone's Live Activity,
+widgets, and control, each with a regression test against `SimulatedSoundcore` (now with firmware
+variants that list the active file and keep a paused recording open, a button press, and a skewed
+clock) or the state and timeline logic:
+
+- Automatic import waits for a listing made on this connection, and a recording the recorder names
+  as active is in progress whether or not it says it's recording; the snapshot keeps it.
+- A recording seen before the link went shows "Recording · as of 10:07 AM" for 20 minutes, then
+  unknown. The button's stop lists the recorder again. Recordings are dated by the recorder's
+  measured clock. Staged audio a killed import left is removed at launch.
+- The recording's identity is checked again right before ingest (session, Mac, iPhone), so an import
+  arriving through sync mid-transfer isn't duplicated. Library links are rebuilt only when a device's
+  own tracks change. One start-date helper replaces three.
+- A handoff mid-recording carries the recording and the conversation waiting for it.
+- iPhone: background app refresh re-arms automatic import; the recording's Live Activity, widgets,
+  and control turn "Not confirmed" when the app stops confirming, every launch path clears leftovers,
+  paused clocks freeze, titles are private on the Lock Screen, the Live Activity's buttons keep
+  4.5:1, "1 bookmark"; Soundcore recordings started on the iPhone and Listen Live get a Live Activity.
+
+Verification on Apple silicon with Xcode 27.1: `swift test` passed 713 XCTest cases across all seven
+bundles; `scripts/build-ios.sh --test --simulator <iPhone 17 Pro, iOS 27.0>` passed 97 tests. (iOS 27.1
+offers only the iPhone Duo simulator, so a dedicated iPhone 17 Pro on iOS 27.0 was used.) No Bluetooth,
+recording, network, or model downloads.
+
+**Still to check with a physical Soundcore Work:** whether firmware lists the recording in progress
+among the list's entries or only after them, and whether Pause keeps it open (both are handled;
+which one is real decides when a paused recording imports); whether the button reports `18 82`
+unasked on start and stop; how far real recorder clocks are off (and whether any firmware keeps
+local time rather than UTC), and that the measured offset is within two seconds when in step; that
+iOS background app refresh actually wakes the app often enough to reach the recorder after the
+15-minute wait (it's only scheduled while sync is connected); and a handoff during a real
+multipoint recording, ending with the recording in the Mac's conversation.
+
+**Still to check on a real iPhone:** that `privacySensitive` titles are redacted on the locked Lock
+Screen (widgets and both Live Activities) and shown once unlocked; that the Live Activity turns
+"Not confirmed" about 90 seconds after the app is killed mid-recording, stays "Paused" through a
+long call, and that the widget's second timeline entry fires; that the Control Center control turns
+off after a crash; that the Live Activity buttons read well on the Lock Screen and in the Dynamic
+Island in light and dark; and that a Soundcore Listen Live activity's Stop Listening runs with the
+app in the background.
+
 ## Project review fixes (2026-10-25)
 
 The review covered persistence and sync, local pairing, model downloads, recorder integration,

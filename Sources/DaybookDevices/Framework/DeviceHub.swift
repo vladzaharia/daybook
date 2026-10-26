@@ -14,8 +14,11 @@ public final class DeviceHub: ObservableObject {
     public var importer: DeviceImporter? { didSet { (sessions + [pendingSetup].compactMap { $0 }).forEach { $0.importer = importer } } }
 
     private var meetings: [Meeting] = []
+    private var index = DeviceLibraryIndex(meetings: [])
     private var libraryReady = false
     private var started = false
+    /// Staged audio older than this belongs to an earlier run: no transfer of this one owns it.
+    private let createdAt = Date()
     private var librarySubscription: AnyCancellable?
     private var ownershipSubscription: AnyCancellable?
     /// The library's recorder ownership and this device's sync ID, once known.
@@ -52,12 +55,36 @@ public final class DeviceHub: ObservableObject {
     public func start() {
         guard !started else { return }
         started = true
+        Self.removeLeftoverStaging(in: environment.stagingDirectory, olderThan: createdAt)
         sessions.forEach { $0.activate() }
+    }
+
+    /// Removes audio a transfer staged that a killed or crashed run never handed to the library (a
+    /// transfer deletes its own file only when it ends). Only Daybook's staged recorder audio, and
+    /// only files from before `cutoff`, so a transfer under way never loses its file. The recorder
+    /// still has every one of these recordings. Returns what was removed.
+    @discardableResult
+    public static func removeLeftoverStaging(in directory: URL, olderThan cutoff: Date) -> [URL] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey],
+                                                                  options: [.skipsHiddenFiles])) ?? []
+        var removed: [URL] = []
+        for file in files where file.lastPathComponent.hasPrefix("Soundcore-") && file.pathExtension.lowercased() == "wav" {
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantFuture
+            guard modified < cutoff, (try? FileManager.default.removeItem(at: file)) != nil else { continue }
+            removed.append(file)
+        }
+        return removed
     }
 
     public func shutDown() {
         sessions.forEach { $0.shutDown() }
         pendingSetup?.shutDown()
+    }
+
+    /// A background wake (iOS app refresh): recorders whose wait before the next automatic import has
+    /// run out reach for the recorder now, since their timers didn't run while the app was suspended.
+    public func resumeAutomaticImportsIfDue(now: Date = Date()) {
+        for session in sessions { (session.direct as? SoundcoreConnection)?.resumeAutomaticImportIfDue(now: now) }
     }
 
     public func session(_ id: String) -> DeviceSession? { sessions.first { $0.id == id } }
@@ -83,9 +110,11 @@ public final class DeviceHub: ObservableObject {
     /// The library changed: every device recomputes which of its recordings are already in it.
     public func libraryChanged(_ meetings: [Meeting], ready: Bool) {
         self.meetings = meetings
+        // One pass over the library for every device.
+        index = DeviceLibraryIndex(meetings: meetings)
         libraryReady = libraryReady || ready
-        sessions.forEach { $0.libraryChanged(meetings, ready: libraryReady) }
-        pendingSetup?.libraryChanged(meetings, ready: libraryReady)
+        sessions.forEach { $0.libraryChanged(meetings, index: index, ready: libraryReady) }
+        pendingSetup?.libraryChanged(meetings, index: index, ready: libraryReady)
     }
 
     // MARK: Setup
@@ -101,7 +130,7 @@ public final class DeviceHub: ObservableObject {
         let device = ConfiguredDevice(kind: kind, name: number == 0 ? kind.name : "\(kind.name) \(number + 1)")
         guard let session = makeSession(device) else { return nil }
         session.activate()
-        session.libraryChanged(meetings, ready: libraryReady)
+        session.libraryChanged(meetings, index: index, ready: libraryReady)
         #if DEBUG
         Self.demo.prepareSetup?(session)
         #endif
@@ -134,7 +163,7 @@ public final class DeviceHub: ObservableObject {
         if let existing = session(device.id) { return existing }
         guard let session = makeSession(device) else { return nil }
         if started { session.activate() }
-        session.libraryChanged(meetings, ready: libraryReady)
+        session.libraryChanged(meetings, index: index, ready: libraryReady)
         sessions.append(session)
         persist()
         return session

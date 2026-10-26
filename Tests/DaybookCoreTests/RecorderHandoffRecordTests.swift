@@ -45,6 +45,16 @@ final class RecorderHandoffRecordTests: XCTestCase {
         encoded = try JSONSerialization.data(withJSONObject: json)
         let decoded = try JSONDecoder().decode(RecorderHandoffRecord.self, from: encoded)
         XCTAssertEqual(decoded.phase, .requested, "an unknown phase waits; it's never taken as a release")
+        XCTAssertNil(decoded.recordingInProgress, "earlier records have no recording in progress")
+
+        // A release naming the recording in progress round-trips, and its key is all an earlier version skips.
+        var released = record(.released, at: t0)
+        released.recordingInProgress = .init(recordingID: "1729003600", attachTo: UUID(), isAutomatic: true)
+        let data = try JSONEncoder().encode(released)
+        XCTAssertEqual(try JSONDecoder().decode(RecorderHandoffRecord.self, from: data), released)
+        let keys = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]).keys
+        XCTAssertEqual(Set(keys).subtracting(try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(record(.released, at: t0))) as? [String: Any]).keys),
+                       ["recordingInProgress"])
         XCTAssertEqual(decoded.recorderID, RecorderOwnership.id(kind: "soundcore.work", serial: "S1"))
     }
 }

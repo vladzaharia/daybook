@@ -161,6 +161,11 @@ struct LivePage: View {
                     .accessibilityHidden(true)
             }
             byline.padding(.top, 6)
+            // Handed over mid-recording: the conversation it goes into once it's finished.
+            if let id = session.split.inProgress?.id, let waiting = session.conversationWaiting(for: id),
+               let meeting = state.meetings.first(where: { $0.id == waiting }) {
+                Text("For \(meeting.title)").font(TypeStyle.status).foregroundStyle(Ink.secondary).padding(.top, Space.s2)
+            }
 
             if live.isListening {
                 listening

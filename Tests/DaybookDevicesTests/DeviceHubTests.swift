@@ -38,6 +38,34 @@ final class DeviceHubTests: XCTestCase {
         }
     }
 
+    func testStartingRemovesAudioAKilledImportLeftStagedButNothingElse() throws {
+        let staging = root.appendingPathComponent("Staging", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let earlier = Date().addingTimeInterval(-600)
+        func file(_ name: String, modified: Date) throws -> URL {
+            let url = staging.appendingPathComponent(name)
+            try Data(repeating: 1, count: 64).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+            return url
+        }
+        let killedImport = try file("Soundcore-1780000000-ab12cd34.wav", modified: earlier)
+        let killedListen = try file("Soundcore-Live-1780000600-ef56ab78.wav", modified: earlier)
+        let notOurs = try file("Interview.wav", modified: earlier)
+        let notAudio = try file("Soundcore-notes.txt", modified: earlier)
+
+        let hub = DeviceHub(environment: environment())
+        // A transfer of this run, staged after the hub was made.
+        let current = try file("Soundcore-1780001200-00aa11bb.wav", modified: Date().addingTimeInterval(5))
+        hub.start()
+        let fileManager = FileManager.default
+        XCTAssertFalse(fileManager.fileExists(atPath: killedImport.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: killedListen.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: current.path), "a transfer under way keeps its file")
+        XCTAssertTrue(fileManager.fileExists(atPath: notOurs.path), "only Daybook's own staged audio")
+        XCTAssertTrue(fileManager.fileExists(atPath: notAudio.path))
+        XCTAssertTrue(DeviceHub.removeLeftoverStaging(in: root.appendingPathComponent("Missing"), olderThan: Date()).isEmpty)
+    }
+
     func testSetupJoinsTheSidebarOnlyOnceAMethodIsSetUp() throws {
         let hub = DeviceHub(environment: environment())
         XCTAssertFalse(hub.hasDevices)

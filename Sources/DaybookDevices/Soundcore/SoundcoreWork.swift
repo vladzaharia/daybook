@@ -151,6 +151,13 @@ public struct SoundcoreSnapshot: Codable, Equatable {
     public var lastConnectedAt: Date?
     public var recordings: [SoundcoreRecording] = []
     public var recordingsUpdatedAt: Date?
+    /// The recording the recorder named as in progress at the last listing, kept across
+    /// disconnects so the remembered list never shows it as finished. Its time is
+    /// `recordingsUpdatedAt`; whether it was recording is `info.isRecording` as of `statusUpdatedAt`.
+    /// Optional, so earlier snapshots decode.
+    public var activeRecordingID: UInt32?
+    /// The recorder's clock, as last measured. Optional, so earlier snapshots decode.
+    public var clock: SoundcoreClock?
 
     /// The name shown in Settings: "soundcore Work ··7F3A".
     public var displayName: String { serial.isEmpty ? name : "\(name) \(maskedSerial(serial))" }
@@ -171,7 +178,7 @@ public struct SoundcoreSnapshot: Codable, Equatable {
         statusUpdatedAt = date
     }
 
-    public init(deviceID: UUID, name: String, serial: String = "", info: SoundcoreDeviceInfo? = nil, statusUpdatedAt: Date? = nil, lastConnectedAt: Date? = nil, recordings: [SoundcoreRecording] = [], recordingsUpdatedAt: Date? = nil) {
+    public init(deviceID: UUID, name: String, serial: String = "", info: SoundcoreDeviceInfo? = nil, statusUpdatedAt: Date? = nil, lastConnectedAt: Date? = nil, recordings: [SoundcoreRecording] = [], recordingsUpdatedAt: Date? = nil, activeRecordingID: UInt32? = nil) {
         self.deviceID = deviceID
         self.name = name
         self.serial = serial
@@ -180,6 +187,36 @@ public struct SoundcoreSnapshot: Codable, Equatable {
         self.lastConnectedAt = lastConnectedAt
         self.recordings = recordings
         self.recordingsUpdatedAt = recordingsUpdatedAt
+        self.activeRecordingID = activeRecordingID
+    }
+}
+
+/// What a Soundcore is recording, as one device knows it: live while connected, otherwise as last
+/// confirmed. `SoundcoreConnection.recordingState` publishes it (for the device page, the iPhone's
+/// Live Activity, and multipoint).
+public struct SoundcoreRecordingState: Equatable, Sendable {
+    /// The recorder said it's recording.
+    public var isRecording: Bool
+    /// The recording it names as in progress: recording, or paused on firmware that keeps the file
+    /// open. Nil when it names none.
+    public var activeRecordingID: UInt32?
+    /// When that recording started, by the recorder's clock corrected by its measured offset.
+    public var startedAt: Date?
+    /// When the recorder last confirmed this.
+    public var asOf: Date
+    /// Connected now: live. Otherwise remembered, and shown with its time.
+    public var isLive: Bool
+    /// This device asked the recorder to start this recording.
+    public var startedHere: Bool
+
+    public init(isRecording: Bool, activeRecordingID: UInt32? = nil, startedAt: Date? = nil, asOf: Date, isLive: Bool,
+                startedHere: Bool = false) {
+        self.isRecording = isRecording
+        self.activeRecordingID = activeRecordingID
+        self.startedAt = startedAt
+        self.asOf = asOf
+        self.isLive = isLive
+        self.startedHere = startedHere
     }
 }
 
@@ -197,8 +234,10 @@ extension SoundcoreDeviceInfo {
 }
 
 extension SoundcoreRecording {
-    /// The generic form; the ID is the start time as a decimal string.
-    public func deviceRecording(inProgress: Bool = false) -> DeviceRecording {
-        DeviceRecording(id: String(id), startedAt: date, length: length, byteCount: UInt64(size), isInProgress: inProgress)
+    /// The generic form; the ID is the start time as a decimal string. `clockCorrection` is the
+    /// recorder's measured clock offset, taken off its start.
+    public func deviceRecording(inProgress: Bool = false, clockCorrection: TimeInterval = 0) -> DeviceRecording {
+        DeviceRecording(id: String(id), startedAt: start(correction: clockCorrection), length: length, byteCount: UInt64(size),
+                        isInProgress: inProgress)
     }
 }

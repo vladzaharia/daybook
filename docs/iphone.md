@@ -195,6 +195,27 @@ sheet's grabber cycles detents for VoiceOver, and the panel's handle and contain
 Collapse actions; the compact detent grows with Dynamic Type and its content scrolls at medium and
 large; Reduce Motion drops the content and panel animations.
 
+## Lock Screen, widgets, and the control
+
+What they show comes from the app, which can stop at any moment (a crash, the system ending it, a
+background relaunch that never reaches `launch`), so each says what it can still vouch for:
+
+- **The recording's Live Activity** has a rolling stale date (90 s while recording, two hours while
+  paused) that the app refreshes at least once a minute while it records. Stale, it says "Not
+  confirmed", with no running clock and only Stop.
+- **Widgets and the Control Center control** read `SharedRecordingState`, which carries `asOf`; the
+  app writes it at least once a minute while recording (`SharedStatePublisher`). The timeline adds an
+  entry where an unconfirmed recording turns into "Not confirmed", and the control is on only while
+  it's confirmed. Paused, the clock is frozen ("Paused · 12:03").
+- **Every launch** clears a recording state and activities an earlier run left (`App.init`).
+- **Privacy.** Conversation titles are `privacySensitive`: hidden on the Lock Screen while locked.
+- **Soundcore Work** gets its own Live Activity (`RecorderLiveActivity`) for Listen Live (with Stop
+  Listening) and for a recording this iPhone started on it: live while connected, "Recording · as
+  of 10:07 AM" after it lets the recorder go, and "Not confirmed" once that's 20 minutes old.
+- Tests (`RecordingSurfacesTests`, `RecorderActivityTests`) cover the state and timeline logic, the
+  Live Activity buttons' contrast (4.5:1 in light, dark, and Increase Contrast), and the recorder
+  activity against the simulated recorder, not pixels.
+
 ## Design language
 
 Same system as the Mac (`docs/interface.md`): paper, the Ink scale, Electric Teal, neon used sparingly (mint means playing, the gradient is brand and progress only, amber means bookmarks, red means recording). Use Liquid Glass for controls (iOS 26) and native navigation. Use New York for titles and SF for everything else.

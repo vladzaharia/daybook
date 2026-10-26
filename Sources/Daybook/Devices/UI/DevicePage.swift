@@ -174,6 +174,7 @@ private struct DeviceOverview: View {
             if let owner = session.managedElsewhere, primary.method == .direct {
                 return "Managed by \(owner.ownerName)"
             }
+            if let status = session.status, status.isRecording == true { return DeviceDateFormat.recordingAsOf(status.updatedAt) }
             if let last = primary.lastConnectedAt { return "Not connected · Last connected \(DeviceDateFormat.lastSeen(last, now: now))" }
             return "Not connected"
         }
@@ -504,9 +505,8 @@ struct RecentImports: View {
     private func label(_ entry: DeviceLibraryLinks.Entry) -> String {
         // Daybook on iPhone's recordings are named by a UUID; their start says more.
         if session.kind.id == DaybookPhoneIntegration.id { return DeviceDateFormat.title(entry.importedAt) }
-        let id = entry.recordingID.hasSuffix(DeviceLibraryLinks.partialSuffix)
-            ? String(entry.recordingID.dropLast(DeviceLibraryLinks.partialSuffix.count)) : entry.recordingID
-        if let seconds = UInt32(id), let date = SoundcoreRecording(id: seconds, size: 0).date {
+        let identity = DeviceRecordingIdentity(kind: session.kind.id, serial: session.recorderSerial, recordingID: entry.recordingID)
+        if let date = DeviceRecordingStart.date(of: identity) {
             let title = DeviceDateFormat.title(date)
             return entry.recordingID.hasSuffix(DeviceLibraryLinks.partialSuffix) ? "\(title) (live)" : title
         }

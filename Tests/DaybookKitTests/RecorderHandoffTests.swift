@@ -235,6 +235,37 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(phone.library.meetings.filter { $0.tracks.contains { $0.deviceRecordingID == id } }.count, 1)
     }
 
+    func testARecordingBothDevicesImportBeforeSyncEndsUpInOneConversation() async throws {
+        let recorder = makeRecorder(count: 1, seconds: 10)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        // Nobody manages it yet (an older build, or before ownership arrived): the phone imports it.
+        phone.session.connect()
+        try await waitUntil("the phone lists it") { phone.session.direct?.isInventoryCurrent == true && phone.session.newRecordings.count == 1 }
+        let id = phone.session.newRecordings[0].id
+        phone.session.importRecordings(phone.session.newRecordings)
+        try await waitUntil("the phone imported it", timeout: 20) { phone.imported.count == 1 && !phone.session.queue.isActive }
+        phone.session.disconnect(.direct)
+        try await syncAll(phone)
+
+        // The Mac hasn't synced since, so it imports it too; the phone's conversation arrives mid-transfer.
+        recorder.pace = .milliseconds(15)
+        mac.session.connect()
+        try await waitUntil("the Mac lists it") { mac.session.direct?.isInventoryCurrent == true && mac.session.newRecordings.count == 1 }
+        mac.session.importRecordings(mac.session.newRecordings)
+        try await waitUntil("the Mac's transfer") { (mac.session.phase?.fraction ?? 0) > 0 }
+        try await syncAll(mac)
+        XCTAssertTrue(mac.session.queue.current != nil, "still transferring when the phone's import arrived")
+        try await waitUntil("the Mac's transfer to end", timeout: 20) { !mac.session.queue.isActive }
+        XCTAssertTrue(mac.imported.isEmpty, "the Mac keeps the phone's import instead of a second conversation")
+        XCTAssertTrue(mac.session.failures.isEmpty)
+
+        try await syncAll(mac, phone)
+        for library in [mac.library, phone.library] {
+            XCTAssertEqual(library.meetings.filter { $0.tracks.contains { $0.deviceRecordingID == id } }.count, 1)
+        }
+    }
+
     func testARecordingKeepsGoingAndRecordControlMovesWithOwnership() async throws {
         let recorder = makeRecorder(count: 1)
         let mac = try await makeSide("Mac", .mac, recorder)
@@ -255,6 +286,40 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertTrue(recorder.isRecording, "the Mac no longer controls it")
         phone.connection.pauseRecording()
         try await waitUntil("the phone stops it") { !recorder.isRecording }
+    }
+
+    func testARecordingHandedOverMidRecordingGoesIntoTheConversationWaitingForIt() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        try await macStartsManaging(mac)
+        // A Mac recording asked the recorder to record too (multipoint), and waits for its recording.
+        mac.connection.startRecording()
+        try await waitUntil("the recorder records") { mac.session.split.inProgress != nil && !mac.connection.recordCommandPending }
+        let id = try XCTUnwrap(mac.session.split.inProgress?.id)
+        let conversation = mac.library.newMeeting(title: "Design review")
+        var companion = CompanionRecording(deviceID: mac.session.id, deviceKind: kind, deviceSerial: recorder.serial, deviceName: "Soundcore Work",
+                                           macStartedAt: Date(), state: .recording, startedByDaybook: true)
+        companion.recordingID = id
+        mac.library.update(conversation) { $0.companions = [companion] }
+        try await syncAll(mac, phone)
+        try await link(mac, phone)
+
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone connects") { phone.session.isLinked && phone.session.direct?.isInventoryCurrent == true }
+        XCTAssertEqual(mac.library.recorderHandoff(kind: kind, serial: recorder.serial)?.recordingInProgress?.recordingID, id,
+                       "the synced record names it too")
+        XCTAssertEqual(mac.library.recorderHandoff(kind: kind, serial: recorder.serial)?.recordingInProgress?.attachTo, conversation)
+        XCTAssertEqual(phone.session.split.inProgress?.id, id)
+        XCTAssertEqual(phone.session.conversationWaiting(for: id), conversation, "the phone knows which conversation waits for it")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(phone.imported.isEmpty, "nothing imports while it's still recording")
+
+        // Stopped on the phone, it's imported into that conversation, not a new one.
+        phone.connection.pauseRecording()
+        try await waitUntil("its import", timeout: 15) { phone.imported.map(\.recordingID) == [id] }
+        let holding = phone.library.meetings.filter { $0.tracks.contains { $0.deviceRecordingID == id } }
+        XCTAssertEqual(holding.map(\.id), [conversation])
     }
 
     func testOfferingItAndHandingItBackWhenTheMacArrives() async throws {

@@ -25,8 +25,11 @@ public struct SoundcoreTiming {
     /// After letting the recorder go, automatic import waits this long before reaching for it again,
     /// so the phone app can have it.
     public var automaticCooldown: Duration = .seconds(900)
+    /// After letting the recorder go, a recording it was making is shown as "Recording · as of 10:07"
+    /// for this long, then as unknown: nobody can see it stop.
+    public var lastKnownRecording: Duration = .seconds(1_200)
 
-    public init(request: Duration = .seconds(10), stall: Duration = .seconds(45), settle: Duration = .seconds(1), scan: Duration = .seconds(15), connect: Duration = .seconds(20), reconnect: Duration = .seconds(10), recordConfirm: Duration = .seconds(10), backoff: [Duration] = [2, 5, 15, 30, 60].map { .seconds($0) }, idleRelease: Duration = .seconds(300), automaticIdleRelease: Duration = .seconds(30), automaticCooldown: Duration = .seconds(900)) {
+    public init(request: Duration = .seconds(10), stall: Duration = .seconds(45), settle: Duration = .seconds(1), scan: Duration = .seconds(15), connect: Duration = .seconds(20), reconnect: Duration = .seconds(10), recordConfirm: Duration = .seconds(10), backoff: [Duration] = [2, 5, 15, 30, 60].map { .seconds($0) }, idleRelease: Duration = .seconds(300), automaticIdleRelease: Duration = .seconds(30), automaticCooldown: Duration = .seconds(900), lastKnownRecording: Duration = .seconds(1_200)) {
         self.request = request
         self.stall = stall
         self.settle = settle
@@ -38,6 +41,7 @@ public struct SoundcoreTiming {
         self.idleRelease = idleRelease
         self.automaticIdleRelease = automaticIdleRelease
         self.automaticCooldown = automaticCooldown
+        self.lastKnownRecording = lastKnownRecording
     }
 }
 

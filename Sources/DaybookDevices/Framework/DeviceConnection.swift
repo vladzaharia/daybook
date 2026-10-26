@@ -270,6 +270,10 @@ public protocol DeviceConnection: ObservableObject where ObjectWillChangePublish
     var recordings: [DeviceRecording] { get }
     var inventoryUpdatedAt: Date? { get }
     var isRefreshing: Bool { get }
+    /// `recordings` reflects the device now: listed since it connected, and not being listed again.
+    /// Until then it may be a remembered list that names a recording since started, grown, or
+    /// finished, so nothing is imported from it.
+    var isInventoryCurrent: Bool { get }
     /// Live while connected, otherwise the last confirmed values with their time.
     var status: DeviceStatus? { get }
     var problem: DeviceProblem? { get }
@@ -308,6 +312,7 @@ public protocol DeviceConnection: ObservableObject where ObjectWillChangePublish
 }
 
 extension DeviceConnection {
+    public var isInventoryCurrent: Bool { !isRefreshing }
     public func refreshIfStale() {
         guard state.isConnected, !isRefreshing else { return }
         if inventoryUpdatedAt.map({ Date().timeIntervalSince($0) > 60 }) ?? true { refresh() }

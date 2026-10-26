@@ -22,7 +22,9 @@ struct RecordConversationControl: ControlWidget {
 struct RecordingStateProvider: ControlValueProvider {
     var previewValue: Bool { false }
 
+    /// On only while the app confirms it's recording: a recording it stopped confirming (it may
+    /// have been stopped) doesn't show as on.
     func currentValue() async throws -> Bool {
-        SharedRecordingState.load().isActive
+        SharedRecordingState.load().isConfirmedActive(at: .now)
     }
 }
