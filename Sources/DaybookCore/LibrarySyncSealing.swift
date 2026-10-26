@@ -259,6 +259,12 @@ extension LibrarySyncEngine {
         SealingMemory.load(localRoot: localRoot).remotes[SealingMemory.key(remoteRoot: remoteRoot)] != nil
     }
 
+    /// Whether this device has synced an encrypted library in any sync folder: the iPhone keeps that library's
+    /// conversations out of backups (the sealed journal is their backup). Readable before any engine exists.
+    public static func hasSyncedEncryptedLibrary(localRoot: URL) -> Bool {
+        !SealingMemory.load(localRoot: localRoot.standardizedFileURL).remotes.isEmpty
+    }
+
     /// Forgets that this sync folder held an encrypted library: the person chose to sync with another iCloud account,
     /// whose library may well be plaintext.
     public static func forgetSealedLibrary(localRoot: URL, remoteRoot: URL) {

@@ -162,6 +162,23 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertFalse(LibrarySyncEngine.sealsNewLibraries, "New libraries stay plaintext until the owner's device checks pass")
     }
 
+    func testADeviceRemembersSyncingAnEncryptedLibraryBeforeAnyPass() async throws {
+        let mac = try mac(), phone = try phone()
+        try await pass(mac, "Mac")
+        try await pass(phone, "Phone")
+        XCTAssertFalse(LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: local("Phone")))
+        try await mac.enableSealing()
+        try await pass(phone, "Phone")
+        XCTAssertTrue(LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: local("Phone")), "the iPhone keeps it out of backups at launch")
+        // Waiting for the key counts too: the library is encrypted.
+        let waiting = try self.phone("Waiting", keys: MemoryLibraryKeyStore())
+        do { _ = try await waiting.synchronize(meetings: []); XCTFail() } catch LibrarySyncError.keyUnavailable {}
+        XCTAssertTrue(LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: local("Waiting")))
+        // Another iCloud account's library may well be plaintext.
+        LibrarySyncEngine.forgetSealedLibrary(localRoot: local("Phone"), remoteRoot: remote)
+        XCTAssertFalse(LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: local("Phone")))
+    }
+
     func testADowngradedManifestPausesSync() async throws {
         let mac = try mac()
         try await pass(mac, "Mac", [Meeting(title: "Before")])

@@ -190,8 +190,9 @@ iCloud on the Mac, Settings › iCloud on the iPhone), and there's no turning it
   courier's CloudKit records hold only sealed bytes. Tampering is detected: every sealed file is authenticated, and a
   manifest replaced by a plaintext one pauses sync on every device that synced the library encrypted.
 - **What it doesn't.** An Apple Account together with a trusted device's passcode; a compromised device; the Mac's
-  working library and Time Machine (FileVault and an encrypted backup do that); the iPhone's iCloud Backup unless
-  Storage › Include in iPhone Backups is off. Still visible to Apple: how many files there are and their sizes, when
+  working library and Time Machine (FileVault and an encrypted backup do that); the iPhone's iCloud Backup when the
+  person includes the encrypted library in it (Storage › Include in iPhone Backups, off by default for an encrypted
+  library: docs/iphone.md, "Backups"). Still visible to Apple: how many files there are and their sizes, when
   they were written, how many devices sync and their kind, the library and key IDs, and the courier records' sizes and
   dates. A Daybook that doesn't encrypt (0.3.0 and earlier) keeps writing its presence record, name included, in
   plaintext. iCloud.com's Data Recovery keeps deleted files for 30 days, and Apple may keep plaintext that long after

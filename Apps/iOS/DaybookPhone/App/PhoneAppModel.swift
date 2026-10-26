@@ -109,7 +109,11 @@ final class PhoneAppModel: RecordingCommandHandling {
             Task { await self?.finishUnexpectedly(recording) }
         }
         sync.protectedConversation = { [weak self] in self?.recorder.captureID }
-        sync.onApplied = { [weak self] _ in self?.publish() }
+        sync.onApplied = { [weak self] _ in
+            self?.publish()
+            // A pass may have made a folder an encrypted library keeps out of backups.
+            self?.applyBackupExclusion()
+        }
         self.link.recordRequestHandler = { [weak self] mac, request in
             await self?.answer(mac, request) ?? .refused(LinkRecordRefusal(reason: .unsupported))
         }
@@ -127,6 +131,10 @@ final class PhoneAppModel: RecordingCommandHandling {
                 guard let self, self.devices.hub.recorderStates() != self.lastRecorders else { return }
                 self.sendRecordingState(force: true)
             }
+            .store(in: &subscriptions)
+        // An encrypted library keeps its conversations out of backups (`BackupExclusion`).
+        library.controller.sync?.$encryption.removeDuplicates().dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.applyBackupExclusion() } }
             .store(in: &subscriptions)
         // A conversation moved to the Trash takes its live captions with it.
         library.controller.$meetings.map(\.count).removeDuplicates().dropFirst()
@@ -485,6 +493,18 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
 
     static let libraryUnavailable = "Couldn’t open your library. Close Daybook and open it again."
+
+    /// The library is encrypted in iCloud: this iPhone syncs it so, waits for its key, or synced it so before.
+    var libraryIsEncrypted: Bool {
+        sync.encryption.isOn || sync.encryption == .waitingForKey || LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: library.rootURL)
+    }
+
+    /// Keeps what Settings › Storage says out of iPhone backups (`BackupExclusion`).
+    func applyBackupExclusion() {
+        BackupExclusion.apply(libraryRoot: library.rootURL, inbox: library.inboxURL, library: BackupExclusion.library(
+            includesLibrary: settings.includesLibraryInBackups, encrypted: libraryIsEncrypted,
+            includesEncryptedLibrary: settings.includesEncryptedLibraryInBackups))
+    }
     static let photoNotSaved = "Couldn’t save that photo. Take it again."
 
     /// What the recording screen says about a problem the recorder reported while it keeps recording
