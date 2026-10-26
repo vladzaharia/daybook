@@ -1,5 +1,38 @@
 # Validation record
 
+## Persistence, performance, and the model runtime (2026-10-26)
+
+Regression tests now cover:
+
+- Saving: a burst of note edits is one write and one published change per keystroke; saves happen
+  without a flush shortly after an edit; a failed save is retried at the next flush, ends when its
+  conversation goes to the Trash (or is trashed behind the library's back), and doesn't stop an
+  import into another conversation; flush waits for saves queued while it waited.
+- The store: unchanged files aren't read back to save; another writer's change is read once and its
+  recordings kept; an unchanged snapshot writes nothing; the recovery copy is the previous snapshot;
+  files are compact and earlier pretty-printed ones read; a sparse 2 GB import doesn't hold up other
+  saves and stops when cancelled.
+- Opening: damaged, newer-schema, unreadable (permissions), and partly undecodable `library.json`,
+  and an interrupted conversation that can't be re-saved at launch.
+- The barrier records every file and folder an import, a save, or a Trash move wrote; durable writes
+  leave a complete user-only file.
+- CryptoKit digests equal the earlier SHA-256 across block, padding, and chunk boundaries.
+- Models: released after the idle delay, kept between back-to-back jobs, released on memory pressure
+  (after a running job), system models kept; a revision being loaded isn't garbage-collected.
+- Photos: one unreadable photo is a failure of its own (real Vision, garbage bytes), waits with
+  backoff, isn't re-read by sync passes, and is retried alone; a failed caption model is recorded.
+- Redraws: progress throttled to the interval with the latest value delivered, the window redrawn only
+  on a new percent or message, search and the visible list worked out once per change.
+- Reading: the playhead and bookmark lookups equal the scans they replaced on 200 random
+  transcripts; the layout is built once per version; the Mac plays the transcribed copy.
+- iPhone: an import whose file another coordinator holds keeps the main actor running; a journal that
+  can't be written is reported once while recording continues.
+
+Not established by these tests: that `F_FULLFSYNC` survives a real power loss (that needs pulling
+power on a test Mac mid-import), how a real memory-pressure event (`sudo memory_pressure -l warn`)
+interacts with an MLX model in use, frame times on a multi-hour transcript (profile with Instruments
+while playing), and File Provider waits for an iCloud Drive file not yet downloaded on an iPhone.
+
 ## Project review fixes (2026-10-25)
 
 The review covered persistence and sync, local pairing, model downloads, recorder integration,

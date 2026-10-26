@@ -226,9 +226,8 @@ public final class LibraryController: ObservableObject {
     /// A durability barrier for operations that discard recovery data or acknowledge a sync pull:
     /// every save is written, and everything written since the last barrier is flushed to permanent
     /// storage (`MeetingStore.synchronizeWrites`). Waiting for the save queue alone does not mean its
-    /// writes succeeded. With `ids`, only those
-    /// conversations' failed saves count (an unrelated conversation that can't be saved doesn't stop
-    /// an import); without, every failure does.
+    /// writes succeeded. With `ids`, only those conversations' failed saves count (an unrelated
+    /// conversation that can't be saved doesn't stop an import); without, every failure does.
     public func flushDurably(_ ids: Set<UUID>? = nil) async throws {
         await flush()
         // What the saves and imports wrote since the last barrier reaches permanent storage.
@@ -250,7 +249,8 @@ public final class LibraryController: ObservableObject {
     // MARK: Editing a conversation
 
     /// The notes as typed. The text saves shortly after typing (or at `flush`); a Version History
-    /// entry is written once typing pauses. `captureTime`, while this conversation is being recorded, timestamps new paragraphs.
+    /// entry is written once typing pauses. `captureTime`, while this conversation is being
+    /// recorded, timestamps new paragraphs.
     public func editNotes(_ id: UUID, text: String, captureTime: TimeInterval? = nil) {
         guard let index = meetings.firstIndex(where: { $0.id == id }) else { return }
         var meeting = meetings[index]
