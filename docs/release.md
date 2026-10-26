@@ -18,11 +18,12 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 | Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
 | Release | `iphone` | `xcode-27`, environment `release` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
 | Release | `mac` | `xcode-27`, environment `release` | archives and exports with `developer-id` (`build-app.sh`), then notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`) |
-| Release | `publish` | `ubuntu-24.04` | tags only: verifies the checksums and creates (or updates) the GitHub Release. It's the only job with `contents: write`, and it holds no Apple secrets |
+| Release | `draft` | `ubuntu-24.04` | tags only, after `mac`: verifies the checksums and creates the GitHub Release as a **draft** with the Mac files (`scripts/ci/github-release.sh draft`). A re-run updates its own draft; it never touches a published release |
+| Release | `publish` | `ubuntu-24.04` | tags only, after `draft` and, when the run releases the iPhone app, after `iphone` succeeded: publishes the draft (`github-release.sh publish`). `draft` and `publish` are the only jobs with `contents: write`, and they hold no Apple secrets |
 
 Hardening:
 
-- Every workflow starts from `permissions: {}`, and each job asks for `contents: read` (or `write` in `publish` only).
+- Every workflow starts from `permissions: {}`, and each job asks for `contents: read` (or `write` in `draft` and `publish` only).
 - Actions are pinned to commit SHAs, with the version in a comment. Checkouts don't persist credentials.
 - Nothing uses `pull_request_target`.
 - Concurrency groups cancel superseded pull request runs and never cancel a release. CI's group includes the workflow's name, which is "Release" when `release.yml` calls it, so a push to `main` can't queue behind or replace a release's validation.
@@ -244,7 +245,8 @@ Then approve the run: Actions › Release › Review deployments › `release` �
 
 - The tag's message opens the GitHub Release notes and What to Test, followed by the commits since the previous tag.
 - The iPhone build appears in TestFlight, in `DAYBOOK_TESTFLIGHT_GROUP`, once processed. "Daybook Internal" is an internal group with access to every build, so each build reaches it by itself; `asc-testflight.sh` only adds builds to groups without that access (App Store Connect refuses it otherwise: 422 "Builds cannot be assigned to this internal group").
-- The Mac ZIP (and DMG), with `SHA256SUMS.txt`, are attached to the release.
+- The Mac ZIP (and DMG), with `SHA256SUMS.txt`, are attached to a **draft** GitHub Release as soon as the Mac job finishes. The release is published, and becomes "Latest" unless it's a prerelease, only after the iPhone build is on TestFlight. If the iPhone job fails, the release stays a draft: re-run the failed job, and `publish` runs after it. To ship the Mac app without the iPhone one, publish the draft by hand (Releases › the draft › Edit › Publish release).
+- A tag run with `apps: mac` publishes as soon as the draft is ready. With `apps: iphone` there are no Mac files, so there's no GitHub Release.
 
 A tag such as `v1.4.0-rc.1` releases marketing version 1.4.0 and marks the GitHub Release as a prerelease.
 
@@ -260,6 +262,20 @@ gh workflow run release.yml --ref main -f apps=iphone -f version=1.4.0 \
 - On a tag (`--ref v1.4.0`), the tag sets the version.
 - `testflight_group` overrides the variable, and `none` skips adding the build to a group.
 - A manual Mac run from `main` produces the notarized artifacts on the run's page, with no GitHub Release; releases come only from tags.
+
+### Re-running
+
+- **Re-run failed jobs** re-runs the failed jobs and the jobs after them, after a new approval. Each re-run job works out its own build number (`1057.2`; see [Versions](#versions)).
+- The `draft` job updates its own draft: title, notes, and prerelease flag again, files that this attempt didn't produce (a DMG, say) deleted, the rest replaced.
+- A **published** release is never changed. `draft` fails instead of swapping files people may already have downloaded, and its `SHA256SUMS.txt` would no longer match them. Cut a new version, or roll back first.
+
+### Rolling back
+
+If a release turns out to be broken:
+
+1. **Unpublish the GitHub Release** so nobody else downloads it: `gh release edit v1.4.0 --draft=true` (or Releases › Edit › "Save as draft"). To keep it visible but out of "Latest", mark it a prerelease instead: `gh release edit v1.4.0 --prerelease`. Make the previous good release "Latest" again with `gh release edit v1.3.2 --latest`.
+2. **Expire the TestFlight build**: App Store Connect › the app › TestFlight › the build › Expire Build. Testers can't install it any more, and the expired build stops opening; they can go back to an earlier build under Previous Builds in the TestFlight app.
+3. **Ship the fix as a new version** (`v1.4.1`). Don't move or reuse the tag: the tag ruleset blocks it, App Store Connect never takes a build number twice, and people may have the old files. If you'd rather redo the same version, delete the draft or unpublished release and its tag (an admin), then tag again: the new run gets a new run number, so a new build number.
 
 ### Versions
 

@@ -343,16 +343,20 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  publish:
-    name: GitHub Release
+  # The GitHub Release starts as a draft as soon as the Mac app is packaged, and becomes public only
+  # once every app the run releases is out (`publish`). Neither job holds Apple secrets.
+  draft:
+    name: GitHub Release (draft)
     needs: [prepare, mac]
     if: needs.prepare.outputs.is_tag == 'true' && needs.mac.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # The only job that can write: it holds no Apple secrets.
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: mac-release
@@ -364,7 +368,8 @@ jobs:
       - name: Verify checksums
         working-directory: dist
         run: sha256sum -c SHA256SUMS.txt
-      - name: Create or update the release
+      # A re-run updates its own draft (stale files go), but never a published release.
+      - name: Create or update the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -372,13 +377,31 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.marketing_version }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          files=(dist/*)
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
-          else
-            flags=(--repo "$REPO" --title "Daybook $VERSION" --notes-file notes/release.md --verify-tag)
-            if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
-            gh release create "$TAG" "${files[@]}" "${flags[@]}"
-          fi
-          echo "### GitHub Release" >> "$GITHUB_STEP_SUMMARY"
-          gh release view "$TAG" --repo "$REPO" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
+          url="$(scripts/ci/github-release.sh draft --repo "$REPO" --tag "$TAG" --title "Daybook $VERSION" \
+            --notes-file notes/release.md --prerelease "$PRERELEASE" dist/*)"
+          { echo "### GitHub Release (draft)"; echo "$url"; } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish the GitHub Release
+    needs: [prepare, draft, iphone]
+    # After the draft, and after the iPhone build is on TestFlight when this run releases the iPhone
+    # app (`apps: mac` skips the iphone job, and publishing doesn't wait for it then).
+    if: >-
+      !cancelled() && needs.prepare.outputs.is_tag == 'true' && needs.draft.result == 'success' &&
+      (needs.iphone.result == 'success' || (needs.iphone.result == 'skipped' && needs.prepare.outputs.iphone != 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          url="$(scripts/ci/github-release.sh publish --repo "$REPO" --tag "$TAG")"
+          { echo "### GitHub Release"; echo "$url"; } >> "$GITHUB_STEP_SUMMARY"

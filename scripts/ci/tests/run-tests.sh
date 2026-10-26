@@ -9,6 +9,7 @@
 #   asc-testflight.sh     the full request sequence against a local mock of the App Store Connect API
 #   release-notes.sh      annotated and lightweight tags in a throwaway repository
 #   check-ref.sh          tags on and off main, manual runs, in a throwaway clone
+#   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 # Runs on macOS (bash 3.2) and Linux.
@@ -207,6 +208,40 @@ expect_ok "a manual run from main passes" check_ref --event workflow_dispatch --
 expect_fail "a push to main doesn't release" check_ref --event push --ref refs/heads/main --sha "$on_main"
 expect_fail "a manual run from another branch fails" check_ref --event workflow_dispatch --ref refs/heads/side --sha "$off_main"
 expect_fail "an unknown commit fails" check_ref --event push --ref refs/tags/v1.0.0 --sha 0123456789abcdef0123456789abcdef01234567
+
+# --- github-release.sh against a fake gh ---------------------------------------------------------------
+echo "github-release.sh"
+mkdir -p "$work/ghbin" "$work/gh" "$work/out"
+cp "$here/fake_gh.sh" "$work/ghbin/gh"
+chmod +x "$work/ghbin/gh"
+echo missing > "$work/gh/state"
+printf 'zip\n' > "$work/out/Daybook-1.4.0-macOS-arm64.zip"
+printf 'dmg\n' > "$work/out/Daybook-1.4.0-macOS-arm64.dmg"
+printf 'sums\n' > "$work/out/SHA256SUMS.txt"
+printf 'Notes\n' > "$work/release-notes.md"
+release() { PATH="$work/ghbin:$PATH" GH_STATE="$work/gh" "$ci/github-release.sh" "$@"; }
+draft() { release draft --repo example/daybook --tag v1.4.0 --title "Daybook 1.4.0" --notes-file "$work/release-notes.md" "$@"; }
+assets() { sort "$work/gh/assets" | paste -sd ' ' -; }
+expect_ok "the first run creates a draft" draft --prerelease false "$work"/out/*
+expect_eq "a draft with every file" "draft|Daybook-1.4.0-macOS-arm64.dmg Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" \
+    "$(cat "$work/gh/state")|$(assets)"
+expect_ok "created as a draft of the existing tag" grep -qE -- '^release create v1.4.0 .*--draft.*--verify-tag' "$work/gh/calls"
+rm "$work/out/Daybook-1.4.0-macOS-arm64.dmg"
+expect_ok "a re-run updates the draft" draft --prerelease true "$work"/out/*
+expect_eq "the DMG it no longer makes is gone" "Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" "$(assets)"
+expect_ok "the files are replaced in the draft" grep -qE -- '^release upload v1.4.0 .*--clobber' "$work/gh/calls"
+expect_eq "title and prerelease set again" "Daybook 1.4.0 true" "$(cat "$work/gh/title") $(cat "$work/gh/prerelease")"
+expect_eq "publishing prints the URL" "https://github.com/example/daybook/releases/tag/v1.4.0" \
+    "$(release publish --repo example/daybook --tag v1.4.0 2>/dev/null)"
+expect_eq "published" "published" "$(cat "$work/gh/state")"
+uploads="$(grep -c '^release upload' "$work/gh/calls")"
+expect_fail "a published release is never replaced" draft --prerelease false "$work"/out/*
+expect_eq "nothing was uploaded to it" "$uploads" "$(grep -c '^release upload' "$work/gh/calls")"
+expect_ok "publishing again changes nothing" release publish --repo example/daybook --tag v1.4.0
+echo missing > "$work/gh/state"
+expect_fail "there's nothing to publish without a draft" release publish --repo example/daybook --tag v1.4.0
+expect_fail "a branch isn't a release tag" release publish --repo example/daybook --tag main
+expect_fail "a draft needs its files" draft --prerelease false "$work/out/none.zip"
 
 # --- check-ios-archive.sh -------------------------------------------------------------------------------
 echo "check-ios-archive.sh"
