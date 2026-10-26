@@ -549,6 +549,70 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertEqual(model.notice, "Studio Mac couldn’t be reached for 30 minutes, so this iPhone stopped recording.")
     }
 
+    // MARK: Recovery
+
+    func testARecordingRecoveredAfterBeingKilledStillJoinsTheMacsConversation() async throws {
+        let mac = try await makeMac()
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        let conversation = UUID()
+        let macStart = rig.clock.now().addingTimeInterval(-30)
+        let reply = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation,
+                                                                    timing: LinkTiming(startedAt: macStart, elapsed: 30, timelineStart: macStart),
+                                                                    title: "Design review", date: macStart), from: link.deviceID)
+        guard case .accepted = reply.outcome else { return XCTFail("\(reply.outcome)") }
+        rig.pump(1)
+        model.editNotes("Budget agreed")
+        rig.pump(2)
+        await rig.recorder.flush()
+        let folder = try XCTUnwrap(rig.recorder.stagingDirectory)
+        XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).multipoint?.role, "macLed")
+        rig.recorder.prepareForTermination()   // the process ends here
+
+        let relaunched = PhoneAppModel(recorder: RecorderRig().recorder, library: model.library, posture: DevicePosture(),
+                                       options: LaunchOptions(arguments: [], environment: [:]))
+        await relaunched.launch()
+        let meeting = try XCTUnwrap(model.library.controller.meeting(conversation))
+        XCTAssertEqual(meeting.title, "Design review", "the Mac's conversation, as it sent it")
+        XCTAssertEqual(meeting.date.timeIntervalSince1970, macStart.timeIntervalSince1970, accuracy: 0.001)
+        let track = try XCTUnwrap(meeting.tracks.first)
+        XCTAssertNil(track.offset, "a source the Mac places, as if it had stopped normally")
+        XCTAssertEqual(track.alignment?.heldNoteIDs, meeting.timedNotes?.map(\.id))
+        XCTAssertEqual(meeting.timedNotes?.first?.time ?? 0, 31, accuracy: 1.5)
+        XCTAssertTrue(relaunched.pendingStops.isEmpty, "the Mac leads; it stops itself")
+    }
+
+    func testARecordingRecoveredAfterBeingKilledStopsTheMacItStarted() async throws {
+        let mac = try await makeMac()
+        let macRecorder = await recordingMac(mac)
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        await model.recordOnMac(mac.id)
+        let conversation = try XCTUnwrap(model.recorder.captureID)
+        rig.pump(1)
+        await rig.recorder.flush()
+        rig.recorder.prepareForTermination()
+
+        let relaunched = PhoneAppModel(recorder: RecorderRig().recorder, library: model.library, posture: DevicePosture(),
+                                       options: LaunchOptions(arguments: [], environment: [:]), link: link)
+        await relaunched.launch()
+        XCTAssertNil(model.library.controller.meeting(conversation)?.tracks.first?.offset, "it joins what the Mac recorded")
+        // The relaunched app owes the Mac its stop, and sends it as the Mac connects.
+        XCTAssertEqual(relaunched.pendingStops[mac.id], conversation)
+        await link.client.disconnect(from: mac.id)
+        try await link.client.connect(to: mac.id, via: mac.endpoint)
+        try await waitUntil("the Mac is stopped") { relaunched.pendingStops.isEmpty }
+        let recording = await macRecorder.recording
+        XCTAssertNil(recording)
+    }
+
     func testRecordRequestsCanBeTurnedOff() async throws {
         let mac = try await makeMac()
         let link = makeLink()

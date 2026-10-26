@@ -50,6 +50,33 @@ struct CapturePhoto: Codable, Equatable, Sendable {
     var time: TimeInterval
 }
 
+/// The Macs a recording is made with (docs/multipoint.md), kept in its journal so that one
+/// recovered after Daybook was killed still joins its conversation and its Macs are still stopped.
+struct CaptureMultipoint: Codable, Equatable, Sendable {
+    struct Mac: Codable, Equatable, Sendable {
+        var id: UUID
+        var name: String
+        /// This iPhone asked it to record, so this iPhone stops it.
+        var startedByPhone: Bool
+        /// It recorded too, or may have (it never answered).
+        var mayHaveRecorded: Bool
+    }
+
+    /// `macLed` (a Mac asked this iPhone to record its conversation) or `phoneLed`.
+    var role: String
+    /// The Mac that leads, when one does.
+    var leadMacID: UUID?
+    /// When that Mac's recording started, and the conversation's timeline zero, on its clock.
+    var leadStartedAt: Date?
+    var timelineStart: Date?
+    /// That Mac's clock − this iPhone's.
+    var leadClockOffset: TimeInterval?
+    /// The conversation as that Mac has it.
+    var title: String?
+    var date: Date?
+    var macs: [Mac] = []
+}
+
 /// The recording's crash-safe sidecar, rewritten atomically as it changes: everything needed to
 /// rebuild the recording, with its notes and bookmarks, if Daybook is killed. The phone's
 /// counterpart of the Mac's capture-session.json and per-track sidecars.
@@ -95,6 +122,8 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     var highlights: [Highlight] = []
     /// Optional, so journals written before photos still load.
     var photos: [CapturePhoto]?
+    /// The Macs it's recorded with; nil when none (and in journals written before multipoint was kept).
+    var multipoint: CaptureMultipoint?
     var finalFile: FinalFile?
 
     init(id: UUID, title: String, createdAt: Date, format: RecordingFormat) {
@@ -162,6 +191,8 @@ struct PhoneRecording: Sendable, Equatable {
     var recovered: Bool
     /// Photos taken while recording; their files are in `stagingDirectory`.
     var photos: [CapturePhoto] = []
+    /// The Macs it was recorded with, as the journal kept them (for a recovered recording).
+    var multipoint: CaptureMultipoint?
 }
 
 enum PhoneRecorderError: LocalizedError, Equatable {

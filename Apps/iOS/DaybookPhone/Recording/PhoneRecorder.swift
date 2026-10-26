@@ -328,6 +328,13 @@ final class PhoneRecorder {
         return entry
     }
 
+    /// The Macs this recording is made with, kept in the journal for recovery.
+    func setMultipoint(_ multipoint: CaptureMultipoint?) {
+        guard isActive, journal != nil, journal?.multipoint != multipoint else { return }
+        journal?.multipoint = multipoint
+        persistJournal()
+    }
+
     /// A shutter moment further back than this is a clock problem, not a slow review.
     static let photoReviewLimit: TimeInterval = 600
 

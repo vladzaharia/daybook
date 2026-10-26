@@ -44,8 +44,11 @@ final class PhoneAppModel: RecordingCommandHandling {
     private(set) var importing = 0
     /// The conversation imported last.
     private(set) var lastImportedID: UUID?
-    /// While a Mac records this conversation too, or asked this iPhone to.
-    private(set) var multipoint: MultipointSession?
+    /// While a Mac records this conversation too, or asked this iPhone to. Kept in the recording's
+    /// journal, so a recording recovered after Daybook was killed still joins and stops its Macs.
+    private(set) var multipoint: MultipointSession? {
+        didSet { if multipoint != oldValue { recorder.setMultipoint(multipoint?.journaled) } }
+    }
     /// The Mac whose device page started this recording (a conversation of this iPhone's own).
     @ObservationIgnored private var startedFromMac: UUID?
     /// Stops this iPhone owes Macs it started, by Mac: the conversation to stop.
@@ -284,6 +287,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         recorder.audioTap = captions.prepare(meetingID: id)
         do {
             try await recorder.start(in: directory, id: id, recordingID: recordingID, title: title)
+            recorder.setMultipoint(multipoint?.journaled)
         } catch {
             multipoint = nil
             recorder.audioTap = nil
@@ -690,7 +694,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         for folder in PhoneRecorder.pendingCaptures(in: library.stagingURL) where folder.standardizedFileURL != recorder.stagingDirectory?.standardizedFileURL {
             do {
                 let recording = try await PhoneRecorder.recover(in: folder)
-                await file(recording)
+                // Made with Macs: it joins their conversation, and the ones this iPhone started are stopped.
+                let session = MultipointSession(conversationID: recording.id, journaled: recording.multipoint)
+                await file(recording, session: session)
+                for mac in session?.macsToStop ?? [] { queueStop(of: mac.id, conversation: recording.id) }
             } catch PhoneRecorderError.nothingRecorded {
                 // No audio at all. Keep the folder only if it holds notes worth saving.
                 let journal = try? PhoneCaptureJournal.load(from: folder)

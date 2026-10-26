@@ -97,3 +97,28 @@ struct MultipointSession: Equatable, Sendable {
         change(&macs[index])
     }
 }
+
+extension MultipointSession {
+    /// As the recording's journal keeps it.
+    var journaled: CaptureMultipoint {
+        var lead: UUID?
+        if case .macLed(let mac) = role { lead = mac }
+        return CaptureMultipoint(role: isMacLed ? "macLed" : "phoneLed", leadMacID: lead, leadStartedAt: leadStartedAt,
+                                 timelineStart: timelineStart, leadClockOffset: leadClockOffset, title: title, date: date,
+                                 macs: macs.map { CaptureMultipoint.Mac(id: $0.id, name: $0.name, startedByPhone: $0.startedByPhone,
+                                                                        mayHaveRecorded: $0.mayHaveRecorded) })
+    }
+
+    /// Rebuilt from a recovered recording's journal: how it joins its conversation, and which Macs
+    /// this iPhone still owes a stop.
+    init?(conversationID: UUID, journaled: CaptureMultipoint?) {
+        guard let journaled else { return nil }
+        let role: Role
+        if journaled.role == "macLed", let lead = journaled.leadMacID { role = .macLed(macID: lead) } else { role = .phoneLed }
+        self.init(conversationID: conversationID, role: role,
+                  macs: journaled.macs.map { Mac(id: $0.id, name: $0.name, state: $0.mayHaveRecorded ? .recording : .failed(""),
+                                                 startedAt: nil, startedByPhone: $0.startedByPhone) },
+                  leadStartedAt: journaled.leadStartedAt, timelineStart: journaled.timelineStart,
+                  leadClockOffset: journaled.leadClockOffset, title: journaled.title, date: journaled.date)
+    }
+}
