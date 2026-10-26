@@ -501,7 +501,7 @@ extension AppState {
                                               startedAt: suggestion.clockOffsets?[target] == nil ? nil : trackStart(track))
         defer { sources.carried[track.sha256] = nil }
         do { _ = try await importAudio([url], source: track.source, attachTo: target, device: track.device) }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { report("Couldn’t Add the Recording", "Try again.", error); return false }
         dismissSourceSuggestion(suggestion.id, in: sourceID)
         trashWhenIdle(sourceID, addedTo: targetTitle)
         return true

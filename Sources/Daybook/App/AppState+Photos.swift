@@ -37,7 +37,7 @@ extension AppState {
     func addPhotos(_ urls: [URL], to id: UUID) {
         guard library.isLoaded, !urls.isEmpty else { return }
         Task {
-            var failures: [String] = []
+            var failures: [Error] = []
             var added = 0
             await library.acquireLock()
             for url in urls {
@@ -55,10 +55,10 @@ extension AppState {
                         throw PhotoStoreError.unsupportedImage(url.lastPathComponent)
                     }
                     added += 1
-                } catch { failures.append(error.localizedDescription) }
+                } catch { failures.append(error) }
             }
             library.releaseLock()
-            if let failure = failures.first { errorMessage = failures.count == 1 ? failure : "\(failures.count) files weren’t added. \(failure)" }
+            if !failures.isEmpty { reportPhotoFailures(failures) }
             if added > 0 { readPhotosWhenIdle(id) }
         }
     }
@@ -67,7 +67,7 @@ extension AppState {
     func addPhotos(_ providers: [NSItemProvider], to id: UUID) {
         guard library.isLoaded, !providers.isEmpty else { return }
         Task {
-            var failures: [String] = []
+            var failures: [Error] = []
             var added = 0
             for provider in providers {
                 do {
@@ -85,9 +85,9 @@ extension AppState {
                     try await library.addPhoto(data: data, to: id, fileName: provider.suggestedName.map { $0 + "." + (PhotoFormat.detect(data)?.fileExtension ?? "png") },
                                                timing: moment, origin: photoOrigin)
                     added += 1
-                } catch { failures.append(error.localizedDescription) }
+                } catch { failures.append(error) }
             }
-            if let failure = failures.first { errorMessage = failure }
+            if !failures.isEmpty { reportPhotoFailures(failures) }
             if added > 0 { readPhotosWhenIdle(id) }
         }
     }
@@ -349,5 +349,19 @@ enum PhotoCopy {
         for copy in earlier where copy.lastPathComponent != token.uuidString { try? FileManager.default.removeItem(at: copy) }
         LocalPasteboard.copy([written as NSURL], to: pasteboard)
         return .copied(written)
+    }
+}
+
+extension AppState {
+    /// Photos that couldn't be added: one says why in its own words when they're Daybook's
+    /// ("Notes.pdf isn’t a HEIC, JPEG, or PNG image."); several are counted, with the reasons behind Details.
+    func reportPhotoFailures(_ failures: [Error]) {
+        guard let first = failures.first else { return }
+        if failures.count == 1 {
+            report("Couldn’t Add Photo", "Try again.", first)
+        } else {
+            problem = AppProblem(title: "Couldn’t Add Photos", message: "\(failures.count) files weren’t added.",
+                                 details: failures.map(\.localizedDescription).joined(separator: "\n"))
+        }
     }
 }

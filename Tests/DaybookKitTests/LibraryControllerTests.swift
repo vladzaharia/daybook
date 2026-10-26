@@ -90,7 +90,10 @@ final class LibraryControllerTests: XCTestCase {
         try FileManager.default.createDirectory(at: primary, withIntermediateDirectories: false)
         library.update(id) { $0.notes = "Keep this recovery note" }
         do { try await library.flushDurably(); XCTFail("Cleanup must not be authorized after a failed save") }
-        catch { XCTAssertNotNil(library.errorMessage) }
+        catch {
+            XCTAssertEqual(library.errorMessage, "Changes to “Capture” couldn’t be saved. Daybook tries again with your next change.")
+            XCTAssertNotNil(library.errorDetails, "the system's words, kept for Details")
+        }
         try FileManager.default.removeItem(at: primary)
         try FileManager.default.moveItem(at: held, to: primary)
         library.rename(id, to: "Recovered capture")

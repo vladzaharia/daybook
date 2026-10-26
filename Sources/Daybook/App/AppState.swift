@@ -62,9 +62,13 @@ final class AppState: ObservableObject {
     /// App-owned so menu commands can drive it. Views observe it directly; its frequent
     /// position updates are deliberately not forwarded through this object.
     let playback = AudioPlaybackController()
+    /// What couldn't be done, for the window's alert (`report(_:_:_:)`, AppProblem.swift).
+    @Published var problem: AppProblem?
+    /// The alert's sentence: a reported problem's, else a library save that failed. Setting it shows
+    /// a plain message in place of either.
     var errorMessage: String? {
-        get { library.errorMessage }
-        set { library.errorMessage = newValue }
+        get { problem?.message ?? library.errorMessage }
+        set { problem = nil; library.errorMessage = newValue; library.errorDetails = nil }
     }
     var notice: String? {
         get { library.notice }
@@ -353,7 +357,7 @@ final class AppState: ObservableObject {
             closeRecoveredLinks()
             // Requests this Mac held when it last quit or crashed run again (or are given back).
             pickUpRequests()
-        } catch { errorMessage = "Couldn’t open your library: \(error.localizedDescription)" }
+        } catch { report("Couldn’t Open Your Library", "Quit Daybook and open it again.", error) }
     }
 
     /// A background import from a recorder (`selecting: false`) takes neither the place being viewed nor the selection.
@@ -396,7 +400,7 @@ final class AppState: ObservableObject {
         guard panel.runModal() == .OK else { return }
         Task {
             do { try await importFiles(panel.urls, source: .imported, attachTo: id) }
-            catch { errorMessage = error.localizedDescription }
+            catch { report("Couldn’t Import Audio", "Choose an audio or video file and try again.", error) }
         }
     }
 
@@ -713,7 +717,7 @@ final class AppState: ObservableObject {
                 await self.refreshInstalledModels()
                 self.collectOldModelRevisions()
             } catch is CancellationError { self.notice = "Download canceled." }
-            catch { self.errorMessage = "Model download failed: \(error.localizedDescription)" }
+            catch { self.report("Couldn’t Download the Model", "Check your internet connection and try again.", error) }
             self.downloadingID = nil; self.downloadTask = nil
             if !Task.isCancelled, let next = self.pendingDownloads.first {
                 self.pendingDownloads.removeFirst(); self.download(next)
@@ -758,7 +762,7 @@ final class AppState: ObservableObject {
                     try await runtime.remove(modelID: id)
                     await refreshInstalledModels()
                     applyRemovalFallback(id)
-                } catch { errorMessage = error.localizedDescription }
+                } catch { report("Couldn’t Remove the Model", "Try again.", error) }
             }
         }
     }
@@ -851,14 +855,14 @@ final class AppState: ObservableObject {
                     }
                 }.value
                 notice = "Exported \(url.lastPathComponent)"
-            } catch { errorMessage = error.localizedDescription }
+            } catch { report("Couldn’t Export", "Try again, or choose another folder.", error) }
         }
     }
 
     func audioURL(for track: RecordingTrack, meetingID: UUID) async -> URL? {
         guard library.isLoaded else { return nil }
         do { return try await library.audioURL(for: track, in: meetingID) }
-        catch { errorMessage = error.localizedDescription; return nil }
+        catch { report("Couldn’t Open the Audio", "Try again.", error); return nil }
     }
 
     /// Imports, sync, and the Trash take turns with the library (`LibraryController`'s lock).
@@ -875,7 +879,7 @@ final class AppState: ObservableObject {
                 }) else { return }
                 if selectedID == id { selectedID = meetings.first?.id }
                 notice = "Moved to the Trash."
-            } catch { errorMessage = error.localizedDescription }
+            } catch { report("Couldn’t Move to Trash", "Try again.", error) }
         }
     }
 }
@@ -914,7 +918,7 @@ extension AppState {
                 await finishCapture(partial)
             } else { update(id) { $0.status = .failed; $0.errorMessage = error.localizedDescription } }
             if automatic { monitor.suppressCurrentMeeting() }
-            errorMessage = error.localizedDescription
+            report("Couldn’t Start Recording", "Try again.", error)
         }
     }
 
@@ -940,7 +944,7 @@ extension AppState {
             enqueue(id)
         } catch {
             update(id) { $0.status = .failed; $0.errorMessage = "Recording is preserved in the recovery folder: \(error.localizedDescription)" }
-            errorMessage = error.localizedDescription
+            report("Couldn’t Add the Recording", "It’s kept, and Daybook adds it the next time it opens.", error)
         }
         captureDirectory = nil
     }

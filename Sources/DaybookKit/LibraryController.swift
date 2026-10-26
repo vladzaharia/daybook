@@ -20,6 +20,8 @@ public final class LibraryController: ObservableObject {
     @Published public var glossary: [GlossaryTerm] = []
     /// The last thing that went wrong, in a sentence for the person.
     @Published public var errorMessage: String?
+    /// The system's own words for it, shown only behind Details.
+    @Published public var errorDetails: String?
     /// The last thing worth knowing (a sync warning, a recording already in the library).
     @Published public var notice: String?
     /// The store is open and the conversations are loaded.
@@ -209,14 +211,16 @@ public final class LibraryController: ObservableObject {
         saves.enqueue("library-settings") { try await store.saveLibraryMetadata(snapshot) }
     }
 
+    /// What couldn't be saved, in plain words; the system's own words go to `errorDetails`.
     private func reportSaveFailure(_ key: String, _ error: Error) {
         switch key {
-        case "library-settings": errorMessage = "Couldn’t save library settings: \(error.localizedDescription)"
-        case "glossary": errorMessage = error.localizedDescription
+        case "library-settings": errorMessage = "Your folders and templates couldn’t be saved. Daybook tries again with your next change."
+        case "glossary": errorMessage = "Your vocabulary couldn’t be saved. Daybook tries again with your next change."
         default:
             let title = meetings.first { $0.id.uuidString == key }?.title ?? "a conversation"
-            errorMessage = "Couldn’t save \(title): \(error.localizedDescription)"
+            errorMessage = "Changes to “\(title)” couldn’t be saved. Daybook tries again with your next change."
         }
+        errorDetails = error.localizedDescription
     }
 
     // MARK: Work this device is doing
