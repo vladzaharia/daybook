@@ -8,6 +8,12 @@ public enum AudioDigest {
         try sha256(fileURL: fileURL) { Task.isCancelled }
     }
 
+    /// The same, read on a queue of its own: neither the caller's actor nor Swift's cooperative
+    /// threads wait on the disk. Cancelling the caller stops it between chunks.
+    public static func sha256(contentsOf fileURL: URL) async throws -> String {
+        try await BlockingFileWork.sha256(fileURL)
+    }
+
     /// The same, checking `isCancelled` between chunks (work on a dispatch queue has no task to check).
     static func sha256(fileURL: URL, isCancelled: () -> Bool) throws -> String {
         let handle = try FileHandle(forReadingFrom: fileURL)

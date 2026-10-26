@@ -132,10 +132,15 @@ public final class LibraryController: ObservableObject {
         return try await store.audioURL(for: track, in: meetingID)
     }
 
-    /// The conversation that already holds these exact bytes, if any.
+    /// The conversation that already holds these exact bytes, if any. The file is hashed off the
+    /// main actor and matched against the digests the library already has in memory; only a
+    /// conversation that claims the digest has its original read to confirm it.
     public func existingMeeting(containingAudioAt url: URL) async throws -> Meeting? {
         guard let store else { throw DaybookError.libraryUnavailable }
-        return try await store.existingMeeting(containingAudioAt: url)
+        let digest = try await AudioDigest.sha256(contentsOf: url)
+        let candidates = meetings.filter { $0.tracks.contains { $0.sha256 == digest } }
+        guard !candidates.isEmpty, let found = await store.verifiedMeeting(withDigest: digest, among: candidates) else { return nil }
+        return meeting(found.id) ?? found
     }
 
     // MARK: Saving
@@ -593,7 +598,7 @@ public final class LibraryController: ObservableObject {
         var stored = imported.tracks.first { track in !meeting.tracks.contains { $0.id == track.id } && track.fileName == url.lastPathComponent }
         if stored == nil, provenance.capture != nil {
             // Same bytes imported before (recovery after a crash): find the existing track by digest.
-            let digest = try await Task.detached { try AudioDigest.sha256(fileURL: url) }.value
+            let digest = try await AudioDigest.sha256(contentsOf: url)
             stored = imported.tracks.first { $0.sha256 == digest }
         }
         update(id) { current in
