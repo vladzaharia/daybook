@@ -300,6 +300,23 @@ extension Meeting {
         applyPlacements([trackID: alignment])
     }
 
+    /// A recording filed as a source still to be placed (another device's, joining) that turns out to
+    /// be its conversation's only one sets the timeline instead: offset 0, and the notes it held timed
+    /// by its own clock.
+    public mutating func makeTimelineOrigin(_ trackID: UUID) {
+        guard let index = tracks.firstIndex(where: { $0.id == trackID }), let alignment = tracks[index].alignment, alignment.isPending else { return }
+        let held = Set(alignment.heldNoteIDs ?? []), start = alignment.captureOffset ?? 0
+        if var notes = timedNotes {
+            for note in notes.indices where held.contains(notes[note].id) {
+                if let time = notes[note].time { notes[note].time = max(0, time - start) }
+            }
+            timedNotes = notes
+        }
+        tracks[index].alignment = nil
+        tracks[index].offset = 0
+        updatedAt = Date()
+    }
+
     /// The person's own work in a conversation: notes, corrections, renamed speakers, bookmarks with
     /// text, tags, a folder, a chosen template or placement, completed next steps, or photos. A conversation
     /// with any of it is never moved to the Trash on its own.

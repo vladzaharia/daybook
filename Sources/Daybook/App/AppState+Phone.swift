@@ -304,6 +304,11 @@ extension AppState {
         }
         guard !arriving.isEmpty else { return false }
         if meeting.tracks.count == 1, let track = arriving.first {
+            // A conversation a Mac recorded with this phone (its link is here) waits for that Mac's
+            // recording, rather than letting the phone's move to another conversation.
+            if meeting.companions?.contains(where: { $0.deviceKind == DaybookPhoneIntegration.id && $0.deviceID == track.deviceSerial }) == true {
+                return false
+            }
             return await phoneRecordingArrivedAlone(track, in: meeting)
         }
         // With recordings of this Mac's placed already, the phone's waits to be lined up.
@@ -323,7 +328,8 @@ extension AppState {
 
     private func phoneRecordingArrivedAlone(_ track: RecordingTrack, in meeting: Meeting) async -> Bool {
         guard let identity = track.device, let url = await audioURL(for: track, meetingID: meeting.id) else { return false }
-        let start = (date: track.startedAt ?? track.createdAt as Date?, reliable: true)
+        // Its start on this Mac's clock (the phone stamps it by its own).
+        let start = (date: trackStart(track) ?? track.createdAt as Date?, reliable: true)
         guard let plan = await planArrival(url: url, duration: track.duration ?? 0, device: identity, start: start, excluding: [meeting.id]) else { return false }
         if let target = plan.attachTo, canMoveSource(into: target), let title = meetings.first(where: { $0.id == target })?.title {
             let stays = meeting.hasPersonMadeContent
@@ -340,6 +346,9 @@ extension AppState {
             trashWhenIdle(meeting.id, addedTo: title)
             return true
         }
+        // It stays: filed as a source to place (it may have joined a Mac's recording that never came),
+        // it's this conversation's own recording after all, and sets its timeline.
+        update(meeting.id) { $0.makeTimelineOrigin(track.id) }
         if let suggestion = plan.suggestion {
             update(meeting.id) { current in
                 guard !(current.sourceSuggestions ?? []).contains(where: { $0.trackID == track.id }) else { return }

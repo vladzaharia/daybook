@@ -749,6 +749,62 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(state.trackStart(track)?.timeIntervalSince(phoneStart.addingTimeInterval(-skew)) ?? 99, 0, accuracy: 0.01)
     }
 
+    func testAPhoneRecordingInAConversationAMacRecordedWithItStaysThere() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let phoneID = UUID()
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: phoneID)
+        defer { library.tearDown() }
+        // The sound would put the phone's recording in this Mac's conversation, which overlaps it.
+        state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: 0.1, rate: 1, confidence: 0.9) }
+        let macAudio = try rig.audio("standup.wav", frequency: 325)
+        let phoneAudio = try rig.audio("iphone-linked.wav", frequency: 485)
+        try rig.inference.script(macAudio, [(0, "Standup notes.")])
+        try rig.inference.script(phoneAudio, [(0, "Design notes.")])
+        let start = Date().addingTimeInterval(-300)
+        let other = try await rig.macConversation("Standup", at: start, seconds: 0.5, audio: macAudio)
+        state.awaitingModels.remove(other)
+        // Another Mac recorded this conversation with the phone; only the phone's recording has synced yet.
+        let conversation = UUID()
+        library.library.add(Meeting(id: conversation, title: "Design review", date: start, status: .imported))
+        library.library.update(conversation) {
+            $0.companions = [CompanionRecording(deviceID: phoneID.uuidString, deviceKind: DaybookPhoneIntegration.id, deviceName: "Pocket iPhone",
+                                                macStartedAt: start, state: .recording, startedByDaybook: true)]
+        }
+        try await library.file(phoneAudio, recordingID: UUID(), into: conversation, start: start.addingTimeInterval(0.1), duration: 0.5)
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitFor("processed", timeout: 20) {
+            rig.meeting(conversation)?.transcripts.isEmpty == false && state.processingID == nil && state.queuedIDs.isEmpty
+        }
+        XCTAssertEqual(rig.meeting(conversation)?.tracks.count, 1, "it waits for that Mac's recording")
+        XCTAssertEqual(rig.meeting(other)?.tracks.count, 1, "never moved into another conversation")
+    }
+
+    func testAJoinedPhoneRecordingThatTurnsOutAloneSetsItsConversationsTimeline() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { library.tearDown() }
+        let phoneAudio = try rig.audio("iphone-alone.wav", frequency: 495)
+        try rig.inference.script(phoneAudio, [(0, "Nobody else recorded this.")])
+        // The phone asked a Mac that never answered, so it filed its recording to be placed; no Mac recording comes.
+        let conversation = UUID(), note = TimedNote(time: 3, text: "Kickoff")
+        try await library.file(phoneAudio, recordingID: UUID(), into: conversation, start: Date().addingTimeInterval(-600), duration: 0.5,
+                               notes: [note])
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitFor("processed", timeout: 20) { rig.meeting(conversation)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty }
+        let meeting = try XCTUnwrap(rig.meeting(conversation))
+        XCTAssertEqual(meeting.tracks.first?.offset, 0, "its own recording sets the timeline")
+        XCTAssertNil(meeting.tracks.first?.alignment)
+        XCTAssertEqual(meeting.timedNotes?.first?.time, 3)
+    }
+
     func testAnUnlinkedPhoneRecordingJoinsByTimeThenSound() async throws {
         let rig = try await rig()
         let state = rig.state
