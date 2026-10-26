@@ -59,7 +59,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     public let live = LiveCapture()
 
     public var onChange: (() -> Void)?
-    /// A Listen Live portion to save: the file, the recording's ID, and its length.
+    /// A Listen Live portion to save: the staged file (the handler removes it once it's saved), the
+    /// recording's ID, and its length.
     public var onLiveSaved: ((URL, String, TimeInterval) -> Void)?
     /// Set from the device's preference. Turning it on arms a quiet connection to the remembered recorder.
     public var importsAutomatically: Bool {
@@ -520,7 +521,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
                     progress: { _, bytes in self.liveProgress(bytes) })
                 let id = String(result.recordingID)
                 self.live.saved = .init(seconds: result.download.seconds, recordingID: id)
-                self.onLiveSaved?(result.download.url, id, result.download.seconds)
+                // Whoever saves it removes the staged audio; with nobody to, it goes now.
+                if let onLiveSaved = self.onLiveSaved { onLiveSaved(result.download.url, id, result.download.seconds) }
+                else { try? FileManager.default.removeItem(at: result.download.url) }
             } catch {
                 if (error as? SoundcoreError) == .liveFileUnavailable { self.problem = SoundcoreIssue.notRecording.problem }
                 else if !(error is CancellationError), (error as? SoundcoreError) != .disconnected { self.lastTechnicalProblem = error.localizedDescription }

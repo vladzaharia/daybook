@@ -473,7 +473,8 @@ public final class DeviceSession: ObservableObject, Identifiable {
 
     /// A Listen Live portion becomes a conversation now; the full recording joins it later.
     private func saveLive(url: URL, recordingID: String, seconds: TimeInterval) {
-        guard let importer else { return }
+        // With nowhere to put it, the staged audio goes now (the recorder still has the recording).
+        guard let importer else { try? FileManager.default.removeItem(at: url); return }
         let identity = DeviceRecordingIdentity(kind: kind.id, serial: status?.serial, recordingID: DeviceLibraryLinks.partialID(recordingID))
         Task {
             defer { try? FileManager.default.removeItem(at: url) }

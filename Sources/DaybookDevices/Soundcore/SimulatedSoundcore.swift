@@ -71,6 +71,9 @@ public final class SimulatedSoundcore {
     /// Start resumes it; `finishRecording()` closes it.
     public var keepsActiveWhilePaused = false
     public var fault: Fault?
+    /// Leaves the key exchange unanswered, as a recorder that went quiet would: a transfer waits in
+    /// it until its request times out or the transfer is stopped.
+    public var answersKeyExchange = true
     /// Audio slices per notification.
     public var slicesPerPacket = 3
     /// Time between audio notifications; nil sends as fast as possible.
@@ -163,6 +166,7 @@ public final class SimulatedSoundcore {
             let page = Int(payload.first ?? 0) | Int(payload.count > 1 ? payload[payload.startIndex + 1] : 0) << 8
             reply(type, 0x0e, listPayload(page: page, extended: type == 0x1b))
         case (0x2e, 0x01):
+            guard answersKeyExchange else { return }
             handshake(payload)
         case (0x1a, 0x07):
             let p = [UInt8](payload)

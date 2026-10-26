@@ -426,6 +426,110 @@ final class SoundcoreSimulatorTests: XCTestCase {
         try await waitUntil("the import after Bluetooth returns", timeout: 10) { rig.library.imports.count == 1 }
     }
 
+    // MARK: Staged audio
+
+    // A transfer stages its audio in the staging folder until the library has a copy. Whatever
+    // happens to it, nothing stays there, and nothing removes the file of a transfer still running.
+
+    func testStoppingDuringTheKeyExchangeStagesNothingAndTheNextImportWorks() async throws {
+        let device = recorder()
+        device.answersKeyExchange = false
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        let target = rig.session.newRecordings[0]
+        rig.session.importRecordings([target])
+        try await waitUntil("the key exchange") { device.received.contains { $0 == (0x2e, 0x01) } }
+        rig.session.stopCurrent()
+        XCTAssertFalse(rig.session.queue.isActive)
+        XCTAssertTrue(stagedFiles.isEmpty)
+
+        // The recorder answers this time: the import waits for the stopped one to let go, exchanges
+        // keys again, and is the only transfer the recorder was asked for.
+        device.answersKeyExchange = true
+        rig.session.importRecordings([target])
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        XCTAssertEqual(device.received.filter { $0 == (0x2e, 0x01) }.count, 2)
+        XCTAssertEqual(device.received.filter { $0 == (0x1a, 0x07) }.count, 1, "nothing was requested during the exchange")
+        XCTAssertTrue(rig.session.failures.isEmpty)
+        XCTAssertNil(rig.session.transferProblem, "stopping isn't a problem")
+        XCTAssertTrue(stagedFiles.isEmpty)
+    }
+
+    func testAnImportTheLibraryRefusesLeavesNothingStaged() async throws {
+        let rig = rig(recorder())
+        try await connectThroughSetup(rig)
+        var stagedWhileImporting: [String] = []
+        rig.session.importer = { [self] url, _, _, _ in
+            stagedWhileImporting = stagedFiles
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+            throw DaybookError.invalidAudio(url.lastPathComponent)
+        }
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the failure") { !rig.session.failures.isEmpty && !rig.session.queue.isActive }
+        XCTAssertEqual(stagedWhileImporting.count, 1, "the transfer finished and staged its audio")
+        XCTAssertTrue(stagedFiles.isEmpty, "removed although the library didn't take it")
+        XCTAssertTrue(rig.library.imports.isEmpty)
+        XCTAssertNil(rig.session.links.imported[rig.session.failures[0].id], "it stays new on the recorder")
+    }
+
+    func testAWrongSizeRemovesEachAttemptsAudioAndOnlyItsOwn() async throws {
+        let device = recorder()
+        device.fault = .wrongSize
+        device.pace = .milliseconds(20)
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        let first = try await waitFor("the first attempt's audio") { stagedFiles.first }
+        // The quiet retry stages its own file; the first attempt's cleanup took only its own.
+        let second = try await waitFor("the retry's audio") {
+            device.received.filter { $0 == (0x1a, 0x07) }.count == 2 ? stagedFiles.first : nil
+        }
+        XCTAssertNotEqual(second, first)
+        XCTAssertEqual(stagedFiles, [second])
+        try await waitUntil("the failure") { !rig.session.queue.isActive }
+        XCTAssertEqual(rig.session.transferProblem?.id, SoundcoreIssue.integrity.rawValue)
+        XCTAssertTrue(rig.library.imports.isEmpty)
+        XCTAssertTrue(stagedFiles.isEmpty)
+    }
+
+    /// What a killed or crashed run left goes when the devices start (`DeviceHub.start()`), by its
+    /// age: a transfer of this run, writing as it goes, keeps its file and imports.
+    func testLeftoversOfAnEarlierRunGoAndATransferUnderWayKeepsItsFile() async throws {
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let leftover = staging.appendingPathComponent("Soundcore-\(base - 7_200)-0badf00d.wav")
+        try Data(repeating: 1, count: 4_096).write(to: leftover)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-600)], ofItemAtPath: leftover.path)
+        let launched = Date()
+        let device = recorder()
+        device.pace = .milliseconds(20)
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        let current = try await waitFor("this run's transfer to stage its audio") {
+            stagedFiles.first { $0 != leftover.lastPathComponent }
+        }
+        XCTAssertEqual(DeviceHub.removeLeftoverStaging(in: staging, olderThan: launched).map(\.lastPathComponent), [leftover.lastPathComponent])
+        XCTAssertEqual(stagedFiles, [current], "the transfer under way keeps its file")
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        XCTAssertTrue(rig.session.failures.isEmpty)
+        XCTAssertTrue(stagedFiles.isEmpty)
+    }
+
+    func testListenLiveWithNowhereToSaveLeavesNothingStaged() async throws {
+        let device = recorder()
+        device.isRecording = true
+        device.activeRecording = .init(id: base + 600, frames: Self.frames)
+        device.pace = .milliseconds(10)
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        rig.session.importer = nil
+        rig.connection.startListening()
+        try await waitUntil("audio arriving") { !stagedFiles.isEmpty }
+        rig.connection.stopListening()
+        try await waitUntil("the portion, kept") { rig.connection.live.saved != nil && !rig.connection.live.isListening }
+        try await waitUntil("its staged audio removed") { stagedFiles.isEmpty }
+    }
+
     // MARK: Automatic import
 
     func testAutomaticImportBringsInRecordingsSinceSetupThenLetsTheRecorderGo() async throws {
@@ -766,6 +870,7 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertTrue(device.isRecording, "Stopping listening doesn't stop the recorder")
         XCTAssertTrue(rig.session.liveCaptions.isEmpty, "captions off: none, and nothing failed")
         XCTAssertEqual(rig.connection.live.captionState, .off)
+        try await waitUntil("its staged audio removed once the library has it") { stagedFiles.isEmpty }
     }
 
     func testListenLiveCaptionsTheRecordersBurstsAndGapsOnItsOwnTimeline() async throws {
