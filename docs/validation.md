@@ -1,5 +1,47 @@
 # Validation record
 
+## Project review fixes (2026-10-25)
+
+The review covered persistence and sync, local pairing, model downloads, recorder integration,
+iPhone capture, and release checks. Regression tests now cover:
+
+- Pairing cancelled, replaced, expired, or stopped during an exchange cannot save a peer key.
+  Authenticated peers advertising invalid heartbeat intervals are disconnected without a timer overflow.
+- Failed saves keep capture staging and recovery data. Filing waits for a successful persistence
+  barrier, and the iPhone reports an unavailable durable library instead of switching to temporary storage.
+- Deleted bookmarks stay deleted through unrelated concurrent edits; delete/edit conflicts retain
+  deterministic history. Shared sync ancestors are visited once, including merge diamonds, and
+  cancellation reaches an active engine pass. A cancelled pass can be retried without acknowledging it.
+- Soundcore Stop works during setup and while queued behind another transfer. A Bluetooth reset
+  invalidates the old session and reconnects. An iPhone media-services reset cannot restart input
+  after Stop has begun.
+- Folder exports use content digests, distinguishing equal names and sizes while offering identical
+  copies once. Existing tracks provide digest aliases. Old completion records without digests adopt
+  the first matching stable file once; their historical name/size ambiguity cannot be reconstructed.
+- Photo deduplication verifies stored original bytes. Reimporting after corruption preserves the
+  damaged original and saves a healthy copy. Model configuration reads enforce their byte limit while
+  streaming, including responses without a declared length.
+
+Release jobs now require the reusable CI workflow to succeed for the release commit. CI includes
+the captions test bundle. No release was published during this review.
+
+Final verification on Apple silicon with Xcode 27.1 / Swift 6.4:
+
+- `swift test`: 699 XCTest cases passed across all seven test bundles.
+- `scripts/build-ios.sh --test --test-arg -parallel-testing-enabled --test-arg NO`: 79 tests passed
+  on the iPhone simulator.
+- `scripts/ci/tests/run-tests.sh`: 70 offline release-helper checks passed.
+- `actionlint`, `shellcheck scripts/build-ios.sh scripts/ci/*.sh scripts/ci/tests/*.sh`, and
+  `git diff --check` passed. No model weights or personal recordings were used.
+
+Hardware limitations remain: no physical Soundcore recorder, Bluetooth radio reset, microphone route
+change, or signed CloudKit background delivery was exercised. Native-codec probes demonstrated that
+trimming valid trailing zero bytes changes decoded audio; feeding the entire unframed padded slot also
+changes it. Exact firmware packet boundaries are still needed. The reverse-engineered Soundcore
+handshake exposes its audio encryption secret, and BLE link protection has not been verified. These
+two protocol issues remain unresolved; the integration's technical notes and [protocol documentation](direct-soundcore.md)
+now state them explicitly. Keep recorder originals and use file export for important recordings.
+
 ## Photos (2026-10-25)
 
 Recovered the unfinished Mac photo feature and completed iPhone import/viewing against the current CloudKit courier code.
