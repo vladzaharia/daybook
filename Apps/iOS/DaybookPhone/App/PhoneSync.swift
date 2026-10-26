@@ -245,9 +245,9 @@ final class PhoneSync {
 
     // MARK: Background
 
-    /// Asks iOS for a background refresh. Call when the app leaves the foreground.
+    /// Asks iOS for a background refresh. Call when the app leaves the foreground. Scheduled whether or not
+    /// sync is connected: the same task also resumes recorders' automatic imports, and a pass checks itself.
     func scheduleBackgroundRefresh() {
-        guard isConnected else { return }
         let request = BGAppRefreshTaskRequest(identifier: Self.refreshIdentifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: Self.refreshInterval)
         try? BGTaskScheduler.shared.submit(request)
