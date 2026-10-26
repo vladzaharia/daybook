@@ -6,7 +6,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml validates the release commit with this workflow, building the Mac app in Release, as
+  # the release does.
   workflow_call:
+    inputs:
+      mac_configuration:
+        description: Mac app configuration (Debug or Release)
+        type: string
+        default: Debug
   workflow_dispatch:
     inputs:
       mac_configuration:
@@ -249,6 +256,12 @@ jobs:
     env:
       CONFIGURATION: ${{ inputs.mac_configuration || 'Debug' }}
     steps:
+      - name: Check the configuration
+        run: |
+          case "$CONFIGURATION" in
+            Debug|Release) ;;
+            *) echo "::error::mac_configuration is Debug or Release, not $CONFIGURATION"; exit 1 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
