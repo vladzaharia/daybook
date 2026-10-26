@@ -84,7 +84,7 @@ struct PhoneOverview: View {
         let conversation = (direct as? PhoneLinkConnection)?.recordingConversationID.flatMap { id in state.meetings.first { $0.id == id } }
         return DeviceBox {
             HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                Image(systemName: paused ? "pause.circle" : "record.circle").foregroundStyle(paused ? Ink.secondary : .red).accessibilityHidden(true)
+                Image(systemName: paused ? "pause.circle" : "record.circle").foregroundStyle(paused ? Ink.secondary : Ink.record).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text((paused ? "Paused" : "Recording now") + (status.recordingStartedAt.map { " · since \($0.formatted(date: .omitted, time: .shortened))" } ?? ""))
                         .font(TypeStyle.statusLead).foregroundStyle(Ink.body)
