@@ -105,4 +105,26 @@ final class ExtensibleValuesTests: XCTestCase {
         XCTAssertEqual((((again["recorders"] as? [[String: Any]])?.first?["value"]) as? [String: Any])?["ownerClass"] as? String, "watch")
         XCTAssertEqual((((again["templates"] as? [[String: Any]])?.first?["value"]) as? [String: Any])?["kind"] as? String, "workshop")
     }
+
+    func testASettingInAShapeThisVersionCantReadTravelsOnUnchanged() throws {
+        var metadata = LibraryMetadata()
+        metadata.folders = [.init(id: "readable", value: LibraryFolder(name: "Readable"))]
+        var object = try json(metadata)
+        var folders = try XCTUnwrap(object["folders"] as? [[String: Any]])
+        folders.append(["id": "future", "modifiedAt": 700_000_000.0, "value": ["name": ["en": "Later"], "color": 3]])
+        object["folders"] = folders
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let decoded = try JSONDecoder().decode(LibraryMetadata.self, from: data)
+        XCTAssertEqual(decoded.folders.compactMap(\.value).map(\.name), ["Readable"])
+        XCTAssertTrue(decoded.hasUnreadableValues)
+        let future = try XCTUnwrap(decoded.folders.first { $0.id == "future" })
+        XCTAssertFalse(future.isDeletion, "a value this version can't read isn't a deletion")
+        // Merged with this device's own settings and written again, it is exactly as it came.
+        var here = LibraryMetadata()
+        here.folders = [.init(id: "local", value: LibraryFolder(name: "Local"))]
+        let merged = here.merging(decoded)
+        let again = try XCTUnwrap((try json(merged)["folders"] as? [[String: Any]])?.first { $0["id"] as? String == "future" })
+        XCTAssertTrue(NSDictionary(dictionary: again).isEqual(to: folders.last!))
+        XCTAssertEqual(merged.folders.count, 3)
+    }
 }

@@ -63,6 +63,9 @@ public actor LibrarySyncEngine {
     // reading again. The directory listing each pass remains the source of truth for membership.
     private var eventCache: [String: SyncEventRecord] = [:]
     private var metadataCache: [String: SyncMetadataRecord] = [:]
+    /// Journal entries that can't be read (a newer format, damage), with the warning to show. Never retried
+    /// in this process: an entry's content can't change. A relaunch (perhaps after an update) reads them again.
+    private var unreadableJournal: [String: String] = [:]
     private var ownJournalWrites: Set<String> = []
     /// Whether each event or one of its ancestors carries photos (`resolvedSnapshot`).
     private var photoLineage: [String: Bool] = [:]
@@ -119,10 +122,12 @@ public actor LibrarySyncEngine {
             try Task.checkCancellation()
             let name = url.deletingPathExtension().lastPathComponent
             if let cached = eventCache[name] { events[name] = cached; continue }
+            if let reason = unreadableJournal[name] { warnings.append(reason); unreadJournalFiles += 1; continue }
             guard budget.admitJournalRead() else { continue }
             do {
                 let bytes = try readJournal(url, in: "Events")
                 let hash = try eventHash(url, bytes: bytes)
+                try requireSupportedVersion(bytes)
                 let event = try decoder.decode(SyncEventRecord.self, from: bytes)
                 guard event.schemaVersion == 1, event.parents.allSatisfy(SyncFiles.isHash),
                       event.deleted != (event.snapshot != nil), event.snapshot?.id == event.meetingID || event.deleted else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
@@ -130,31 +135,38 @@ public actor LibrarySyncEngine {
                 events[hash] = event; eventCache[hash] = event
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
             catch let error as CancellationError { throw error }
-            catch { warnings.append(error.localizedDescription); pendingDownloads += 1; unreadJournalFiles += 1 }
+            catch { warnings.append(markUnreadable(name, error)); unreadJournalFiles += 1 }
         }
         for url in metadataURLs {
             try Task.checkCancellation()
             let name = url.deletingPathExtension().lastPathComponent
             if let cached = metadataCache[name] { metadata[name] = cached; continue }
+            if let reason = unreadableJournal[name] { warnings.append(reason); continue }
             guard budget.admitJournalRead() else { metadataIncomplete = true; continue }
             do {
                 let bytes = try readJournal(url, in: "Metadata")
                 let hash = try eventHash(url, bytes: bytes)
+                try requireSupportedVersion(bytes)
                 let record = try decoder.decode(SyncMetadataRecord.self, from: bytes)
                 guard record.schemaVersion == 1, record.parents.allSatisfy(SyncFiles.isHash) else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
+                // Library settings a newer Daybook wrote in a format this one can't merge stay out of the heads here;
+                // they stay heads for the devices that read them, since nothing here is ever published over them.
+                try requireSupportedVersion(record.data)
                 metadata[hash] = record; metadataCache[hash] = record
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1; metadataIncomplete = true }
             catch let error as CancellationError { throw error }
-            catch { warnings.append(error.localizedDescription); pendingDownloads += 1; unreadJournalFiles += 1 }
+            catch { warnings.append(markUnreadable(name, error)) }
         }
         journalDeviceIDs = Set(events.values.map(\.deviceID)).union(metadata.values.map(\.deviceID))
         // A parent belongs to the same conversation. Malformed cross-conversation edges
         // cannot provide ancestry or hide a legitimate head.
         for (id, event) in events where event.parents.contains(where: { events[$0].map { $0.meetingID != event.meetingID } ?? false }) {
-            events.removeValue(forKey: id)
-            warnings.append(LibrarySyncError.invalidEvent(id).localizedDescription); pendingDownloads += 1
+            events.removeValue(forKey: id); eventCache.removeValue(forKey: id)
+            warnings.append(markUnreadable(id, LibrarySyncError.invalidEvent(id))); unreadJournalFiles += 1
         }
-        let unknownParents = Set(events.values.flatMap(\.parents)).subtracting(events.keys)
+        // A parent that couldn't be read holds back its descendants until an update can read it; that isn't a
+        // download to wait for. Only parents not listed or not downloaded yet are.
+        let unknownParents = Set(events.values.flatMap(\.parents)).subtracting(events.keys).filter { unreadableJournal[$0] == nil }
         if !unknownParents.isEmpty {
             pendingDownloads += unknownParents.count
             warnings.append("Some changes are waiting for the next sync.")
@@ -225,6 +237,9 @@ public actor LibrarySyncEngine {
         var proposedBases = state.bases
         var proposedHeads = state.heads
         let completeAncestors = try completeAncestorIDs(events: events, budget: &budget)
+        // Events whose only missing ancestors can't be read (a newer format): nothing will arrive to complete them.
+        let unreadable = Set(unreadableJournal.keys)
+        let settledAncestors = unreadable.isEmpty ? completeAncestors : try completeAncestorIDs(events: events, budget: &budget, present: unreadable)
         var memo = MergeMemo()
         let grouped = Dictionary(grouping: events.keys, by: { events[$0]!.meetingID })
         for (meetingID, ids) in grouped.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
@@ -241,8 +256,12 @@ public actor LibrarySyncEngine {
             }
             // Failed uploads must never let an older remote snapshot replace unsent local edits.
             guard !failedPublications.contains(meetingID) else { continue }
-            let headIDs = heads(ids: ids, parents: { events[$0]?.parents ?? [] })
-            guard !headIDs.isEmpty, headIDs.allSatisfy(completeAncestors.contains) else { continue }
+            let allHeads = heads(ids: ids, parents: { events[$0]?.parents ?? [] })
+            // A head waiting for a download holds the conversation. One that descends from an entry this version
+            // can't read is set aside: the conversation applies as far as this version can read it.
+            guard !allHeads.isEmpty, allHeads.allSatisfy(settledAncestors.contains) else { continue }
+            let headIDs = allHeads.filter(completeAncestors.contains)
+            guard !headIDs.isEmpty else { continue }
             // With part of the journal unread (downloading, or deferred by limits), a conversation whose applied
             // heads weren't read this pass would roll back to an older snapshot. It waits for a fuller read.
             if journalIncomplete, let applied = state.heads[meetingID.uuidString], !applied.allSatisfy({ events[$0] != nil }) { continue }
@@ -280,8 +299,10 @@ public actor LibrarySyncEngine {
         if sourceMeetings.values.contains(where: { $0.count > 1 }) {
             warnings.append("The same recording is in more than one conversation. They stay separate.")
         }
+        // Library settings merge item by item, last change wins, so the readable heads merge on their own: a parent
+        // that can't be read (a newer format) doesn't hold them back. One still downloading does.
         let metadataHeads = heads(ids: Array(metadata.keys), parents: { metadata[$0]?.parents ?? [] })
-        let missingMetadataParents = Set(metadata.values.flatMap(\.parents)).subtracting(metadata.keys)
+        let missingMetadataParents = Set(metadata.values.flatMap(\.parents)).subtracting(metadata.keys).filter { unreadableJournal[$0] == nil }
         let versions: [Data]
         if !missingMetadataParents.isEmpty {
             pendingDownloads += missingMetadataParents.count; versions = []
@@ -389,6 +410,22 @@ public actor LibrarySyncEngine {
         try LocalFiles.atomicWrite(SyncEncoding.data(state), to: checkpointURL)
     }
     private func hash<T: Encodable>(_ value: T) throws -> String { SyncDigest.sha256(data: try SyncEncoding.data(value)) }
+    /// A journal entry (or the library settings in one) that declares a schema newer than this version reads.
+    private func requireSupportedVersion(_ bytes: Data) throws {
+        struct Header: Decodable { var schemaVersion: Int? }
+        if let version = (try? decoder.decode(Header.self, from: bytes))?.schemaVersion, version > 1 { throw LibrarySyncError.unsupportedVersion(version) }
+    }
+    /// Remembers an entry that can't be read, so later passes neither read it again nor wait for it: its content
+    /// never changes. A newer Daybook's entries say so; anything else says it couldn't be read.
+    private func markUnreadable(_ name: String, _ error: Error) -> String {
+        let reason: String
+        switch error {
+        case LibrarySyncError.unsupportedVersion, is DecodingError: reason = "Some changes were made with a newer version of Daybook. Update Daybook to see them."
+        default: reason = error.localizedDescription
+        }
+        unreadableJournal[name] = reason
+        return reason
+    }
     private func eventHash(_ url: URL, bytes: Data) throws -> String {
         let expected = url.deletingPathExtension().lastPathComponent
         guard SyncFiles.isHash(expected), SyncDigest.sha256(data: bytes) == expected else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
@@ -610,16 +647,18 @@ public actor LibrarySyncEngine {
     }
     /// Visit every edge once. Missing parents and cycles never become ready, while shared
     /// ancestors in a merge history do not multiply the work or consume the call stack.
-    private func completeAncestorIDs(events: [String: SyncEventRecord], budget: inout SyncPassBudget) throws -> Set<String> {
+    /// `present` are entries that count as available though they aren't among `events`.
+    private func completeAncestorIDs(events: [String: SyncEventRecord], budget: inout SyncPassBudget, present: Set<String> = []) throws -> Set<String> {
         var remaining: [String: Int] = [:]
         var children: [String: [String]] = [:]
         var ready: [String] = []
         for (id, event) in events {
             try Task.checkCancellation()
             guard !budget.timeExceeded else { budget.deferred += 1; return [] }
-            remaining[id] = event.parents.count
-            if event.parents.isEmpty { ready.append(id) }
-            for parent in event.parents { children[parent, default: []].append(id) }
+            let parents = event.parents.filter { !present.contains($0) }
+            remaining[id] = parents.count
+            if parents.isEmpty { ready.append(id) }
+            for parent in parents { children[parent, default: []].append(id) }
         }
         var complete = Set<String>()
         while let id = ready.popLast() {

@@ -619,11 +619,15 @@ public final class LibraryController: ObservableObject {
                 }
             }
             let metadataBeforeMerge = metadata
+            // Each version merges on its own: one this version can't read (a newer format) is left for an update
+            // instead of stopping every pass, and settings inside one it can't read travel on unchanged.
             for data in result.metadataVersions {
-                let remote = try JSONDecoder().decode(LibraryMetadata.self, from: data)
-                guard remote.schemaVersion == 1 else { throw DaybookError.libraryUnavailable }
+                guard let remote = try? JSONDecoder().decode(LibraryMetadata.self, from: data), remote.schemaVersion == 1 else {
+                    mergeWarnings.append(Self.newerSettingsWarning); continue
+                }
                 metadata = metadata.merging(remote)
             }
+            if metadata.hasUnreadableValues { mergeWarnings.append(Self.newerSettingsWarning) }
             let mergedGlossary = metadata.vocabulary.compactMap(\.value)
             if mergedGlossary != glossary || metadata != metadataBeforeMerge ||
                 persistenceErrors["library-settings"] != nil || persistenceErrors["glossary"] != nil {
@@ -642,6 +646,10 @@ public final class LibraryController: ObservableObject {
         } catch { sync.reportFailure(error.localizedDescription) }
         return applied
     }
+}
+
+extension LibraryController {
+    static let newerSettingsWarning = "Some library settings were saved with a newer version of Daybook. Update Daybook to see them."
 }
 
 /// What one sync pass applied.

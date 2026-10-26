@@ -105,7 +105,13 @@ extension LibrarySyncEngine {
         case .absent:
             break
         }
-        return try SyncFiles.coordinateRead(delivered, below: inboxBase) { try Data(contentsOf: $0) }
+        let bytes = try SyncFiles.coordinateRead(delivered, below: inboxBase) { try Data(contentsOf: $0) }
+        // A delivery damaged after it was stored is discarded; iCloud Drive's copy takes over.
+        guard SyncDigest.sha256(data: bytes) == url.deletingPathExtension().lastPathComponent else {
+            discardDelivery(delivered)
+            throw SyncPendingDownload()
+        }
+        return bytes
     }
 
     /// The courier's copy of an audio object to install from while the sync folder's copy isn't downloaded (or hasn't
