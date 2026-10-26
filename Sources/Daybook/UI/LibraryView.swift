@@ -64,6 +64,7 @@ struct LibraryView: View {
         .onChange(of: showsConversation) { _, _ in adaptColumns() }
         .sheet(item: $state.activeSheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
         .sheet(item: $state.addDeviceRequest) { request in AddDeviceSheet(state: state, request: request) }
+        .sheet(item: $state.libraryMoveOffer) { offer in LibraryMoveSheet(state: state, offer: offer) }
         .alert(trashTitle, isPresented: Binding(get: { !state.trashRequestIDs.isEmpty }, set: { if !$0 { state.trashRequestIDs = [] } })) {
             Button("Move to Trash", role: .destructive) {
                 for id in state.trashRequestIDs { state.trashMeeting(id) }

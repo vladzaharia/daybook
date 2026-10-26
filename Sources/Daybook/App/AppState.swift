@@ -72,6 +72,10 @@ final class AppState: ObservableObject {
         set { library.notice = newValue }
     }
     @Published var isReady = false
+    /// A library in the wrong place for this build (docs/sandbox.md): the library doesn't open until the person decides.
+    @Published var libraryMoveOffer: LibraryMoveOffer?
+    @Published var isMovingLibrary = false
+    @Published var libraryMoveError: String?
     @Published var processingID: UUID?
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
@@ -278,6 +282,49 @@ final class AppState: ObservableObject {
         wireDevices()
         wirePhones()
         wireCaptions()
+        libraryMoveOffer = Self.launchLibraryOffer(library: libraryURL, defaults: defaults)
+    }
+
+    /// A move this build should offer before it opens its library; only for the app's own library, never `--library`,
+    /// `swift run`, or tests.
+    static func launchLibraryOffer(library: URL, defaults: UserDefaults, bundle: Bundle = .main,
+                                   sandboxed: Bool = SandboxEnvironment.isSandboxed) -> LibraryMoveOffer? {
+        guard library.standardizedFileURL.path == LibraryLocation.standard.standardizedFileURL.path,
+              LibraryLocation.folderName(bundleURL: bundle.bundleURL) == LibraryLocation.appFolder,
+              let identifier = bundle.bundleIdentifier else { return nil }
+        if !sandboxed {
+            return LegacyLibraryReturn.plan(library: library, bundleIdentifier: identifier, defaults: defaults).map { .returnFromContainer($0) }
+        }
+        return nil
+    }
+
+    /// Moves the library as offered, then starts over with it in place.
+    func acceptLibraryMove() {
+        guard let offer = libraryMoveOffer, !isMovingLibrary else { return }
+        isMovingLibrary = true; libraryMoveError = nil
+        Task {
+            do {
+                switch offer {
+                case .returnFromContainer(let plan):
+                    _ = try await Task.detached(priority: .userInitiated) { try LegacyLibraryReturn.move(plan) }.value
+                    LegacyLibraryReturn.finish(plan, defaults: preferences)
+                }
+                AppRelaunch.relaunch()
+            } catch {
+                isMovingLibrary = false
+                libraryMoveError = "Couldn’t move your library: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Not Now: the library opens where it is.
+    func declineLibraryMove() async {
+        guard let offer = libraryMoveOffer, !isMovingLibrary else { return }
+        switch offer {
+        case .returnFromContainer(let plan): LegacyLibraryReturn.decline(plan, defaults: preferences)
+        }
+        libraryMoveOffer = nil
+        await initialize()
     }
 
     var selectedMeeting: Meeting? { meetings.first { $0.id == selectedID } }
@@ -337,6 +384,8 @@ final class AppState: ObservableObject {
 
     func initialize() async {
         guard !isReady else { return }
+        // A library to move first: nothing opens until the person decides (`libraryMoveOffer`).
+        guard libraryMoveOffer == nil else { return }
         do {
             try await library.load()
             recordReplicaIdentity()
