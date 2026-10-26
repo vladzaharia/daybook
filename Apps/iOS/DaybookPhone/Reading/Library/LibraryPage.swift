@@ -195,7 +195,7 @@ struct LibraryPage: View {
         case .section(.all):
             VStack(spacing: PhoneStyle.Space.s3) {
                 Image(systemName: "waveform").font(.largeTitle).foregroundStyle(PhoneStyle.brandGradient)
-                Text("No conversations yet").font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
+                Text("No Conversations Yet").font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
                 Text("Conversations you record or import appear here.")
                     .font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary).multilineTextAlignment(.center)
             }

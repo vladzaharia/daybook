@@ -244,7 +244,8 @@ private struct TranscriptToolbar: ToolbarContent {
     }
 }
 
-/// The right page before anything is chosen.
+/// The right page before anything is chosen. In an empty library the left page already says what
+/// to do, so this page shows only the mark.
 private struct NotebookPlaceholder: View {
     let isEmpty: Bool
     var body: some View {
@@ -253,12 +254,10 @@ private struct NotebookPlaceholder: View {
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(PhoneStyle.brandGradient)
                 .accessibilityHidden(true)
-            Text(isEmpty ? "Your conversations will open here" : "Choose a conversation")
-                .font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
-                .multilineTextAlignment(.center)
-            if isEmpty {
-                Text("Record one with the button on the left, or on your Mac.")
-                    .font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary).multilineTextAlignment(.center)
+            if !isEmpty {
+                Text("Choose a Conversation")
+                    .font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
+                    .multilineTextAlignment(.center)
             }
         }
         .padding(PhoneStyle.Space.s6)
