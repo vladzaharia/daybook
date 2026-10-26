@@ -185,6 +185,26 @@ final class LibrarySyncApplyTests: XCTestCase {
         XCTAssertEqual(next?.editedDuringPass, [])
     }
 
+    func testARequestMadeByTheRequestedPassRunsAfterItInsteadOfCancellingIt() async throws {
+        let mac = try await library("Mac")
+        let sync = try XCTUnwrap(mac.sync)
+        sync.syncDebounce = .milliseconds(10)
+        var passes = 0, cancelled = false
+        sync.onSyncRequested = {
+            passes += 1
+            if passes == 1 {
+                sync.requestSync()   // what an edit saved during the pass does
+                try? await Task.sleep(for: .milliseconds(30))
+                cancelled = Task.isCancelled
+            }
+        }
+        sync.requestSync()
+        try await waitUntil("the first pass") { passes == 1 }
+        await sync.awaitIdle()
+        XCTAssertFalse(cancelled, "the running pass isn't cancelled by its own request")
+        XCTAssertEqual(passes, 2, "the request runs once the pass is over")
+    }
+
     func testWhileRecordingTheMacTakesHandoffsAndOwnershipAndSaysItsRecording() async throws {
         let mac = try await library("Mac"), phone = try await library("Phone", phone: true)
         let id = mac.newMeeting(title: "Recording now")

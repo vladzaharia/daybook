@@ -170,6 +170,9 @@ public final class LibrarySyncController: ObservableObject {
     private var polling: Task<Void, Never>?
     private var debounce: Task<Void, Never>?
     private var debounceToken = UUID()
+    /// The requested pass is running; a request now waits for it to end.
+    private var debounceRunsPass = false
+    private var requestedDuringPass = false
     private var passEndWaiters: [CheckedContinuation<Void, Never>] = []
     /// How long a request waits before it runs a pass, so a burst of edits makes one. Nil: requests never run a
     /// pass on their own; test rigs drive passes themselves.
@@ -401,13 +404,21 @@ public final class LibrarySyncController: ObservableObject {
 
     public func requestSync() {
         guard folder != nil else { return }
+        // A request made by the pass a request started (an edit saved meanwhile, a courier delivery) mustn't cancel
+        // that pass: it runs again once the pass is over.
+        if debounceRunsPass { requestedDuringPass = true; return }
         debounce?.cancel(); debounce = nil
         guard let delay = syncDebounce else { return }
         let token = UUID()
         debounceToken = token
         debounce = Task { [weak self] in
-            if (try? await Task.sleep(for: delay)) != nil, !Task.isCancelled { await self?.onSyncRequested?() }
+            if (try? await Task.sleep(for: delay)) != nil, !Task.isCancelled {
+                self?.debounceRunsPass = true
+                await self?.onSyncRequested?()
+                self?.debounceRunsPass = false
+            }
             if self?.debounceToken == token { self?.debounce = nil }
+            if self?.requestedDuringPass == true { self?.requestedDuringPass = false; self?.requestSync() }
         }
     }
 
@@ -881,6 +892,7 @@ public final class LibrarySyncController: ObservableObject {
 
     private func stopMonitoring() {
         polling?.cancel(); polling = nil; debounce?.cancel(); debounce = nil; containerListed = false
+        debounceRunsPass = false; requestedDuringPass = false
         query?.stop(); query = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
         scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil
