@@ -40,22 +40,24 @@ struct PlayerBar: View {
     private var controls: some View {
         VStack(spacing: 6) {
             HStack(spacing: 4) {
-                Button { player.skip(-15) } label: { Image(systemName: "gobackward.15").font(.title3) }
+                Button { player.skip(-15) } label: {
+                    Image(systemName: "gobackward.15").font(.title3).frame(width: 44, height: 44).contentShape(Rectangle())
+                }
                     .accessibilityLabel("Back 15 seconds")
-                    .frame(width: 40, height: 40)
                 Button { player.toggle() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(PhoneStyle.onPlayFill)
                         .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                         .background(Circle().fill(PhoneStyle.playFill))
                         .neonGlow(player.isPlaying ? PhoneStyle.neonMint : .clear, radius: 6)
                 }
                 .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-                Button { player.skip(15) } label: { Image(systemName: "goforward.15").font(.title3) }
+                Button { player.skip(15) } label: {
+                    Image(systemName: "goforward.15").font(.title3).frame(width: 44, height: 44).contentShape(Rectangle())
+                }
                     .accessibilityLabel("Forward 15 seconds")
-                    .frame(width: 40, height: 40)
                 if !dynamicType.isAccessibilitySize {
                     VStack(alignment: .leading, spacing: 0) {
                         if let caption {
@@ -76,6 +78,8 @@ struct PlayerBar: View {
                         .font(.footnote.weight(.semibold).monospacedDigit())
                         .padding(.horizontal, 7).padding(.vertical, 3)
                         .background(PhoneStyle.quietFill, in: Capsule())
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Playback speed, \(player.rate.formatted()) times")
                 Button {
@@ -86,11 +90,12 @@ struct PlayerBar: View {
                 } label: {
                     Image(systemName: "bookmark").symbolEffect(.bounce, value: bookmarks)
                         .foregroundStyle(PhoneStyle.bookmark)
-                        .frame(width: 34, height: 40)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Add bookmark here")
                 Button { withAnimation(.snappy(duration: 0.25)) { player.close() } } label: {
-                    Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 30, height: 40)
+                    Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .accessibilityLabel("Close player")
             }
@@ -130,7 +135,7 @@ struct PlayerBar: View {
                     ProgressView(value: 0.05).progressViewStyle(.brand(width: nil, height: 3)).opacity(0.5)
                 }
             }
-            Button { player.close() } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 30, height: 36) }
+            Button { player.close() } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.plain).foregroundStyle(PhoneStyle.Ink.body)
                 .accessibilityLabel("Cancel download")
         }
@@ -144,7 +149,7 @@ struct PlayerBar: View {
             Text(message).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
-            Button { player.close() } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 30, height: 30) }
+            Button { player.close() } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.plain).foregroundStyle(PhoneStyle.Ink.body)
                 .accessibilityLabel("Close")
         }
@@ -180,15 +185,16 @@ struct MiniPlayer: View {
             .accessibilityHint("Opens the conversation")
             Button { player.toggle() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").contentTransition(.symbolEffect(.replace))
-                    .frame(width: 36, height: 36)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-            Button { player.close() } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 30, height: 36) }
+            Button { player.close() } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .accessibilityLabel("Close player")
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
-        .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 6)
+        .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 2)
         .glassEffect(.regular, in: Capsule())
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }

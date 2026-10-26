@@ -271,8 +271,15 @@ struct TagEditor: View {
             ForEach(tags, id: \.self) { tag in
                 HStack(spacing: 4) {
                     Text(tag)
-                    Button { save(tags.filter { $0 != tag }) } label: { Image(systemName: "xmark").font(.caption2.weight(.bold)) }
+                    // A 44 pt target that doesn't make the chip taller.
+                    Button { save(tags.filter { $0 != tag }) } label: {
+                        Image(systemName: "xmark").font(.caption2.weight(.bold))
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
                         .buttonStyle(.plain)
+                        .padding(.vertical, -14)
+                        .padding(.horizontal, -14)
                         .accessibilityLabel("Remove tag \(tag)")
                 }
                 .font(.subheadline.weight(.medium))
