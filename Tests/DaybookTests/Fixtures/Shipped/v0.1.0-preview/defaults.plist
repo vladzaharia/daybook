@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>automaticRecording</key>
+	<true/>
+	<key>detectSpeakers</key>
+	<true/>
+	<key>importedFileFingerprints</key>
+	<array>
+		<string>/Users/example/Recordings/Soundcore/2026-10-20 Planning.m4a|482113|1792500150.0</string>
+	</array>
+	<key>includeComputerAudio</key>
+	<false/>
+	<key>processSyncedAudio</key>
+	<false/>
+	<key>processingPreferences</key>
+	<data>
+	eyJzcGVha2VyT3B0aW9ucyI6eyJxdWFsaXR5IjoiYWNjdXJhdGUiLCJleHBlY3RlZFNw
+	ZWFrZXJDb3VudCI6M30sIm1hdGNoU3BlYWtlcnNBY3Jvc3NTb3VyY2VzIjpmYWxzZSwi
+	c3BlYWtlck1hdGNoTWFyZ2luIjowLjA2MjUsInNwZWFrZXJNb2RlbElEIjoic3BlYWtl
+	ci1zb3J0Zm9ybWVyLXYyLjEiLCJzcGVha2VyTWF0Y2hUaHJlc2hvbGQiOjAuODc1fQ==
+	</data>
+	<key>summaryModel</key>
+	<string>qwen-3b</string>
+	<key>transcriptionModel</key>
+	<string>whisper-small</string>
+</dict>
+</plist>

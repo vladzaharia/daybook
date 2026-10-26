@@ -1,0 +1,16 @@
+[
+  {
+    "aliases" : [
+      "day book"
+    ],
+    "approved" : true,
+    "definition" : "The app.",
+    "id" : "0B2C3D4E-0000-4000-8000-0000000000D1",
+    "occurrences" : 3,
+    "sourceMeetingIDs" : [
+      "0B2C3D4E-0000-4000-8000-000000000001"
+    ],
+    "term" : "Daybook",
+    "updatedAt" : 814292850
+  }
+]

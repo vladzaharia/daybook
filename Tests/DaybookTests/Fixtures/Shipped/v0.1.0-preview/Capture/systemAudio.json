@@ -1,0 +1,10 @@
+{
+  "channelCount" : 2,
+  "firstSampleHostTimeSeconds" : 81235,
+  "frameCount" : 2904000,
+  "offsetSeconds" : 0.5,
+  "role" : "systemAudio",
+  "sampleRate" : 48000,
+  "startedAt" : 1792500000500,
+  "url" : "file:\/\/\/Users\/example\/Library\/Application%20Support\/Daybook\/Staging\/0A1B2C3D-0000-4000-8000-000000000001\/systemAudio.caf"
+}

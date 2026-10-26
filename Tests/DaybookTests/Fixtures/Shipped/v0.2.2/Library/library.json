@@ -1,0 +1,94 @@
+{
+  "folders" : [
+    {
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000F1",
+      "modifiedAt" : 814192800,
+      "value" : {
+        "id" : "0B2C3D4E-0000-4000-8000-0000000000F1",
+        "name" : "Projects"
+      }
+    },
+    {
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000F2",
+      "modifiedAt" : 814202800
+    }
+  ],
+  "handoffs" : [
+    {
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000E5",
+      "modifiedAt" : 814293310,
+      "value" : {
+        "id" : "0B2C3D4E-0000-4000-8000-0000000000E5",
+        "importedRecordingIDs" : [
+          "1792600000"
+        ],
+        "kind" : "soundcore.work",
+        "ownerID" : "5D6E7F80-0000-4000-8000-00000000000A",
+        "ownerName" : "Studio Mac",
+        "pendingImports" : [
+          {
+            "attachTo" : "0B2C3D4E-0000-4000-8000-000000000001",
+            "isAutomatic" : true,
+            "recordingID" : "1792603600"
+          }
+        ],
+        "phase" : "released",
+        "recorderIsRecording" : false,
+        "requestedAt" : 814293300,
+        "requesterClass" : "phone",
+        "requesterID" : "5D6E7F80-0000-4000-8000-00000000000B",
+        "requesterName" : "Alex’s iPhone",
+        "serial" : "D3200SIM0000001",
+        "updatedAt" : 814293310
+      }
+    }
+  ],
+  "recorders" : [
+    {
+      "id" : "soundcore.work|D3200SIM0000001",
+      "modifiedAt" : 814282800,
+      "value" : {
+        "claimedAt" : 814282800,
+        "kind" : "soundcore.work",
+        "ownerClass" : "mac",
+        "ownerID" : "5D6E7F80-0000-4000-8000-00000000000A",
+        "ownerName" : "Studio Mac",
+        "serial" : "D3200SIM0000001"
+      }
+    }
+  ],
+  "schemaVersion" : 1,
+  "templates" : [
+    {
+      "id" : "custom-design-review",
+      "modifiedAt" : 814212800,
+      "value" : {
+        "id" : "custom-design-review",
+        "instructions" : "List the options and the choice.",
+        "kind" : "general",
+        "name" : "Design review",
+        "updatedAt" : 814212800
+      }
+    }
+  ],
+  "vocabulary" : [
+    {
+      "id" : "0B2C3D4E-0000-4000-8000-0000000000D1",
+      "modifiedAt" : 814292850,
+      "value" : {
+        "aliases" : [
+          "day book"
+        ],
+        "approved" : true,
+        "definition" : "The app.",
+        "id" : "0B2C3D4E-0000-4000-8000-0000000000D1",
+        "occurrences" : 3,
+        "sourceMeetingIDs" : [
+          "0B2C3D4E-0000-4000-8000-000000000001"
+        ],
+        "term" : "Daybook",
+        "updatedAt" : 814292850
+      }
+    }
+  ]
+}

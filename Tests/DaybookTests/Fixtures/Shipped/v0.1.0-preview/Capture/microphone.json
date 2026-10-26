@@ -1,0 +1,10 @@
+{
+  "channelCount" : 1,
+  "firstSampleHostTimeSeconds" : 81234.75,
+  "frameCount" : 2940000,
+  "offsetSeconds" : 0.25,
+  "role" : "microphone",
+  "sampleRate" : 48000,
+  "startedAt" : 1792500000250,
+  "url" : "file:\/\/\/Users\/example\/Library\/Application%20Support\/Daybook\/Staging\/0A1B2C3D-0000-4000-8000-000000000001\/microphone.caf"
+}

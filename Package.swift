@@ -98,7 +98,7 @@ let package = Package(
             "DaybookCaptions",
             "DaybookDesign",
             "DaybookTestSupport"
-        ]),
+        ], resources: [.copy("Fixtures")]), // Fixtures/Shipped: files written by shipped versions.
         .testTarget(name: "DaybookLinkTests", dependencies: ["DaybookLink", "DaybookTestSupport"]),
         .testTarget(name: "DaybookCaptionsTests", dependencies: ["DaybookCaptions", "DaybookTestSupport"])
     ],

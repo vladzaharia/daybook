@@ -1,0 +1,17 @@
+{
+  "channelCount" : 2,
+  "clockAnchors" : [
+    {
+      "frame" : 0,
+      "hostTime" : 91235
+    }
+  ],
+  "firstSampleHostTimeSeconds" : 91235,
+  "frameCount" : 2904000,
+  "method" : "process-tap",
+  "offsetSeconds" : 0.5,
+  "role" : "systemAudio",
+  "sampleRate" : 48000,
+  "startedAt" : 1792600000500,
+  "url" : "file:\/\/\/Users\/example\/Library\/Application%20Support\/Daybook\/Staging\/0B2C3D4E-0000-4000-8000-000000000001\/systemAudio.caf"
+}
