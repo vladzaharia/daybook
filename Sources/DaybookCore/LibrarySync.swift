@@ -26,6 +26,14 @@ public struct SyncResult: Sendable {
     public var hasMoreWork: Bool { deferredItems > 0 }
 }
 
+/// What a pass exchanges.
+public enum SyncPassScope: Sendable {
+    /// Conversations and library settings.
+    case full
+    /// Library settings only (`LibrarySyncEngine.synchronize`).
+    case metadataOnly
+}
+
 public enum LibrarySyncError: LocalizedError {
     case unsafeLocation, invalidManifest, manifestConflict, unsupportedVersion(Int), invalidEvent(String), invalidBlob(String), missingLocalAudio(String), corruptState, invalidCheckpoint
     /// No library is visible in the sync folder yet, and iCloud hasn't finished listing it: one may be there.
@@ -86,6 +94,8 @@ public actor LibrarySyncEngine {
     var settledJournalListing: Set<String>?
     var presenceWritten: (record: SyncDeviceRecord, at: Date)?
     nonisolated let installation: String?
+    /// What this device is doing, for its presence record (`publishActivity`).
+    var activity: SyncDeviceActivity?
     /// Another device writes presence under this device ID: this one should take a new identity.
     public internal(set) var sharesIdentity = false
     /// The sync library's ID, from its manifest, once a pass has read it. The iPhone's local link
@@ -122,12 +132,14 @@ public actor LibrarySyncEngine {
     /// Cancelling the calling task stops the pass; an unacknowledged pull is offered again next time.
     /// `protecting` are conversations this device is recording or processing into: a deletion from another
     /// device waits until they're no longer protected, and what this device added is then kept (see below).
+    /// `scope` `.metadataOnly` exchanges library settings alone (a device busy recording).
     public func synchronize(meetings: [Meeting], deletedMeetingIDs: Set<UUID> = [], libraryMetadata: Data? = nil,
-                            limits: SyncPassLimits = .unlimited, protecting: Set<UUID> = []) async throws -> SyncResult {
+                            limits: SyncPassLimits = .unlimited, protecting: Set<UUID> = [], scope: SyncPassScope = .full) async throws -> SyncResult {
         try Task.checkCancellation()
         let manifest = try prepareRemote()
         libraryID = manifest.libraryID
         try loadCheckpoint(libraryID: manifest.libraryID, superseding: manifest.supersedes ?? [])
+        if scope == .metadataOnly { return try synchronizeMetadataOnly(libraryMetadata, limits: limits) }
         var budget = SyncPassBudget(limits)
         var warnings: [String] = []
         var pendingDownloads = 0
@@ -160,26 +172,10 @@ public actor LibrarySyncEngine {
             catch let error as CancellationError { throw error }
             catch { warnings.append(markUnreadable(name, error)); unreadJournalFiles += 1 }
         }
-        for url in metadataURLs {
-            try Task.checkCancellation()
-            let name = url.deletingPathExtension().lastPathComponent
-            if let cached = metadataCache[name] { metadata[name] = cached; continue }
-            if let reason = unreadableJournal[name] { warnings.append(reason); continue }
-            guard budget.admitJournalRead() else { metadataIncomplete = true; continue }
-            do {
-                let bytes = try readJournal(url, in: "Metadata")
-                let hash = try eventHash(url, bytes: bytes)
-                try requireSupportedVersion(bytes)
-                let record = try decoder.decode(SyncMetadataRecord.self, from: bytes)
-                guard record.schemaVersion == 1, record.parents.allSatisfy(SyncFiles.isHash) else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
-                // Library settings a newer Daybook wrote in a format this one can't merge stay out of the heads here;
-                // they stay heads for the devices that read them, since nothing here is ever published over them.
-                try requireSupportedVersion(record.data)
-                metadata[hash] = record; metadataCache[hash] = record
-            } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1; metadataIncomplete = true }
-            catch let error as CancellationError { throw error }
-            catch { warnings.append(markUnreadable(name, error)) }
-        }
+        let metadataRead = try readMetadata(metadataURLs, budget: &budget, warnings: &warnings)
+        metadata = metadataRead.records
+        metadataIncomplete = metadataRead.incomplete
+        pendingDownloads += metadataRead.downloading; unreadJournalFiles += metadataRead.downloading
         journalDeviceIDs = Set(events.values.map(\.deviceID)).union(metadata.values.map(\.deviceID))
         // A parent belongs to the same conversation. Malformed cross-conversation edges
         // cannot provide ancestry or hide a legitimate head.
@@ -357,24 +353,11 @@ public actor LibrarySyncEngine {
         if sourceMeetings.values.contains(where: { $0.count > 1 }) {
             warnings.append("The same recording is in more than one conversation. They stay separate.")
         }
-        // Library settings merge item by item, last change wins, so the readable heads merge on their own: a parent
-        // that can't be read (a newer format) doesn't hold them back. One still downloading does.
-        let metadataHeads = heads(ids: Array(metadata.keys), parents: { metadata[$0]?.parents ?? [] })
-        let missingMetadataParents = Set(metadata.values.flatMap(\.parents)).subtracting(metadata.keys).filter { unreadableJournal[$0] == nil }
-        let versions: [Data]
-        if !missingMetadataParents.isEmpty {
-            pendingDownloads += missingMetadataParents.count; versions = []
-            warnings.append("Folders and templates are waiting for the next sync.")
-        } else if metadataIncomplete {
-            // Heads of a partial read could be older than those already applied; wait for the rest.
-            versions = []
-        } else {
-            versions = metadataHeads.compactMap { metadata[$0]?.data }
-        }
+        let settings = metadataVersions(metadata, incomplete: metadataIncomplete, warnings: &warnings, pendingDownloads: &pendingDownloads)
+        let metadataHeads = settings.heads, versions = settings.versions
         let checkpointID = UUID()
         try Task.checkCancellation()
-        state.pending = SyncPendingApply(id: checkpointID, heads: proposedHeads,
-            metadataHeads: missingMetadataParents.isEmpty && !metadataIncomplete ? metadataHeads : state.metadataHeads,
+        state.pending = SyncPendingApply(id: checkpointID, heads: proposedHeads, metadataHeads: settings.applied ? metadataHeads : state.metadataHeads,
             changedBases: baseChanges, removedBases: removedBases.sorted())
         try saveCheckpoint()
         retainCaches(heads: Set(proposedHeads.values.joined()).union(state.heads.values.joined()),
@@ -394,6 +377,85 @@ public actor LibrarySyncEngine {
             deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
             pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
             changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred, writtenFiles: written)
+    }
+
+    /// Reads the library settings versions, first-time reads within `budget`.
+    private func readMetadata(_ urls: [URL], budget: inout SyncPassBudget, warnings: inout [String])
+        throws -> (records: [String: SyncMetadataRecord], incomplete: Bool, downloading: Int) {
+        var metadata: [String: SyncMetadataRecord] = [:]
+        var incomplete = false, downloading = 0
+        for url in urls {
+            try Task.checkCancellation()
+            let name = url.deletingPathExtension().lastPathComponent
+            if let cached = metadataCache[name] { metadata[name] = cached; continue }
+            if let reason = unreadableJournal[name] { warnings.append(reason); continue }
+            guard budget.admitJournalRead() else { incomplete = true; continue }
+            do {
+                let bytes = try readJournal(url, in: "Metadata")
+                let hash = try eventHash(url, bytes: bytes)
+                try requireSupportedVersion(bytes)
+                let record = try decoder.decode(SyncMetadataRecord.self, from: bytes)
+                guard record.schemaVersion == 1, record.parents.allSatisfy(SyncFiles.isHash) else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
+                // Library settings a newer Daybook wrote in a format this one can't merge stay out of the heads here;
+                // they stay heads for the devices that read them, since nothing here is ever published over them.
+                try requireSupportedVersion(record.data)
+                metadata[hash] = record; metadataCache[hash] = record
+            } catch is SyncPendingDownload { downloading += 1; incomplete = true }
+            catch let error as CancellationError { throw error }
+            catch { warnings.append(markUnreadable(name, error)) }
+        }
+        return (metadata, incomplete, downloading)
+    }
+
+    /// The settings versions to offer: the readable heads. Library settings merge item by item, last change wins, so
+    /// the readable heads merge on their own: a parent that can't be read (a newer format) doesn't hold them back. One
+    /// still downloading does, as does a partial read, whose heads could be older than those already applied.
+    private func metadataVersions(_ metadata: [String: SyncMetadataRecord], incomplete: Bool, warnings: inout [String],
+                                  pendingDownloads: inout Int) -> (heads: [String], versions: [Data], applied: Bool) {
+        let metadataHeads = heads(ids: Array(metadata.keys), parents: { metadata[$0]?.parents ?? [] })
+        let missingParents = Set(metadata.values.flatMap(\.parents)).subtracting(metadata.keys).filter { unreadableJournal[$0] == nil }
+        if !missingParents.isEmpty {
+            pendingDownloads += missingParents.count
+            warnings.append("Folders and templates are waiting for the next sync.")
+            return (metadataHeads, [], false)
+        }
+        if incomplete { return (metadataHeads, [], false) }
+        return (metadataHeads, metadataHeads.compactMap { metadata[$0]?.data }, true)
+    }
+
+    /// A pass over library settings only (recorder ownership, handoffs, folders, templates, vocabulary): for a device
+    /// busy recording, so another device's handoff request or claim is seen without touching any conversation.
+    private func synchronizeMetadataOnly(_ libraryMetadata: Data?, limits: SyncPassLimits) throws -> SyncResult {
+        var budget = SyncPassBudget(limits)
+        var warnings: [String] = []
+        var pendingDownloads = 0, published = 0
+        ownJournalWrites = []
+        let read = try readMetadata(try journalListing(in: "Metadata"), budget: &budget, warnings: &warnings)
+        var metadata = read.records
+        pendingDownloads += read.downloading
+        if let libraryMetadata, SyncDigest.sha256(data: libraryMetadata) != state.metadataSubmittedHash {
+            let sequence = state.sequence + 1
+            let record = SyncMetadataRecord(deviceID: deviceID, sequence: sequence, parents: state.metadataHeads.sorted(), data: libraryMetadata)
+            let id = try writeRecord(record, directory: "Metadata")
+            metadata[id] = record; metadataCache[id] = record
+            state.metadataSubmittedHash = SyncDigest.sha256(data: libraryMetadata); state.metadataHeads = [id]; state.sequence = sequence
+            published += 1
+            try saveCheckpoint()
+        }
+        let settings = metadataVersions(metadata, incomplete: read.incomplete, warnings: &warnings, pendingDownloads: &pendingDownloads)
+        let checkpointID = UUID()
+        try Task.checkCancellation()
+        state.pending = SyncPendingApply(id: checkpointID, heads: state.heads, metadataHeads: settings.applied ? settings.heads : state.metadataHeads,
+                                         changedBases: [:], removedBases: [])
+        try saveCheckpoint()
+        // Conversations weren't read: the next full pass decides what's new.
+        settledJournalListing = nil
+        if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
+        let written = courierWrites.values.sorted { $0.path < $1.path }
+        courierWrites = [:]
+        return SyncResult(checkpointID: checkpointID, meetings: [], deletedMeetingIDs: [], metadataVersions: settings.versions,
+                          warnings: Array(Set(warnings)).sorted(), pendingDownloads: pendingDownloads, pendingUploads: 0,
+                          publishedEvents: published, deferredItems: budget.deferred, writtenFiles: written)
     }
 
     /// A conversation deleted elsewhere that holds what the deletion never saw becomes a new conversation with

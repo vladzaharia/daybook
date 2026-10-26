@@ -184,6 +184,34 @@ final class LibrarySyncApplyTests: XCTestCase {
         XCTAssertEqual(next?.editedDuringPass, [])
     }
 
+    func testWhileRecordingTheMacTakesHandoffsAndOwnershipAndSaysItsRecording() async throws {
+        let mac = try await library("Mac"), phone = try await library("Phone", phone: true)
+        let id = mac.newMeeting(title: "Recording now")
+        await mac.flush()
+        await sync(mac); await sync(phone)
+        // The Mac starts recording: the phone sees it at once, without a pass.
+        mac.sync?.publishActivity(recording: id, since: Date())
+        var recording: KnownSyncDevice?
+        for _ in 0..<100 where recording == nil {
+            recording = await phone.sync?.knownDevices().recordingMac()
+            if recording == nil { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        XCTAssertEqual(recording?.activity?.recordingConversationID, id)
+        // The phone takes over a recorder and renames the conversation; the Mac, still recording, takes the
+        // ownership only.
+        phone.claimRecorder(kind: "soundcore.work", serial: "S1", deviceClass: .phone)
+        phone.rename(id, to: "Renamed on the phone")
+        await phone.flush()
+        await sync(phone)
+        let busy = await mac.synchronize(protecting: id, scope: .metadataOnly)
+        XCTAssertEqual(busy?.acknowledged, true)
+        XCTAssertEqual(mac.recorderOwner(kind: "soundcore.work", serial: "S1")?.ownerID, phone.sync?.deviceID)
+        XCTAssertEqual(mac.meeting(id)?.title, "Recording now", "conversations wait until the recording is filed")
+        mac.sync?.publishActivity(recording: nil)
+        await sync(mac)
+        XCTAssertEqual(mac.meeting(id)?.title, "Renamed on the phone")
+    }
+
     private func waitUntil(_ what: String, timeout: Duration = .seconds(10), _ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + timeout
         while !condition() {

@@ -119,6 +119,37 @@ public enum TrackAudioAvailability: String, Codable, Sendable {
     case notLocal
 }
 
+/// What a device is doing right now, in its presence record (docs/icloud-sync.md, "Devices and presence"): the
+/// conversation it's recording into and the recorders it drives. The device rewrites it at the start and end of a
+/// recording and every few minutes while it lasts, even while its sync passes wait; readers ignore it after
+/// `expiresAt`. Additive: older readers skip it, and one that can't be read is left out of the record.
+public struct SyncDeviceActivity: Codable, Equatable, Sendable {
+    /// A recorder (a Soundcore, a phone) this device drives, as of `asOf`.
+    public struct Recorder: Codable, Equatable, Sendable {
+        public var kind: String
+        public var serial: String?
+        public var isRecording: Bool
+        public var recordingID: String?
+        public var startedAt: Date?
+        public var asOf: Date
+        public init(kind: String, serial: String? = nil, isRecording: Bool, recordingID: String? = nil, startedAt: Date? = nil, asOf: Date = Date()) {
+            self.kind = kind; self.serial = serial; self.isRecording = isRecording; self.recordingID = recordingID
+            self.startedAt = startedAt; self.asOf = asOf
+        }
+    }
+    public var recordingConversationID: UUID?
+    /// When the recording started.
+    public var since: Date?
+    public var recorders: [Recorder]?
+    /// When to stop believing it, by the writer's clock; renewed while it lasts.
+    public var expiresAt: Date
+    public init(recordingConversationID: UUID? = nil, since: Date? = nil, recorders: [Recorder]? = nil, expiresAt: Date = .distantFuture) {
+        self.recordingConversationID = recordingConversationID; self.since = since; self.recorders = recorders; self.expiresAt = expiresAt
+    }
+    /// Recording, into a conversation or on a recorder it drives.
+    public var isRecording: Bool { recordingConversationID != nil || recorders?.contains(where: \.isRecording) == true }
+}
+
 /// One device known to the library: from its presence record, or (for a replica running an older
 /// Daybook) only from the device ID on its journal entries.
 public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
@@ -131,11 +162,18 @@ public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
     /// When the device last completed a sync pass, by its own clock (clamped to now). Nil without presence.
     public var lastSeen: Date?
     public var isCurrentDevice: Bool
+    /// What it's doing, as its presence record last said (nil without one, or with nothing to say).
+    public var activity: SyncDeviceActivity?
     public var reportsPresence: Bool { lastSeen != nil }
     public init(id: String, deviceClass: SyncDeviceClass? = nil, displayName: String? = nil, canProcess: Bool? = nil,
-                audioPolicy: SyncAudioPolicy? = nil, lastSeen: Date? = nil, isCurrentDevice: Bool = false) {
+                audioPolicy: SyncAudioPolicy? = nil, lastSeen: Date? = nil, isCurrentDevice: Bool = false, activity: SyncDeviceActivity? = nil) {
         self.id = id; self.deviceClass = deviceClass; self.displayName = displayName; self.canProcess = canProcess
-        self.audioPolicy = audioPolicy; self.lastSeen = lastSeen; self.isCurrentDevice = isCurrentDevice
+        self.audioPolicy = audioPolicy; self.lastSeen = lastSeen; self.isCurrentDevice = isCurrentDevice; self.activity = activity
+    }
+    /// Recording now, by an activity that hasn't expired (`now` on the reader's clock).
+    public func isRecording(at now: Date = Date()) -> Bool {
+        guard let activity, activity.expiresAt > now else { return false }
+        return activity.isRecording
     }
 }
 
@@ -148,6 +186,10 @@ extension Array where Element == KnownSyncDevice {
     }
     /// Other replicas that wrote to the journal without a presence record (an older Daybook on a Mac).
     public var hasPeersWithoutPresence: Bool { contains { !$0.isCurrentDevice && !$0.reportsPresence } }
+    /// Another Mac that's recording now, by its presence.
+    public func recordingMac(at now: Date = Date()) -> KnownSyncDevice? {
+        first { !$0.isCurrentDevice && $0.deviceClass == .mac && $0.isRecording(at: now) }
+    }
 }
 
 /// Local audio budget for an on-demand replica.

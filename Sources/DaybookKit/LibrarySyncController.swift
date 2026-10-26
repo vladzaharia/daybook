@@ -372,7 +372,10 @@ public final class LibrarySyncController: ObservableObject {
         isICloudLocation = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true || root.path.contains("/Library/Mobile Documents/")
         // Other devices learn this one exists (and what it is) right away, not only after its first full
         // pass, which can take minutes on a new library. Presence is advisory, so a failure is ignored.
-        if let engine, replica.device != nil { Task { try? await engine.publishPresence() } }
+        if let engine, replica.device != nil {
+            let activity = self.activity
+            Task { if let activity { try? await engine.publishActivity(activity) } else { try? await engine.publishPresence() } }
+        }
         startCourier()
         if monitorChanges { startMonitoring(url); requestSync() }
     }
@@ -432,14 +435,14 @@ public final class LibrarySyncController: ObservableObject {
     public func deferUntilIdle() { if folder != nil && !isSyncing { status = "Waiting for recording or local processing to finish" } }
 
     public func synchronize(meetings: [Meeting], deletedMeetingIDs: Set<UUID>, metadata: Data,
-                            limits: SyncPassLimits = .unlimited, protecting: Set<UUID> = []) async throws -> SyncResult? {
+                            limits: SyncPassLimits = .unlimited, protecting: Set<UUID> = [], scope: SyncPassScope = .full) async throws -> SyncResult? {
         try Task.checkCancellation()
         guard let engine, !isSyncing else { return nil }
         let generation = configurationID
         isSyncing = true; status = "Syncing recordings and conversations…"
         do {
             let task = Task { try await engine.synchronize(meetings: meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: metadata,
-                                                           limits: limits, protecting: protecting) }
+                                                           limits: limits, protecting: protecting, scope: scope) }
             activeTask = task
             let result = try await withTaskCancellationHandler {
                 try await task.value
@@ -486,6 +489,20 @@ public final class LibrarySyncController: ObservableObject {
     }
 
     // MARK: Presence
+
+    /// What this device is doing, in its presence record. Kept across reconnections.
+    private var activity: SyncDeviceActivity?
+
+    /// Tells the other devices this one is recording into `conversationID` (nil: it stopped), and which recorders
+    /// it drives. Written at once and kept fresh every few minutes, even while recording holds sync passes back, so
+    /// the iPhone sees this Mac as present and busy rather than asleep.
+    public func publishActivity(recording conversationID: UUID?, since: Date? = nil, recorders: [SyncDeviceActivity.Recorder] = []) {
+        let next = conversationID == nil && recorders.isEmpty ? nil
+            : SyncDeviceActivity(recordingConversationID: conversationID, since: since, recorders: recorders.isEmpty ? nil : recorders)
+        activity = next
+        guard let engine, replica.device != nil else { return }
+        Task { try? await engine.publishActivity(next) }
+    }
 
     /// How this replica describes itself to the other devices (its presence record) and keeps
     /// audio. Set it before connecting; `updatePresence(_:)` changes a connected engine's identity.
@@ -844,6 +861,8 @@ public final class LibrarySyncController: ObservableObject {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
                 await self?.onSyncRequested?()
+                // Presence stays fresh while passes wait (recording, processing): rewritten when it's due.
+                if let engine = self?.engine { try? await engine.refreshPresence() }
             }
         }
         // The container has its own account handling (`accountDidChange`). A chosen folder disconnects.

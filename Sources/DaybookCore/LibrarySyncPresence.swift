@@ -20,11 +20,39 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// A random ID for this installation. Two devices writing the same record with different ones share a device
     /// ID (one was cloned from the other), and one of them takes a new identity (`sharesIdentity`).
     var installation: String?
+    var activity: SyncDeviceActivity?
 
+    init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
+         installation: String? = nil, activity: SyncDeviceActivity? = nil) {
+        self.deviceID = deviceID; self.deviceClass = deviceClass; self.displayName = displayName; self.canProcess = canProcess
+        self.audioPolicy = audioPolicy; self.lastSeen = lastSeen; self.installation = installation; self.activity = activity
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        format = try values.decode(String.self, forKey: .format)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        deviceID = try values.decode(String.self, forKey: .deviceID)
+        deviceClass = try values.decode(SyncDeviceClass.self, forKey: .deviceClass)
+        displayName = try values.decode(String.self, forKey: .displayName)
+        canProcess = try values.decode(Bool.self, forKey: .canProcess)
+        audioPolicy = try values.decodeIfPresent(String.self, forKey: .audioPolicy)
+        lastSeen = try values.decode(Date.self, forKey: .lastSeen)
+        installation = try? values.decodeIfPresent(String.self, forKey: .installation)
+        // Activity a newer Daybook wrote differently is left out, never a reason to skip the device.
+        activity = (try? values.decodeIfPresent(SyncDeviceActivity.self, forKey: .activity)) ?? nil
+    }
+
+    /// The same device, saying the same thing: everything but when it was written.
     func sameIdentity(as other: SyncDeviceRecord) -> Bool {
-        var copy = self
+        var copy = self, compared = other
         copy.lastSeen = other.lastSeen
-        return copy == other
+        copy.activity?.expiresAt = .distantFuture; compared.activity?.expiresAt = .distantFuture
+        return copy == compared
     }
 }
 
@@ -62,10 +90,24 @@ extension LibrarySyncEngine {
     /// Writes this replica's presence record now, regardless of the refresh interval.
     public func publishPresence() throws { try writePresence(now: Date(), force: true) }
 
+    /// Rewrites the presence record if it's older than the refresh interval: the controller's timer keeps it fresh
+    /// while passes wait (recording, processing).
+    public func refreshPresence() throws { try writePresence(now: Date(), force: false) }
+
+    /// What this device is doing now (nil: nothing to say), written into its presence record at once and renewed
+    /// with it. Its expiry is set at each write, a few refresh intervals ahead.
+    public func publishActivity(_ activity: SyncDeviceActivity?) throws {
+        self.activity = activity
+        try writePresence(now: Date(), force: true)
+    }
+
     func writePresence(now: Date, force: Bool) throws {
         guard let device else { return }
+        var stamped = activity
+        stamped?.expiresAt = now.addingTimeInterval(presenceRefreshInterval * 2.5)
         let record = SyncDeviceRecord(deviceID: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
-                                      canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation)
+                                      canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation,
+                                      activity: stamped)
         let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
         let url = directory.appendingPathComponent(SyncPresenceFiles.fileName(for: deviceID))
         // Another installation wrote this device's record recently: two devices share this device ID. The one with
@@ -107,12 +149,12 @@ extension LibrarySyncEngine {
         var devices = records.values.map { record in
             KnownSyncDevice(id: record.deviceID, deviceClass: record.deviceClass, displayName: record.displayName,
                             canProcess: record.canProcess, audioPolicy: record.audioPolicy.flatMap(SyncAudioPolicy.init(rawValue:)),
-                            lastSeen: min(record.lastSeen, now), isCurrentDevice: record.deviceID == deviceID)
+                            lastSeen: min(record.lastSeen, now), isCurrentDevice: record.deviceID == deviceID, activity: record.activity)
         }
         if records[deviceID] == nil, let device {
             devices.append(KnownSyncDevice(id: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                            canProcess: device.canProcess, audioPolicy: audioPolicy,
-                                           lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true))
+                                           lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true, activity: activity))
         }
         for id in journalDeviceIDs.subtracting(records.keys).subtracting([deviceID]).sorted() {
             devices.append(KnownSyncDevice(id: id))

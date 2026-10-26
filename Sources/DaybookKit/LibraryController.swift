@@ -608,20 +608,21 @@ public final class LibraryController: ObservableObject {
     /// One sync pass: exchanges changes with the sync folder, applies what arrived (merging
     /// concurrent edits, moving remote deletions to the Trash), and acknowledges it. `protecting`
     /// is a conversation this device is recording, which a remote deletion or status never touches.
-    /// Returns what was applied, or nil when nothing was.
-    public func synchronize(protecting active: UUID? = nil, limits: SyncPassLimits = .unlimited) async -> SyncApplied? {
+    /// Returns what was applied, or nil when nothing was. `scope` `.metadataOnly` exchanges library settings alone
+    /// (recorder ownership, handoffs), for a device busy recording.
+    public func synchronize(protecting active: UUID? = nil, limits: SyncPassLimits = .unlimited, scope: SyncPassScope = .full) async -> SyncApplied? {
         guard !Task.isCancelled, isLoaded, let sync, sync.folder != nil, !isApplyingSync else { return nil }
         isApplyingSync = true
         editedDuringSync = []; settingsEditedDuringSync = false
         await acquireLock()
-        var applied = await applyPass(sync, protecting: active, limits: limits)
+        var applied = await applyPass(sync, protecting: active, limits: limits, scope: scope)
         releaseLock(); isApplyingSync = false
         applied?.editedDuringPass = editedDuringSync; applied?.settingsEditedDuringPass = settingsEditedDuringSync
         if !editedDuringSync.isEmpty || settingsEditedDuringSync { sync.requestSync() }
         return applied
     }
 
-    private func applyPass(_ sync: LibrarySyncController, protecting active: UUID?, limits: SyncPassLimits) async -> SyncApplied? {
+    private func applyPass(_ sync: LibrarySyncController, protecting active: UUID?, limits: SyncPassLimits, scope: SyncPassScope) async -> SyncApplied? {
         await flush()
         guard let store else { return nil }
         var applied: SyncApplied?
@@ -631,7 +632,7 @@ public final class LibraryController: ObservableObject {
             let deleted = Set(trashedMeetingIDs())
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata),
-                                                          limits: limits, protecting: active.map { [$0] } ?? []) else { return nil }
+                                                          limits: limits, protecting: active.map { [$0] } ?? [], scope: scope) else { return nil }
             // Save edits made while iCloud hydrated files before applying a remote deletion.
             await flush()
             try Task.checkCancellation()

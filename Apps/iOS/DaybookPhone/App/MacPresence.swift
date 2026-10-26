@@ -47,6 +47,12 @@ enum MacPresence: Equatable, Sendable {
         return devices.hasPeersWithoutPresence ? .olderMac : .noMac
     }
 
+    /// "Studio Mac is recording", while a Mac's presence says it's recording (and hasn't expired), for the places
+    /// that show presence; nil otherwise. A recording Mac keeps its presence fresh, so it also reads as just seen.
+    static func recordingLine(devices: [KnownSyncDevice], now: Date = Date()) -> String? {
+        devices.recordingMac(at: now).map { "\($0.displayName ?? "Your Mac") is recording" }
+    }
+
     var macName: String? {
         switch self {
         case .connected(let name), .seen(let name, _), .notProcessing(let name, _): return name
