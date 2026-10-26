@@ -1,6 +1,7 @@
 import AppKit
 import DaybookCore
 import DaybookIntelligence
+import DaybookKit
 import SwiftUI
 
 // MARK: - Color
@@ -534,9 +535,8 @@ struct MarkdownText: View {
         return blocks
     }
 
-    static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-    }
+    /// Inline Markdown from a model, with its links dropped (`ModelText.inlineMarkdown`).
+    static func inline(_ text: String) -> AttributedString { ModelText.inlineMarkdown(text) }
 
     /// Inline Markdown with the library search's matches marked, as transcript passages mark them.
     static func inline(_ text: String, highlighting query: String) -> AttributedString {

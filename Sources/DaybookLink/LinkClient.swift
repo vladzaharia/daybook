@@ -45,10 +45,6 @@ public actor LinkClient {
     private var browseResults: [(name: String, endpoint: NWEndpoint, advertisement: LinkAdvertisement)] = []
     public private(set) var discoveredMacs: [LinkDiscoveredMac] = []
 
-    /// Codes that failed from this phone. A failed attempt may have revealed part of its code, so
-    /// it's never sent again.
-    private var burnedCodes: Set<UInt32> = []
-
     public init(identity: LinkIdentity, keyStore: any LinkKeyStore, configuration: LinkConfiguration = LinkConfiguration()) {
         queue = DispatchSerialQueue(label: "local.daybook.link.client")
         self.identity = identity
@@ -95,7 +91,14 @@ public actor LinkClient {
     /// `connect(to:)`.
     public func pair(with endpoint: LinkEndpoint, code typed: String) async throws -> LinkPairedDevice {
         guard let code = LinkPairingCode(typed: typed) else { throw LinkPairingError.invalidCode }
-        guard !burnedCodes.contains(code.value) else { throw LinkPairingError.codeAlreadyUsed }
+        // A failed attempt may have revealed part of its code, so a code that failed is never sent
+        // again. It's burned before the attempt, so even a crash part-way leaves it burned, and
+        // given back only when the Mac turned the attempt away before anything was committed.
+        let now = configuration.clock.now()
+        var burned = BurnedPairingCodes.load(from: configuration.burnedCodes)
+        guard !burned.contains(code.value, now: now) else { throw LinkPairingError.codeAlreadyUsed }
+        burned.burn(code.value, until: now.addingTimeInterval(configuration.pairingCodeLifetime), now: now)
+        burned.save(to: configuration.burnedCodes)
         let result: Result<LinkPairingRecord, LinkPairingError> = await withCheckedContinuation { continuation in
             runPairing(endpoint: endpoint, code: code) { continuation.resume(returning: $0) }
         }
@@ -106,12 +109,22 @@ public actor LinkClient {
             refreshDiscovered()
             return record.device
         case .failure(let error):
-            switch error {
-            case .notPairing, .busy, .unsupportedVersion, .connectionFailed: break
-            default: burnedCodes.insert(code.value)
+            if Self.revealedNothing(error) {
+                var burned = BurnedPairingCodes.load(from: configuration.burnedCodes)
+                burned.restore(code.value)
+                burned.save(to: configuration.burnedCodes)
             }
             hub.yield(.pairingFailed(error))
             throw error
+        }
+    }
+
+    /// Failures that leave a code unused: the Mac refused before either side committed to a bit
+    /// (`PasskeyExchange` believes a refusal only then), or nothing ever came back.
+    static func revealedNothing(_ error: LinkPairingError) -> Bool {
+        switch error {
+        case .notPairing, .busy, .unsupportedVersion, .connectionFailed: return true
+        default: return false
         }
     }
 

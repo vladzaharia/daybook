@@ -84,10 +84,7 @@ struct PhotoMenu: View {
 
     var body: some View {
         Button("Open Photo") { openPhoto?(photo) }
-        Button("Copy") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.writeObjects([state.photoURL(photo, in: meeting.id) as NSURL])
-        }
+        Button("Copy") { LocalPasteboard.copy([state.photoURL(photo, in: meeting.id) as NSURL]) }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([state.photoURL(photo, in: meeting.id)]) }
         Divider()
         if photo.hiddenFromSummary == true {

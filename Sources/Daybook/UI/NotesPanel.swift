@@ -63,13 +63,7 @@ final class FloatingNotesWindow {
     func close() { panel?.close() }
 
     private func makePanel() -> FloatingNotesPanel {
-        // A full title bar, not `.utilityWindow`: its 28 pt band and standard close button hold the
-        // status bar. No toolbar, so the window keeps the smaller corner radius.
-        let panel = FloatingNotesPanel(contentRect: NSRect(origin: .zero, size: FloatingLayout.defaultSize),
-                                       styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
-                                       backing: .buffered, defer: false)
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let panel = Self.floatingPanel()
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
@@ -105,6 +99,21 @@ final class FloatingNotesWindow {
         return panel
     }
 
+    /// The window itself: a floating, non-activating panel on every Space and over full-screen apps.
+    static func floatingPanel() -> FloatingNotesPanel {
+        // A full title bar, not `.utilityWindow`: its 28 pt band and standard close button hold the
+        // status bar. No toolbar, so the window keeps the smaller corner radius.
+        let panel = FloatingNotesPanel(contentRect: NSRect(origin: .zero, size: FloatingLayout.defaultSize),
+                                       styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+                                       backing: .buffered, defer: false)
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // It floats over calls with your notes and live captions: keep it out of screen shares and
+        // screenshots (docs/validation.md has the per-app check).
+        panel.sharingType = .none
+        return panel
+    }
+
     /// First appearance: top-trailing of the screen under the pointer, inset 20 pt.
     private func place(_ panel: NSPanel) {
         let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
@@ -114,7 +123,7 @@ final class FloatingNotesWindow {
     }
 }
 
-private final class FloatingNotesPanel: NSPanel {
+final class FloatingNotesPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }

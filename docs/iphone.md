@@ -32,7 +32,9 @@ Everything below is in v1:
   - Other recorders through Files.
 - **Multipoint.** When the Mac records, the phone can record too, and the reverse. Recordings join one conversation through the existing multipoint pipeline.
 - **Settings.** Sync folder, devices, recording, Mac pairing, appearance and text size.
-- **Export.** Markdown and audio through the share sheet.
+- **File protection.** Recording segments, the capture journal, photos taken while recording, and live captions are `completeUntilFirstUserAuthentication`, like the library. `completeUnlessOpen` was weighed and kept out: it lets a locked phone create files and keep writing ones already open, but not reopen a closed one, and Daybook reopens its own closed files while locked in everyday use. Stop from the Lock Screen, Siri, or a Mac reads every segment back to assemble the recording (`RecordingAssembler` opens even a single clean segment to check it) and copies the result into the library; an interruption closes one segment and opens another, so both are read at Stop; filing reads the photos taken while recording, and recovering after a quit reads the journal; and live captions reread their file to keep its track. Under `completeUnlessOpen` each of those fails until the phone is unlocked. Finished library items stay at the same class because background sync reads them while locked.
+- **Backups.** iPhone backups (iCloud and computer) never hold copies Daybook can rebuild: the courier's inbox and outbox (`Sync/Inbox`, `Sync/Courier`; iCloud Drive carries the same files), audio downloaded for playback, imports being copied in, and `Documents/Inbox` (`BackupExclusion`, applied at launch and after each download). The library itself goes in unless Settings › Storage › Include in iPhone Backups is off (default on), which keeps the whole library folder out, for someone who doesn't want recordings in a backup, with or without sync.
+- **Export.** Markdown and audio through the share sheet. Copy (a passage, a summary line, Copy Summary) stays on the device that copied it, on the Mac too: never Universal Clipboard (`LocalPasteboard`). Exports wait in `tmp/Daybook Export/` only until the share sheet is done with them, and anything left there is cleared at launch. A file another app opens in Daybook (iOS copies it to `Documents/Inbox/`) is removed once it's imported; a failed import keeps it.
 
 **Not possible on iOS, by design**
 - Recording another app's call audio. iOS has no per-app or system audio capture, so on a call the phone records its own microphone only. The Mac records the call.
@@ -114,6 +116,7 @@ Apps/iOS            (Xcode, via XcodeGen)
 - **Local link.**
   - When both are on the same network, DaybookLink (Network.framework, Bonjour, TLS with a pre-shared key from pairing) carries what iCloud is too slow for: start and stop for multipoint, live recording state, bookmarks, and live processing progress.
   - Without it, everything still works through sync, just later.
+  - A Mac paired from now on can't start this iPhone's microphone until the person allows it. Right after pairing, the phone asks once: "Let <Mac> start recording on this iPhone?" (Allow / Not Now). The answer belongs to that pairing (pairing again asks again), and the Mac's row in Settings › Macs changes it later (Can Start Recording). Macs paired before the phone started asking keep the behavior they had. A start request from a Mac without permission is refused as `declined` with a sentence the Mac shows. Stop requests are unaffected.
 - **What goes where.**
 
   | What | iCloud Drive (`<container>/Documents/Daybook`) | CloudKit courier (private database, zone `Courier`) | Local link |

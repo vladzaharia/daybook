@@ -68,6 +68,9 @@ struct MacDetailScreen: View {
                     MacRow(mac: mac)
                 }
                 Section("This Mac") {
+                    Toggle("Can Start Recording", isOn: Binding(
+                        get: { model.settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) },
+                        set: { model.settings.setMacMayStartRecording($0, for: mac.id, pairedAt: mac.pairedAt) }))
                     LabeledContent("Transcribes", value: mac.canProcess ? "Yes" : mac.isConnected ? "No models yet" : "Unknown until connected")
                     if let version = mac.appVersion { LabeledContent("Daybook", value: version) }
                     LabeledContent("Paired", value: mac.pairedAt.formatted(date: .abbreviated, time: .omitted))
@@ -85,6 +88,7 @@ struct MacDetailScreen: View {
                 Button("Unpair", role: .destructive) {
                     Task {
                         await model.link.unpair(macID)
+                        model.settings.forgetMacRecordDecision(macID)
                         dismiss()
                     }
                 }
@@ -115,6 +119,9 @@ struct PairingSheet: View {
     @State private var pairing = false
     @State private var error: String?
     @State private var paired: String?
+    /// The Mac just paired, until the person says whether it may start recording here.
+    @State private var asking: LinkPairedDevice?
+    @State private var showingQuestion = false
     @FocusState private var codeFocused: Bool
 
     var body: some View {
@@ -175,6 +182,11 @@ struct PairingSheet: View {
                 }
             }
             .onDisappear { Task { await model.link.stopBrowsing() } }
+            .alert("Let \(asking?.name ?? "this Mac") start recording on this iPhone?", isPresented: $showingQuestion,
+                   presenting: asking) { device in
+                Button("Not Now", role: .cancel) { decide(false, for: device) }
+                Button("Allow") { decide(true, for: device) }
+            }
             .onChange(of: model.link.candidates) { _, candidates in
                 // The chosen Mac left the network: choose again.
                 if let selection, !candidates.contains(where: { $0.id == selection }) { self.selection = nil }
@@ -276,6 +288,11 @@ struct PairingSheet: View {
         }
     }
 
+    private func decide(_ allowed: Bool, for device: LinkPairedDevice) {
+        model.settings.setMacMayStartRecording(allowed, for: device.deviceID, pairedAt: device.pairedAt)
+        asking = nil
+    }
+
     private func pair() async {
         guard let mac = selectedMac else { return }
         pairing = true
@@ -284,6 +301,11 @@ struct PairingSheet: View {
             let device = try await model.link.pair(with: mac.endpoint, code: digits)
             paired = device.name
             code = ""
+            // Asked once per pairing; until then the Mac can't start recording here.
+            if !model.settings.hasMacRecordDecision(device.deviceID, pairedAt: device.pairedAt) {
+                asking = device
+                showingQuestion = true
+            }
         } catch {
             self.error = PhoneLink.message(for: error)
             code = ""

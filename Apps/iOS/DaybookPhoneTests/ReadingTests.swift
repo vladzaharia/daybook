@@ -1,7 +1,9 @@
 import DaybookCaptions
 import Combine
 import DaybookKit
+import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 import XCTest
 @testable import DaybookPhone
 
@@ -320,6 +322,78 @@ final class ReadingTests: XCTestCase {
         XCTAssertTrue(text.hasPrefix("# Q4: launch / beta?"))
         XCTAssertTrue(text.contains("**Daniel:** That works."))
         XCTAssertEqual(ExportFiles.fileName("  ...  "), "Conversation")
+    }
+
+    /// Exports wait in tmp only until the share sheet is done; a library original handed to it
+    /// is never removed.
+    func testSharedExportsAreClearedAndNothingElseIs() throws {
+        let directory = try temporaryDirectory()
+        let meeting = weekly()
+        let first = try ExportFiles.markdown(meeting, in: directory)
+        var other = weekly()
+        other.id = UUID()
+        let second = try ExportFiles.markdown(other, in: directory)
+        let original = directory.appendingPathComponent("Library/Originals/Photos/a.jpg")
+        try FileManager.default.createDirectory(at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("photo".utf8).write(to: original)
+
+        ExportFiles.clear([first, original], in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.deletingLastPathComponent().path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path), "another export waits for its own share sheet")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path), "never a file outside the exports")
+
+        ExportFiles.clear(in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ExportFiles.root(in: directory).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+    }
+
+    /// Share Photo hands over a copy without location or camera details, named after its caption.
+    func testASharedPhotoLeavesLocationBehind() throws {
+        let directory = try temporaryDirectory()
+        let original = directory.appendingPathComponent("IMG_0412.jpg")
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 20)).image { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 40, height: 20))
+        }
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(image.cgImage), [
+            kCGImagePropertyOrientation: 6,
+            kCGImagePropertyGPSDictionary: [kCGImagePropertyGPSLatitude: 37.33, kCGImagePropertyGPSLatitudeRef: "N"]
+        ] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        try (data as Data).write(to: original)
+
+        let shared = try ExportFiles.photo(original, caption: "Whiteboard: Q4 plan", in: directory)
+        XCTAssertEqual(shared.lastPathComponent, "Whiteboard- Q4 plan.jpg")
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(shared as CFURL, nil))
+        let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+        XCTAssertNil(properties[kCGImagePropertyGPSDictionary])
+        XCTAssertEqual(properties[kCGImagePropertyOrientation] as? Int, 6)
+        XCTAssertEqual(try Data(contentsOf: original), data as Data, "the library's original is untouched")
+        ExportFiles.clear([shared], in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: shared.path))
+    }
+
+    // MARK: Copy
+
+    private final class PasteboardRecorder: LocalPasteboardWriting {
+        var writes: [(items: [[String: Any]], options: [UIPasteboard.OptionsKey: Any])] = []
+        func setItems(_ items: [[String: Any]], options: [UIPasteboard.OptionsKey: Any]) { writes.append((items, options)) }
+    }
+
+    func testCopiedTextStaysOnThisIPhone() {
+        let recorder = PasteboardRecorder()
+        LocalPasteboard.copy("We agreed on Friday.", to: recorder)
+        XCTAssertEqual(recorder.writes.count, 1)
+        XCTAssertEqual(recorder.writes.first?.options[.localOnly] as? Bool, true, "never Universal Clipboard")
+        XCTAssertNil(recorder.writes.first?.options[.expirationDate])
+        XCTAssertEqual(recorder.writes.first?.items.first?["public.utf8-plain-text"] as? String, "We agreed on Friday.")
+
+        let pasteboard = UIPasteboard.withUniqueName()
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        LocalPasteboard.copy("Ship it", to: pasteboard)
+        XCTAssertEqual(pasteboard.string, "Ship it")
     }
 
     // MARK: The session across folds

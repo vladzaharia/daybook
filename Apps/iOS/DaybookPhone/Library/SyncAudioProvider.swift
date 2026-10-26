@@ -131,6 +131,7 @@ final class SyncAudioProvider: AudioProviding {
     func refreshUsage() async {
         guard let engine else { usage = CacheUsage(budget: budget); return }
         let cached = await engine.cachedAudio()
+        BackupExclusion.excludeDownloads(cached, libraryRoot: library.rootURL)
         usage = CacheUsage(bytes: cached.reduce(0) { $0 + $1.bytes },
                            downloadedBytes: cached.filter { $0.origin == .fetched }.reduce(0) { $0 + $1.bytes },
                            budget: budget, items: cached.count)

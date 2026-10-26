@@ -78,6 +78,8 @@ public struct LinkConfiguration: Sendable {
     public var pairingTimeout: TimeInterval = 60
     /// Failed attempts before the Mac closes pairing.
     public var maxPairingFailures = 5
+    /// Phone: codes that failed from it, kept across launches so none is ever sent again.
+    public var burnedCodes: any LinkBurnedCodeStore = DefaultsLinkBurnedCodeStore()
 
     /// Reconnection backoff. Authentication failures jump straight to the maximum.
     public var reconnect = LinkBackoff()
@@ -93,6 +95,8 @@ public struct LinkConfiguration: Sendable {
 
     /// Versions this side offers. Only tests and staged rollouts change it.
     var supportedVersions: ClosedRange<Int> = LinkProtocol.supportedVersions
+    /// Mac: whether a connection comes from the local network; tests stand in for other networks.
+    var isLocalEndpoint: (@Sendable (NWEndpoint) -> Bool) = { LinkLocalNetwork.isLocal($0) }
     /// Pairing codes; tests inject fixed ones.
     var codeGenerator: (@Sendable (TimeInterval, Date) -> LinkPairingCode) = { LinkPairingCode.random(validFor: $0, now: $1) }
 
@@ -109,6 +113,7 @@ public struct LinkConfiguration: Sendable {
         configuration.handshakeTimeout = 3
         configuration.requestTimeout = 3
         configuration.pairingTimeout = 5
+        configuration.burnedCodes = MemoryLinkBurnedCodeStore()
         configuration.reconnect = LinkBackoff(initial: 0.05, maximum: 0.5, jitter: 0)
         configuration.clockSamplesPerBurst = 4
         configuration.clockSampleSpacing = 0.02

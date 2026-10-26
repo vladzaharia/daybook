@@ -320,10 +320,7 @@ private struct Passage: View {
         .contextMenu {
             Button("Play from Here") { play(.segment(segment)) }
                 .disabled(state.isRecording)
-            Button("Copy") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(segment.text, forType: .string)
-            }
+            Button("Copy") { LocalPasteboard.copy(segment.text) }
             Divider()
             Button("Correct Passage…", action: correct)
             if let rename { Button("Rename Speaker…", action: rename) }

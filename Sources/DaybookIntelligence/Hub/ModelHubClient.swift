@@ -93,9 +93,11 @@ public struct HuggingFaceHubClient: ModelHubClient {
         var result: [ModelHubFile] = []
         while let url = next {
             let (entries, response) = try await get(url, as: [Entry].self)
-            result += entries.filter { $0.type == "file" }.map { entry in
-                entry.lfs.map { ModelHubFile(path: entry.path, size: $0.size, sha256: $0.oid) }
-                    ?? ModelHubFile(path: entry.path, size: entry.size ?? 0, gitOID: entry.oid)
+            result += try entries.filter { $0.type == "file" }.map { entry in
+                if let lfs = entry.lfs { return ModelHubFile(path: entry.path, size: lfs.size, sha256: lfs.oid) }
+                // A file without a checksum couldn't be verified once downloaded.
+                guard let oid = entry.oid, !oid.isEmpty else { throw ModelHubError.badResponse(entry.path) }
+                return ModelHubFile(path: entry.path, size: entry.size ?? 0, gitOID: oid)
             }
             next = Self.nextPage(response)
         }

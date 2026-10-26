@@ -112,7 +112,10 @@ public actor ModelStore {
                 try Task.checkCancellation()
                 let url = sources[artifact.name]!.appendingPathComponent(file.path)
                 do { try ModelFileDigest.verify(url, against: file) }
-                catch {
+                catch ModelFileDigest.Failure.noDigest {
+                    try? files.removeItem(at: url)
+                    throw ModelStoreError.unverifiable(model: model.name, file: file.path)
+                } catch {
                     // Removed, so the next attempt downloads this file again instead of trusting it.
                     try? files.removeItem(at: url)
                     throw ModelStoreError.verificationFailed(model: model.name, file: file.path)

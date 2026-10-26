@@ -79,49 +79,151 @@ public final class MemoryLinkKeyStore: LinkKeyStore, @unchecked Sendable {
 }
 
 /// Keeps each record as a generic-password item: service `local.daybook.link`, account = the
-/// other device's ID. Items never sync through iCloud Keychain and never move to another device
-/// (`…ThisDeviceOnly`). On iPhone they're readable after first unlock, so a recording that
-/// continues on the Lock Screen can reconnect.
+/// other device's ID. Items never sync through iCloud Keychain and never move to another device: they
+/// live in the data-protection keychain as `…AfterFirstUnlockThisDeviceOnly`, readable after first
+/// unlock so a recording that continues on the Lock Screen can reconnect.
+///
+/// On the Mac the data-protection keychain needs a signed build with an application identifier.
+/// Earlier versions used the login keychain there (whose items Migration Assistant carries to a new
+/// Mac); the first use moves them over: read, write the new item, delete the old. Builds that can't
+/// use the data-protection keychain (unsigned development and test builds) keep the login keychain.
 public final class KeychainLinkKeyStore: LinkKeyStore, @unchecked Sendable {
     public let service: String
     public let accessGroup: String?
+    private let keychain: any LinkKeychain
+    private let lock = NSLock()
+    private var resolved: Location?
 
-    public init(service: String = "local.daybook.link", accessGroup: String? = nil) {
-        self.service = service
-        self.accessGroup = accessGroup
+    /// Which keychain holds the items.
+    enum Location: Equatable {
+        /// The data-protection keychain (always, on iPhone).
+        case dataProtection
+        /// The Mac's file-based login keychain.
+        case login
     }
 
-    private func baseQuery() -> [String: Any] {
+    public convenience init(service: String = "local.daybook.link", accessGroup: String? = nil) {
+        self.init(service: service, accessGroup: accessGroup, keychain: SystemLinkKeychain())
+    }
+
+    init(service: String, accessGroup: String?, keychain: any LinkKeychain) {
+        self.service = service
+        self.accessGroup = accessGroup
+        self.keychain = keychain
+    }
+
+    public func records() throws -> [LinkPairingRecord] {
+        let location = try self.location()
+        // The file-based macOS keychain can't return data for several items at once.
+        return try accounts(in: location).compactMap { UUID(uuidString: $0) }.compactMap { try record(for: $0, in: location) }
+            .sorted { $0.pairedAt < $1.pairedAt }
+    }
+
+    public func record(for deviceID: UUID) throws -> LinkPairingRecord? {
+        try record(for: deviceID, in: location())
+    }
+
+    public func save(_ record: LinkPairingRecord) throws {
+        let location = try self.location()
+        let status = write(record, in: location)
+        if status == errSecMissingEntitlement, location == .dataProtection {
+            // This build can't use the data-protection keychain after all.
+            lock.withLock { resolved = .login }
+            let fallback = write(record, in: .login)
+            guard fallback == errSecSuccess else { throw LinkKeyStoreError.keychain(fallback) }
+            return
+        }
+        guard status == errSecSuccess else { throw LinkKeyStoreError.keychain(status) }
+    }
+
+    public func remove(deviceID: UUID) throws {
+        let location = try self.location()
+        let status = delete(deviceID.uuidString, in: location)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw LinkKeyStoreError.keychain(status) }
+        #if os(macOS)
+        // Never leave a copy in the other keychain (from a move that was interrupted) to come back later.
+        _ = delete(deviceID.uuidString, in: location == .dataProtection ? .login : .dataProtection)
+        #endif
+    }
+
+    // MARK: Location and migration
+
+    /// Settled on first use. On the Mac: the data-protection keychain when this build can use it,
+    /// after moving any login-keychain items into it; otherwise the login keychain.
+    func location() throws -> Location {
+        lock.lock()
+        defer { lock.unlock() }
+        if let resolved { return resolved }
+        #if os(macOS)
+        var probe = baseQuery(.dataProtection)
+        probe[kSecMatchLimit as String] = kSecMatchLimitOne
+        probe[kSecReturnAttributes as String] = true
+        var result: CFTypeRef?
+        let status = keychain.copyMatching(probe, &result)
+        switch status {
+        case errSecSuccess, errSecItemNotFound:
+            resolved = migrateLoginItems() ? .dataProtection : .login
+        case errSecMissingEntitlement:
+            resolved = .login
+        default:
+            throw LinkKeyStoreError.keychain(status)
+        }
+        #else
+        resolved = .dataProtection
+        #endif
+        return resolved ?? .login
+    }
+
+    /// Moves every login-keychain item into the data-protection keychain. Returns false, leaving the
+    /// login keychain in use for this run, if any item couldn't be moved, so no pairing goes missing;
+    /// the next launch tries again. When both keychains hold a pairing (an earlier, interrupted move),
+    /// the newer pairing wins.
+    private func migrateLoginItems() -> Bool {
+        guard let accounts = try? accounts(in: .login) else { return false }
+        for account in accounts {
+            guard let id = UUID(uuidString: account), let old = try? record(for: id, in: .login) else { return false }
+            let current: LinkPairingRecord?
+            do { current = try record(for: id, in: .dataProtection) } catch { return false }
+            if current.map({ $0.pairedAt < old.pairedAt }) ?? true {
+                guard write(old, in: .dataProtection) == errSecSuccess else { return false }
+            }
+            let deleted = delete(account, in: .login)
+            guard deleted == errSecSuccess || deleted == errSecItemNotFound else { return false }
+        }
+        return true
+    }
+
+    // MARK: Items
+
+    private func baseQuery(_ location: Location) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrSynchronizable as String: false
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+        if location == .dataProtection { query[kSecUseDataProtectionKeychain as String] = true }
         return query
     }
 
-    public func records() throws -> [LinkPairingRecord] {
-        var query = baseQuery()
+    private func accounts(in location: Location) throws -> [String] {
+        var query = baseQuery(location)
         query[kSecMatchLimit as String] = kSecMatchLimitAll
         query[kSecReturnAttributes as String] = true
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = keychain.copyMatching(query, &result)
         if status == errSecItemNotFound { return [] }
         guard status == errSecSuccess else { throw LinkKeyStoreError.keychain(status) }
-        let accounts = (result as? [[String: Any]] ?? []).compactMap { $0[kSecAttrAccount as String] as? String }
-        // The file-based macOS keychain can't return data for several items at once.
-        return try accounts.compactMap { UUID(uuidString: $0) }.compactMap { try record(for: $0) }
-            .sorted { $0.pairedAt < $1.pairedAt }
+        return (result as? [[String: Any]] ?? []).compactMap { $0[kSecAttrAccount as String] as? String }
     }
 
-    public func record(for deviceID: UUID) throws -> LinkPairingRecord? {
-        var query = baseQuery()
+    private func record(for deviceID: UUID, in location: Location) throws -> LinkPairingRecord? {
+        var query = baseQuery(location)
         query[kSecAttrAccount as String] = deviceID.uuidString
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         query[kSecReturnData as String] = true
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = keychain.copyMatching(query, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw LinkKeyStoreError.keychain(status) }
         guard let data = result as? Data, let record = try? JSONDecoder().decode(LinkPairingRecord.self, from: data) else {
@@ -130,28 +232,45 @@ public final class KeychainLinkKeyStore: LinkKeyStore, @unchecked Sendable {
         return record
     }
 
-    public func save(_ record: LinkPairingRecord) throws {
-        let data = try JSONEncoder().encode(record)
-        var query = baseQuery()
+    private func write(_ record: LinkPairingRecord, in location: Location) -> OSStatus {
+        guard let data = try? JSONEncoder().encode(record) else { return errSecParam }
+        var query = baseQuery(location)
         query[kSecAttrAccount as String] = record.deviceID.uuidString
         var attributes: [String: Any] = [kSecValueData as String: data, kSecAttrLabel as String: "Daybook link: \(record.name)"]
-        #if os(iOS)
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        #endif
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            query.merge(attributes) { $1 }
-            let added = SecItemAdd(query as CFDictionary, nil)
-            guard added == errSecSuccess else { throw LinkKeyStoreError.keychain(added) }
-        } else if status != errSecSuccess {
-            throw LinkKeyStoreError.keychain(status)
+        if location == .dataProtection {
+            attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         }
+        let status = keychain.update(query, attributes)
+        guard status == errSecItemNotFound else { return status }
+        query.merge(attributes) { $1 }
+        return keychain.add(query)
     }
 
-    public func remove(deviceID: UUID) throws {
-        var query = baseQuery()
-        query[kSecAttrAccount as String] = deviceID.uuidString
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw LinkKeyStoreError.keychain(status) }
+    private func delete(_ account: String, in location: Location) -> OSStatus {
+        var query = baseQuery(location)
+        query[kSecAttrAccount as String] = account
+        return keychain.delete(query)
     }
+}
+
+/// The Security calls `KeychainLinkKeyStore` makes; tests stand in a keychain of their own.
+protocol LinkKeychain: Sendable {
+    func copyMatching(_ query: [String: Any], _ result: inout CFTypeRef?) -> OSStatus
+    func add(_ attributes: [String: Any]) -> OSStatus
+    func update(_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus
+    func delete(_ query: [String: Any]) -> OSStatus
+}
+
+struct SystemLinkKeychain: LinkKeychain {
+    func copyMatching(_ query: [String: Any], _ result: inout CFTypeRef?) -> OSStatus {
+        SecItemCopyMatching(query as CFDictionary, &result)
+    }
+
+    func add(_ attributes: [String: Any]) -> OSStatus { SecItemAdd(attributes as CFDictionary, nil) }
+
+    func update(_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus {
+        SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    }
+
+    func delete(_ query: [String: Any]) -> OSStatus { SecItemDelete(query as CFDictionary) }
 }

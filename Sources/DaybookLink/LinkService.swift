@@ -312,6 +312,8 @@ public actor LinkService {
 
     private func accept(_ connection: NWConnection) {
         guard isRunning, unrouted.count < 16 else { connection.cancel(); return }
+        // The listener can't be bound to "the local network", so anything from elsewhere is dropped here.
+        guard configuration.isLocalEndpoint(connection.endpoint) else { connection.cancel(); return }
         let channel = LinkChannel(connection: connection, queue: queue, clock: configuration.clock)
         let id = ObjectIdentifier(channel)
         unrouted[id] = channel

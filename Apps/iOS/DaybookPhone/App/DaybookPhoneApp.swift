@@ -9,6 +9,8 @@ struct DaybookPhoneApp: App {
 
     init() {
         let options = LaunchOptions()
+        // Exports a share sheet never finished with (the app quit first).
+        ExportFiles.clear()
         // Synthetic audio in tests and simulator demos, so nothing ever opens a real microphone there.
         let environment: PhoneRecorderEnvironment = options.syntheticAudio || options.isRunningTests ? .synthetic() : .live()
         let root = options.libraryPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -31,6 +33,7 @@ struct DaybookPhoneApp: App {
         }
         // Storage errors surface when loading, and retry the same durable location.
         let library = PhoneLibrary(rootURL: root, sync: sync)
+        BackupExclusion.apply(libraryRoot: root, inbox: library.inboxURL, includesLibrary: settings.includesLibraryInBackups)
         let model = PhoneAppModel(recorder: PhoneRecorder(environment: environment), library: library,
                                   posture: DevicePosture(arguments: CommandLine.arguments), options: options, settings: settings)
         model.demoAudioSession = environment.session as? ScriptedAudioSession

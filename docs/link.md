@@ -17,7 +17,7 @@ Foundation, Network, CryptoKit and Security.
 | Transport | TLS 1.2, `TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256`, with the pairing key as PSK; session authentication bound to the TLS session |
 | Framing | `NWProtocolFramer`: 4-byte big-endian length, then one JSON message (max 256 KiB) |
 | Messages | `{"v": version, "type": "...", "body": {...}}`; unknown types and fields are ignored |
-| Keys | Keychain, behind `LinkKeyStore` (`MemoryLinkKeyStore` in tests) |
+| Keys | Data-protection keychain, `…AfterFirstUnlockThisDeviceOnly`, behind `LinkKeyStore` (`MemoryLinkKeyStore` in tests) |
 
 ## Threat model
 
@@ -87,7 +87,16 @@ in `LinkPairing.swift`):
 **Codes are single-use.** A failed attempt reveals bits up to the failure, so:
 - The Mac replaces its code after **any** attempt that doesn't finish: a wrong bit, a broken
   confirmation, a timeout, or a dropped connection.
-- The phone never sends a code that failed (`codeAlreadyUsed`).
+- The phone never sends a code that failed (`codeAlreadyUsed`). It burns the code before the
+  attempt and gives it back only when the Mac turned the attempt away before either side committed
+  to a bit (`notPairing`, `busy`, `unsupportedVersion`, or no answer at all), so a crash part-way
+  leaves it burned too.
+- Burned codes outlive a relaunch: UserDefaults (`daybook.link.burnedCodes`) keeps them as salted
+  SHA-256 digests, never digits, each forgotten after the 5 minutes a code can live on the Mac.
+- A refusal (`pair.refuse`) is believed only before the phone's first commitment. Later it counts
+  as a wrong code. Otherwise a device spoofing the Mac's advert could commit a guess for each bit,
+  learn the bit from the phone's reveal, refuse as `busy` whenever it guessed wrong, and so collect
+  the 20 bits in about ten retries while the code is still good on the real Mac.
 - Codes expire after 5 minutes.
 - Pairing closes after 5 failed attempts.
 - One attempt runs at a time; others get `busy`.
@@ -133,6 +142,12 @@ bound to the TLS session with an RFC 5705 exporter E (`EXPORTER-DaybookLink-sess
 A hello copied into another TLS session, or relayed by a device in the middle, has the wrong E
 and fails, even when sent by someone who has the key. Connections that don't authenticate within
 the handshake timeout (10 s) are closed. At most 16 unauthenticated connections are held.
+
+**Local connections only.** A listener can't be bound to "the local network", so the Mac drops a
+connection before TLS unless it comes from loopback, a private (RFC 1918) or link-local IPv4
+address, a link-local or unique local (`fc00::/7`) IPv6 address, or a subnet one of its interfaces
+is on (`LinkLocalNetwork`; point-to-point links such as VPN tunnels don't count). A Mac with a
+public address can't be reached for pairing or sessions from the internet.
 
 ## Discovery
 
@@ -209,7 +224,9 @@ change take seconds instead of a sync round trip. They're app messages, added wi
   `notRecording`, `microphoneUnavailable`, `permissionDenied`, `storageFull`, `busy`, `declined`
   or `unsupported`.
 
-Without a handler, every request is refused as `unsupported`. Requests are idempotent by ID: a
+Without a handler, every request is refused as `unsupported`. The iPhone's handler refuses a start
+from a Mac the person hasn't allowed to start recording there (asked once per pairing;
+docs/iphone.md, "Local link") as `declined`, with a sentence the Mac shows. Requests are idempotent by ID: a
 retry after a lost reply, even on a new connection, gets the first answer and never starts a
 second recording. `LinkTiming` carries the requester's prior: its own start, elapsed timeline,
 and its clock-offset estimate with uncertainty.
@@ -339,18 +356,25 @@ Both apps' Info.plist:
 - The non-sandboxed Mac app needs no network entitlement. A sandboxed build would need
   `com.apple.security.network.server` and `.client`.
 - Keychain: the default access group works.
-  - On iPhone, items are `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so a recording that
-    continues on the Lock Screen can reconnect.
+  - Items are in the data-protection keychain as `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`,
+    so a recording that continues on the iPhone's Lock Screen can reconnect, and neither iCloud
+    Keychain, a backup, nor Migration Assistant carries a key to another device.
   - If an extension ever needs the link, add a `keychain-access-groups` entry and pass it as
     `KeychainLinkKeyStore(accessGroup:)`.
-  - On macOS the store uses the login keychain, so a Developer ID app without a provisioning
-    profile can use it.
+  - On macOS the data-protection keychain needs a signed build with an application identifier
+    (the provisioning profile the iCloud capability already requires). Earlier versions kept Mac
+    keys in the login keychain; the first use moves them (read, write the new item, delete the
+    old). If any item can't be moved, the store stays on the login keychain for that run so no
+    pairing goes missing, and tries again at the next launch; when both keychains hold a pairing,
+    the newer one wins. Builds that can't use the data-protection keychain (unsigned development
+    and `swift test` builds get `errSecMissingEntitlement`, as do ad hoc builds) keep the login
+    keychain. `LinkKeyStoreTests` cover the move and the fallback against a keychain in memory.
 - Background: the link adds no background mode. It rides on the recorder's `audio` mode while
   recording and is closed otherwise.
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 47 tests, about 4 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 66 tests, about 8 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
@@ -358,6 +382,9 @@ the test process, and nothing is advertised.
 - **Pairing over loopback:**
   - success, then an immediate session;
   - a wrong code is rejected, the code is burned and replaced, and a failed code is never resent;
+  - a refusal is believed only before the first commitment: a Mac impersonator that refuses after
+    a reveal burns the code, across a relaunch too, while an early `busy` leaves it usable; burned
+    codes are stored as salted digests that expire;
   - pairing closes after too many failures, and is refused while the Mac isn't pairing;
   - a recorded pairing replayed frame for frame against the same Mac and the same code fails at
     the first reveal;
@@ -381,7 +408,10 @@ the test process, and nothing is advertised.
   the sync ID and feature, and older ones don't; the messages over a loopback session both ways.
   The handoff itself, over loopback with a simulated recorder, is `RecorderHandoffTests` in
   DaybookKit.
-- **Units:** wire round trips, frames, TXT tags, backoff, clock filter, key store.
+- **Local network:** which addresses count as local (IPv4, IPv6, IPv4-mapped, attached subnets,
+  names), and that the listener drops a connection from elsewhere before any pairing attempt.
+- **Units:** wire round trips, frames, TXT tags, backoff, clock filter, key store (memory, and
+  the keychain store's move to the data-protection keychain against a keychain in memory).
 
 The relay in `LinkTestSupport.swift` is a loopback TCP proxy with per-direction delay that can
 freeze (hold connections open, pass nothing) or drop every connection.
@@ -401,6 +431,7 @@ freeze (hold connections open, pass nothing) or drop every connection.
     Live Activity, including on the Lock Screen and across calls and interruptions;
   - that `.background` closes cleanly before suspension;
   - the battery cost of 20 s heartbeats.
-- **Keychain.** `KeychainLinkKeyStore` in the signed apps: access after first unlock on iPhone,
-  and the login keychain prompt-free on the Mac. Tests use memory storage.
+- **Keychain.** `KeychainLinkKeyStore` in the signed apps: access after first unlock on iPhone;
+  on the Mac, that a pairing made by an earlier version moves out of the login keychain without a
+  prompt and keeps connecting. Tests use memory storage.
 - **Clock accuracy on real Wi-Fi**, where delay is noisier and more lopsided than the relay's.

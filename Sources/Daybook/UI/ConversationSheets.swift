@@ -343,8 +343,7 @@ struct OriginalTranscriptSheet: View {
                 Text("Original Transcript: \(track.map { $0.source == .imported ? $0.fileName : $0.source.recordingName } ?? "Recording")").font(.headline)
                 Spacer()
                 Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(run?.segments.map { "[\(TimeLabel.short($0.start))] \($0.text)" }.joined(separator: "\n") ?? "", forType: .string)
+                    LocalPasteboard.copy(run?.segments.map { "[\(TimeLabel.short($0.start))] \($0.text)" }.joined(separator: "\n") ?? "")
                 }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }

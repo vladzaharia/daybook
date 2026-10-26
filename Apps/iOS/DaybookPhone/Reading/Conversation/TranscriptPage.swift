@@ -324,7 +324,7 @@ private struct PassageRow: View {
         .animation(.easeOut(duration: 0.2), value: isPlaying)
         .contextMenu {
             Button { play(.segment(segment)) } label: { Label("Play from Here", systemImage: "play") }
-            Button { UIPasteboard.general.string = segment.text } label: { Label("Copy", systemImage: "doc.on.doc") }
+            Button { LocalPasteboard.copy(segment.text) } label: { Label("Copy", systemImage: "doc.on.doc") }
             Divider()
             Button { session.sheet = .correct(meetingID: meeting.id, segmentID: segment.id) } label: { Label("Correct Passage…", systemImage: "pencil") }
             if let rename { Button(action: rename) { Label("Rename Speaker…", systemImage: "person.text.rectangle") } }

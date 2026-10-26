@@ -266,11 +266,14 @@ struct DetailsSheet: View {
     }
 }
 
-/// The system share sheet.
+/// The system share sheet. Once it's done (shared, saved, or cancelled), the export files go.
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let files = items.compactMap { $0 as? URL }
+        controller.completionWithItemsHandler = { _, _, _, _ in ExportFiles.clear(files) }
+        return controller
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

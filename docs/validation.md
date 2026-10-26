@@ -1,5 +1,54 @@
 # Validation record
 
+## Security review fixes (2026-10-25)
+
+Regression tests cover: a pairing refusal believed only before the first commitment, a Mac
+impersonator that refuses after a reveal burning the code (across a relaunch, as salted digests that
+expire), and an early `busy` leaving it usable; which addresses the link listener treats as local,
+and that it drops others before pairing; moving Mac link keys into the data-protection keychain,
+falling back, retrying an interrupted move, and keeping the newer pairing; model links dropped in
+the app and Markdown escaped in exports and Copy Summary; Floating Notes kept out of screen capture;
+model files without a checksum refused; copies kept off Universal Clipboard on both apps; exported
+and shared photos without GPS, maker notes, camera details, or original names, originals untouched;
+inbox copies removed after import and kept on failure, shared exports cleared; backup exclusion and
+the library setting; and a newly paired Mac refused until allowed, with earlier pairings unaffected.
+
+- `swift test`: 728 tests passed across all seven bundles (`DaybookLinkTests` 66).
+- `scripts/build-ios.sh --test` on an iOS 27.1 simulator: 95 tests passed.
+
+Still requires real devices:
+
+- **Link on a real network.** Pair and connect a phone and a Mac on ordinary Wi-Fi, over IPv4 and
+  over IPv6 (including a network that hands out global IPv6 addresses), to confirm the listener's
+  local-network check never drops a phone on the same network. A Mac with a public address should
+  not be reachable from another network.
+- **Floating Notes in screen shares.** On macOS 15 and macOS 26, share the entire screen and then
+  just a window in Zoom, Google Meet (in Safari and in Chrome), and Microsoft Teams while Floating
+  Notes shows notes and live captions over the call: the other side must not see the panel, and
+  neither may a screenshot (⇧⌘3, ⇧⌘5) or a QuickTime screen recording. ScreenCaptureKit decides
+  whether to honour `sharingType = .none`; if an app still captures the panel on a macOS version,
+  record it here and hide the panel while that app shares.
+- **Exported photos.** Export (Mac) and share as Markdown (iPhone) a conversation with a geotagged
+  HEIC taken by an iPhone camera and a portrait JPEG: `exiftool` shows no GPS, MakerApple, Make,
+  Model, or Software in the exported files, the portrait one still opens upright, the capture date
+  is kept, and the library's originals are unchanged (same digest).
+- **iPhone backups.** With a few recordings and some downloaded audio, Settings › [your name] ›
+  iCloud › Manage Storage › Backups lists Daybook at the library's size without the downloaded
+  audio; with Include in iPhone Backups off, near zero. Restoring a backup made with it on brings
+  back the library, and played audio downloads again.
+- **Mac permission to record on the iPhone.** Pair a new Mac: the iPhone asks "Let <Mac> start
+  recording on this iPhone?". After Not Now, a recording the Mac starts with the phone shows the
+  phone's refusal on the Mac; turning on Can Start Recording in that Mac's row lets the next one
+  start. A Mac paired before the update keeps starting recordings without being asked.
+- **Recording while locked.** Record, lock the phone, take a call (an interruption) and return
+  to recording, then Stop from the Live Activity while still locked: the recording is filed with
+  both segments joined and its captions kept, before unlocking. This is why staging stays at
+  `completeUntilFirstUserAuthentication` (docs/iphone.md, "File protection"); repeat it before
+  changing any recording file's protection class.
+- **Mac keychain move.** With a signed build of the previous version paired to a phone, install the
+  new build: the pairing keeps connecting with no keychain prompt, and Keychain Access no longer
+  lists a "Daybook link" item in the login keychain. An ad hoc build keeps using the login keychain.
+
 ## Project review fixes (2026-10-25)
 
 The review covered persistence and sync, local pairing, model downloads, recorder integration,

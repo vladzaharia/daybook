@@ -117,6 +117,98 @@ enum LinkTransport {
     }
 }
 
+// MARK: Local network
+
+/// Whether a connection comes from the local network. The link is local by definition (docs/link.md,
+/// "Threat model"), so the Mac drops a connection from anywhere else before TLS: loopback, IPv4
+/// private (RFC 1918) and link-local, IPv6 link-local and unique local, or a subnet one of the Mac's
+/// interfaces is on (a network with public addresses, or global IPv6 on the same prefix).
+enum LinkLocalNetwork {
+    struct Subnet: Equatable {
+        var address: [UInt8]
+        var mask: [UInt8]
+
+        func contains(_ other: [UInt8]) -> Bool {
+            guard other.count == address.count, mask.count == address.count else { return false }
+            return zip(zip(other, address), mask).allSatisfy { pair, mask in pair.0 & mask == pair.1 & mask }
+        }
+    }
+
+    static func isLocal(_ endpoint: NWEndpoint) -> Bool { isLocal(endpoint, subnets: attachedSubnets()) }
+
+    static func isLocal(_ endpoint: NWEndpoint, subnets: [Subnet]) -> Bool {
+        guard case .hostPort(let host, _) = endpoint, let address = bytes(of: host) else { return false }
+        return isLocal(address, subnets: subnets)
+    }
+
+    static func isLocal(_ address: [UInt8], subnets: [Subnet]) -> Bool {
+        switch address.count {
+        case 4:
+            switch (address[0], address[1]) {
+            case (127, _), (10, _), (192, 168), (169, 254), (172, 16...31): return true
+            default: break
+            }
+        case 16:
+            // IPv4-mapped (::ffff:a.b.c.d): judged as IPv4.
+            if address[0..<10].allSatisfy({ $0 == 0 }), address[10] == 0xff, address[11] == 0xff {
+                return isLocal(Array(address[12...]), subnets: subnets)
+            }
+            if address[0..<15].allSatisfy({ $0 == 0 }), address[15] == 1 { return true }   // ::1
+            if address[0] == 0xfe, address[1] & 0xc0 == 0x80 { return true }                 // fe80::/10
+            if address[0] & 0xfe == 0xfc { return true }                                       // fc00::/7
+        default:
+            return false
+        }
+        return subnets.contains { $0.contains(address) }
+    }
+
+    static func bytes(of host: NWEndpoint.Host) -> [UInt8]? {
+        switch host {
+        case .ipv4(let address): return [UInt8](address.rawValue)
+        case .ipv6(let address): return [UInt8](address.rawValue)
+        case .name(let name, _):
+            if let address = IPv4Address(name) { return [UInt8](address.rawValue) }
+            if let address = IPv6Address(name) { return [UInt8](address.rawValue) }
+            return nil
+        @unknown default:
+            return nil
+        }
+    }
+
+    /// The subnets of the interfaces that are up, except loopback (always local) and point-to-point
+    /// links such as VPN tunnels, whose far end isn't on this network.
+    static func attachedSubnets() -> [Subnet] {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return [] }
+        defer { freeifaddrs(list) }
+        var subnets: [Subnet] = []
+        for entry in sequence(first: first, next: { $0.pointee.ifa_next }).map(\.pointee) {
+            let flags = Int32(entry.ifa_flags)
+            guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0, flags & IFF_POINTOPOINT == 0,
+                  let address = entry.ifa_addr, let mask = entry.ifa_netmask else { continue }
+            let family = Int32(address.pointee.sa_family)
+            guard let bytes = bytes(of: address, family: family), let maskBytes = self.bytes(of: mask, family: family),
+                  maskBytes.contains(where: { $0 != 0 }) else { continue }
+            subnets.append(Subnet(address: bytes, mask: maskBytes))
+        }
+        return subnets
+    }
+
+    /// The address in a `sockaddr` of `family`. Netmasks may be cut short after their last nonzero
+    /// byte (`sa_len`), so bytes past the end read as zero.
+    private static func bytes(of pointer: UnsafeMutablePointer<sockaddr>, family: Int32) -> [UInt8]? {
+        let offset: Int, count: Int
+        switch family {
+        case AF_INET: (offset, count) = (MemoryLayout<sockaddr_in>.offset(of: \sockaddr_in.sin_addr) ?? 4, 4)
+        case AF_INET6: (offset, count) = (MemoryLayout<sockaddr_in6>.offset(of: \sockaddr_in6.sin6_addr) ?? 8, 16)
+        default: return nil
+        }
+        let length = Int(pointer.pointee.sa_len)
+        let raw = UnsafeRawPointer(pointer)
+        return (0..<count).map { offset + $0 < length ? raw.load(fromByteOffset: offset + $0, as: UInt8.self) : 0 }
+    }
+}
+
 // MARK: Channel
 
 /// Why a channel closed.

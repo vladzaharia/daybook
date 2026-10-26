@@ -21,8 +21,7 @@ extension AppState {
 
     func copySummary(_ id: UUID) {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(MeetingExport.summaryMarkdown(meeting), forType: .string)
+        LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting))
     }
 
     func focusSearch() { searchFocusRequest += 1 }
@@ -43,6 +42,29 @@ extension AppState {
         })
     }
 }
+
+/// Copy for conversation content: it stays on this Mac (`.currentHostOnly`) rather than going to
+/// Universal Clipboard on every nearby device signed in to the same Apple Account.
+enum LocalPasteboard {
+    static func copy(_ string: String, to pasteboard: some LocalPasteboardWriting = NSPasteboard.general) {
+        _ = pasteboard.prepareForNewContents(with: .currentHostOnly)
+        _ = pasteboard.setString(string, forType: .string)
+    }
+
+    static func copy(_ objects: [NSPasteboardWriting], to pasteboard: some LocalPasteboardWriting = NSPasteboard.general) {
+        _ = pasteboard.prepareForNewContents(with: .currentHostOnly)
+        _ = pasteboard.writeObjects(objects)
+    }
+}
+
+/// What copying needs of a pasteboard, so tests can watch it.
+protocol LocalPasteboardWriting {
+    func prepareForNewContents(with options: NSPasteboard.ContentsOptions) -> Int
+    func setString(_ string: String, forType dataType: NSPasteboard.PasteboardType) -> Bool
+    func writeObjects(_ objects: [NSPasteboardWriting]) -> Bool
+}
+
+extension NSPasteboard: LocalPasteboardWriting {}
 
 /// Opens a Privacy & Security pane in System Settings.
 enum PrivacySettings {

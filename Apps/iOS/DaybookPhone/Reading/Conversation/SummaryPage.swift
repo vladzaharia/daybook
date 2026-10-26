@@ -229,7 +229,7 @@ struct EvidenceLink<Content: View>: View {
                     Button { session.showInTranscript(evidence, switchPage: !twoPage) } label: {
                         Label("Show in Transcript", systemImage: "text.quote")
                     }
-                    Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    Button { LocalPasteboard.copy(text) } label: { Label("Copy", systemImage: "doc.on.doc") }
                 }
                 .accessibilityAction(named: "Show in Transcript") { session.showInTranscript(evidence, switchPage: !twoPage) }
         } else {
