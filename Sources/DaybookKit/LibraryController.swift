@@ -487,17 +487,43 @@ public final class LibraryController: ObservableObject {
             .compactMap { UUID(uuidString: $0.lastPathComponent) }
     }
 
-    /// Puts a conversation back from the Trash. Refused while sync is on: the sync journal keeps
-    /// deletions final, so the next sync would move it back.
+    /// Puts a conversation back from the Trash. Once sync has published its deletion, that ID stays deleted
+    /// everywhere (the next pass would move it back), so it comes back as a new conversation with the same
+    /// content and a Version History entry; the result says which.
     @discardableResult
     public func restoreFromTrash(_ id: UUID) async throws -> Meeting {
-        guard sync?.folder == nil else { throw LibraryControllerError.restoreWhileSyncing }
         await acquireLock()
         defer { releaseLock() }
         guard let store else { throw DaybookError.libraryUnavailable }
+        if let sync, sync.isSyncedDeletion(id) {
+            let restored = try await restoreAsNewConversation(id, store: store)
+            meetings.append(restored)
+            sync.requestSync()
+            return restored
+        }
         let meeting = try await store.restoreFromTrash(id)
         if self.meeting(id) == nil { meetings.append(meeting) }
         return meeting
+    }
+
+    /// The trashed conversation's files, cloned into a new conversation's folder, and its last saved copy as
+    /// that conversation. The Trash copy is removed once the new one is saved.
+    private func restoreAsNewConversation(_ id: UUID, store: MeetingStore) async throws -> Meeting {
+        let trashed = rootURL.appendingPathComponent("Trash/\(id.uuidString)", isDirectory: true)
+        let newID = UUID()
+        let folder = rootURL.appendingPathComponent("Meetings/\(newID.uuidString)", isDirectory: true)
+        let restored = try await Task.detached(priority: .userInitiated) { () throws -> Meeting in
+            let decoder = JSONDecoder()
+            let saved = [trashed.appendingPathComponent("meeting.json"), trashed.appendingPathComponent("meeting.recovery.json")]
+                .lazy.compactMap { try? decoder.decode(Meeting.self, from: Data(contentsOf: $0)) }.first { $0.id == id }
+            guard let saved else { throw LibraryError.corruptMeeting(id) }
+            try MeetingFolderCopy.copyFiles(from: trashed, to: folder)
+            return saved.keptAs(newID, field: "source:restored", title: "Restored from the Trash")
+        }.value
+        do { try await store.save(restored) }
+        catch { try? FileManager.default.removeItem(at: folder); throw error }
+        try? FileManager.default.removeItem(at: trashed)
+        return restored
     }
 
     // MARK: Bringing in recordings
@@ -735,11 +761,3 @@ public struct IngestedRecording: Sendable {
     public var imported: Meeting
 }
 
-public enum LibraryControllerError: LocalizedError {
-    case restoreWhileSyncing
-    public var errorDescription: String? {
-        switch self {
-        case .restoreWhileSyncing: return "Turn off sync to restore a conversation from the Trash."
-        }
-    }
-}

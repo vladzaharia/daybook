@@ -96,4 +96,45 @@ final class LibrarySyncApplyTests: XCTestCase {
         XCTAssertEqual(mac.meeting(kept.id)?.tracks.map(\.sha256), kept.tracks.map(\.sha256))
         XCTAssertNil(mac.meeting(id))
     }
+
+    func testRestoringAConversationWhoseDeletionSyncedBringsItBackAsANewOne() async throws {
+        let mac = try await library("Mac"), other = try await library("Other Mac")
+        let id = mac.newMeeting(title: "Budget")
+        mac.editNotes(id, text: "Line items")
+        let file = root.appendingPathComponent("budget.wav")
+        try Data("budget audio".utf8).write(to: file)
+        await mac.acquireLock()
+        _ = try await mac.ingest(file, into: id, provenance: .file(source: .imported))
+        mac.releaseLock()
+        await mac.flush()
+        await sync(mac); await sync(other)
+        _ = try await mac.moveToTrash(id)
+        await sync(mac); await sync(other)
+        XCTAssertNil(other.meeting(id))
+
+        // With sync off, as before; turning it back on must not take it away again.
+        mac.sync?.disconnect()
+        let restored = try await mac.restoreFromTrash(id)
+        XCTAssertNotEqual(restored.id, id, "the deleted ID stays deleted; the conversation comes back as a new one")
+        XCTAssertEqual(restored.notes, "Line items")
+        XCTAssertEqual(restored.tracks.count, 1)
+        XCTAssertTrue(restored.revisions.contains { $0.field.hasPrefix("source:restored") })
+        XCTAssertFalse(mac.trashedMeetingIDs().contains(id))
+        let audio = try await mac.audioURL(for: restored.tracks[0], in: restored.id)
+        XCTAssertEqual(try Data(contentsOf: audio), Data("budget audio".utf8))
+
+        try mac.sync?.connect(to: container, monitorChanges: false)
+        await sync(mac)
+        XCTAssertNotNil(mac.meeting(restored.id), "turning sync on again doesn't move it back to the Trash")
+        await sync(other)
+        XCTAssertEqual(other.meeting(restored.id)?.notes, "Line items")
+        XCTAssertNil(other.meeting(id))
+
+        // Restoring one whose deletion hasn't synced yet keeps its ID.
+        let fresh = mac.newMeeting(title: "Never synced")
+        await mac.flush()
+        _ = try await mac.moveToTrash(fresh)
+        let back = try await mac.restoreFromTrash(fresh)
+        XCTAssertEqual(back.id, fresh)
+    }
 }

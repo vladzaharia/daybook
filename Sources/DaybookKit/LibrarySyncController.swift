@@ -407,6 +407,12 @@ public final class LibrarySyncController: ObservableObject {
         return (try? await engine.knownDevices()) ?? []
     }
 
+    /// Whether sync has published `id`'s deletion from this device's point of view (any library it synced),
+    /// so that ID is deleted everywhere. Works with sync off too.
+    public func isSyncedDeletion(_ id: UUID) -> Bool {
+        LibrarySyncEngine.recordsDeletion(of: id, localRoot: localRoot, deviceID: deviceID)
+    }
+
     /// The sync library's ID (its manifest's), once a pass has read it.
     public func libraryID() async -> UUID? {
         guard let engine else { return nil }

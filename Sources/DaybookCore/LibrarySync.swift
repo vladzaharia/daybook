@@ -533,6 +533,17 @@ public actor LibrarySyncEngine {
         try LocalFiles.atomicWrite(Data(contentsOf: from), to: to)
         return true
     }
+    /// Whether one of this device's checkpoints (for any library) records `id` as deleted through sync.
+    public static func recordsDeletion(of id: UUID, localRoot: URL, deviceID: String) -> Bool {
+        struct Deletions: Decodable { var deletedIDs: Set<UUID>? }
+        let sync = localRoot.standardizedFileURL.appendingPathComponent("Sync", isDirectory: true)
+        let suffix = "-\(SyncDigest.sha256(data: Data(deviceID.utf8)).prefix(16)).json"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: sync.path)) ?? []
+        return names.filter { $0.hasSuffix(suffix) }.contains { name in
+            let deletions = try? JSONDecoder().decode(Deletions.self, from: Data(contentsOf: sync.appendingPathComponent(name)))
+            return deletions?.deletedIDs?.contains(id) == true
+        }
+    }
     static func checkpointStem(libraryID: UUID, deviceID: String) -> String {
         "\(libraryID.uuidString)-\(SyncDigest.sha256(data: Data(deviceID.utf8)).prefix(16))"
     }
