@@ -197,6 +197,9 @@ extension LibrarySyncEngine {
                 if state == .local,
                    (try? SyncFiles.coordinateRead(remote, below: remoteRoot) { try SyncDigest.sha256(fileURL: $0) }) == expected {
                     try? fm.removeItem(at: url)
+                } else if !directory.hasPrefix("Sealed/"), sealing != nil, sealedCounterpartExists(name, in: directory) {
+                    // A plaintext delivery in an encrypted library, sealed since (the sealer read it): not needed.
+                    try? fm.removeItem(at: url)
                 } else {
                     if state == .absent, let arrived = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
                        now.timeIntervalSince(arrived) >= Self.courierPromotionDelay, mayPromote(url, directory: directory, name: name) {
@@ -209,10 +212,19 @@ extension LibrarySyncEngine {
         return waiting
     }
 
+    /// Whether a plaintext delivery's entry or object (named by its SHA-256) is in the sync folder sealed under the
+    /// current key.
+    private func sealedCounterpartExists(_ name: String, in directory: String) -> Bool {
+        guard let sealing, let kind = SealedKind(directory: "Sealed/\(directory)"),
+              let sealed = sealing.current.objectName(kind, plaintextSHA256: SyncJournalFile.address(of: name, in: directory) ?? "") else { return false }
+        return SyncFiles.itemState(remoteRoot.appendingPathComponent("Sealed/\(directory)/\(sealed)")) != .absent
+    }
+
     /// Whether a delivery may be written into the sync folder: a plaintext one was verified against its name when it
-    /// arrived; a sealed one must open with a key held here (so it really is the object its name says).
+    /// arrived, and only into a plaintext library (an encrypted one never receives plaintext from this device); a sealed
+    /// one must open with a key held here (so it really is the object its name says).
     private func mayPromote(_ delivery: URL, directory: String, name: String) -> Bool {
-        guard let kind = SealedKind(directory: directory) else { return true }
+        guard let kind = SealedKind(directory: directory) else { return sealing == nil && waitingForKey == nil && !syncedSealedLibraryHere }
         guard let sealing else { return false }
         return (try? SyncFiles.coordinateRead(delivery, below: inboxBase) { source in
             try SealedObject.openFile(source, to: nil, kind: kind, libraryID: sealing.libraryID, keyring: sealing.keyring, expectedName: name)

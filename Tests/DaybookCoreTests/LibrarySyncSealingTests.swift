@@ -569,4 +569,41 @@ final class LibrarySyncSealingTests: XCTestCase {
         let result = try await pass(mac, "Mac")
         XCTAssertTrue(result.meetings.isEmpty)
     }
+
+    func testAPlaintextDeliveryIsNeverWrittenIntoAnEncryptedLibrary() async throws {
+        let mac = try mac(), other = try self.mac("Other")
+        try await pass(mac, "Mac")
+        try await pass(other, "Other")
+        let key = try await mac.enableSealing()
+        try await pass(other, "Other")
+        // A phone still on a plaintext pass sent an entry by courier before it saw the manifest.
+        let staging = root.appendingPathComponent("StaleFolder")
+        let legacy = try LegacyLibrarySyncEngine(localRoot: local("Stale"), remoteRoot: staging, deviceID: "Stale")
+        _ = try await legacy.synchronize(meetings: [Meeting(title: "Zanzibar, late")])
+        let name = try XCTUnwrap(try FileManager.default.contentsOfDirectory(atPath: staging.appendingPathComponent("Events").path).first)
+        let bytes = try Data(contentsOf: staging.appendingPathComponent("Events/\(name)"))
+        let file = SyncJournalFile(path: "Events/\(name)", sha256: SyncDigest.sha256(data: bytes), size: Int64(bytes.count))
+        for engine in [mac, other] {
+            let url = root.appendingPathComponent("Courier/\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try bytes.write(to: url)
+            let delivery = try await engine.receiveCourierFile(file, libraryID: key.libraryID, contents: url)
+            XCTAssertEqual(delivery, .stored)
+        }
+        // A device that isn't the migrator reads it, and a day later still doesn't write it into the sync folder.
+        let seen = try await pass(other, "Other")
+        XCTAssertEqual(seen.meetings.map(\.title), ["Zanzibar, late"])
+        await other.pruneCourierInbox(now: Date().addingTimeInterval(LibrarySyncEngine.courierPromotionDelay * 2))
+        XCTAssertTrue(files("Events").isEmpty)
+        // The migrator seals it; then both inbox copies go, and nothing plaintext ever reached the sync folder.
+        try await pass(mac, "Mac")
+        let sealedName = try XCTUnwrap(key.objectName(.event, plaintextSHA256: String(name.dropLast(5))))
+        XCTAssertTrue(files("Sealed/Events").contains(sealedName))
+        await other.pruneCourierInbox(now: Date().addingTimeInterval(LibrarySyncEngine.courierPromotionDelay * 2))
+        let left = await mac.courierInboxCount(), otherLeft = await other.courierInboxCount()
+        XCTAssertEqual(left, 0); XCTAssertEqual(otherLeft, 0)
+        XCTAssertTrue(files("Events").isEmpty)
+        try assertNoPlaintext()
+    }
 }
+
