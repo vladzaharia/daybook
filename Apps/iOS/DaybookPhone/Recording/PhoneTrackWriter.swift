@@ -36,7 +36,7 @@ final class PhoneTrackWriter: @unchecked Sendable {
 
     // Owned by `queue`.
     private var writer: AACSegmentWriter?
-    private var converter: AVAudioConverter?
+    private let converter = PCMFormatConverter()
     private var lastAnchor: ClockAnchor?
     private var pendingResync = false
     private var pendingNotes: [String] = []
@@ -130,7 +130,7 @@ final class PhoneTrackWriter: @unchecked Sendable {
             var buffer = input
             if input.format != format.pcmFormat {
                 buffer = try convert(input)
-            } else if converter != nil {
+            } else if converter.inputFormat != nil {
                 try drainConverter()
                 pendingResync = true
                 pendingNotes.append("The microphone returned to 48 kHz mono.")
@@ -205,7 +205,7 @@ final class PhoneTrackWriter: @unchecked Sendable {
             writer.cancel()
             pendingNotes.append("The segment couldn't be finished: \(error.localizedDescription)")
         }
-        converter = nil
+        converter.discard()
         return lock.withLock { () -> CaptureSegment? in
             guard var current = segments.last, !current.closed else { return nil }
             current.frameCount = frames
@@ -217,40 +217,26 @@ final class PhoneTrackWriter: @unchecked Sendable {
 
     private func convert(_ input: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
         let output = format.pcmFormat
-        if converter?.inputFormat != input.format {
-            try drainConverter()
-            guard let created = AVAudioConverter(from: input.format, to: output) else { throw PhoneRecorderError.encoderUnavailable("converter") }
-            if input.format.channelCount > output.channelCount { created.downmix = true }
-            converter = created
-            pendingResync = true
-            pendingNotes.append("The microphone delivered \(Int(input.format.sampleRate)) Hz, \(input.format.channelCount) ch; converted to 48 kHz mono.")
+        if converter.inputFormat != input.format { try drainConverter() }
+        do {
+            if try converter.prepare(from: input.format, to: output) {
+                pendingResync = true
+                pendingNotes.append("The microphone delivered \(Int(input.format.sampleRate)) Hz, \(input.format.channelCount) ch; converted to 48 kHz mono.")
+            }
+            return try converter.convert(input)
+        } catch PCMFormatConverter.Failure.buffer {
+            throw PhoneRecorderError.encoderUnavailable("buffer")
+        } catch PCMFormatConverter.Failure.conversion(let error) {
+            throw error ?? PhoneRecorderError.encoderUnavailable("convert")
+        } catch is PCMFormatConverter.Failure {
+            throw PhoneRecorderError.encoderUnavailable("converter")
         }
-        guard let converter else { throw PhoneRecorderError.encoderUnavailable("converter") }
-        let capacity = AVAudioFrameCount(Double(input.frameLength) * output.sampleRate / input.format.sampleRate) + 64
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: capacity) else { throw PhoneRecorderError.encoderUnavailable("buffer") }
-        var supplied = false
-        var error: NSError?
-        let status = converter.convert(to: buffer, error: &error) { _, outStatus in
-            if supplied { outStatus.pointee = .noDataNow; return nil }
-            supplied = true
-            outStatus.pointee = .haveData
-            return input
-        }
-        if status == .error { throw error ?? PhoneRecorderError.encoderUnavailable("convert") }
-        return buffer
     }
 
     /// Writes what a sample-rate converter still holds and retires it.
     private func drainConverter(into target: AACSegmentWriter? = nil) throws {
-        guard let converter, let writer = target ?? self.writer else { self.converter = nil; return }
-        self.converter = nil
-        guard let output = AVAudioPCMBuffer(pcmFormat: format.pcmFormat, frameCapacity: 8_192) else { return }
-        var error: NSError?
-        let status = converter.convert(to: output, error: &error) { _, outStatus in
-            outStatus.pointee = .endOfStream
-            return nil
-        }
-        guard status != .error, output.frameLength > 0 else { return }
+        guard let writer = target ?? self.writer else { converter.discard(); return }
+        guard let output = converter.drain() else { return }
         try writer.append(output)
     }
 }
