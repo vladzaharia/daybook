@@ -14,9 +14,37 @@
 //               or -allowProvisioningUpdates once (see README.md, "First-time provisioning").
 //     local     ad hoc ("Sign to Run Locally"), no team, no profile, no iCloud entitlements. The app runs
 //               and reports that this build can't use iCloud. For development without an account.
+//     rehearsal ad hoc like `local`, under a bundle ID of its own, with a manifest that moves a synthetic
+//               library into its container: the migration rehearsal (scripts/build-app.sh --sandbox-rehearsal,
+//               docs/sandbox.md).
 //
 // scripts/build-app.sh chooses `local` itself when no team is configured (or with --ad-hoc).
 DAYBOOK_SIGNING = signed
+
+// Whether a signed build runs in the App Sandbox (docs/sandbox.md). NO until the switch ships: YES picks the
+// sandboxed entitlements and embeds the container migration manifest, which moves the library into the container
+// the first time the app launches. scripts/build-app.sh --sandbox (or DAYBOOK_SANDBOX=1) sets it. Ad hoc and
+// rehearsal builds are always sandboxed, under bundle IDs of their own.
+DAYBOOK_SANDBOX = NO
+
+// Bundle IDs. A container is created once, by whichever sandboxed build with the bundle ID launches first, and only
+// then does the manifest move anything. So development builds never use the app's ID: an ad hoc build can't create
+// local.daybook.app's container or move the real library. scripts/build-app.sh can give a rehearsal another
+// local.daybook.app.rehearsal… ID (DAYBOOK_REHEARSAL_BUNDLE_ID), since a container can't be fully removed.
+DAYBOOK_BUNDLE_ID_signed = local.daybook.app
+DAYBOOK_BUNDLE_ID_local = local.daybook.app.adhoc
+DAYBOOK_BUNDLE_ID_rehearsal = local.daybook.app.rehearsal
+DAYBOOK_BUNDLE_ID = $(DAYBOOK_BUNDLE_ID_$(DAYBOOK_SIGNING))
+
+// The container migration manifest copied into Contents/Resources/container-migration.plist ("Embed container
+// migration manifest" in project.yml); empty embeds none. Only signed sandboxed builds move the real library.
+DAYBOOK_MIGRATION_MANIFEST_signed_NO =
+DAYBOOK_MIGRATION_MANIFEST_signed_YES = $(DAYBOOK_ROOT)/Resources/container-migration.plist
+DAYBOOK_MIGRATION_MANIFEST_local_NO =
+DAYBOOK_MIGRATION_MANIFEST_local_YES =
+DAYBOOK_MIGRATION_MANIFEST_rehearsal_NO = $(DAYBOOK_ROOT)/Resources/container-migration-rehearsal.plist
+DAYBOOK_MIGRATION_MANIFEST_rehearsal_YES = $(DAYBOOK_ROOT)/Resources/container-migration-rehearsal.plist
+DAYBOOK_MIGRATION_MANIFEST = $(DAYBOOK_MIGRATION_MANIFEST_$(DAYBOOK_SIGNING)_$(DAYBOOK_SANDBOX))
 
 DAYBOOK_ROOT = $(SRCROOT)/../..
 
@@ -31,16 +59,24 @@ DAYBOOK_APS_ENVIRONMENT = development
 
 DAYBOOK_CODE_SIGN_STYLE_signed = Automatic
 DAYBOOK_CODE_SIGN_STYLE_local = Manual
+DAYBOOK_CODE_SIGN_STYLE_rehearsal = Manual
 DAYBOOK_CODE_SIGN_IDENTITY_signed = Apple Development
 DAYBOOK_CODE_SIGN_IDENTITY_local = -
+DAYBOOK_CODE_SIGN_IDENTITY_rehearsal = -
 DAYBOOK_DEVELOPMENT_TEAM_signed = $(DAYBOOK_TEAM_ID)
 DAYBOOK_DEVELOPMENT_TEAM_local =
-DAYBOOK_ENTITLEMENTS_signed = $(DAYBOOK_ROOT)/Resources/Daybook.entitlements
-DAYBOOK_ENTITLEMENTS_local = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
+DAYBOOK_DEVELOPMENT_TEAM_rehearsal =
+// The entitlements files are the only source of the app's entitlements (no ENABLE_APP_SANDBOX or similar settings).
+DAYBOOK_ENTITLEMENTS_signed_NO = $(DAYBOOK_ROOT)/Resources/Daybook.entitlements
+DAYBOOK_ENTITLEMENTS_signed_YES = $(DAYBOOK_ROOT)/Resources/Daybook.entitlements
+DAYBOOK_ENTITLEMENTS_local_NO = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
+DAYBOOK_ENTITLEMENTS_local_YES = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
+DAYBOOK_ENTITLEMENTS_rehearsal_NO = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
+DAYBOOK_ENTITLEMENTS_rehearsal_YES = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
 
 CODE_SIGN_STYLE = $(DAYBOOK_CODE_SIGN_STYLE_$(DAYBOOK_SIGNING))
 CODE_SIGN_IDENTITY = $(DAYBOOK_CODE_SIGN_IDENTITY_$(DAYBOOK_SIGNING))
 DEVELOPMENT_TEAM = $(DAYBOOK_DEVELOPMENT_TEAM_$(DAYBOOK_SIGNING))
-CODE_SIGN_ENTITLEMENTS = $(DAYBOOK_ENTITLEMENTS_$(DAYBOOK_SIGNING))
+CODE_SIGN_ENTITLEMENTS = $(DAYBOOK_ENTITLEMENTS_$(DAYBOOK_SIGNING)_$(DAYBOOK_SANDBOX))
 
 #include? "Signing.local.xcconfig"

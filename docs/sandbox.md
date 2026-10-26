@@ -85,10 +85,33 @@ No login item, App Intents, Apple Events, XPC services, or helpers.
 
 ## Release N+1: the switch
 
-To come with the sandboxed build: entitlements for it, a container migration manifest in signed sandboxed builds
-only, ad hoc builds under their own bundle ID so they can never create or migrate the real container, a launch check
-that offers **Move Library…** when the library didn't move, re-granting folders whose old bookmarks don't resolve,
-and a process-tap probe.
+### Builds
+
+A container is created once, by whichever sandboxed build with the bundle ID launches first, and macOS moves files
+into it (the container migration manifest) only then. So only one kind of build ever uses `local.daybook.app`
+sandboxed, and only it carries the manifest that moves the real library:
+
+| Build | Bundle ID | Sandboxed | Manifest | Library |
+|---|---|---|---|---|
+| Signed (Developer ID, Apple Development), the default | `local.daybook.app` | no | none | `~/Library/Application Support/Daybook` |
+| Signed with `--sandbox` / `DAYBOOK_SANDBOX=1` (release only) | `local.daybook.app` | yes | `Resources/container-migration.plist`: moves `${ApplicationSupport}/Daybook` | the container's |
+| Ad hoc (`--ad-hoc`, or no team) | `local.daybook.app.adhoc` | yes | none | its own container's, empty at first |
+| Rehearsal (`--sandbox-rehearsal`) | `local.daybook.app.rehearsal` (or `DAYBOOK_REHEARSAL_BUNDLE_ID`) | yes | `Resources/container-migration-rehearsal.plist`: moves `${ApplicationSupport}/Daybook Rehearsal` to `${ApplicationSupport}/Daybook` | its own container's |
+| `swift run`, `.build/debug/Daybook` | none | no | none | `~/Library/Application Support/Daybook Development` |
+
+`Apps/macOS/Config/Signing.xcconfig` derives all of it from `DAYBOOK_SIGNING` (`signed`, `local`, `rehearsal`) and
+`DAYBOOK_SANDBOX` (`NO` by default): `PRODUCT_BUNDLE_IDENTIFIER`, `CODE_SIGN_ENTITLEMENTS`, and
+`DAYBOOK_MIGRATION_MANIFEST`. The target's "Embed container migration manifest" script copies the manifest into
+`Contents/Resources/container-migration.plist` (after `plutil -lint`), or removes a stale one, before signing.
+
+A container can't be fully removed from the command line: the files inside can, but macOS protects
+`.com.apple.containermanagerd.metadata.plist`, and a container that still has it isn't created again (so its
+manifest never runs again). Remove it in Finder, or rehearse again under a new `DAYBOOK_REHEARSAL_BUNDLE_ID`.
+
+### Still to come
+
+Sandboxed entitlements, a launch check that offers **Move Library…** when the library didn't move, and re-granting
+folders whose old bookmarks don't resolve.
 
 ## The process-tap probe
 

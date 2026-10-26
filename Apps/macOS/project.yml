@@ -9,6 +9,8 @@
 # never rewrites them. Signed builds (Daybook.entitlements) carry iCloud with iCloud Documents and CloudKit (the
 # courier, docs/icloud-sync.md) and push for CKSyncEngine, so the app ID needs the iCloud and Push Notifications
 # capabilities (docs/release.md, "One-time setup"). Ad hoc builds (Daybook-Local.entitlements) carry neither.
+# Bundle IDs, the App Sandbox, and the container migration manifest follow DAYBOOK_SIGNING and DAYBOOK_SANDBOX
+# (Config/Signing.xcconfig, docs/sandbox.md).
 name: DaybookMac
 
 options:
@@ -53,6 +55,10 @@ targets:
       - path: ../../Resources/Daybook.entitlements
         buildPhase: none
       - path: ../../Resources/Daybook-Local.entitlements
+        buildPhase: none
+      - path: ../../Resources/container-migration.plist
+        buildPhase: none
+      - path: ../../Resources/container-migration-rehearsal.plist
         buildPhase: none
     dependencies:
       - package: Daybook
@@ -103,10 +109,26 @@ targets:
               fi
             done
           done
+    postBuildScripts:
+      - name: Embed container migration manifest
+        # Signed sandboxed builds and the rehearsal carry a manifest (DAYBOOK_MIGRATION_MANIFEST, Config/Signing.xcconfig);
+        # every other build carries none, so a stale one from an earlier build is removed. Runs before signing.
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          destination="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/container-migration.plist"
+          /bin/rm -f "${destination}"
+          if [[ -n "${DAYBOOK_MIGRATION_MANIFEST:-}" ]]; then
+            /usr/bin/plutil -lint "${DAYBOOK_MIGRATION_MANIFEST}"
+            mkdir -p "$(dirname "${destination}")"
+            /bin/cp -f "${DAYBOOK_MIGRATION_MANIFEST}" "${destination}"
+            echo "Embedded ${DAYBOOK_MIGRATION_MANIFEST}"
+          fi
     settings:
       base:
         PRODUCT_NAME: Daybook
-        PRODUCT_BUNDLE_IDENTIFIER: local.daybook.app
+        # local.daybook.app for signed builds; ad hoc and rehearsal builds have their own (Config/Signing.xcconfig).
+        PRODUCT_BUNDLE_IDENTIFIER: $(DAYBOOK_BUNDLE_ID)
         PRODUCT_MODULE_NAME: Daybook
         INFOPLIST_FILE: $(DAYBOOK_ROOT)/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO

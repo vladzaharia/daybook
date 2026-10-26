@@ -455,6 +455,7 @@ if macos; then
         : > "$work/stub.log"
         env -u DAYBOOK_TEAM_ID -u DAYBOOK_ASC_KEY_PATH -u DAYBOOK_ASC_KEY_ID -u DAYBOOK_ASC_ISSUER_ID \
             -u DAYBOOK_DEVELOPER_ID_PROFILE -u DAYBOOK_NOTARY_PROFILE -u DAYBOOK_MAC_DERIVED_DATA \
+            -u DAYBOOK_REHEARSAL_BUNDLE_ID -u DAYBOOK_SANDBOX \
             PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" XCODEGEN="$stubs/xcodegen" ${vars[@]+"${vars[@]}"} \
             "$mac_repo/scripts/build-app.sh" "$@" > "$work/build-app.out" 2>&1
     }
@@ -468,6 +469,13 @@ if macos; then
     expect_ok "builds Debug, signed locally" grep -q -- '-configuration Debug .* build .*DAYBOOK_SIGNING=local' <<< "$(xcb ' build ')"
     expect_ok "packages dist/Daybook.app and the ZIP" test -d "$mac_repo/dist/Daybook.app" -a -f "$mac_repo/dist/Daybook-macOS-arm64.zip"
     expect_eq "a local build never asks to change the account" "" "$(grep -- '-allowProvisioning' "$work/stub.log" || true)"
+    expect_ok "a migration rehearsal" build_app -- --sandbox-rehearsal --debug
+    expect_ok "is ad hoc, under the rehearsal's own bundle ID" \
+        grep -q -- 'DAYBOOK_SIGNING=rehearsal .*DAYBOOK_BUNDLE_ID_rehearsal=local.daybook.app.rehearsal' <<< "$(xcb ' build ')"
+    expect_ok "another rehearsal from scratch" build_app DAYBOOK_REHEARSAL_BUNDLE_ID=local.daybook.app.rehearsal2 -- --sandbox-rehearsal --debug
+    expect_ok "takes a new bundle ID" grep -q -- 'DAYBOOK_BUNDLE_ID_rehearsal=local.daybook.app.rehearsal2' <<< "$(xcb ' build ')"
+    expect_fail "a rehearsal never takes the app's bundle ID" build_app DAYBOOK_REHEARSAL_BUNDLE_ID=local.daybook.app -- --sandbox-rehearsal
+    expect_fail "and never changes the account" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --sandbox-rehearsal --allow-provisioning-updates
     expect_ok "an ad hoc release archive" build_app -- --ad-hoc
     expect_eq "is archived, not exported" "1 0" "$(xcb ' archive ' | wc -l | tr -d ' ') $(xcb '-exportArchive' | wc -l | tr -d ' ')"
     expect_ok "the release pipeline's signed build" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" -- \
