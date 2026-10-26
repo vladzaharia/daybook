@@ -208,6 +208,24 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertNil(rig.meeting(request.conversationID), "not a conversation of this Mac's")
     }
 
+    func testAPausedPhoneRecordingIsStillItsRecordingAndCanBeStopped() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        let control = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString)?.direct as? PhoneLinkConnection)
+        let conversation = UUID()
+        // A call interrupted the phone's recording.
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .paused, conversationID: conversation, startedAt: Date())))
+        try await waitFor("its state") { control.recordingPhase == .paused }
+        XCTAssertEqual(control.status?.isRecording, true, "paused, it's still recording that conversation")
+        XCTAssertEqual(control.recordingConversationID, conversation)
+        control.pauseRecording()
+        try await waitFor("Stop on iPhone") { phone.recorder.requests.contains { $0.action == .stop && $0.conversationID == conversation } }
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle)))
+        try await waitFor("idle") { control.recordingPhase == nil }
+        XCTAssertEqual(control.status?.isRecording, false)
+    }
+
     func testAPhoneThatSaysNoIsReportedQuietly() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state)

@@ -41,7 +41,7 @@ struct PhoneOverview: View {
             .padding(.top, 6)
 
             if let status = session.status, status.isRecording == true, session.isLinked {
-                recordingNow(status)
+                recordingNow(status, paused: (direct as? PhoneLinkConnection)?.recordingPhase == .paused)
                     .padding(.top, Space.s5)
                     .transition(.deviceNotice(reduceMotion: reduceMotion))
             }
@@ -58,7 +58,7 @@ struct PhoneOverview: View {
         guard let direct, direct.isSetUp else { return "Not paired" }
         if direct.state.isConnected {
             var parts = ["Connected over Wi‑Fi"]
-            if session.status?.isRecording == true { parts.append("Recording") }
+            if session.status?.isRecording == true { parts.append((direct as? PhoneLinkConnection)?.recordingPhase == .paused ? "Paused" : "Recording") }
             if state.sync.folder == nil { parts.append("Sync is off") }
             return parts.joined(separator: " · ")
         }
@@ -66,14 +66,14 @@ struct PhoneOverview: View {
         return "Not connected"
     }
 
-    /// "Recording now · since 10:02 AM", with the conversation when this Mac has it, and Stop.
-    private func recordingNow(_ status: DeviceStatus) -> some View {
+    /// "Recording now · since 10:02 AM" (or "Paused"), with the conversation when this Mac has it, and Stop.
+    private func recordingNow(_ status: DeviceStatus, paused: Bool) -> some View {
         let conversation = (direct as? PhoneLinkConnection)?.recordingConversationID.flatMap { id in state.meetings.first { $0.id == id } }
         return DeviceBox {
             HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                Image(systemName: "record.circle").foregroundStyle(.red).accessibilityHidden(true)
+                Image(systemName: paused ? "pause.circle" : "record.circle").foregroundStyle(paused ? Ink.secondary : .red).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Recording now" + (status.recordingStartedAt.map { " · since \($0.formatted(date: .omitted, time: .shortened))" } ?? ""))
+                    Text((paused ? "Paused" : "Recording now") + (status.recordingStartedAt.map { " · since \($0.formatted(date: .omitted, time: .shortened))" } ?? ""))
                         .font(TypeStyle.statusLead).foregroundStyle(Ink.body)
                     if let conversation {
                         Button(conversation.title) { state.showConversation(conversation.id) }

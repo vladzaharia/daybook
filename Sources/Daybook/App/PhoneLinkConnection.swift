@@ -44,18 +44,26 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
     var problem: DeviceProblem? { nil }
     var lastConnectedAt: Date? { link.lastConnected[phoneID] }
 
-    /// The phone's recorder as it last said, with its start on this Mac's clock.
+    /// What the phone's recorder is doing, as it last said: recording, paused (a call interrupted it;
+    /// still its recording, which Stop ends), or nil when idle or not connected.
+    var recordingPhase: LinkRecordingState.Phase? {
+        guard peer != nil, let phase = link.recordingStates[phoneID]?.phase, [.starting, .recording, .paused, .stopping].contains(phase) else { return nil }
+        return phase
+    }
+
+    /// The phone's recorder as it last said, with its start on this Mac's clock. A paused recording is
+    /// still recording (`recordingPhase` says which).
     var status: DeviceStatus? {
         guard let peer, let recording = link.recordingStates[phoneID] else { return nil }
         let start = recording.startedAt.map { peer.clock?.localDate(fromPeer: $0) ?? $0 }
-        return DeviceStatus(isRecording: recording.phase == .recording || recording.phase == .starting,
-                            recordingStartedAt: start, updatedAt: peer.clock?.localDate(fromPeer: recording.sentAt) ?? Date())
+        return DeviceStatus(isRecording: recordingPhase != nil, recordingStartedAt: start,
+                            updatedAt: peer.clock?.localDate(fromPeer: recording.sentAt) ?? Date())
     }
 
     /// The conversation the phone is recording (or paused in), when it says it's recording one.
     var recordingConversationID: UUID? {
-        guard let recording = link.recordingStates[phoneID], recording.phase == .recording || recording.phase == .starting else { return nil }
-        return recording.conversationID
+        guard recordingPhase != nil else { return nil }
+        return link.recordingStates[phoneID]?.conversationID
     }
 
     var summary: String {
