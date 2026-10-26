@@ -335,7 +335,8 @@ public final class RecorderHandoff: ObservableObject {
             takeOver(kind: release.kind, serial: release.serial, from: peerName(linkID),
                      requestID: release.requestID,
                      pending: release.pendingImports.map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
-                     imported: release.importedRecordingIDs)
+                     imported: release.importedRecordingIDs,
+                     inProgress: release.recordingInProgress.map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) })
         default:
             break
         }
@@ -479,6 +480,7 @@ public final class RecorderHandoff: ObservableObject {
         let pending = session.takeWaitingImports()
         let imported = Self.recentImports(session)
         let recording = session.isLinked ? session.status?.isRecording : nil
+        let inProgress = recordingInProgress(session, kind: kind, serial: serial)
         // Recording the new owner first means this device's connection won't reach for it again.
         library.claimRecorder(kind: kind, serial: serial, deviceClass: Self.syncClass(newOwner.deviceClass),
                               by: ProcessingRequest.Device(id: newOwner.syncID, name: newOwner.name))
@@ -487,13 +489,14 @@ public final class RecorderHandoff: ObservableObject {
         session.disconnect(.direct)
         session.endHandoffHold()
         let existing = library.recorderHandoff(kind: kind, serial: serial)
-        let record = RecorderHandoffRecord(
+        var record = RecorderHandoffRecord(
             id: requestID, kind: kind, serial: serial, ownerID: thisDevice.id, ownerName: thisDevice.name,
             requesterID: newOwner.syncID, requesterName: newOwner.name, requesterClass: Self.syncClass(newOwner.deviceClass),
             phase: .released,
             pendingImports: pending.map { RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
             importedRecordingIDs: imported, recorderIsRecording: recording,
             requestedAt: existing?.id == requestID ? existing?.requestedAt ?? Date() : Date())
+        record.recordingInProgress = inProgress.map { RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) }
         library.saveRecorderHandoff(record)
         releasing[id] = nil
         releaseTasks[id] = nil
@@ -502,7 +505,8 @@ public final class RecorderHandoff: ObservableObject {
             let release = LinkRecorderRelease(
                 requestID: requestID, kind: kind, serial: serial, newOwner: newOwner,
                 pendingImports: pending.map { LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
-                importedRecordingIDs: imported, recorderIsRecording: recording)
+                importedRecordingIDs: imported, recorderIsRecording: recording,
+                recordingInProgress: inProgress.map { LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) })
             send(.recorderRelease(release), to: peer.linkID)
         }
     }
@@ -521,23 +525,28 @@ public final class RecorderHandoff: ObservableObject {
             guard let self, !Task.isCancelled, let serial = session.recorderSerial else { return }
             let pending = session.takeWaitingImports()
             let imported = Self.recentImports(session)
+            let kind = session.kind.id
+            let inProgress = self.recordingInProgress(session, kind: kind, serial: serial)
             session.disconnect(.direct)
             session.endHandoffHold()
             self.releasing[id] = nil
             self.releaseTasks[id] = nil
             if self.states[id]?.isPending == true { self.states[id] = nil }
-            guard !pending.isEmpty || !imported.isEmpty else { return }
-            let kind = session.kind.id
-            self.library.saveRecorderHandoff(RecorderHandoffRecord(
+            guard !pending.isEmpty || !imported.isEmpty || inProgress != nil else { return }
+            var record = RecorderHandoffRecord(
                 id: requestID, kind: kind, serial: serial, ownerID: self.thisDevice.id, ownerName: self.thisDevice.name,
                 requesterID: owner.ownerID, requesterName: owner.ownerName, requesterClass: owner.ownerClass, phase: .released,
                 pendingImports: pending.map { RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
-                importedRecordingIDs: imported))
+                importedRecordingIDs: imported)
+            record.recordingInProgress = inProgress.map { RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) }
+            self.library.saveRecorderHandoff(record)
             if let peer = self.peer(syncID: owner.ownerID) {
                 self.send(.recorderRelease(LinkRecorderRelease(
                     requestID: requestID, kind: kind, serial: serial, newOwner: newOwner,
                     pendingImports: pending.map { LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
-                    importedRecordingIDs: imported)), to: peer.linkID)
+                    importedRecordingIDs: imported,
+                    recordingInProgress: inProgress.map { LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) })),
+                          to: peer.linkID)
             }
         }
     }
@@ -547,7 +556,8 @@ public final class RecorderHandoff: ObservableObject {
     /// The old owner let go (over the link or through sync): claim the recorder, import what it had
     /// waiting, and connect.
     private func takeOver(kind: String, serial: String, from ownerName: String?, requestID: UUID?,
-                          pending: [DeviceHandedOffImport], imported: [String], previousOwner: RecorderOwnership? = nil) {
+                          pending: [DeviceHandedOffImport], imported: [String], inProgress: DeviceHandedOffImport? = nil,
+                          previousOwner: RecorderOwnership? = nil) {
         if let requestID {
             // The record is done with either way (it may arrive through sync after the link's release).
             library.clearRecorderHandoff(kind: kind, serial: serial, onlyID: requestID)
@@ -562,7 +572,8 @@ public final class RecorderHandoff: ObservableObject {
         guard let session = session(kind: kind, serial: serial) else { return }
         if library.recorderOwner(kind: kind, serial: serial)?.ownerID != thisDevice.id { claim(kind: kind, serial: serial) } else { applyOwnership() }
         if let before, before.ownerID != thisDevice.id { rememberHome(id, from: before) }
-        session.adoptHandedOffImports(pending, alreadyImported: imported)
+        // The recording it's making waits here too, for the conversation that asked for it.
+        session.adoptHandedOffImports(pending + (inProgress.map { [$0] } ?? []), alreadyImported: imported)
         if session.isLinked {
             if states[id]?.isPending == true { states[id] = .done(at: Date()); clearLater(id) }
         } else {
@@ -657,6 +668,7 @@ public final class RecorderHandoff: ObservableObject {
                     takeOver(kind: record.kind, serial: record.serial, from: record.ownerName, requestID: record.id,
                              pending: (record.pendingImports ?? []).map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
                              imported: record.importedRecordingIDs ?? [],
+                             inProgress: record.recordingInProgress.map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) },
                              previousOwner: RecorderOwnership(kind: record.kind, serial: record.serial, ownerID: record.ownerID,
                                                               ownerName: record.ownerName, ownerClass: deviceClass == .mac ? .phone : .mac))
                 case .refused:
@@ -747,6 +759,20 @@ public final class RecorderHandoff: ObservableObject {
         case .liveListening?: return .liveListening
         default: return nil
         }
+    }
+
+    /// The recording the recorder is making as it's let go (live, or as last seen), and the
+    /// conversation waiting for it: one whose recording asked the recorder to record too and hasn't
+    /// got its recording yet. The new owner imports it there once it's finished.
+    private func recordingInProgress(_ session: DeviceSession, kind: String, serial: String) -> DeviceHandedOffImport? {
+        guard let id = session.split.inProgress?.id else { return nil }
+        let waiting = library.meetings.first { meeting in
+            meeting.companions?.contains { link in
+                link.deviceKind == kind && (link.deviceSerial ?? serial) == serial && link.recordingID == id
+                    && link.trackID == nil && link.expectsRecording
+            } == true
+        }
+        return DeviceHandedOffImport(recordingID: id, attachTo: waiting?.id, isAutomatic: true)
     }
 
     /// Recordings imported here in the last day: they may not have reached the new owner yet.

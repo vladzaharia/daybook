@@ -569,17 +569,27 @@ public final class DeviceSession: ObservableObject, Identifiable {
               let listed = direct.inventoryUpdatedAt else { return }
         let recordings = Dictionary(direct.recordings.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var remaining: [DeviceHandedOffImport] = []
+        var recordingNow: [DeviceHandedOffImport] = []
         for item in adoptedImports {
             if links.imported[item.recordingID] != nil || arrivingThroughSync[item.recordingID] != nil { continue }
             if let recording = recordings[item.recordingID], !recording.isInProgress {
                 // Automatic: the person asked on the other device, not here, so this one doesn't ask
                 // for notification permission or keep the recorder longer than an automatic import.
                 enqueue([recording], method: .direct, attachTo: item.attachTo, automatic: true)
+            } else if recordings[item.recordingID]?.isInProgress == true {
+                // Still being recorded: it waits, however many listings it takes.
+                recordingNow.append(item)
             } else {
                 remaining.append(item)
             }
         }
-        adoptedImports = listed > (adoptedAt ?? .distantFuture) ? [] : remaining
+        adoptedImports = (listed > (adoptedAt ?? .distantFuture) ? [] : remaining) + recordingNow
+    }
+
+    /// The conversation a recording goes into once it's imported, when the device that let go of the
+    /// recorder named one (a Mac recording that asked the recorder to record too).
+    public func conversationWaiting(for recordingID: String) -> UUID? {
+        adoptedImports.first { $0.recordingID == recordingID }?.attachTo
     }
 
     /// Warns once a day when the recorder is nearly full, because Soundcore overwrites its oldest recordings.

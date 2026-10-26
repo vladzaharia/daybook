@@ -239,7 +239,14 @@ private struct DevicePageContent: View {
                 if let now = split.inProgress {
                     HStack {
                         Circle().fill(PhoneStyle.Ink.record).frame(width: 8, height: 8)
-                        Text("Recording now · started \(now.title)").font(.subheadline)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Recording now · started \(now.title)").font(.subheadline)
+                            // Handed over mid-recording: the conversation it goes into once it's finished.
+                            if let waiting = session.conversationWaiting(for: now.id),
+                               let title = model.library.controller.meeting(waiting)?.title {
+                                Text("For \(title)").font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
                 ForEach(new) { recording in

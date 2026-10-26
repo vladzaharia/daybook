@@ -98,6 +98,9 @@ public struct RecorderHandoffRecord: Codable, Equatable, Sendable {
     public var importedRecordingIDs: [String]?
     /// With `released`: the recorder was recording, and keeps recording.
     public var recorderIsRecording: Bool?
+    /// With `released`: the recording it was making, and the conversation waiting for it. Optional,
+    /// so earlier records decode and earlier versions ignore it.
+    public var recordingInProgress: PendingImport?
     public var requestedAt: Date
     public var updatedAt: Date
 

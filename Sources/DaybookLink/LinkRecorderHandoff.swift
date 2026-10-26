@@ -225,9 +225,14 @@ public struct LinkRecorderRelease: Codable, Sendable, Equatable {
     public var importedRecordingIDs: [String]
     /// The recorder was recording when it was let go; it keeps recording.
     public var recorderIsRecording: Bool?
+    /// The recording it was making, and the conversation waiting for it (a Mac recording that asked
+    /// it to record too): the new owner imports it there once it's finished. Optional; older builds
+    /// neither send nor read it.
+    public var recordingInProgress: LinkHandoffImport?
 
     public init(requestID: UUID?, kind: String, serial: String, newOwner: LinkHandoffDevice, releasedAt: Date = Date(),
-                pendingImports: [LinkHandoffImport] = [], importedRecordingIDs: [String] = [], recorderIsRecording: Bool? = nil) {
+                pendingImports: [LinkHandoffImport] = [], importedRecordingIDs: [String] = [], recorderIsRecording: Bool? = nil,
+                recordingInProgress: LinkHandoffImport? = nil) {
         self.requestID = requestID
         self.kind = kind
         self.serial = serial
@@ -236,6 +241,7 @@ public struct LinkRecorderRelease: Codable, Sendable, Equatable {
         self.pendingImports = pendingImports
         self.importedRecordingIDs = importedRecordingIDs
         self.recorderIsRecording = recorderIsRecording
+        self.recordingInProgress = recordingInProgress
     }
 
     public init(from decoder: Decoder) throws {
@@ -248,6 +254,7 @@ public struct LinkRecorderRelease: Codable, Sendable, Equatable {
         pendingImports = try c.decodeIfPresent([LinkHandoffImport].self, forKey: .pendingImports) ?? []
         importedRecordingIDs = try c.decodeIfPresent([String].self, forKey: .importedRecordingIDs) ?? []
         recorderIsRecording = try c.decodeIfPresent(Bool.self, forKey: .recorderIsRecording)
+        recordingInProgress = try c.decodeIfPresent(LinkHandoffImport.self, forKey: .recordingInProgress)
     }
 }
 

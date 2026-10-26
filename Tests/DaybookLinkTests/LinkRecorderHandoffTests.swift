@@ -31,6 +31,10 @@ final class LinkRecorderHandoffTests: XCTestCase {
                                                       pendingImports: [LinkHandoffImport(recordingID: "1729000000", attachTo: UUID(), isAutomatic: true)],
                                                       importedRecordingIDs: ["1728990000"], recorderIsRecording: false))),
             .app(.recorderRelease(LinkRecorderRelease(requestID: nil, kind: "soundcore.work", serial: "S", newOwner: mac, releasedAt: t0))),
+            .app(.recorderRelease(LinkRecorderRelease(requestID: request.id, kind: "soundcore.work", serial: "S", newOwner: phone, releasedAt: t0,
+                                                      recorderIsRecording: true,
+                                                      recordingInProgress: LinkHandoffImport(recordingID: "1729003600", attachTo: UUID(),
+                                                                                             isAutomatic: true)))),
         ]
         for message in messages {
             let frame = try LinkWire.encode(message, version: 1)
