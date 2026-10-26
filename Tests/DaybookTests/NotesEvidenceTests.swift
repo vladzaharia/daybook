@@ -25,7 +25,8 @@ final class NotesEvidenceTests: XCTestCase {
             alignmentReports: [.init(trackID: wearableID, method: .unaligned)],
             highlights: [.init(trackID: wearableID, time: 52, text: "My annotation")])
         let evidence = try XCTUnwrap(MeetingEvidence.highlights(meeting))
-        XCTAssertTrue(evidence.contains("wearable.wav"))
+        XCTAssertTrue(evidence.contains(", Soundcore Work, unaligned"), evidence)
+        XCTAssertFalse(evidence.contains("wearable"), "never the file's name")
         XCTAssertTrue(evidence.contains("unaligned source-local timeline"))
         XCTAssertTrue(evidence.contains("do not imply overlap with other sources"))
         XCTAssertTrue(evidence.contains("User annotation: My annotation"))

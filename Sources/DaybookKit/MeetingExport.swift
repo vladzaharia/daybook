@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDevices
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -58,8 +59,8 @@ public enum MeetingExport {
         }
         if let highlights = MeetingEvidence.highlights(meeting) { lines += ["", "## Bookmarks and what was said", "", safe(highlights)] }
         for report in meeting.alignmentReports where report.method == .unaligned {
-            let track = meeting.tracks.first { $0.id == report.trackID }
-            lines += ["", "## Unaligned source: \(safe(track?.fileName ?? report.trackID.uuidString))", "", report.explanation, ""]
+            let name = meeting.tracks.first { $0.id == report.trackID }.map { sourceName(of: $0, in: meeting) } ?? "Recording"
+            lines += ["", "## Unaligned source: \(safe(name))", "", report.explanation, ""]
             lines += meeting.transcripts.filter { $0.trackID == report.trackID }.max { $0.createdAt < $1.createdAt }?.segments.map { "[\(TimeLabel.format($0.start))] \(safe($0.text))" } ?? []
         }
         return lines.joined(separator: "\n") + "\n"
@@ -77,6 +78,25 @@ public enum MeetingExport {
         }
         for section in summary.sections { lines += ["", "## \(safe(section.heading))", "", safe(section.body)] }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// What an export calls a recording: where it came from ("Soundcore Work", "iPhone",
+    /// "Microphone", "Imported recording"), how Daybook derived it ("Microphone, echo removed"), and
+    /// a number when two would read the same. Never the name its file arrived with, which can say
+    /// more than the person meant to share.
+    public static func sourceName(of track: RecordingTrack, in meeting: Meeting) -> String {
+        let name = plainSourceName(track)
+        let alike = meeting.tracks.filter { plainSourceName($0) == name }
+        guard alike.count > 1, let index = alike.firstIndex(where: { $0.id == track.id }) else { return name }
+        return "\(name) \(index + 1)"
+    }
+
+    private static func plainSourceName(_ track: RecordingTrack) -> String {
+        var name = track.deviceKind == DaybookPhoneIntegration.id ? "iPhone" : track.source.title
+        if track.derivedFrom != nil {
+            name += track.processing == RecordingTrack.echoCancelledProcessing ? ", echo removed" : ", processed"
+        }
+        return name
     }
 
     /// "Photo 01", "Photo 02", … in the order of `visiblePhotos`, for the exported files and for a

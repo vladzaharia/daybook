@@ -12,7 +12,8 @@ import Foundation
 /// its tracks with its installation ID as the serial; the two are expected to be the same UUID.
 public struct DaybookPhoneIntegration: DeviceIntegration {
     /// Stored on every track the phone records (`DeviceRecordingIdentity.kind`). Never change it.
-    public static let id = "daybook.iphone"
+    /// Nonisolated, so what reads a track off the main actor (exports) can tell.
+    public nonisolated static let id = "daybook.iphone"
 
     public init() {}
 
