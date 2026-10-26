@@ -1,0 +1,23 @@
+# Weekly update pull requests for the pinned GitHub Actions (their commit SHAs and version comments)
+# and the Swift packages. Security updates are on too (Settings › Advanced Security). Each pull request
+# goes through CI like any other; nothing merges on its own. docs/release.md, "Dependency updates".
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  # Package.swift pins each dependency exactly and Package.resolved records the commits, so every
+  # update is a deliberate pull request that CI builds with the new versions.
+  - package-ecosystem: swift
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5

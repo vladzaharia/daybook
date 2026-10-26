@@ -355,7 +355,8 @@ expect_ok "dry run never calls gh" test ! -e "$work/gh-calls"
 expect_ok "dry run says nothing changed" grep -q 'Nothing was changed' <<< "$plan"
 for needle in "environments/release" "deployment-branch-policies" "gh secret set ASC_KEY_P8_BASE64 --env release" \
               "gh secret set ASC_ISSUER_ID --env release" "DAYBOOK_TEAM_ID --body 48H7CLBV8Y" \
-              "DAYBOOK_TESTFLIGHT_GROUP --body External\\ testers" "default_workflow_permissions=read" "rulesets"; do
+              "DAYBOOK_TESTFLIGHT_GROUP --body External\\ testers" "default_workflow_permissions=read" "rulesets" \
+              "sha_pinning_required=true" "secret_scanning_push_protection" "automated-security-fixes"; do
     expect_ok "plan includes $needle" grep -qF -- "$needle" <<< "$plan"
 done
 key_body="$(sed '1d;$d' "$key" | tr -d '\n' | cut -c1-24)"

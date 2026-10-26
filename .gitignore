@@ -14,3 +14,11 @@ xcuserdata/
 # Mac app: the Xcode project is generated from Apps/macOS/project.yml (scripts/build-app.sh).
 Apps/macOS/DaybookMac.xcodeproj/
 Apps/macOS/Config/Signing.local.xcconfig
+
+# Signing material never belongs in the repository (docs/release.md, "Secrets and variables").
+*.p8
+*.p12
+AuthKey_*
+*.mobileprovision
+*.provisionprofile
+*.cer

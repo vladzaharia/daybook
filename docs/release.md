@@ -25,7 +25,9 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 Hardening:
 
 - Every workflow starts from `permissions: {}`, and each job asks for `contents: read` (or `write` in `draft` and `publish` only). The Release `mac` job alone adds `id-token: write` and `attestations: write`, for build provenance.
-- Actions are pinned to commit SHAs, with the version in a comment. Checkouts don't persist credentials.
+- Actions are pinned to commit SHAs, with the version in a comment, and the repository requires it (Settings › Actions › "Require actions to be pinned to a full-length commit SHA", `sha_pinning_required`). Checkouts don't persist credentials.
+- Secret scanning with push protection, Dependabot alerts, and Dependabot security updates are on. `.gitignore` keeps signing material out (`*.p8`, `*.p12`, `AuthKey_*`, `*.mobileprovision`, `*.provisionprofile`, `*.cer`).
+- `.github/dependabot.yml` opens weekly update pull requests for the actions (grouped) and the Swift packages; see [Dependency updates](#dependency-updates).
 - Nothing uses `pull_request_target`.
 - Concurrency groups cancel superseded pull request runs and never cancel a release. CI's group includes the workflow's name, which is "Release" when `release.yml` calls it, so a push to `main` can't queue behind or replace a release's validation.
 - Secrets are environment secrets in `release`. Only jobs that a reviewer approved can read them, and only from `main` or a `v*` tag. Each secret is passed only to the steps that need it, and becomes a file only while such a step runs: see [Secrets on the runner](#secrets-on-the-runner).
@@ -197,7 +199,7 @@ Repository **variables**:
 
 The `release` environment has required reviewers (the owner) and deployment policies for branch `main` and tags `v*`.
 
-`scripts/ci/setup-github.sh` creates all of this from local files. It also sets two Actions defaults: read-only workflow tokens, and approval before outside contributors' pull requests run workflows. With `--protect-tags` it adds a ruleset so only admins create, move, or delete `v*` tags. **It prints the plan and changes nothing unless `--apply` is passed.**
+`scripts/ci/setup-github.sh` creates all of this from local files. It also sets the repository's Actions and security settings: read-only workflow tokens, required SHA pinning, approval before outside contributors' pull requests run workflows, secret scanning with push protection, and Dependabot alerts and security updates. With `--protect-tags` it adds a ruleset so only admins create, move, or delete `v*` tags. **It prints the plan and changes nothing unless `--apply` is passed.**
 
 ## One-time setup
 
@@ -249,6 +251,15 @@ In order, by the owner or their delegate:
    d. **Check the first release.**
       - Mac: `codesign -d --entitlements - --xml /Applications/Daybook.app | plutil -p -` lists `CloudKit` under `com.apple.developer.icloud-services`, `com.apple.developer.aps-environment` as `production`, and `com.apple.developer.icloud-container-environment` as `Production`.
       - Both: record on the iPhone with the Mac open. In CloudKit Console › **Production** › **Records** (Private Database, signed in with **Act as iCloud Account** as the test account), zone `Courier`, a `CourierFile` record appears when the recording is filed and is gone once the Mac has stored it.
+
+## Dependency updates
+
+Dependabot (`.github/dependabot.yml`) opens pull requests every Monday:
+
+- **GitHub Actions**, all in one grouped pull request. It moves each pinned SHA and its version comment together, so pinning (which the repository enforces) stays intact. Check the release notes of anything that runs in the `release` jobs (checkout, the artifact actions, `attest-build-provenance`) before merging.
+- **Swift packages.** `Package.swift` pins each one exactly, so every bump is a pull request that changes `Package.swift` and `Package.resolved` together; CI builds and tests it with the new versions. MLX, WhisperKit, FluidAudio, and swift-transformers change model behavior, so check `docs/validation.md` before merging one.
+
+Security updates (for a published advisory) come the same way, outside the weekly schedule.
 
 ## Export compliance
 
