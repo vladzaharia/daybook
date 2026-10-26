@@ -409,7 +409,8 @@ final class AppState: ObservableObject {
     /// the selection.
     func importAudio(_ urls: [URL], source: AudioSource, attachTo id: UUID?,
                      device: DeviceRecordingIdentity? = nil) async throws -> [UUID] {
-        await acquireImportLock()
+        // A cancelled import (a recorder that went away) stops waiting for the lock it never got.
+        try await library.acquireLockUnlessCancelled()
         defer { releaseImportLock() }
         guard library.isLoaded else { throw AppError.libraryUnavailable }
         var meetingIDs: [UUID] = []
@@ -930,7 +931,7 @@ extension AppState {
         if result.echoRemoval == nil && result.tracks.contains(where: { $0.role == .systemAudio }) {
             update(id) { if $0.status == .recording { $0.status = .transcribing } }
         }
-        let result = await Task.detached(priority: .userInitiated) { CaptureFinalizer.finalize(result) }.value
+        let result = await detachedWork(priority: .userInitiated) { CaptureFinalizer.finalize(result) }
         await acquireImportLock()
         defer { releaseImportLock() }
         guard library.isLoaded, meetings.contains(where: { $0.id == id }) else { throw AppError.libraryUnavailable }

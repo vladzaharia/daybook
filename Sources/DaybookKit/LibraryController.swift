@@ -46,7 +46,8 @@ public final class LibraryController: ObservableObject {
     private var notesTasks: [UUID: Task<Void, Never>] = [:]
     private var noteOriginals: [UUID: String] = [:]
     private var locked = false
-    private var lockWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Tasks waiting for the lock, in order; each is resumed with true when it's handed the lock.
+    private var lockWaiters: [(id: UUID, waiting: CheckedContinuation<Bool, Never>)] = []
 
     /// How long a save waits after an edit, so a burst of edits (typing) writes once.
     public var saveDelay: Duration {
@@ -373,10 +374,11 @@ public final class LibraryController: ObservableObject {
     /// actor. Skipped if its recordings or transcripts changed meanwhile.
     public func realign(_ id: UUID) async {
         guard let snapshot = meeting(id) else { return }
-        let (prepared, settled) = await Task.detached(priority: .userInitiated) {
+        let (prepared, settled) = await detachedWork(priority: .userInitiated) {
             let fusion = SourceFusion.fuse(snapshot)
             return (snapshot.preparingFusion(fusion.fusion), fusion.settled)
-        }.value
+        }
+        // Applied even when the caller was cancelled meanwhile: it matches the transcripts kept.
         guard let current = meeting(id), current.transcripts == snapshot.transcripts,
               current.tracks == snapshot.tracks, current.audioAlignments == snapshot.audioAlignments else { return }
         update(id) { $0.applyFusion(prepared); $0.applyPlacements(settled) }
@@ -577,14 +579,41 @@ public final class LibraryController: ObservableObject {
     // MARK: Bringing in recordings
 
     /// Serializes changes to the store that span awaits: imports, sync, and the Trash. Every
-    /// `acquireLock()` needs a `releaseLock()`.
+    /// `acquireLock()` needs a `releaseLock()`. Waits even if the task is cancelled meanwhile; see
+    /// `acquireLockUnlessCancelled()`.
     public func acquireLock() async {
-        if !locked { locked = true; return }
-        await withCheckedContinuation { lockWaiters.append($0) }
+        _ = await waitForLock(cancellable: false)
+    }
+
+    /// The same, but a task cancelled while it waits stops waiting and throws `CancellationError`,
+    /// without the lock: only a call that returns needs its `releaseLock()`.
+    public func acquireLockUnlessCancelled() async throws {
+        guard await waitForLock(cancellable: true) else { throw CancellationError() }
     }
 
     public func releaseLock() {
-        if lockWaiters.isEmpty { locked = false } else { lockWaiters.removeFirst().resume() }
+        if lockWaiters.isEmpty { locked = false } else { lockWaiters.removeFirst().waiting.resume(returning: true) }
+    }
+
+    /// True once this task holds the lock; false when it stopped waiting because it was cancelled. A
+    /// cancellation that arrives after the lock was handed over leaves it held: the caller releases it.
+    private func waitForLock(cancellable: Bool) async -> Bool {
+        if cancellable && Task.isCancelled { return false }
+        if !locked { locked = true; return true }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (waiting: CheckedContinuation<Bool, Never>) in
+                lockWaiters.append((id, waiting))
+            }
+        } onCancel: {
+            guard cancellable else { return }
+            Task { @MainActor [weak self] in self?.stopWaiting(id) }
+        }
+    }
+
+    private func stopWaiting(_ id: UUID) {
+        guard let index = lockWaiters.firstIndex(where: { $0.id == id }) else { return }
+        lockWaiters.remove(at: index).waiting.resume(returning: false)
     }
 
     /// Copies a recording into a conversation, with where it came from. The original file is
