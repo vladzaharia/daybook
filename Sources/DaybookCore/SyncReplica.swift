@@ -297,10 +297,13 @@ enum SyncDigest {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty {
+        // Each read is autoreleased: drained a chunk at a time, hashing a long recording takes a megabyte, not its size.
+        while try autoreleasepool(invoking: { () throws -> Bool in
+            guard let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty else { return false }
             try Task.checkCancellation()
             hasher.update(data: bytes)
-        }
+            return true
+        }) {}
         return hex(hasher.finalize())
     }
     static func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
