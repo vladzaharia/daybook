@@ -95,6 +95,67 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(loaded.timedNotes, meeting.timedNotes)
     }
 
+    func testPhotosTakenWhileRecordingAreFiledOnThePhoneTrack() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let rig = RecorderRig()
+        let id = UUID()
+        try await rig.recorder.start(in: library.stagingURL.appendingPathComponent(id.uuidString), id: id, title: "Whiteboard")
+        rig.pump(4)
+        let shutter = rig.clock.now().addingTimeInterval(-1)
+        let keptPhoto = try await rig.recorder.addPhoto(syntheticCameraPhoto(capturedAt: shutter))
+        let kept = try XCTUnwrap(keptPhoto)
+        rig.pump(2)
+        var recording = try await rig.stop()
+        let spare = try temporaryDirectory().appendingPathComponent("spare")
+        try FileManager.default.copyItem(at: recording.stagingDirectory, to: spare)
+
+        let meeting = try await library.file(recording)
+        let track = try XCTUnwrap(meeting.tracks.first)
+        XCTAssertEqual(meeting.visiblePhotos.count, 1)
+        let photo = try XCTUnwrap(meeting.visiblePhotos.first)
+        XCTAssertEqual(photo.trackID, track.id)
+        XCTAssertEqual(photo.time ?? -1, kept.time, accuracy: 1e-6)
+        XCTAssertEqual(photo.time ?? -1, 3, accuracy: 1e-6)
+        XCTAssertEqual(photo.capturedAt, shutter)
+        XCTAssertEqual(photo.origin?.kind, PhoneDevice.kind)
+        XCTAssertEqual(photo.origin?.serial, "INSTALL-1")
+        XCTAssertEqual(meeting.timelineTime(of: photo) ?? -1, 3, accuracy: 1e-6)
+        XCTAssertTrue(library.controller.hasLocalPhoto(photo, in: meeting.id))
+
+        // Filing again after an interruption keeps one photo.
+        recording.stagingDirectory = spare
+        recording.audioURL = spare.appendingPathComponent(PhoneCaptureJournal.finalFileName)
+        let again = try await library.file(recording)
+        XCTAssertEqual(again.visiblePhotos.map(\.id), [photo.id])
+    }
+
+    func testAPhotoFromTheCameraAfterStopJoinsTheFiledConversation() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let rig = RecorderRig()
+        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        try await model.startRecording()
+        rig.pump(3)
+        await model.addPhoto(syntheticCameraPhoto(capturedAt: rig.clock.now()))
+        // A Mac stopped the recording while the camera was still open.
+        try await model.stopRecording()
+        let late = rig.clock.now()
+        await model.addPhoto(syntheticCameraPhoto(capturedAt: late, size: CGSize(width: 50, height: 50)))
+        XCTAssertNil(model.notice)
+
+        let filed = try XCTUnwrap(library.conversations.first)
+        let photos = filed.visiblePhotos
+        XCTAssertEqual(photos.count, 2)
+        XCTAssertEqual(photos.first?.trackID, filed.tracks.first?.id)
+        XCTAssertEqual(photos.first?.time ?? -1, 3, accuracy: 1e-6)
+        let after = try XCTUnwrap(photos.last)
+        XCTAssertNil(after.trackID)
+        XCTAssertEqual(after.capturedAt, late)
+        XCTAssertEqual(after.origin?.serial, PhoneDevice.installationID())
+    }
+
     func testFilingAgainNeverDuplicates() async throws {
         let root = try temporaryDirectory()
         let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")

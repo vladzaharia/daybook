@@ -50,6 +50,12 @@ private struct ReadingLayout: View {
                 .environment(session)
                 .tint(PhoneStyle.accent)
         }
+        .fullScreenCover(isPresented: Binding(get: { session.cameraFor != nil }, set: { if !$0 { session.cameraFor = nil } })) {
+            if let id = session.cameraFor {
+                CameraPicker(capture: { photo in addPhoto(photo, to: id) }, finish: { session.cameraFor = nil })
+                    .ignoresSafeArea()
+            }
+        }
         .alert("Daybook", isPresented: Binding(get: { session.alert != nil }, set: { if !$0 { session.alert = nil } })) {
             Button("OK", role: .cancel) { }
         } message: { Text(session.alert ?? "") }
@@ -66,6 +72,13 @@ private struct ReadingLayout: View {
             // A conversation trashed elsewhere (or by sync) leaves the page.
             if let open = session.openID, !ids.contains(open) { session.forget(open) }
             if style != .pocket { adapt(to: style) }
+        }
+    }
+
+    private func addPhoto(_ photo: CameraPhoto, to id: UUID) {
+        Task {
+            do { try await library.addCameraPhoto(photo, to: id) }
+            catch { session.alert = "The photo couldn’t be added: \(error.localizedDescription)" }
         }
     }
 

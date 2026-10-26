@@ -12,10 +12,11 @@ Everything below is in v1:
 
 - **Record.**
   - Microphone recording, background-safe, interruption-safe, compressed (AAC).
-  - Notes with recording times and bookmarks, exactly as on the Mac (`TimedNotes`, highlights).
+  - Notes with recording times and bookmarks, exactly as on the Mac (`TimedNotes`, highlights), in every posture.
+  - Photos from the camera at their moment in the recording ([photos](photos.md)).
   - Start, stop, and bookmark from the Lock Screen, Dynamic Island / Live Activity, Control Center, the Action button, and Siri (App Intents).
   - **Live captions while recording.** Tentative, on-device captions from the Speech framework's `SpeechTranscriber` (volatile results), shown like closed captions. They prove the audio pipeline is working and give something to read until the Mac's transcript arrives, and they are never the transcript: phone-local (`<library>/LiveCaptions/<id>.json`, never synced), never fused, summarized, or used as evidence, and hidden once the official transcript exists. If the language isn't available, the app says so and recording is unaffected.
-- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select.
+- **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select. New Note starts a conversation that's only your notes (and any photos), with nothing to transcribe.
 - **Reading.**
   - The summary page: lede, next steps, sections, your notes, bookmarks, colophon.
   - The transcript: speakers, times, tap to play.
@@ -140,7 +141,7 @@ Confirmed in the iOS 27.1 SDK: SwiftUI `onHingeChange { old, new in }` gives `De
 |---|---|
 | **Closed** (outer 5.4") | *Pocket recorder.* One-handed. A large Record control at the thumb, the recorder's status, and recent conversations. Reading is one column. |
 | **Open flat** (inner 7.6") | *Notebook.* Two pages split at the crease, never across it. Library, then conversation. In a conversation, the summary is on the left and the transcript on the right, linked: tapping a next step or bookmark scrolls the transcript to its evidence, and playback follows on the right. While recording: notes on the left; levels, bookmarks, and the live timeline on the right. |
-| **Partly open on a table** while recording | *Table mode*, in landscape (flex mode): the phone is turned a quarter, hinge horizontal, the bottom half flat and the top half standing. The top half shows live captions in large type with the elapsed time and level, readable from across the table. The bottom half has large Bookmark and Stop targets. Dimmed between interactions to save battery. |
+| **Partly open on a table** while recording | *Table mode*, in landscape (flex mode): the phone is turned a quarter, hinge horizontal, the bottom half flat and the top half standing. The top half shows live captions in large type with the elapsed time and level, readable from across the table. The bottom half has large Bookmark and Stop targets, Write Notes, and the camera. Writing, the notes take the standing half and the keyboard the flat one; it doesn't dim until Done. Dimmed between interactions to save battery. |
 | **Folding or unfolding** | Context carries over: unfold while reading a summary and the transcript opens beside it; fold mid-recording and the pocket recorder takes over without interrupting anything. |
 
 Accessibility: Dynamic Type, VoiceOver order across both pages, Reduce Motion for posture transitions, and everything reachable with one hand when closed.

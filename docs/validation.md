@@ -42,6 +42,13 @@ handshake exposes its audio encryption secret, and BLE link protection has not b
 two protocol issues remain unresolved; the integration's technical notes and [protocol documentation](direct-soundcore.md)
 now state them explicitly. Keep recorder originals and use file export for important recordings.
 
+## iPhone camera and notes (2026-10-25)
+
+- `scripts/build-ios.sh --test`: 86 tests passed. New coverage: a photo taken while recording keeps its shutter time (not the moment the review screen was accepted), lands in the journal, and survives a quit; a photo after Stop isn't kept with the recording; camera encoding keeps the EXIF shutter moment and orientation; filing anchors photos to the phone's track and never duplicates them on a retry; a photo taken as a Mac stops the recording joins the filed conversation; photos sit between notes and bookmarks in the recording's timeline; New Note makes a conversation without audio in the place being viewed.
+- Duo simulator screenshots of the pocket recorder, table mode (book and flex, with and without Write Notes), and the library's New Note. The simulator has no camera, so the camera button is disabled there and Take Photo is hidden.
+
+Still requires a real iPhone: taking photos with the system camera while recording (that the microphone keeps recording with no interruption, and the shutter time from real EXIF), the camera permission prompt, and Write Notes with the keyboard in flex mode on folding hardware.
+
 ## Photos (2026-10-25)
 
 Recovered the unfinished Mac photo feature and completed iPhone import/viewing against the current CloudKit courier code.

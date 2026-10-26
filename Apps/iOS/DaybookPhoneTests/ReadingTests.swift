@@ -324,6 +324,28 @@ final class ReadingTests: XCTestCase {
 
     // MARK: The session across folds
 
+    func testANewNoteIsAConversationWithoutAudioInThePlaceBeingViewed() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "TEST")
+        try await library.reload()
+        let session = ReadingSession()
+        session.place = .library(.section(.work))
+        let id = session.newNote(in: library.controller)
+        let meeting = try XCTUnwrap(library.controller.meeting(id))
+        XCTAssertTrue(meeting.title.hasPrefix("Note at "))
+        XCTAssertTrue(meeting.tracks.isEmpty)
+        XCTAssertEqual(meeting.placement, .work)
+        XCTAssertEqual(ProcessingStatus(meeting), .done, "nothing to transcribe, nothing to wait for")
+        XCTAssertEqual(session.openID, id)
+        XCTAssertTrue(session.reading)
+        XCTAssertEqual(session.pageMode, .summary)
+        XCTAssertEqual(session.focusNotesFor, id)
+
+        let folder = library.controller.createFolder(named: "Ideas")
+        session.place = .library(.folder(folder))
+        let filed = try XCTUnwrap(library.controller.meeting(session.newNote(in: library.controller)))
+        XCTAssertEqual(filed.folderID, folder)
+    }
+
     func testTheSessionCarriesReadingAcrossLayouts() throws {
         let session = ReadingSession()
         let first = UUID(), second = UUID(), segment = UUID()

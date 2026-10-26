@@ -58,6 +58,8 @@
 	<array>
 		<string>_daybook-link._tcp</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Daybook takes photos of whiteboards, slides, and notes for your conversations.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Daybook finds your Mac on this network to record together.</string>
 	<key>NSMicrophoneUsageDescription</key>

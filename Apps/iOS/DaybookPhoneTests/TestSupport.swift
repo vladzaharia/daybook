@@ -112,3 +112,13 @@ extension XCTestCase {
         return url
     }
 }
+
+/// A small solid image, as a camera photo taken at `capturedAt`.
+@MainActor
+func syntheticCameraPhoto(capturedAt: Date, size: CGSize = CGSize(width: 80, height: 40)) -> CameraPhoto {
+    let data = UIGraphicsImageRenderer(size: size).jpegData(withCompressionQuality: 0.8) { context in
+        UIColor.orange.setFill()
+        context.fill(CGRect(origin: .zero, size: size))
+    }
+    return CameraPhoto(data: data, fileExtension: "jpg", capturedAt: capturedAt)
+}

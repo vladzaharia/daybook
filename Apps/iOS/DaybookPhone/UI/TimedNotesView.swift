@@ -13,7 +13,8 @@ struct TimedNotesView: View {
 
     var body: some View {
         let recorder = model.recorder
-        let items = NotesTimeline.items(notes: recorder.notes, anchors: recorder.timedNotes, bookmarks: recorder.highlights)
+        let items = NotesTimeline.items(notes: recorder.notes, anchors: recorder.timedNotes, bookmarks: recorder.highlights,
+                                        photos: recorder.photos)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
@@ -46,6 +47,10 @@ struct TimedNotesView: View {
                 Label("Bookmark", systemImage: "bookmark.fill")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(PhoneStyle.bookmark)
+            case .photo:
+                Label("Photo", systemImage: "camera.fill")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(PhoneStyle.Ink.secondary)
             }
         }
     }
@@ -90,6 +95,7 @@ enum NotesTimeline {
         enum Kind: Equatable {
             case paragraph(index: Int, text: String)
             case bookmark(UUID)
+            case photo(String)
         }
         var kind: Kind
         var time: TimeInterval?
@@ -97,9 +103,11 @@ enum NotesTimeline {
             switch kind {
             case .paragraph(let index, _): return "p\(index)"
             case .bookmark(let id): return "b\(id.uuidString)"
+            case .photo(let fileName): return "f\(fileName)"
             }
         }
         var isBookmark: Bool { if case .bookmark = kind { return true } else { return false } }
+        var isParagraph: Bool { if case .paragraph = kind { return true } else { return false } }
     }
 
     /// Nonempty paragraphs, split the way `NoteTimeline` splits them.
@@ -109,19 +117,21 @@ enum NotesTimeline {
             .filter { !$0.isEmpty }
     }
 
-    /// Paragraphs stay in text order; each bookmark goes before the first paragraph written after it.
-    static func items(notes: String, anchors: [TimedNote], bookmarks: [Highlight]) -> [Item] {
+    /// Paragraphs stay in text order; each bookmark and photo goes before the first paragraph written after it.
+    static func items(notes: String, anchors: [TimedNote], bookmarks: [Highlight], photos: [CapturePhoto] = []) -> [Item] {
         let paragraphs = paragraphs(notes)
         let times = NoteTimeline.paragraphTimes(anchors: anchors, text: notes)
         var items = paragraphs.enumerated().map { index, text in
             Item(kind: .paragraph(index: index, text: text), time: times.indices.contains(index) ? times[index] : nil)
         }
-        for mark in bookmarks.sorted(by: { $0.time < $1.time }) {
+        let moments = bookmarks.map { Item(kind: .bookmark($0.id), time: $0.time) } + photos.map { Item(kind: .photo($0.fileName), time: $0.time) }
+        for moment in moments.sorted(by: { ($0.time ?? 0) < ($1.time ?? 0) }) {
+            let time = moment.time ?? 0
             let position = items.firstIndex { item in
-                guard !item.isBookmark, let time = item.time else { return false }
-                return time > mark.time
+                guard item.isParagraph, let paragraphTime = item.time else { return false }
+                return paragraphTime > time
             } ?? items.endIndex
-            items.insert(Item(kind: .bookmark(mark.id), time: mark.time), at: position)
+            items.insert(moment, at: position)
         }
         return items
     }

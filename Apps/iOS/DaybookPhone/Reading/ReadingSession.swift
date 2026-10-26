@@ -53,6 +53,10 @@ final class ReadingSession {
 
     // Sheets
     var sheet: ReadingSheet?
+    /// The camera is open to add a photo to this conversation.
+    var cameraFor: UUID?
+    /// A new note: its notes take the keyboard when the page appears.
+    var focusNotesFor: UUID?
     /// One sentence for the person when something couldn't be done (the audio isn't here to share).
     var alert: String?
 
@@ -77,6 +81,24 @@ final class ReadingSession {
         chosen = true
         if let mode { pageMode = mode }
         reading = true
+    }
+
+    /// A conversation that's only your notes (photos can join it), in the place being viewed, open
+    /// with the keyboard on its notes.
+    @discardableResult
+    func newNote(in library: LibraryController, now: Date = Date()) -> UUID {
+        var folder: UUID?, placement: LibraryPlacement?
+        switch place {
+        case .library(.folder(let id)): folder = id
+        case .library(.section(.work)): placement = .work
+        case .library(.section(.personal)): placement = .personal
+        default: break
+        }
+        let id = library.newMeeting(title: "Note at \(now.formatted(date: .omitted, time: .shortened))", date: now,
+                                    folderID: folder, placement: placement)
+        focusNotesFor = id
+        open(id, mode: .summary)
+        return id
     }
 
     /// Shows a conversation on the notebook's right page without leaving the list.

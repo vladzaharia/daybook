@@ -74,6 +74,8 @@ final class PhoneRecorder {
     private(set) var notes = ""
     private(set) var timedNotes: [TimedNote] = []
     private(set) var highlights: [Highlight] = []
+    /// Photos taken during this recording, kept in the staging folder.
+    private(set) var photos: [CapturePhoto] = []
     private(set) var inputRoute: AudioInputRoute?
     /// The interruption ended; recording can continue.
     private(set) var canResume = false
@@ -138,7 +140,7 @@ final class PhoneRecorder {
         cancelStart = false
         lastError = nil; canResume = false; pauseMessage = nil
         captureID = id; self.title = title; startedAt = nil
-        notes = ""; timedNotes = []; highlights = []
+        notes = ""; timedNotes = []; highlights = []; photos = []
         level = .silent; isMicrophoneSilent = false
         do {
             guard !FileManager.default.fileExists(atPath: PhoneCaptureJournal.url(in: directory).path) else {
@@ -296,6 +298,34 @@ final class PhoneRecorder {
         onChange?()
         return mark
     }
+
+    /// Keeps a photo with the recording, at the conversation time of its shutter (the camera's
+    /// review step can take a while). Nil when the recording ended before the photo was saved; the
+    /// caller then adds it to the filed conversation.
+    @discardableResult
+    func addPhoto(_ photo: CameraPhoto) async throws -> CapturePhoto? {
+        guard isCapturing, state != .starting, let directory else { return nil }
+        let lag = min(max(0, environment.clock.now().timeIntervalSince(photo.capturedAt)), Self.photoReviewLimit)
+        let entry = CapturePhoto(fileName: "photo-\(UUID().uuidString).\(photo.fileExtension)", capturedAt: photo.capturedAt,
+                                 time: max(0, elapsedTime - lag))
+        let url = directory.appendingPathComponent(entry.fileName)
+        let data = photo.data
+        try await Task.detached(priority: .userInitiated) {
+            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }.value
+        guard self.directory == directory, isCapturing else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        photos.append(entry)
+        journal?.photos = photos
+        persistJournal()
+        onChange?()
+        return entry
+    }
+
+    /// A shutter moment further back than this is a clock problem, not a slow review.
+    static let photoReviewLimit: TimeInterval = 600
 
     // MARK: Recovery
 

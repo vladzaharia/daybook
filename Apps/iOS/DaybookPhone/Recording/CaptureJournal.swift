@@ -41,6 +41,15 @@ struct CaptureRouteEvent: Codable, Equatable, Sendable {
     var reason: String
 }
 
+/// A photo taken during the recording, kept in the staging folder until the recording is filed.
+struct CapturePhoto: Codable, Equatable, Sendable {
+    var fileName: String
+    /// The shutter moment.
+    var capturedAt: Date
+    /// Conversation seconds at the shutter.
+    var time: TimeInterval
+}
+
 /// The recording's crash-safe sidecar, rewritten atomically as it changes: everything needed to
 /// rebuild the recording, with its notes and bookmarks, if Daybook is killed. The phone's
 /// counterpart of the Mac's capture-session.json and per-track sidecars.
@@ -80,6 +89,8 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     var notes = ""
     var timedNotes: [TimedNote] = []
     var highlights: [Highlight] = []
+    /// Optional, so journals written before photos still load.
+    var photos: [CapturePhoto]?
     var finalFile: FinalFile?
 
     init(id: UUID, title: String, createdAt: Date, format: RecordingFormat) {
@@ -142,6 +153,8 @@ struct PhoneRecording: Sendable, Equatable {
     /// The staging folder; the library removes it once the recording is filed.
     var stagingDirectory: URL
     var recovered: Bool
+    /// Photos taken while recording; their files are in `stagingDirectory`.
+    var photos: [CapturePhoto] = []
 }
 
 enum PhoneRecorderError: LocalizedError, Equatable {

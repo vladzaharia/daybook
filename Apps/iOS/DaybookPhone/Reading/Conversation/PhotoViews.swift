@@ -62,9 +62,7 @@ struct ImportPhotosSheet: View {
         }
     }
 
-    private var origin: PhotoOrigin {
-        PhotoOrigin(kind: "daybook.iphone", serial: PhoneDevice.installationID(), name: UIDevice.current.name)
-    }
+    private var origin: PhotoOrigin { .thisIPhone() }
 
     private func finish(_ failures: [String]) {
         importing = false
