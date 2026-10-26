@@ -213,6 +213,33 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertEqual(try records().filter { $0["deviceID"] as? String == "B" }.count, 1)
     }
 
+    func testARevertWhileAPublishedEditIsHeldBackIsPublishedToo() async throws {
+        let first = root.appendingPathComponent("first.wav"), second = root.appendingPathComponent("second.wav")
+        try Data("first recording".utf8).write(to: first); try Data("second recording".utf8).write(to: second)
+        let storeA = try MeetingStore(rootURL: local("A"))
+        let a = try engine("A"), b = try engine("B")
+        var original = try await storeA.importAudio(from: first, into: Meeting(title: "Review"))
+        original.notes = "Original"
+        let base = try await publish(original, using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: []); try await apply(pulled, to: "B", using: b)
+        let onB = pulled.meetings[0]
+        // A's new recording hasn't uploaded, so B's copy is held back while B edits and then reverts.
+        let added = try await storeA.importAudio(from: second, into: base)
+        _ = try await publish(added, using: a, name: "A")
+        let blob = remote.appendingPathComponent("Blobs/\(added.tracks[1].sha256)")
+        let aside = root.appendingPathComponent("blob")
+        try FileManager.default.moveItem(at: blob, to: aside)
+        var changed = onB; changed.notes = "Changed"
+        let edit = try await b.synchronize(meetings: [changed]); try await b.acknowledge(edit.checkpointID)
+        XCTAssertEqual(edit.publishedEvents, 1)
+        let revert = try await b.synchronize(meetings: [onB]); try await b.acknowledge(revert.checkpointID)
+        XCTAssertEqual(revert.publishedEvents, 1, "going back to the base value is an edit too")
+        try FileManager.default.moveItem(at: aside, to: blob)
+        let settled = try await b.synchronize(meetings: [onB])
+        XCTAssertEqual(settled.meetings.first?.notes, "Original")
+        XCTAssertEqual(settled.meetings.first?.tracks.count, 2)
+    }
+
     func testACrashBetweenWritingAnEntryAndSavingTheCheckpointPublishesTheSameEntry() async throws {
         let a = try engine("A")
         let base = try await publish(Meeting(title: "Plan", notes: "First"), using: a, name: "A")

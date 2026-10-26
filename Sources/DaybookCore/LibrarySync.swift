@@ -214,9 +214,12 @@ public actor LibrarySyncEngine {
                 guard !state.deletedIDs.contains(supplied.id) else { continue }
                 // Cheap equality first: most meetings are unchanged on most passes.
                 let pendingBase = state.pending?.changedBases?[key]
-                if supplied == state.bases[key] || pendingBase == supplied { continue }
+                // With a publication of this conversation not applied yet (the pass held it back), the base is behind
+                // the journal: matching the base is then a revert, which must be published too.
+                let baseIsCurrent = state.submittedHashes[key] == nil
+                if (baseIsCurrent && supplied == state.bases[key]) || pendingBase == supplied { continue }
                 let fingerprint = try hash(supplied)
-                guard fingerprint != state.submittedHashes[key], fingerprint != state.bases[key].flatMap({ try? hash($0) }),
+                guard fingerprint != state.submittedHashes[key], !baseIsCurrent || fingerprint != state.bases[key].flatMap({ try? hash($0) }),
                       fingerprint != pendingBase.flatMap({ try? hash($0) }) else { continue }
                 do {
                     let prepared = try prepareUpload(supplied, journalAssets: journalAssets)
