@@ -152,7 +152,7 @@ extension LibrarySyncEngine {
                 return try copyPlaintext(remote, of: object, below: root, libraryID: nil, to: temporary, expected: expected) { done, total in
                     progress?(AudioFetchProgress(phase: .copying, completedBytes: done, totalBytes: total))
                 }
-            } catch is SyncKeyPending { throw AudioFetchError.downloadFailed("This library’s key isn’t on this device yet.") }
+            } catch is SyncKeyPending { throw AudioFetchError.keyUnavailable }
         }
         return try SyncFiles.coordinateRead(remote, below: root) { source in
             guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {

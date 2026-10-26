@@ -177,7 +177,7 @@ struct VocabularyScreen: View {
                 } description: {
                     Text("Add names, products, and words to spell your way.")
                 } actions: {
-                    Button("Add Term") { editing = GlossaryTerm(term: "", approved: true) }
+                    Button("Add Term…") { editing = GlossaryTerm(term: "", approved: true) }
                 }
                 .listRowBackground(Color.clear)
             }

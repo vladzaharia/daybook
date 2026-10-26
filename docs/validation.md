@@ -157,7 +157,7 @@ Still requires the owner's devices, before turning it on for anyone:
   `scripts/ci/check-ios-archive.sh` passes on a signed TestFlight archive (it checks the iPhone's groups and their order).
   Existing pairings and the sync device ID still work after updating (the default group didn't move).
 - **The key through iCloud Keychain.** Turn encryption on on the Mac with a few conversations. How long until the iPhone
-  (TestFlight) leaves "Waiting for its key from iCloud Keychain." without a recovery key or the link? Repeat with the iPhone
+  (TestFlight) leaves "Waiting for this library’s key." without a recovery key or the link? Repeat with the iPhone
   turning it on.
 - **iCloud Keychain off** on the iPhone: it waits; Get Key from <Mac> over the link opens the library and the Mac says it
   sent it; turning iCloud Keychain back on changes nothing.

@@ -313,6 +313,8 @@ public struct AudioFetchProgress: Equatable, Sendable {
 
 public enum AudioFetchError: LocalizedError, Equatable {
     case invalidTrack(String), meetingInTrash, integrityMismatch(String), downloadFailed(String), notUploadedYet, downloadTimedOut
+    /// An encrypted library's recording, and this device doesn't have the key it's sealed with yet.
+    case keyUnavailable
     public var errorDescription: String? {
         switch self {
         case .invalidTrack(let name): return "\(name) can’t be downloaded."
@@ -321,7 +323,15 @@ public enum AudioFetchError: LocalizedError, Equatable {
         case .downloadFailed(let reason): return "iCloud couldn’t download this recording: \(reason)"
         case .notUploadedYet: return "This recording hasn’t finished uploading."
         case .downloadTimedOut: return "iCloud is still downloading this recording. Try again in a moment."
+        case .keyUnavailable: return "This recording plays once this device has the library’s key."
         }
+    }
+
+    /// Whether `errorDescription` is a sentence of Daybook's own, to show as it is; a failed download carries the
+    /// system's words, which go behind Details.
+    public var isPlainSentence: Bool {
+        if case .downloadFailed = self { return false }
+        return true
     }
 }
 

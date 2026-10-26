@@ -187,7 +187,7 @@ final class PhoneAppModel: RecordingCommandHandling {
                 let grants = await controller.libraryKeyGrants(for: request, peerLibraryID: mac.libraryID)
                 var sent = false
                 for grant in grants where (try? await link.send(.libraryKeyGrant(grant), to: macID)) != nil { sent = true }
-                if sent { notice = "Sent your library’s key to \(mac.name)." }
+                if sent { notice = "Sent this library’s key to \(mac.name)." }
             }
         case .libraryKeyGrant(let grant):
             Task { await controller.accept(grant) }
@@ -372,7 +372,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             await captions.finish()
             sayStartFailed(error)
             publish()
-            throw RecordingCommandError.failed(error.localizedDescription)
+            throw Self.commandFailure(error, starting: true)
         }
         sync.controller?.publishActivity(recording: id, since: Date())
         // Captions start beside the recording, never in its way.
@@ -426,7 +426,7 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     func resumeRecording() async throws {
         guard recorder.isPaused else { throw RecordingCommandError.notRecording }
-        do { try await recorder.resume() } catch { throw RecordingCommandError.failed(error.localizedDescription) }
+        do { try await recorder.resume() } catch { throw Self.commandFailure(error, starting: false) }
     }
 
     @discardableResult
@@ -487,8 +487,18 @@ final class PhoneAppModel: RecordingCommandHandling {
     private func sayStartFailed(_ error: Error) {
         switch error as? PhoneRecorderError {
         case .microphoneDenied?: say("Allow Daybook to use the microphone in Settings.", fix: .openSettings)
-        case let known?: say(known.localizedDescription)
+        case let known?: say(known.localizedDescription, details: known.details)
         case nil: say("Couldn’t start recording. Try again.", details: error.localizedDescription)
+        }
+    }
+
+    /// What a Shortcut, the control, or a Live Activity button says when recording couldn't start or resume: Daybook's
+    /// own sentence, never the system's words (those are in the app's notice).
+    static func commandFailure(_ error: Error, starting: Bool) -> RecordingCommandError {
+        switch error as? PhoneRecorderError {
+        case .microphoneDenied?: return .failed("Allow Daybook to use the microphone in Settings.")
+        case let known? where known.details == nil: return .failed(known.localizedDescription)
+        default: return .failed(starting ? "Couldn’t start recording. Open Daybook to try again." : "Couldn’t resume recording. Open Daybook to try again.")
         }
     }
 

@@ -415,7 +415,12 @@ final class ModelManagerTests: XCTestCase {
             XCTFail("Gated")
         } catch {
             XCTAssertEqual(error.localizedDescription, "someone/gated requires accepting its terms on Hugging Face, so Daybook can’t download it.")
+            XCTAssertNil((error as? ModelAdditionProblem)?.details)
         }
+        // The system's own words go behind Details.
+        let other = ModelAdditionProblem(CocoaError(.fileWriteOutOfSpace), input: ModelRepositoryInput(repository: "someone/big"))
+        XCTAssertEqual(other.message, "Couldn’t add “someone/big”. Try again.")
+        XCTAssertEqual(other.details, CocoaError(.fileWriteOutOfSpace).localizedDescription)
         hub.set("someone/notes", commit: "n1", files: ["README.md": "hello"])
         let preview = try await manager.preview(ModelRepositoryInput(repository: "someone/notes"))
         XCTAssertTrue(preview.candidates.isEmpty)

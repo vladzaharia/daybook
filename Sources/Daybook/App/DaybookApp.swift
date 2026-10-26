@@ -283,7 +283,7 @@ struct FolderMenuItems: View {
             Button(folder.name) { state.moveToFolder(meetingIDs, folder.id) }
         }
         Divider()
-        Button("New Folder…") { state.requestNewFolder(moving: meetingIDs) }
+        Button("New Folder") { state.requestNewFolder(moving: meetingIDs) }
     }
 }
 

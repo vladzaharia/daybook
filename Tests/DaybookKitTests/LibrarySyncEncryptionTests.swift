@@ -111,7 +111,7 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         let applied = await phone.library.synchronize()
         XCTAssertNil(applied)
         XCTAssertEqual(phone.sync.encryption, .waitingForKey)
-        XCTAssertEqual(phone.sync.status, "Your library in iCloud is encrypted. Waiting for its key from iCloud Keychain.")
+        XCTAssertEqual(phone.sync.status, "Waiting for this library’s key.")
 
         // Over the local link: the phone asks, the Mac sends the key only to a device of its library.
         let asked = await phone.sync.libraryKeyRequest()

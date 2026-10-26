@@ -184,6 +184,7 @@ private struct PlayerBar: View {
                 VStack(spacing: 2) {
                     if let error = player.errorMessage {
                         Label(error, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(Ink.warning)
+                            .help(player.errorDetails ?? error)
                     }
                     if player.duration > 0 { controls }
                 }

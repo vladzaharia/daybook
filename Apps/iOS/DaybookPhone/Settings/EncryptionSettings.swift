@@ -19,13 +19,13 @@ struct EncryptionRows: View {
             case .unavailable:
                 EmptyView()
             case .off:
-                Button("Encrypt Library in iCloud") { enabling = true }
+                Button("Encrypt Library in iCloud…") { enabling = true }
                     .disabled(model.sync.isSyncing)
             case .waitingForKey:
                 ForEach(model.link.connectedMacs) { mac in
                     Button("Get Key from \(mac.name)") { Task { await model.requestLibraryKey(from: mac.id) } }
                 }
-                Button("Enter Recovery Key") { enteringKey = true }
+                Button("Enter Recovery Key…") { enteringKey = true }
                 if model.sync.mayStartOver {
                     Button("Start Over…", role: .destructive) { confirmingStartOver = true }
                 }
@@ -34,9 +34,9 @@ struct EncryptionRows: View {
                 if summary.hasRecoveryKey {
                     LabeledContent("Recovery Key", value: "Saved")
                 } else {
-                    Button("Create Recovery Key") { createRecoveryKey() }
+                    Button("Create Recovery Key…") { createRecoveryKey() }
                 }
-                Button("Erase Deleted Conversations from iCloud", role: .destructive) { confirmingErase = true }
+                Button("Erase Deleted Conversations from iCloud…", role: .destructive) { confirmingErase = true }
                     .disabled(model.sync.isSyncing)
             }
             if let problem { ProblemText(problem: problem) }
@@ -63,7 +63,7 @@ struct EncryptionRows: View {
         Task {
             guard let controller = model.sync.controller else { return }
             do { shownKey = ShownRecoveryKey(key: try await controller.createRecoveryKey()) } catch {
-                problem = ReadingAlert(title: "Couldn’t Make a Recovery Key", error: error, fallback: "A recovery key couldn’t be made. Try again.")
+                problem = ReadingAlert(title: "Couldn’t Create a Recovery Key", error: error, fallback: "A recovery key couldn’t be created. Try again.")
             }
         }
     }
@@ -112,7 +112,7 @@ private struct EncryptLibraryScreen: View {
                             Text(device.displayName ?? "A device that hasn’t checked in")
                         }
                     } header: {
-                        Text("Stop syncing until they’re updated")
+                        Text("Stop Syncing Until Updated")
                     }
                 }
                 Section {
@@ -121,7 +121,7 @@ private struct EncryptLibraryScreen: View {
                     if let problem { ProblemText(problem: problem) }
                 }
             }
-            .navigationTitle("Encrypt Library")
+            .navigationTitle("Encrypt Library in iCloud")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -223,9 +223,11 @@ private struct EnterRecoveryKeyScreen: View {
     }
 }
 
-/// A problem shown in place: one plain sentence, and the system's own words behind Details.
+/// A problem shown in place: one plain sentence, and the system's own words behind Details, in the sheet every other
+/// problem on this iPhone opens.
 private struct ProblemText: View {
     let problem: ReadingAlert
+    @State private var showingDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -233,10 +235,10 @@ private struct ProblemText: View {
                 .font(.footnote)
                 .foregroundStyle(PhoneStyle.Ink.warning)
             if let details = problem.details {
-                DisclosureGroup("Details") {
-                    Text(details).font(.footnote).textSelection(.enabled)
-                }
-                .font(.footnote)
+                Button("Details") { showingDetails = true }
+                    .font(.footnote)
+                    .buttonStyle(.borderless)
+                    .sheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: details) }
             }
         }
     }

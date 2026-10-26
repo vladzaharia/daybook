@@ -38,6 +38,7 @@ struct AppProblem: Equatable, Identifiable {
         switch error {
         case is RecordingError, is PCMTrackWriterError, is PhotoStoreError, is LibraryError: return true
         case let error as LibrarySyncError: return error.isPlainSentence
+        case is SandboxMigration.MoveError: return true
         case let error as DaybookError: if case .saveFailed = error { return false } else { return true }
         default: return false
         }

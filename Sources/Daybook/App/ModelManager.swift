@@ -486,8 +486,8 @@ final class ModelManager: ObservableObject {
     @Published private(set) var updates: [ModelUpdate] = []
     @Published private(set) var updateCheck = UpdateCheck.never
     @Published private(set) var resultCounts: [String: Int] = [:]
-    /// A problem to show, in one sentence with its fix.
-    @Published var problem: String?
+    /// A problem to show: what couldn't be done, one sentence with its fix, and the system's words behind Details.
+    @Published var problem: AppProblem?
     @Published private(set) var isWorking = false
 
     init(state: AppState, hubClient: (any ModelHubClient)? = nil, requestDownload: (([String]) -> Void)? = nil) {
@@ -579,7 +579,7 @@ final class ModelManager: ObservableObject {
             state.modelCatalog = try await state.runtime.recordUpdate(update)
             requestDownload(["\(update.model)@\(update.revision.id)"])
         } catch {
-            problem = "Couldn’t install the update to \(update.name): \(error.localizedDescription)"
+            problem = AppProblem(title: "Couldn’t Install the Update", fallback: "The update to \(update.name) couldn’t be installed. Try again.", error: error)
         }
     }
 
@@ -594,7 +594,7 @@ final class ModelManager: ObservableObject {
     }
 
     func confirm(_ removal: ModelRemoval) async {
-        guard canChangeFiles else { problem = "Try again when processing and downloads finish."; return }
+        guard canChangeFiles else { problem = AppProblem(title: "Can’t Remove It Yet", message: "Try again when processing and downloads finish."); return }
         guard removal.removesEntry else {
             // The app removes the files and moves each role that chose it, as the confirmation said.
             state.removeModels([removal.key])
@@ -609,7 +609,7 @@ final class ModelManager: ObservableObject {
             state.modelSelections = removal.selections
             await refresh()
         } catch {
-            problem = "Couldn’t remove \(removal.name): \(error.localizedDescription)"
+            problem = AppProblem(title: "Couldn’t Remove \(removal.name)", fallback: "\(removal.name) couldn’t be removed. Try again.", error: error)
         }
     }
 
@@ -680,9 +680,10 @@ final class ModelManager: ObservableObject {
     }
 }
 
-/// Why adding a model didn't work, in one sentence with its fix.
+/// Why adding a model didn't work, in one sentence with its fix; the system's own words, if any, behind Details.
 struct ModelAdditionProblem: LocalizedError, Equatable {
     let message: String
+    var details: String?
 
     init(message: String) { self.message = message }
 
@@ -693,8 +694,12 @@ struct ModelAdditionProblem: LocalizedError, Equatable {
                 ?? "Hugging Face has no “\(input.repository)”. Check the name, and that the repository is public."
         } else if ModelManager.isOffline(error) {
             message = "Couldn’t reach Hugging Face. Check your connection and try again."
-        } else {
+        } else if error is ModelAdditionError || error is ModelHubError {
+            // Daybook's own sentences, with what to do.
             message = error.localizedDescription
+        } else {
+            message = "Couldn’t add “\(input.repository)”. Try again."
+            details = error.localizedDescription
         }
     }
 

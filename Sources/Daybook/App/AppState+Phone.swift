@@ -390,7 +390,11 @@ extension AppState {
                                                   placement: plan.placement, clockOffset: nil, startedAt: start.date)
             defer { sources.carried[track.sha256] = nil }
             do { _ = try await importAudio([url], source: track.source, attachTo: target, device: identity) }
-            catch { movedPhoneRecordings.remove(meeting.id); errorMessage = error.localizedDescription; return false }
+            catch {
+                movedPhoneRecordings.remove(meeting.id)
+                report("Couldn’t Add the Recording", "The \(sourceName(track)) couldn’t be added to “\(title)”. It stays in “\(meeting.title)”.", error)
+                return false
+            }
             guard !stays else {
                 notice = "Added the \(sourceName(track)) to “\(title)”. “\(meeting.title)” stays, with your notes."
                 return false

@@ -60,7 +60,7 @@ public enum LibrarySyncError: LocalizedError, Equatable {
         case .corruptState: return "Sync stopped: this device’s sync record is unreadable."
         case .invalidCheckpoint: return "Sync again to finish."
         case .waitingForICloud: return "Waiting for iCloud…"
-        case .keyUnavailable: return "Your library in iCloud is encrypted. Waiting for its key from iCloud Keychain."
+        case .keyUnavailable: return "Waiting for this library’s key."
         case .sealingRemoved: return "The library in iCloud is no longer encrypted."
         case .keyStoreUnavailable: return "This build of Daybook can’t keep encryption keys."
         case .keyAvailable: return "One of your devices has this library’s key. Get the key from it instead."

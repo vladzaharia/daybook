@@ -23,6 +23,9 @@ struct AddModelSheet: View {
     @State private var name = ""
     @State private var familyID = ""
     @State private var problem: String?
+    /// The system's words for `problem`, behind Details.
+    @State private var problemDetails: String?
+    @State private var showingDetails = false
     @State private var rejections: [ModelAdditionPreview.Rejection] = []
     /// The fields as they were checked; editing them makes the result stale.
     @State private var checkedFields = ""
@@ -66,12 +69,28 @@ struct AddModelSheet: View {
 
     // MARK: Parts
 
+    /// A problem in one sentence; anything the system said goes behind Details.
+    private func show(_ error: Error) {
+        let addition = error as? ModelAdditionProblem
+        problem = addition?.message ?? "Couldn’t add the model. Try again."
+        problemDetails = addition == nil ? error.localizedDescription : addition?.details
+    }
+
     private func problemSection(_ problem: String) -> some View {
         Section {
-            Label {
-                Text(problem).fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
+            HStack(alignment: .firstTextBaseline) {
+                Label {
+                    Text(problem).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
+                }
+                if let problemDetails {
+                    Spacer(minLength: Space.s3)
+                    Button("Details…") { showingDetails = true }
+                        .popover(isPresented: $showingDetails) {
+                            Text(problemDetails).textSelection(.enabled).padding(Space.s4).frame(maxWidth: 360, alignment: .leading)
+                        }
+                }
             }
             ForEach(Self.grouped(rejections), id: \.engine) { group in
                 VStack(alignment: .leading, spacing: 2) {
@@ -176,7 +195,7 @@ struct AddModelSheet: View {
 
     private func check() async {
         guard var parsed = ModelRepositoryInput(repositoryText) else {
-            problem = "Enter a Hugging Face repository as owner/name, or paste its link."
+            problem = "Enter a Hugging Face repository as owner/name, or paste its link."; problemDetails = nil
             rejections = []
             return
         }
@@ -189,7 +208,7 @@ struct AddModelSheet: View {
         parsed.folder = trimmedFolder.isEmpty ? nil : trimmedFolder
         checkedFields = fields
         phase = .checking
-        problem = nil
+        problem = nil; problemDetails = nil
         rejections = []
         do {
             let result = try await manager.preview(parsed)
@@ -206,7 +225,7 @@ struct AddModelSheet: View {
             name = parsed.suggestedName
             phase = .proposal
         } catch {
-            problem = error.localizedDescription
+            show(error)
             phase = .editing
         }
     }
@@ -217,12 +236,12 @@ struct AddModelSheet: View {
         chosen.familyID = family?.id
         chosen.familyName = family?.name
         phase = .adding
-        problem = nil
+        problem = nil; problemDetails = nil
         do {
             try await manager.add(chosen, from: preview, name: name, input: input)
             dismiss()
         } catch {
-            problem = error.localizedDescription
+            show(error)
             phase = .proposal
         }
     }
@@ -232,7 +251,7 @@ struct AddModelSheet: View {
         guard phase == .proposal || problem != nil, fields != checkedFields else { return }
         phase = .editing
         preview = nil
-        problem = nil
+        problem = nil; problemDetails = nil
         rejections = []
     }
 

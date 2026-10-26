@@ -105,6 +105,53 @@ The Floating Notes footer in interface.md still quotes "Transcribing on this Mac
 
   The foot of the recorder's page, "How Recordings Arrive", needs a scroll that the simulator can't make, so only its code was checked.
 
+## Code written after the pass (2026-10-26)
+
+The App Sandbox, the cross-stream follow-ups, and sync encryption added interface after this pass. A second sweep of
+every string in the same places found these, and fixed them:
+
+- **Encryption.**
+  - The waiting line is "Waiting for this library’s key." on both apps, not "Your library in iCloud is encrypted.
+    Waiting for its key from iCloud Keychain.". On the Mac, under the headline, it gives the fix: "Turn on iCloud
+    Keychain, or get the key from another device."
+  - Every place says "this library’s key", including the Mac headline and the iPhone's "Sent this library’s key to …".
+  - "Couldn’t Create a Recovery Key" matches its button (it was "Make").
+  - The iPhone's items that open a sheet or a confirmation have their ellipses (Encrypt Library in iCloud…, Enter
+    Recovery Key…, Create Recovery Key…, Erase Deleted Conversations from iCloud…). Its sheet is titled "Encrypt Library
+    in iCloud", and its section header reads "Stop Syncing Until Updated".
+  - The iPhone's problem lines open the same Details sheet as every other problem there.
+  - The Mac's rows are sentence case ("Recovery key", "Previous sync folder").
+  - A recording whose key hasn't arrived says "This recording plays once this device has the library’s key."; it used
+    to be a capitalised fragment after "iCloud couldn’t download this recording:".
+- **App Sandbox.**
+  - The library-move sheet's titles are title case.
+  - Its error is one sentence, with the system's words behind Details….
+  - "Can’t open the folder this Mac synced through before." matches the line under it.
+  - The development panel's prompt is "Connect Library".
+  - A launch-path message uses a curly apostrophe.
+- **Words.**
+  - The Conversation menu says Transcribe New Audio, Summarize Again, Identify Speakers Again, and Transcribe
+    Everything Again, as the page and the iPhone do. It used to say Process New Audio, Refresh Summary, Re-label
+    Speakers, and Re-transcribe Audio.
+  - The folder menu's New Folder has no ellipsis: it names the folder in place.
+  - The iPhone's Unpair … and Add Term… have their ellipses.
+  - Models › "On This Mac" is title case.
+- **System words behind Details.** These now follow the pattern:
+  - On the Mac: exporting a conversation, adding an iPhone recording to another conversation, recovering an
+    interrupted recording, installing a model update or removing a model (the alert's title had been the whole raw
+    sentence), adding a model, playback (the system's words are in the tooltip), the vocabulary notice, and the Floating
+    Notes sync chip (which gives a reason only when it's Daybook's own).
+  - On the iPhone: a recording that couldn't continue (the encoder's step goes to Details), and what Shortcuts, the
+    control, and Live Activity buttons say when recording couldn't start or resume.
+  - Daybook's own sync sentences (`LibrarySyncError.isPlainSentence`) show as they are on both apps.
+
+Left as they are, for a later pass:
+
+- The Mac's capture warnings (`RecordingController`, `CaptureSources`, `CaptureRecovery`, `CaptureFinalizer`,
+  `PCMTrackWriter`), which reach the conversation's notice and provenance with the system's words.
+- The sync engine's per-pass warnings that carry an error's own text, listed in Settings › Library.
+- The iPhone's Details buttons, which have no ellipsis. They're consistent across the iPhone.
+
 ## Every change
 
 Line numbers are the line before the change. Interpolations appear as in the source, so a string split by `\(…)` can show as two pieces.

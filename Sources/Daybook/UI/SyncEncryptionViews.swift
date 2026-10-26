@@ -38,7 +38,7 @@ struct SyncEncryptionRows: View {
                     }
                 }
             case .waitingForKey:
-                EncryptionWarning(text: LibrarySyncError.keyUnavailable("").localizedDescription) {
+                EncryptionWarning(text: "Turn on iCloud Keychain, or get the key from another device.") {
                     HStack {
                         ForEach(phoneLink.peers.values.sorted { $0.name < $1.name }) { phone in
                             Button("Get Key from \(phone.name)") { Task { await state.requestLibraryKey(from: phone.deviceID) } }
@@ -53,7 +53,7 @@ struct SyncEncryptionRows: View {
                 LabeledContent("Encryption") {
                     Text(LibraryWords.encryptionStatus(summary)).foregroundStyle(.secondary).monospacedDigit()
                 }
-                LabeledContent("Recovery Key") {
+                LabeledContent("Recovery key") {
                     if summary.hasRecoveryKey {
                         Text("Saved").foregroundStyle(.secondary)
                     } else {
@@ -61,7 +61,7 @@ struct SyncEncryptionRows: View {
                     }
                 }
                 if sync.hasRetiredFolderJournal {
-                    LabeledContent("Previous Sync Folder") {
+                    LabeledContent("Previous sync folder") {
                         Button("Delete Its Copy…") { confirmingFolder = true }
                     }
                 }
@@ -106,7 +106,7 @@ struct SyncEncryptionRows: View {
         problem = nil
         Task {
             do { shownKey = ShownRecoveryKey(key: try await sync.createRecoveryKey()) } catch {
-                problem = AppProblem(title: "Couldn’t Make a Recovery Key", fallback: "A recovery key couldn’t be made. Try again.", error: error)
+                problem = AppProblem(title: "Couldn’t Create a Recovery Key", fallback: "A recovery key couldn’t be created. Try again.", error: error)
             }
         }
     }

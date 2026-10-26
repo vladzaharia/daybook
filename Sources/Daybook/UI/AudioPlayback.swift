@@ -10,6 +10,8 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var currentURL: URL?
     @Published private(set) var errorMessage: String?
+    /// The system's words for `errorMessage`, in its tooltip.
+    @Published private(set) var errorDetails: String?
     /// Playback speed, kept when another source loads.
     @Published var rate: Float = 1 { didSet { player?.rate = rate } }
     /// The recording and conversation now loaded, so views can follow along.
@@ -43,14 +45,14 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
                 loaded.delegate = self
                 loaded.enableRate = true
                 guard loaded.prepareToPlay() else {
-                    throw NSError(domain: "DaybookPlayback", code: 1, userInfo: [NSLocalizedDescriptionKey: "This audio file could not be prepared for playback."])
+                    throw NSError(domain: "DaybookPlayback", code: 1, userInfo: [NSLocalizedDescriptionKey: "The audio file couldn’t be prepared for playback."])
                 }
                 loaded.rate = rate
                 player = loaded
                 currentURL = url
                 duration = loaded.duration
             }
-            errorMessage = nil
+            errorMessage = nil; errorDetails = nil
             seek(to: seconds)
             resume()
         } catch {
@@ -59,7 +61,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
             duration = 0
             position = 0
             isPlaying = false
-            errorMessage = error.localizedDescription
+            errorMessage = "This recording couldn’t be opened."; errorDetails = error.localizedDescription
             invalidateTimer()
         }
     }
@@ -68,12 +70,12 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
         guard let player else { return }
         if player.currentTime >= player.duration { player.currentTime = 0 }
         guard player.play() else {
-            errorMessage = "Audio playback could not start. Check your output device and try again."
+            errorMessage = "Playback couldn’t start. Check your output device and try again."; errorDetails = nil
             isPlaying = false
             invalidateTimer()
             return
         }
-        errorMessage = nil
+        errorMessage = nil; errorDetails = nil
         isPlaying = true
         position = player.currentTime
         invalidateTimer()
@@ -108,7 +110,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
         trackID = nil
         meetingID = nil
         duration = 0
-        errorMessage = nil
+        errorMessage = nil; errorDetails = nil
     }
 
     /// Bind a playback slider's setter to this method. Seeking preserves pause/play.
@@ -139,7 +141,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
             self.isPlaying = false
             self.position = self.duration
             self.invalidateTimer()
-            if !flag { self.errorMessage = "Playback ended before the audio file finished." }
+            if !flag { self.errorMessage = "Playback stopped before the end of the recording."; self.errorDetails = nil }
         }
     }
 
@@ -147,7 +149,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
         Task { @MainActor [weak self] in
             guard let self, self.player === player else { return }
             self.isPlaying = false
-            self.errorMessage = error?.localizedDescription ?? "This audio file could not be decoded."
+            self.errorMessage = "This recording couldn’t be played."; self.errorDetails = error?.localizedDescription
             self.invalidateTimer()
         }
     }

@@ -246,9 +246,10 @@ libraries pause sync, unless they started over from the same one (below).
 
 **On a pass.** The engine reads the manifest, then the keychain (every pass, so a key that arrives is picked up at once).
 Without the current key it reads and writes nothing (`keyUnavailable`): local recording and editing go on, the courier
-still takes deliveries, presence says it's waiting, and Settings says "Your library in iCloud is encrypted. Waiting for its
-key from iCloud Keychain." with Get Key from (a paired device), Enter Recovery Key, and, when no device has the key, Start
-Over (below). With the key, an entry's ID is
+still takes deliveries, presence says it's waiting, and the status says "Waiting for this library’s key." (on the Mac,
+"Turn on iCloud Keychain, or get the key from another device.") with Get Key from (a paired device), Enter Recovery
+Key, and, when no device has the key, Start Over (below). A recording that can't open yet says it plays once this device
+has the key (`AudioFetchError.keyUnavailable`). With the key, an entry's ID is
 still the SHA-256 of its plaintext record, so parents, heads, merges, and checkpoints are exactly as before; only the
 files differ. Sealed and plaintext copies of an entry are one entry. Objects are found sealed under any key held here,
 else in plaintext from before; they're written sealed under the current key. Installing an object opens it while hashing

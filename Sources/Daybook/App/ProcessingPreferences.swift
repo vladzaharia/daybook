@@ -68,13 +68,13 @@ struct ProcessingPreferences: Codable, Equatable, Sendable {
 }
 
 extension ProcessingRequest.Mode {
-    /// The Mac's menu titles.
+    /// The Mac's menu titles, in the words the page and the iPhone use (docs/interface.md, "Words").
     var title: String {
         switch self {
-        case .newAudio: return "Process New Audio"
-        case .summaryOnly: return "Refresh Summary"
-        case .speakerRefresh: return "Re-label Speakers"
-        case .fullRetranscription: return "Re-transcribe Audio"
+        case .newAudio: return "Transcribe New Audio"
+        case .summaryOnly: return "Summarize Again"
+        case .speakerRefresh: return "Identify Speakers Again"
+        case .fullRetranscription: return "Transcribe Everything Again"
         }
     }
 }

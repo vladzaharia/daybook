@@ -23,6 +23,19 @@ final class ProblemWordsTests: XCTestCase {
         XCTAssertEqual(save.details, "disk full (28)")
     }
 
+    func testSyncAndLibraryMoveSentencesAreShownAsTheyAre() {
+        let refused = AppProblem(title: "Couldn’t Start Over", fallback: "Try again.", error: LibrarySyncError.keyAvailable)
+        XCTAssertEqual(refused.message, "One of your devices has this library’s key. Get the key from it instead.")
+        XCTAssertNil(refused.details)
+        // One that names a file stays behind Details.
+        let damaged = AppProblem(title: "Couldn’t Sync", fallback: "Try again.", error: LibrarySyncError.invalidEvent("abc.json"))
+        XCTAssertEqual(damaged.message, "Try again.")
+        XCTAssertNotNil(damaged.details)
+        let move = AppProblem(title: "Couldn’t Move Your Library", fallback: "Try again.", error: SandboxMigration.MoveError.libraryNotEmpty)
+        XCTAssertEqual(move.message, "There’s already a library here.")
+        XCTAssertEqual(ProcessingRequest.Mode.fullRetranscription.title, "Transcribe Everything Again", "the words the page uses")
+    }
+
     func testReportedProblemsAndLibrarySaveFailuresShareTheWindowsAlert() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookProblemTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
