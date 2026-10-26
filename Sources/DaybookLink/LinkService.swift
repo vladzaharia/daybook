@@ -30,6 +30,8 @@ public actor LinkService {
     private var sessions: [ObjectIdentifier: LinkSession] = [:]
     private var peers: [UUID: LinkSession] = [:]
     private var answeredByDevice: [UUID: [UUID: LinkRecordReply]] = [:]
+    /// Record requests the app is still answering, by device, with every connection waiting for the answer.
+    private var answering: [UUID: [UUID: [(LinkRecordReply.Outcome) -> Void]]] = [:]
     private var recordHandler: LinkRecordControlHandler?
 
     private struct PairingWindow {
@@ -404,9 +406,18 @@ public actor LinkService {
             reply(.refused(LinkRecordRefusal(reason: .unsupported)))
             return
         }
+        // A repeat on a new connection (a lost reply, a reconnect) gets the first answer, and one
+        // still being worked out (a microphone prompt) is answered once, on every connection that asked.
+        let device = peer.deviceID
+        if let earlier = answeredByDevice[device]?[request.id] { reply(earlier.outcome); return }
+        if answering[device]?[request.id] != nil { answering[device]?[request.id]?.append(reply); return }
+        answering[device, default: [:]][request.id] = [reply]
         Task {
             let outcome = await handler(peer, request)
-            reply(outcome)
+            let waiting = answering[device]?.removeValue(forKey: request.id) ?? []
+            LinkRecordReply.remember(LinkRecordReply(requestID: request.id, outcome: outcome, sentAt: configuration.clock.now()),
+                                     in: &answeredByDevice[device, default: [:]])
+            for reply in waiting { reply(outcome) }
         }
     }
 

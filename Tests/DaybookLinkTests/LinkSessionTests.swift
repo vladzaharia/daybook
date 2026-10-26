@@ -379,6 +379,45 @@ final class LinkSessionTests: XCTestCase {
         await pair.tearDown()
     }
 
+    func testARequestRepeatedOnANewConnectionWhileBeingAnsweredReachesThePhoneOnce() async throws {
+        // A microphone prompt outlasts the request's timeout; the Mac reconnects and asks again
+        // with the same ID. The phone hears it once and both askers get its one answer.
+        var configuration = LinkConfiguration.loopback()
+        configuration.requestTimeout = 0.3
+        let pair = try await LinkedPair.make(self, service: configuration, relay: (0, 0))
+        try await pair.connect()
+        let gate = AnswerGate()
+        await pair.client.setRecordControlHandler { _, request in
+            await gate.arrive()
+            await gate.wait()
+            return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "phone-1"))
+        }
+        let start = LinkRecordRequest(action: .start, conversationID: UUID())
+        do {
+            _ = try await pair.service.request(start, from: pair.phone.deviceID)
+            XCTFail("the answer is still coming")
+        } catch let error as LinkError {
+            XCTAssertEqual(error, .timedOut)
+        }
+        pair.relay?.dropAll()
+        _ = try await pair.macEvents.next("Mac saw the drop") { $0.disconnectReason }
+        _ = try await pair.macEvents.next("Mac reconnected") { $0.connected }
+        async let repeated = pair.service.request(start, from: pair.phone.deviceID)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await gate.open()
+        let reply = try await repeated
+        guard case .accepted(let ack) = reply.outcome else { return XCTFail("\(reply)") }
+        XCTAssertEqual(ack.recordingID, "phone-1")
+        let arrivals = await gate.arrivals
+        XCTAssertEqual(arrivals, 1, "the phone's app heard the request once")
+        // Later repeats get the same answer without reaching the app.
+        let again = try await pair.service.request(start, from: pair.phone.deviceID)
+        XCTAssertEqual(again.outcome, reply.outcome)
+        let still = await gate.arrivals
+        XCTAssertEqual(still, 1)
+        await pair.tearDown()
+    }
+
     // MARK: Unpairing
 
     func testUnpairingOnTheMacRemovesTheKeyOnBothSides() async throws {
@@ -461,5 +500,25 @@ actor FakeRecorder {
         default:
             return .refused(LinkRecordRefusal(reason: .notRecording))
         }
+    }
+}
+
+/// Holds a record-control answer until the test lets it go, counting the requests that reach it.
+actor AnswerGate {
+    private(set) var arrivals = 0
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func arrive() { arrivals += 1 }
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters = []
     }
 }

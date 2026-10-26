@@ -286,10 +286,11 @@ final class LinkSession: @unchecked Sendable {
     var answeredReplies: [UUID: LinkRecordReply] { answered }
 
     func adoptAnsweredReplies(_ replies: [UUID: LinkRecordReply]) {
-        for (id, reply) in replies where answered[id] == nil {
+        for (id, reply) in replies.sorted(by: { $0.value.sentAt < $1.value.sentAt }) where answered[id] == nil {
             answered[id] = reply
             answeredOrder.append(id)
         }
+        while answeredOrder.count > 64 { answered.removeValue(forKey: answeredOrder.removeFirst()) }
     }
 
     // MARK: Send
@@ -476,5 +477,14 @@ final class LinkSession: @unchecked Sendable {
         Data(HMAC<SHA256>.authenticationCode(for: authMessage(sender: sender, exporter: exporter, clientID: clientID,
                                                               serverID: serverID),
                                              using: SymmetricKey(data: key)))
+    }
+}
+
+extension LinkRecordReply {
+    /// Keeps a reply a device's requests may be repeated against, and only the latest 64 of them.
+    static func remember(_ reply: LinkRecordReply, in replies: inout [UUID: LinkRecordReply]) {
+        replies[reply.requestID] = reply
+        guard replies.count > 64 else { return }
+        for old in replies.values.sorted(by: { $0.sentAt < $1.sentAt }).prefix(replies.count - 64) { replies[old.requestID] = nil }
     }
 }
