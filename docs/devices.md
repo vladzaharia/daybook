@@ -52,7 +52,8 @@ DeviceHub (@MainActor ObservableObject)   │  configured devices, persisted as 
     `reconnecting`, `connected`, `unavailable`), `problem`, `lastConnectedAt`, `summary`.
   - Inventory: `recordings: [DeviceRecording]` with stable string IDs, start time, exact or
     estimated length, size, and whether it's still being recorded; `inventoryUpdatedAt`,
-    `isRefreshing`.
+    `isRefreshing`, and `isInventoryCurrent` (listed since it connected and not being listed again;
+    nothing imports from a list that isn't).
   - Status: `DeviceStatus` (battery, case battery, storage as hours, recording state,
     firmware, serial), live while connected and otherwise the last confirmed values with
     their time.
@@ -97,9 +98,24 @@ new conversation at the recording's start, doesn't take the place being viewed o
 selection, and joins a conversation that already holds the same bytes.
 
 "Already in Daybook", "Recently imported", "Show Conversation", and live-to-full linking come
-from `DeviceLibraryLinks(meetings:kind:serial:)`, so they survive sync and work on another Mac.
-A Listen Live portion is stored with the recording ID plus `~live`; a later full import of
+from `DeviceLibraryLinks`, so they survive sync and work on another Mac. The hub indexes the
+library's recorder tracks by kind once per change (`DeviceLibraryIndex`), and a device rebuilds its
+links only when its own tracks (or its recorder's serial) change, so editing notes costs no device
+anything. A Listen Live portion is stored with the recording ID plus `~live`; a later full import of
 that recording joins the same conversation.
+
+- **Checked again at ingest.** Another device's import of the same recording can arrive through
+  sync while this one transfers, and two decodes of one recording needn't be byte-identical. So the
+  session, the Mac's device importer (`importFromDevice`), and the iPhone's (under its library lock)
+  look the identity up once more right before ingesting (`DeviceLibraryLinks.meeting(holding:in:)`:
+  kind and recording ID, the same recorder when both name a serial, never a Listen Live portion) and
+  keep the conversation that has it. Moving a recording between conversations isn't an import and
+  isn't checked. Two devices that both finish before either syncs still make two; ownership (below) is what
+  keeps them from both importing.
+- **Start dates.** `DeviceRecordingStart.date(of:)` reads a recording's start from its identity, for
+  the new conversation's date and title and the device page's labels: Soundcore IDs are start times
+  by the recorder's clock, less its measured offset ([direct Soundcore](direct-soundcore.md), "The
+  recorder's clock").
 
 ## Automatic import (the default, and why)
 
@@ -114,9 +130,34 @@ that recording joins the same conversation.
   person didn't ask for. Older recordings are listed under New on Soundcore for one click.
 - Nothing imports automatically until the library has loaded, because without it every
   recording would look new.
+- Nothing imports from a remembered list either: only once the recorder has been listed on this
+  connection (`isInventoryCurrent`). The remembered list can show a recording that was in progress
+  as finished, and importing it early, under its final ID, would block the full one for good. A
+  recording the recorder names as active is in progress whether or not it says it's recording
+  (firmware may list the growing file, or keep a paused one open), so it waits, and a queued one the
+  current list shows in progress leaves the queue.
 - An automatic connection is let go 30 seconds after its imports finish, and the next attempt
   waits 15 minutes, so the phone app can reach the recorder. A connection the person made is
   let go after 5 idle minutes. The person can turn automatic import off in Settings › Devices.
+- On iPhone that wait is a timer, and a suspended app runs none: the app-refresh task (registered
+  with sync's, in `DaybookPhoneApp`) calls `DeviceHub.resumeAutomaticImportsIfDue()`, which starts
+  the quiet connection once `automaticDueAt` has passed; iOS keeps it pending and wakes the app when
+  the recorder answers.
+- Audio a killed run left staged is removed when the hub starts (only `Soundcore-*.wav` older than
+  the hub, so no transfer under way loses its file). The recorder still has all of it.
+
+## What the recorder is recording
+
+`SoundcoreConnection.recordingState` (`SoundcoreRecordingState`) is what this device knows:
+`isRecording` (the recorder's flag), `activeRecordingID` (the file it names as in progress, also
+when paused on firmware that keeps it open), `startedAt` (its start on this device's clock),
+`asOf`, `isLive` (connected now), and `startedHere` (this device asked it to start). While
+connected it's live. After the link goes (the idle release lets go even of a recording Daybook just
+started), it's the last confirmed state for 20 minutes (`SoundcoreTiming.lastKnownRecording`): the
+device's status says recording, pages read "Recording · as of 10:07 AM", the recording stays
+Recording now, and then it's unknown again, because nobody can see it stop. The snapshot keeps
+`activeRecordingID`, `info.isRecording`, and `statusUpdatedAt` (the as-of), so a relaunch knows too.
+On iPhone, a recording it started and Listen Live get a Live Activity (docs/iphone.md).
 
 ## One owner per recorder
 
@@ -178,6 +219,11 @@ and hands over what was waiting.
   names those, and the new owner neither offers nor imports them until they arrive
   (`DeviceSession.arrivingThroughSync`, at most a day). Tests check that each recording ends up in
   exactly one conversation on both devices.
+- *A recording under way.* The release (and the synced record) carries `recordingInProgress`: the
+  recording the recorder is making, and the conversation waiting for it (one whose recording asked
+  the recorder to record too and hasn't got its track). The new owner keeps it among its adopted
+  imports while it's in progress, imports it into that conversation once it's finished, and its
+  device page says "For Design review". Optional fields; earlier builds neither send nor read them.
 
 **Hand back** (iPhone, off by default; the device page's "Hand Back to My Mac When It’s Nearby"):
 a recorder the iPhone took from a Mac goes back to that Mac when the Mac connects over the link,
