@@ -35,6 +35,10 @@ final class LinkRecorderHandoffTests: XCTestCase {
                                                       recorderIsRecording: true,
                                                       recordingInProgress: LinkHandoffImport(recordingID: "1729003600", attachTo: UUID(),
                                                                                              isAutomatic: true)))),
+            .app(.recorderRelease(LinkRecorderRelease(requestID: request.id, kind: "soundcore.work", serial: "S", newOwner: phone, releasedAt: t0,
+                                                      recorderIsRecording: true,
+                                                      recordingInProgress: LinkHandoffImport(recordingID: "1729003600", attachTo: UUID(),
+                                                                                             isAutomatic: true, stopsWithConversation: true)))),
         ]
         for message in messages {
             let frame = try LinkWire.encode(message, version: 1)
@@ -51,6 +55,18 @@ final class LinkRecorderHandoffTests: XCTestCase {
               case .refused(let refusal) = reply.outcome else { return XCTFail("an unknown outcome must not read as accepted") }
         XCTAssertEqual(reply.requestID, id)
         XCTAssertEqual(refusal.reason.rawValue, "unknown")
+    }
+
+    func testARecordingInProgressFromAnEarlierBuildIsLeftToThePerson() throws {
+        // 0.3.0 sends no `stopsWithConversation`: the new owner imports the recording but never stops it.
+        let earlier = #"{"recordingID":"1729003600","attachTo":"\#(UUID().uuidString)","isAutomatic":true}"#
+        let decoded = try JSONDecoder().decode(LinkHandoffImport.self, from: Data(earlier.utf8))
+        XCTAssertNil(decoded.stopsWithConversation)
+        let unreadable = #"{"recordingID":"1729003600","stopsWithConversation":"maybe"}"#
+        XCTAssertNil(try JSONDecoder().decode(LinkHandoffImport.self, from: Data(unreadable.utf8)).stopsWithConversation,
+                     "a value this build can't read is no reason to stop it")
+        let keys = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(LinkHandoffImport(recordingID: "1"))) as? [String: Any]).keys
+        XCTAssertFalse(keys.contains("stopsWithConversation"), "absent unless set, as an earlier build writes it")
     }
 
     func testOptionalFieldsAndUnknownValuesFromOtherVersionsDecode() throws {

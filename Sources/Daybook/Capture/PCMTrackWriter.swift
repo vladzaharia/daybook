@@ -1,4 +1,3 @@
-import Accelerate
 import AVFoundation
 import DaybookCore
 import Foundation
@@ -23,27 +22,13 @@ final class AudioLevelMeter: @unchecked Sendable {
     private var peakSinceRead: Float = -160
 
     func record(_ buffer: AVAudioPCMBuffer, hostTime: TimeInterval) {
-        guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else { return }
-        let count = Int(buffer.format.channelCount)
-        // Interleaved audio is one run of frames × channels; otherwise one run per channel.
-        let lanes = buffer.format.isInterleaved ? 1 : count
-        let perLane = vDSP_Length(Int(buffer.frameLength) * (buffer.format.isInterleaved ? count : 1))
-        var sumSquares: Float = 0, peak: Float = 0
-        for lane in 0..<lanes {
-            var squares: Float = 0, magnitude: Float = 0
-            vDSP_svesq(channels[lane], 1, &squares, perLane)
-            vDSP_maxmgv(channels[lane], 1, &magnitude, perLane)
-            sumSquares += squares; peak = max(peak, magnitude)
-        }
-        let samples = Float(buffer.frameLength) * Float(count)
-        let rms = 10 * log10(max(sumSquares / max(samples, 1), 1e-16))
-        let peakDB = 20 * log10(max(peak, 1e-8))
+        guard let level = AudioBufferLevel.measure(buffer) else { return }
         lock.lock()
-        reading.rms = rms
-        peakSinceRead = max(peakSinceRead, peakDB)
+        reading.rms = level.rms
+        peakSinceRead = max(peakSinceRead, level.peak)
         reading.peak = peakSinceRead
-        if peak > 0 { reading.receivedSignal = true }
-        if rms >= Self.audibleThreshold { reading.lastAudibleHostTime = hostTime }
+        if level.hasSignal { reading.receivedSignal = true }
+        if level.rms >= Self.audibleThreshold { reading.lastAudibleHostTime = hostTime }
         lock.unlock()
     }
 
@@ -87,7 +72,7 @@ final class PCMTrackWriter: @unchecked Sendable {
     private var lastMetadataWrite: TimeInterval = -.infinity
     private var lastAnchor: ClockAnchor?
     private var pendingResync = false
-    private var converter: AVAudioConverter?
+    private let converter = PCMFormatConverter()
     private var notes: [String] = []
     private let pendingSlots = DispatchSemaphore(value: 256)
     private let overflowLock = NSLock()
@@ -158,9 +143,9 @@ final class PCMTrackWriter: @unchecked Sendable {
         defer { track = current }
         var buffer = input
         if input.format != file.processingFormat {
-            if let converter, converter.inputFormat != input.format { try drainConverter(into: file, track: &current) }
+            if let from = converter.inputFormat, from != input.format { try drainConverter(into: file, track: &current) }
             buffer = try convert(input, to: file.processingFormat)
-        } else if converter != nil {
+        } else if converter.inputFormat != nil {
             try drainConverter(into: file, track: &current)
             pendingResync = true
             notes.append("The \(role.rawValue) returned to its original format.")
@@ -216,26 +201,19 @@ final class PCMTrackWriter: @unchecked Sendable {
     /// Converts a buffer from a new device format to the file's format, keeping one converter per
     /// input format so resampling state carries across buffers.
     private func convert(_ input: AVAudioPCMBuffer, to format: AVAudioFormat) throws -> AVAudioPCMBuffer {
-        if converter?.inputFormat != input.format {
-            guard let created = AVAudioConverter(from: input.format, to: format) else { throw RecordingError.audioFormatChanged }
-            if input.format.channelCount > format.channelCount { created.downmix = true }
-            converter = created
-            pendingResync = true
-            notes.append("The \(role.rawValue) changed to \(Int(input.format.sampleRate)) Hz, \(input.format.channelCount) ch; converted to the recording’s format.")
+        do {
+            if try converter.prepare(from: input.format, to: format) {
+                pendingResync = true
+                notes.append("The \(role.rawValue) changed to \(Int(input.format.sampleRate)) Hz, \(input.format.channelCount) ch; converted to the recording’s format.")
+            }
+            return try converter.convert(input)
+        } catch PCMFormatConverter.Failure.buffer {
+            throw RecordingError.invalidAudio
+        } catch PCMFormatConverter.Failure.conversion(let error?) {
+            throw error
+        } catch is PCMFormatConverter.Failure {
+            throw RecordingError.audioFormatChanged
         }
-        guard let converter else { throw RecordingError.audioFormatChanged }
-        let capacity = AVAudioFrameCount(Double(input.frameLength) * format.sampleRate / input.format.sampleRate) + 64
-        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { throw RecordingError.invalidAudio }
-        var supplied = false
-        var error: NSError?
-        let status = converter.convert(to: output, error: &error) { _, outStatus in
-            if supplied { outStatus.pointee = .noDataNow; return nil }
-            supplied = true
-            outStatus.pointee = .haveData
-            return input
-        }
-        if status == .error { throw error ?? RecordingError.audioFormatChanged }
-        return output
     }
 
     /// Returns once every buffer appended so far has been written.
@@ -245,15 +223,7 @@ final class PCMTrackWriter: @unchecked Sendable {
 
     /// Writes the frames a sample-rate converter still holds (its look-ahead) and retires it.
     private func drainConverter(into file: AVAudioFile, track: inout CapturedAudioTrack) throws {
-        guard let converter else { return }
-        self.converter = nil
-        guard let output = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 8_192) else { return }
-        var error: NSError?
-        let status = converter.convert(to: output, error: &error) { _, outStatus in
-            outStatus.pointee = .endOfStream
-            return nil
-        }
-        guard status != .error, output.frameLength > 0 else { return }
+        guard let output = converter.drain() else { return }
         try file.write(from: output)
         track.frameCount += Int64(output.frameLength)
     }

@@ -122,6 +122,8 @@ final class LibraryLoadingTests: XCTestCase {
         let id = library.newMeeting(title: "Was transcribing")
         library.update(id) { $0.status = .transcribing }
         await library.flush()
+        // The record of this device's work is written in the background; reopening reads it.
+        LibraryController.drainLocalWorkWrites()
         let folder = root.appendingPathComponent("Meetings/\(id.uuidString)")
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
         let reopened = try await open()

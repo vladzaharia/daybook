@@ -71,6 +71,7 @@ final class LibrarySyncCompatibilityTests: XCTestCase {
         let head = try XCTUnwrap(try eventNames().first)
         var snapshot = try object(meeting)
         snapshot["kind"] = "workshop"; snapshot["status"] = "queued"; snapshot["mood"] = "focused"
+        snapshot["highlights"] = [["id": UUID().uuidString, "time": 3, "text": "", "color": "mint"]]
         try write(["schemaVersion": 1, "meetingID": meeting.id.uuidString, "deviceID": "Future", "sequence": 1,
                    "parents": [head], "snapshot": snapshot, "deleted": false, "assets": [], "signature": "extra"])
         let pulled = try await pass(b, "B")
@@ -85,6 +86,10 @@ final class LibrarySyncCompatibilityTests: XCTestCase {
         XCTAssertEqual(onA.notes, "B's notes")
         XCTAssertEqual(onA.$kind.rawValue, "workshop", "an older device's edit keeps the newer value")
         XCTAssertEqual(onA.$status.rawValue, "queued")
+        XCTAssertEqual(onA.unknownFields["mood"], .string("focused"), "and the newer fields, here and inside")
+        XCTAssertEqual(onA.highlights.first?.unknownFields["color"], .string("mint"))
+        let stored = try await MeetingStore(rootURL: local("A")).load(meeting.id)
+        XCTAssertEqual(stored.unknownFields["mood"], .string("focused"), "on disk too")
     }
 
     func testLibrarySettingsInANewerFormatDoNotFreezeTheRest() async throws {

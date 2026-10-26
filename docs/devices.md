@@ -224,6 +224,20 @@ and hands over what was waiting.
   the recorder to record too and hasn't got its track). The new owner keeps it among its adopted
   imports while it's in progress, imports it into that conversation once it's finished, and its
   device page says "For Design review". Optional fields; earlier builds neither send nor read them.
+- *Stopping it with that recording.* When Daybook started the recording for that conversation's
+  recording, which hasn't ended (`stopsWithConversation`, also optional), the recorder stops when that
+  recording does. Over the link, the Mac stops it through the new owner (docs/multipoint.md). Out of
+  reach, the new owner watches instead (`RecorderHandoff.followed`, kept in its preferences across
+  relaunches): once that device's presence has named the conversation (`SyncDeviceActivity`), a later
+  presence record of that device's that no longer does means the recording ended; so does the
+  conversation arriving with its link to the recorder ended (`macEndedAt`). It then pauses the
+  recorder only if a list read then says it's still making that recording (by its ID), never one the
+  person started since, and imports it into the conversation; out of range or not yet listed, it tries
+  again a minute later. It gives up, leaving the recorder to the person, when the recording ended
+  another way, when the recorder is handed on, when that device's presence is more than 30 minutes
+  old, or 12 hours after the handoff; until then it waits for a recorder this device doesn't know yet
+  (at launch). A recording the recorder was making already, or one from a build that doesn't
+  say, is never stopped.
 
 **Hand back** (iPhone, off by default; the device page's "Hand Back to My Mac When It’s Nearby"):
 a recorder the iPhone took from a Mac goes back to that Mac when the Mac connects over the link,

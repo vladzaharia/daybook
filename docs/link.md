@@ -179,7 +179,7 @@ can copy the tags, but it can't complete TLS without the key.
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
 | `recorder.handoff.reply` | `LinkRecorderHandoffReply` | both | accepted (what it finishes first, time left) or refused with a reason; repeated as progress |
-| `recorder.release` | `LinkRecorderRelease` | both | the old owner let go: imports that were waiting, recordings it imported recently |
+| `recorder.release` | `LinkRecorderRelease` | both | the old owner let go: imports that were waiting, recordings it imported recently, the recording in progress and the conversation waiting for it (with whether it stops when that conversation's recording does; optional) |
 | `ping` / `pong` | sequence, interval | both | presence |
 | `clock.request` / `clock.reply` | t1 / t1 t2 t3 | both | NTP-style samples |
 | `unpair`, `goodbye` | | both | |
@@ -242,7 +242,9 @@ Additions within version 1, all optional, which older builds ignore:
 - `recorder` (`LinkRecorderTarget`: kind, serial, and for a stop the recording's ID): start or stop
   a recorder the receiver manages instead of its microphone. Sent only to a peer that lists
   `recorderControl` in its features, since an older one would record its own microphone; a stop
-  pauses only the named recording.
+  pauses only the named recording, and only once the recorder's list has been read again (an older
+  one may name a recording the person has stopped since): without that, it's refused as
+  `recorderUnavailable`, to ask again.
 - `LinkTiming.timelineStart`: from an older build, `elapsed` counted from the requester's own start.
 
 ## Recording state

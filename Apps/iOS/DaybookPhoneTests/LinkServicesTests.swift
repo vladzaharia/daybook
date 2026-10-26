@@ -503,6 +503,40 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertNil(recording)
     }
 
+    /// A stop owed to a Mac that's away is kept in a file in the library's folder, so the app, relaunched
+    /// before the Mac comes back, still sends it as the Mac connects.
+    func testAStopOwedToAMacIsSentAfterARelaunch() async throws {
+        let mac = try await makeMac()
+        let macRecorder = await recordingMac(mac)
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        await model.recordOnMac(mac.id)
+        XCTAssertEqual(model.multipoint?.macs.first?.state, .recording)
+        await link.client.disconnect(from: mac.id)
+        try await waitUntil("disconnected") { link.macs.first?.isConnected == false }
+        try await model.stopRecording()
+        let conversation = try XCTUnwrap(model.library.conversations.first?.id)
+        XCTAssertEqual(model.pendingStops[mac.id], conversation)
+        let kept = model.library.rootURL.appendingPathComponent(PhoneAppModel.owedStopsFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: kept.path), "kept in the library's folder")
+
+        let relaunched = PhoneAppModel(recorder: RecorderRig().recorder, library: model.library, posture: DevicePosture(),
+                                       options: LaunchOptions(arguments: [], environment: [:]), link: link)
+        XCTAssertEqual(relaunched.pendingStops[mac.id], conversation, "still owed after the relaunch")
+        var recording = await macRecorder.recording
+        XCTAssertNotNil(recording)
+        try await link.client.connect(to: mac.id, via: mac.endpoint)
+        try await waitUntil("the stop goes as the Mac connects") { relaunched.pendingStops.isEmpty }
+        recording = await macRecorder.recording
+        XCTAssertNil(recording)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: kept.path), "nothing left to keep")
+    }
+
     func testAnUnexpectedEndStopsTheMacsThisIPhoneStarted() async throws {
         let mac = try await makeMac()
         let macRecorder = await recordingMac(mac)

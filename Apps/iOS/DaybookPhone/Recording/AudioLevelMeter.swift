@@ -1,5 +1,5 @@
-import Accelerate
 import AVFoundation
+import DaybookCore
 import Foundation
 
 /// One reading of the input level.
@@ -24,26 +24,12 @@ final class AudioLevelMeter: @unchecked Sendable {
     var receivedSignal: Bool { lock.withLock { signal } }
 
     func record(_ buffer: AVAudioPCMBuffer) {
-        guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else { return }
-        let count = Int(buffer.format.channelCount)
-        let lanes = buffer.format.isInterleaved ? 1 : count
-        let perLane = vDSP_Length(Int(buffer.frameLength) * (buffer.format.isInterleaved ? count : 1))
-        var sumSquares: Float = 0, peak: Float = 0
-        for lane in 0..<lanes {
-            var squares: Float = 0, magnitude: Float = 0
-            vDSP_svesq(channels[lane], 1, &squares, perLane)
-            vDSP_maxmgv(channels[lane], 1, &magnitude, perLane)
-            sumSquares += squares
-            peak = max(peak, magnitude)
-        }
-        let samples = Float(buffer.frameLength) * Float(count)
-        let rms = 10 * log10(max(sumSquares / max(samples, 1), 1e-16))
-        let peakDB = 20 * log10(max(peak, 1e-8))
+        guard let measured = AudioBufferLevel.measure(buffer) else { return }
         lock.withLock {
-            level.rms = rms
-            peakSinceRead = max(peakSinceRead, peakDB)
+            level.rms = measured.rms
+            peakSinceRead = max(peakSinceRead, measured.peak)
             level.peak = peakSinceRead
-            if peak > 0 { signal = true }
+            if measured.hasSignal { signal = true }
         }
     }
 

@@ -279,6 +279,30 @@ final class MultiSourceTests: XCTestCase {
         XCTAssertNil(meeting.tracks[1].alignment?.heldNoteIDs)
     }
 
+    /// The iPhone led and this Mac joined later, so this Mac's recording sets the timeline and the
+    /// phone's is placed before its zero. Notes the phone took before this Mac started keep their time
+    /// in the phone's recording, before the timeline's zero, as its passages do; editing keeps them.
+    func testNotesFromBeforeTheTimelinesZeroKeepTheirPlaceBeforeIt() {
+        var meeting = macConversation()
+        meeting.tracks.append(RecordingTrack(id: recorder, source: .microphone, relativePath: "Originals/phone.m4a", fileName: "iPhone recording.m4a"))
+        let notes = [TimedNote(time: 30, text: "Walking over"), TimedNote(time: 150, text: "Budget agreed")]
+        meeting.addRecordingWork(trackID: recorder, notes: notes, bookmarks: [], joining: true)
+        XCTAssertEqual(meeting.paragraphTimes(), [30, 150], "by the phone's clock until it's placed")
+
+        // This Mac started two minutes after the phone.
+        meeting.applyPlacements([recorder: SourceAlignment(method: .audio, offset: -120, confidence: 0.9)])
+        XCTAssertEqual(meeting.paragraphTimes(), [-90, 30])
+        XCTAssertNil(meeting.tracks[1].alignment?.heldNoteIDs)
+
+        meeting.notes = "Walking over to the office\nBudget agreed"
+        meeting.timedNotes = NoteTimeline.reconcile(previous: meeting.timedNotes ?? [], text: meeting.notes, captureTime: nil)
+        XCTAssertEqual(meeting.paragraphTimes(), [-90, 30], "an edit keeps the time before zero")
+        let copy = Meeting(id: meeting.id, title: meeting.title, date: meeting.date, notes: "Mac notes",
+                           timedNotes: [TimedNote(time: 12, text: "Mac notes")])
+        let merged = MeetingMerge.merge(base: nil, local: meeting, remote: copy).meeting
+        XCTAssertEqual(merged.paragraphTimes(), [-90, 12, 30], "and so does a merge")
+    }
+
     func testARecordingOfItsOwnConversationBringsItsNotesAsTheyWere() {
         var meeting = Meeting(title: "Walk", date: start)
         let mark = Highlight(time: 3)

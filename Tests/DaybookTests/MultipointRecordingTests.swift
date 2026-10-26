@@ -1,6 +1,7 @@
 import DaybookCore
 @testable import DaybookKit
 import DaybookLink
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -11,7 +12,7 @@ import XCTest
 @MainActor
 final class MultipointRecordingTests: XCTestCase {
     private func setUp(_ recorder: FakeRecorder, configure: (inout ConfiguredDevice) -> Void = { _ in }) async throws -> (MultiSourceRig, DeviceSession) {
-        let rig = try await MultiSourceRig.make(models: false)
+        let rig = try await MultiSourceRig.make(in: self, models: false)
         addTeardownBlock { await rig.tearDown() }
         var device = ConfiguredDevice(id: "recorder", kind: SoundcoreWorkIntegration().kind)
         configure(&device)
@@ -80,7 +81,7 @@ final class MultipointRecordingTests: XCTestCase {
         XCTAssertEqual(recorder.commands, ["connect", "start", "pause"])
         XCTAssertEqual(rig.state.sources.recorders.status, "Soundcore Work stopped. Its recording will be added here.")
 
-        try await rig.waitUntil("the recorder's recording to join the conversation") { rig.meeting(id)?.tracks.count == 1 }
+        try await waitUntil("the recorder's recording to join the conversation") { rig.meeting(id)?.tracks.count == 1 }
         await rig.state.flush()
         XCTAssertEqual(recorder.transfers, [link.recordingID!])
         XCTAssertEqual(rig.state.meetings.count, 1, "Never a new conversation")
@@ -196,7 +197,7 @@ final class MultipointRecordingTests: XCTestCase {
         await rig.state.sources.recorders.settle()
         XCTAssertFalse(recorder.commands.contains("pause"), "their recording isn't Daybook's to stop")
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
-        try await rig.waitUntil("Daybook's recording to join") { rig.meeting(id)?.tracks.count == 1 }
+        try await waitUntil("Daybook's recording to join") { rig.meeting(id)?.tracks.count == 1 }
         XCTAssertEqual(recorder.transfers, [link.recordingID!])
     }
 
@@ -207,7 +208,7 @@ final class MultipointRecordingTests: XCTestCase {
         let id = macStartsRecording(rig)
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .failed)
-        try await rig.waitUntil("it starts after all") { recorder.status?.isRecording == true && !recorder.recordCommandPending }
+        try await waitUntil("it starts after all") { recorder.status?.isRecording == true && !recorder.recordCommandPending }
         macStopsRecording(rig, id)
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(recorder.commands, ["connect", "start", "pause"], "it started after all, from Daybook's command: stopped like one that confirmed")
@@ -258,7 +259,7 @@ final class MultipointRecordingTests: XCTestCase {
     /// The real Soundcore connection against the simulated recorder: Start, Pause, the finished
     /// recording's transfer, and its arrival in the conversation this Mac recorded.
     func testSimulatedSoundcoreWorkRecordsAlongsideAndItsRecordingJoins() async throws {
-        let rig = try await MultiSourceRig.make(models: false)
+        let rig = try await MultiSourceRig.make(in: self, models: false)
         addTeardownBlock { await rig.tearDown() }
         let simulated = SimulatedSoundcore(recordings: [])
         let transport = SimulatedSoundcoreTransport(device: simulated)
@@ -295,7 +296,7 @@ final class MultipointRecordingTests: XCTestCase {
         macStopsRecording(rig, id)
         await rig.state.sources.recorders.settle()
         XCTAssertFalse(simulated.isRecording)
-        try await rig.waitUntil("the recording to transfer and join", timeout: 15) { rig.meeting(id)?.tracks.count == 1 }
+        try await waitUntil("the recording to transfer and join", timeout: 15) { rig.meeting(id)?.tracks.count == 1 }
         await rig.state.flush()
         let meeting = try XCTUnwrap(rig.meeting(id))
         XCTAssertEqual(rig.state.meetings.count, 1)
@@ -354,7 +355,7 @@ final class MultipointRecordingTests: XCTestCase {
 @MainActor
 final class RecorderOwnerTests: XCTestCase {
     private func rig() async throws -> MultiSourceRig {
-        let rig = try await MultiSourceRig.make(models: false)
+        let rig = try await MultiSourceRig.make(in: self, models: false)
         addTeardownBlock { await rig.state.phoneLink.shutDown(); await rig.tearDown() }
         return rig
     }
@@ -428,6 +429,41 @@ final class RecorderOwnerTests: XCTestCase {
     }
 
     private static func inProgress(_ recorder: FakeRecorder) -> String? { recorder.recordings.first(where: \.isInProgress)?.id }
+
+    /// A stop naming a recording waits for the recorder's list read now: an older one may still name a
+    /// recording the person has stopped since, and pausing then would stop the person's own.
+    func testTheOwnerNeverStopsARecordingByAListItHasntReadAgain() async throws {
+        let rig = try await rig()
+        let recorder = FakeRecorder()
+        let session = recorderSession(recorder, defaults: rig.defaults)
+        var timing = RecorderRemoteControl.Timing()
+        timing.connect = .seconds(2); timing.confirm = .seconds(2); timing.inventory = .milliseconds(300); timing.listing = .seconds(1)
+        timing.poll = .milliseconds(10)
+        let target = LinkRecorderTarget(kind: SoundcoreWorkIntegration.id, serial: "FAKE1")
+        let conversation = UUID()
+        let start = await RecorderRemoteControl.answer(LinkRecordRequest(action: .start, conversationID: conversation, recorder: target),
+                                                       target: target, sessions: [session], timing: timing)
+        guard case .accepted(let ack) = start else { return XCTFail("\(start)") }
+        var named = target
+        named.recordingID = try XCTUnwrap(ack.recordingID)
+
+        // The person stopped it and started their own; the recorder is slow to list again.
+        recorder.personStartsAnother(at: Date().addingTimeInterval(1).rounded)
+        recorder.refreshDelay = .seconds(2)
+        let unsure = await RecorderRemoteControl.answer(LinkRecordRequest(action: .stop, conversationID: conversation, recorder: named),
+                                                        target: named, sessions: [session], timing: timing)
+        guard case .refused(let refusal) = unsure else { return XCTFail("\(unsure)") }
+        XCTAssertEqual(refusal.reason, .recorderUnavailable, "asked again later")
+        XCTAssertFalse(recorder.commands.contains("pause"), "the person's recording keeps going")
+
+        // Listed again, it says what it's recording: not that one.
+        recorder.refreshDelay = .milliseconds(30)
+        try await waitUntil("the slow list") { !recorder.isRefreshing }
+        let refused = await RecorderRemoteControl.answer(LinkRecordRequest(action: .stop, conversationID: conversation, recorder: named),
+                                                         target: named, sessions: [session], timing: timing)
+        XCTAssertEqual(refused, .refused(LinkRecordRefusal(reason: .notRecording)))
+        XCTAssertFalse(recorder.commands.contains("pause"))
+    }
 
     func testMultipointStartsAndStopsARecorderThePhoneManagesThroughThePhone() async throws {
         let rig = try await rig()

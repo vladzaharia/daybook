@@ -87,8 +87,10 @@ own) is left alone; Daybook's recording has ended, so it's imported. A recorder 
 `failed` but turns out to be recording, live, since Daybook's command is stopped too. One that a
 phone now manages (handed over mid-recording) is stopped through that phone, by the recording's ID;
 when it can't be, the line names it: "Couldn't reach Soundcore Work to stop it. Stop it on Alex's
-iPhone." Only links made by this recording are acted on; a link an interrupted session left behind
-never stops a recorder.
+iPhone." That phone, which can't be told, stops it itself once it sees this Mac's recording end (its
+presence, or the conversation arriving through sync; docs/devices.md, "Handing a recorder over").
+Only links made by this recording are acted on; a link an interrupted session left behind never stops
+a recorder.
 
 Quitting waits up to 5 s for these stops to leave; going to sleep stops the recording (as before)
 and holds sleep back, through the power notification, for up to 5 s while they do. After a crash,
@@ -218,7 +220,11 @@ phone's clock. The phone answers straight away, so there's no polling:
 When this Mac stops, it asks to stop the phones it started, a phone that never answered, and one
 that says it's recording this conversation after all (`stopped`). A stop the phone refuses is
 `stopFailed`: "Alex's iPhone didn't stop. Stop it on the iPhone." One that doesn't reach it is owed
-until it reconnects: "Couldn't reach Alex's iPhone to stop it. It stops when it reconnects."
+until it reconnects: "Couldn't reach Alex's iPhone to stop it. It stops when it reconnects." An owed
+stop is kept in this Mac's preferences (`multipoint.owedStops`, never synced) for a day, so it still
+goes if Daybook quits or restarts before the phone is back (`OwedStopsStore`). A stop of a recorder
+the phone manages that doesn't name the recording (the phone's answer to the start didn't) is owed
+only until Daybook quits, since it would pause whatever the recorder records by then.
 
 The device page's **Start Recording on iPhone** asks for a conversation of the phone's own
 (`standalone`), which that Mac may stop.
@@ -232,7 +238,8 @@ recording another conversation (`recordingSomethingElse`, naming it), starting o
 too, since nobody may be at the Mac to answer the prompt). The phone may stop a recording it asked
 for, not one started on the Mac (`declined`); it stops each Mac it started when it stops, including
 one still being asked and one whose answer never came, and owes a stop that didn't arrive until that
-Mac reconnects. A start that comes back after the phone stopped is stopped too.
+Mac reconnects, kept for a day in `owed-stops.json` in its library's folder (never synced), so a
+relaunch still sends it. A start that comes back after the phone stopped is stopped too.
 
 **Who stops whom.** A device that records because the other asked follows it: when the one that
 asked says it isn't recording that conversation any more (as it does on every reconnection), or
@@ -251,8 +258,9 @@ starts are compared.
 answered) is filed into that conversation as a source to place: offset unknown, its bookmarks on its
 track, and its notes, matched by ID so nothing doubles, timed by its own clock and held by its track
 (`SourceAlignment.heldNoteIDs`, as for **Record on This Mac**) until it's placed, when they move with
-it. The phone never writes the conversation's title, date, status or message; one that hasn't
-synced to it yet is made as its leader sent it. A recording made alone is a conversation of its own,
+it. A note taken before the recording that sets the timeline began keeps its place before zero (a
+negative time). The phone never writes the conversation's title, date, status or message; one that
+hasn't synced to it yet is made as its leader sent it. A recording made alone is a conversation of its own,
 as before. A recording the phone was killed while making is recovered with the Macs it was made
 with (its journal keeps them): it joins the same way, and the phone stops the Macs it started.
 
@@ -297,10 +305,15 @@ so only the Mac that carries out the request does this (any Mac, for a recording
 - When either device makes the other's conversation before it has synced, both copies carry the
   same title and date, but they meet without a common ancestor: until sync treats that case, a
   differing status is kept in Version History.
-- When the phone led and this Mac joined later, this Mac's recording sets the timeline, so notes the
-  phone took before this Mac started land at its start once the phone's recording is placed.
-- Stops owed to a device that's away, and starts still being asked, are kept in memory: quitting
-  drops them, and the device's own follow-the-leader check (or the next launch) stops it instead.
+- When the phone led and this Mac joined later, this Mac's recording sets the timeline and the phone's
+  is placed before its zero. Notes the phone took before this Mac started keep their time in the
+  phone's recording, so they read before the timeline's zero (−0:42), as its passages do. Daybook
+  0.3.0 and earlier reads note times from zero only, so editing those notes there drops their times
+  (the notes stay).
+- Starts still being asked are kept in memory: quitting drops them, and the device's own
+  follow-the-leader check (or the next launch) stops it instead. Owed stops are kept for a day; one
+  older than that is dropped, by when the other device has stopped by its own rule or the person
+  has.
 - A Mac reached through a phone's recorder can't measure the recorder's clock; its recording is
   placed by the recorder's own start, then sound and transcript.
 - Record control with the phone, the clock prior on real Wi‑Fi, and a phone that loses the link

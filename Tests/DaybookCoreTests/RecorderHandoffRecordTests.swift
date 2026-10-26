@@ -55,6 +55,12 @@ final class RecorderHandoffRecordTests: XCTestCase {
         let keys = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]).keys
         XCTAssertEqual(Set(keys).subtracting(try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(record(.released, at: t0))) as? [String: Any]).keys),
                        ["recordingInProgress"])
+        XCTAssertNil(try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])["recordingInProgress"]
+            .flatMap { ($0 as? [String: Any])?["stopsWithConversation"] }, "absent unless Daybook started it for the conversation")
+        // One Daybook started for the conversation's recording says so, for the new owner to stop it with that recording.
+        released.recordingInProgress?.stopsWithConversation = true
+        XCTAssertEqual(try JSONDecoder().decode(RecorderHandoffRecord.self, from: JSONEncoder().encode(released)).recordingInProgress?.stopsWithConversation,
+                       true)
         XCTAssertEqual(decoded.recorderID, RecorderOwnership.id(kind: "soundcore.work", serial: "S1"))
     }
 }

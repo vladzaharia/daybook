@@ -8,7 +8,7 @@ import XCTest
 @MainActor
 final class NoticeTests: XCTestCase {
     func testEveryDistinctNoticeIsKept() async throws {
-        let rig = try await MultiSourceRig.make()
+        let rig = try await MultiSourceRig.make(in: self)
         addTeardownBlock { await rig.tearDown() }
         rig.state.notice = nil
         rig.state.post(["Speaker detection failed for mic.caf.", "Older transcript has no word timings."])

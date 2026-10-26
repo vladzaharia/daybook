@@ -116,7 +116,9 @@ public enum RecorderRemoteControl {
             control.refresh()
         }
         // What it's recording comes with its list, read on this connection.
-        _ = await wait(timing.inventory, timing.poll) { !control.isRefreshing && (control.inventoryUpdatedAt.map { $0 >= asked } ?? false) }
+        let listed = await wait(timing.inventory, timing.poll) {
+            !control.isRefreshing && control.isInventoryCurrent && (control.inventoryUpdatedAt.map { $0 >= asked } ?? false)
+        }
         let inProgress = { control.recordings.first(where: \.isInProgress)?.id }
         switch request.action {
         case .start:
@@ -131,6 +133,11 @@ public enum RecorderRemoteControl {
             return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: control.status?.recordingStartedAt ?? Date(),
                                            recordingID: inProgress()))
         case .stop:
+            // Which recording it's making is known only from a list read now: an older one may name a
+            // recording the person has stopped since, and pausing would stop theirs.
+            if target.recordingID != nil, !listed {
+                return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) didn’t say what it’s recording."))
+            }
             guard control.status?.isRecording == true, target.recordingID == nil || inProgress() == target.recordingID else {
                 return .refused(LinkRecordRefusal(reason: .notRecording))
             }

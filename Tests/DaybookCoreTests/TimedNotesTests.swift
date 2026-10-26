@@ -75,6 +75,15 @@ final class TimedNotesTests: XCTestCase {
         XCTAssertNil(TimedNote(time: -.infinity, text: "Thought").time)
     }
 
+    func testATimeBeforeTheTimelinesZeroIsKeptButACaptureTimeNeverIsNegative() {
+        // A note another device took before the recording that sets the timeline began.
+        XCTAssertEqual(TimedNote(time: -42.5, text: "Early").time, -42.5)
+        let kept = NoteTimeline.reconcile(previous: [TimedNote(time: -42.5, text: "Early")], text: "Early, edited\nLater", captureTime: 3)
+        XCTAssertEqual(kept.map(\.time), [-42.5, 3])
+        XCTAssertNil(NoteTimeline.reconcile(previous: [], text: "Thought", captureTime: -1).first?.time,
+                     "a recording's own clock never stamps a negative time")
+    }
+
     func testRoundTripPreservesIdentityAndFractionalTimestamp() throws {
         let note = TimedNote(time: 12.345, text: "A detail")
         XCTAssertEqual(try JSONDecoder().decode(TimedNote.self, from: JSONEncoder().encode(note)), note)

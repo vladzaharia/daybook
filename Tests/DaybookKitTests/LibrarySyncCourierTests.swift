@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -10,7 +11,6 @@ import XCTest
 final class LibrarySyncCourierTests: XCTestCase {
     private var root: URL!
     private var service: InMemoryCourierService!
-    private var suites: [String] = []
     private var controllers: [LibrarySyncController] = []
     private let fm = FileManager.default
     private var container: URL { root.appendingPathComponent("Container", isDirectory: true) }
@@ -40,17 +40,13 @@ final class LibrarySyncCourierTests: XCTestCase {
     override func tearDown() async throws {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         try? fm.removeItem(at: root)
     }
 
     private func device(_ name: String, phone: Bool, role: CourierRole, clock: Clock = Clock(),
                         policy: CourierPolicy = CourierPolicy()) async throws -> Device {
         let libraryRoot = root.appendingPathComponent(name, isDirectory: true)
-        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
-        let suite = root.appendingPathComponent("Preferences-\(name)-\(UUID().uuidString)").path
-        suites.append(suite)
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = makeTestDefaults("daybook.sync.courier.\(name)")
         defaults.set(name, forKey: "syncDeviceID")
         let sync = LibrarySyncController(localRoot: libraryRoot, defaults: defaults)
         controllers.append(sync)
@@ -64,24 +60,15 @@ final class LibrarySyncCourierTests: XCTestCase {
         sync.onSyncRequested = { _ = await library.synchronize() }
         try sync.connect(to: container, monitorChanges: false)
         let expected: CourierAvailability = service.isAvailable ? .available : .unavailable("No iCloud account")
-        try await wait("the courier to start") { sync.courierStatus.availability == expected }
+        try await waitUntil("the courier to start", state: syncState) { sync.courierStatus.availability == expected }
         return Device(library: library, sync: sync, courier: courier, root: libraryRoot)
     }
 
     /// Waits for `condition`, scaled by `DAYBOOK_TEST_TIMEOUT_SCALE`; throws on timeout with the controllers' state.
-    private func wait(_ what: String, timeout: Duration = .seconds(10), until condition: () async -> Bool) async throws {
-        let scale = Double(ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"] ?? "") ?? 1
-        let deadline = ContinuousClock.now + timeout * scale
-        while !(await condition()) {
-            guard ContinuousClock.now < deadline else {
-                let state = controllers.map { "\($0.deviceID): \($0.status), courier \($0.courierStatus.availability)" }.joined(separator: "; ")
-                throw TimedOut(description: "Timed out waiting for \(what) (\(state))")
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+    /// What every controller says, for a wait that times out.
+    private func syncState() -> String {
+        controllers.map { "\($0.deviceID): \($0.status), courier \($0.courierStatus.availability)" }.joined(separator: "; ")
     }
-
-    private struct TimedOut: Error, CustomStringConvertible { var description: String }
 
     /// Waits out a pass the courier asked for (its debounce and the pass itself), so the next `synchronize()`
     /// runs one of its own rather than finding a pass already applying.
@@ -152,7 +139,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         XCTAssertTrue(written.contains("Blobs/\(meeting.tracks[0].sha256)"))
         XCTAssertTrue(written.contains { $0.hasPrefix("Events/") })
         XCTAssertTrue(service.fileIDs.isEmpty, "The network is down")
-        try await wait("the waiting count") { phone.sync.courierStatus.waitingToSend == written.count }
+        try await waitUntil("the waiting count", state: syncState) { phone.sync.courierStatus.waitingToSend == written.count }
         XCTAssertNotNil(phone.sync.courierStatus.lastError)
         XCTAssertFalse(phone.sync.courierStatus.isStuck(), "Not stuck after a moment")
         let staged = try fm.contentsOfDirectory(atPath: phone.root.appendingPathComponent("Sync/Courier/Outbox").path)
@@ -179,7 +166,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         await pass(phone.library)
         await phone.sync.finishCourierSends()
         XCTAssertEqual(service.saveCount, written.count, "Nothing is sent twice")
-        try await wait("the status") { phone.sync.courierStatus.waitingToSend == 0 }
+        try await waitUntil("the status", state: syncState) { phone.sync.courierStatus.waitingToSend == 0 }
         XCTAssertTrue(((try? fm.contentsOfDirectory(atPath: phone.root.appendingPathComponent("Sync/Courier/Outbox").path)) ?? []).isEmpty)
 
         // A relaunched courier remembers what it sent, so a pass that reports the same file again sends nothing.
@@ -200,7 +187,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         let blob = "Blobs/\(meeting.tracks[0].sha256)"
         XCTAssertTrue(written.contains(blob), "iCloud Drive carries it")
         XCTAssertEqual(Set(service.fileIDs), Set(written.subtracting([blob]).map { id(of: $0, in: libraryID) }))
-        try await wait("the status") { phone.sync.courierStatus.waitingToSend == 0 }
+        try await waitUntil("the status", state: syncState) { phone.sync.courierStatus.waitingToSend == 0 }
     }
 
     func testStorageFullWaitsLongerEachTimeThenSends() async throws {
@@ -208,7 +195,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         service.failure = .storageFull
         let phone = try await device("Phone", phone: true, role: .send, clock: clock)
         _ = try await recordAndSync(on: phone, bytes: audioBytes(3_000, seed: 3))
-        try await wait("storage full") { phone.sync.courierStatus.storageFull }
+        try await waitUntil("storage full", state: syncState) { phone.sync.courierStatus.storageFull }
         let attempts = service.saveCount
         service.failure = nil
         await phone.courier.flush()
@@ -216,7 +203,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         clock.advance(61)
         await phone.courier.flush()
         XCTAssertGreaterThan(service.saveCount, attempts)
-        try await wait("the status") { phone.sync.courierStatus.waitingToSend == 0 && !phone.sync.courierStatus.storageFull }
+        try await waitUntil("the status", state: syncState) { phone.sync.courierStatus.waitingToSend == 0 && !phone.sync.courierStatus.storageFull }
     }
 
     // MARK: Receiving
@@ -244,7 +231,7 @@ final class LibrarySyncCourierTests: XCTestCase {
 
         // A push: the Mac fetches, verifies, keeps the files in its inbox, and asks for a pass, which applies them.
         await mac.courier.fetch()
-        try await wait("the conversation on the Mac") { mac.library.meeting(meeting.id) != nil }
+        try await waitUntil("the conversation on the Mac", state: syncState) { mac.library.meeting(meeting.id) != nil }
         try await settle(mac)
         let onMac = try XCTUnwrap(mac.library.meeting(meeting.id))
         XCTAssertEqual(onMac.tracks, meeting.tracks)
@@ -284,7 +271,7 @@ final class LibrarySyncCourierTests: XCTestCase {
         service.corrupt(blobID, with: damaged)
 
         await mac.courier.fetch()
-        try await wait("the courier to be cleared") { self.service.fileIDs.isEmpty }
+        try await waitUntil("the courier to be cleared", state: syncState) { self.service.fileIDs.isEmpty }
         try await settle(mac)
         let inbox = await mac.sync.engine?.courierInboxCount()
         XCTAssertEqual(inbox, written.count - 1, "Everything but the damaged audio")

@@ -1,6 +1,7 @@
 import DaybookCore
 @testable import DaybookKit
 import DaybookLink
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -11,7 +12,7 @@ import XCTest
 @MainActor
 final class PhoneLinkTests: XCTestCase {
     private func rig() async throws -> MultiSourceRig {
-        let rig = try await MultiSourceRig.make(models: true)
+        let rig = try await MultiSourceRig.make(in: self, models: true)
         addTeardownBlock { await rig.state.phoneLink.shutDown(); await rig.tearDown() }
         return rig
     }
@@ -73,14 +74,14 @@ final class PhoneLinkTests: XCTestCase {
         let wrong = String(first.digits.dropLast()) + (first.digits.last == "0" ? "1" : "0")
         do { _ = try await client.pair(with: endpoint, code: wrong); XCTFail("A wrong code can't pair") }
         catch let error as LinkPairingError { XCTAssertEqual(error, .codeRejected) }
-        try await waitFor("a new code") { if case .showing(let code) = state.phoneLink.pairing { return code != first }; return false }
+        try await waitUntil("a new code") { if case .showing(let code) = state.phoneLink.pairing { return code != first }; return false }
         XCTAssertNotNil(state.phoneLink.pairingProblem)
         guard case .showing(let second) = state.phoneLink.pairing else { return XCTFail() }
 
         // The right one: the sheet shows the phone, which joins Devices.
         let mac = try await client.pair(with: endpoint, code: second.digits)
         XCTAssertEqual(mac.deviceID, state.phoneLink.identity.deviceID)
-        try await waitFor("the paired phone") { if case .paired = state.phoneLink.pairing { return true }; return false }
+        try await waitUntil("the paired phone") { if case .paired = state.phoneLink.pairing { return true }; return false }
         guard case .paired(let phone) = state.phoneLink.pairing else { return XCTFail() }
         XCTAssertEqual(phone.deviceID, phoneID)
         XCTAssertEqual(phone.name, PhoneLinkRig.phoneName)
@@ -94,7 +95,7 @@ final class PhoneLinkTests: XCTestCase {
 
         // Connected, the device is linked; closing the sheet keeps the link for the paired phone.
         try await client.connect(to: mac.deviceID, via: endpoint)
-        try await waitFor("the phone to connect") { session.isLinked }
+        try await waitUntil("the phone to connect") { session.isLinked }
         XCTAssertEqual(session.direct?.state, .connected)
         await state.phoneLink.endPairing()
         XCTAssertEqual(state.phoneLink.pairing, .closed)
@@ -102,9 +103,9 @@ final class PhoneLinkTests: XCTestCase {
 
         // Unpair: the phone hears it, the device leaves Devices, and with no phone the link stops.
         state.unpairPhone(phoneID)
-        try await waitFor("the unpairing") { state.devices.session(phoneID.uuidString) == nil && state.phoneLink.paired.isEmpty }
-        try await waitFor("the phone to hear it") { events.unpaired }
-        try await waitFor("the link to stop") { !state.phoneLink.isRunning }
+        try await waitUntil("the unpairing") { state.devices.session(phoneID.uuidString) == nil && state.phoneLink.paired.isEmpty }
+        try await waitUntil("the phone to hear it") { events.unpaired }
+        try await waitUntil("the link to stop") { !state.phoneLink.isRunning }
         await client.disconnect(from: mac.deviceID)
     }
 
@@ -157,18 +158,18 @@ final class PhoneLinkTests: XCTestCase {
         rig.state.phoneLink.recordingStateInterval = .milliseconds(150)
         let phone = try await PhoneLinkRig.connect(rig.state)
         defer { Task { await phone.tearDown(rig.state) } }
-        try await waitFor("the state as the phone connects") { phone.events.states.first?.phase == .idle }
+        try await waitUntil("the state as the phone connects") { phone.events.states.first?.phase == .idle }
 
         let id = macStartsRecording(rig)
-        try await waitFor("recording") { phone.events.states.contains { $0.phase == .recording && $0.conversationID == id } }
+        try await waitUntil("recording") { phone.events.states.contains { $0.phase == .recording && $0.conversationID == id } }
         let started = try XCTUnwrap(phone.events.states.first { $0.phase == .recording })
         XCTAssertEqual(started.startedAt?.timeIntervalSince1970 ?? 0, rig.state.recordingStartedAt?.timeIntervalSince1970 ?? 1, accuracy: 0.001)
         // Repeated while it records, so the phone can tell it's still at it.
-        try await waitFor("the state again") { phone.events.states.filter { $0.phase == .recording }.count >= 3 }
+        try await waitUntil("the state again") { phone.events.states.filter { $0.phase == .recording }.count >= 3 }
 
         macStopsRecording(rig, id)
         await rig.state.sources.recorders.settle()
-        try await waitFor("idle") { phone.events.states.last?.phase == .idle }
+        try await waitUntil("idle") { phone.events.states.last?.phase == .idle }
         let count = phone.events.states.count
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(phone.events.states.count, count, "nothing more while idle")
@@ -187,7 +188,7 @@ final class PhoneLinkTests: XCTestCase {
         rig.state.sources.recorders.sessions = { [session, phoneSession] }
         let id = macStartsRecording(rig)
         await rig.state.sources.recorders.settle()
-        try await waitFor("the recorder in this Mac's state") {
+        try await waitUntil("the recorder in this Mac's state") {
             phone.events.states.last?.recorders?.first?.isRecording == true
         }
         let sent = try XCTUnwrap(phone.events.states.last?.recorders)
@@ -206,14 +207,14 @@ final class PhoneLinkTests: XCTestCase {
             LinkRecorderState(kind: SoundcoreWorkIntegration.id, serial: "S2", name: "Soundcore Work", isRecording: true, recordingID: "1", startedAt: started,
                               asOf: Date().addingTimeInterval(-120))])))
         let control = try XCTUnwrap(phoneSession.direct as? PhoneLinkConnection)
-        try await waitFor("the phone's recorders") { !control.recorders().isEmpty }
+        try await waitUntil("the phone's recorders") { !control.recorders().isEmpty }
         let shown = try XCTUnwrap(control.recorders().first)
         XCTAssertEqual(shown.summary(), "Recording since \(started.formatted(date: .omitted, time: .shortened)), as of \(Date().addingTimeInterval(-120).formatted(date: .omitted, time: .shortened))")
         XCTAssertEqual(control.recorders(now: Date().addingTimeInterval(17 * 60)).count, 1)
         XCTAssertTrue(control.recorders(now: Date().addingTimeInterval(19 * 60)).isEmpty, "too old to say: 20 minutes past its as-of")
         // Still known after the phone disconnects, for as long as it can be trusted.
         await phone.client.disconnect(from: phone.macID)
-        try await waitFor("disconnected") { rig.state.phoneLink.peers[phone.phoneID] == nil }
+        try await waitUntil("disconnected") { rig.state.phoneLink.peers[phone.phoneID] == nil }
         XCTAssertEqual(control.recorders().count, 1)
     }
 
@@ -243,7 +244,7 @@ final class PhoneLinkTests: XCTestCase {
         defer { Task { await phone.tearDown(rig.state) } }
         let control = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString)?.direct as? PhoneLinkConnection)
         control.startRecording()
-        try await waitFor("the request") { !phone.recorder.requests.isEmpty }
+        try await waitUntil("the request") { !phone.recorder.requests.isEmpty }
         let request = try XCTUnwrap(phone.recorder.requests.first)
         XCTAssertEqual(request.standalone, true)
         XCTAssertTrue(request.isStandalone)
@@ -259,13 +260,13 @@ final class PhoneLinkTests: XCTestCase {
         let conversation = UUID()
         // A call interrupted the phone's recording.
         try await phone.client.send(.recordingState(LinkRecordingState(phase: .paused, conversationID: conversation, startedAt: Date())))
-        try await waitFor("its state") { control.recordingPhase == .paused }
+        try await waitUntil("its state") { control.recordingPhase == .paused }
         XCTAssertEqual(control.status?.isRecording, true, "paused, it's still recording that conversation")
         XCTAssertEqual(control.recordingConversationID, conversation)
         control.pauseRecording()
-        try await waitFor("Stop on iPhone") { phone.recorder.requests.contains { $0.action == .stop && $0.conversationID == conversation } }
+        try await waitUntil("Stop on iPhone") { phone.recorder.requests.contains { $0.action == .stop && $0.conversationID == conversation } }
         try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle)))
-        try await waitFor("idle") { control.recordingPhase == nil }
+        try await waitUntil("idle") { control.recordingPhase == nil }
         XCTAssertEqual(control.status?.isRecording, false)
     }
 
@@ -353,7 +354,7 @@ final class PhoneLinkTests: XCTestCase {
         try rig.connectSync(cloud)
         let link = try await PhoneLinkRig.connect(state)
         defer { Task { await link.tearDown(state) } }
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
         defer { library.tearDown() }
         state.microphoneAccess = { .authorized }
         state.phoneCapture = PhoneCapture(start: { id in _ = self.macStartsRecording(rig, into: id); return true },
@@ -384,21 +385,23 @@ final class PhoneLinkTests: XCTestCase {
         await state.synchronizeLibrary()
         await library.synchronize()
 
-        // The phone files into this Mac's conversation: a note at 5 s by its own clock, a bookmark at 4 s.
+        // The phone files into this Mac's conversation: a note at 1 s by its own clock (before this Mac
+        // started), another at 5 s, and a bookmark at 4 s.
+        let early = TimedNote(time: 1, text: "Leaving the office")
         let note = TimedNote(time: 5, text: "Budget agreed")
         let mark = Highlight(time: 4)
         try await library.file(phoneAudio, recordingID: recordingID, into: conversation, start: phoneStart, duration: 0.5,
-                               notes: [note], bookmarks: [mark])
+                               notes: [early, note], bookmarks: [mark])
         let filed = try XCTUnwrap(library.library.meeting(conversation))
         XCTAssertEqual(filed.title, "Walk with Priya")
-        XCTAssertEqual(filed.timedNotes?.first?.time, 5)
+        XCTAssertEqual(filed.timedNotes?.map(\.time), [1, 5])
         let held = try XCTUnwrap(filed.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id }?.alignment)
         XCTAssertEqual(held.method, .pending)
-        XCTAssertEqual(held.heldNoteIDs, [note.id], "the note waits with the phone's recording")
+        XCTAssertEqual(held.heldNoteIDs, [early.id, note.id], "the notes wait with the phone's recording")
         await library.synchronize()
         await state.synchronizeLibrary()
 
-        try await waitFor("the conversation to be processed with both recordings", timeout: 20) {
+        try await waitUntil("the conversation to be processed with both recordings", timeout: 20) {
             rig.meeting(conversation)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty
         }
         let meeting = try XCTUnwrap(rig.meeting(conversation))
@@ -408,7 +411,10 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertNil(track.alignment?.heldNoteIDs)
         XCTAssertEqual(meeting.timedNotes?.first { $0.id == note.id }?.time ?? -1, 3, accuracy: 0.001,
                        "the note moved onto the timeline with the phone's recording")
-        XCTAssertEqual(meeting.notes, "Budget agreed")
+        XCTAssertEqual(meeting.timedNotes?.first { $0.id == early.id }?.time ?? 99, -1, accuracy: 0.001,
+                       "a note from before this Mac started keeps its place before the timeline's zero")
+        XCTAssertEqual(meeting.paragraphTimes().map { $0.map { ($0 * 1000).rounded() / 1000 } }, [-1, 3])
+        XCTAssertEqual(meeting.notes, "Leaving the office\nBudget agreed")
         XCTAssertEqual(meeting.highlights.map(\.id), [mark.id])
         XCTAssertEqual(meeting.highlights.first?.trackID, track.id, "the bookmark follows the phone's recording")
         XCTAssertEqual(meeting.title, "Walk with Priya")
@@ -442,7 +448,7 @@ final class PhoneLinkTests: XCTestCase {
         defer { Task { await phone.tearDown(rig.state) } }
         phone.recorder.delay(.start, by: .seconds(5))
         let id = macStartsRecording(rig)
-        try await waitFor("the phone is asked") { !phone.recorder.requests.isEmpty }
+        try await waitUntil("the phone is asked") { !phone.recorder.requests.isEmpty }
         macStopsRecording(rig, id)
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(phone.recorder.requests.map(\.action), [.start, .stop], "it never answered, so it may be recording: it's stopped")
@@ -460,7 +466,7 @@ final class PhoneLinkTests: XCTestCase {
         // Yet it reports recording this conversation.
         try await phone.client.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: id, startedAt: Date())))
         let control = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString)?.direct as? PhoneLinkConnection)
-        try await waitFor("its state") { control.recordingConversationID == id }
+        try await waitUntil("its state") { control.recordingConversationID == id }
         phone.recorder.answer = { request in .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: Date())) }
         macStopsRecording(rig, id)
         await rig.state.sources.recorders.settle()
@@ -475,7 +481,7 @@ final class PhoneLinkTests: XCTestCase {
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .recording)
         await phone.client.disconnect(from: phone.macID)
-        try await waitFor("the phone is gone") { rig.state.phoneLink.peers[phone.phoneID] == nil }
+        try await waitUntil("the phone is gone") { rig.state.phoneLink.peers[phone.phoneID] == nil }
         macStopsRecording(rig, id)
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopFailed)
@@ -483,10 +489,64 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(phone.recorder.requests.map(\.action), [.start])
 
         try await phone.client.connect(to: phone.macID, via: phone.endpoint)
-        try await waitFor("the stop on reconnecting") { phone.recorder.requests.map(\.action) == [.start, .stop] }
+        try await waitUntil("the stop on reconnecting") { phone.recorder.requests.map(\.action) == [.start, .stop] }
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
         XCTAssertTrue(rig.state.sources.recorders.pendingStops.isEmpty)
+    }
+
+    /// A stop owed to a phone that's away is kept across a relaunch of this Mac, and goes when the phone
+    /// reconnects to the relaunched Mac.
+    func testAStopOwedToAPhoneIsSentAfterThisMacRelaunches() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        await phone.client.disconnect(from: phone.macID)
+        try await waitUntil("the phone is gone") { rig.state.phoneLink.peers[phone.phoneID] == nil }
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.state.sources.recorders.pendingStops[phone.phoneID.uuidString]?.map(\.meetingID), [id])
+        XCTAssertNotNil(rig.defaults.data(forKey: MultiSourceCoordinator.owedStopsKey), "kept in this Mac's preferences")
+
+        // Daybook quits and opens again.
+        await rig.state.phoneLink.shutDown()
+        await rig.state.flush()
+        let relaunched = AppState(libraryURL: rig.root, defaults: rig.defaults)
+        // Its link starts as it opens (a phone is paired): on loopback, with the same pairing.
+        PhoneLinkRig.useLoopback(relaunched, keyStore: phone.macKeyStore)
+        await relaunched.initialize()
+        defer { Task { await phone.client.disconnect(from: phone.macID); await relaunched.phoneLink.shutDown() } }
+        XCTAssertEqual(relaunched.sources.recorders.pendingStops[phone.phoneID.uuidString]?.map(\.meetingID), [id])
+        XCTAssertEqual(relaunched.meetings.first { $0.id == id }?.companions?.first?.state, .stopFailed)
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start])
+
+        try await phone.reconnect(to: relaunched)
+        try await waitUntil("the stop on reconnecting") { phone.recorder.requests.map(\.action) == [.start, .stop] }
+        await relaunched.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.last?.conversationID, id)
+        XCTAssertEqual(relaunched.meetings.first { $0.id == id }?.companions?.first?.state, .stopped)
+        XCTAssertTrue(relaunched.sources.recorders.pendingStops.isEmpty)
+        XCTAssertNil(rig.defaults.data(forKey: MultiSourceCoordinator.owedStopsKey), "nothing left to keep")
+    }
+
+    /// A stop of a recorder a phone manages that doesn't name the recording (its start never said) would
+    /// pause whatever the recorder records by then: it's owed until Daybook quits, never kept past it.
+    func testOnlyStopsThatNameTheirRecordingAreKeptAcrossRelaunches() throws {
+        let defaults = makeTestDefaults("daybook.owedStops")
+        let store = OwedStopsStore<CompanionRecorders.PendingStop>(defaults: defaults, key: MultiSourceCoordinator.owedStopsKey)
+        let recorders = CompanionRecorders(owed: store)
+        let meeting = UUID(), now = Date()
+        func stop(_ recorder: LinkRecorderTarget?) -> CompanionRecorders.PendingStop {
+            .init(sessionID: "phone", meetingID: meeting, linkID: UUID(), end: now, recorder: recorder, owedAt: now)
+        }
+        let phone = stop(nil)
+        let named = stop(LinkRecorderTarget(kind: SoundcoreWorkIntegration.id, serial: "S1", recordingID: "1729003600"))
+        let unnamed = stop(LinkRecorderTarget(kind: SoundcoreWorkIntegration.id, serial: "S1"))
+        for owed in [phone, named, unnamed] { recorders.owe(owed) }
+        XCTAssertEqual(Set(recorders.pendingStops["phone"]?.map(\.linkID) ?? []), [phone.linkID, named.linkID, unnamed.linkID], "all owed now")
+        XCTAssertEqual(Set(store.load().map(\.linkID)), [phone.linkID, named.linkID], "only those kept")
+        XCTAssertEqual(Set(CompanionRecorders(owed: store).pendingStops["phone"]?.map(\.linkID) ?? []), [phone.linkID, named.linkID])
     }
 
     func testAPhoneThatRefusesOrDropsMidStopIsReportedQuietly() async throws {
@@ -515,13 +575,13 @@ final class PhoneLinkTests: XCTestCase {
         await rig.state.sources.recorders.settle()
         phone.recorder.delay(.stop, by: .seconds(1))
         macStopsRecording(rig, other)
-        try await waitFor("the stop reaches the phone") { phone.recorder.requests.filter { $0.action == .stop && $0.conversationID == other }.count == 1 }
+        try await waitUntil("the stop reaches the phone") { phone.recorder.requests.filter { $0.action == .stop && $0.conversationID == other }.count == 1 }
         await phone.client.disconnect(from: phone.macID)
         await rig.state.sources.recorders.settle()
         XCTAssertEqual(rig.meeting(other)?.companions?.first?.state, .stopFailed)
         phone.recorder.delay(.stop, by: nil)
         try await phone.client.connect(to: phone.macID, via: phone.endpoint)
-        try await waitFor("stopped once it's back") { rig.meeting(other)?.companions?.first?.state == .stopped }
+        try await waitUntil("stopped once it's back") { rig.meeting(other)?.companions?.first?.state == .stopped }
         XCTAssertNil(rig.state.errorMessage)
     }
 
@@ -546,18 +606,18 @@ final class PhoneLinkTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(state.recordingID, first, "still recording what the phone records")
         try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle)))
-        try await waitFor("this Mac stops too") { state.recordingID == nil }
+        try await waitUntil("this Mac stops too") { state.recordingID == nil }
         XCTAssertEqual(state.notice, "\(PhoneLinkRig.phoneName) stopped recording, so this Mac stopped too.")
 
         // Gone for half an hour: this Mac stops on its own.
         _ = try await phoneLeads()
         await phone.client.disconnect(from: phone.macID)
-        try await waitFor("the phone is gone") { state.phoneLink.peers[phone.phoneID] == nil }
+        try await waitUntil("the phone is gone") { state.phoneLink.peers[phone.phoneID] == nil }
         state.checkPhoneLead(now: Date().addingTimeInterval(10 * 60))
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertNotNil(state.recordingID)
         state.checkPhoneLead(now: Date().addingTimeInterval(31 * 60))
-        try await waitFor("stopped on its own") { state.recordingID == nil }
+        try await waitUntil("stopped on its own") { state.recordingID == nil }
         XCTAssertEqual(state.notice, "\(PhoneLinkRig.phoneName) couldn’t be reached for 30 minutes, so this Mac stopped recording.")
     }
 
@@ -619,7 +679,7 @@ final class PhoneLinkTests: XCTestCase {
 
         rig.state.enqueue(id)
         try await rig.processed(id)
-        try await waitFor("the last message") { phone.events.progress.contains { $0.meetingID == id && $0.phase == .finished } }
+        try await waitUntil("the last message") { phone.events.progress.contains { $0.meetingID == id && $0.phase == .finished } }
         // It waited for models while its recording was stored; from the queue on, the phone hears each step.
         let all = phone.events.progress.filter { $0.meetingID == id }
         let messages = Array(all.drop { $0.phase != .queued })
@@ -643,7 +703,7 @@ final class PhoneLinkTests: XCTestCase {
         let skew: TimeInterval = 2.5
         let link = try await PhoneLinkRig.connect(state, clockOffset: skew)
         defer { Task { await link.tearDown(state) } }
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
         defer { library.tearDown() }
         let expected = ExpectedOffsets()
         state.sources.alignAudio = { _, _, prior, _ in expected.append(prior); return nil }
@@ -676,7 +736,7 @@ final class PhoneLinkTests: XCTestCase {
         // Its nudge makes this Mac look now.
         try await link.client.send(.processingNudge(LinkProcessingNudge(requestID: requestID, meetingID: own, mode: .transcribe)))
 
-        try await waitFor("the phone's recording to join the Mac's conversation", timeout: 20) {
+        try await waitUntil("the phone's recording to join the Mac's conversation", timeout: 20) {
             rig.meeting(id)?.tracks.count == 2 && rig.meeting(own) == nil && state.processingID == nil && state.queuedIDs.isEmpty
                 && rig.meeting(id)?.summary != nil
         }
@@ -712,7 +772,7 @@ final class PhoneLinkTests: XCTestCase {
         let skew: TimeInterval = -0.8
         let link = try await PhoneLinkRig.connect(state, clockOffset: skew)
         defer { Task { await link.tearDown(state) } }
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
         defer { library.tearDown() }
         let expected = ExpectedOffsets()
         state.sources.alignAudio = { _, _, prior, _ in expected.append(prior); return nil }
@@ -743,7 +803,7 @@ final class PhoneLinkTests: XCTestCase {
         await library.synchronize()
         await state.synchronizeLibrary()
 
-        try await waitFor("the conversation to be processed with both recordings", timeout: 20) {
+        try await waitUntil("the conversation to be processed with both recordings", timeout: 20) {
             rig.meeting(id)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty
         }
         let meeting = try XCTUnwrap(rig.meeting(id))
@@ -764,7 +824,7 @@ final class PhoneLinkTests: XCTestCase {
         try rig.connectSync(cloud)
         let link = try await PhoneLinkRig.connect(state)
         defer { Task { await link.tearDown(state) } }
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
         defer { library.tearDown() }
         let recordingID = UUID()
         link.recorder.answer = { request in
@@ -777,7 +837,7 @@ final class PhoneLinkTests: XCTestCase {
         // The phone marks a moment: the Mac shows it at once, and the phone keeps it with its recording.
         let mark = Highlight(time: 1.5)
         try await link.client.send(.bookmark(LinkBookmark(id: mark.id, conversationID: id, recordingTime: mark.time)))
-        try await waitFor("the Mac's copy") { rig.meeting(id)?.highlights.contains { $0.id == mark.id } == true }
+        try await waitUntil("the Mac's copy") { rig.meeting(id)?.highlights.contains { $0.id == mark.id } == true }
         // The same bookmark again (a resend) doesn't add a second.
         try await link.client.send(.bookmark(LinkBookmark(id: mark.id, conversationID: id, recordingTime: mark.time)))
         try await Task.sleep(for: .milliseconds(200))
@@ -806,7 +866,7 @@ final class PhoneLinkTests: XCTestCase {
         let skew: TimeInterval = 2.5
         let link = try await PhoneLinkRig.connect(state, clockOffset: skew)
         defer { Task { await link.tearDown(state) } }
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
         defer { library.tearDown() }
         let expected = ExpectedOffsets()
         state.sources.alignAudio = { _, _, prior, _ in expected.append(prior); return nil }
@@ -836,7 +896,7 @@ final class PhoneLinkTests: XCTestCase {
         try await library.file(phoneAudio, recordingID: recordingID, into: id, start: phoneStart, duration: 0.5, peerClocks: [measured])
         await library.synchronize()
         await state.synchronizeLibrary()
-        try await waitFor("processed", timeout: 20) { rig.meeting(id)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty }
+        try await waitUntil("processed", timeout: 20) { rig.meeting(id)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty }
         let track = try XCTUnwrap(rig.meeting(id)?.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id })
         // Its exact first sample, on this Mac's clock by the phone's measurement: 1 s after this Mac's start.
         let prior = phoneStart.addingTimeInterval(-skew).timeIntervalSince(macStart)
@@ -852,7 +912,7 @@ final class PhoneLinkTests: XCTestCase {
         let cloud = try temporaryFolder("Cloud")
         try rig.connectSync(cloud)
         let phoneID = UUID()
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: phoneID)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: phoneID)
         defer { library.tearDown() }
         // The sound would put the phone's recording in this Mac's conversation, which overlaps it.
         state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: 0.1, rate: 1, confidence: 0.9) }
@@ -873,7 +933,7 @@ final class PhoneLinkTests: XCTestCase {
         try await library.file(phoneAudio, recordingID: UUID(), into: conversation, start: start.addingTimeInterval(0.1), duration: 0.5)
         await library.synchronize()
         await state.synchronizeLibrary()
-        try await waitFor("processed", timeout: 20) {
+        try await waitUntil("processed", timeout: 20) {
             rig.meeting(conversation)?.transcripts.isEmpty == false && state.processingID == nil && state.queuedIDs.isEmpty
         }
         XCTAssertEqual(rig.meeting(conversation)?.tracks.count, 1, "it waits for that Mac's recording")
@@ -885,7 +945,7 @@ final class PhoneLinkTests: XCTestCase {
         let state = rig.state
         let cloud = try temporaryFolder("Cloud")
         try rig.connectSync(cloud)
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
         defer { library.tearDown() }
         let phoneAudio = try rig.audio("iphone-alone.wav", frequency: 495)
         try rig.inference.script(phoneAudio, [(0, "Nobody else recorded this.")])
@@ -895,7 +955,7 @@ final class PhoneLinkTests: XCTestCase {
                                notes: [note])
         await library.synchronize()
         await state.synchronizeLibrary()
-        try await waitFor("processed", timeout: 20) { rig.meeting(conversation)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty }
+        try await waitUntil("processed", timeout: 20) { rig.meeting(conversation)?.summary != nil && state.processingID == nil && state.queuedIDs.isEmpty }
         let meeting = try XCTUnwrap(rig.meeting(conversation))
         XCTAssertEqual(meeting.tracks.first?.offset, 0, "its own recording sets the timeline")
         XCTAssertNil(meeting.tracks.first?.alignment)
@@ -907,7 +967,7 @@ final class PhoneLinkTests: XCTestCase {
         let state = rig.state
         let cloud = try temporaryFolder("Cloud")
         try rig.connectSync(cloud)
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
         defer { library.tearDown() }
         // Soundcore Work records along with this Mac.
         let recorder = FakeRecorder()
@@ -936,7 +996,7 @@ final class PhoneLinkTests: XCTestCase {
         let own = try await library.fileFromRecorder(recorderAudio, identity: identity, start: try XCTUnwrap(link.recorderStartedAt))
         await library.synchronize()
         await state.synchronizeLibrary()
-        try await waitFor("the recorder's recording to join by its link", timeout: 20) {
+        try await waitUntil("the recorder's recording to join by its link", timeout: 20) {
             rig.meeting(id)?.tracks.count == 2 && rig.meeting(own) == nil && state.processingID == nil && state.queuedIDs.isEmpty
         }
         let meeting = try XCTUnwrap(rig.meeting(id))
@@ -951,7 +1011,7 @@ final class PhoneLinkTests: XCTestCase {
         let state = rig.state
         let cloud = try temporaryFolder("Cloud")
         try rig.connectSync(cloud)
-        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
         defer { library.tearDown() }
         // The sound matches the Mac's recording, 0.1 s in.
         state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: 0.1, rate: 1, confidence: 0.9) }
@@ -966,7 +1026,7 @@ final class PhoneLinkTests: XCTestCase {
         let own = try await library.file(phoneAudio, recordingID: UUID(), start: start.addingTimeInterval(0.1), duration: 0.5)
         await library.synchronize()
         await state.synchronizeLibrary()
-        try await waitFor("the phone's recording to join by sound", timeout: 20) {
+        try await waitUntil("the phone's recording to join by sound", timeout: 20) {
             rig.meeting(id)?.tracks.count == 2 && rig.meeting(own) == nil && state.processingID == nil && state.queuedIDs.isEmpty
         }
         let track = try XCTUnwrap(rig.meeting(id)?.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id })

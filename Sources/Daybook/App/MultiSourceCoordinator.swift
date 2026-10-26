@@ -59,13 +59,15 @@ final class MultiSourceCoordinator: ObservableObject {
     var recovered: [(meetingID: UUID, startedAt: Date, endedAt: Date)] = []
 
     static let matchesImportedFilesKey = "matchesImportedFilesToConversations"
+    /// Stops owed to devices that answer, kept across relaunches (never synced).
+    static let owedStopsKey = "multipoint.owedStops"
     private let defaults: UserDefaults
     private var subscription: AnyCancellable?
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
         matchesImportedFiles = defaults.bool(forKey: Self.matchesImportedFilesKey)
-        recorders = CompanionRecorders()
+        recorders = CompanionRecorders(owed: OwedStopsStore(defaults: defaults, key: Self.owedStopsKey))
         subscription = recorders.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 }
@@ -167,16 +169,41 @@ final class CompanionRecorders: ObservableObject {
     var write: (UUID, (inout [CompanionRecording]) -> Void) -> Void = { _, _ in }
     var timing = Timing()
 
+    /// A stop that didn't reach a device that answers: sent again when it reconnects, even after a
+    /// relaunch. With `recorder`, a stop of a recorder that device manages.
+    struct PendingStop: OwedStop {
+        /// The device that answers (its session).
+        var sessionID: String
+        var meetingID: UUID
+        var linkID: UUID
+        var end: Date
+        var recorder: LinkRecorderTarget?
+        var owedAt: Date
+    }
+
     private var starting: [UUID: Task<Void, Never>] = [:]
     private var stopping: [UUID: Task<Void, Never>] = [:]
     private var stopRequested: Set<UUID> = []
     /// Links to devices that answer whose start never got an answer: they may be recording.
     private var unanswered: Set<UUID> = []
-    /// Stops that didn't reach a device that answers, by device: sent again when it reconnects. With
-    /// `recorder`, a stop of a recorder that device manages.
-    private(set) var pendingStops: [String: [(meetingID: UUID, linkID: UUID, end: Date, recorder: LinkRecorderTarget?)]] = [:]
+    /// Stops that didn't reach a device that answers, by device: sent again when it reconnects. Kept in
+    /// `owed` too, so a relaunch still sends them, except a stop of a recorder that doesn't name the
+    /// recording (it would pause whatever the recorder records by then): that one lasts until Daybook quits.
+    private(set) var pendingStops: [String: [PendingStop]] = [:] {
+        didSet {
+            guard pendingStops != oldValue else { return }
+            owed?.save(pendingStops.values.flatMap { $0 }.filter { $0.recorder.map { $0.recordingID != nil } ?? true })
+        }
+    }
+    private let owed: OwedStopsStore<PendingStop>?
     /// When each Mac recording in progress started, so only its own links are stopped.
     private var recordingSince: [UUID: Date] = [:]
+
+    /// `owed` keeps stops for devices that answer across relaunches; those still owed are loaded now.
+    init(owed: OwedStopsStore<PendingStop>? = nil) {
+        self.owed = owed
+        pendingStops = Dictionary(grouping: owed?.load() ?? [], by: \.sessionID)
+    }
 
     /// Recorders that record alongside this Mac: record control, set up, its direct method on, and
     /// "Also record on <device>" on.
@@ -297,7 +324,7 @@ final class CompanionRecorders: ObservableObject {
 
     /// A device that answers connected again: stops that didn't reach it go now.
     func reconnected(_ sessionID: String) {
-        guard let owed = pendingStops.removeValue(forKey: sessionID), !owed.isEmpty,
+        guard let owed = pendingStops[sessionID], !owed.isEmpty,
               let session = sessions().first(where: { $0.id == sessionID }),
               let control = session.direct as? any AnsweringRecordControl else { return }
         let previous = stopping[owed[0].meetingID]
@@ -305,6 +332,10 @@ final class CompanionRecorders: ObservableObject {
             await previous?.value
             guard let self else { return }
             for stop in owed {
+                // Each stays owed (and kept) until it's sent: one a stop owes again goes back.
+                guard self.pendingStops[sessionID]?.contains(where: { $0.linkID == stop.linkID }) == true else { continue }
+                self.pendingStops[sessionID]?.removeAll { $0.linkID == stop.linkID }
+                if self.pendingStops[sessionID]?.isEmpty == true { self.pendingStops[sessionID] = nil }
                 guard let link = self.links(stop.meetingID).first(where: { $0.id == stop.linkID }), link.state != .attached else { continue }
                 if let recorder = stop.recorder {
                     await self.stop(link, through: (session, control), recorder: recorder, meetingID: stop.meetingID, at: stop.end)
@@ -539,8 +570,7 @@ final class CompanionRecorders: ObservableObject {
             status = "\(name) didn’t stop. Stop it on \(ownerName)."
         case .unavailable, .noAnswer:
             update(meetingID, link.id) { $0.state = .stopFailed }
-            pendingStops[owner.session.id, default: []].removeAll { $0.linkID == link.id }
-            pendingStops[owner.session.id, default: []].append((meetingID, link.id, end, recorder))
+            owe(PendingStop(sessionID: owner.session.id, meetingID: meetingID, linkID: link.id, end: end, recorder: recorder, owedAt: Date()))
             status = "Couldn’t reach \(ownerName) to stop \(name). It stops when it reconnects."
         }
     }
@@ -560,10 +590,19 @@ final class CompanionRecorders: ObservableObject {
         case .unavailable, .noAnswer:
             // Owed until it reconnects (it connects to this Mac, never the reverse).
             update(meetingID, link.id) { $0.state = .stopFailed }
-            pendingStops[session.id, default: []].removeAll { $0.linkID == link.id }
-            pendingStops[session.id, default: []].append((meetingID, link.id, end, nil))
+            owe(PendingStop(sessionID: session.id, meetingID: meetingID, linkID: link.id, end: end, recorder: nil, owedAt: Date()))
             status = "Couldn’t reach \(name) to stop it. It stops when it reconnects."
         }
+    }
+
+    /// Owes a stop until its device reconnects; one owed again for the same link keeps when it was first owed.
+    func owe(_ stop: PendingStop) {
+        var stop = stop
+        var owed = pendingStops[stop.sessionID] ?? []
+        if let earlier = owed.first(where: { $0.linkID == stop.linkID }) { stop.owedAt = min(stop.owedAt, earlier.owedAt) }
+        owed.removeAll { $0.linkID == stop.linkID }
+        owed.append(stop)
+        pendingStops[stop.sessionID] = owed
     }
 
     /// Connects when needed. Gives up when the connection does (out of range, Bluetooth off) or

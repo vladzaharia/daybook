@@ -1,6 +1,7 @@
 import DaybookCore
 @testable import DaybookKit
 import DaybookIntelligence
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -36,7 +37,7 @@ final class PhotoReadingTests: XCTestCase {
     }
 
     func testAnUnreadablePhotoWaitsWhileTheOthersAreRead() async throws {
-        let rig = try await MultiSourceRig.make()
+        let rig = try await MultiSourceRig.make(in: self)
         addTeardownBlock { await rig.tearDown() }
         let id = rig.state.newMeeting(title: "Photos")
         let bytes = try XCTUnwrap(PhotoDemo.jpeg(PhotoDemo.board(["LAUNCH PLAN"])))
@@ -49,7 +50,7 @@ final class PhotoReadingTests: XCTestCase {
         rig.state.sources.inference = reader
 
         rig.state.readPhotosWhenIdle(id)
-        try await rig.waitUntil("the first reading") { !reader.batches.isEmpty && rig.state.readingPhotoID == nil }
+        try await waitUntil("the first reading") { !reader.batches.isEmpty && rig.state.readingPhotoID == nil }
         XCTAssertNotNil(rig.meeting(id)?.photo(good.id)?.analysis)
         XCTAssertNil(rig.meeting(id)?.photo(bad.id)?.analysis)
         XCTAssertEqual(rig.state.photoBackoff.failure(bad.id)?.attempts, 1)
@@ -62,7 +63,7 @@ final class PhotoReadingTests: XCTestCase {
         // Once its wait is over, it's tried again on its own.
         rig.state.photoBackoff.failed(bad.id, reason: "Unreadable", at: Date(timeIntervalSinceNow: -100_000))
         rig.state.requeueUnreadPhotos()
-        try await rig.waitUntil("the retry") { reader.batches.count == 2 && rig.state.readingPhotoID == nil }
+        try await waitUntil("the retry") { reader.batches.count == 2 && rig.state.readingPhotoID == nil }
         XCTAssertEqual(reader.batches, [2, 1], "Only the failed photo is read again")
     }
 }

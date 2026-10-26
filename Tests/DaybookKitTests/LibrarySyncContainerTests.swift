@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -9,7 +10,6 @@ import XCTest
 @MainActor
 final class LibrarySyncContainerTests: XCTestCase {
     private var root: URL!
-    private var suite: String!
     private var defaults: UserDefaults!
     private var account: FakeAccount!
     private var controllers: [LibrarySyncController] = []
@@ -22,9 +22,7 @@ final class LibrarySyncContainerTests: XCTestCase {
     override func setUp() async throws {
         root = fm.temporaryDirectory.appendingPathComponent("DaybookContainer-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: containerURL, withIntermediateDirectories: true)
-        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
-        suite = root.appendingPathComponent("Preferences").path
-        defaults = UserDefaults(suiteName: suite)
+        defaults = makeTestDefaults("daybook.sync.container")
         defaults.set("Mac", forKey: "syncDeviceID")
         account = FakeAccount(identity: Data("account-a".utf8), container: containerURL)
     }
@@ -32,7 +30,6 @@ final class LibrarySyncContainerTests: XCTestCase {
     override func tearDown() async throws {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
-        defaults.removePersistentDomain(forName: suite)
         try? fm.removeItem(at: root)
     }
 
@@ -50,19 +47,10 @@ final class LibrarySyncContainerTests: XCTestCase {
     }
 
     /// Waits for `condition`, scaled by `DAYBOOK_TEST_TIMEOUT_SCALE`; throws on timeout with the controller's state.
-    private func wait(_ what: String, timeout: Duration = .seconds(10), until condition: () -> Bool) async throws {
-        let scale = Double(ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"] ?? "") ?? 1
-        let deadline = ContinuousClock.now + timeout * scale
-        while !condition() {
-            guard ContinuousClock.now < deadline else {
-                let state = controllers.last.map { "iCloud: \($0.iCloud), status: \($0.status)" } ?? "no controller"
-                throw TimedOut(description: "Timed out waiting for \(what) (\(state))")
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+    /// What the latest controller says, for a wait that times out.
+    private func syncState() -> String {
+        controllers.last.map { "iCloud: \($0.iCloud), status: \($0.status)" } ?? "no controller"
     }
-
-    private struct TimedOut: Error, CustomStringConvertible { var description: String }
 
     /// A library that synced through `folder` as device "Mac", remembered with a bookmark as before.
     @discardableResult
@@ -118,13 +106,13 @@ final class LibrarySyncContainerTests: XCTestCase {
         let sync = controller(environment())
         XCTAssertEqual(sync.iCloud, .checking)
         sync.restore()
-        try await wait("the container") { sync.iCloud == .connected }
+        try await waitUntil("the container", state: syncState) { sync.iCloud == .connected }
         XCTAssertEqual(sync.transport, .iCloudContainer)
         XCTAssertEqual(sync.folder?.standardizedFileURL, journal.standardizedFileURL)
         XCTAssertNil(sync.migrationRecord, "Nothing to migrate without a previous folder")
         XCTAssertNil(defaults.data(forKey: "syncFolderBookmark"))
         // A new library starts only once iCloud has listed the container.
-        try await wait("iCloud's listing") { sync.containerListed }
+        try await waitUntil("iCloud's listing", state: syncState) { sync.containerListed }
         let result = try await sync.synchronize(meetings: [], deletedMeetingIDs: [], metadata: JSONEncoder().encode(LibraryMetadata()))
         let receipt = try XCTUnwrap(result)
         try await sync.acknowledge(receipt)
@@ -135,9 +123,9 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertEqual(sync.iCloud, .turnedOff); XCTAssertNil(sync.folder)
         let relaunched = controller(environment())
         relaunched.restore()
-        try await wait("the off state") { relaunched.iCloud == .turnedOff }
+        try await waitUntil("the off state", state: syncState) { relaunched.iCloud == .turnedOff }
         relaunched.turnOnICloudSync()
-        try await wait("reconnection") { relaunched.iCloud == .connected }
+        try await waitUntil("reconnection", state: syncState) { relaunched.iCloud == .connected }
     }
 
     func testWaitForContainerReturnsOnceTheBackgroundLookupHasConnected() async throws {
@@ -155,7 +143,7 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertEqual(sync.iCloud, .connected)
         XCTAssertEqual(sync.folder?.standardizedFileURL, journal.standardizedFileURL)
         // Presence is written on attach, before any full pass, so other devices see this one at once.
-        try await wait("the presence record") {
+        try await waitUntil("the presence record", state: syncState) {
             ((try? fm.contentsOfDirectory(atPath: journal.appendingPathComponent("Devices").path)) ?? []).contains { $0.hasSuffix(".json") }
         }
     }
@@ -165,20 +153,20 @@ final class LibrarySyncContainerTests: XCTestCase {
         account.signedIn = false
         let signedOut = controller(environment())
         signedOut.restore()
-        try await wait("signed out") { signedOut.iCloud == .signedOut }
+        try await waitUntil("signed out", state: syncState) { signedOut.iCloud == .signedOut }
         XCTAssertEqual(signedOut.status, "Signed out of iCloud"); XCTAssertNil(signedOut.folder)
 
         account.signedIn = true
         let driveOff = controller(environment())
         driveOff.restore()
-        try await wait("iCloud Drive off") { driveOff.iCloud == .iCloudDriveOff }
+        try await waitUntil("iCloud Drive off", state: syncState) { driveOff.iCloud == .iCloudDriveOff }
         XCTAssertEqual(driveOff.status, "iCloud is off in System Settings")
 
         account.identity = Data("account-a".utf8)
         account.container = nil
         let unavailable = controller(environment())
         unavailable.restore()
-        try await wait("unavailable") { if case .containerUnavailable = unavailable.iCloud { return true } else { return false } }
+        try await waitUntil("unavailable", state: syncState) { if case .containerUnavailable = unavailable.iCloud { return true } else { return false } }
         XCTAssertNil(unavailable.folder)
     }
 
@@ -187,7 +175,7 @@ final class LibrarySyncContainerTests: XCTestCase {
         let before = try files(folder)
         let sync = controller(environment())
         sync.restore()
-        try await wait("the move to iCloud") { sync.iCloud == .connected }
+        try await waitUntil("the move to iCloud", state: syncState) { sync.iCloud == .connected }
         XCTAssertEqual(sync.folder?.standardizedFileURL, journal.standardizedFileURL)
         let record = try XCTUnwrap(sync.migrationRecord)
         XCTAssertNotNil(record.switchedAt); XCTAssertNotNil(record.completedAt)
@@ -210,7 +198,7 @@ final class LibrarySyncContainerTests: XCTestCase {
         sync.disconnect(); defaults.removeObject(forKey: "syncICloudTurnedOff")
         let relaunched = controller(environment())
         relaunched.restore()
-        try await wait("reconnection") { relaunched.iCloud == .connected }
+        try await waitUntil("reconnection", state: syncState) { relaunched.iCloud == .connected }
         XCTAssertEqual(relaunched.migrationRecord, record)
     }
 
@@ -221,15 +209,15 @@ final class LibrarySyncContainerTests: XCTestCase {
         try cloud.evict(event)
         let sync = controller(environment(cloud: cloud.files))
         sync.restore()
-        try await wait("a migration waiting for iCloud") {
+        try await waitUntil("a migration waiting for iCloud", state: syncState) {
             if case .migrating(let progress) = sync.iCloud { return progress.waitingJournal == 1 } else { return false }
         }
         XCTAssertTrue(sync.status.hasPrefix("Migrating "), sync.status)
         XCTAssertTrue(sync.status.contains("Waiting for iCloud to download 1."), sync.status)
         XCTAssertNil(sync.folder, "Sync waits for the journal before switching")
-        try await wait("a download request") { !cloud.requests.isEmpty }
+        try await waitUntil("a download request", state: syncState) { !cloud.requests.isEmpty }
         try cloud.deliver(event)
-        try await wait("the switch") { sync.iCloud == .connected }
+        try await waitUntil("the switch", state: syncState) { sync.iCloud == .connected }
         XCTAssertNotNil(sync.migrationRecord?.completedAt)
         XCTAssertTrue(fm.fileExists(atPath: journal.appendingPathComponent("Events/\(event.lastPathComponent)").path))
     }
@@ -237,24 +225,24 @@ final class LibrarySyncContainerTests: XCTestCase {
     func testAccountChangePausesUntilThePersonChoosesTheNewAccount() async throws {
         let sync = controller(environment())
         sync.restore()
-        try await wait("the container") { sync.iCloud == .connected }
+        try await waitUntil("the container", state: syncState) { sync.iCloud == .connected }
         account.identity = Data("account-b".utf8)
         NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
-        try await wait("the pause") { sync.iCloud == .accountChanged }
+        try await waitUntil("the pause", state: syncState) { sync.iCloud == .accountChanged }
         XCTAssertNil(sync.folder); XCTAssertEqual(sync.transport, .none)
         XCTAssertEqual(sync.status, "Sync paused: the iCloud account changed")
         // A relaunch stays paused too.
         let relaunched = controller(environment())
         relaunched.restore()
-        try await wait("the pause after relaunch") { relaunched.iCloud == .accountChanged }
+        try await waitUntil("the pause after relaunch", state: syncState) { relaunched.iCloud == .accountChanged }
         relaunched.disconnect(); defaults.removeObject(forKey: "syncICloudTurnedOff")
 
         sync.useCurrentICloudAccount()
-        try await wait("the new account") { sync.iCloud == .connected }
+        try await waitUntil("the new account", state: syncState) { sync.iCloud == .connected }
         // Signing out pauses as well.
         account.identity = nil; account.signedIn = false
         NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
-        try await wait("signed out") { sync.iCloud == .signedOut }
+        try await waitUntil("signed out", state: syncState) { sync.iCloud == .signedOut }
         XCTAssertNil(sync.folder)
     }
 
@@ -265,18 +253,18 @@ final class LibrarySyncContainerTests: XCTestCase {
         sync.replica.cloud = SyncCloudFiles(requestDownload: { _ in gate.waitForCancellation() }, isUploaded: { _ in true })
         sync.syncDebounce = nil
         sync.restore()
-        try await wait("the container") { sync.iCloud == .connected && sync.containerListed }
+        try await waitUntil("the container", state: syncState) { sync.iCloud == .connected && sync.containerListed }
         // A journal entry still in iCloud: the pass waits on its download, as it would copying a long recording.
         try fm.createDirectory(at: journal.appendingPathComponent("Events"), withIntermediateDirectories: true)
         try Data().write(to: journal.appendingPathComponent("Events/.\(String(repeating: "b", count: 64)).json.icloud"))
         let pass = Task { try? await sync.synchronize(meetings: [], deletedMeetingIDs: [], metadata: Data()) }
-        try await wait("the pass to reach iCloud") { gate.entered }
+        try await waitUntil("the pass to reach iCloud", state: syncState) { gate.entered }
         NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
         // The same account comes back while the cancelled pass is still unwinding.
         try await Task.sleep(for: .milliseconds(200))
         gate.release()
         _ = await pass.value
-        try await wait("sync to reconnect") { sync.iCloud == .connected && sync.folder != nil }
+        try await waitUntil("sync to reconnect", state: syncState) { sync.iCloud == .connected && sync.folder != nil }
         XCTAssertFalse(sync.isSyncing)
     }
 
@@ -291,7 +279,7 @@ final class LibrarySyncContainerTests: XCTestCase {
         sync.replica.cloud = SyncCloudFiles(requestDownload: { _ in gate.waitForCancellation() }, isUploaded: { _ in true })
         try sync.connect(to: folder, monitorChanges: false)
         let pass = Task { try await sync.synchronize(meetings: [meeting], deletedMeetingIDs: [], metadata: Data()) }
-        try await wait("an active cloud read") { gate.entered }
+        try await waitUntil("an active cloud read", state: syncState) { gate.entered }
         pass.cancel()
         gate.release()
         do { _ = try await pass.value; XCTFail("The cancelled pass must not return a receipt") }

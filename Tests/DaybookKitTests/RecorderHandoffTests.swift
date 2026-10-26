@@ -333,6 +333,169 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(holding.map(\.id), [conversation])
     }
 
+    // MARK: A recording handed over mid-recording, its Mac out of reach
+
+    /// Handed to the phone while the Mac's recording had it record too, the recorder stops when the Mac's
+    /// recording ends although the phone isn't on the link any more: the Mac's presence stops naming the
+    /// conversation. Its recording is then imported.
+    func testARecordingHandedOverStopsWhenTheMacsRecordingEndsOutOfReach() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder, presence: true)
+        let phone = try await makeSide("Phone", .phone, recorder, presence: true)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+        // The Mac's conversation isn't synced while it records; only its presence says what it records.
+        let (conversation, id) = try await macRecordsAlong(mac, recorder)
+        let pair = try await link(mac, phone)
+
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone connects") { phone.session.isLinked && phone.session.direct?.isInventoryCurrent == true }
+        XCTAssertEqual(phone.handoff.followed.map(\.recordingID), [id], "Daybook started it for the Mac's recording, which hasn't ended")
+        XCTAssertEqual(phone.handoff.followed.first?.conversationID, conversation)
+        try await waitUntil("the phone sees the Mac recording it") { phone.handoff.followed.first?.seenRecordingAt != nil }
+        XCTAssertEqual(phone.handoff.followed.first?.recordingDevice, mac.id)
+        let kept = try XCTUnwrap(phone.defaults.data(forKey: "recorderHandoff.following"))
+        XCTAssertEqual(try JSONDecoder().decode([RecorderHandoff.FollowedRecording].self, from: kept).map(\.recordingID), [id],
+                       "kept across relaunches")
+
+        // The link goes; then the Mac stops recording.
+        await pair.tearDown()
+        try await waitUntil("the link is gone") { pair.phoneEnd.peers.isEmpty }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(recorder.isRecording, "nothing stops it while the Mac records")
+        macRecordingEnds(mac, conversation)
+
+        try await waitUntil("the phone stops the recorder", timeout: 15) { !recorder.isRecording }
+        try await waitUntil("its recording is imported", timeout: 15) { phone.imported.map(\.recordingID) == [id] }
+        try await waitUntil("it's no longer followed") { phone.handoff.followed.isEmpty }
+        XCTAssertNil(phone.defaults.data(forKey: "recorderHandoff.following"))
+    }
+
+    /// Without presence (a Mac whose presence never arrives), the conversation arriving through sync
+    /// with the Mac's recording of it ended stops the recorder, and its recording goes into it.
+    func testARecordingHandedOverStopsWhenTheConversationArrivesEnded() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+        let (conversation, id) = try await macRecordsAlong(mac, recorder)
+        let pair = try await link(mac, phone)
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone connects") { phone.session.isLinked && phone.session.direct?.isInventoryCurrent == true }
+        await pair.tearDown()
+        try await waitUntil("the link is gone") { pair.phoneEnd.peers.isEmpty }
+        await phone.handoff.checkFollowed()
+        XCTAssertEqual(phone.handoff.followed.map(\.recordingID), [id], "nothing says the Mac's recording ended")
+        XCTAssertTrue(recorder.isRecording)
+
+        // The Mac files its recording; the conversation syncs, its link to the recorder ended.
+        macRecordingEnds(mac, conversation)
+        try await syncAll(mac, phone)
+        try await waitUntil("the phone stops the recorder", timeout: 15) { !recorder.isRecording }
+        try await waitUntil("its recording joins the conversation", timeout: 15) {
+            phone.library.meeting(conversation)?.tracks.contains { $0.deviceRecordingID == id } == true
+        }
+        try await waitUntil("it's no longer followed") { phone.handoff.followed.isEmpty }
+    }
+
+    /// Only a recording Daybook started for the conversation is stopped: not one the recorder was making
+    /// already, and not one the person started on it since.
+    func testOnlyTheRecordingDaybookStartedIsStopped() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder, presence: true)
+        let phone = try await makeSide("Phone", .phone, recorder, presence: true)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+        // It was recording before the Mac's recording began.
+        let (alreadyRecording, _) = try await macRecordsAlong(mac, recorder, startedByDaybook: false)
+        var pair = try await link(mac, phone)
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone connects") { phone.session.isLinked && phone.session.direct?.isInventoryCurrent == true }
+        XCTAssertTrue(phone.handoff.followed.isEmpty, "Daybook didn't start it, so it doesn't stop it")
+        await pair.tearDown()
+        macRecordingEnds(mac, alreadyRecording)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(recorder.isRecording)
+
+        // Back to the Mac, which starts it for a new recording; then to the phone again.
+        phone.connection.pauseRecording()
+        try await waitUntil("stopped") { !recorder.isRecording }
+        try await syncAll(phone, mac)
+        pair = try await link(mac, phone)
+        mac.handoff.useHere(mac.session)
+        try await waitUntil("on the Mac") { mac.session.isLinked && mac.session.direct?.isInventoryCurrent == true }
+        let (conversation, id) = try await macRecordsAlong(mac, recorder)
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("on the phone") { phone.session.isLinked && phone.session.direct?.isInventoryCurrent == true }
+        XCTAssertEqual(phone.handoff.followed.map(\.recordingID), [id])
+        try await waitUntil("the phone sees the Mac recording it") { phone.handoff.followed.first?.seenRecordingAt != nil }
+        await pair.tearDown()
+        // The person stops it on the phone and starts another (a second later: the recorder names a
+        // recording by the second it started).
+        phone.connection.pauseRecording()
+        try await waitUntil("stopped") { !recorder.isRecording && !phone.connection.recordCommandPending }
+        try await Task.sleep(for: .milliseconds(1_100))
+        phone.connection.startRecording()
+        try await waitUntil("recording again") { recorder.isRecording && phone.session.split.inProgress.map { $0.id != id } == true }
+        macRecordingEnds(mac, conversation)
+        try await waitUntil("the phone lets it be", timeout: 15) { phone.handoff.followed.isEmpty }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(recorder.isRecording, "the person's recording keeps going")
+    }
+
+    /// A Mac whose presence goes quiet while it records (it crashed, say) is given up on after a while:
+    /// the recorder is left to the person.
+    func testFollowingEndsWhenTheMacsPresenceGoesStale() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder, presence: true)
+        let phone = try await makeSide("Phone", .phone, recorder, presence: true)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+        _ = try await macRecordsAlong(mac, recorder)
+        let pair = try await link(mac, phone)
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone sees the Mac recording it") { phone.handoff.followed.first?.seenRecordingAt != nil }
+        await pair.tearDown()
+        let staleness = phone.handoff.timing.followStaleness
+        await phone.handoff.checkFollowed(now: Date().addingTimeInterval(staleness / 2))
+        XCTAssertFalse(phone.handoff.followed.isEmpty, "not yet")
+        await phone.handoff.checkFollowed(now: Date().addingTimeInterval(staleness + 60))
+        XCTAssertTrue(phone.handoff.followed.isEmpty, "its presence is too old to believe")
+        XCTAssertTrue(recorder.isRecording, "left to the person")
+    }
+
+    /// What's followed is kept across a relaunch, and isn't given up while the recorder isn't known yet
+    /// (at launch, devices start after the library opens); handed on to another device, it's that one's.
+    func testFollowingSurvivesARelaunchAndEndsWhenTheRecorderIsHandedOn() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder, presence: true)
+        let phone = try await makeSide("Phone", .phone, recorder, presence: true)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+        let (_, id) = try await macRecordsAlong(mac, recorder)
+        let pair = try await link(mac, phone)
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone sees the Mac recording it") { phone.handoff.followed.first?.seenRecordingAt != nil }
+        await pair.tearDown()
+
+        // Relaunched: its devices haven't started, so the recorder's serial isn't known yet.
+        let staging = root.appendingPathComponent("relaunch-staging", isDirectory: true)
+        let devices = DeviceHub(environment: DeviceEnvironment(defaults: makeTestDefaults("daybook.handoff.relaunch"), stagingDirectory: staging))
+        let relaunched = RecorderHandoff(library: phone.library, devices: devices, deviceClass: .phone, defaults: phone.defaults,
+                                         timing: Self.handoffTiming, deviceName: "Alex’s iPhone")
+        XCTAssertEqual(relaunched.followed.map(\.recordingID), [id])
+        XCTAssertEqual(relaunched.followed.first?.seenRecordingAt, phone.handoff.followed.first?.seenRecordingAt)
+        await relaunched.checkFollowed()
+        XCTAssertEqual(relaunched.followed.map(\.recordingID), [id], "kept until the recorder is known")
+
+        // Another device takes it over: it's that device's to stop now.
+        phone.library.claimRecorder(kind: kind, serial: recorder.serial, deviceClass: .mac,
+                                    by: ProcessingRequest.Device(id: "office-imac", name: "Office iMac"))
+        await relaunched.checkFollowed()
+        XCTAssertTrue(relaunched.followed.isEmpty)
+    }
+
     func testOfferingItAndHandingItBackWhenTheMacArrives() async throws {
         let recorder = makeRecorder(count: 1)
         let mac = try await makeSide("Mac", .mac, recorder)
@@ -393,24 +556,30 @@ final class RecorderHandoffTests: XCTestCase {
         let connection: SoundcoreConnection
         let transport: SimulatedSoundcoreTransport
         let handoff: RecorderHandoff
+        let defaults: UserDefaults
         var imported: [DeviceRecordingIdentity] = []
         var subscriptions: Set<AnyCancellable> = []
         var id: String { library.thisDevice.id }
 
         init(name: String, library: LibraryController, hub: DeviceHub, session: DeviceSession, connection: SoundcoreConnection,
-             transport: SimulatedSoundcoreTransport, handoff: RecorderHandoff) {
+             transport: SimulatedSoundcoreTransport, handoff: RecorderHandoff, defaults: UserDefaults) {
             self.name = name; self.library = library; self.hub = hub; self.session = session
-            self.connection = connection; self.transport = transport; self.handoff = handoff
+            self.connection = connection; self.transport = transport; self.handoff = handoff; self.defaults = defaults
         }
     }
 
+    /// `presence`: its sync replica writes a presence record (what it's recording), as the apps' do.
     private func makeSide(_ name: String, _ deviceClass: SyncDeviceClass, _ recorder: SimulatedSoundcore,
-                          automatic: Bool = false, setUp: Bool = true, knownOwner: Side? = nil) async throws -> Side {
+                          automatic: Bool = false, setUp: Bool = true, knownOwner: Side? = nil, presence: Bool = false) async throws -> Side {
         let defaults = makeTestDefaults("daybook.handoff.\(name)")
         let local = root.appendingPathComponent(name, isDirectory: true)
         let staging = root.appendingPathComponent("\(name)-staging", isDirectory: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         let sync = LibrarySyncController(localRoot: local, defaults: defaults)
+        if presence {
+            sync.replica.device = SyncDeviceIdentity(deviceClass: deviceClass, displayName: deviceClass == .mac ? "Studio Mac" : "Alex’s iPhone",
+                                                     canProcess: deviceClass == .mac)
+        }
         try sync.connect(to: cloud, monitorChanges: false)
         let library = LibraryController(rootURL: local, sync: sync)
         try await library.load()
@@ -441,7 +610,7 @@ final class RecorderHandoffTests: XCTestCase {
                                                                                   connections: [], defaults: defaults)
         let side = Side(name: name, library: library, hub: hub, session: session,
                         connection: (session.direct as? SoundcoreConnection) ?? SoundcoreConnection(device: configured, environment: environment),
-                        transport: transport, handoff: handoff)
+                        transport: transport, handoff: handoff, defaults: defaults)
         hub.importer = { [weak side, weak library] url, identity, attachTo, source in
             guard let side, let library else { throw DaybookError.libraryUnavailable }
             await library.acquireLock()
@@ -486,6 +655,13 @@ final class RecorderHandoffTests: XCTestCase {
         timing.handBackCooldown = 0
         timing.poll = .milliseconds(20)
         timing.progressInterval = 0.3
+        timing.followCheck = .milliseconds(50)
+        timing.followRetry = 0.3
+        timing.remote.connect = .seconds(3)
+        timing.remote.confirm = .seconds(3)
+        timing.remote.inventory = .seconds(1)
+        timing.remote.listing = .seconds(5)
+        timing.remote.poll = .milliseconds(20)
         return timing
     }
 
@@ -494,6 +670,36 @@ final class RecorderHandoffTests: XCTestCase {
         mac.handoff.useHere(mac.session)
         try await waitUntil("the Mac connects") { mac.session.isLinked }
         try await waitUntil("the Mac lists the recordings") { mac.session.direct?.isRefreshing == false && mac.session.direct?.inventoryUpdatedAt != nil }
+    }
+
+    /// The Mac records a conversation and the recorder records along (multipoint): the conversation, its
+    /// link to the recorder's recording as `CompanionRecorders` stores it, and the Mac's presence saying
+    /// what it records. With `startedByDaybook` false, the recorder was recording already.
+    private func macRecordsAlong(_ mac: Side, _ recorder: SimulatedSoundcore, startedByDaybook: Bool = true) async throws -> (UUID, String) {
+        mac.connection.startRecording()
+        try await waitUntil("the recorder records") { mac.session.split.inProgress != nil && !mac.connection.recordCommandPending }
+        let id = try XCTUnwrap(mac.session.split.inProgress?.id)
+        let start = Date()
+        let conversation = mac.library.newMeeting(title: "Design review")
+        var companion = CompanionRecording(deviceID: mac.session.id, deviceKind: kind, deviceSerial: recorder.serial, deviceName: "Soundcore Work",
+                                           macStartedAt: start, state: startedByDaybook ? .recording : .alreadyRecording,
+                                           startedByDaybook: startedByDaybook)
+        companion.recordingID = id
+        mac.library.update(conversation) { $0.companions = [companion] }
+        mac.library.sync?.publishActivity(recording: conversation, since: start)
+        return (conversation, id)
+    }
+
+    /// The Mac's recording ends without reaching the recorder: its link is closed, and its presence no
+    /// longer names the conversation.
+    private func macRecordingEnds(_ mac: Side, _ conversation: UUID) {
+        mac.library.update(conversation) { meeting in
+            for index in (meeting.companions ?? []).indices {
+                meeting.companions?[index].macEndedAt = Date()
+                meeting.companions?[index].state = .stopFailed
+            }
+        }
+        mac.library.sync?.publishActivity(recording: nil)
     }
 
     /// Sync passes in order, each one saving first, and each acknowledged.

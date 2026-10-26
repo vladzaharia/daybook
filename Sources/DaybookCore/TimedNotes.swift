@@ -1,7 +1,9 @@
 import Foundation
 
 /// A note's first recording-relative timestamp survives later wording changes.
-/// Nil means the text originated outside an active recording.
+/// Nil means the text originated outside an active recording. A time before the timeline's zero is
+/// negative, like a passage another recording heard before it began: a note the iPhone took before
+/// the Mac whose recording sets the timeline started (docs/multipoint.md).
 public struct TimedNote: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var time: TimeInterval?
@@ -9,7 +11,7 @@ public struct TimedNote: Codable, Equatable, Identifiable, Sendable {
 
     public init(id: UUID = UUID(), time: TimeInterval? = nil, text: String) {
         self.id = id
-        self.time = time.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        self.time = time.flatMap { $0.isFinite ? $0 : nil }
         self.text = text
     }
 }

@@ -1,5 +1,6 @@
 import DaybookCore
 @testable import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -16,7 +17,7 @@ final class MultiSourceProcessingTests: XCTestCase {
                            "Priya owns the pricing page copy this sprint"]
 
     private func rig(models: Bool = true) async throws -> MultiSourceRig {
-        let rig = try await MultiSourceRig.make(models: models)
+        let rig = try await MultiSourceRig.make(in: self, models: models)
         addTeardownBlock { await rig.tearDown() }
         return rig
     }
@@ -112,7 +113,7 @@ final class MultiSourceProcessingTests: XCTestCase {
         XCTAssertEqual(joined.alignment?.method, .pending)
         XCTAssertEqual(joined.alignment?.clockOffset ?? 0, 1, accuracy: 0.001)
         XCTAssertTrue(rig.meeting(first)?.revisions.contains { $0.newValue == "Added Soundcore Work recording" } == true)
-        try await rig.waitUntil("the separate conversation to move to the Trash") { rig.meeting(separate) == nil }
+        try await waitUntil("the separate conversation to move to the Trash") { rig.meeting(separate) == nil }
         XCTAssertTrue(FileManager.default.fileExists(atPath: rig.root.appendingPathComponent("Trash/\(separate.uuidString)").path),
                       "Its original stays restorable in the Trash")
         XCTAssertNil(rig.meeting(second)?.tracks.first { $0.source == .soundcore })
@@ -164,9 +165,9 @@ final class MultiSourceProcessingTests: XCTestCase {
                                                             attachTo: nil, source: .soundcore)
         XCTAssertNotEqual(separate, call)
         XCTAssertEqual(rig.meeting(separate)?.sourceSuggestions?.first?.reason, .checkingTranscript)
-        try await rig.waitUntil("the recording to move into the call") { rig.meeting(call)?.tracks.count == 2 }
+        try await waitUntil("the recording to move into the call") { rig.meeting(call)?.tracks.count == 2 }
         try await rig.processed()
-        try await rig.waitUntil("the separate conversation to move to the Trash") { rig.meeting(separate) == nil }
+        try await waitUntil("the separate conversation to move to the Trash") { rig.meeting(separate) == nil }
 
         let meeting = try XCTUnwrap(rig.meeting(call))
         let track = try XCTUnwrap(meeting.tracks.first { $0.source == .soundcore })
@@ -279,11 +280,11 @@ final class MultiSourceProcessingTests: XCTestCase {
         try rig.inference.script(file, lines(from: -4))
         try rig.inference.block(file)
         _ = try await rig.state.importFromDevice(file, identity: MultiSourceRig.soundcore(start.addingTimeInterval(4)), attachTo: nil, source: .soundcore)
-        try await rig.waitUntil("the new recording to be transcribing") { rig.inference.isWaiting(on: file) }
+        try await waitUntil("the new recording to be transcribing") { rig.inference.isWaiting(on: file) }
         XCTAssertEqual(rig.state.sourceActivity(call), "Adding Soundcore Work recording…")
 
         rig.state.pauseProcessing(call)
-        try await rig.waitUntil("the pause") { rig.state.processingID == nil }
+        try await waitUntil("the pause") { rig.state.processingID == nil }
         var meeting = try XCTUnwrap(rig.meeting(call))
         let track = try XCTUnwrap(meeting.tracks.first { $0.source == .soundcore })
         XCTAssertTrue(rig.state.pausedIDs.contains(call))
@@ -306,10 +307,10 @@ final class MultiSourceProcessingTests: XCTestCase {
         _ = try await rig.state.importFromDevice(second, identity: MultiSourceRig.soundcore(start.addingTimeInterval(60)), attachTo: nil, source: .soundcore)
         let other = try rig.audio("other.wav", frequency: 698)
         try await rig.state.importFiles([other], source: .imported, attachTo: nil)
-        try await rig.waitUntil("the second recording to be transcribing") { rig.inference.isWaiting(on: second) }
+        try await waitUntil("the second recording to be transcribing") { rig.inference.isWaiting(on: second) }
         XCTAssertEqual(rig.state.queuedIDs.count, 1)
         rig.state.cancelProcessing()
-        try await rig.waitUntil("the cancel") { rig.state.processingID == nil }
+        try await waitUntil("the cancel") { rig.state.processingID == nil }
         XCTAssertTrue(rig.state.queuedIDs.isEmpty)
         XCTAssertTrue(rig.state.pausedIDs.contains(call))
         XCTAssertEqual(rig.meeting(call)?.tracks.filter { $0.source == .soundcore }.count, 2, "Cancelling keeps the recording")
