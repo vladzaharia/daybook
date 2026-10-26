@@ -38,12 +38,17 @@ macos() { [[ "$(uname)" == Darwin ]]; }
 echo "version.sh"
 expect_eq "tag" "marketing_version=1.4.0
 build_number=1057
+build_base=1057
+build_candidates=1057
 tag=v1.4.0
 is_tag=true
 prerelease=false" "$("$ci/version.sh" --ref refs/tags/v1.4.0 --run-number 57)"
 expect_eq "prerelease tag" "1.4.0 true" \
     "$("$ci/version.sh" --ref refs/tags/v1.4.0-rc.1 --run-number 1 | awk -F= '/^marketing_version|^prerelease/ {printf "%s%s", sep, $2; sep=" "}')"
 expect_eq "re-run attempt" "build_number=1057.2" "$("$ci/version.sh" --ref refs/tags/v1.4.0 --run-number 57 --run-attempt 2 | grep build_number)"
+expect_eq "third attempt: base and every number so far" "build_number=1057.3 build_base=1057 build_candidates=1057 1057.2 1057.3" \
+    "$("$ci/version.sh" --ref refs/tags/v1.4.0 --run-number 57 --run-attempt 3 | grep '^build_' | paste -sd ' ' -)"
+expect_fail "absurd attempt" "$ci/version.sh" --ref refs/tags/v1.4.0 --run-number 57 --run-attempt 101
 expect_eq "custom offset" "build_number=5" "$("$ci/version.sh" --ref refs/tags/v0.1.0 --run-number 5 --offset 0 | grep build_number)"
 expect_eq "branch with version" "marketing_version=2.0.10 is_tag=false" \
     "$("$ci/version.sh" --ref refs/heads/main --version 2.0.10 --run-number 9 | grep -E '^(marketing_version|is_tag)=' | paste -sd ' ' -)"
@@ -143,6 +148,21 @@ expect_fail "unknown group fails" env ASC_API_BASE="http://127.0.0.1:$port" ASC_
     DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
     "$ci/asc-testflight.sh" --bundle-id local.daybook.phone --version 1.4.0 --build 1057 --group "Nobody"
 expect_fail "missing key fails" env -u DAYBOOK_ASC_KEY_PATH "$ci/asc-testflight.sh" --bundle-id x --version 1.0.0 --build 1
+find_build() {
+    ASC_API_BASE="http://127.0.0.1:$port" DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
+        "$ci/asc-testflight.sh" --bundle-id local.daybook.phone --version 1.4.0 "$@" 2>"$work/find.err"
+}
+: > "$log"
+expect_eq "an earlier attempt's upload is found; a failed one is skipped" "found=2001" \
+    "$(find_build --find-build "2001 2001.2 2001.3" --uploaded-after 2026-10-24T20:11:08Z)"
+expect_eq "one lookup for every candidate" "GET /v1/apps|GET /v1/builds 2001,2001.2,2001.3 1.4.0" \
+    "$(jq -r '"\(.method) \(.path)\(if .path == "/v1/builds" then " \(.query["filter[version]"][0]) \(.query["filter[preReleaseVersion.version]"][0])" else "" end)"' "$log" | paste -sd '|' -)"
+expect_eq "nothing uploaded yet" "found=" "$(find_build --find-build "2002")"
+expect_fail "a build uploaded before the run started is a collision" find_build --find-build "3001" --uploaded-after 2026-10-24T20:11:08Z
+expect_ok "the collision says to raise the offset" grep -q "Raise DAYBOOK_BUILD_NUMBER_OFFSET" "$work/find.err"
+expect_eq "without a start time it's simply found" "found=3001" "$(find_build --find-build "3001")"
+expect_fail "find mode rejects a malformed list" find_build --find-build "1057;rm"
+expect_fail "find mode rejects a malformed time" find_build --find-build "2001" --uploaded-after yesterday
 
 # --- release-notes.sh -----------------------------------------------------------------------------------
 echo "release-notes.sh"

@@ -17,6 +17,12 @@ APP_ID, BUILD_ID, GROUP_ID = "6700000001", "build-1", "group-1"
 # An internal group with access to every build: App Store Connect refuses to add builds to it.
 ALL_BUILDS_GROUP_ID = "group-all"
 state = {"build_polls": 0}
+# Builds that are already there, for asc-testflight.sh --find-build: version -> (processingState, uploadedDate).
+UPLOADED = {
+    "2001": ("VALID", "2026-10-24T13:20:00.000-07:00"),
+    "2001.2": ("FAILED", "2026-10-24T21:00:00Z"),
+    "3001": ("VALID", "2026-01-01T00:00:00Z"),
+}
 
 
 def decode_segment(segment):
@@ -57,6 +63,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/apps":
             self.reply(200, {"data": [{"type": "apps", "id": APP_ID,
                                        "attributes": {"bundleId": query["filter[bundleId]"][0], "name": "Daybook"}}]})
+        elif path == "/v1/builds" and query["filter[version]"][0] != "1057":
+            wanted = query["filter[version]"][0].split(",")
+            builds = [{"type": "builds", "id": f"build-{v}", "attributes": {
+                "version": v, "processingState": UPLOADED[v][0], "uploadedDate": UPLOADED[v][1], "expired": False}}
+                for v in wanted if v in UPLOADED]
+            builds.sort(key=lambda b: b["id"], reverse=True)
+            self.reply(200, {"data": builds})
         elif path == "/v1/builds":
             state["build_polls"] += 1
             if state["build_polls"] == 1:

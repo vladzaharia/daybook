@@ -5,6 +5,15 @@
 #
 #   scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --version 1.4.0 --build 1057 \
 #       [--group "Daybook testers"] [--notes-file notes.txt] [--locale en-US] [--timeout 3600]
+#   scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --version 1.4.0 \
+#       --find-build "1057 1057.2" [--uploaded-after 2026-10-24T20:11:08Z]
+#
+# --find-build only looks: it prints found=<build number> for the newest of those builds of --version
+# that App Store Connect already has and that didn't fail processing (found= when there's none), and
+# changes nothing. release.yml asks before archiving and again before uploading, with every number the
+# run has used so far, so a re-run after a successful upload goes straight to TestFlight instead of
+# uploading a duplicate. With --uploaded-after (the run's creation time), a build uploaded earlier
+# can't be this run's: the build number collided with an older upload, and it fails.
 #
 # Environment (all three required):
 #   DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, DAYBOOK_ASC_ISSUER_ID   the API key (scripts/ci/secrets.sh)
@@ -33,6 +42,8 @@ group=""
 notes_file=""
 locale="en-US"
 timeout=3600
+find_builds=""
+uploaded_after=""
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 fail() { echo "asc-testflight.sh: $*" >&2; exit 1; }
@@ -47,13 +58,23 @@ while [[ $# -gt 0 ]]; do
         --notes-file) notes_file="${2-}"; shift ;;
         --locale) locale="${2-}"; shift ;;
         --timeout) timeout="${2-}"; shift ;;
+        --find-build) find_builds="${2-}"; shift ;;
+        --uploaded-after) uploaded_after="${2-}"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "unknown option: $1" ;;
     esac
     shift
 done
 
-[[ -n "$bundle_id" && -n "$version" && -n "$build" ]] || { usage >&2; fail "--bundle-id, --version, and --build are required"; }
+if [[ -n "$find_builds" ]]; then
+    [[ -n "$bundle_id" && -n "$version" ]] || { usage >&2; fail "--bundle-id and --version are required"; }
+    [[ "$find_builds" =~ ^[0-9.]+( [0-9.]+)*$ ]] || fail "--find-build takes build numbers separated by spaces"
+    if [[ -n "$uploaded_after" && ! "$uploaded_after" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})$ ]]; then
+        fail "--uploaded-after must be an ISO 8601 time, such as 2026-10-24T20:11:08Z"
+    fi
+else
+    [[ -n "$bundle_id" && -n "$version" && -n "$build" ]] || { usage >&2; fail "--bundle-id, --version, and --build are required"; }
+fi
 : "${DAYBOOK_ASC_KEY_PATH:?set DAYBOOK_ASC_KEY_PATH}" "${DAYBOOK_ASC_KEY_ID:?set DAYBOOK_ASC_KEY_ID}" "${DAYBOOK_ASC_ISSUER_ID:?set DAYBOOK_ASC_ISSUER_ID}"
 [[ -z "$notes_file" || -r "$notes_file" ]] || fail "can't read --notes-file $notes_file"
 command -v jq >/dev/null || fail "jq is required"
@@ -105,6 +126,13 @@ $details}"
 }
 
 uri() { jq -rn --arg v "$1" '$v|@uri'; }
+# ISO 8601 (App Store Connect writes offsets such as -07:00, and fractions of a second) to Unix time.
+epoch() {
+    jq -rn --arg t "$1" '$t | capture("^(?<dt>[0-9-]+T[0-9:]+)(\\.[0-9]+)?(?<tz>Z|[+-][0-9]{2}:?[0-9]{2})$")
+        | ((.dt + "Z") | fromdateiso8601) - (if .tz == "Z" then 0 else (.tz
+            | capture("(?<s>[+-])(?<h>[0-9]{2}):?(?<m>[0-9]{2})")
+            | (if .s == "-" then -1 else 1 end) * ((.h | tonumber) * 3600 + (.m | tonumber) * 60)) end)'
+}
 
 # 1. The app record.
 request GET "/v1/apps?filter%5BbundleId%5D=$(uri "$bundle_id")&fields%5Bapps%5D=bundleId,name&limit=10"
@@ -112,6 +140,38 @@ expect 200
 app_id=$(printf '%s' "$response_body" | jq -r --arg b "$bundle_id" '[.data[] | select(.attributes.bundleId == $b)][0].id // empty')
 [[ -n "$app_id" ]] || fail "no App Store Connect app has the bundle ID $bundle_id. Create the app record first (docs/release.md, One-time setup)."
 note "app $bundle_id is $app_id"
+
+# --find-build: look, report, and stop.
+if [[ -n "$find_builds" ]]; then
+    query="/v1/builds?filter%5Bapp%5D=$app_id&filter%5Bversion%5D=$(uri "${find_builds// /,}")"
+    query+="&filter%5BpreReleaseVersion.version%5D=$(uri "$version")&filter%5BpreReleaseVersion.platform%5D=IOS"
+    query+="&fields%5Bbuilds%5D=version,processingState,uploadedDate,expired&sort=-uploadedDate&limit=50"
+    request GET "$query"
+    expect 200
+    listed=$(printf '%s' "$response_body" | jq -r '.data[] | [.attributes.version, (.attributes.processingState // "?"), (.attributes.uploadedDate // ""), (.attributes.expired // false)] | @tsv')
+    found=""
+    while IFS=$'\t' read -r number state uploaded expired; do
+        [[ -n "$number" ]] || continue
+        flag=""
+        [[ "$expired" == true ]] && flag=", expired"
+        note "App Store Connect has $version ($number): $state, uploaded $uploaded$flag"
+        if [[ -n "$uploaded_after" && -n "$uploaded" ]] && (( $(epoch "$uploaded") < $(epoch "$uploaded_after") )); then
+            fail "$version ($number) was uploaded at $uploaded, before this run started ($uploaded_after), so it isn't this run's build: the build number collided with an earlier upload. Raise DAYBOOK_BUILD_NUMBER_OFFSET above the highest build number in App Store Connect and run the release again (docs/release.md, Versions)."
+        fi
+        case "$state" in
+            FAILED|INVALID) continue ;;
+        esac
+        [[ "$expired" == true ]] && continue
+        [[ -z "$found" ]] && found="$number"
+    done <<< "$listed"
+    if [[ -n "$found" ]]; then
+        note "$version ($found) is already in App Store Connect; it doesn't need uploading again"
+    else
+        note "App Store Connect has no usable build $version (${find_builds// /, })"
+    fi
+    echo "found=$found"
+    exit 0
+fi
 
 # 2. Wait for processing.
 query="/v1/builds?filter%5Bapp%5D=$app_id&filter%5Bversion%5D=$(uri "$build")"

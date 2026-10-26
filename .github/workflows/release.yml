@@ -55,9 +55,12 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read # the run's creation time, below
+    # No build number here: "Re-run failed jobs" doesn't re-run this job, so the iphone and mac jobs
+    # work theirs out from their own github.run_attempt.
     outputs:
       marketing_version: ${{ steps.version.outputs.marketing_version }}
-      build_number: ${{ steps.version.outputs.build_number }}
+      run_created_at: ${{ steps.created.outputs.created_at }}
       tag: ${{ steps.version.outputs.tag }}
       is_tag: ${{ steps.version.outputs.is_tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
@@ -93,6 +96,18 @@ jobs:
           args=(--ref "$REF" --run-number "$RUN_NUMBER" --run-attempt "$RUN_ATTEMPT" --offset "$OFFSET")
           if [[ -n "$VERSION" ]]; then args+=(--version "$VERSION"); fi
           scripts/ci/version.sh "${args[@]}" | tee -a "$GITHUB_OUTPUT"
+      # The same for every attempt of the run: an App Store Connect build uploaded before it can't be
+      # this run's (asc-testflight.sh --find-build --uploaded-after).
+      - name: When the run was created
+        id: created
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          created="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .created_at)"
+          [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || { echo "::error::Unexpected creation time '$created'"; exit 1; }
+          echo "created_at=$created" | tee -a "$GITHUB_OUTPUT"
       - name: Apps and TestFlight group
         id: apps
         env:
@@ -151,7 +166,7 @@ jobs:
     env:
       DAYBOOK_TEAM_ID: ${{ vars.DAYBOOK_TEAM_ID }}
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
-      BUILD: ${{ needs.prepare.outputs.build_number }}
+      RUN_CREATED_AT: ${{ needs.prepare.outputs.run_created_at }}
     steps:
       - name: Check the configuration
         run: |
@@ -161,6 +176,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build number for this attempt
+        env:
+          REF: ${{ github.ref }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          OFFSET: ${{ vars.DAYBOOK_BUILD_NUMBER_OFFSET || '1000' }}
+        run: |
+          numbers="$(scripts/ci/version.sh --ref "$REF" --version "$VERSION" --run-number "$RUN_NUMBER" \
+            --run-attempt "$RUN_ATTEMPT" --offset "$OFFSET" | grep '^build_')"
+          printf '%s\n' "$numbers"
+          {
+            echo "BUILD=$(printf '%s\n' "$numbers" | sed -n 's/^build_number=//p')"
+            echo "BUILD_CANDIDATES=$(printf '%s\n' "$numbers" | sed -n 's/^build_candidates=//p')"
+          } >> "$GITHUB_ENV"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-notes
@@ -175,14 +204,37 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
         run: scripts/ci/secrets.sh setup
+      # A re-run after an upload that went through (the job then failed waiting for processing, say)
+      # finds that build and goes straight to TestFlight instead of uploading a duplicate.
+      - name: Look for this run's build in App Store Connect
+        id: earlier
+        run: |
+          found="$(scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --version "$VERSION" \
+            --find-build "$BUILD_CANDIDATES" --uploaded-after "$RUN_CREATED_AT" | sed -n 's/^found=//p')"
+          echo "build=$found" >> "$GITHUB_OUTPUT"
+          if [[ -n "$found" ]]; then
+            echo "BUILD=$found" >> "$GITHUB_ENV"
+            echo "::notice title=Already uploaded::Daybook $VERSION ($found) is in App Store Connect from an earlier attempt; skipping the archive and upload"
+          fi
       # Automatic signing with the API key: Xcode's cloud-managed signing supplies the certificates
       # and profiles (no exported .p12 for the iPhone app).
       - name: Archive DaybookPhone with its widget extension
+        if: steps.earlier.outputs.build == ''
         run: scripts/build-ios.sh --archive --marketing-version "$VERSION" --build-number "$BUILD"
       - name: Check the archive (export compliance, icon, versions, entitlements)
+        if: steps.earlier.outputs.build == ''
         run: scripts/ci/check-ios-archive.sh Apps/iOS/build/DaybookPhone.xcarchive --version "$VERSION" --build "$BUILD"
-      - name: Export and upload to App Store Connect
-        run: scripts/build-ios.sh --export upload
+      - name: Export and upload to App Store Connect (unless the build is there already)
+        if: steps.earlier.outputs.build == ''
+        run: |
+          found="$(scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --version "$VERSION" \
+            --find-build "$BUILD_CANDIDATES" --uploaded-after "$RUN_CREATED_AT" | sed -n 's/^found=//p')"
+          if [[ -n "$found" ]]; then
+            echo "BUILD=$found" >> "$GITHUB_ENV"
+            echo "::warning title=Upload skipped::Daybook $VERSION ($found) is already in App Store Connect; not uploading it again"
+          else
+            scripts/build-ios.sh --export upload
+          fi
       - name: Wait for processing, set What to Test, add to the beta group
         env:
           GROUP: ${{ needs.prepare.outputs.testflight_group }}
@@ -223,7 +275,6 @@ jobs:
     env:
       DAYBOOK_TEAM_ID: ${{ vars.DAYBOOK_TEAM_ID }}
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
-      BUILD: ${{ needs.prepare.outputs.build_number }}
     steps:
       - name: Check the configuration
         run: |
@@ -233,6 +284,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build number for this attempt
+        env:
+          REF: ${{ github.ref }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          OFFSET: ${{ vars.DAYBOOK_BUILD_NUMBER_OFFSET || '1000' }}
+        run: |
+          numbers="$(scripts/ci/version.sh --ref "$REF" --version "$VERSION" --run-number "$RUN_NUMBER" \
+            --run-attempt "$RUN_ATTEMPT" --offset "$OFFSET" | grep '^build_')"
+          printf '%s\n' "$numbers"
+          echo "BUILD=$(printf '%s\n' "$numbers" | sed -n 's/^build_number=//p')" >> "$GITHUB_ENV"
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --metal
       - name: Install XcodeGen
