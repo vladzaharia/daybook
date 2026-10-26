@@ -33,6 +33,7 @@ struct SyncSection: View {
                 NavigationLink(value: SettingsRoute.libraryDevices) {
                     LabeledContent("Devices in This Library", value: devicesSummary)
                 }
+                EncryptionRows()
             } else if case .unavailable = sync.connection {
                 Button("Check Again") { Task { await model.refreshCloud() } }
             }

@@ -68,6 +68,7 @@ struct SyncSettingsView: View {
             ForEach(Array(sync.warnings.enumerated()), id: \.offset) { _, warning in
                 SyncWarning(text: warning)
             }
+            SyncEncryptionRows(state: state)
             Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
                 .controlSize(.regular)
             HStack {
@@ -75,6 +76,8 @@ struct SyncSettingsView: View {
                 Button("Turn Off Sync…") { confirmingTurnOff = true }
                     .disabled(sync.isSyncing)
             }
+        case .waitingForKey:
+            SyncEncryptionRows(state: state)
         case .accountChanged:
             SyncWarning(text: "This library synced with a different iCloud account, so sync is paused.") {
                 Button("Sync with This Account…") { confirmingAccount = true }
@@ -98,6 +101,7 @@ struct SyncSettingsView: View {
         switch sync.iCloud {
         case .checking: return "Checking iCloud…"
         case .connected: return "Syncing with iCloud"
+        case .waitingForKey: return "Waiting for the library’s key"
         case .iCloudDriveOff: return "iCloud is off in System Settings"
         case .signedOut: return "Signed out"
         case .migrating(let progress):
@@ -112,7 +116,7 @@ struct SyncSettingsView: View {
 
     @ViewBuilder private var headlineAction: some View {
         switch sync.iCloud {
-        case .connected:
+        case .connected, .waitingForKey:
             Button("Sync Now") { Task { await state.synchronizeLibrary() } }
                 .disabled(sync.isSyncing)
         case .iCloudDriveOff, .signedOut:
@@ -203,6 +207,7 @@ struct SyncSettingsView: View {
             ForEach(Array(sync.warnings.enumerated()), id: \.offset) { _, warning in
                 SyncWarning(text: warning)
             }
+            SyncEncryptionRows(state: state)
             Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
                 .controlSize(.regular)
             HStack {

@@ -36,6 +36,23 @@ public enum ICloudSyncState: Equatable, Sendable {
     case migrating(SyncMigrationProgress)
     /// Syncing with iCloud.
     case connected
+    /// The library in iCloud is encrypted and this device doesn't hold its key yet: nothing is exchanged until iCloud
+    /// Keychain (or a paired device, or a recovery key) brings it. Every pass checks again.
+    case waitingForKey
+}
+
+/// Whether the library in iCloud is encrypted, as this device sees it (docs/icloud-sync.md, "Encryption").
+public enum LibraryEncryptionState: Equatable, Sendable {
+    /// This build can't keep library keys (no keychain group: unsigned and ad hoc builds, tests without a store).
+    case unavailable
+    /// Not encrypted (or not known yet).
+    case off
+    /// Encrypted, and this device is waiting for the key.
+    case waitingForKey
+    /// Encrypted, and this device holds the key.
+    case on(SealingSummary)
+
+    public var isOn: Bool { if case .on = self { return true } else { return false } }
 }
 
 /// The one-time move from a chosen folder to the iCloud container, as recorded on this device.
@@ -165,6 +182,10 @@ public final class LibrarySyncController: ObservableObject {
     public private(set) var engine: LibrarySyncEngine?
     /// The last pass stopped at its `SyncPassLimits`; run another soon.
     @Published public private(set) var hasMoreWork = false
+    /// Whether the library is encrypted here, updated after every pass.
+    @Published public private(set) var encryption: LibraryEncryptionState = .off
+    /// The libraries whose plaintext courier files were dropped once they were found encrypted.
+    private var courierSealedLibraries = Set<UUID>()
     private var activeTask: Task<SyncResult, Error>?
     private var pendingReceipt: UUID?
     private var polling: Task<Void, Never>?
@@ -187,6 +208,8 @@ public final class LibrarySyncController: ObservableObject {
     private var migrationTask: Task<Void, Never>?
     private var containerGeneration = UUID()
     private var accountObserver: NSObjectProtocol?
+    /// The person chose to sync with another iCloud account: forget the container's library was encrypted.
+    private var forgetsSealedLibrary = false
     /// iCloud has listed the connected folder once (its metadata query finished gathering).
     private(set) var containerListed = false
 
@@ -319,6 +342,8 @@ public final class LibrarySyncController: ObservableObject {
     public func useCurrentICloudAccount() {
         defaults.removeObject(forKey: Key.account)
         guard let identifier = containerIdentifier else { return }
+        // The other account's library is another library: whether this one was encrypted says nothing about it.
+        forgetsSealedLibrary = true
         startContainer(identifier)
     }
 
@@ -372,6 +397,7 @@ public final class LibrarySyncController: ObservableObject {
                                             waitsForListing: transport == .iCloudContainer && monitorChanges, installation: installation) }
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = "Connected · preparing sync"; configurationID = UUID()
+        encryption = replica.keyStore == nil ? .unavailable : .off
         isICloudLocation = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true || root.path.contains("/Library/Mobile Documents/")
         // Other devices learn this one exists (and what it is) right away, not only after its first full
         // pass, which can take minutes on a new library. Presence is advisory, so a failure is ignored.
@@ -464,6 +490,7 @@ public final class LibrarySyncController: ObservableObject {
             try Task.checkCancellation()
             guard generation == configurationID else { isSyncing = false; return nil }
             if await engine.sharesIdentity { needsNewIdentity = true }
+            await noteEncryption(engine)
             handToCourier(result.writtenFiles, engine: engine)
             pendingReceipt = result.checkpointID
             pendingDownloads = result.pendingDownloads; pendingUploads = result.pendingUploads; warnings = result.warnings
@@ -474,6 +501,15 @@ public final class LibrarySyncController: ObservableObject {
             // Not a failure: the pass runs again once iCloud has listed the container.
             activeTask = nil; isSyncing = false; pendingReceipt = nil
             status = LibrarySyncError.waitingForICloud.localizedDescription
+            return nil
+        } catch LibrarySyncError.keyUnavailable {
+            // Not a failure either: the library is encrypted and its key hasn't reached this device. Every pass checks
+            // the keychain again; local edits wait.
+            activeTask = nil; isSyncing = false; pendingReceipt = nil
+            guard generation == configurationID else { return nil }
+            encryption = .waitingForKey
+            if transport == .iCloudContainer { iCloud = .waitingForKey }
+            status = LibrarySyncError.keyUnavailable("").localizedDescription
             return nil
         } catch {
             activeTask = nil; isSyncing = false; pendingReceipt = nil
@@ -497,6 +533,116 @@ public final class LibrarySyncController: ObservableObject {
     public func reportFailure(_ message: String) {
         isSyncing = false; pendingReceipt = nil; status = "Sync paused: " + message
         takeNewIdentity()
+    }
+
+    // MARK: Encryption
+
+    /// After a pass: the library's encryption, and once it's found encrypted, plaintext files the courier still holds
+    /// are dropped (and those it sent, deleted).
+    private func noteEncryption(_ engine: LibrarySyncEngine) async {
+        let summary = await engine.sealingSummary()
+        let next: LibraryEncryptionState
+        if let summary { next = summary.hasKey ? .on(summary) : .waitingForKey }
+        else { next = replica.keyStore == nil ? .unavailable : .off }
+        if encryption != next { encryption = next }
+        if case .on = next, iCloud == .waitingForKey { iCloud = .connected }
+        if next.isOn, let courier, let libraryID = await engine.libraryID, courierSealedLibraries.insert(libraryID).inserted {
+            Task { await courier.forgetPlaintext() }
+        }
+    }
+
+    /// Encrypts the library in iCloud from now on (`LibrarySyncEngine.enableSealing`). With `recoveryKey`, its key is
+    /// also kept wrapped with it. The next passes seal what's new and the history. There's no turning it off.
+    public func enableEncryption(recoveryKey: RecoveryKey? = nil) async throws {
+        guard let engine else { throw SyncControllerError.notConnected }
+        guard !isSyncing else { throw SyncControllerError.busy }
+        try await engine.enableSealing(recovery: recoveryKey)
+        await noteEncryption(engine)
+        requestSync()
+    }
+
+    /// Makes a recovery key, keeps the library's keys wrapped with it in iCloud, and returns it to show once.
+    public func createRecoveryKey() async throws -> RecoveryKey {
+        guard let engine else { throw SyncControllerError.notConnected }
+        let recovery = RecoveryKey.generate()
+        try await engine.saveRecoveryKey(recovery)
+        await noteEncryption(engine)
+        return recovery
+    }
+
+    /// Opens the library's keys with a recovery key someone typed. False when it isn't this library's (or doesn't read
+    /// as a recovery key).
+    public func enterRecoveryKey(_ text: String) async throws -> Bool {
+        guard let engine else { throw SyncControllerError.notConnected }
+        guard let recovery = RecoveryKey(text) else { return false }
+        let recovered = try await engine.recoverKeys(with: recovery)
+        guard recovered > 0 else { return false }
+        requestSync()
+        return true
+    }
+
+    /// Replaces the library's key ("Erase Deleted Conversations from iCloud"): everything live is sealed again under a
+    /// new key, and once every device has it, the old key's files go, and with them deleted conversations' history.
+    public func rotateEncryptionKey() async throws {
+        guard let engine else { throw SyncControllerError.notConnected }
+        guard !isSyncing else { throw SyncControllerError.busy }
+        try await engine.rotateKey()
+        await noteEncryption(engine)
+        requestSync()
+    }
+
+    /// Devices that would stop syncing if the library were encrypted now: their Daybook doesn't say it reads encrypted
+    /// libraries (an earlier version, or one seen only in the journal).
+    public func devicesNotReadyForEncryption() async -> [KnownSyncDevice] {
+        await knownDevices().filter { !$0.isCurrentDevice && !$0.readsEncryptedLibraries }
+    }
+
+    /// The library and key this device waits for, to ask a paired device for it over the local link.
+    public func keyRequest() async -> (libraryID: UUID, keyID: String)? {
+        guard let engine, let libraryID = await engine.libraryID, let keyID = await engine.waitingForKey else { return nil }
+        return (libraryID, keyID)
+    }
+
+    /// The keys this device can give a paired device of the same library.
+    public func keysToGrant(libraryID: UUID) async -> [LibraryKey] {
+        guard let engine, await engine.libraryID == libraryID else { return [] }
+        return await engine.heldKeys()
+    }
+
+    /// A key a paired device sent: kept when it's this library's, and a pass runs. True when kept.
+    @discardableResult
+    public func acceptKey(_ material: Data, keyID: Data, libraryID: UUID) async -> Bool {
+        guard let engine, (try? await engine.acceptKey(material, keyID: keyID, libraryID: libraryID)) == true else { return false }
+        requestSync()
+        return true
+    }
+
+    /// The folder this Mac synced through before the move into iCloud still holds a plaintext copy of the journal, and
+    /// the library is now encrypted: Settings offers to delete that copy.
+    public var hasRetiredFolderJournal: Bool {
+        encryption.isOn && migrationRecord?.completedAt != nil && defaults.data(forKey: Key.migratedFolderBookmark) != nil
+    }
+
+    /// Deletes the previous sync folder's journal (its manifest, `Events/`, `Metadata/`, `Blobs/`, and `Devices/`),
+    /// nothing else in it, and forgets the folder.
+    public func deleteRetiredFolderJournal() throws {
+        guard hasRetiredFolderJournal, let bookmark = defaults.data(forKey: Key.migratedFolderBookmark) else { return }
+        if let folder = Self.resolve(bookmark) {
+            let scoped = folder.startAccessingSecurityScopedResource()
+            defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+            let coordinator = NSFileCoordinator(filePresenter: nil)
+            for name in ["daybook-sync.json", "Events", "Metadata", "Blobs", "Devices"] {
+                let item = folder.appendingPathComponent(name)
+                guard FileManager.default.fileExists(atPath: item.path) else { continue }
+                var coordinationError: NSError?, failure: Error?
+                coordinator.coordinate(writingItemAt: item, options: .forDeleting, error: &coordinationError) { target in
+                    do { try FileManager.default.removeItem(at: target) } catch { failure = error }
+                }
+                if let error = coordinationError ?? failure { throw error }
+            }
+        }
+        defaults.removeObject(forKey: Key.migratedFolderBookmark)
+        objectWillChange.send()
     }
 
     // MARK: Presence
@@ -681,6 +827,10 @@ public final class LibrarySyncController: ObservableObject {
             return
         }
         let root = container.appendingPathComponent("Documents", isDirectory: true).appendingPathComponent("Daybook", isDirectory: true)
+        if forgetsSealedLibrary {
+            forgetsSealedLibrary = false
+            LibrarySyncEngine.forgetSealedLibrary(localRoot: localRoot, remoteRoot: root)
+        }
         do { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true) }
         catch {
             iCloud = .containerUnavailable(error.localizedDescription); status = "Couldn’t open iCloud: \(error.localizedDescription)"
@@ -726,7 +876,8 @@ public final class LibrarySyncController: ObservableObject {
         saveMigration(record)
         iCloud = .migrating(SyncMigrationProgress()); status = Self.migrationStatus(SyncMigrationProgress())
         let migration: LibrarySyncMigration
-        do { migration = try LibrarySyncMigration(source: source, destination: root, localRoot: localRoot, deviceID: deviceID, cloud: environment.cloud) }
+        do { migration = try LibrarySyncMigration(source: source, destination: root, localRoot: localRoot, deviceID: deviceID, cloud: environment.cloud,
+                                                  keyStore: replica.keyStore) }
         catch {
             iCloud = .containerUnavailable(error.localizedDescription); status = "Couldn’t move sync to iCloud: \(error.localizedDescription)"
             return false
@@ -757,7 +908,8 @@ public final class LibrarySyncController: ObservableObject {
     private func finishMigration(into root: URL, identifier: String, generation: UUID) async {
         guard let bookmark = defaults.data(forKey: Key.migratedFolderBookmark), let source = Self.resolve(bookmark),
               var record = migrationRecord,
-              let migration = try? LibrarySyncMigration(source: source, destination: root, localRoot: localRoot, deviceID: deviceID, cloud: environment.cloud)
+              let migration = try? LibrarySyncMigration(source: source, destination: root, localRoot: localRoot, deviceID: deviceID, cloud: environment.cloud,
+                                                        keyStore: replica.keyStore)
         else { return }
         while isCurrent(generation) {
             do { try await Task.sleep(for: environment.retryInterval * 6) } catch { return }
@@ -949,11 +1101,12 @@ enum TaskWaiter {
 }
 
 private enum SyncControllerError: LocalizedError {
-    case busy, overlappingLibrary
+    case busy, overlappingLibrary, notConnected
     public var errorDescription: String? {
         switch self {
         case .busy: return "Wait for the current sync to finish before changing folders."
         case .overlappingLibrary: return "Choose a separate iCloud Drive folder, outside the local working library."
+        case .notConnected: return "Sync isn’t on."
         }
     }
 }

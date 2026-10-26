@@ -57,6 +57,8 @@ final class PhoneSync {
     private(set) var passes = 0
     /// The courier sending this iPhone's files to the Mac ahead of iCloud Drive, when there is one.
     private(set) var courier = CourierStatus()
+    /// Whether the library in iCloud is encrypted, and whether this iPhone holds its key.
+    private(set) var encryption: LibraryEncryptionState = .off
 
     /// Nil for a library without sync (unit tests of other parts).
     let controller: LibrarySyncController?
@@ -88,6 +90,7 @@ final class PhoneSync {
         if controller == nil { connection = .unavailable("Sync isn't set up for this library.") }
         controller?.onSyncRequested = { [weak self] in await self?.synchronize(.remote) }
         controller?.$courierStatus.sink { [weak self] status in self?.courier = status }.store(in: &subscriptions)
+        controller?.$encryption.sink { [weak self] state in self?.encryption = state }.store(in: &subscriptions)
         // Count local changes as they happen, shortly after, so a burst of typing counts once.
         library.objectWillChange.sink { [weak self] _ in self?.scheduleRecount() }.store(in: &subscriptions)
     }
@@ -297,6 +300,7 @@ final class PhoneSync {
         case .checking: return "Checking iCloud…"
         case .unavailable(let reason): return reason
         case .connected:
+            if encryption == .waitingForKey { return LibrarySyncError.keyUnavailable("").localizedDescription }
             if isSyncing { return changesInFlight > 0 ? "Syncing \(Self.changes(changesInFlight))" : "Syncing…" }
             if let lastError { return "Sync paused: \(lastError)" }
             if pendingUploads > 0 { return "Uploading \(pendingUploads) \(pendingUploads == 1 ? "item" : "items") to iCloud" }
@@ -315,7 +319,7 @@ final class PhoneSync {
     }
 
     var isUpToDate: Bool {
-        isConnected && !isSyncing && lastError == nil && localChanges == 0 && pendingUploads == 0 && !hasMoreWork && lastSynced != nil
+        isConnected && !isSyncing && lastError == nil && encryption != .waitingForKey && localChanges == 0 && pendingUploads == 0 && !hasMoreWork && lastSynced != nil
             && courierLine() == nil
     }
 

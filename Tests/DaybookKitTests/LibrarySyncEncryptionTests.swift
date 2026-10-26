@@ -1,0 +1,229 @@
+import DaybookCore
+import DaybookLink
+import Foundation
+import XCTest
+@testable import DaybookKit
+
+/// An encrypted library through `LibrarySyncController` (docs/icloud-sync.md, "Encryption"): turning it on, a device
+/// waiting for the key and getting it from a paired device or a recovery key, and the courier carrying sealed files in
+/// their own zone, which an earlier Daybook ignores. iCloud Keychain is a `MemoryLibraryKeyStore`, CloudKit an
+/// `InMemoryCourierService`, and a temporary folder the iCloud container.
+@MainActor
+final class LibrarySyncEncryptionTests: XCTestCase {
+    private var root: URL!
+    private var service: InMemoryCourierService!
+    private var suites: [String] = []
+    private var controllers: [LibrarySyncController] = []
+    private let fm = FileManager.default
+    private var container: URL { root.appendingPathComponent("Container", isDirectory: true) }
+
+    private struct Device {
+        let library: LibraryController
+        let sync: LibrarySyncController
+        let courier: InMemoryCourier
+        let root: URL
+    }
+
+    override func setUp() async throws {
+        root = fm.temporaryDirectory.appendingPathComponent("DaybookEncryption-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: container, withIntermediateDirectories: true)
+        service = InMemoryCourierService()
+    }
+
+    override func tearDown() async throws {
+        for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
+        controllers = []
+        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        try? fm.removeItem(at: root)
+    }
+
+    private func device(_ name: String, phone: Bool, role: CourierRole, keys: MemoryLibraryKeyStore?,
+                        zones: Set<String> = [CloudKitCourier.zoneName, CloudKitCourier.sealedZoneName]) async throws -> Device {
+        let libraryRoot = root.appendingPathComponent(name, isDirectory: true)
+        let suite = root.appendingPathComponent("Preferences-\(name)-\(UUID().uuidString)").path
+        suites.append(suite)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.set(name, forKey: "syncDeviceID")
+        let sync = LibrarySyncController(localRoot: libraryRoot, defaults: defaults, identityStore: .unavailable)
+        controllers.append(sync)
+        sync.replica = phone ? .phone(displayName: name) : .mac(displayName: name, canProcess: true)
+        sync.replica.keyStore = keys
+        let courier = InMemoryCourier(service: service, directory: libraryRoot.appendingPathComponent("Sync/Courier"), deviceID: name, zones: zones)
+        sync.courier = courier
+        sync.courierRole = role
+        sync.syncDebounce = nil
+        let library = LibraryController(rootURL: libraryRoot, sync: sync)
+        try await library.load()
+        sync.onSyncRequested = { _ = await library.synchronize() }
+        try sync.connect(to: container, monitorChanges: false)
+        try await wait("the courier to start") { sync.courierStatus.availability == .available }
+        return Device(library: library, sync: sync, courier: courier, root: libraryRoot)
+    }
+
+    private func wait(_ what: String, timeout: Duration = .seconds(10), until condition: () async -> Bool) async throws {
+        let scale = Double(ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"] ?? "") ?? 1
+        let deadline = ContinuousClock.now + timeout * scale
+        while !(await condition()) {
+            guard ContinuousClock.now < deadline else { throw TimedOut(description: "Timed out waiting for \(what)") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private struct TimedOut: Error, CustomStringConvertible { var description: String }
+
+    @discardableResult
+    private func pass(_ device: Device, file: StaticString = #filePath, line: UInt = #line) async -> SyncApplied? {
+        let applied = await device.library.synchronize()
+        XCTAssertEqual(applied?.acknowledged, true, device.sync.status, file: file, line: line)
+        return applied
+    }
+
+    private func record(on device: Device, bytes: Data, title: String) async throws -> UUID {
+        let file = root.appendingPathComponent("Incoming-\(UUID().uuidString).wav")
+        try bytes.write(to: file)
+        let id = device.library.newMeeting(title: title)
+        await device.library.acquireLock()
+        _ = try await device.library.ingest(file, into: id, provenance: .file(source: .microphone))
+        device.library.releaseLock()
+        await device.library.flush()
+        return id
+    }
+
+    private func audioBytes(_ count: Int, seed: UInt8) -> Data { Data((0..<count).map { UInt8(truncatingIfNeeded: $0 &* 29 &+ Int(seed)) }) }
+
+    // MARK: Turning it on
+
+    func testTurningEncryptionOnAndADeviceWaitingForItsKey() async throws {
+        let keychain = MemoryLibraryKeyStore()
+        let mac = try await device("Mac", phone: false, role: .receive, keys: keychain)
+        await pass(mac)
+        XCTAssertEqual(mac.sync.encryption, .off)
+        let notReady = await mac.sync.devicesNotReadyForEncryption()
+        XCTAssertTrue(notReady.isEmpty)
+        try await mac.sync.enableEncryption()
+        await pass(mac)
+        guard case .on(let summary) = mac.sync.encryption else { return XCTFail("\(mac.sync.encryption)") }
+        XCTAssertTrue(summary.hasKey); XCTAssertTrue(summary.isMigrator); XCTAssertFalse(summary.hasRecoveryKey)
+
+        // iCloud Keychain hasn't brought the key to the phone: it waits, and says so.
+        let phoneKeys = MemoryLibraryKeyStore()
+        let phone = try await device("Phone", phone: true, role: .send, keys: phoneKeys)
+        let applied = await phone.library.synchronize()
+        XCTAssertNil(applied)
+        XCTAssertEqual(phone.sync.encryption, .waitingForKey)
+        XCTAssertEqual(phone.sync.status, "Your library in iCloud is encrypted. Waiting for its key from iCloud Keychain.")
+
+        // Over the local link: the phone asks, the Mac sends the key only to a device of its library.
+        let asked = await phone.sync.libraryKeyRequest()
+        let request = try XCTUnwrap(asked)
+        let foreign = await mac.sync.libraryKeyGrants(for: request, peerLibraryID: UUID())
+        XCTAssertTrue(foreign.isEmpty, "A paired device of another library gets nothing")
+        let unknown = await mac.sync.libraryKeyGrants(for: request, peerLibraryID: nil)
+        XCTAssertTrue(unknown.isEmpty)
+        let grants = await mac.sync.libraryKeyGrants(for: request, peerLibraryID: request.libraryID)
+        XCTAssertEqual(grants.count, 1)
+        // The link carries it as a message both ways.
+        for grant in grants {
+            let kept = await phone.sync.accept(grant)
+            XCTAssertTrue(kept)
+        }
+        await pass(phone)
+        XCTAssertTrue(phone.sync.encryption.isOn)
+        // A grant that doesn't match its ID, or another library's, isn't kept.
+        var forged = grants[0]; forged.key = Data(count: 32)
+        let keptForged = await phone.sync.accept(forged)
+        XCTAssertFalse(keptForged)
+    }
+
+    func testARecoveryKeyFromSettingsOpensTheLibraryElsewhere() async throws {
+        let mac = try await device("Mac", phone: false, role: .receive, keys: MemoryLibraryKeyStore())
+        await pass(mac)
+        try await mac.sync.enableEncryption()
+        let recovery = try await mac.sync.createRecoveryKey()
+        guard case .on(let summary) = mac.sync.encryption else { return XCTFail() }
+        XCTAssertTrue(summary.hasRecoveryKey)
+        let phone = try await device("Phone", phone: true, role: .send, keys: MemoryLibraryKeyStore())
+        _ = await phone.library.synchronize()
+        XCTAssertEqual(phone.sync.encryption, .waitingForKey)
+        let wrong = try await phone.sync.enterRecoveryKey(RecoveryKey.generate().text)
+        XCTAssertFalse(wrong)
+        let mistyped = try await phone.sync.enterRecoveryKey("not a key")
+        XCTAssertFalse(mistyped)
+        let right = try await phone.sync.enterRecoveryKey(recovery.text.lowercased())
+        XCTAssertTrue(right)
+        await pass(phone)
+        XCTAssertTrue(phone.sync.encryption.isOn)
+    }
+
+    func testABuildWithoutAKeyStoreCantTurnItOn() async throws {
+        let mac = try await device("Mac", phone: false, role: .receive, keys: nil)
+        await pass(mac)
+        XCTAssertEqual(mac.sync.encryption, .unavailable)
+        do { try await mac.sync.enableEncryption(); XCTFail() } catch LibrarySyncError.keyStoreUnavailable {}
+    }
+
+    // MARK: The courier
+
+    func testSealedFilesTravelInTheirOwnZoneWhichAnEarlierDaybookIgnores() async throws {
+        let keychain = MemoryLibraryKeyStore()
+        let phone = try await device("Phone", phone: true, role: .send, keys: keychain)
+        await pass(phone)
+        try await phone.sync.enableEncryption(recoveryKey: RecoveryKey.generate())
+        await pass(phone)
+        // An earlier Daybook on a second Mac fetches only the plaintext zone.
+        let old = try await device("Old", phone: false, role: .receive, keys: nil, zones: [CloudKitCourier.zoneName])
+        let mac = try await device("Mac", phone: false, role: .receive, keys: keychain)
+        await pass(mac)
+
+        let id = try await record(on: phone, bytes: audioBytes(9_000, seed: 3), title: "Zanzibar")
+        await pass(phone)
+        await phone.sync.finishCourierSends()
+        let sent = service.fileIDs
+        XCTAssertFalse(sent.isEmpty)
+        XCTAssertTrue(sent.allSatisfy(CloudKitCourier.isSealed), "\(sent)")
+        XCTAssertTrue(sent.allSatisfy { service.file($0)?.journal.isSealed == true })
+
+        await old.courier.fetch()
+        let oldDelivered = await old.courier.delivered
+        XCTAssertTrue(oldDelivered.isEmpty)
+        XCTAssertEqual(Set(service.fileIDs), Set(sent), "An earlier Daybook leaves the zone alone")
+
+        // The Mac stores them, applies before iCloud Drive would, and deletes them from the courier.
+        for path in ["Sealed/Events", "Sealed/Blobs"] {
+            for name in try fm.contentsOfDirectory(atPath: container.appendingPathComponent(path).path) where !name.hasPrefix(".") {
+                let held = root.appendingPathComponent("Held/\(path)/\(name)")
+                try fm.createDirectory(at: held.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if sent.contains(where: { $0.hasSuffix(name) }) { try fm.moveItem(at: container.appendingPathComponent("\(path)/\(name)"), to: held) }
+            }
+        }
+        await mac.courier.fetch()
+        try await wait("the courier's files to be stored") { self.service.fileIDs.isEmpty }
+        await pass(mac)
+        XCTAssertNotNil(mac.library.meeting(id))
+    }
+
+    func testTurningEncryptionOnDropsPlaintextTheCourierHolds() async throws {
+        let keychain = MemoryLibraryKeyStore()
+        let phone = try await device("Phone", phone: true, role: .send, keys: keychain)
+        await pass(phone)
+        _ = try await record(on: phone, bytes: audioBytes(4_000, seed: 4), title: "Sent")
+        await pass(phone)
+        await phone.sync.finishCourierSends()
+        let sent = Set(service.fileIDs)
+        XCTAssertFalse(sent.isEmpty)
+        XCTAssertFalse(sent.contains(where: CloudKitCourier.isSealed))
+        service.failure = .network
+        _ = try await record(on: phone, bytes: audioBytes(4_000, seed: 5), title: "Waiting")
+        await pass(phone)
+        await phone.sync.finishCourierSends()
+        let waiting = await phone.courier.status().waitingToSend
+        XCTAssertGreaterThan(waiting, 0)
+        service.failure = nil
+
+        try await phone.sync.enableEncryption()
+        try await wait("plaintext to be dropped") {
+            let status = await phone.courier.status()
+            return status.waitingToSend == 0 && Set(self.service.fileIDs).isDisjoint(with: sent)
+        }
+    }
+}

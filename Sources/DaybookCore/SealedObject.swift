@@ -77,6 +77,8 @@ public struct LibraryKey: Sendable {
 
     /// The key's ID as lowercase hex (32 characters), as the manifest and the keychain name it.
     public var idHex: String { SyncDigest.hex(id) }
+    /// A key ID from its hex (32 lowercase hex digits), or nil.
+    public static func id(hex: String) -> Data? { SealedFormat.data(hex: hex).flatMap { $0.count == 16 ? $0 : nil } }
     /// The 32 key bytes. Only for storing the key (the keychain, a recovery wrap, a link grant).
     public var materialBytes: Data { material.withUnsafeBytes { Data($0) } }
 

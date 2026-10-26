@@ -119,6 +119,8 @@ enum WireMessage: Equatable {
         case .app(.recorderHandoffRequest): return "recorder.handoff.request"
         case .app(.recorderHandoffReply): return "recorder.handoff.reply"
         case .app(.recorderRelease): return "recorder.release"
+        case .app(.libraryKeyRequest): return "libraryKey.request"
+        case .app(.libraryKeyGrant): return "libraryKey.grant"
         case .recordRequest: return "record.request"
         case .recordReply: return "record.reply"
         case .ping: return "ping"
@@ -186,6 +188,8 @@ enum LinkWire {
         case .app(.recorderHandoffRequest(let body)): return try pack(body)
         case .app(.recorderHandoffReply(let body)): return try pack(body)
         case .app(.recorderRelease(let body)): return try pack(body)
+        case .app(.libraryKeyRequest(let body)): return try pack(body)
+        case .app(.libraryKeyGrant(let body)): return try pack(body)
         case .recordRequest(let body): return try pack(body)
         case .recordReply(let body): return try pack(body)
         case .ping(let body), .pong(let body): return try pack(body)
@@ -219,6 +223,8 @@ enum LinkWire {
         case "recorder.handoff.request": message = .app(.recorderHandoffRequest(try body(LinkRecorderHandoffRequest.self)))
         case "recorder.handoff.reply": message = .app(.recorderHandoffReply(try body(LinkRecorderHandoffReply.self)))
         case "recorder.release": message = .app(.recorderRelease(try body(LinkRecorderRelease.self)))
+        case "libraryKey.request": message = .app(.libraryKeyRequest(try body(LinkLibraryKeyRequest.self)))
+        case "libraryKey.grant": message = .app(.libraryKeyGrant(try body(LinkLibraryKeyGrant.self)))
         case "record.request": message = .recordRequest(try body(LinkRecordRequest.self))
         case "record.reply": message = .recordReply(try body(LinkRecordReply.self))
         case "ping": message = .ping(try body(Heartbeat.self))

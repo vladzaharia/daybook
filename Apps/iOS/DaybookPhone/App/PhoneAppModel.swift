@@ -100,6 +100,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
         self.link.onMacRecordingState = { [weak self] mac, state in self?.macReported(state, from: mac) }
         self.link.onMacConnected = { [weak self] mac in self?.macConnected(mac) }
+        self.link.onLibraryKeyMessage = { [weak self] message, mac in self?.libraryKeyMessage(message, from: mac) }
         self.devices.onImported = { [weak self] filed in self?.filedElsewhere(filed) }
         wireRecorderHandoff()
         // Macs hear what the recorders this iPhone manages are doing, when that changes.
@@ -145,6 +146,34 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     private func pruneCaptions() {
         captions.prune(trashed: Set(library.controller.trashedMeetingIDs()))
+    }
+
+    // MARK: Library keys
+
+    /// A Mac waiting for the encrypted library's key asked for it (it gets it when its library is this one), or a Mac
+    /// sent it.
+    private func libraryKeyMessage(_ message: LinkMessage, from macID: UUID) {
+        guard let controller = sync.controller else { return }
+        switch message {
+        case .libraryKeyRequest(let request):
+            guard let mac = link.macs.first(where: { $0.id == macID }) else { return }
+            Task {
+                let grants = await controller.libraryKeyGrants(for: request, peerLibraryID: mac.libraryID)
+                var sent = false
+                for grant in grants where (try? await link.send(.libraryKeyGrant(grant), to: macID)) != nil { sent = true }
+                if sent { notice = "Sent your library’s key to \(mac.name)." }
+            }
+        case .libraryKeyGrant(let grant):
+            Task { await controller.accept(grant) }
+        default:
+            break
+        }
+    }
+
+    /// Asks a connected Mac for the encrypted library's key this iPhone is waiting for.
+    func requestLibraryKey(from macID: UUID) async {
+        guard let request = await sync.controller?.libraryKeyRequest() else { return }
+        try? await link.send(.libraryKeyRequest(request), to: macID)
     }
 
     private static func testDefaults() -> UserDefaults {
