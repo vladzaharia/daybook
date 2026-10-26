@@ -32,7 +32,7 @@ Everything below is in v1:
   - Other recorders through Files.
 - **Multipoint.** When the Mac records, the phone can record too, and the reverse. Recordings join one conversation through the existing multipoint pipeline.
 - **Settings.** Sync folder, devices, recording, Mac pairing, appearance and text size.
-- **Export.** Markdown and audio through the share sheet. Copy (a passage, a summary line, Copy Summary) stays on the device that copied it, on the Mac too: never Universal Clipboard (`LocalPasteboard`).
+- **Export.** Markdown and audio through the share sheet. Copy (a passage, a summary line, Copy Summary) stays on the device that copied it, on the Mac too: never Universal Clipboard (`LocalPasteboard`). Exports wait in `tmp/Daybook Export/` only until the share sheet is done with them, and anything left there is cleared at launch. A file another app opens in Daybook (iOS copies it to `Documents/Inbox/`) is removed once it's imported; a failed import keeps it.
 
 **Not possible on iOS, by design**
 - Recording another app's call audio. iOS has no per-app or system audio capture, so on a call the phone records its own microphone only. The Mac records the call.

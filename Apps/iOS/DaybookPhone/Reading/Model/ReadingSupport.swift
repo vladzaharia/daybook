@@ -153,14 +153,32 @@ enum TrashedConversations {
     }
 }
 
-/// Files handed to the share sheet: the conversation as Markdown, named after its title.
+/// Files handed to the share sheet: the conversation as Markdown, named after its title. They wait in
+/// `tmp/Daybook Export/` and are removed once the share sheet is done with them, and at launch.
 enum ExportFiles {
+    static func root(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
+        directory.appendingPathComponent("Daybook Export", isDirectory: true)
+    }
+
+    /// Removes the export folders holding `urls`, or every export when nil. A URL outside the export
+    /// folder (a library original) is never touched.
+    static func clear(_ urls: [URL]? = nil, in directory: URL = FileManager.default.temporaryDirectory) {
+        let root = root(in: directory)
+        guard let urls else { try? FileManager.default.removeItem(at: root); return }
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        for url in urls where url.isFileURL {
+            let path = url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+            guard path.count > rootPath.count, Array(path.prefix(rootPath.count)) == rootPath else { continue }
+            try? FileManager.default.removeItem(at: root.appendingPathComponent(path[rootPath.count], isDirectory: true))
+        }
+    }
+
     /// A photo-bearing export is one ZIP, so sharing keeps the Markdown's relative links intact.
     static func markdownWithPhotos(_ meeting: Meeting, originals: [UUID: URL],
                                    in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
         guard !meeting.visiblePhotos.isEmpty else { return try markdown(meeting, in: directory) }
         let name = fileName(meeting.title)
-        let folder = directory.appendingPathComponent("Daybook Export/\(UUID().uuidString)", isDirectory: true)
+        let folder = root(in: directory).appendingPathComponent(UUID().uuidString, isDirectory: true)
         let package = folder.appendingPathComponent(name, isDirectory: true)
         try MeetingExport.write(meeting, to: package, name: name) { originals[$0.id] }
         let archive = folder.appendingPathComponent(name + ".zip")
@@ -175,8 +193,7 @@ enum ExportFiles {
     }
 
     static func markdown(_ meeting: Meeting, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
-        let folder = directory.appendingPathComponent("Daybook Export", isDirectory: true)
-            .appendingPathComponent(meeting.id.uuidString, isDirectory: true)
+        let folder = root(in: directory).appendingPathComponent(meeting.id.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent(fileName(meeting.title) + ".md")
         try MeetingExport.markdown(meeting).write(to: url, atomically: true, encoding: .utf8)
@@ -186,8 +203,7 @@ enum ExportFiles {
     /// The recording, under the conversation's name, so the share sheet doesn't offer "iPhone recording.m4a".
     @MainActor
     static func audio(_ source: URL, meeting: Meeting, track: RecordingTrack, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
-        let folder = directory.appendingPathComponent("Daybook Export", isDirectory: true)
-            .appendingPathComponent(meeting.id.uuidString, isDirectory: true)
+        let folder = root(in: directory).appendingPathComponent(meeting.id.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let suffix = meeting.tracks.count > 1 ? " (\(SourceDescription.name(track, in: meeting)))" : ""
         let url = folder.appendingPathComponent(fileName(meeting.title) + fileName(suffix))

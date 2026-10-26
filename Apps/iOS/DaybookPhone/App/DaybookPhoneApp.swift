@@ -9,6 +9,8 @@ struct DaybookPhoneApp: App {
 
     init() {
         let options = LaunchOptions()
+        // Exports a share sheet never finished with (the app quit first).
+        ExportFiles.clear()
         // Synthetic audio in tests and simulator demos, so nothing ever opens a real microphone there.
         let environment: PhoneRecorderEnvironment = options.syntheticAudio || options.isRunningTests ? .synthetic() : .live()
         let root = options.libraryPath.map { URL(fileURLWithPath: $0, isDirectory: true) }

@@ -322,6 +322,29 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(ExportFiles.fileName("  ...  "), "Conversation")
     }
 
+    /// Exports wait in tmp only until the share sheet is done; a library original handed to it
+    /// is never removed.
+    func testSharedExportsAreClearedAndNothingElseIs() throws {
+        let directory = try temporaryDirectory()
+        let meeting = weekly()
+        let first = try ExportFiles.markdown(meeting, in: directory)
+        var other = weekly()
+        other.id = UUID()
+        let second = try ExportFiles.markdown(other, in: directory)
+        let original = directory.appendingPathComponent("Library/Originals/Photos/a.jpg")
+        try FileManager.default.createDirectory(at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("photo".utf8).write(to: original)
+
+        ExportFiles.clear([first, original], in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.deletingLastPathComponent().path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path), "another export waits for its own share sheet")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path), "never a file outside the exports")
+
+        ExportFiles.clear(in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ExportFiles.root(in: directory).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+    }
+
     // MARK: Copy
 
     private final class PasteboardRecorder: LocalPasteboardWriting {

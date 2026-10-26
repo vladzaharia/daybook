@@ -246,4 +246,47 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(relaunched.notice, "Recovered a recording Daybook was making when it quit.")
         XCTAssertTrue(PhoneRecorder.pendingCaptures(in: library.stagingURL).isEmpty)
     }
+
+    // MARK: Files opened in Daybook
+
+    /// A second of tone as a WAV file, as another app might hand over.
+    private func audioFile(at url: URL, step: Float = 0.17) throws {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_000))
+        buffer.frameLength = 16_000
+        for index in 0..<16_000 { buffer.floatChannelData![0][index] = 0.2 * sin(Float(index) * step) }
+        let file = try AVAudioFile(forWriting: url, settings: [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000,
+                                                              AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16])
+        try file.write(from: buffer)
+    }
+
+    /// iOS copies a file another app opens in Daybook into Documents/Inbox. Once imported, that copy
+    /// goes; a failed import keeps it, and a file from anywhere else is never removed.
+    func testAnImportedInboxCopyIsRemovedButAFailedOneAndOutsideFilesStay() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root.appendingPathComponent("Library"), installation: "INSTALL-1")
+        library.inboxURL = root.appendingPathComponent("Documents/Inbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: library.inboxURL, withIntermediateDirectories: true)
+
+        let shared = library.inboxURL.appendingPathComponent("Voice memo.wav")
+        try audioFile(at: shared)
+        let filed = try await library.importFile(shared, requestTranscription: false)
+        XCTAssertEqual(filed.meeting.title, "Voice memo")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: shared.path), "the inbox copy goes once imported")
+
+        let broken = library.inboxURL.appendingPathComponent("Broken.m4a")
+        try Data("not audio".utf8).write(to: broken)
+        do {
+            _ = try await library.importFile(broken, requestTranscription: false)
+            XCTFail("imported something that isn't audio")
+        } catch {}
+        XCTAssertTrue(FileManager.default.fileExists(atPath: broken.path), "kept to try again")
+
+        let picked = root.appendingPathComponent("Files/Interview.wav")
+        try FileManager.default.createDirectory(at: picked.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try audioFile(at: picked, step: 0.31)
+        _ = try await library.importFile(picked, requestTranscription: false)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: picked.path), "a file chosen in Files is the person's")
+        XCTAssertEqual(library.conversations.count, 2)
+    }
 }

@@ -36,6 +36,10 @@ final class PhoneLibrary {
     var stagingURL: URL { rootURL.appendingPathComponent("Staging", isDirectory: true) }
     /// Where imports and recorder transfers wait while they're copied in.
     var importsURL: URL { rootURL.appendingPathComponent("Staging/Imports", isDirectory: true) }
+    /// Where iOS copies a file another app opens in Daybook (`Documents/Inbox`). Once imported, the
+    /// library has its own copy, so this one is removed.
+    @ObservationIgnored var inboxURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Inbox", isDirectory: true)
 
     /// Conversations, newest first.
     var conversations: [Meeting] {
@@ -171,9 +175,24 @@ final class PhoneLibrary {
 
     /// Imports audio from Files or the share sheet (Voice Memos, call recordings saved from Notes)
     /// into a new conversation named after the file and dated when it was recorded, if the file says.
-    /// The original isn't moved or changed. Returns what was filed; audio already in the library
+    /// The original isn't moved or changed, except the copy iOS left in the inbox, which goes once
+    /// it's imported (a failed import keeps it). Returns what was filed; audio already in the library
     /// returns that conversation instead of a copy.
     func importFile(_ url: URL, requestTranscription: Bool) async throws -> Filed {
+        let filed = try await importCopy(of: url, requestTranscription: requestTranscription)
+        removeInboxCopy(url)
+        return filed
+    }
+
+    /// Removes `url` if it's a file iOS put in the inbox; anything else is someone else's file.
+    func removeInboxCopy(_ url: URL) {
+        let inbox = inboxURL.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let file = url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard url.isFileURL, file.count > inbox.count, Array(file.prefix(inbox.count)) == inbox else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func importCopy(of url: URL, requestTranscription: Bool) async throws -> Filed {
         try await reload()
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
