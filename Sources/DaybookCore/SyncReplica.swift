@@ -153,6 +153,14 @@ public struct SyncDeviceActivity: Codable, Equatable, Sendable {
     public var isRecording: Bool { recordingConversationID != nil || recorders?.contains(where: \.isRecording) == true }
 }
 
+/// Whether a device holds an encrypted library's current key (`id`, hex), as its presence says.
+public struct SyncDeviceKeyState: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable { case waiting, ready }
+    public var state: State
+    public var id: String
+    public init(state: State, id: String) { self.state = state; self.id = id }
+}
+
 /// One device known to the library: from its presence record, or (for a replica running an older
 /// Daybook) only from the device ID on its journal entries.
 public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
@@ -167,7 +175,13 @@ public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
     public var isCurrentDevice: Bool
     /// What it's doing, as its presence record last said (nil without one, or with nothing to say).
     public var activity: SyncDeviceActivity?
+    /// What its Daybook says it can do (`LibrarySyncEngine.sealingFeature`). Empty for older versions.
+    public var features: [String] = []
+    /// In an encrypted library, whether it holds the current key.
+    public var keyState: SyncDeviceKeyState?
     public var reportsPresence: Bool { lastSeen != nil }
+    /// Its Daybook reads and writes encrypted libraries. A device without presence (an older Daybook) doesn't.
+    public var readsEncryptedLibraries: Bool { features.contains(LibrarySyncEngine.sealingFeature) }
     public init(id: String, deviceClass: SyncDeviceClass? = nil, displayName: String? = nil, canProcess: Bool? = nil,
                 audioPolicy: SyncAudioPolicy? = nil, lastSeen: Date? = nil, isCurrentDevice: Bool = false, activity: SyncDeviceActivity? = nil) {
         self.id = id; self.deviceClass = deviceClass; self.displayName = displayName; self.canProcess = canProcess
