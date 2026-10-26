@@ -143,7 +143,7 @@ struct ConversationMoreMenu: View {
             AddRecordingFromDeviceItems(state: state)
         }
         .disabled(locked)
-        Button("Add Photo…") { state.chooseAddPhoto(to: meeting.id) }
+        Button("Add Photos…") { state.chooseAddPhoto(to: meeting.id) }
         ReprocessMenu(state: state, meeting: meeting)
         Button("Version History…") { state.activeSheet = .versionHistory }.disabled(meeting.revisions.isEmpty)
         Divider()

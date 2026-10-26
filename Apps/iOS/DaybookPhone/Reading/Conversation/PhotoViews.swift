@@ -12,7 +12,9 @@ struct ImportPhotosSheet: View {
     @State private var selection: [PhotosPickerItem] = []
     @State private var choosingFiles = false
     @State private var importing = false
-    @State private var failure: String?
+    /// Why the last photos weren't added, in the system's words (behind Details).
+    @State private var failures: [String] = []
+    @State private var showingDetails = false
 
     var body: some View {
         NavigationStack {
@@ -22,8 +24,18 @@ struct ImportPhotosSheet: View {
                 }
                 Button { choosingFiles = true } label: { Label("Choose Files", systemImage: "folder") }
                 if importing { ProgressView("Adding photos…") }
-                if let failure { Text(failure).foregroundStyle(.secondary) }
+                if !failures.isEmpty {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label(failures.count == 1 ? "A photo wasn’t added." : "\(failures.count) photos weren’t added.",
+                              systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(PhoneStyle.Ink.warning)
+                        Spacer()
+                        Button("Details") { showingDetails = true }.buttonStyle(.daybookLink)
+                    }
+                    .font(PhoneStyle.Typeface.status)
+                }
             }
+            .sheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: failures.joined(separator: "\n")) }
             .disabled(importing)
             .navigationTitle("Add Photos")
             .navigationBarTitleDisplayMode(.inline)
@@ -37,7 +49,7 @@ struct ImportPhotosSheet: View {
                         let result = await library.importPhotos(urls, into: meetingID, origin: origin)
                         finish(result.failures)
                     }
-                case .failure(let error): failure = error.localizedDescription
+                case .failure(let error): failures = [error.localizedDescription]
                 }
             }
             .onChange(of: selection) { _, items in
@@ -66,7 +78,7 @@ struct ImportPhotosSheet: View {
 
     private func finish(_ failures: [String]) {
         importing = false
-        failure = failures.isEmpty ? nil : failures.joined(separator: "\n")
+        self.failures = failures
         if failures.isEmpty { dismiss() }
     }
 }
@@ -102,7 +114,7 @@ struct PhotoImage: View {
                     guard let loaded else { throw PhotoStoreError.unsupportedImage(photo.fileName) }
                     image = UIImage(cgImage: loaded)
                 } catch is CancellationError { }
-                catch { failure = error.localizedDescription }
+                catch { failure = PlainError.message(for: error, fallback: "The photo couldn’t be loaded.").message }
             }
     }
 
@@ -140,7 +152,7 @@ struct PhotoTile: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Photo: \(photo.displayCaption ?? photo.fileName)")
+        .accessibilityLabel(meeting.photoAccessibilityLabel(photo))
     }
 }
 
@@ -154,7 +166,9 @@ struct PhotoStrip: View {
                 HStack {
                     PageHeading(text: "Photos")
                     Spacer()
-                    Button("Add Photos") { session.sheet = .importPhotos(meeting.id) }.font(.subheadline)
+                    Button("Add Photos…") { session.sheet = .importPhotos(meeting.id) }
+                        .buttonStyle(.daybookLink)
+                        .font(PhoneStyle.Typeface.statusLead)
                 }
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 12) {
@@ -189,12 +203,12 @@ struct PhotoViewer: View {
                 VStack(spacing: 12) {
                     PhotoImage(photo: photo, meetingID: meetingID, maxPixels: 2400, mode: .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityLabel(photo.displayCaption ?? "Photo")
+                        .accessibilityLabel(meeting.photoAccessibilityLabel(photo))
                     VStack(alignment: .leading, spacing: 12) {
                         TextField(photo.analysis?.caption ?? "Caption", text: $caption, axis: .vertical)
                             .accessibilityLabel("Caption").onSubmit(saveCaption)
                         Text(photo.capturedAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(PhoneStyle.Typeface.byline).foregroundStyle(PhoneStyle.Ink.secondary)
                         if let time = meeting.timelineTime(of: photo), !meeting.tracks.isEmpty {
                             HStack {
                                 Button("Play from \(TimeLabel.short(time))") {
@@ -206,9 +220,12 @@ struct PhotoViewer: View {
                                     }
                                 }
                             }
-                            .font(.subheadline)
+                            .font(PhoneStyle.Typeface.status)
                         }
-                        if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
+                        if let failure {
+                            Label(failure, systemImage: "exclamationmark.triangle")
+                                .font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.warning)
+                        }
                     }
                     .padding(.horizontal).padding(.bottom)
                 }
@@ -230,7 +247,7 @@ struct PhotoViewer: View {
                                         let url = try await provider.localPhoto(for: photo, in: meetingID)
                                         saveCaption()
                                         session.sheet = .share([try ExportFiles.photo(url, caption: photo.displayCaption)])
-                                    } catch { failure = error.localizedDescription }
+                                    } catch { failure = PlainError.message(for: error, fallback: "The photo couldn’t be shared. Try again.").message }
                                 }
                             }
                             Button("Delete Photo…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
@@ -252,7 +269,7 @@ struct PhotoViewer: View {
                 .onChange(of: photoID) { _, _ in caption = self.photo?.caption ?? "" }
                 .onDisappear(perform: saveCaption)
             } else {
-                ContentUnavailableView("Photo Not Found", systemImage: "photo")
+                ContentUnavailableView("Photo Deleted", systemImage: "photo")
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             }
         }

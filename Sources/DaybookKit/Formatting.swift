@@ -121,3 +121,11 @@ public enum LibraryWords {
         }
     }
 }
+
+extension Meeting {
+    /// VoiceOver's name for a photo, on both apps: "Photo at 2 minutes, 5 seconds: Whiteboard".
+    public func photoAccessibilityLabel(_ photo: MeetingPhoto) -> String {
+        let time = timelineTime(of: photo).map { " at \(SpokenTime.format($0))" } ?? ""
+        return "Photo\(time)" + (photo.displayCaption.map { ": \($0)" } ?? "")
+    }
+}

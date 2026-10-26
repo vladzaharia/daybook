@@ -119,7 +119,7 @@ struct DaybookCommands: Commands {
             DeviceFileMenuItems(state: state)
             Button("Add Recording to Conversation…") { if let id = meeting?.id { state.chooseImport(attachTo: id) } }
                 .disabled(locked)
-            Button("Add Photo…") { if let id = meeting?.id { state.chooseAddPhoto(to: id) } }
+            Button("Add Photos…") { if let id = meeting?.id { state.chooseAddPhoto(to: id) } }
                 .keyboardShortcut("p", modifiers: [.command, .option])
                 .disabled(meeting == nil)
         }

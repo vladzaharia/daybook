@@ -107,7 +107,7 @@ extension AppState {
         notice = "There’s no image to paste."
     }
 
-    /// Add Photo…: an open panel for images.
+    /// Add Photos…: an open panel for images.
     func chooseAddPhoto(to id: UUID) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]

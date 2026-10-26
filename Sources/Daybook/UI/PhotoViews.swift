@@ -155,7 +155,7 @@ struct PhotoStrip: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text("Photos").font(TypeStyle.heading(scale)).foregroundStyle(Ink.body).accessibilityAddTraits(.isHeader)
                         Spacer()
-                        Button("Add Photo…") { state.chooseAddPhoto(to: meeting.id) }.buttonStyle(.daybookLink).font(TypeStyle.status)
+                        Button("Add Photos…") { state.chooseAddPhoto(to: meeting.id) }.buttonStyle(.daybookLink).font(TypeStyle.status)
                     }
                 }
                 .padding(.top, Space.s6)
@@ -264,7 +264,7 @@ struct PhotoViewer: View {
                 Divider()
                 details(photo, in: meeting)
             } else {
-                ContentUnavailableView("This photo was deleted.", systemImage: "photo")
+                ContentUnavailableView("Photo Deleted", systemImage: "photo")
             }
         }
         .frame(minWidth: 640, idealWidth: 860, minHeight: 520, idealHeight: 680)
@@ -353,8 +353,7 @@ enum PhotoWords {
     }
 
     static func accessibilityLabel(_ photo: MeetingPhoto, in meeting: Meeting) -> String {
-        let time = meeting.timelineTime(of: photo).map { " at \(SpokenTime.format($0))" } ?? ""
-        return "Photo\(time)" + (photo.displayCaption.map { ": \($0)" } ?? "")
+        meeting.photoAccessibilityLabel(photo)
     }
 }
 
