@@ -401,7 +401,7 @@ Both apps' Info.plist:
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: LINKTESTCOUNT tests, about 8 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 67 tests, about 8 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
