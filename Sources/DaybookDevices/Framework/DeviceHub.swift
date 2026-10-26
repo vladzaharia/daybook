@@ -16,6 +16,8 @@ public final class DeviceHub: ObservableObject {
     private var meetings: [Meeting] = []
     private var libraryReady = false
     private var started = false
+    /// Staged audio older than this belongs to an earlier run: no transfer of this one owns it.
+    private let createdAt = Date()
     private var librarySubscription: AnyCancellable?
     private var ownershipSubscription: AnyCancellable?
     /// The library's recorder ownership and this device's sync ID, once known.
@@ -52,7 +54,25 @@ public final class DeviceHub: ObservableObject {
     public func start() {
         guard !started else { return }
         started = true
+        Self.removeLeftoverStaging(in: environment.stagingDirectory, olderThan: createdAt)
         sessions.forEach { $0.activate() }
+    }
+
+    /// Removes audio a transfer staged that a killed or crashed run never handed to the library (a
+    /// transfer deletes its own file only when it ends). Only Daybook's staged recorder audio, and
+    /// only files from before `cutoff`, so a transfer under way never loses its file. The recorder
+    /// still has every one of these recordings. Returns what was removed.
+    @discardableResult
+    public static func removeLeftoverStaging(in directory: URL, olderThan cutoff: Date) -> [URL] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey],
+                                                                  options: [.skipsHiddenFiles])) ?? []
+        var removed: [URL] = []
+        for file in files where file.lastPathComponent.hasPrefix("Soundcore-") && file.pathExtension.lowercased() == "wav" {
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantFuture
+            guard modified < cutoff, (try? FileManager.default.removeItem(at: file)) != nil else { continue }
+            removed.append(file)
+        }
+        return removed
     }
 
     public func shutDown() {
