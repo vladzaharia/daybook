@@ -130,6 +130,17 @@ public enum DeviceRecordingStart {
               let seconds = UInt32(DeviceLibraryLinks.wholeRecordingID(identity.recordingID)) else { return nil }
         return SoundcoreRecording(id: seconds, size: 0).start(correction: SoundcoreClocks.clock(serial: identity.serial)?.correction ?? 0)
     }
+
+    /// The recorder's measured clock that `date(of:)` dates this recording by, for its track's
+    /// provenance: the offset, and whether it moved the start. Nil when the recorder's clock was
+    /// never measured (Daybook hasn't started a recording on it).
+    public static func clock(of identity: DeviceRecordingIdentity) -> CaptureRecorderClock? {
+        guard identity.kind == SoundcoreWorkIntegration.id,
+              let seconds = UInt32(DeviceLibraryLinks.wholeRecordingID(identity.recordingID)),
+              let clock = SoundcoreClocks.clock(serial: identity.serial) else { return nil }
+        let applied = clock.correction != 0 && SoundcoreRecording(id: seconds, size: 0).start(correction: clock.correction) != nil
+        return CaptureRecorderClock(offset: clock.offset, applied: applied, measuredAt: clock.measuredAt)
+    }
 }
 
 /// The list column's groups: New on the recorder and Already in Daybook, newest first.

@@ -799,9 +799,13 @@ final class SoundcoreSimulatorTests: XCTestCase {
         try await waitUntil("its recording, listed") { rig.session.split.inProgress == nil && rig.session.newRecordings.count == 2 }
         let finished = try XCTUnwrap(rig.session.newRecordings.first)
         XCTAssertEqual(try XCTUnwrap(finished.startedAt).timeIntervalSince(sent), 0, accuracy: 3)
-        // What dates an import from its identity alone uses the same clock.
+        // What dates an import from its identity alone uses the same clock, and its provenance says so.
         let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: device.serial, recordingID: finished.id)
         XCTAssertEqual(DeviceRecordingStart.date(of: identity), finished.startedAt)
+        XCTAssertEqual(DeviceRecordingStart.clock(of: identity), CaptureRecorderClock(offset: clock.offset, applied: true, measuredAt: clock.measuredAt))
+        var elsewhere = identity
+        elsewhere.serial = "D3200OTHER000005"
+        XCTAssertNil(DeviceRecordingStart.clock(of: elsewhere), "another recorder's clock was never measured")
 
         // It's remembered with the recorder.
         var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
@@ -825,6 +829,9 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(clock.summary, "In step")
         let id = try XCTUnwrap(device.activeRecording?.id)
         XCTAssertEqual(rig.connection.status?.recordingStartedAt, SoundcoreRecording(id: id, size: 0).date)
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: device.serial, recordingID: String(id))
+        XCTAssertEqual(DeviceRecordingStart.clock(of: identity)?.applied, false, "measured and kept, not applied")
+        XCTAssertEqual(DeviceRecordingStart.clock(of: identity)?.offset, clock.offset)
     }
 
     func testTheRecordersButtonListsItAgainOnStartAndOnStop() async throws {

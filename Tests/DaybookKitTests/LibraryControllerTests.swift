@@ -173,9 +173,12 @@ final class LibraryControllerTests: XCTestCase {
         let id = library.newMeeting(title: "Soundcore Work at 10:02 AM")
         let url = try file("1745312520.wav", "audio bytes")
         let identity = DeviceRecordingIdentity(kind: "soundcore.work", serial: "D320", recordingID: "1745312520")
+        let measured = CaptureRecorderClock(offset: 300.4, applied: true, measuredAt: Date(timeIntervalSince1970: 1_745_312_000))
         await library.acquireLock()
-        let first = try await library.ingest(url, into: id, provenance: .file(source: .soundcore, device: identity, duration: 61))
-        let again = try await library.ingest(url, into: id, provenance: .file(source: .soundcore, device: identity, duration: 61))
+        let first = try await library.ingest(url, into: id, provenance: .file(source: .soundcore, device: identity, duration: 61,
+                                                                              recorderClock: measured))
+        let again = try await library.ingest(url, into: id, provenance: .file(source: .soundcore, device: identity, duration: 61,
+                                                                              recorderClock: CaptureRecorderClock(offset: 1, applied: false)))
         library.releaseLock()
         await library.flush()
 
@@ -187,6 +190,9 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertEqual(track.device, identity)
         XCTAssertEqual(track.source, .soundcore)
         XCTAssertEqual(track.duration, 61)
+        XCTAssertEqual(track.capture, TrackCaptureDetails(recorderClock: measured), "the recorder's clock as measured when it first arrived")
+        let reopened = try await open()
+        XCTAssertEqual(reopened.meeting(id)?.tracks.first?.capture?.recorderClock, measured, "and saved with it")
         XCTAssertEqual(meeting.status, .imported)
         let stored = try await library.audioURL(for: track, in: id)
         XCTAssertEqual(try Data(contentsOf: stored), Data("audio bytes".utf8), "The original bytes are copied, never moved")
