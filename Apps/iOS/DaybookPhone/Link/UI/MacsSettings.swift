@@ -14,7 +14,8 @@ struct MacsSection: View {
             Button {
                 showingPairing = true
             } label: {
-                Label(model.link.macs.isEmpty ? "Pair with Your Mac…" : "Pair Another Mac…", systemImage: "plus.circle")
+                // The Mac's instructions name this item, so it's always the same words.
+                Label("Pair with Your Mac…", systemImage: "plus.circle")
             }
         } header: {
             Text("Macs")
@@ -231,7 +232,7 @@ struct PairingSheet: View {
                             Image(systemName: "desktopcomputer").foregroundStyle(PhoneStyle.accent).frame(width: 26)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(mac.name).foregroundStyle(.primary)
-                                Text(mac.isPaired ? "Paired" : mac.isPairing ? "Showing a code" : "Open pairing on this Mac")
+                                Text(mac.isPaired ? "Paired" : mac.isPairing ? "Showing a code" : "Not showing a code")
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -241,6 +242,7 @@ struct PairingSheet: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(selection == mac.id ? .isSelected : [])
                     if mac.id != candidates.last?.id { Divider().padding(.leading, 52) }
                 }
             }
@@ -255,11 +257,14 @@ struct PairingSheet: View {
                 .foregroundStyle(PhoneStyle.Ink.meta)
                 .textCase(.uppercase)
             ZStack {
+                // The real field, nearly invisible under the boxes: VoiceOver and the keyboard use it.
                 TextField("", text: $code)
                     .keyboardType(.numberPad)
                     .textContentType(.oneTimeCode)
                     .focused($codeFocused)
                     .opacity(0.02)
+                    .accessibilityLabel("Code on \(mac.name)")
+                    .accessibilityValue(digits.isEmpty ? "Empty" : digits.map(String.init).joined(separator: " "))
                     .onChange(of: code) { _, value in
                         let filtered = String(value.filter(\.isNumber).prefix(6))
                         if filtered != value { code = filtered }
@@ -279,12 +284,10 @@ struct PairingSheet: View {
                     }
                 }
                 .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
             .contentShape(Rectangle())
             .onTapGesture { codeFocused = true }
-            .accessibilityElement()
-            .accessibilityLabel("Pairing code")
-            .accessibilityValue(digits.isEmpty ? "Empty" : digits.map(String.init).joined(separator: " "))
             if pairing {
                 HStack(spacing: 8) { ProgressView(); Text("Pairing…").foregroundStyle(.secondary) }
             }

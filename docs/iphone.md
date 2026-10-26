@@ -50,7 +50,7 @@ A conversation's processing state comes from its data and is shown the same way 
 | **Requested** | A `ProcessingRequest` is in the library, waiting | "Waiting for your Mac" (with "Last seen 2 h ago" when no Mac has checked in recently) |
 | **Processing** | A Mac claimed it | "Transcribing on <Mac name> · 40%" (live over the local link; coarse over sync) |
 | **Done** | Transcript and summary present | Normal page |
-| **Couldn't finish** | The Mac reported a failure | The Mac's reason and Try Again (which writes a new request) |
+| **Couldn't finish** | The Mac reported a failure | What it means in plain words, Try Again (which writes a new request), and the Mac's own reason behind Details |
 
 - **Requests travel in the library.** A `ProcessingRequest` (meeting, mode, template, requested by, when) is synced metadata, like an edit. Recording on the phone requests **Transcribe** automatically.
 - **Requests run on a Mac.**
@@ -177,9 +177,9 @@ and sync at a glance, expanding to manage them (`DaybookPhone/Status/`). The wor
 
 | Detent | What it shows |
 |---|---|
-| **Compact** | Record, Import, and Search at the thumb; then one line each: the recorder ("Connected · 80% · 2 new", "Recording · 80%", "Importing 1 of 3", "Managed by Studio Mac", a handoff under way), your Mac ("Transcribing · 40%" with the gradient line, "Connected · 2 waiting", "Last seen 2 h ago"), and iCloud ("Up to date", "Syncing 3 changes"). Tapping a line goes to medium |
-| **Medium** | Live listening captions while a recorder streams, first (`DeviceSession.liveCaptions`, tentative); every recorder with its handoff (Use on This iPhone / Use on Studio Mac, progress, Take Over Anyway); the Mac's presence and queue: running with progress, waiting oldest first with "Requested from this iPhone", failures |
-| **Large** | Management: connect, Import N New, Record on Soundcore / Pause, Listen Live; recordings waiting on the recorder; the recorder's space and this iPhone's downloaded audio; paired Macs and Pair a Mac…. Links open the full screens (the device page, a Mac, Storage) inside the sheet rather than copies of them |
+| **Compact** | Record, Import, and Search at the thumb; then one line each: the recorder ("Connected · 80% · 2 new", "Recording · 80%", "Importing 1 of 3", "Managed by Studio Mac", a handoff under way), your Mac ("Transcribing · 40%" with the gradient line, "Connected · 2 waiting", "Last seen 2 h ago", or "Recording" with the red dot when its synced presence says so and the link has no word), and iCloud ("Up to date", "Syncing 3 changes"). Tapping a line goes to medium |
+| **Medium** | Live listening captions while a recorder streams, first (`DeviceSession.liveCaptions`, tentative); every recorder with its handoff (Use on This iPhone / Use on Studio Mac, progress, Take Over Anyway); the Mac's presence and queue: running with progress, waiting oldest first with "Requested from this iPhone", failures ("Studio Mac couldn’t finish" with the page's plain sentence; the Mac's words behind Details) |
+| **Large** | Management: connect, Import N New, Record on Soundcore / Pause, Listen Live; recordings waiting on the recorder; the recorder's space and this iPhone's downloaded audio; paired Macs and Pair with Your Mac…. Links open the full screens (the device page, a Mac, Storage) inside the sheet rather than copies of them |
 
 **Per posture, and why:**
 

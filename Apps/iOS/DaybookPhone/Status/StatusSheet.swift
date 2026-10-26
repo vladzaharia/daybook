@@ -754,7 +754,7 @@ private struct StatusPairing: View {
                 }
                 .background(PhoneStyle.quietFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
-            Button("Pair a Mac…", action: pair)
+            Button("Pair with Your Mac…", action: pair)
                 .font(PhoneStyle.Typeface.statusLead).foregroundStyle(PhoneStyle.Ink.link)
         }
     }
