@@ -276,6 +276,12 @@ final class PhoneAppModel: RecordingCommandHandling {
         // Intents can start before the first scene loads. Never record into an unopenable library.
         do { try await library.reload() }
         catch { notice = "Couldn’t open your library: \(error.localizedDescription)"; throw error }
+        // Another start won while the library loaded (an intent and a Mac at once): leave its recording
+        // be. Asked for that same recording, this one is it; asked for another, it can't start.
+        guard !recorder.isActive else {
+            if requestedID == nil || requestedID == recorder.captureID { return }
+            throw RecordingCommandError.failed(PhoneRecorderError.alreadyRecording.localizedDescription)
+        }
         let id = requestedID ?? UUID()
         let recordingID = UUID()
         let title = requestedTitle ?? "Conversation at \(Date().formatted(date: .omitted, time: .shortened))"
@@ -579,6 +585,9 @@ final class PhoneAppModel: RecordingCommandHandling {
                 try await startRecording(into: request.conversationID, title: title, multipoint: session)
                 if session == nil { startedFromMac = mac.id }
             } catch {
+                if recorder.isActive, recorder.captureID != request.conversationID {
+                    return .refused(LinkRecordRefusal(reason: .recordingSomethingElse, conversationID: recorder.captureID))
+                }
                 let denied = recorder.lastError == PhoneRecorderError.microphoneDenied.localizedDescription
                 return .refused(LinkRecordRefusal(reason: denied ? .permissionDenied : .microphoneUnavailable, message: recorder.lastError))
             }

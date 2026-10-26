@@ -358,6 +358,33 @@ final class PhoneLibraryTests: XCTestCase {
         } catch {}
     }
 
+    func testTwoStartsAtOnceLeaveTheOneThatWonAlone() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        let rig = RecorderRig()
+        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        // A Mac's request and an intent arrive together.
+        let conversation = UUID()
+        let session = MultipointSession(conversationID: conversation, role: .macLed(macID: UUID()),
+                                        macs: [MultipointSession.Mac(id: UUID(), name: "Studio Mac", state: .recording, startedAt: nil, startedByPhone: false)])
+        let led = Task { try await model.startRecording(into: conversation, title: "Design review", multipoint: session) }
+        let intent = Task { try await model.startRecording() }
+        let ledFailed: Bool
+        do { try await led.value; ledFailed = false } catch { ledFailed = true }
+        try await intent.value
+        XCTAssertTrue(model.recorder.isActive)
+        if model.recorder.captureID == conversation {
+            XCTAssertFalse(ledFailed)
+            XCTAssertEqual(model.multipoint?.conversationID, conversation, "the loser didn't clear the winner's session")
+        } else {
+            XCTAssertTrue(ledFailed, "the Mac's conversation can't start while another records")
+            XCTAssertNil(model.multipoint)
+        }
+        rig.pump(1)
+        try await model.stopRecording()
+        XCTAssertEqual(library.conversations.count, 1)
+    }
+
     func testStopFilesTheRecordingEvenWhenTheCallerIsCancelled() async throws {
         let root = try temporaryDirectory()
         let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
