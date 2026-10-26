@@ -1,8 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Ad hoc ("Sign to Run Locally") development builds: everything in Daybook.entitlements except iCloud and push,
-     which macOS only grants through a provisioning profile. These builds report that iCloud isn't available, keep
-     sync off, and never create the CloudKit courier (see docs/icloud-sync.md, "Development builds"). -->
+<!-- Ad hoc ("Sign to Run Locally") development builds and the migration rehearsal. They run in the App Sandbox, under
+     bundle IDs of their own (local.daybook.app.adhoc, local.daybook.app.rehearsal…), so they never create or move
+     into the app's container (docs/sandbox.md). Everything the sandboxed signed build has except iCloud and push,
+     which macOS only grants through a provisioning profile: these builds report that iCloud isn't available, keep
+     sync off, and never create the CloudKit courier (docs/icloud-sync.md, "Development builds").
+
+     The one temporary exception, /private/tmp/daybook/, lets the debug flags (dash-dash library, snapshot, output,
+     and so on) write somewhere a person can find. scripts/ci/check-mac-app.sh allows it here only; signed builds
+     carry no temporary exceptions. -->
 <plist version="1.0"><dict>
+<key>com.apple.security.app-sandbox</key><true/>
 <key>com.apple.security.device.audio-input</key><true/>
+<key>com.apple.security.device.microphone</key><true/>
+<key>com.apple.security.device.bluetooth</key><true/>
+<key>com.apple.security.network.client</key><true/>
+<key>com.apple.security.network.server</key><true/>
+<key>com.apple.security.files.user-selected.read-write</key><true/>
+<key>com.apple.security.files.bookmarks.app-scope</key><true/>
+<key>com.apple.security.temporary-exception.files.absolute-path.read-write</key><array><string>/private/tmp/daybook/</string></array>
 </dict></plist>

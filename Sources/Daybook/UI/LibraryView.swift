@@ -64,6 +64,7 @@ struct LibraryView: View {
         .onChange(of: showsConversation) { _, _ in adaptColumns() }
         .sheet(item: $state.activeSheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
         .sheet(item: $state.addDeviceRequest) { request in AddDeviceSheet(state: state, request: request) }
+        .sheet(item: $state.libraryMoveOffer) { offer in LibraryMoveSheet(state: state, offer: offer) }
         .alert(trashTitle, isPresented: Binding(get: { !state.trashRequestIDs.isEmpty }, set: { if !$0 { state.trashRequestIDs = [] } })) {
             Button("Move to Trash", role: .destructive) {
                 for id in state.trashRequestIDs { state.trashMeeting(id) }
@@ -301,7 +302,7 @@ private struct AddRecordingDrop: ViewModifier {
         content
             .overlay { if targeted { DropOutline(label: "Add to “\(meeting.title)”") } }
             .dropDestination(for: URL.self) { urls, _ in
-                let audio = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .audiovisualContent) == true }
+                let audio = AppState.droppedRecordings(urls)
                 guard !audio.isEmpty, state.recordingID != meeting.id else { return false }
                 Task { do { try await state.importFiles(audio, source: .imported, attachTo: meeting.id) } catch { state.errorMessage = error.localizedDescription } }
                 return true

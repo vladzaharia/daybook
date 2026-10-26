@@ -60,11 +60,12 @@ extension AppState {
         panel.prompt = "Watch Folder"
         let source = session.kind.id == SoundcoreWorkIntegration.id ? "the Soundcore app" : "your recorder"
         panel.message = "Choose where you save recordings exported from \(source), such as a “Daybook Import” folder in iCloud Drive."
-        let iCloud = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
-        let suggested = iCloud.appendingPathComponent("Daybook Import", isDirectory: true)
-        if FileManager.default.fileExists(atPath: suggested.path) { panel.directoryURL = suggested }
-        else if FileManager.default.fileExists(atPath: iCloud.path) { panel.directoryURL = iCloud }
+        // The person's iCloud Drive (`UserHome`), not the sandbox container's. Existence can be checked anywhere; the
+        // panel falls back on its own when iCloud Drive itself is missing.
+        let suggested = UserHome.iCloudDrive.appendingPathComponent("Daybook Import", isDirectory: true)
+        panel.directoryURL = FileManager.default.fileExists(atPath: suggested.path) ? suggested : UserHome.iCloudDrive
+        // Choosing again (in the App Sandbox a bookmark made before can stop working): start beside where it was.
+        if let known = session.files?.suggestedFolder { panel.directoryURL = known.deletingLastPathComponent() }
         guard panel.runModal() == .OK, let url = panel.url, let files = session.files else { return false }
         do {
             try files.watch(url)

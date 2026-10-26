@@ -41,4 +41,4 @@ Use a temporary library, with synthetic photos drawn by the app:
   --snapshot /tmp/daybook-photo-viewer --snapshot-delay 5 --photo-demo --open-photo
 ```
 
-First-run Vision processing can take longer than the usual four-second snapshot delay. In a debug iPhone simulator build, `--select "Spring launch review" --sheet photo` opens the first photo, and `--sheet photos` opens the importer. See [validation](validation.md#photos-2026-10-25) for tests and hardware limitations.
+With the packaged, sandboxed app, keep both paths under `/tmp/daybook/` (docs/sandbox.md). First-run Vision processing can take longer than the usual four-second snapshot delay. In a debug iPhone simulator build, `--select "Spring launch review" --sheet photo` opens the first photo, and `--sheet photos` opens the importer. See [validation](validation.md#photos-2026-10-25) for tests and hardware limitations.

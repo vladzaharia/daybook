@@ -32,6 +32,10 @@ public enum ICloudSyncState: Equatable, Sendable {
     case accountChanged
     /// The folder this Mac synced through before can't be found, so its journal can't be moved yet.
     case previousFolderMissing
+    /// The folder this Mac synced through before is there, but this build can't open it (in the App Sandbox, a
+    /// bookmark made before can stop working): the person chooses it again (`regrantPreviousFolder`). Carries where it
+    /// was, to start the panel there.
+    case previousFolderAccessLost(URL?)
     /// Copying the previous sync folder's journal into the container.
     case migrating(SyncMigrationProgress)
     /// Syncing with iCloud.
@@ -75,7 +79,7 @@ public struct SyncContainerEnvironment: Sendable {
     /// account or iCloud Drive is off.
     public var accountIdentity: @Sendable () -> Data?
     /// Whether any iCloud account is signed in, to tell "signed out" from "iCloud Drive off"; nil if unknown.
-    public var accountSignedIn: @Sendable () -> Bool?
+    public var accountSignedIn: @Sendable () async -> Bool?
     /// `FileManager.url(forUbiquityContainerIdentifier:)`. Called off the main actor.
     public var resolveContainer: @Sendable (String) -> URL?
     public var cloud: SyncCloudFiles
@@ -83,7 +87,7 @@ public struct SyncContainerEnvironment: Sendable {
     public var retryInterval: Duration
 
     public init(containerIdentifier: String?, hasEntitlement: @escaping @Sendable (String) -> Bool,
-                accountIdentity: @escaping @Sendable () -> Data?, accountSignedIn: @escaping @Sendable () -> Bool? = { nil },
+                accountIdentity: @escaping @Sendable () -> Data?, accountSignedIn: @escaping @Sendable () async -> Bool? = { nil },
                 resolveContainer: @escaping @Sendable (String) -> URL?, cloud: SyncCloudFiles = .system,
                 retryInterval: Duration = .seconds(5)) {
         self.containerIdentifier = Self.valid(containerIdentifier)
@@ -92,8 +96,9 @@ public struct SyncContainerEnvironment: Sendable {
     }
 
     public static var system: SyncContainerEnvironment {
-        SyncContainerEnvironment(
-            containerIdentifier: Bundle.main.object(forInfoDictionaryKey: infoKey) as? String,
+        let containerIdentifier = Bundle.main.object(forInfoDictionaryKey: infoKey) as? String
+        return SyncContainerEnvironment(
+            containerIdentifier: containerIdentifier,
             hasEntitlement: { identifier in
                 #if os(macOS)
                 return signedUbiquityContainers().contains(identifier)
@@ -106,9 +111,9 @@ public struct SyncContainerEnvironment: Sendable {
             },
             accountSignedIn: {
                 #if os(macOS)
-                // Best effort: the Apple Account list in the user's preferences (only whether it's empty is
-                // read). Unknown when it can't be read.
-                return (UserDefaults(suiteName: "MobileMeAccounts")?.array(forKey: "Accounts")).map { !$0.isEmpty }
+                // CloudKit's account status for the app's container (`ICloudAccountCheck`), which works in the App
+                // Sandbox. Unknown without the CloudKit entitlement, or when CloudKit can't tell.
+                return await ICloudAccountCheck.signedIn(containerIdentifier: containerIdentifier)
                 #else
                 return nil
                 #endif
@@ -198,6 +203,9 @@ public final class LibrarySyncController: ObservableObject {
 
     private enum Key {
         static let folderBookmark = "syncFolderBookmark"
+        /// A plain (not security-scoped) bookmark of the same folder, kept beside it: it still says where the folder is
+        /// when the scoped one can't be opened, so the panel can start there.
+        static let folderLocation = "syncFolderLocation"
         static let migratedFolderBookmark = "syncMigratedFolderBookmark"
         static let migration = "syncContainerMigration"
         static let account = "syncICloudAccount"
@@ -297,7 +305,7 @@ public final class LibrarySyncController: ObservableObject {
             var stale = false
             let url = try URL(resolvingBookmarkData: data, options: Self.bookmarkResolution, relativeTo: nil, bookmarkDataIsStale: &stale)
             try connect(to: url)
-            if stale { try saveBookmark(url) }
+            if stale { try saveBookmark(url) } else if defaults.data(forKey: Key.folderLocation) == nil { rememberLocation(of: url) }
         } catch { status = "Reconnect your iCloud folder: \(error.localizedDescription)" }
     }
 
@@ -342,6 +350,30 @@ public final class LibrarySyncController: ObservableObject {
     private func saveBookmark(_ url: URL) throws {
         let data = try url.bookmarkData(options: Self.bookmarkCreation, includingResourceValuesForKeys: nil, relativeTo: nil)
         defaults.set(data, forKey: Key.folderBookmark)
+        rememberLocation(of: url)
+    }
+
+    /// Keeps a plain bookmark of the chosen folder beside the scoped one (`Key.folderLocation`).
+    private func rememberLocation(of url: URL) {
+        if let data = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            defaults.set(data, forKey: Key.folderLocation)
+        }
+    }
+
+    /// Where the previous folder was, from the plain bookmark, when it's there at all.
+    private func previousFolderLocation() -> URL? {
+        guard let data = defaults.data(forKey: Key.folderLocation) else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale),
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    /// The previous folder, chosen again after this build lost access to it (`previousFolderAccessLost`): its bookmark is
+    /// replaced and the move to iCloud tries again.
+    public func regrantPreviousFolder(_ url: URL) {
+        do { try saveBookmark(url) } catch { status = "Couldn’t use that folder: \(error.localizedDescription)"; return }
+        retryContainer()
     }
 
     // A sandboxed Mac keeps access through a security-scoped bookmark. On iPhone a folder picked in
@@ -660,7 +692,9 @@ public final class LibrarySyncController: ObservableObject {
             iCloud = .turnedOff; status = "iCloud sync is off"; return
         }
         guard let account = environment.accountIdentity() else {
-            if environment.accountSignedIn() == false {
+            let signedIn = await environment.accountSignedIn()
+            guard isCurrent(generation) else { return }
+            if signedIn == false {
                 iCloud = .signedOut; status = "Signed out of iCloud"
             } else {
                 iCloud = .iCloudDriveOff; status = "iCloud is off in System Settings"
@@ -712,11 +746,18 @@ public final class LibrarySyncController: ObservableObject {
     /// while iCloud downloads the source's files.
     private func migrateFolder(into root: URL, identifier: String, generation: UUID) async -> Bool {
         guard let bookmark = defaults.data(forKey: Key.folderBookmark) else { return true }
-        guard let source = Self.resolve(bookmark) else {
-            iCloud = .previousFolderMissing
-            status = "Sync paused: the folder this Mac synced through can’t be found"
+        guard let source = Self.resolve(bookmark), Self.canOpen(source) else {
+            // There but unreadable (a bookmark made before the App Sandbox), or gone.
+            if let location = Self.resolve(bookmark) ?? previousFolderLocation() {
+                iCloud = .previousFolderAccessLost(location)
+                status = "Sync paused: choose the folder this Mac synced through again"
+            } else {
+                iCloud = .previousFolderMissing
+                status = "Sync paused: the folder this Mac synced through can’t be found"
+            }
             return false
         }
+        if defaults.data(forKey: Key.folderLocation) == nil { rememberLocation(of: source) }
         if Self.samePlace(source, root) {
             // An earlier build connected the container itself through a bookmark: nothing to move.
             retireFolderBookmark(); return true
@@ -831,6 +872,13 @@ public final class LibrarySyncController: ObservableObject {
         guard let url = try? URL(resolvingBookmarkData: bookmark, options: bookmarkResolution, relativeTo: nil, bookmarkDataIsStale: &stale),
               FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
+    }
+
+    /// Whether this build can list `url`, with its security scope held while it checks.
+    private static func canOpen(_ url: URL) -> Bool {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        return (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
     }
 
     private static func samePlace(_ a: URL, _ b: URL) -> Bool {

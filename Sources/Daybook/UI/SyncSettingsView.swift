@@ -79,6 +79,13 @@ struct SyncSettingsView: View {
             SyncWarning(text: "This library synced with a different iCloud account, so sync is paused.") {
                 Button("Sync with This Account…") { confirmingAccount = true }
             }
+        case .previousFolderAccessLost(let location):
+            SyncWarning(text: "Daybook can’t open the folder this Mac synced through before.") {
+                HStack {
+                    Button("Choose Folder Again…") { sync.choosePreviousFolderAgain(near: location) }
+                    Button("Sync Without It…") { confirmingSkip = true }
+                }
+            }
         case .previousFolderMissing:
             SyncWarning(text: "Can’t find the folder this Mac synced through before.") {
                 HStack {
@@ -103,7 +110,7 @@ struct SyncSettingsView: View {
         case .migrating(let progress):
             return progress.total > 0 ? "Migrating \(progress.completed) of \(progress.total) files…" : "Preparing to move to iCloud…"
         case .accountChanged: return "Paused"
-        case .previousFolderMissing: return "Paused"
+        case .previousFolderMissing, .previousFolderAccessLost: return "Paused"
         case .containerUnavailable: return "Not available"
         case .turnedOff: return "Off"
         case .unavailableInThisBuild: return "Not available in this build"

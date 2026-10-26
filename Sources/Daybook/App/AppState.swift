@@ -14,7 +14,8 @@ import UniformTypeIdentifiers
 /// members are forwarded so views and menus read them here as before.
 @MainActor
 final class AppState: ObservableObject {
-    nonisolated static let libraryURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Daybook", isDirectory: true)
+    /// `Application Support/Daybook` for the app; `Daybook Development` for unbundled runs (`LibraryLocation`).
+    nonisolated static let libraryURL = LibraryLocation.standard
     /// The library: conversations, folders, templates, vocabulary, and every edit.
     let library: LibraryController
     var meetings: [Meeting] {
@@ -71,6 +72,14 @@ final class AppState: ObservableObject {
         set { library.notice = newValue }
     }
     @Published var isReady = false
+    /// A library in the wrong place for this build (docs/sandbox.md): the library doesn't open until the person decides.
+    @Published var libraryMoveOffer: LibraryMoveOffer?
+    @Published var isMovingLibrary = false
+    @Published var libraryMoveError: String?
+    /// A library just copied into the container, before the person decides about the old copy.
+    @Published var movedLibrary: MovedLibrary?
+    /// Said once the library opens (`LaunchCheck`).
+    var launchNotice: String?
     @Published var processingID: UUID?
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
@@ -199,6 +208,8 @@ final class AppState: ObservableObject {
     let searchMemo = LibrarySearchMemo()
 
     init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard) {
+        // Where the library is, before anything here writes preferences or sync resolves its identity (docs/sandbox.md).
+        let launch = Self.launchCheck(library: libraryURL, defaults: defaults)
         let storedPreferences = defaults.data(forKey: "processingPreferences").flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
         var processingPreferences = storedPreferences ?? .init()
         let selections = Self.loadModelSelections(defaults: defaults, speakerModel: storedPreferences?.speakerModelID)
@@ -275,6 +286,126 @@ final class AppState: ObservableObject {
         wireDevices()
         wirePhones()
         wireCaptions()
+        libraryMoveOffer = launch.offer
+        launchNotice = launch.notice
+    }
+
+    /// What the launch check found: a move to offer, or something to say once the library opens.
+    struct LaunchCheck: Equatable {
+        var offer: LibraryMoveOffer?
+        var notice: String?
+    }
+
+    /// Where the library is, before anything writes preferences or sync resolves its identity (docs/sandbox.md). A
+    /// library that moved gets this Mac's identity back (`ReplicaIdentity`). Then, for the app's own library only (never
+    /// `--library`, `swift run`, or tests): unsandboxed, whether to move it back out of the sandboxed build's container
+    /// (`LegacyLibraryReturn`); sandboxed, whether it's in place in the container (`SandboxMigration`).
+    static func launchCheck(library: URL, defaults: UserDefaults, bundle: Bundle = .main,
+                            sandboxed: Bool = SandboxEnvironment.isSandboxed) -> LaunchCheck {
+        let priorUse = SandboxMigration.preferencesShowPriorUse(defaults)
+        ReplicaIdentity.restore(library: library, defaults: defaults, machine: ReplicaIdentity.currentMachine)
+        guard library.standardizedFileURL.path == LibraryLocation.standard.standardizedFileURL.path,
+              LibraryLocation.folderName(bundleURL: bundle.bundleURL) == LibraryLocation.appFolder,
+              let identifier = bundle.bundleIdentifier else { return LaunchCheck() }
+        return launchCheck(library: library, bundleIdentifier: identifier, defaults: defaults, sandboxed: sandboxed, priorUse: priorUse)
+    }
+
+    static func launchCheck(library: URL, bundleIdentifier: String, defaults: UserDefaults, sandboxed: Bool, priorUse: Bool,
+                            home: URL = UserHome.url,
+                            store: (URL) -> SyncDeviceIdentityStore = { SyncDeviceIdentityStore.keychain(for: $0) }) -> LaunchCheck {
+        guard sandboxed else {
+            // Only the app itself goes back: its library is the old place its bundle ID's sandboxed build moved from.
+            guard SandboxMigration.legacyFolderName(bundleIdentifier: bundleIdentifier) == library.lastPathComponent else { return LaunchCheck() }
+            let plan = LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleIdentifier, home: home, defaults: defaults)
+            return LaunchCheck(offer: plan.map { .returnFromContainer($0) })
+        }
+        guard let legacy = SandboxMigration.legacyLibrary(bundleIdentifier: bundleIdentifier, home: home) else { return LaunchCheck() }
+        switch SandboxMigration.check(library: library, legacy: legacy, defaults: defaults, priorUse: priorUse, store: store) {
+        case .fresh, .moved:
+            return LaunchCheck()
+        case .stillAtOldLocation:
+            return LaunchCheck(offer: .moveIntoContainer(.init(legacy: legacy, library: library, legacyExists: LibraryContents.looksLikeLibrary(legacy))))
+        case .bothPresent:
+            guard defaults.string(forKey: SandboxMigration.keptOldCopyKey) != legacy.path else { return LaunchCheck() }
+            return LaunchCheck(offer: .oldCopyRemains(legacy))
+        case .identityMissing:
+            return LaunchCheck(notice: "If your iPhone can’t find this Mac, pair it again in Settings › Devices.")
+        }
+    }
+
+    /// Moves the library as offered. Back out of the container: moved, then the app starts over. Into the container: the
+    /// person chooses the old library (the sandbox can read it only then), it's copied into place, and the sheet asks
+    /// about the old copy (`finishLibraryMove`).
+    func acceptLibraryMove() {
+        guard let offer = libraryMoveOffer, !isMovingLibrary else { return }
+        libraryMoveError = nil
+        switch offer {
+        case .returnFromContainer(let plan):
+            isMovingLibrary = true
+            Task {
+                do {
+                    _ = try await Task.detached(priority: .userInitiated) { try LegacyLibraryReturn.move(plan) }.value
+                    LegacyLibraryReturn.finish(plan, defaults: preferences)
+                    AppRelaunch.relaunch()
+                } catch {
+                    isMovingLibrary = false
+                    libraryMoveError = "Couldn’t move your library: \(error.localizedDescription)"
+                }
+            }
+        case .moveIntoContainer(let plan):
+            guard let source = SandboxMigration.chooseLibrary(near: plan.legacy) else { return }
+            isMovingLibrary = true
+            let scoped = source.startAccessingSecurityScopedResource()
+            Task {
+                do {
+                    try await Task.detached(priority: .userInitiated) { try SandboxMigration.copyLibrary(from: source, to: plan.library) }.value
+                    movedLibrary = MovedLibrary(source: source, scoped: scoped, legacy: plan.legacy)
+                } catch {
+                    if scoped { source.stopAccessingSecurityScopedResource() }
+                    libraryMoveError = "Couldn’t move your library: \(error.localizedDescription)"
+                }
+                isMovingLibrary = false
+            }
+        case .oldCopyRemains(let legacy):
+            NSWorkspace.shared.activateFileViewerSelecting([legacy])
+            keepOldLibraryCopy(legacy)
+        }
+    }
+
+    /// After a move into the container: the old copy goes to the Trash or stays, and the app starts over with the
+    /// library in place.
+    func finishLibraryMove(trashingOldCopy: Bool) {
+        guard let moved = movedLibrary else { return }
+        var trashed = false
+        if trashingOldCopy {
+            trashed = (try? FileManager.default.trashItem(at: moved.source, resultingItemURL: nil)) != nil
+            if !trashed { NSWorkspace.shared.activateFileViewerSelecting([moved.source]) }
+        }
+        if !trashed { preferences.set(moved.legacy.path, forKey: SandboxMigration.keptOldCopyKey) }
+        if moved.scoped { moved.source.stopAccessingSecurityScopedResource() }
+        AppRelaunch.relaunch()
+    }
+
+    /// Not Now (or Quit, Start Fresh, Keep It), depending on the offer.
+    func declineLibraryMove() async {
+        guard let offer = libraryMoveOffer, !isMovingLibrary else { return }
+        switch offer {
+        case .returnFromContainer(let plan): LegacyLibraryReturn.decline(plan, defaults: preferences)
+        case .moveIntoContainer(let plan):
+            // With a library at the old place, nothing opens without it; with none there, start a new one.
+            guard !plan.legacyExists else { NSApp.terminate(nil); return }
+            preferences.set(true, forKey: SandboxMigration.startedFreshKey)
+        case .oldCopyRemains(let legacy):
+            keepOldLibraryCopy(legacy)
+            return
+        }
+        libraryMoveOffer = nil
+        await initialize()
+    }
+
+    private func keepOldLibraryCopy(_ legacy: URL) {
+        preferences.set(legacy.path, forKey: SandboxMigration.keptOldCopyKey)
+        libraryMoveOffer = nil
     }
 
     var selectedMeeting: Meeting? { meetings.first { $0.id == selectedID } }
@@ -334,8 +465,12 @@ final class AppState: ObservableObject {
 
     func initialize() async {
         guard !isReady else { return }
+        // A library to move first: nothing opens until the person decides (`libraryMoveOffer`).
+        guard libraryMoveOffer?.holdsLibrary != true else { return }
         do {
             try await library.load()
+            recordReplicaIdentity()
+            if let launchNotice { post([launchNotice]); self.launchNotice = nil }
             // Installs from before the model system move into the store first, without downloading.
             let migration = await runtime.prepare()
             if !migration.failed.isEmpty {
@@ -354,6 +489,15 @@ final class AppState: ObservableObject {
             // Requests this Mac held when it last quit or crashed run again (or are given back).
             pickUpRequests()
         } catch { errorMessage = "Couldn’t open your library: \(error.localizedDescription)" }
+    }
+
+    /// Keeps this Mac's sync and link identity with the library (`ReplicaIdentity`), for when the library moves.
+    func recordReplicaIdentity() {
+        guard library.isLoaded else { return }
+        ReplicaIdentity.save(ReplicaIdentity(syncDeviceID: sync.deviceID, installation: sync.installation,
+                                             linkDeviceID: phoneLink.identity.deviceID.uuidString,
+                                             libraryPath: storageURL.standardizedFileURL.path,
+                                             machine: ReplicaIdentity.currentMachine ?? "", savedAt: Date()), in: storageURL)
     }
 
     /// A background import from a recorder (`selecting: false`) takes neither the place being viewed nor the selection.
@@ -392,7 +536,8 @@ final class AppState: ObservableObject {
     func chooseImport(attachTo id: UUID? = nil) {
         let panel = NSOpenPanel()
         panel.title = id == nil ? "Import recordings" : "Add another recording of this conversation"
-        panel.allowedContentTypes = [.audio, .movie]; panel.allowsMultipleSelection = true
+        // A recording's bookmarks file ("call.highlights.json") can be chosen with it (`separatingSidecars`).
+        panel.allowedContentTypes = [.audio, .movie, .json]; panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
         Task {
             do { try await importFiles(panel.urls, source: .imported, attachTo: id) }
@@ -415,7 +560,8 @@ final class AppState: ObservableObject {
         defer { releaseImportLock() }
         guard library.isLoaded else { throw AppError.libraryUnavailable }
         var meetingIDs: [UUID] = []
-        for url in urls {
+        let (audioURLs, chosenSidecars) = Self.separatingSidecars(urls)
+        for url in audioURLs {
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             // Validate before creating a library entry; zero-length and unsupported files remain outside the library.
@@ -444,9 +590,10 @@ final class AppState: ObservableObject {
                 ?? newMeeting(title: url.deletingPathExtension().lastPathComponent)
             await flush()
             guard let meeting = meetings.first(where: { $0.id == meetingID }) else { continue }
-            let sidecar = url.deletingPathExtension().appendingPathExtension("highlights.json")
+            let sidecar = readableSidecar(for: url, chosen: chosenSidecars)
+            defer { sidecar.close() }
             let imported = try await library.ingest(url, into: meetingID, provenance: .file(source: source, device: device,
-                sidecarURL: FileManager.default.fileExists(atPath: sidecar.path) ? sidecar : nil, duration: duration,
+                sidecarURL: sidecar.url, duration: duration,
                 recorderClock: device.flatMap(DeviceRecordingStart.clock(of:)))).imported
             await sourceArrived(meetingID, before: meeting, imported: imported, url: url, device: device, plan: plan)
             if device == nil { selectedID = meetingID }
@@ -454,6 +601,46 @@ final class AppState: ObservableObject {
             enqueue(meetingID)
         }
         return meetingIDs
+    }
+
+    /// Recordings to import and the highlights sidecars ("call.highlights.json") chosen or dropped with them, keyed by
+    /// the recording they belong to: its path without the extension. Other JSON files are left out.
+    nonisolated static func separatingSidecars(_ urls: [URL]) -> (audio: [URL], sidecars: [String: URL]) {
+        var audio: [URL] = [], sidecars: [String: URL] = [:]
+        for url in urls {
+            if let recording = sidecarRecordingPath(url) { sidecars[recording] = url }
+            else if url.pathExtension.lowercased() != "json" { audio.append(url) }
+        }
+        return (audio, sidecars)
+    }
+
+    /// "/a/call.highlights.json" → "/a/call"; nil for anything that isn't a highlights sidecar.
+    nonisolated static func sidecarRecordingPath(_ url: URL) -> String? {
+        let suffix = ".highlights.json", name = url.lastPathComponent
+        guard name.lowercased().hasSuffix(suffix), name.count > suffix.count else { return nil }
+        return url.deletingLastPathComponent().appendingPathComponent(String(name.dropLast(suffix.count))).standardizedFileURL.path
+    }
+
+    /// What a drop imports: its recordings and the highlights sidecars beside them; nothing when it holds no recording.
+    nonisolated static func droppedRecordings(_ urls: [URL]) -> [URL] {
+        let audio = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .audiovisualContent) == true }
+        guard !audio.isEmpty else { return [] }
+        return audio + urls.filter { sidecarRecordingPath($0) != nil }
+    }
+
+    /// The highlights sidecar to import with `audio`: one chosen or dropped with it, else the file beside it
+    /// ("call.highlights.json"). One that exists but can't be read is left out with a notice, and the recording imports
+    /// without its bookmarks: in the App Sandbox only files the person chose are readable, so a sidecar beside a chosen
+    /// recording usually isn't.
+    private func readableSidecar(for audio: URL, chosen: [String: URL]) -> ImportSidecar {
+        let recording = audio.deletingPathExtension().standardizedFileURL.path
+        let candidate = chosen[recording] ?? audio.deletingPathExtension().appendingPathExtension("highlights.json")
+        guard FileManager.default.fileExists(atPath: candidate.path) else { return ImportSidecar(url: nil, scoped: false) }
+        let scoped = candidate.startAccessingSecurityScopedResource()
+        if (try? Data(contentsOf: candidate, options: .mappedIfSafe)) != nil { return ImportSidecar(url: candidate, scoped: scoped) }
+        if scoped { candidate.stopAccessingSecurityScopedResource() }
+        post(["Imported “\(audio.lastPathComponent)” without its bookmarks. To include them, choose “\(candidate.lastPathComponent)” with it."])
+        return ImportSidecar(url: nil, scoped: false)
     }
 
     func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio) {
@@ -836,10 +1023,12 @@ final class AppState: ObservableObject {
 
     func export(_ id: UUID, json: Bool = false) {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return }
-        let panel = NSSavePanel(); panel.allowedContentTypes = json ? [.json] : [.plainText]
-        panel.nameFieldStringValue = meeting.title.replacingOccurrences(of: "/", with: "-") + (json ? ".json" : ".md")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
         let directory = library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)", isDirectory: true)
+        // Markdown with photos is a file and a folder beside it: the person chooses where both go.
+        if !json && !meeting.visiblePhotos.isEmpty { exportWithPhotos(meeting, from: directory); return }
+        let panel = NSSavePanel(); panel.allowedContentTypes = json ? [.json] : [.plainText]
+        panel.nameFieldStringValue = Self.exportName(meeting.title) + (json ? ".json" : ".md")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
@@ -853,6 +1042,35 @@ final class AppState: ObservableObject {
                 notice = "Exported \(url.lastPathComponent)"
             } catch { errorMessage = error.localizedDescription }
         }
+    }
+
+    /// Markdown with photos goes into a folder the person chooses, as `<title>.md` and `<title> Photos/`, never
+    /// replacing anything there. A save panel grants only the file it names; in the App Sandbox the photos folder beside
+    /// it couldn't be created.
+    private func exportWithPhotos(_ meeting: Meeting, from directory: URL) {
+        let panel = NSOpenPanel()
+        panel.title = "Export “\(meeting.title)”"
+        panel.prompt = "Export Here"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        let name = Self.exportName(meeting.title)
+        Task {
+            do {
+                let written = try await Task.detached(priority: .userInitiated) {
+                    let scoped = folder.startAccessingSecurityScopedResource()
+                    defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+                    return try MeetingExport.write(meeting, to: folder, name: name) { directory.appendingPathComponent($0.relativePath) }
+                }.value
+                notice = "Exported \(written.markdown.lastPathComponent)"
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    /// A conversation's title as an export's file name: no folder separators, never empty.
+    nonisolated static func exportName(_ title: String) -> String {
+        let name = title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty || name == "." || name == ".." ? "Conversation" : name
     }
 
     func audioURL(for track: RecordingTrack, meetingID: UUID) async -> URL? {
@@ -1031,6 +1249,13 @@ enum ActiveSheet: Identifiable, Equatable {
 struct NewFolderRequest: Identifiable, Equatable {
     let id = UUID()
     var moving: [UUID] = []
+}
+
+/// A highlights sidecar an import reads, with the access it was granted held until the import is done.
+struct ImportSidecar {
+    let url: URL?
+    let scoped: Bool
+    func close() { if scoped { url?.stopAccessingSecurityScopedResource() } }
 }
 
 /// The library's errors, shared with the devices that import into it.

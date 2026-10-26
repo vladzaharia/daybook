@@ -102,8 +102,7 @@ enum DeviceDemo {
     }
 
     private static var folder: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Daybook Import", isDirectory: true)
+        UserHome.iCloudDrive.appendingPathComponent("Daybook Import", isDirectory: true)
     }
 
     private static func file(_ name: String, megabytes: Double, hoursAgo: Double) -> DeviceRecording {

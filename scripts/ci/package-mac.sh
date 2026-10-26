@@ -3,13 +3,18 @@
 # DMG when one can be signed, and SHA256SUMS.txt.
 #
 #   scripts/ci/package-mac.sh --app dist/Daybook.app --version 1.4.0 [--build 1057] --output dist/release [--notarize]
+#                             [--sandbox]
 #
 #   --version, --build   the app's Info.plist must carry these as CFBundleShortVersionString and
 #                CFBundleVersion, or nothing is packaged
 #   --notarize   submit to Apple's notary service with the App Store Connect API key
 #                (DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, DAYBOOK_ASC_ISSUER_ID), wait, and staple.
 #                Requires a Developer ID signature with the iCloud entitlements. Without it (local
-#                checks), the app is packaged as it is and nothing is sent to Apple.
+#                checks), the app is packaged as it is and nothing is sent to Apple. With --notarize the
+#                app's bundle ID, App Sandbox entitlements, and migration manifest are checked first
+#                (scripts/ci/check-mac-app.sh): not sandboxed and no manifest, or with --sandbox, sandboxed,
+#                no temporary exceptions, and the manifest that moves the library (docs/sandbox.md).
+#   --sandbox    the app is the sandboxed build (build-app.sh --sandbox)
 #   --wait 45m, --dmg-wait 20m
 #                how long to wait for each submission (notarytool's --timeout). Apple usually takes
 #                minutes; these keep the waits well inside the job's time limit.
@@ -40,6 +45,7 @@ version=""
 build=""
 output=""
 notarize=0
+sandbox=0
 app_wait="45m"
 dmg_wait="20m"
 state_dir=""
@@ -57,6 +63,7 @@ while [[ $# -gt 0 ]]; do
         --build) build="${2-}"; shift ;;
         --output) output="${2-}"; shift ;;
         --notarize) notarize=1 ;;
+        --sandbox) sandbox=1 ;;
         --wait) app_wait="${2-}"; shift ;;
         --dmg-wait) dmg_wait="${2-}"; shift ;;
         --state-dir) state_dir="${2-}"; shift ;;
@@ -140,6 +147,10 @@ if (( notarize )); then
     printf '%s' "$entitlements" | grep -q "<string>$container</string>" \
         || fail "$app lacks the $container entitlement: the export didn't use the Developer ID profile with iCloud"
     echo "Entitlements include $container"
+    # A release is exactly the kind it says: never sandboxed by accident, never sandboxed without the manifest.
+    kind=signed
+    if (( sandbox )); then kind=signed-sandbox; fi
+    "$(dirname "$0")/check-mac-app.sh" --app "$app" --kind "$kind" || fail "$app isn't the $kind build this release expects"
 
     summary "### Notarization"
     pending="$state_dir/pending.json"

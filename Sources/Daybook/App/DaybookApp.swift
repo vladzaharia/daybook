@@ -5,6 +5,12 @@ import SwiftUI
 @main
 enum DaybookEntry {
     @MainActor static func main() async {
+        // A sandboxed build can't reach paths outside its container: stop now and say where it can write.
+        let unreachable = LaunchPaths.problems(arguments: CommandLine.arguments)
+        if !unreachable.isEmpty {
+            FileHandle.standardError.write(Data((unreachable.joined(separator: "\n") + "\n").utf8))
+            Darwin.exit(2)
+        }
         if CommandLine.arguments.contains("--smoke-test") {
             let code = await SmokeTest.run(arguments: CommandLine.arguments)
             Darwin.exit(code)
@@ -13,6 +19,13 @@ enum DaybookEntry {
             let code = await SpeechEvaluation.run(arguments: CommandLine.arguments)
             Darwin.exit(code)
         }
+        #if DEBUG
+        // Whether process taps work in the App Sandbox (docs/sandbox.md): the tap alone, nothing recorded.
+        if CommandLine.arguments.contains("--capture-probe") {
+            let code = await CaptureProbe.run(arguments: CommandLine.arguments)
+            Darwin.exit(code)
+        }
+        #endif
         DaybookApp.main()
     }
 }
@@ -60,7 +73,9 @@ struct DaybookApp: App {
             .windowStyle(.hiddenTitleBar)
             .windowResizability(.contentSize)
             .restorationBehavior(.disabled)
-            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil ? .suppressed : .presented)
+            // A library to move first (docs/sandbox.md) is asked about in the library window, which opens instead.
+            .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil || state.libraryMoveOffer?.holdsLibrary == true
+                                   ? .suppressed : .presented)
 
         Window("Vocabulary", id: WindowID.vocabulary) { GlossaryView(state: state).defaultAppStorage(LaunchOptions.defaults) }
             .defaultSize(width: 640, height: 440)
@@ -286,6 +301,7 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
             // Recorders and phones that recorded along hear the stop before the link goes (briefly).
             await state.sources.recorders.settle(within: .seconds(5))
             await state.flush()
+            state.recordReplicaIdentity()
             await state.phoneLink.shutDown()
             sender.reply(toApplicationShouldTerminate: true)
         }

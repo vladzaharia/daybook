@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import CoreGraphics
+import DaybookCore
 import SwiftUI
 
 /// The Settings panes, restored from `@AppStorage("settingsPane")`.
@@ -305,11 +306,12 @@ private struct LibrarySettings: View {
     }
 }
 
-/// Paths as people read them: "iCloud Drive › Daybook", or "~/Library/Application Support/Daybook".
+/// Paths as people read them: "iCloud Drive › Daybook", or "~/Library/Application Support/Daybook". `home` is the
+/// person's own home folder (`UserHome`): in the App Sandbox the library is in the container, and shows as such.
 enum SettingsPath {
-    static func display(_ url: URL) -> String {
+    static func display(_ url: URL, home: URL = UserHome.url) -> String {
         let path = url.standardizedFileURL.path
-        let mobile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents").path + "/"
+        let mobile = home.appendingPathComponent("Library/Mobile Documents").path + "/"
         if path.hasPrefix(mobile) {
             var parts = path.dropFirst(mobile.count).split(separator: "/").map(String.init)
             guard let container = parts.first else { return "iCloud Drive" }
@@ -318,6 +320,9 @@ enum SettingsPath {
             if container != "com~apple~CloudDocs", parts.first == "Documents" { parts.removeFirst() }
             return (["iCloud Drive"] + parts).joined(separator: " › ")
         }
-        return (path as NSString).abbreviatingWithTildeInPath
+        let homePath = home.standardizedFileURL.path
+        if path == homePath { return "~" }
+        if path.hasPrefix(homePath + "/") { return "~" + path.dropFirst(homePath.count) }
+        return path
     }
 }

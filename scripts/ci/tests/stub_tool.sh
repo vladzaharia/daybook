@@ -15,6 +15,7 @@
 #   STUB_XCODE_VERSION, STUB_XCODE_BUILD
 #                              what `xcodebuild -version` reports (default Xcode 27.1, 27A9275)
 #   STUB_IMPORT_FAILS=1        `security import` fails the way security -i reports it
+#   STUB_ENTITLEMENTS=FILE     `codesign -d --entitlements` prints FILE (default: just the iCloud container)
 # `security -i` reads commands from standard input: each line goes to $STUB_LOG as "security-stdin
 # <line>", and its arguments, split as security splits them, to $STUB_LOG.args as a JSON array.
 set -euo pipefail
@@ -111,7 +112,9 @@ case "$tool" in
     codesign)
         if has -dv "$@" || has -d "$@"; then
             if has --entitlements "$@"; then
-                echo '<plist><dict><key>com.apple.developer.icloud-container-identifiers</key><array><string>iCloud.local.daybook</string></array></dict></plist>'
+                if [[ -n "${STUB_ENTITLEMENTS:-}" ]]; then cat "$STUB_ENTITLEMENTS"
+                else echo '<plist><dict><key>com.apple.developer.icloud-container-identifiers</key><array><string>iCloud.local.daybook</string></array></dict></plist>'
+                fi
             else
                 printf 'Identifier=local.daybook.app\nAuthority=Developer ID Application: Example (48H7CLBV8Y)\nTeamIdentifier=48H7CLBV8Y\n' >&2
             fi

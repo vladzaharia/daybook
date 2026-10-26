@@ -89,10 +89,14 @@ final class PhotoLibraryTests: XCTestCase {
         try Data("keep".utf8).write(to: unrelated)
         let result = try MeetingExport.write(meeting, to: root, name: "Plan (draft)") { _ in source }
         XCTAssertEqual(try String(contentsOf: unrelated, encoding: .utf8), "keep")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: existing.path), ["keep.txt"])
+        // The taken name moves the whole export to the next free one, Markdown and photos together.
+        XCTAssertEqual(result.markdown.lastPathComponent, "Plan (draft) 2.md")
+        XCTAssertEqual(result.photos?.lastPathComponent, "Plan (draft) 2 Photos")
         let copied = try XCTUnwrap(result.photos).appendingPathComponent("Photo 01.jpg")
         XCTAssertEqual(PhotoMetadata.read(try Data(contentsOf: copied)), PhotoMetadata.read(bytes), "the same picture, taken at the same moment")
         let markdown = try String(contentsOf: result.markdown, encoding: .utf8)
-        XCTAssertTrue(markdown.contains("![Board \\[draft\\]](Plan%20%28draft%29%20Photos"), markdown)
+        XCTAssertTrue(markdown.contains("![Board \\[draft\\]](Plan%20%28draft%29%202%20Photos/Photo%2001.jpg)"), markdown)
         XCTAssertTrue(markdown.contains("Photo%2001.jpg)"))
         XCTAssertThrowsError(try MeetingExport.write(meeting, to: root, name: "../escape") { _ in source })
     }
@@ -138,6 +142,43 @@ final class PhotoLibraryTests: XCTestCase {
             XCTAssertFalse(markdown.contains("Passport"), markdown)
             XCTAssertTrue(markdown.contains("**Photo:** Photo 02") || markdown.contains("Photo 02 ·"), markdown)
         }
+    }
+
+    /// The Mac exports a conversation with photos into a folder the person chose; a second export there sits beside
+    /// the first instead of replacing it.
+    func testExportingIntoTheSameFolderAgainKeepsTheEarlierExport() throws {
+        let source = root.appendingPathComponent("original.jpg")
+        try jpeg().write(to: source)
+        var meeting = Meeting(title: "Plan")
+        meeting.photos = [MeetingPhoto(relativePath: "Originals/Photos/a.jpg", fileName: "a.jpg", sha256: "", capturedAt: Date(), caption: "Board")]
+        let folder = root.appendingPathComponent("Exports", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let first = try MeetingExport.write(meeting, to: folder, name: "Plan") { _ in source }
+        let firstMarkdown = try Data(contentsOf: first.markdown)
+        meeting.notes = "Edited after the first export."
+        let second = try MeetingExport.write(meeting, to: folder, name: "Plan") { _ in source }
+
+        XCTAssertEqual(first.markdown.lastPathComponent, "Plan.md")
+        XCTAssertEqual(first.photos?.lastPathComponent, "Plan Photos")
+        XCTAssertEqual(second.markdown.lastPathComponent, "Plan 2.md")
+        XCTAssertEqual(second.photos?.lastPathComponent, "Plan 2 Photos")
+        XCTAssertEqual(try Data(contentsOf: first.markdown), firstMarkdown)
+        XCTAssertTrue(try String(contentsOf: second.markdown, encoding: .utf8).contains("Plan%202%20Photos/Photo%2001.jpg"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(),
+                       ["Plan 2 Photos", "Plan 2.md", "Plan Photos", "Plan.md"])
+    }
+
+    func testAnExportNameSkipsTakenFilesAndPhotoFolders() throws {
+        let folder = root.appendingPathComponent("Names", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        XCTAssertEqual(MeetingExport.availableName("Plan", in: folder, withPhotos: true), "Plan")
+        try Data().write(to: folder.appendingPathComponent("Plan.md"))
+        XCTAssertEqual(MeetingExport.availableName("Plan", in: folder, withPhotos: false), "Plan 2")
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("Plan 2 Photos"), withIntermediateDirectories: false)
+        // A photos folder left by another export takes its name only when this export has photos too.
+        XCTAssertEqual(MeetingExport.availableName("Plan", in: folder, withPhotos: false), "Plan 2")
+        XCTAssertEqual(MeetingExport.availableName("Plan", in: folder, withPhotos: true), "Plan 3")
     }
 
     func testAPhotoThatIsNotAnImageIsLeftOutOfTheExport() throws {
