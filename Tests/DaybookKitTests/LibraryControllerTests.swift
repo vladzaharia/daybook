@@ -149,6 +149,43 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertNil(library.metadata.vocabulary.first?.value)
     }
 
+    /// A folder, template, or vocabulary term a newer Daybook gave a field of its own keeps it through an
+    /// edit made here, even one made from a fresh value (a rename), and through reopening.
+    func testSettingsANewerDaybookExtendedKeepTheirFieldsThroughEditsHere() async throws {
+        let folderID = UUID(), termID = UUID()
+        var metadata = LibraryMetadata()
+        metadata.folders = [LibraryValue(id: folderID.uuidString, value: LibraryFolder(id: folderID, name: "Clients"))]
+        metadata.templates = [LibraryValue(id: "custom-retro", value: SummaryTemplate(id: "custom-retro", name: "Retro", instructions: "Short."))]
+        metadata.vocabulary = [LibraryValue(id: termID.uuidString, value: GlossaryTerm(id: termID, term: "Daybook"))]
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(metadata)) as? [String: Any])
+        for (list, key) in [("folders", "color"), ("templates", "audience"), ("vocabulary", "pronunciation")] {
+            var items = try XCTUnwrap(json[list] as? [[String: Any]])
+            var value = try XCTUnwrap(items[0]["value"] as? [String: Any])
+            value[key] = "newer"
+            items[0]["value"] = value
+            json[list] = items
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: json).write(to: root.appendingPathComponent("library.json"))
+
+        let library = try await open()
+        library.saveFolder(LibraryFolder(id: folderID, name: "Clients, renamed"))
+        library.saveTemplate(SummaryTemplate(id: "custom-retro", name: "Retrospective", instructions: "Short."))
+        var term = try XCTUnwrap(library.glossary.first)
+        term.definition = "The meeting app"
+        library.saveGlossaryTerm(term)
+        library.saveGlossaryTerm(GlossaryTerm(id: termID, term: "Daybook", definition: "Edited from a fresh value"))
+        try await library.flushDurably(includingSettings: true)
+
+        let reopened = try await open()
+        XCTAssertEqual(reopened.metadata.folders.first?.value?.name, "Clients, renamed")
+        XCTAssertEqual(reopened.metadata.folders.first?.value?.unknownFields["color"], .string("newer"))
+        XCTAssertEqual(reopened.metadata.templates.first { $0.id == "custom-retro" }?.value?.name, "Retrospective")
+        XCTAssertEqual(reopened.metadata.templates.first { $0.id == "custom-retro" }?.value?.unknownFields["audience"], .string("newer"))
+        XCTAssertEqual(reopened.metadata.vocabulary.first?.value?.definition, "Edited from a fresh value")
+        XCTAssertEqual(reopened.metadata.vocabulary.first?.value?.unknownFields["pronunciation"], .string("newer"))
+    }
+
     func testTheTrashKeepsAConversationAndCanGiveItBack() async throws {
         let library = try await open()
         let id = library.newMeeting(title: "Keep me")

@@ -445,9 +445,19 @@ public final class LibraryController: ObservableObject {
     public func saveFolder(_ folder: LibraryFolder) {
         let name = folder.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
+        var value = Self.keepingNewerFields(folder, of: metadata.folders.first { $0.id == folder.id.uuidString }?.value)
+        value.name = name
         metadata.folders.removeAll { $0.id == folder.id.uuidString }
-        metadata.folders.append(.init(id: folder.id.uuidString, value: LibraryFolder(id: folder.id, name: name)))
+        metadata.folders.append(.init(id: folder.id.uuidString, value: value))
         persistMetadata()
+    }
+
+    /// An edit made from a fresh value (a rename) keeps what a newer Daybook added to the item it edits.
+    private static func keepingNewerFields<T>(_ value: T, of stored: T?) -> T where T: PreservesUnknownFields {
+        guard value.unknownFields.isEmpty, let stored else { return value }
+        var kept = value
+        kept.unknownFields = stored.unknownFields
+        return kept
     }
 
     /// Creates a folder and moves conversations into it. Returns the folder's ID.
@@ -467,7 +477,8 @@ public final class LibraryController: ObservableObject {
     }
 
     public func saveTemplate(_ template: SummaryTemplate) {
-        var value = template; value.updatedAt = Date()
+        var value = Self.keepingNewerFields(template, of: metadata.templates.first { $0.id == template.id }?.value)
+        value.updatedAt = Date()
         metadata.templates.removeAll { $0.id == value.id }
         metadata.templates.append(.init(id: value.id, value: value)); persistMetadata()
     }
@@ -551,7 +562,8 @@ public final class LibraryController: ObservableObject {
     // MARK: Vocabulary
 
     public func saveGlossaryTerm(_ term: GlossaryTerm) {
-        if let index = glossary.firstIndex(where: { $0.id == term.id }) { glossary[index] = term } else { glossary.append(term) }
+        if let index = glossary.firstIndex(where: { $0.id == term.id }) { glossary[index] = Self.keepingNewerFields(term, of: glossary[index]) }
+        else { glossary.append(term) }
         persistGlossary()
     }
 

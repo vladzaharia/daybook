@@ -5,6 +5,11 @@ import Foundation
 // versions"). So the stored and synced models keep the JSON keys they don't know, exactly as they came,
 // and write them back after their own. Merges carry them key by key (`UnknownFields.merged`).
 
+/// A stored or synced model that keeps the keys this version doesn't know.
+public protocol PreservesUnknownFields {
+    var unknownFields: UnknownFields { get set }
+}
+
 /// The JSON keys of a model that this version doesn't know, as written (`SyncJSONValue`). Empty for
 /// anything this version wrote, so its encoding is exactly what it was before.
 public struct UnknownFields: Equatable, Sendable {
@@ -119,3 +124,17 @@ extension SyncJSONValue {
         return canonical(.object(a)) >= canonical(.object(b)) ? a : b
     }
 }
+
+extension Meeting: PreservesUnknownFields {}
+extension RecordingTrack: PreservesUnknownFields {}
+extension Highlight: PreservesUnknownFields {}
+extension MeetingSummary: PreservesUnknownFields {}
+extension SummarySection: PreservesUnknownFields {}
+extension ActionItem: PreservesUnknownFields {}
+extension MeetingPhoto: PreservesUnknownFields {}
+extension LibraryFolder: PreservesUnknownFields {}
+extension SummaryTemplate: PreservesUnknownFields {}
+extension GlossaryTerm: PreservesUnknownFields {}
+extension RecorderOwnership: PreservesUnknownFields {}
+extension RecorderHandoffRecord: PreservesUnknownFields {}
+extension LibraryMetadata: PreservesUnknownFields {}
