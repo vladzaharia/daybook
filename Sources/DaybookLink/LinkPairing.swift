@@ -41,6 +41,90 @@ public struct LinkPairingCode: Sendable, Hashable, CustomStringConvertible {
     func bit(_ round: Int) -> UInt8 { UInt8((value >> UInt32(round)) & 1) }
 }
 
+// MARK: Burned codes
+
+/// Where the phone remembers the codes that failed from it. A failed attempt may have revealed some
+/// of its code's bits (to a device pretending to be the Mac, say), so such a code is never sent again,
+/// even after the app relaunches.
+public protocol LinkBurnedCodeStore: Sendable {
+    func load() -> Data?
+    func save(_ data: Data?)
+}
+
+/// For tests: forgotten with the process.
+public final class MemoryLinkBurnedCodeStore: LinkBurnedCodeStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var data: Data?
+
+    public init() {}
+
+    public func load() -> Data? { lock.withLock { data } }
+    public func save(_ data: Data?) { lock.withLock { self.data = data } }
+}
+
+/// In UserDefaults, under `daybook.link.burnedCodes`.
+public final class DefaultsLinkBurnedCodeStore: LinkBurnedCodeStore, @unchecked Sendable {
+    private let defaults: UserDefaults
+    private let key: String
+
+    public init(defaults: UserDefaults = .standard, key: String = "daybook.link.burnedCodes") {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    public func load() -> Data? { defaults.data(forKey: key) }
+    public func save(_ data: Data?) { defaults.set(data, forKey: key) }
+}
+
+/// Codes that failed from this phone, kept as salted SHA-256 digests with an expiry, never as digits.
+/// A code lives at most `pairingCodeLifetime` on the Mac, so a burned one is forgotten after that.
+struct BurnedPairingCodes: Codable, Equatable {
+    struct Entry: Codable, Equatable {
+        var digest: Data
+        var expiresAt: Date
+    }
+
+    var salt: Data
+    var entries: [Entry]
+
+    init(salt: Data = PasskeyExchange.randomBytes(16), entries: [Entry] = []) {
+        self.salt = salt
+        self.entries = entries
+    }
+
+    static func load(from store: any LinkBurnedCodeStore) -> BurnedPairingCodes {
+        guard let data = store.load(), let codes = try? JSONDecoder().decode(Self.self, from: data), codes.salt.count == 16 else {
+            return BurnedPairingCodes()
+        }
+        return codes
+    }
+
+    func save(to store: any LinkBurnedCodeStore) { store.save(try? JSONEncoder().encode(self)) }
+
+    func contains(_ code: UInt32, now: Date) -> Bool {
+        let digest = digest(of: code)
+        return entries.contains { $0.expiresAt > now && PasskeyExchange.constantTimeEqual($0.digest, digest) }
+    }
+
+    mutating func burn(_ code: UInt32, until expiry: Date, now: Date) {
+        let digest = digest(of: code)
+        entries.removeAll { $0.expiresAt <= now || $0.digest == digest }
+        entries.append(Entry(digest: digest, expiresAt: expiry))
+    }
+
+    mutating func restore(_ code: UInt32) {
+        let digest = digest(of: code)
+        entries.removeAll { $0.digest == digest }
+    }
+
+    private func digest(of code: UInt32) -> Data {
+        var message = Data("DaybookLink burned code v1".utf8)
+        message.append(salt)
+        withUnsafeBytes(of: code.bigEndian) { message.append(contentsOf: $0) }
+        return Data(SHA256.hash(data: message))
+    }
+}
+
 // MARK: Messages
 
 /// Who is pairing, as told during pairing (and covered by the confirmation MACs).
@@ -252,7 +336,13 @@ final class PasskeyExchange {
     private func handle(_ frame: Data) throws -> [Data] {
         guard case .pairing(let message) = try LinkWire.decode(frame).message else { throw Failure.unexpected("not pairing") }
         if case .fail(let fail) = message { throw Failure.peerFailed(fail.reason) }
-        if case .refuse(let refuse) = message { throw Failure.refused(refuse.reason) }
+        if case .refuse(let refuse) = message {
+            // A refusal is believed only before anything is committed. Later, a Mac impersonator
+            // that guessed a bit wrong could refuse as "busy" to keep the code alive, having learnt
+            // that bit from this side's reveal; there it counts as a mismatch, which burns the code.
+            guard role == .initiator, step == .awaitingAccept else { throw Failure.codeMismatch }
+            throw Failure.refused(refuse.reason)
+        }
         if Self.isInTranscript(message) { transcript.update(data: frame) }
 
         switch (role, step, message) {

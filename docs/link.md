@@ -87,7 +87,16 @@ in `LinkPairing.swift`):
 **Codes are single-use.** A failed attempt reveals bits up to the failure, so:
 - The Mac replaces its code after **any** attempt that doesn't finish: a wrong bit, a broken
   confirmation, a timeout, or a dropped connection.
-- The phone never sends a code that failed (`codeAlreadyUsed`).
+- The phone never sends a code that failed (`codeAlreadyUsed`). It burns the code before the
+  attempt and gives it back only when the Mac turned the attempt away before either side committed
+  to a bit (`notPairing`, `busy`, `unsupportedVersion`, or no answer at all), so a crash part-way
+  leaves it burned too.
+- Burned codes outlive a relaunch: UserDefaults (`daybook.link.burnedCodes`) keeps them as salted
+  SHA-256 digests, never digits, each forgotten after the 5 minutes a code can live on the Mac.
+- A refusal (`pair.refuse`) is believed only before the phone's first commitment. Later it counts
+  as a wrong code. Otherwise a device spoofing the Mac's advert could commit a guess for each bit,
+  learn the bit from the phone's reveal, refuse as `busy` whenever it guessed wrong, and so collect
+  the 20 bits in about ten retries while the code is still good on the real Mac.
 - Codes expire after 5 minutes.
 - Pairing closes after 5 failed attempts.
 - One attempt runs at a time; others get `busy`.
@@ -350,7 +359,7 @@ Both apps' Info.plist:
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 47 tests, about 4 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 54 tests, about 8 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
@@ -358,6 +367,9 @@ the test process, and nothing is advertised.
 - **Pairing over loopback:**
   - success, then an immediate session;
   - a wrong code is rejected, the code is burned and replaced, and a failed code is never resent;
+  - a refusal is believed only before the first commitment: a Mac impersonator that refuses after
+    a reveal burns the code, across a relaunch too, while an early `busy` leaves it usable; burned
+    codes are stored as salted digests that expire;
   - pairing closes after too many failures, and is refused while the Mac isn't pairing;
   - a recorded pairing replayed frame for frame against the same Mac and the same code fails at
     the first reveal;

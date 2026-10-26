@@ -1,6 +1,7 @@
 import CryptoKit
 @testable import DaybookLink
 import Foundation
+@preconcurrency import Network
 import XCTest
 
 final class LinkPairingTests: XCTestCase {
@@ -99,6 +100,57 @@ final class LinkPairingTests: XCTestCase {
         guard case .pairing(.begin(let b)) = try LinkWire.decode(begin).message else { return XCTFail() }
         let accept = try LinkWire.encode(.pairing(.accept(.init(device: device("Mac"), publicKey: b.publicKey))), version: 1)
         XCTAssertThrowsError(try initiator.receive(accept)) { XCTAssertEqual($0 as? PasskeyExchange.Failure, .invalidKey) }
+    }
+
+    /// A refusal ends pairing as "busy" or "not pairing" only before anything is committed. After
+    /// the first commitment the peer has seen a reveal, so a refusal counts as a wrong code.
+    func testRefusalIsBelievedOnlyBeforeTheFirstCommitment() throws {
+        let code = LinkPairingCode(value: 482_913, expiresAt: .distantFuture)
+        let busy = try LinkWire.encode(.pairing(.refuse(.init(reason: .busy))), version: 1)
+
+        let early = PasskeyExchange(role: .initiator, code: code, local: device("iPhone"))
+        _ = try early.start()
+        XCTAssertThrowsError(try early.receive(busy)) { XCTAssertEqual($0 as? PasskeyExchange.Failure, .refused(.busy)) }
+
+        let late = PasskeyExchange(role: .initiator, code: code, local: device("iPhone"))
+        let mac = PasskeyExchange(role: .responder, code: code, local: device("Mac"))
+        let accept = try mac.receive(try late.start())
+        let commit = try late.receive(XCTUnwrap(accept.first))
+        XCTAssertEqual(commit.count, 1, "the phone committed to bit 0")
+        XCTAssertThrowsError(try late.receive(busy)) { XCTAssertEqual($0 as? PasskeyExchange.Failure, .codeMismatch) }
+        XCTAssertEqual(LinkService.error(for: .codeMismatch), .codeRejected)
+    }
+
+    /// The Mac's side: a refusal never comes from a phone, so it's a failure that burns the code.
+    func testResponderTreatsARefusalAsAMismatch() throws {
+        let code = LinkPairingCode(value: 5, expiresAt: .distantFuture)
+        let phone = PasskeyExchange(role: .initiator, code: code, local: device("iPhone"))
+        let mac = PasskeyExchange(role: .responder, code: code, local: device("Mac"))
+        _ = try mac.receive(try phone.start())
+        let refuse = try LinkWire.encode(.pairing(.refuse(.init(reason: .notPairing))), version: 1)
+        XCTAssertThrowsError(try mac.receive(refuse)) { XCTAssertEqual($0 as? PasskeyExchange.Failure, .codeMismatch) }
+        XCTAssertNil(mac.outcome)
+    }
+
+    func testBurnedCodesAreSaltedDigestsThatExpire() throws {
+        let store = MemoryLinkBurnedCodeStore()
+        let now = Date()
+        var burned = BurnedPairingCodes.load(from: store)
+        burned.burn(482_913, until: now.addingTimeInterval(300), now: now)
+        burned.save(to: store)
+
+        let saved = try XCTUnwrap(store.load())
+        XCTAssertNil(String(data: saved, encoding: .utf8)?.range(of: "482913"), "the digits are never stored")
+        let loaded = BurnedPairingCodes.load(from: store)
+        XCTAssertTrue(loaded.contains(482_913, now: now))
+        XCTAssertFalse(loaded.contains(482_914, now: now))
+        XCTAssertFalse(loaded.contains(482_913, now: now.addingTimeInterval(301)), "forgotten once the Mac's code has expired")
+        // Another install hashes the same code differently.
+        XCTAssertNotEqual(BurnedPairingCodes().salt, loaded.salt)
+        // Expired entries are dropped when the next one is added.
+        var later = loaded
+        later.burn(1, until: now.addingTimeInterval(900), now: now.addingTimeInterval(600))
+        XCTAssertEqual(later.entries.count, 1)
     }
 
     func testCodesParseAndFormat() {
@@ -286,6 +338,63 @@ final class LinkPairingTests: XCTestCase {
         await service.stop()
     }
 
+    /// A device pretending to be the Mac (a spoofed Bonjour advert) answers the phone, guesses bit 0,
+    /// learns it from the phone's reveal, and refuses as "busy" to keep the code alive for another
+    /// round. The phone counts it as a wrong code and never sends that code again, even after a
+    /// relaunch, so the impersonator can't collect the code bit by bit.
+    func testMacImpersonatorRefusingAfterARevealBurnsTheCode() async throws {
+        let impersonator = try await FakePairingMac.start(.refuseAfterFirstReveal)
+        defer { impersonator.stop() }
+        let store = MemoryLinkBurnedCodeStore()
+        var configuration = LinkConfiguration.loopback()
+        configuration.burnedCodes = store
+        let client = LinkClient(identity: Fixture.phone(), keyStore: MemoryLinkKeyStore(), configuration: configuration)
+
+        do {
+            _ = try await client.pair(with: impersonator.endpoint, code: "482 913")
+            XCTFail("paired with an impersonator")
+        } catch let error as LinkPairingError {
+            XCTAssertEqual(error, .codeRejected)
+        }
+        XCTAssertEqual(impersonator.revealsSeen, 1, "the phone revealed bit 0 before the refusal")
+        do {
+            _ = try await client.pair(with: impersonator.endpoint, code: "482913")
+            XCTFail("a burned code was sent again")
+        } catch let error as LinkPairingError {
+            XCTAssertEqual(error, .codeAlreadyUsed)
+        }
+        // After a relaunch, too.
+        let relaunched = LinkClient(identity: Fixture.phone(), keyStore: MemoryLinkKeyStore(), configuration: configuration)
+        do {
+            _ = try await relaunched.pair(with: impersonator.endpoint, code: "482 913")
+            XCTFail("a burned code was sent again after a relaunch")
+        } catch let error as LinkPairingError {
+            XCTAssertEqual(error, .codeAlreadyUsed)
+        }
+        XCTAssertEqual(impersonator.attempts, 1)
+    }
+
+    /// The other way round: a refusal before anything is committed reveals nothing, so the code
+    /// stays usable (the Mac may simply be busy for a moment).
+    func testRefusalBeforeAnyCommitmentLeavesTheCodeUsable() async throws {
+        let busy = try await FakePairingMac.start(.refuseAtBegin(.busy))
+        defer { busy.stop() }
+        let store = MemoryLinkBurnedCodeStore()
+        var configuration = LinkConfiguration.loopback()
+        configuration.burnedCodes = store
+        let client = LinkClient(identity: Fixture.phone(), keyStore: MemoryLinkKeyStore(), configuration: configuration)
+        for _ in 0..<2 {
+            do {
+                _ = try await client.pair(with: busy.endpoint, code: "482 913")
+                XCTFail("paired while busy")
+            } catch let error as LinkPairingError {
+                XCTAssertEqual(error, .busy)
+            }
+        }
+        XCTAssertEqual(busy.attempts, 2)
+        XCTAssertFalse(BurnedPairingCodes.load(from: store).contains(482_913, now: Date()))
+    }
+
     /// Replays a recorded successful pairing, frame for frame, against the same Mac showing the
     /// same code. The Mac's fresh key makes every recorded commitment stale.
     func testReplayedPairingHandshakeIsRejected() async throws {
@@ -395,6 +504,90 @@ final class LinkPairingTests: XCTestCase {
         let answer = try LinkWire.decode(try await XCTUnwrapAsync(try await channel.receive())).message
         XCTAssertEqual(answer, .refused(Refusal(reason: .notPaired, versions: nil)))
         await pair.tearDown()
+    }
+}
+
+/// Listens on loopback with the public pairing PSK, like a Mac, and answers pairing as told.
+private final class FakePairingMac: @unchecked Sendable {
+    enum Behavior {
+        case refuseAtBegin(PairingMessage.Refuse.Reason)
+        /// Runs the exchange with a guessed code until the phone's first reveal, then refuses as busy.
+        case refuseAfterFirstReveal
+    }
+
+    private let queue = DispatchQueue(label: "test.fake-mac")
+    private let listener: NWListener
+    private let behavior: Behavior
+    private var channels: [LinkChannel] = []
+    private let lock = NSLock()
+    private var counts = (attempts: 0, reveals: 0)
+    private var port: UInt16 = 0
+
+    var attempts: Int { lock.withLock { counts.attempts } }
+    var revealsSeen: Int { lock.withLock { counts.reveals } }
+    var endpoint: LinkEndpoint { LinkEndpoint(host: "127.0.0.1", port: port) }
+
+    private init(listener: NWListener, behavior: Behavior) {
+        self.listener = listener
+        self.behavior = behavior
+    }
+
+    static func start(_ behavior: Behavior) async throws -> FakePairingMac {
+        let parameters = LinkTransport.parameters(psks: [LinkTransport.pairingPSK], allowPeerToPeer: false)
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let mac = FakePairingMac(listener: try NWListener(using: parameters), behavior: behavior)
+        mac.listener.newConnectionHandler = { [weak mac] connection in mac?.accept(connection) }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let once = Once()
+            mac.listener.stateUpdateHandler = { [weak mac] state in
+                guard !once.done else { return }
+                switch state {
+                case .ready:
+                    once.done = true
+                    mac?.port = mac?.listener.port?.rawValue ?? 0
+                    continuation.resume()
+                case .failed(let error):
+                    once.done = true
+                    continuation.resume(throwing: error)
+                default: break
+                }
+            }
+            mac.listener.start(queue: mac.queue)
+        }
+        return mac
+    }
+
+    private func accept(_ connection: NWConnection) {
+        let channel = LinkChannel(connection: connection, queue: queue, clock: SystemLinkClock())
+        channels.append(channel)
+        lock.withLock { counts.attempts += 1 }
+        let exchange = PasskeyExchange(role: .responder, code: LinkPairingCode(value: 0, expiresAt: .distantFuture),
+                                       local: Fixture.mac().pairingDevice)
+        channel.onFrame = { [weak self, weak channel] frame, _ in
+            guard let self, let channel else { return }
+            switch self.behavior {
+            case .refuseAtBegin(let reason):
+                channel.close(after: PasskeyExchange.refuseFrame(reason))
+            case .refuseAfterFirstReveal:
+                if case .pairing(.reveal) = try? LinkWire.decode(frame).message {
+                    self.lock.withLock { self.counts.reveals += 1 }
+                    channel.close(after: PasskeyExchange.refuseFrame(.busy))
+                } else if let replies = try? exchange.receive(frame) {
+                    replies.forEach(channel.send)
+                } else {
+                    channel.close()
+                }
+            }
+        }
+        channel.start()
+    }
+
+    func stop() {
+        queue.sync {
+            channels.forEach { $0.close() }
+            channels.removeAll()
+            listener.cancel()
+        }
     }
 }
 
