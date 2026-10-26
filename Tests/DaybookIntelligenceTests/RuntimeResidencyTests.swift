@@ -6,6 +6,7 @@ import XCTest
 
 /// Models leave memory when nothing uses them: after an idle delay, at once when memory is short
 /// (after the job that holds them), never in the middle of one, and never a model the system holds.
+/// A revision being loaded can't be garbage-collected.
 final class RuntimeResidencyTests: XCTestCase {
     private var root: URL!
 
@@ -123,5 +124,21 @@ final class RuntimeResidencyTests: XCTestCase {
         await runtime.memoryPressureRaised()
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertFalse(log.calls.contains("unload"))
+    }
+
+    func testARevisionBeingLoadedIsNotCollected() async throws {
+        let log = CallLog(), gate = Gate(holding: "load")
+        let runtime = try await runtime(engine: GatedEngine(log: log, gate: gate), revisions: ["rev-a", "rev-b"])
+        // A queued job froze the older revision; the newer one is what selections resolve to.
+        let job = Task { try await runtime.transcribe(url: root.appendingPathComponent("a.caf"), model: ModelReference("toy/v1", revision: "rev-a")) }
+        await gate.reach("load")
+        var removed = await runtime.collectGarbage(protecting: [])
+        XCTAssertEqual(removed, [], "Not while it loads")
+        await gate.open()
+        _ = try await job.value
+        removed = await runtime.collectGarbage(protecting: [])
+        XCTAssertEqual(removed, [], "Nor while it's loaded")
+        let inventory = await runtime.inventory()
+        XCTAssertEqual(Set(inventory.revisions(of: "toy/v1").map(\.key.revision)), ["rev-a", "rev-b"])
     }
 }

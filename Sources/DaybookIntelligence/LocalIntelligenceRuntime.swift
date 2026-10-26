@@ -178,9 +178,11 @@ public actor LocalIntelligenceRuntime {
     var holdsResidentModels: Bool { loaded.values.contains { $0.residency != .system } }
 
     /// Removes revisions newer ones replaced, keeping those `protecting` references resolve to
-    /// (selections, queued jobs), pinned ones, and loaded ones.
+    /// (selections, queued jobs), pinned ones, and loaded ones. Nothing is removed while an
+    /// operation runs: a revision it's resolving or loading isn't leased yet. Callers try again later.
     @discardableResult
     public func collectGarbage(protecting references: [ModelReference]) async -> [ModelInstallKey] {
+        guard !busy else { return [] }
         let inventory = await store.inventory()
         var keep = Set<ModelInstallKey>()
         for reference in references {
@@ -383,9 +385,12 @@ public actor LocalIntelligenceRuntime {
         }
         if let current = loaded[role], current.key == installation.key { return (current.model, provenance) }
         await release(role)
-        if let message { progress(.init(0, message)) }
-        let model = try await engine.load(installation, role: role, progress: progress)
+        // Leased before loading, so garbage collection can't remove the revision while it loads.
         let lease = await store.lease([installation.key])
+        if let message { progress(.init(0, message)) }
+        let model: any LoadedModel
+        do { model = try await engine.load(installation, role: role, progress: progress) }
+        catch { await store.endLease(lease); throw error }
         loaded[role] = Loaded(key: installation.key, residency: engine.descriptor.residency, model: model, lease: lease)
         return (model, provenance)
     }
