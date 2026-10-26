@@ -57,7 +57,11 @@ jobs:
           mkdir -p build/test-results
           swift build --build-tests --force-resolved-versions 2>&1 | tee build/test-results/build.log
           git diff --exit-code -- Package.resolved
+      # Every test wait five times as long (Tests/DaybookTestSupport): what fails here then is a
+      # timing assumption, not a wait too short for a starved machine.
       - name: Test every bundle at background priority, with every core busy
+        env:
+          DAYBOOK_TEST_TIMEOUT_SCALE: "5"
         run: |
           cores="$(sysctl -n hw.ncpu)"
           pids=()
@@ -126,9 +130,11 @@ jobs:
           xcrun simctl bootstatus "$udid" -b
       # Every test, the timing ones included, three times in a row: a test that fails any iteration
       # fails the job, and xcresult-retries.sh names each one that passed some iterations and not others.
+      # Every test wait five times as long; xcodebuild passes TEST_RUNNER_ variables to the runner.
       - name: Every test, three iterations
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
+          TEST_RUNNER_DAYBOOK_TEST_TIMEOUT_SCALE: "5"
         run: |
           mkdir -p build/test-results
           status=0

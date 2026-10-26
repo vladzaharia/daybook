@@ -125,24 +125,36 @@ jobs:
           key: ${{ steps.key.outputs.build }}
       # One step per test target group (each target is its own test bundle), so a failure names its
       # area and every group still runs. The two timing-budget tests run on their own afterwards.
+      # DAYBOOK_TEST_TIMEOUT_SCALE doubles every test wait (Tests/DaybookTestSupport): hosted runners
+      # are small shared VMs. The timing-budget step keeps its own budget.
       - name: Test DaybookCore
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: |
           swift test --skip-build --filter '^DaybookCoreTests\.' \
             --skip 'AudioAlignerTests/testThirtyMinutePairAlignsWithinBudget$' 2>&1 | tee build/test-results/core.log
       - name: Test DaybookDevices, DaybookKit, and DaybookLink
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: |
           swift test --skip-build --filter '^(DaybookDevicesTests|DaybookKitTests|DaybookLinkTests)\.' 2>&1 \
             | tee build/test-results/devices-kit-link.log
       - name: Test DaybookIntelligence
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: swift test --skip-build --filter '^DaybookIntelligenceTests\.' 2>&1 | tee build/test-results/intelligence.log
       - name: Test DaybookCaptions
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: swift test --skip-build --filter '^DaybookCaptionsTests\.' 2>&1 | tee build/test-results/captions.log
       - name: Test the Mac app target
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: swift test --skip-build --filter '^DaybookTests\.' 2>&1 | tee build/test-results/app.log
       # A 30-minute synthetic pair must align within 15 s. Hosted runners are small shared VMs, so the
       # test runs alone, after the build, with one retry; a pass on the retry leaves a warning.
@@ -201,10 +213,13 @@ jobs:
           { echo "### iPhone simulator"; tail -1 "$RUNNER_TEMP/simulator.txt"; } >> "$GITHUB_STEP_SUMMARY"
           # Boot it now, so the test run doesn't spend its launch timeout on a cold boot.
           xcrun simctl bootstatus "$udid" -b
+      # xcodebuild hands TEST_RUNNER_-prefixed variables to the test runner without the prefix: every
+      # test wait doubles (DaybookPhoneTests/TestSupport.swift). The encoder timing step keeps its own.
       - name: Build and test
         id: test
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
+          TEST_RUNNER_DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: |
           mkdir -p build/test-results
           scripts/build-ios.sh --test --simulator "$UDID" \
