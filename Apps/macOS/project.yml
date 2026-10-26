@@ -56,6 +56,8 @@ targets:
         buildPhase: none
       - path: ../../Resources/Daybook-Local.entitlements
         buildPhase: none
+      - path: ../../Resources/Daybook-Sandbox.entitlements
+        buildPhase: none
       - path: ../../Resources/container-migration.plist
         buildPhase: none
       - path: ../../Resources/container-migration-rehearsal.plist

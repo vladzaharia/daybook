@@ -480,6 +480,17 @@ if macos; then
     expect_fail "and never changes the account" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --sandbox-rehearsal --allow-provisioning-updates
     expect_ok "an ad hoc release archive" build_app -- --ad-hoc
     expect_eq "is archived, not exported" "1 0" "$(xcb ' archive ' | wc -l | tr -d ' ') $(xcb '-exportArchive' | wc -l | tr -d ' ')"
+    expect_ok "signed builds aren't sandboxed by default" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --archive-only
+    expect_ok "(DAYBOOK_SANDBOX=NO)" grep -q -- 'DAYBOOK_SIGNING=signed .*DAYBOOK_SANDBOX=NO' <<< "$(xcb ' archive ')"
+    expect_ok "--sandbox: a sandboxed signed release" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --sandbox --archive-only
+    expect_ok "(DAYBOOK_SANDBOX=YES)" grep -q -- 'DAYBOOK_SIGNING=signed .*DAYBOOK_SANDBOX=YES' <<< "$(xcb ' archive ')"
+    expect_ok "and says the first launch moves the library" grep -q "moves ~/Library/Application Support/Daybook" "$work/build-app.out"
+    expect_ok "DAYBOOK_SANDBOX=1 is the same" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_SANDBOX=1 -- --archive-only
+    expect_ok "(DAYBOOK_SANDBOX=YES again)" grep -q -- 'DAYBOOK_SANDBOX=YES' <<< "$(xcb ' archive ')"
+    expect_fail "a sandboxed Debug build could create the app's container" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --sandbox --debug
+    expect_fail "--sandbox needs a team" build_app -- --sandbox
+    expect_fail "and isn't for ad hoc builds" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --sandbox --ad-hoc
+    expect_fail "DAYBOOK_SANDBOX takes 1 or 0" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_SANDBOX=maybe --
     expect_ok "the release pipeline's signed build" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" -- \
         --marketing-version 1.4.0 --build-number 1057
     expect_ok "archives with the key and versions" grep -q -- "-allowProvisioningUpdates -authenticationKeyPath $key .* archive .*MARKETING_VERSION=1.4.0 CURRENT_PROJECT_VERSION=1057" <<< "$(xcb ' archive ')"
@@ -566,6 +577,31 @@ if macos; then
     expect_fail "which isn't a sandboxed one" check_app --app "$app" --kind signed-sandbox
     expect_fail "a signed build with a manifest" \
         check_app --app "$(fake_app signed-manifest local.daybook.app "$resources/Daybook.entitlements" "$resources/container-migration.plist")" --kind signed
+    sandbox_ent="$resources/Daybook-Sandbox.entitlements"
+    app="$(fake_app signed-sandbox local.daybook.app "$sandbox_ent" "$resources/container-migration.plist")"
+    expect_ok "the sandboxed signed entitlements and the manifest make a sandboxed release" check_app --app "$app" --kind signed-sandbox
+    expect_fail "which isn't the default signed build" check_app --app "$app" --kind signed
+    expect_fail "a sandboxed release without the manifest" \
+        check_app --app "$(fake_app signed-sandbox-bare local.daybook.app "$sandbox_ent")" --kind signed-sandbox
+    expect_fail "a sandboxed release with the rehearsal's manifest" \
+        check_app --app "$(fake_app signed-sandbox-rehearsal local.daybook.app "$sandbox_ent" "$resources/container-migration-rehearsal.plist")" --kind signed-sandbox
+    expect_fail "a sandboxed release with a temporary exception" \
+        check_app --app "$(fake_app signed-sandbox-exception local.daybook.app "$local_ent" "$resources/container-migration.plist")" --kind signed-sandbox
+    # Daybook-Sandbox.entitlements is Daybook.entitlements plus the App Sandbox's keys, nothing else: a key added to one
+    # (keychain access groups, say) has to be added to the other.
+    entitlement_keys() { plutil -p "$1" | sed -n 's/^  "\([^"]*\)" =>.*/\1/p' | sort; }
+    sandbox_only="com.apple.security.app-sandbox com.apple.security.device.bluetooth com.apple.security.device.microphone com.apple.security.files.bookmarks.app-scope com.apple.security.files.user-selected.read-write com.apple.security.network.client com.apple.security.network.server"
+    expect_eq "the sandboxed signed entitlements add only the sandbox's keys" "$sandbox_only" \
+        "$(comm -13 <(entitlement_keys "$resources/Daybook.entitlements") <(entitlement_keys "$sandbox_ent") | paste -sd ' ' -)"
+    expect_eq "and keep every signed key" "" "$(comm -23 <(entitlement_keys "$resources/Daybook.entitlements") <(entitlement_keys "$sandbox_ent") | paste -sd ' ' -)"
+    differing=""
+    for entitlement in $(entitlement_keys "$resources/Daybook.entitlements"); do
+        escaped="${entitlement//./\\.}"
+        if [[ "$(plutil -extract "$escaped" xml1 -o - "$resources/Daybook.entitlements")" != "$(plutil -extract "$escaped" xml1 -o - "$sandbox_ent")" ]]; then
+            differing="$differing $entitlement"
+        fi
+    done
+    expect_eq "with the same values" "" "${differing# }"
 else
     skip "check-mac-app.sh (macOS only)"
 fi
@@ -614,6 +650,7 @@ if macos; then
         rm -rf "$app"
         mkdir -p "$app/Contents/MacOS"
         plutil -create xml1 "$app/Contents/Info.plist"
+        plutil -insert CFBundleIdentifier -string local.daybook.app "$app/Contents/Info.plist"
         plutil -insert CFBundleShortVersionString -string "$2" "$app/Contents/Info.plist"
         plutil -insert CFBundleVersion -string "$3" "$app/Contents/Info.plist"
     }
@@ -701,6 +738,24 @@ if macos; then
     rm -rf "$work/notary-out" "$work/state"
     expect_ok "a DMG that isn't notarized in time is left out" notarize STUB_NOTARY=accepted STUB_NOTARY_DMG=slow -- --output "$work/notary-out" --state-dir "$work/state"
     expect_eq "the release ships the ZIP" "Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" "$(files_in "$work/notary-out")"
+
+    # The App Sandbox: a release is exactly the kind it says (scripts/ci/check-mac-app.sh).
+    # shellcheck disable=SC2016 # the entitlements file's own build settings, replaced literally
+    sed -e 's/$(DAYBOOK_ICLOUD_CONTAINER)/iCloud.local.daybook/g' -e 's/$(DAYBOOK_APS_ENVIRONMENT)/production/g' \
+        "$ci/../../Resources/Daybook-Sandbox.entitlements" > "$work/sandboxed.entitlements"
+    rm -rf "$work/notary-out" "$work/state"
+    expect_fail "--sandbox refuses an app that isn't sandboxed" notarize STUB_NOTARY=accepted -- --sandbox --output "$work/notary-out" --state-dir "$work/state"
+    expect_eq "before anything goes to Apple" "" "$(grep -E '^xcrun notarytool submit' "$work/stub.log" || true)"
+    expect_fail "a sandboxed app without the manifest" notarize STUB_NOTARY=accepted STUB_ENTITLEMENTS="$work/sandboxed.entitlements" -- \
+        --sandbox --output "$work/notary-out" --state-dir "$work/state"
+    mkdir -p "$work/pkg/Daybook.app/Contents/Resources"
+    cp "$ci/../../Resources/container-migration.plist" "$work/pkg/Daybook.app/Contents/Resources/"
+    expect_ok "a sandboxed release with the manifest" notarize STUB_NOTARY=accepted STUB_ENTITLEMENTS="$work/sandboxed.entitlements" -- \
+        --sandbox --output "$work/notary-out" --state-dir "$work/state"
+    rm -rf "$work/notary-out" "$work/state"
+    expect_fail "but not as an ordinary release" notarize STUB_NOTARY=accepted STUB_ENTITLEMENTS="$work/sandboxed.entitlements" -- \
+        --output "$work/notary-out" --state-dir "$work/state"
+    rm -f "$work/pkg/Daybook.app/Contents/Resources/container-migration.plist"
 else
     skip "package-mac.sh (macOS only)"
 fi

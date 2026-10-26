@@ -27,7 +27,9 @@ xcrun --kill-cache
 |---|---|
 | `./scripts/build-app.sh` | Release: `xcodebuild archive`, then `-exportArchive` with the `developer-id` method (Developer ID Application and its provisioning profile, which carries iCloud) |
 | `./scripts/build-app.sh --debug` | Debug, signed with Apple Development |
-| `./scripts/build-app.sh --ad-hoc` | Signed to run locally: no team, no profile, no iCloud. Sync stays off. Combine with `--debug` |
+| `./scripts/build-app.sh --ad-hoc` | Signed to run locally: no team, no profile, no iCloud. Sync stays off. Sandboxed, as `local.daybook.app.adhoc`, with its own library. Combine with `--debug` |
+| `./scripts/build-app.sh --sandbox` | Release, signed, in the App Sandbox: its first launch moves the library into the app's container ([docs/sandbox.md](docs/sandbox.md)) |
+| `./scripts/build-app.sh --sandbox-rehearsal` | Ad hoc, as `local.daybook.app.rehearsal`: rehearses that move with a synthetic library |
 | `./scripts/build-app.sh --generate-only` | Regenerates the Xcode project only |
 
 ### Signing and iCloud

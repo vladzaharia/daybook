@@ -115,9 +115,16 @@ manifest never runs again). Remove it in Finder, or rehearse again under a new `
 `files.bookmarks.app-scope`, and one temporary exception, read-write `/private/tmp/daybook/`, so the debug flags have a
 place outside the container that a person can find (`--library /tmp/daybook/ui --snapshot /tmp/daybook/shots`).
 
+`Resources/Daybook-Sandbox.entitlements` (signed builds with `DAYBOOK_SANDBOX = YES`) is exactly
+`Resources/Daybook.entitlements` plus `app-sandbox` and the same capability keys, with no temporary exception.
+`run-tests.sh` checks that relationship: a key added to one file (keychain access groups, say) fails CI until it's in
+both. Signed builds with the sandbox off keep `Daybook.entitlements` and aren't sandboxed.
+
 `scripts/ci/check-mac-app.sh --app <app> --kind adhoc|rehearsal|signed|signed-sandbox` reads what was actually
 signed: the bundle ID, every sandbox capability, the temporary exceptions (only that one, only in ad hoc and
-rehearsal builds), and the manifest (none, the rehearsal's, or the real one). CI runs it on every ad hoc build;
+rehearsal builds), and the manifest (none, the rehearsal's, or the real one). CI runs it on every ad hoc build, and
+`package-mac.sh --notarize` on every release before anything goes to Apple: `signed` by default, `signed-sandbox`
+with `--sandbox`, so a release is never sandboxed by accident or sandboxed without the manifest.
 `scripts/ci/tests/run-tests.sh` checks it against stand-in apps signed with the repository's entitlements files.
 
 ### Moving the library
@@ -163,6 +170,55 @@ scoped one opens), and still says where the folder is:
   offers **Choose Folder Again…** (an open panel where it was) or **Sync Without It…**; choosing it again replaces the
   bookmark and the move to iCloud goes ahead.
 - The development sync folder (`-DaybookDevelopmentFolderSync YES`) says to reconnect it; Choose Folder… does.
+
+## Shipping the sandboxed build
+
+Signed builds stay unsandboxed until the owner ships the switch. The gate is one setting, `DAYBOOK_SANDBOX`:
+`scripts/build-app.sh --sandbox` (or `DAYBOOK_SANDBOX=1`) sets it, only for a signed Release build (it refuses
+`--debug` and ad hoc builds, so a development build can never be the one that creates `local.daybook.app`'s
+container); `release.yml`'s manual `sandbox` input sets it for the release, and makes the GitHub Release a
+prerelease whatever the tag says.
+
+Before the first sandboxed prerelease, on real hardware:
+
+1. **The probe** (above): process taps work sandboxed, for an app and a browser call. If they don't, decide whether
+   ScreenCaptureKit alone is acceptable first.
+2. **The rehearsal**: `scripts/build-app.sh --sandbox-rehearsal --debug`, with a synthetic library at
+   `~/Library/Application Support/Daybook Rehearsal` (APFS clones of the real `Models` folders make it as big as the
+   real one at no cost: `cp -c -R`), and preferences in the rehearsal's domain
+   (`defaults write local.daybook.app.rehearsal onboardingCompleted -bool YES`). Launch `dist/Daybook.app`: the
+   library should be in `~/Library/Containers/local.daybook.app.rehearsal/Data/Library/Application Support/Daybook`,
+   gone from `Daybook Rehearsal`, and the app should open it without asking. Check whether the preferences came along
+   (`defaults read ~/Library/Containers/local.daybook.app.rehearsal/Data/Library/Preferences/local.daybook.app.rehearsal`);
+   if they didn't, add `${Library}/Preferences/${BundleId}.plist` to both manifests before shipping. Each further
+   rehearsal needs a new `DAYBOOK_REHEARSAL_BUNDLE_ID` (above). docs/validation.md records the last one.
+3. **A backup** of the real library, an APFS clone that costs no space:
+   `cp -c -R ~/Library/Application\ Support/Daybook ~/Library/Application\ Support/Daybook\ Backup\ $(date +%F)` (or a
+   Time Machine backup). Quit Daybook first.
+
+Then the prerelease:
+
+1. Tag the commit on `main`, e.g. `git tag -a v0.4.0-rc.1 -m "Daybook 0.4.0 RC 1: the App Sandbox"` and push it.
+   The push starts an ordinary (unsandboxed) release run: in Actions › Release, open it and **Reject** its
+   deployment (or cancel it), so it never builds.
+2. `gh workflow run release.yml --ref v0.4.0-rc.1 -f apps=mac -f sandbox=true`, then approve that run. The `prepare`
+   job says "App Sandbox" in its notice; `package-mac.sh` checks the signed app is the `signed-sandbox` kind before
+   notarizing; the draft is published as a prerelease, so it never becomes "Latest".
+3. Install it over the current app, after the backup. The first launch moves the library into the container (the
+   manifest), and the app opens it; Settings › Library shows the container's path. Run the owner checks below.
+4. To go back: install the previous (unsandboxed) release. It offers **Move Library Back** (above).
+
+Owner checks with the sandboxed prerelease: the first launch on the real library (nothing asked, library intact,
+the identity kept: the iPhone reconnects without pairing again, sync and the courier run under Developer ID); real
+calls (process tap, the ScreenCaptureKit fallback, meeting detection); microphone and AirPods routes; Soundcore over
+Bluetooth; captions and Foundation Models; Continuity Camera; re-granting the import folder; notarization and
+`spctl`; and going back to the unsandboxed release and forward again.
+
+**Making it the default** later, in one commit: `sandbox=1` as `build-app.sh`'s default (with a way to turn it off for
+a while, e.g. `DAYBOOK_SANDBOX=0`), `DAYBOOK_SANDBOX = YES` in `Signing.xcconfig` (for builds from Xcode),
+`release.yml`'s input default `true` without forcing a prerelease, CI's `check-mac-app.sh` kinds (a signed default is
+`signed-sandbox`), and this document and docs/release.md. The rollback path (`LegacyLibraryReturn`) and
+`replica.json` stay in every build, sandboxed or not, so any later unsandboxed build can still go back.
 
 ## The process-tap probe
 

@@ -26,6 +26,10 @@ on:
         description: What to Test (blank uses the tag message and commits since the previous tag)
         type: string
         required: false
+      sandbox:
+        description: Mac app in the App Sandbox (docs/sandbox.md). Its first launch moves the library; always a prerelease
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -73,7 +77,8 @@ jobs:
       run_created_at: ${{ steps.created.outputs.created_at }}
       tag: ${{ steps.version.outputs.tag }}
       is_tag: ${{ steps.version.outputs.is_tag }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
+      prerelease: ${{ steps.sandbox.outputs.prerelease }}
+      sandbox: ${{ steps.sandbox.outputs.sandbox }}
       iphone: ${{ steps.apps.outputs.iphone }}
       mac: ${{ steps.apps.outputs.mac }}
       testflight_group: ${{ steps.apps.outputs.testflight_group }}
@@ -107,6 +112,20 @@ jobs:
           args=(--ref "$REF" --run-number "$RUN_NUMBER" --run-attempt "$RUN_ATTEMPT" --offset "$OFFSET")
           if [[ -n "$VERSION" ]]; then args+=(--version "$VERSION"); fi
           scripts/ci/version.sh "${args[@]}" | tee -a "$GITHUB_OUTPUT"
+      # The sandboxed Mac app (a manual run's `sandbox` input; a pushed tag never is) ships only as a prerelease,
+      # whatever the tag says, until the switch is the default (docs/sandbox.md, "Shipping the sandboxed build").
+      - name: App Sandbox
+        id: sandbox
+        env:
+          SANDBOX: ${{ inputs.sandbox == true }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          if [[ "$SANDBOX" == true ]]; then
+            echo "::notice title=App Sandbox::The Mac app is sandboxed and its first launch moves the library into its container; the GitHub Release is a prerelease."
+            printf 'sandbox=true\nprerelease=true\n' | tee -a "$GITHUB_OUTPUT"
+          else
+            printf 'sandbox=false\nprerelease=%s\n' "$PRERELEASE" | tee -a "$GITHUB_OUTPUT"
+          fi
       # The same for every attempt of the run: an App Store Connect build uploaded before it can't be
       # this run's (asc-testflight.sh --find-build --uploaded-after).
       - name: When the run was created
@@ -307,6 +326,8 @@ jobs:
     env:
       DAYBOOK_TEAM_ID: ${{ vars.DAYBOOK_TEAM_ID }}
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
+      # build-app.sh reads it (--sandbox): the sandboxed entitlements and the container migration manifest.
+      DAYBOOK_SANDBOX: ${{ needs.prepare.outputs.sandbox == 'true' && '1' || '0' }}
     steps:
       - name: Check the configuration
         run: |
@@ -398,6 +419,7 @@ jobs:
           args=(--app dist/Daybook.app --version "$VERSION" --build "$BUILD" --output dist/release --notarize
                 --state-dir "build/notarization/attempt-$GITHUB_RUN_ATTEMPT")
           if [[ -n "$SUBMISSION" ]]; then args+=(--submission "$SUBMISSION"); fi
+          if [[ "$DAYBOOK_SANDBOX" == 1 ]]; then args+=(--sandbox); fi
           scripts/ci/secrets.sh run -- scripts/ci/package-mac.sh "${args[@]}"
       - name: Keep the pending notarization for a re-run
         if: (failure() || cancelled()) && hashFiles('build/notarization/*/pending.json') != ''

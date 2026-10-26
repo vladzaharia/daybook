@@ -9,6 +9,12 @@
 #   scripts/build-app.sh --ad-hoc         sign to run locally: no team, no profile, no iCloud entitlements;
 #                                         the app runs and keeps sync off. Combine with --debug. Bundle ID
 #                                         local.daybook.app.adhoc, so it never uses the app's container.
+#   scripts/build-app.sh --sandbox        Release, signed: run in the App Sandbox (Daybook-Sandbox.entitlements)
+#                                         and embed the container migration manifest, so the first launch MOVES
+#                                         ~/Library/Application Support/Daybook into local.daybook.app's container,
+#                                         once and for good (docs/sandbox.md). Also DAYBOOK_SANDBOX=1. Needs a
+#                                         team; refuses --debug and --ad-hoc. Without it signed builds aren't
+#                                         sandboxed.
 #   scripts/build-app.sh --sandbox-rehearsal
 #                                         ad hoc, bundle ID local.daybook.app.rehearsal (or
 #                                         $DAYBOOK_REHEARSAL_BUNDLE_ID), with a manifest that moves
@@ -40,6 +46,8 @@
 #   DAYBOOK_ICLOUD_CONTAINER  iCloud container for sync (default iCloud.local.daybook)
 #   DAYBOOK_NOTARY_PROFILE    notarytool keychain profile: notarize and staple the Developer ID export
 #   DAYBOOK_MAC_DERIVED_DATA  derived data (default build/macOS/DerivedData)
+#   DAYBOOK_SANDBOX           1 (or YES, true) is --sandbox; 0, NO, false, or unset leave signed builds
+#                             unsandboxed
 #   DAYBOOK_REHEARSAL_BUNDLE_ID
 #                             --sandbox-rehearsal's bundle ID, local.daybook.app.rehearsal…: a container can't be
 #                             fully removed, so each rehearsal from scratch needs a new one
@@ -69,6 +77,12 @@ packages_dir="$work_dir/SourcePackages"
 dist_dir="$repo_dir/dist"
 configuration=Release
 signing=""
+sandbox=0
+case "${DAYBOOK_SANDBOX:-}" in
+    1|YES|yes|true) sandbox=1 ;;
+    ""|0|NO|no|false) ;;
+    *) echo "DAYBOOK_SANDBOX is 1 or 0, not ${DAYBOOK_SANDBOX}." >&2; exit 2 ;;
+esac
 generate_only=0
 resolve_only=0
 archive_only=0
@@ -83,6 +97,7 @@ while (( $# )); do
         --debug) configuration=Debug ;;
         --ad-hoc) signing=local ;;
         --sandbox-rehearsal) signing=rehearsal ;;
+        --sandbox) sandbox=1 ;;
         --allow-provisioning-updates) provisioning=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration) ;;
         --generate-only) generate_only=1 ;;
         --resolve-only) resolve_only=1 ;;
@@ -172,6 +187,19 @@ if [[ "$signing" == local || "$signing" == rehearsal ]]; then
     fi
     echo "Signing ad hoc: no team, so this build has no iCloud entitlements and keeps sync off."
 fi
+if (( sandbox )); then
+    # Only a signed Release build may run sandboxed as local.daybook.app: its first launch creates the app's container
+    # and moves the real library into it, once. A development build must never be the one that does (docs/sandbox.md).
+    if [[ "$signing" != signed ]]; then
+        echo "--sandbox is for signed builds (DAYBOOK_TEAM_ID). Ad hoc builds are always sandboxed, as local.daybook.app.adhoc." >&2
+        exit 2
+    fi
+    if [[ "$configuration" == Debug ]]; then
+        echo "--sandbox is for Release builds: a Debug build must never create local.daybook.app's container." >&2
+        exit 2
+    fi
+    echo "App Sandbox: this build's first launch moves ~/Library/Application Support/Daybook into its container (docs/sandbox.md)."
+fi
 rehearsal_id="${DAYBOOK_REHEARSAL_BUNDLE_ID:-local.daybook.app.rehearsal}"
 if [[ "$signing" == rehearsal ]]; then
     if [[ ! "$rehearsal_id" =~ ^local\.daybook\.app\.rehearsal[A-Za-z0-9.-]*$ ]]; then
@@ -184,6 +212,7 @@ fi
 # ARCHS on the command line reaches the package targets too: Apple silicon only, as before.
 settings=(ARCHS=arm64 "DAYBOOK_SIGNING=$signing" "DAYBOOK_SOURCE_PACKAGES=$packages_dir")
 if [[ "$signing" == rehearsal ]]; then settings+=("DAYBOOK_BUNDLE_ID_rehearsal=$rehearsal_id"); fi
+if (( sandbox )); then settings+=(DAYBOOK_SANDBOX=YES); else settings+=(DAYBOOK_SANDBOX=NO); fi
 if [[ -n "$team" ]]; then settings+=("DAYBOOK_TEAM_ID=$team"); fi
 if [[ -n "${DAYBOOK_ICLOUD_CONTAINER:-}" ]]; then settings+=("DAYBOOK_ICLOUD_CONTAINER=$DAYBOOK_ICLOUD_CONTAINER"); fi
 settings+=(${version_settings[@]+"${version_settings[@]}"})

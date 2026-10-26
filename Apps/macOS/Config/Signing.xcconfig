@@ -68,7 +68,7 @@ DAYBOOK_DEVELOPMENT_TEAM_local =
 DAYBOOK_DEVELOPMENT_TEAM_rehearsal =
 // The entitlements files are the only source of the app's entitlements (no ENABLE_APP_SANDBOX or similar settings).
 DAYBOOK_ENTITLEMENTS_signed_NO = $(DAYBOOK_ROOT)/Resources/Daybook.entitlements
-DAYBOOK_ENTITLEMENTS_signed_YES = $(DAYBOOK_ROOT)/Resources/Daybook.entitlements
+DAYBOOK_ENTITLEMENTS_signed_YES = $(DAYBOOK_ROOT)/Resources/Daybook-Sandbox.entitlements
 DAYBOOK_ENTITLEMENTS_local_NO = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
 DAYBOOK_ENTITLEMENTS_local_YES = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
 DAYBOOK_ENTITLEMENTS_rehearsal_NO = $(DAYBOOK_ROOT)/Resources/Daybook-Local.entitlements
