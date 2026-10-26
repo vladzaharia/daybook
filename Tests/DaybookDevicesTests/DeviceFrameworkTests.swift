@@ -268,6 +268,20 @@ final class DeviceFrameworkTests: XCTestCase {
         XCTAssertEqual(snapshot.displayName, "soundcore Work ··7F3A")
     }
 
+    @MainActor
+    func testARecordingsStartIsReadFromItsIdentityInOnePlace() {
+        let kind = SoundcoreWorkIntegration.id
+        XCTAssertEqual(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: kind, recordingID: "1780000000")),
+                       Date(timeIntervalSince1970: 1_780_000_000))
+        XCTAssertEqual(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: kind, recordingID: "1780000000~live")),
+                       Date(timeIntervalSince1970: 1_780_000_000), "a Listen Live portion starts with its recording")
+        XCTAssertNil(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: kind, recordingID: "12")), "not a plausible time")
+        XCTAssertNil(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: OtherRecorderIntegration.id, recordingID: "1780000000")))
+        XCTAssertNil(DeviceRecordingStart.date(of: DeviceRecordingIdentity(kind: kind, recordingID: "file:ZOOM0009.WAV|58200000")))
+        XCTAssertEqual(DeviceLibraryLinks.wholeRecordingID("1780000000~live"), "1780000000")
+        XCTAssertEqual(DeviceLibraryLinks.wholeRecordingID("1780000000"), "1780000000")
+    }
+
     func testCatalogDeclaresMethodsInPreferenceOrder() async {
         await MainActor.run {
             let soundcore = DeviceCatalog.kind(SoundcoreWorkIntegration.id)

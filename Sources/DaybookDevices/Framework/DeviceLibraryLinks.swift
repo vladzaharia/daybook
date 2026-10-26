@@ -34,6 +34,11 @@ public struct DeviceLibraryLinks: Equatable {
 
     public static func partialID(_ recordingID: String) -> String { recordingID + partialSuffix }
 
+    /// The recording a Listen Live portion belongs to; any other ID unchanged.
+    public static func wholeRecordingID(_ recordingID: String) -> String {
+        recordingID.hasSuffix(partialSuffix) ? String(recordingID.dropLast(partialSuffix.count)) : recordingID
+    }
+
     public init(imported: [String: UUID] = [:], partial: [String: UUID] = [:]) {
         self.imported = imported; self.partial = partial
     }
@@ -63,6 +68,17 @@ public struct DeviceLibraryLinks: Equatable {
         }
         for id in imported.keys { partial[id] = nil }
         recent = Array(entries.sorted { $0.importedAt > $1.importedAt }.prefix(recentLimit))
+    }
+}
+
+/// When a recorder's recording started, read from its identity: Soundcore recording IDs are Unix start
+/// times on the recorder's clock. The one place every surface dates or titles an import from.
+@MainActor
+public enum DeviceRecordingStart {
+    public static func date(of identity: DeviceRecordingIdentity) -> Date? {
+        guard identity.kind == SoundcoreWorkIntegration.id,
+              let seconds = UInt32(DeviceLibraryLinks.wholeRecordingID(identity.recordingID)) else { return nil }
+        return SoundcoreRecording(id: seconds, size: 0).date
     }
 }
 

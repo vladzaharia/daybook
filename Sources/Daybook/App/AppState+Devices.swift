@@ -96,12 +96,7 @@ extension AppState {
     }
 
     /// When a recorder's recording started, when its ID says (Soundcore IDs are Unix start times).
-    func deviceRecordingStart(_ identity: DeviceRecordingIdentity) -> Date? {
-        let id = identity.recordingID.hasSuffix(DeviceLibraryLinks.partialSuffix)
-            ? String(identity.recordingID.dropLast(DeviceLibraryLinks.partialSuffix.count)) : identity.recordingID
-        guard identity.kind == SoundcoreWorkIntegration.id, let seconds = UInt32(id) else { return nil }
-        return SoundcoreRecording(id: seconds, size: 0).date
-    }
+    func deviceRecordingStart(_ identity: DeviceRecordingIdentity) -> Date? { DeviceRecordingStart.date(of: identity) }
 
     /// Connects the devices to the library. Call once from `init`.
     func wireDevices() {

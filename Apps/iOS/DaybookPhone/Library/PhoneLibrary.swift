@@ -249,12 +249,7 @@ final class PhoneLibrary {
     }
 
     /// Soundcore recording IDs are their Unix start times.
-    static func deviceStart(_ identity: DeviceRecordingIdentity) -> Date? {
-        let id = identity.recordingID.hasSuffix(DeviceLibraryLinks.partialSuffix)
-            ? String(identity.recordingID.dropLast(DeviceLibraryLinks.partialSuffix.count)) : identity.recordingID
-        guard identity.kind == SoundcoreWorkIntegration.id, let seconds = UInt32(id) else { return nil }
-        return SoundcoreRecording(id: seconds, size: 0).date
-    }
+    static func deviceStart(_ identity: DeviceRecordingIdentity) -> Date? { DeviceRecordingStart.date(of: identity) }
 
     // MARK: Reading
 
