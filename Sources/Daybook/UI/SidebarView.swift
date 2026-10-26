@@ -69,8 +69,7 @@ struct SidebarView: View {
             }
             Button("Cancel", role: .cancel) { folderToDelete = nil }
         } message: {
-            let count = state.meetings.filter { $0.folderID == folderToDelete?.id }.count
-            Text(count == 0 ? "The folder is empty." : "The \(count == 1 ? "conversation" : "\(count) conversations") in it stay in your library.")
+            Text(LibraryWords.folderDeletion(conversations: state.meetings.filter { $0.folderID == folderToDelete?.id }.count))
         }
     }
 

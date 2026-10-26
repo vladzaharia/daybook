@@ -64,6 +64,12 @@ private struct ReadingLayout: View {
             }
             Button("OK", role: .cancel) { }
         } message: { alert in Text(alert.message) }
+        .alert(trashTitle, isPresented: Binding(get: { !session.confirmingTrash.isEmpty }, set: { if !$0 { session.confirmingTrash = [] } })) {
+            Button("Move to Trash", role: .destructive) { trash(session.confirmingTrash) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(session.confirmingTrash.count > 1 ? "Their audio, notes, and summaries go with them." : "Its audio, notes, and summary go with it.")
+        }
         .onChange(of: library.isLoaded, initial: true) { _, loaded in
             guard loaded else { return }
             session.launch.apply(to: session, library: library, provider: provider)
@@ -77,6 +83,33 @@ private struct ReadingLayout: View {
             // A conversation trashed elsewhere (or by sync) leaves the page.
             if let open = session.openID, !ids.contains(open) { session.forget(open) }
             if style != .pocket { adapt(to: style) }
+        }
+    }
+
+    /// "Move “Weekly sync” to the Trash?", as on the Mac.
+    private var trashTitle: String {
+        let ids = session.confirmingTrash
+        if ids.count > 1 { return "Move \(ids.count) conversations to the Trash?" }
+        let title = ids.first.flatMap { library.meeting($0)?.title }.flatMap { $0.isEmpty ? nil : $0 }
+        return title.map { "Move “\($0)” to the Trash?" } ?? "Move this conversation to the Trash?"
+    }
+
+    private func trash(_ ids: [UUID]) {
+        Task {
+            var failures: [String] = []
+            for id in ids {
+                do {
+                    if try await library.moveToTrash(id) { session.forget(id) }
+                } catch {
+                    failures.append(error.localizedDescription)
+                }
+            }
+            if session.isSelecting { session.isSelecting = false; session.selection = [] }
+            if !failures.isEmpty {
+                session.alert = ReadingAlert(title: "Couldn’t Move to Trash",
+                                             message: failures.count == 1 ? "Try again." : "\(failures.count) conversations weren’t moved. Try again.",
+                                             details: failures.joined(separator: "\n"))
+            }
         }
     }
 

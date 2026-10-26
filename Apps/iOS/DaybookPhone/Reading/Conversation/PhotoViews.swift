@@ -177,6 +177,7 @@ struct PhotoViewer: View {
     @Environment(\.dismiss) private var dismiss
     @State private var caption = ""
     @State private var failure: String?
+    @State private var confirmingDelete = false
 
     private var meeting: Meeting? { library.meeting(meetingID) }
     private var photos: [MeetingPhoto] { meeting?.visiblePhotos ?? [] }
@@ -232,9 +233,7 @@ struct PhotoViewer: View {
                                     } catch { failure = error.localizedDescription }
                                 }
                             }
-                            Button("Delete Photo", systemImage: "trash", role: .destructive) {
-                                saveCaption(); library.removePhoto(photo.id, in: meetingID); dismiss()
-                            }
+                            Button("Delete Photo…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
                         } label: { Label("Photo Actions", systemImage: "ellipsis") }
                     }
                     ToolbarItemGroup(placement: .bottomBar) {
@@ -243,6 +242,12 @@ struct PhotoViewer: View {
                         Button("Next", systemImage: "chevron.right") { step(1) }.disabled(index == nil || index == photos.count - 1)
                     }
                 }
+                .alert("Delete this photo?", isPresented: $confirmingDelete) {
+                    Button("Delete Photo", role: .destructive) {
+                        saveCaption(); library.removePhoto(photo.id, in: meetingID); dismiss()
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: { Text("It stays in Version History.") }
                 .onAppear { caption = photo.caption ?? "" }
                 .onChange(of: photoID) { _, _ in caption = self.photo?.caption ?? "" }
                 .onDisappear(perform: saveCaption)

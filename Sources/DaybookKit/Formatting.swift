@@ -109,3 +109,15 @@ extension Meeting {
         return named.prefix(3).joined(separator: ", ") + " and \(named.count - 3) others"
     }
 }
+
+/// Sentences both apps put in the same dialogs, so the Mac and the iPhone say the same thing.
+public enum LibraryWords {
+    /// Under "Delete the folder “Clients”?": what happens to what's in it.
+    public static func folderDeletion(conversations count: Int) -> String {
+        switch count {
+        case 0: return "The folder is empty."
+        case 1: return "The conversation in it stays in your library."
+        default: return "The \(count) conversations in it stay in your library."
+        }
+    }
+}

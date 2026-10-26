@@ -101,11 +101,7 @@ struct ConversationMoreMenu: View {
             Label(personal ? "Move to Work" : "Move to Personal", systemImage: personal ? "briefcase" : "house")
         }
         Divider()
-        Button(role: .destructive) {
-            Task {
-                if (try? await library.moveToTrash(meeting.id)) == true { session.forget(meeting.id) }
-            }
-        } label: { Label("Move to Trash", systemImage: "trash") }
+        Button(role: .destructive) { session.confirmingTrash = [meeting.id] } label: { Label("Move to Trash…", systemImage: "trash") }
     }
 }
 

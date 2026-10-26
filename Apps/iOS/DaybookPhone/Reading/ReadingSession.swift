@@ -59,6 +59,8 @@ final class ReadingSession {
     var focusNotesFor: UUID?
     /// Something couldn't be done (the audio isn't here to share): an alert naming it.
     var alert: ReadingAlert?
+    /// Conversations waiting for the person to confirm moving them to the Trash.
+    var confirmingTrash: [UUID] = []
 
     let player = PlaybackController()
     /// Debug launch arguments for screenshots, applied once the library has loaded.
