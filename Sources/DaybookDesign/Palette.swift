@@ -253,7 +253,7 @@ extension UIColor {
 enum ClockFormat {
     static func short(_ seconds: Double) -> String {
         let safe = seconds.isFinite ? min(abs(seconds), Double(Int.max / 2)) : 0
-        let value = Int(safe), sign = seconds < 0 ? "−" : ""
+        let value = Int(safe), sign = seconds < 0 && value > 0 ? "−" : ""
         return sign + (value >= 3600
             ? String(format: "%d:%02d:%02d", value / 3600, (value % 3600) / 60, value % 60)
             : String(format: "%d:%02d", value / 60, value % 60))

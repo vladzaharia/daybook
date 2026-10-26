@@ -316,7 +316,7 @@ private struct NextStepRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Said at \(SpokenTime.format(segment.start.rounded(.down)))")
+                .accessibilityLabel("Said at \(SpokenTime.format(segment.start))")
                 .accessibilityHint("Shows it in the transcript")
             }
         }
