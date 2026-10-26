@@ -148,6 +148,8 @@ enum ReadingPlace: Hashable {
 
 /// Sheets shown over the conversation or the library.
 enum ReadingSheet: Identifiable, Equatable {
+    case importPhotos(UUID)
+    case photo(meetingID: UUID, photoID: UUID)
     case info(UUID)
     case history(UUID)
     case share([URL])
@@ -159,6 +161,8 @@ enum ReadingSheet: Identifiable, Equatable {
 
     var id: String {
         switch self {
+        case .importPhotos(let id): return "import-photos:\(id)"
+        case .photo(let meeting, let photo): return "photo:\(meeting):\(photo)"
         case .info(let id): return "info:\(id)"
         case .history(let id): return "history:\(id)"
         case .share(let urls): return "share:" + urls.map(\.path).joined(separator: ",")

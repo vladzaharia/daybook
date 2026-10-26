@@ -267,13 +267,13 @@ extension Meeting {
     }
 
     /// The person's own work in a conversation: notes, corrections, renamed speakers, bookmarks with
-    /// text, tags, a folder, a chosen template or placement, or completed next steps. A conversation
+    /// text, tags, a folder, a chosen template or placement, completed next steps, or photos. A conversation
     /// with any of it is never moved to the Trash on its own.
     public var hasPersonMadeContent: Bool {
         !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || folderID != nil || !(tags ?? []).isEmpty
             || templateID != nil || placement != nil || summary?.actionItems.contains(where: \.completed) == true
             || revisions.contains { ["segment", "speaker", "notes"].contains($0.field.split(separator: ":").first.map(String.init) ?? "") }
-            || highlights.contains { !$0.text.isEmpty }
+            || highlights.contains { !$0.text.isEmpty } || !visiblePhotos.isEmpty
     }
 }
 

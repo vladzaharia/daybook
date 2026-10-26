@@ -276,6 +276,15 @@ public actor LocalIntelligenceRuntime {
     public func summarize(transcript: String, notes: String, template: MeetingKind = .auto, glossary: [String] = [],
                           model: ModelReference, templateInstructions: String? = nil, highlightEvidence: String? = nil,
                           progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> GeneratedMeetingNotes {
+        try await summarize(transcript: transcript, notes: notes, template: template, glossary: glossary, model: model,
+                            templateInstructions: templateInstructions, highlightEvidence: highlightEvidence, photos: [], progress: progress)
+    }
+
+    /// The same, with photos the summary may place under its sections.
+    public func summarize(transcript: String, notes: String, template: MeetingKind = .auto, glossary: [String] = [],
+                          model: ModelReference, templateInstructions: String? = nil, highlightEvidence: String? = nil,
+                          photos: [PhotoEvidence],
+                          progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> GeneratedMeetingNotes {
         try begin(); defer { busy = false }
         let (loaded, provenance) = try await use(model, for: .summarization, message: "Loading language model locally", progress: progress)
         guard let summarizer = loaded as? any Summarizing else {
@@ -284,7 +293,8 @@ public actor LocalIntelligenceRuntime {
         try Task.checkCancellation()
         var notes = try await summarizer.summarize(
             SummaryRequest(transcript: transcript, notes: notes, template: template, glossary: glossary,
-                           templateInstructions: templateInstructions, highlightEvidence: highlightEvidence, modelID: model.id),
+                           templateInstructions: templateInstructions, highlightEvidence: highlightEvidence, modelID: model.id,
+                           photos: photos),
             progress: progress)
         notes.provenance = provenance
         return notes
@@ -305,6 +315,20 @@ public actor LocalIntelligenceRuntime {
             progress: progress)
         result.provenance = provenance
         return result
+    }
+
+    /// Photos to captions, text, labels, sharpness, and near copies (`DescribingImages`): Apple Vision,
+    /// or a vision-language model for captions. One result per request, in order.
+    public func describeImages(_ requests: [ImageDescriptionRequest], model: ModelReference,
+                               progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> [ImageDescription] {
+        try begin(); defer { busy = false }
+        let (loaded, provenance) = try await use(model, for: .imageDescription, message: "Loading photo model locally", progress: progress)
+        guard let describer = loaded as? any DescribingImages else {
+            throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "photos")
+        }
+        var results = try await describer.describe(requests, progress: progress)
+        for index in results.indices { results[index].provenance = provenance }
+        return results
     }
 
     // MARK: Loading

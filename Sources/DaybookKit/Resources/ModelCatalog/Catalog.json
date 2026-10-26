@@ -29,6 +29,9 @@
         ],
         "smallTasks": [
           "apple-foundation-models/system"
+        ],
+        "imageDescription": [
+          "apple-vision/system"
         ]
       },
       "tiers": {
@@ -98,6 +101,9 @@
         ],
         "smallTasks": [
           "apple-foundation-models/system"
+        ],
+        "imageDescription": [
+          "apple-vision/system"
         ]
       },
       "tiers": {
@@ -171,6 +177,9 @@
         ],
         "smallTasks": [
           "apple-foundation-models/system"
+        ],
+        "imageDescription": [
+          "apple-vision/system"
         ]
       },
       "tiers": {
@@ -241,6 +250,9 @@
       ],
       "smallTasks": [
         "apple-foundation-models/system"
+      ],
+      "imageDescription": [
+        "apple-vision/system"
       ]
     },
     "tiers": {

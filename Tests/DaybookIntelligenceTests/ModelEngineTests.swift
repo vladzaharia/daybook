@@ -122,7 +122,10 @@ final class ModelEngineTests: XCTestCase {
     func testTheStandardRegistryDeclaresEachEngine() {
         let registry = ModelEngineRegistry.standard
         XCTAssertEqual(registry.descriptors.map(\.id), [.whisperKit, .community1, .sortformer, .mlxLanguage, .parakeet, .nemotronDiarizer,
-                                                        .appleFoundationModels])
+                                                        .appleFoundationModels, .appleVision])
+        XCTAssertEqual(registry.engine(.appleVision)?.descriptor.roles, [.imageDescription])
+        XCTAssertEqual(registry.engine(.appleVision)?.descriptor.residency, .system)
+        XCTAssertEqual(registry.engine(.mlxLanguage)?.descriptor.roles, [.summarization, .imageDescription])
         XCTAssertEqual(registry.engine(.whisperKit)?.descriptor.roles, [.transcription])
         XCTAssertEqual(registry.engine(.community1)?.descriptor.roles, [.diarization, .speakerEmbedding])
         XCTAssertEqual(registry.engine(.parakeet)?.descriptor.roles, [.transcription])
@@ -132,7 +135,7 @@ final class ModelEngineTests: XCTestCase {
         XCTAssertEqual(registry.engine(.mlxLanguage)?.descriptor.residency, .exclusive)
         XCTAssertEqual(registry.engine(.sortformer)?.descriptor.residency, .shared)
         XCTAssertEqual(registry.engine(.whisperKit)?.descriptor.versionString, "2 (argmax-oss-swift 1.1.1)")
-        XCTAssertEqual(registry.engine(.mlxLanguage)?.descriptor.versionString, "2 (mlx-swift-lm 3.32.3)")
+        XCTAssertEqual(registry.engine(.mlxLanguage)?.descriptor.versionString, "3 (mlx-swift-lm 3.32.3)")
         XCTAssertEqual(registry.engine(.appleFoundationModels)?.descriptor.roles, [.smallTasks])
         XCTAssertEqual(registry.engine(.appleFoundationModels)?.descriptor.residency, .system)
         XCTAssertTrue(registry.descriptors.allSatisfy { $0.platforms.contains(.macOS) })

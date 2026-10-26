@@ -31,6 +31,22 @@ protocol AudioProviding: Sendable {
                                progress: @escaping @Sendable (Double) -> Void) async throws -> URL
 }
 
+extension AudioProviding {
+    /// Photos use the same verified, content-addressed fetch and cache as audio originals.
+    @MainActor
+    func localPhoto(for photo: MeetingPhoto, in meetingID: UUID) async throws -> URL {
+        let original = RecordingTrack(id: photo.id, source: .imported, relativePath: photo.relativePath,
+                                      fileName: photo.fileName, sha256: photo.sha256)
+        do { return try await localAudio(for: original, in: meetingID, progress: { _ in }) }
+        catch is AudioProvidingError { throw PhotoProvidingError.unavailable }
+    }
+}
+
+enum PhotoProvidingError: LocalizedError {
+    case unavailable
+    var errorDescription: String? { "The photo isn’t on this iPhone yet. Try again when you’re online." }
+}
+
 /// Whether a recording can play right now.
 enum AudioAvailability: Equatable, Sendable {
     /// On this iPhone; plays at once.

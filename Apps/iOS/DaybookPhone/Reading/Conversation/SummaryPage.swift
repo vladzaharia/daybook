@@ -35,6 +35,7 @@ struct SummaryPage: View {
                     YourNotes(library: library, meeting: meeting, play: play)
                         .padding(.top, meeting.summary == nil ? PhoneStyle.Space.s5 : 0)
                         .id(meeting.summary == nil ? SummaryBlockID.notes : "notes-body")
+                    PhotoStrip(meeting: meeting)
                     if meeting.summary != nil {
                         Colophon(library: library, meeting: meeting).id(SummaryBlockID.colophon)
                     }
@@ -200,6 +201,7 @@ private struct SummaryBody: View {
                 VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
                     PageHeading(text: section.heading)
                     SectionBody(source: section.body, evidence: evidence)
+                    ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true) }
                 }
                 .padding(.top, PhoneStyle.Space.s6)
                 .id(SummaryBlockID.section(section.id))

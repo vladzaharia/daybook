@@ -57,6 +57,8 @@ let package = Package(
             .product(name: "WhisperKit", package: "argmax-oss-swift"),
             .product(name: "MLX", package: "mlx-swift"),
             .product(name: "MLXLLM", package: "mlx-swift-lm"),
+            // Gemma 4's vision tower, for photo captions (docs/models.md, "Photos").
+            .product(name: "MLXVLM", package: "mlx-swift-lm"),
             .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             .product(name: "MLXGuidedGeneration", package: "mlx-swift-lm"),
             .product(name: "FluidAudio", package: "FluidAudio"),

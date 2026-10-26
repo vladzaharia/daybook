@@ -29,9 +29,12 @@ public struct ModelRole: RawRepresentable, Codable, Hashable, Sendable, Expressi
     public static let summarization: ModelRole = "summarization"
     /// Short, fixed-shape jobs: titles, meeting kind, vocabulary suggestions.
     public static let smallTasks: ModelRole = "smallTasks"
+    /// A photo's caption: what it shows, in a few words (photos also get their text read and their
+    /// sharpness judged by Apple Vision, whichever model writes the caption).
+    public static let imageDescription: ModelRole = "imageDescription"
 
     /// The roles Daybook knows, in the order the interface lists them.
-    public static let known: [ModelRole] = [.transcription, .diarization, .speakerEmbedding, .summarization, .smallTasks]
+    public static let known: [ModelRole] = [.transcription, .diarization, .speakerEmbedding, .summarization, .smallTasks, .imageDescription]
 }
 
 /// An engine's stable identifier: "whisperKit", "community1", "mlxLanguage".
@@ -58,6 +61,8 @@ public struct ModelEngineID: RawRepresentable, Codable, Hashable, Sendable, Expr
     // Engines planned next (docs/models.md, "How to add a model"). A manifest may already name them;
     // until an engine registers, its entries read "Needs a newer Daybook".
     public static let appleFoundationModels: ModelEngineID = "appleFoundationModels"
+    /// Apple's Vision framework: text recognition, classification, sharpness, and near copies.
+    public static let appleVision: ModelEngineID = "appleVision"
     public static let mlxAudio: ModelEngineID = "mlxAudio"
 }
 

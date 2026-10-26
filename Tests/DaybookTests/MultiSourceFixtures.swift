@@ -116,6 +116,18 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
     private var _summarized: [String] = []
     private var _blocked: Set<String> = []
     private var _waiting: Set<String> = []
+    private var _photosBlocked = false
+    private var _readingPhotos = false
+
+    func blockPhotos(_ blocked: Bool) { lock.withLock { _photosBlocked = blocked } }
+    var readingPhotos: Bool { lock.withLock { _readingPhotos } }
+    func describeImages(_ requests: [ImageDescriptionRequest], model: ModelReference,
+                        progress: @escaping IntelligenceProgressHandler) async throws -> [ImageDescription] {
+        lock.withLock { _readingPhotos = true }
+        defer { lock.withLock { _readingPhotos = false } }
+        while lock.withLock({ _photosBlocked }) { try await Task.sleep(for: .milliseconds(10)) }
+        return requests.map { _ in ImageDescription(caption: "Whiteboard", recognizedText: "Planning for launch", sharpness: 0.8) }
+    }
 
     func script(_ url: URL, _ lines: [(Double, String)]) throws {
         let digest = try AudioDigest.sha256(fileURL: url)

@@ -13,7 +13,7 @@ final class ModelManifestTests: XCTestCase {
         XCTAssertTrue(catalog.warnings.isEmpty, "\(catalog.warnings)")
         // Family files load in file-name order.
         XCTAssertEqual(catalog.models.map(\.key), [
-            "apple-foundation-models/system", "community-1/offline",
+            "apple-foundation-models/system", "apple-vision/system", "community-1/offline",
             "gemma-4/e2b-4bit", "gemma-4/e4b-4bit", "gemma-4/12b-4bit", "gemma-4/26b-a4b-qat-4bit", "gemma-4/31b-8bit",
             "nemotron-3-diarization/offline", "nemotron-3-diarization/compact", "parakeet/ultra", "parakeet/redux",
             "qwen2.5/1.5b-4bit", "qwen2.5/3b-4bit", "qwen2.5/7b-4bit", "qwen3.5/4b-4bit", "qwen3.5/9b-4bit", "qwen3.6/35b-a3b-4bit",

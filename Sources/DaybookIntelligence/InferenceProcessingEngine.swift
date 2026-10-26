@@ -30,17 +30,22 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         /// Automatic only: transcribes instead when the first transcript is in a language
         /// `transcriptionModel` doesn't cover (`TranscriptionRouter`).
         public var languageFallbackModel: ModelReference?
+        /// Writes photo captions (`ModelSelections[.imageDescription]`) when it isn't Apple Vision, which
+        /// reads every photo's text, sharpness, and near copies either way. Nil leaves captions to Vision.
+        public var photoModel: ModelReference?
 
         public init(transcriptionModel: ModelReference, summaryModel: ModelReference, detectSpeakers: Bool, speakerModel: ModelReference,
                     voiceEmbeddingModel: ModelReference? = nil, smallTasksModel: ModelReference? = nil,
                     speakerOptions: SpeakerAnalysisOptions, fingerprint: String,
                     speakerMatchThreshold: Double, speakerMatchMargin: Double,
-                    transcriptionLanguage: String? = nil, languageFallbackModel: ModelReference? = nil) {
+                    transcriptionLanguage: String? = nil, languageFallbackModel: ModelReference? = nil,
+                    photoModel: ModelReference? = nil) {
             self.transcriptionModel = transcriptionModel; self.summaryModel = summaryModel; self.detectSpeakers = detectSpeakers
             self.speakerModel = speakerModel; self.voiceEmbeddingModel = voiceEmbeddingModel; self.smallTasksModel = smallTasksModel
             self.speakerOptions = speakerOptions
             self.fingerprint = fingerprint; self.speakerMatchThreshold = speakerMatchThreshold; self.speakerMatchMargin = speakerMatchMargin
             self.transcriptionLanguage = transcriptionLanguage; self.languageFallbackModel = languageFallbackModel
+            self.photoModel = photoModel
         }
 
         /// What a transcript run records about how it was made.
@@ -143,14 +148,17 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         let small = try await smallTasks(transcript: transcript, notes: notes, kind: requestedKind, vocabulary: vocabulary, progress: report)
         // The small-tasks model's kind guides the summary's sections, as a chosen kind would.
         let summaryKind = requestedKind == .auto ? (small?.kind ?? .auto) : requestedKind
+        let photos = PhotoPlacement.candidates(in: meeting)
         let generated = try await inference.summarize(
             transcript: transcript, notes: notes, template: summaryKind,
             glossary: vocabulary, model: configuration.summaryModel, templateInstructions: template?.instructions,
-            highlightEvidence: MeetingEvidence.highlights(meeting), progress: report)
-        var summary = generated.summary
+            highlightEvidence: MeetingEvidence.highlights(meeting), photos: photos, progress: report)
+        // The model's photo placements, kept only where valid, plus the time fallback (PhotoPlacement).
+        var summary = PhotoPlacement.arrange(generated.summary, in: meeting)
         var parameters = ["configuration": configuration.fingerprint, "templateID": template?.id ?? "auto",
                           "templateInstructions": template?.instructions ?? "Automatic selection"]
         var suggestedTerms = generated.suggestedTerms
+        if !photos.isEmpty { parameters["photos"] = String(photos.count) }
         if let small, let model = configuration.smallTasksModel {
             if let title = small.title { summary.title = title }
             if requestedKind == .auto, let kind = small.kind { summary.kind = kind }
@@ -161,6 +169,77 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         summary.processingSettings = ProcessingSettings(modelID: configuration.summaryModel.id, parameters: parameters,
                                                         model: generated.provenance)
         return SummaryProcessingOutput(summary: summary, suggestedTerms: suggestedTerms, warnings: generated.warnings)
+    }
+
+    /// Reads photos with Apple Vision (text, labels, sharpness, near copies), then, when a caption model
+    /// other than Vision is chosen, has it caption the informative ones. Photos analysed before are only
+    /// compared for near copies. A caption model that can't run leaves Vision's captions, with a notice;
+    /// photos never stop a summary.
+    public func describePhotos(_ meeting: Meeting, photos: [PhotoProcessingInput],
+                               progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput {
+        let pending = photos.filter { Self.needsReading($0.photo, captionModel: configuration.photoModel) }
+        guard !pending.isEmpty else { return PhotoProcessingOutput() }
+        let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
+        let ordered = photos.sorted { $0.photo.capturedAt == $1.photo.capturedAt ? $0.photo.id.uuidString < $1.photo.id.uuidString : $0.photo.capturedAt < $1.photo.capturedAt }
+        let pendingIDs = Set(pending.map(\.photo.id))
+        let requests = ordered.map { ImageDescriptionRequest(url: $0.url, compareOnly: !pendingIDs.contains($0.photo.id)) }
+        var notices: [String] = []
+        let read: [ImageDescription]
+        do { read = try await inference.describeImages(requests, model: PhotoReading.visionModel, progress: report) }
+        catch is CancellationError { throw CancellationError() }
+        catch LocalIntelligenceError.busy { throw LocalIntelligenceError.busy }
+        catch { return PhotoProcessingOutput(notices: ["Photos couldn’t be read: \(error.localizedDescription)"]) }
+        guard read.count == ordered.count else { return PhotoProcessingOutput() }
+        var captions = read.map(\.caption)
+        var captionModels = Array(repeating: PhotoReading.visionModel.id, count: read.count)
+        var captionProvenance = read.map(\.provenance)
+        if let model = configuration.photoModel, model.id != PhotoReading.visionModel.id {
+            let informative = ordered.indices.filter { pendingIDs.contains(ordered[$0].photo.id) && PhotoReading.isInformative(read[$0], caption: read[$0].caption) }
+            if !informative.isEmpty {
+                do {
+                    let described = try await inference.describeImages(informative.map { ImageDescriptionRequest(url: ordered[$0].url, recognizedText: read[$0].recognizedText) },
+                                                                       model: model, progress: report)
+                    for (position, index) in informative.enumerated() where position < described.count {
+                        if let caption = described[position].caption, !caption.isEmpty {
+                            captions[index] = caption
+                            captionModels[index] = model.id
+                            captionProvenance[index] = described[position].provenance
+                        }
+                    }
+                } catch is CancellationError { throw CancellationError() }
+                catch { notices.append("Photo captions use Apple Vision: \(error.localizedDescription)") }
+            }
+        }
+        var analyses: [UUID: PhotoAnalysis] = [:]
+        let now = Date()
+        for (index, input) in ordered.enumerated() where pendingIDs.contains(input.photo.id) {
+            let found = read[index]
+            let duplicate = found.duplicateOf.flatMap { (0..<index).contains($0) ? ordered[$0].photo.id : nil }
+            var parameters = ["textModel": PhotoReading.visionModel.id]
+            if let vision = found.provenance { parameters["textEngine"] = "\(vision.engine) \(vision.engineVersion)" }
+            if !PhotoReading.isInformative(found, caption: found.caption) {
+                // A model change must not repeatedly process photos excluded from captioning.
+                parameters["captionSkipped"] = "uninformative"
+            }
+            let settings = ProcessingSettings(modelID: captionModels[index], parameters: parameters, createdAt: now, model: captionProvenance[index])
+            analyses[input.photo.id] = PhotoAnalysis(caption: captions[index], recognizedText: found.recognizedText,
+                                                     labels: found.labels.isEmpty ? nil : found.labels, sharpness: found.sharpness,
+                                                     duplicateOf: duplicate,
+                                                     isInformative: PhotoReading.isInformative(found, caption: captions[index]),
+                                                     settings: settings, createdAt: now)
+        }
+        return PhotoProcessingOutput(analyses: analyses, notices: notices)
+    }
+
+    /// A photo is read when it has no analysis, or its caption came from another model than the one chosen now.
+    public static func needsReading(_ photo: MeetingPhoto, captionModel: ModelReference?) -> Bool {
+        guard !photo.isRemoved else { return false }
+        guard let analysis = photo.analysis else { return true }
+        if analysis.settings?.parameters["captionSkipped"] == "uninformative" { return false }
+        let wanted = captionModel?.id ?? PhotoReading.visionModel.id
+        if analysis.settings?.modelID != wanted { return true }
+        if let revision = captionModel?.revision { return analysis.settings?.model?.revision != revision }
+        return false
     }
 
     /// The small-tasks step: nil when no small-tasks model is selected, or it can't run (Apple

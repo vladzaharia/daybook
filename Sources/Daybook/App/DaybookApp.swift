@@ -119,7 +119,13 @@ struct DaybookCommands: Commands {
             DeviceFileMenuItems(state: state)
             Button("Add Recording to Conversation…") { if let id = meeting?.id { state.chooseImport(attachTo: id) } }
                 .disabled(locked)
+            Button("Add Photo…") { if let id = meeting?.id { state.chooseAddPhoto(to: id) } }
+                .keyboardShortcut("p", modifiers: [.command, .option])
+                .disabled(meeting == nil)
         }
+        // Continuity Camera: Take Photo, Scan Documents, and Add Sketch from an iPhone or iPad
+        // (the page receives them through `importsItemProviders`).
+        ImportFromDevicesCommands()
         CommandGroup(after: .saveItem) {
             Menu("Export") {
                 Button("Markdown…") { if let id = meeting?.id { state.export(id) } }
@@ -138,6 +144,8 @@ struct DaybookCommands: Commands {
             Divider()
             Button("Copy Summary") { if let meeting { state.copySummary(meeting.id) } }
                 .disabled(meeting?.summary == nil)
+            Button("Paste Photo") { if let meeting { state.pastePhoto(into: meeting.id) } }
+                .disabled(meeting == nil)
         }
         CommandGroup(after: .textEditing) {
             Button("Search Conversations") { state.focusSearch() }
@@ -372,6 +380,7 @@ private struct DebugLaunchActions: ViewModifier {
             DeviceDemo.apply(to: state)
             PhoneDemo.apply(to: state)
             FloatingNotesDemo.apply(to: state)
+            PhotoDemo.apply(to: state)
             if let query = LaunchOptions.value(after: "--search") { state.search = query }
             switch LaunchOptions.value(after: "--sheet") {
             case "history": state.activeSheet = .versionHistory

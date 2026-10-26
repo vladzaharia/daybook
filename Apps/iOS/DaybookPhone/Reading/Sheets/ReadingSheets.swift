@@ -282,6 +282,8 @@ struct ReadingSheetContent: View {
 
     var body: some View {
         switch sheet {
+        case .importPhotos(let id): ImportPhotosSheet(library: library, meetingID: id)
+        case .photo(let meeting, let photo): PhotoViewer(library: library, meetingID: meeting, photoID: photo)
         case .info(let id): ConversationInfo(library: library, meetingID: id)
         case .history(let id): VersionHistoryView(library: library, meetingID: id)
         case .share(let urls): ShareSheet(items: urls).presentationDetents([.medium, .large]).ignoresSafeArea()

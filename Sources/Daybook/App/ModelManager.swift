@@ -20,6 +20,7 @@ extension ModelRole {
         case .speakerEmbedding: return "Voice profiles"
         case .summarization: return "Summaries"
         case .smallTasks: return "Titles and tags"
+        case .imageDescription: return "Photos"
         default: return Self.words(rawValue)
         }
     }
@@ -409,6 +410,7 @@ extension ModelCapabilities {
         if expectedSpeakerCount == true { lines.append("Expected number of speakers") }
         if let contextLength { lines.append("\(contextLength >= 1024 ? "\(contextLength / 1024)K" : "\(contextLength)") context") }
         if structuredOutput == true { lines.append("Structured output") }
+        if imageInput == true { lines.append("Reads photos") }
         if streaming == true { lines.append("Live") }
         if let memoryGB { lines.append("About \(memoryGB.formatted(.number.precision(.fractionLength(0...1)))) GB while running") }
         return lines

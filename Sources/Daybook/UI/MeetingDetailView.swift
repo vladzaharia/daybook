@@ -12,11 +12,15 @@ enum PlaybackTarget {
     case source(RecordingTrack, Double)
 }
 
+/// A photo open in the viewer.
+struct PhotoViewerRequest: Identifiable, Equatable { let id: UUID }
+
 /// A conversation: its page (Summary or Transcript), toolbar, and player.
 struct MeetingDetailView: View {
     @ObservedObject var state: AppState
     let meetingID: UUID
     @State private var playbackRequest: Task<Void, Never>?
+    @State private var viewingPhoto: PhotoViewerRequest?
     @AppStorage("isInspectorPresented") private var inspectorPresented = false
     @Environment(\.readingScale) private var scale
 
@@ -41,6 +45,19 @@ struct MeetingDetailView: View {
             .onDisappear {
                 playbackRequest?.cancel()
                 if state.playback.meetingID == meetingID { state.playback.unload() }
+            }
+            .environment(\.openPhoto) { viewingPhoto = PhotoViewerRequest(id: $0.id) }
+            .sheet(item: $viewingPhoto) { request in PhotoViewer(state: state, meetingID: meetingID, photoID: request.id, play: play) }
+            .modifier(PhotoDropTarget(state: state, meetingID: meetingID))
+            // Photos synced from another device, or added before the models were here, are read when seen.
+            .task(id: "\(meetingID):\(meeting.visiblePhotos.filter { $0.analysis == nil }.map(\.id)):\(state.photoModel?.description ?? "vision"):\(state.recordingID?.uuidString ?? "idle")") {
+                state.readPhotosWhenIdle(meetingID)
+                #if DEBUG
+                if PhotoDemo.opensPhoto, viewingPhoto == nil, meeting.visiblePhotos.allSatisfy({ $0.analysis != nil }), let first = meeting.visiblePhotos.first {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    viewingPhoto = PhotoViewerRequest(id: first.id)
+                }
+                #endif
             }
         }
     }
@@ -147,6 +164,7 @@ struct ConversationMoreMenu: View {
             AddRecordingFromDeviceItems(state: state)
         }
         .disabled(locked)
+        Button("Add Photo…") { state.chooseAddPhoto(to: meeting.id) }
         ReprocessMenu(state: state, meeting: meeting)
         Button("Version History…") { state.activeSheet = .versionHistory }.disabled(meeting.revisions.isEmpty)
         Divider()

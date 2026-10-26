@@ -233,6 +233,54 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(BookmarkMarks.holder(of: meeting.highlights[0], in: meeting), holder)
     }
 
+    func testPhotosAppearAtTheirTimesAndBreakSpeakerTurns() {
+        var meeting = weekly()
+        let photo = MeetingPhoto(relativePath: "Originals/Photos/a.jpg", fileName: "a.jpg", sha256: "",
+                                 capturedAt: now, time: 5.4, caption: "Whiteboard")
+        meeting.photos = [photo]
+        let rows = TranscriptRow.rows(in: meeting)
+        let index = rows.firstIndex { $0.id == photo.id.uuidString }
+        XCTAssertNotNil(index)
+        if let index, case .photo(let placed, let time) = rows[index] {
+            XCTAssertEqual(placed.id, photo.id)
+            XCTAssertEqual(time, 5.4)
+            XCTAssertGreaterThan(index, 0)
+            XCTAssertLessThan(index, rows.count - 1)
+        } else { XCTFail("The photo needs its own transcript row") }
+        meeting.removePhoto(photo.id)
+        XCTAssertFalse(TranscriptRow.rows(in: meeting).contains { $0.id == photo.id.uuidString })
+    }
+
+    func testThePhotoProviderReadsAnOriginalAndReportsMissingPhotos() async throws {
+        let root = try temporaryDirectory()
+        let library = try PhoneLibrary(rootURL: root, installation: "TEST")
+        try await library.reload()
+        let id = library.controller.newMeeting(title: "Photos")
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 40))
+        let bytes = renderer.pngData { context in
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 80, height: 40))
+        }
+        await library.controller.acquireLock()
+        let photo = try await library.controller.addPhoto(data: bytes, to: id)
+        library.controller.releaseLock()
+        let provider = LocalAudioProvider(library: library)
+        let url = try await provider.localPhoto(for: photo, in: id)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertNotNil(PhotoImage.thumbnail(url, maxPixels: 40))
+        let meeting = try XCTUnwrap(library.controller.meeting(id))
+        let archive = try ExportFiles.markdownWithPhotos(meeting, originals: [photo.id: url], in: root)
+        XCTAssertEqual(archive.pathExtension, "zip")
+        XCTAssertEqual(Array(try Data(contentsOf: archive).prefix(4)), [0x50, 0x4b, 0x03, 0x04])
+        try FileManager.default.removeItem(at: url)
+        do {
+            _ = try await provider.localPhoto(for: photo, in: id)
+            XCTFail("A missing photo must be reported")
+        } catch {
+            XCTAssertTrue(error is PhotoProvidingError)
+        }
+    }
+
     func testPlaybackTargetsResolveToARecordingAndATime() throws {
         let meeting = weekly()
         let passage = meeting.unifiedTranscript[3]

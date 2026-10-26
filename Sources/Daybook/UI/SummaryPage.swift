@@ -42,6 +42,8 @@ struct SummaryPage: View {
             }
             YourNotes(state: state, meeting: meeting, play: play)
                 .padding(.top, meeting.summary == nil ? Space.s5 : Space.s2)
+            // Every photo, in the order taken; the summary's sections show the ones they illustrate.
+            PhotoStrip(state: state, meeting: meeting)
             // Tentative captions while recording and until the transcript exists; after the notes,
             // so arriving words never move what you're typing.
             LiveCaptionsSection(captions: state.captions, meeting: meeting, isRecording: state.recordingID == meeting.id)
@@ -110,6 +112,8 @@ private struct SummaryBody: View {
                     heading(section.heading)
                     MarginRow { MarkdownText(source: section.body).foregroundStyle(Ink.body) }
                         .padding(.top, Space.s2)
+                    let pictures = meeting.photos(in: section)
+                    if !pictures.isEmpty { SectionPhotos(state: state, meeting: meeting, photos: pictures) }
                 }
                 .modifier(Arrival(index: offset + index, revealing: revealing, shown: shown))
             }

@@ -38,7 +38,8 @@ final class ModelSelectionTests: XCTestCase {
         let quick = ModelRecommendations.preset(.quick, tier: .standard, catalog: catalog)
         XCTAssertEqual(quick.selections, ModelSelections([.transcription: "parakeet/ultra", .diarization: "community-1/offline",
                                                           .speakerEmbedding: "community-1/offline", .summarization: "gemma-4/e4b-4bit",
-                                                          .smallTasks: "apple-foundation-models/system"]))
+                                                          .smallTasks: "apple-foundation-models/system",
+                                                          .imageDescription: "apple-vision/system"]))
         XCTAssertEqual(quick.speakerQuality, "fast")
         let balanced = ModelRecommendations.preset(.balanced, tier: .compact, catalog: catalog)
         XCTAssertEqual(balanced.model(for: .transcription), "parakeet/ultra")
@@ -193,7 +194,7 @@ final class ModelSelectionTests: XCTestCase {
 
     func testAcknowledgementsAreGeneratedFromTheManifests() {
         let list = ModelAcknowledgements.list(from: catalog)
-        XCTAssertEqual(list.map(\.title), ["Apple Foundation Models", "Community-1", "Gemma 4", "Nemotron 3 Diarization", "Parakeet",
+        XCTAssertEqual(list.map(\.title), ["Apple Foundation Models", "Apple Vision", "Community-1", "Gemma 4", "Nemotron 3 Diarization", "Parakeet",
                                              "Qwen 2.5", "Qwen 2.5", "Qwen 3.5", "Qwen 3.6", "Sortformer 2.1", "Whisper"])
         XCTAssertEqual(list.first { $0.title == "Parakeet" }?.models, ["Parakeet Ultra", "Parakeet Redux"])
         XCTAssertEqual(list.first { $0.title == "Nemotron 3 Diarization" }?.licenseName, "OpenMDW License 1.1")

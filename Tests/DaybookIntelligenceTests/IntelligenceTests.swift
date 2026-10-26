@@ -11,7 +11,7 @@ final class IntelligenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let runtime = LocalIntelligenceRuntime(modelsDirectory: root, registry: Self.withoutAppleIntelligence)
         let installed = await runtime.installedModels()
-        XCTAssertTrue(installed.isEmpty)
+        XCTAssertEqual(installed, ["apple-vision/system"], "only the system's own photo reader, which needs no download")
         do {
             _ = try await runtime.transcribe(url: root.appendingPathComponent("missing.wav"), model: "whisper-base")
             XCTFail("Missing model must fail before touching audio or the network")
@@ -40,7 +40,7 @@ final class IntelligenceTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data("{}".utf8).write(to: folder.appendingPathComponent("installed.json"))
         let installed = await LocalIntelligenceRuntime(modelsDirectory: root, registry: Self.withoutAppleIntelligence).installedModels()
-        XCTAssertTrue(installed.isEmpty)
+        XCTAssertEqual(installed, ["apple-vision/system"])
     }
 
     /// The standard engines, with Apple's system model reporting it's off, so results don't depend

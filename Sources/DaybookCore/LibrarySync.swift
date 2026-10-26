@@ -451,6 +451,7 @@ public actor LibrarySyncEngine {
             meeting.tracks[index].sha256 = digest
             assets.append(SyncAsset(relativePath: track.relativePath, sha256: digest))
         }
+        try appendPhotoAssets(&meeting, directory: directory, journalAssets: journalAssets, assets: &assets, byReference: &byReference)
         let originals = directory.appendingPathComponent("Originals", isDirectory: true)
         if let files = try? fm.contentsOfDirectory(at: originals, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
             for file in files where file.pathExtension == "json" && file.lastPathComponent.contains(".highlights-") {
@@ -518,9 +519,10 @@ public actor LibrarySyncEngine {
         for track in snapshot.tracks {
             guard SyncFiles.isHash(track.sha256), assets.contains(where: { $0.relativePath == track.relativePath && $0.sha256 == track.sha256 }) else { throw LibrarySyncError.invalidBlob(track.fileName) }
         }
+        try validatePhotoAssets(snapshot, assets: assets)
     }
     private func mergedAssets(for meeting: Meeting, eventIDs: [String], events: [String: SyncEventRecord]) -> [SyncAsset] {
-        var assets = meeting.tracks.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) }
+        var assets = meeting.tracks.map { SyncAsset(relativePath: $0.relativePath, sha256: $0.sha256) } + photoAssets(of: meeting)
         for id in eventIDs.sorted() {
             for asset in events[id]?.assets ?? [] where asset.relativePath.contains(".highlights-") && !assets.contains(asset) { assets.append(asset) }
         }

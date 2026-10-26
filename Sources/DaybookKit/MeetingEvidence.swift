@@ -37,11 +37,14 @@ public enum MeetingEvidence {
 
 public enum MeetingTimelineItem: Identifiable {
     case speech(TranscriptSegment), note(TimedNote), highlight(Highlight, Double)
+    /// A photo at the moment it was taken (`Meeting.timelineTime(of:)`).
+    case photo(MeetingPhoto, Double)
     public var id: String {
         switch self {
         case .speech(let value): return "speech:\(value.id)"
         case .note(let value): return "note:\(value.id)"
         case .highlight(let value, _): return "highlight:\(value.id)"
+        case .photo(let value, _): return "photo:\(value.id)"
         }
     }
     public var time: Double {
@@ -49,13 +52,15 @@ public enum MeetingTimelineItem: Identifiable {
         case .speech(let value): return value.start
         case .note(let value): return value.time ?? 0
         case .highlight(_, let value): return value
+        case .photo(_, let value): return value
         }
     }
     public static func items(in meeting: Meeting) -> [Self] {
         let speech = meeting.unifiedTranscript.map(Self.speech)
         let notes = (meeting.timedNotes ?? []).filter { $0.time != nil }.map(Self.note)
         let highlights = meeting.highlights.compactMap { value in meeting.alignedTime(for: value).map { Self.highlight(value, $0) } }
-        return (speech + notes + highlights).sorted { $0.time == $1.time ? $0.id < $1.id : $0.time < $1.time }
+        let photos = meeting.visiblePhotos.compactMap { value in meeting.timelineTime(of: value).map { Self.photo(value, $0) } }
+        return (speech + notes + highlights + photos).sorted { $0.time == $1.time ? $0.id < $1.id : $0.time < $1.time }
     }
 }
 

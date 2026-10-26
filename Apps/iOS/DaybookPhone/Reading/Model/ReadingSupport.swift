@@ -153,6 +153,25 @@ enum TrashedConversations {
 
 /// Files handed to the share sheet: the conversation as Markdown, named after its title.
 enum ExportFiles {
+    /// A photo-bearing export is one ZIP, so sharing keeps the Markdown's relative links intact.
+    static func markdownWithPhotos(_ meeting: Meeting, originals: [UUID: URL],
+                                   in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        guard !meeting.visiblePhotos.isEmpty else { return try markdown(meeting, in: directory) }
+        let name = fileName(meeting.title)
+        let folder = directory.appendingPathComponent("Daybook Export/\(UUID().uuidString)", isDirectory: true)
+        let package = folder.appendingPathComponent(name, isDirectory: true)
+        try MeetingExport.write(meeting, to: package, name: name) { originals[$0.id] }
+        let archive = folder.appendingPathComponent(name + ".zip")
+        var coordinationError: NSError?
+        var copyError: Error?
+        NSFileCoordinator().coordinate(readingItemAt: package, options: .forUploading, error: &coordinationError) { uploaded in
+            do { try FileManager.default.copyItem(at: uploaded, to: archive) }
+            catch { copyError = error }
+        }
+        if let error = coordinationError ?? copyError as NSError? { throw error }
+        return archive
+    }
+
     static func markdown(_ meeting: Meeting, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
         let folder = directory.appendingPathComponent("Daybook Export", isDirectory: true)
             .appendingPathComponent(meeting.id.uuidString, isDirectory: true)

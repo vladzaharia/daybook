@@ -144,6 +144,10 @@ struct TranscriptPage: View {
             NoteRow(note: note, play: { play(.timeline(note.time ?? 0)) })
                 .padding(.top, PhoneStyle.Space.s3)
                 .id(row.id)
+        case .photo(let photo, _):
+            PhotoTile(meeting: meeting, photo: photo)
+                .padding(.top, PhoneStyle.Space.s3)
+                .id(row.id)
         }
     }
 
@@ -209,12 +213,14 @@ enum TranscriptRow: Identifiable, Equatable {
     case turn(speakerID: String?, first: TranscriptSegment)
     case passage(TranscriptSegment)
     case note(TimedNote)
+    case photo(MeetingPhoto, Double)
 
     var id: String {
         switch self {
         case .turn(_, let first): return "turn:\(first.id.uuidString)"
         case .passage(let segment): return segment.id.uuidString
         case .note(let note): return "note:\(note.id.uuidString)"
+        case .photo(let photo, _): return photo.id.uuidString
         }
     }
 
@@ -226,6 +232,8 @@ enum TranscriptRow: Identifiable, Equatable {
                 return [.turn(speakerID: speakerID, first: first)] + segments.map(TranscriptRow.passage)
             case .note(let note):
                 return [.note(note)]
+            case .photo(let photo, let time):
+                return [.photo(photo, time)]
             }
         }
     }

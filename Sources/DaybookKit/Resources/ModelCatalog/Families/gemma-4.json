@@ -24,6 +24,10 @@
           "id": "e2b-4bit",
           "name": "Gemma 4 · E2B",
           "detail": "Fast and small.",
+          "roles": [
+            "summarization",
+            "imageDescription"
+          ],
           "releaseDate": "2026-04-02",
           "recommendedMemoryGB": 8,
           "capabilities": {
@@ -31,7 +35,8 @@
             "structuredOutput": true,
             "languages": [
               "*"
-            ]
+            ],
+            "imageInput": true
           },
           "engineOptions": {
             "architecture": "gemma4",
@@ -108,6 +113,10 @@
           "id": "e4b-4bit",
           "name": "Gemma 4 · E4B",
           "detail": "Balanced quality and speed.",
+          "roles": [
+            "summarization",
+            "imageDescription"
+          ],
           "releaseDate": "2026-04-02",
           "recommendedMemoryGB": 16,
           "capabilities": {
@@ -115,7 +124,8 @@
             "structuredOutput": true,
             "languages": [
               "*"
-            ]
+            ],
+            "imageInput": true
           },
           "engineOptions": {
             "architecture": "gemma4",
