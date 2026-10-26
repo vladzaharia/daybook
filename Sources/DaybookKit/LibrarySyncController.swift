@@ -189,6 +189,9 @@ public final class LibrarySyncController: ObservableObject {
     @Published public private(set) var hasMoreWork = false
     /// Whether the library is encrypted here, updated after every pass.
     @Published public private(set) var encryption: LibraryEncryptionState = .off
+    /// Waiting for the key, Start Over may be offered: no other device has said it holds the key recently
+    /// (`LibrarySyncEngine.mayStartOver`).
+    @Published public private(set) var mayStartOverEncryption = false
     /// The libraries whose plaintext courier files were dropped once they were found encrypted.
     private var courierSealedLibraries = Set<UUID>()
     private var activeTask: Task<SyncResult, Error>?
@@ -542,6 +545,8 @@ public final class LibrarySyncController: ObservableObject {
             encryption = .waitingForKey
             if transport == .iCloudContainer { iCloud = .waitingForKey }
             status = LibrarySyncError.keyUnavailable("").localizedDescription
+            let mayStartOver = await engine.mayStartOver()
+            if mayStartOverEncryption != mayStartOver { mayStartOverEncryption = mayStartOver }
             return nil
         } catch {
             activeTask = nil; isSyncing = false; pendingReceipt = nil
@@ -577,6 +582,8 @@ public final class LibrarySyncController: ObservableObject {
         if let summary { next = summary.hasKey ? .on(summary) : .waitingForKey }
         else { next = replica.keyStore == nil ? .unavailable : .off }
         if encryption != next { encryption = next }
+        let mayStartOver = next == .waitingForKey ? await engine.mayStartOver() : false
+        if mayStartOverEncryption != mayStartOver { mayStartOverEncryption = mayStartOver }
         if case .on = next, iCloud == .waitingForKey { iCloud = .connected }
         if next.isOn, let courier, let libraryID = await engine.libraryID, courierSealedLibraries.insert(libraryID).inserted {
             Task { await courier.forgetPlaintext() }
@@ -619,6 +626,17 @@ public final class LibrarySyncController: ObservableObject {
         guard let engine else { throw SyncControllerError.notConnected }
         guard !isSyncing else { throw SyncControllerError.busy }
         try await engine.rotateKey()
+        await noteEncryption(engine)
+        requestSync()
+    }
+
+    /// Starts over with a new encrypted library when the key is lost on every device
+    /// (`LibrarySyncEngine.startOver`): what's only in iCloud is lost, and the next pass publishes this device's library
+    /// into the new one. Offered only while `mayStartOverEncryption`.
+    public func startOverEncryption() async throws {
+        guard let engine else { throw SyncControllerError.notConnected }
+        guard !isSyncing else { throw SyncControllerError.busy }
+        try await engine.startOver()
         await noteEncryption(engine)
         requestSync()
     }

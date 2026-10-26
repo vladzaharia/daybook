@@ -354,8 +354,10 @@ extension LibrarySyncEngine {
                 if now.timeIntervalSince(sealing.manifest.sealedSince) < Self.retirementGrace { ready = false; progress.waitingFor.append(.gracePeriod) }
                 if !sealing.hasRecovery, otherDevicesHolding(current.idHex).isEmpty { ready = false; progress.waitingFor.append(.anotherDeviceOrRecoveryKey) }
             }
+            // A library that started over never wrote plaintext: a recording from before nothing uses is the old library's.
             if ready, let plan = retirementPlan(entries: legacyEntries, blobs: legacyBlobs.map { ($0, Optional<Data>.none) }, input: input,
-                                                liveShas: liveShas, knownShas: knownShas, progress: &progress) {
+                                                liveShas: liveShas, knownShas: knownShas, unnamedAreReplaced: sealing.manifest.replaces != nil,
+                                                progress: &progress) {
                 for url in plan { deleteRemote(url) }
                 deleteStalePresence()
                 if sealing.manifest.legacyRetired == nil, let updated = try? updateManifest({ $0.sealing?.legacyRetired = now }), let description = updated.sealing {
@@ -408,9 +410,10 @@ extension LibrarySyncEngine {
 
     /// The files to delete when retiring `entries` and objects `blobs` (by plaintext SHA-256, under the key whose ID is
     /// given, or plaintext with nil), or nil when something isn't safe yet: an entry not read, a live counterpart under
-    /// the current key not read back whole, or not uploaded.
+    /// the current key not read back whole, or not uploaded. An object nothing names is left alone, unless
+    /// `unnamedAreReplaced` (it's a replaced library's).
     private func retirementPlan(entries: [JournalEntry], blobs: [(String, Data?)], input: SealerInput, liveShas: Set<String>,
-                                knownShas: Set<String>, progress: inout SealerProgress) -> [URL]? {
+                                knownShas: Set<String>, unnamedAreReplaced: Bool = false, progress: inout SealerProgress) -> [URL]? {
         guard let sealing else { return nil }
         let current = sealing.current
         var delete: [URL] = []
@@ -452,7 +455,7 @@ extension LibrarySyncEngine {
                 case .uploading: waitingForUploads = true
                 case .missing: progress.remaining += 1; return nil
                 }
-            } else if !knownShas.contains(sha) {
+            } else if !knownShas.contains(sha), !unnamedAreReplaced {
                 // Not named by anything this pass read (an upload whose entry hasn't arrived): left alone.
                 continue
             }

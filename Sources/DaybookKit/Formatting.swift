@@ -117,6 +117,9 @@ public enum LibraryWords {
         "Note at \(date.formatted(date: .omitted, time: .shortened))"
     }
 
+    /// Under "Start over with a new key?" (an encrypted library whose key is lost): what's lost and what isn't.
+    public static let startOverConsequence = "What’s only in iCloud is lost. Conversations on your devices stay and sync again."
+
     /// Under "Delete the folder “Clients”?": what happens to what's in it.
     public static func folderDeletion(conversations count: Int) -> String {
         switch count {

@@ -177,6 +177,8 @@ enum PlainError {
         switch error {
         case is AudioProvidingError, is PhotoProvidingError, is PhoneRecorderError, is PhotoStoreError:
             return (error.localizedDescription, nil)
+        case let error as LibrarySyncError where error.isPlainSentence:
+            return (error.localizedDescription, nil)
         default:
             let words = error.localizedDescription
             return (fallback, words.isEmpty || words == fallback ? nil : words)

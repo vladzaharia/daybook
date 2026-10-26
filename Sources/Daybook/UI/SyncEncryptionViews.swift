@@ -15,6 +15,7 @@ struct SyncEncryptionRows: View {
     @State private var enteringKey = false
     @State private var confirmingErase = false
     @State private var confirmingFolder = false
+    @State private var confirmingStartOver = false
     @State private var problem: AppProblem?
 
     init(state: AppState) {
@@ -43,6 +44,9 @@ struct SyncEncryptionRows: View {
                             Button("Get Key from \(phone.name)") { Task { await state.requestLibraryKey(from: phone.deviceID) } }
                         }
                         Button("Enter Recovery Key…") { enteringKey = true }
+                        if sync.mayStartOverEncryption {
+                            Button("Start Over…") { confirmingStartOver = true }
+                        }
                     }
                 }
             case .on(let summary):
@@ -80,6 +84,12 @@ struct SyncEncryptionRows: View {
         } message: {
             Text("This can’t be undone.")
         }
+        .alert("Start over with a new key?", isPresented: $confirmingStartOver) {
+            Button("Start Over", role: .destructive) { startOver() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(LibraryWords.startOverConsequence)
+        }
         .alert("Delete the previous sync folder’s copy?", isPresented: $confirmingFolder) {
             Button("Delete", role: .destructive) {
                 do { try sync.deleteRetiredFolderJournal() } catch {
@@ -104,6 +114,15 @@ struct SyncEncryptionRows: View {
         Task {
             do { shownKey = ShownRecoveryKey(key: try await sync.createRecoveryKey()) } catch {
                 problem = AppProblem(title: "Couldn’t Make a Recovery Key", fallback: "A recovery key couldn’t be made. Try again.", error: error)
+            }
+        }
+    }
+
+    private func startOver() {
+        problem = nil
+        Task {
+            do { try await sync.startOverEncryption() } catch {
+                problem = AppProblem(title: "Couldn’t Start Over", fallback: "The library couldn’t start over. Try again.", error: error)
             }
         }
     }

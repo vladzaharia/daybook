@@ -162,6 +162,44 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         do { try await mac.sync.enableEncryption(); XCTFail() } catch LibrarySyncError.keyStoreUnavailable {}
     }
 
+    // MARK: Starting over
+
+    func testStartingOverWhenTheKeyIsLostOnEveryDevice() async throws {
+        let keychain = MemoryLibraryKeyStore()
+        let mac = try await device("Mac", phone: false, role: .receive, keys: keychain)
+        let phone = try await device("Phone", phone: true, role: .send, keys: keychain)
+        _ = mac.library.newMeeting(title: "Kept on the Mac")
+        await mac.library.flush()
+        await pass(mac)
+        try await mac.sync.enableEncryption()
+        await pass(mac)
+        _ = phone.library.newMeeting(title: "Kept on the phone")
+        await phone.library.flush()
+        await pass(phone)
+        XCTAssertFalse(mac.sync.mayStartOverEncryption, "never offered while the key is here")
+
+        // iCloud Keychain loses the key, and there's no recovery key.
+        for key in keychain.allKeys { try keychain.remove(keyID: key.id, libraryID: key.libraryID) }
+        _ = await phone.library.synchronize()
+        _ = await mac.library.synchronize()
+        XCTAssertEqual(mac.sync.encryption, .waitingForKey)
+        XCTAssertTrue(mac.sync.mayStartOverEncryption)
+        let oldLibrary = await mac.sync.libraryID()
+
+        try await mac.sync.startOverEncryption()
+        XCTAssertTrue(mac.sync.encryption.isOn)
+        XCTAssertFalse(mac.sync.mayStartOverEncryption)
+        let newLibrary = await mac.sync.libraryID()
+        XCTAssertNotEqual(newLibrary, oldLibrary)
+        await pass(mac)
+        await pass(phone)
+        await pass(mac)
+        XCTAssertTrue(phone.sync.encryption.isOn)
+        XCTAssertEqual(Set(mac.library.meetings.map(\.title)), ["Kept on the Mac", "Kept on the phone"])
+        XCTAssertEqual(Set(phone.library.meetings.map(\.title)), ["Kept on the Mac", "Kept on the phone"])
+        XCTAssertEqual(mac.sync.warnings, []); XCTAssertEqual(phone.sync.warnings, [])
+    }
+
     // MARK: The courier
 
     func testSealedFilesTravelInTheirOwnZoneWhichAnEarlierDaybookIgnores() async throws {

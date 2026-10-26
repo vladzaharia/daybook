@@ -46,6 +46,8 @@ public enum LibrarySyncError: LocalizedError, Equatable {
     case sealingRemoved
     /// This build can't keep a library key (no keychain group: an unsigned or ad hoc build).
     case keyStoreUnavailable
+    /// Start Over was refused: this device holds the library's key, or another device said it did recently.
+    case keyAvailable
     public var errorDescription: String? {
         switch self {
         case .unsafeLocation: return "The sync folder must be separate from the local library and cannot contain symbolic links."
@@ -61,6 +63,16 @@ public enum LibrarySyncError: LocalizedError, Equatable {
         case .keyUnavailable: return "Your library in iCloud is encrypted. Waiting for its key from iCloud Keychain."
         case .sealingRemoved: return "The library in iCloud is no longer encrypted."
         case .keyStoreUnavailable: return "This build of Daybook can’t keep encryption keys."
+        case .keyAvailable: return "One of your devices has this library’s key. Get the key from it instead."
+        }
+    }
+
+    /// Whether `errorDescription` is a plain sentence a person can act on, to show as it is; the others name files and
+    /// go behind Details.
+    public var isPlainSentence: Bool {
+        switch self {
+        case .invalidEvent, .invalidBlob, .missingLocalAudio, .invalidManifest, .unsafeLocation: return false
+        default: return true
         }
     }
 }
@@ -121,6 +133,8 @@ public actor LibrarySyncEngine {
     var sealing: SealingState?
     /// The current key (hex) of an encrypted library this device can't open yet.
     public internal(set) var waitingForKey: String?
+    /// That library's manifest description, while waiting.
+    var waitingSealing: SyncManifest.Sealing?
     /// A manifest has been read (a pass, or presence looking first), so `sealing` and `waitingForKey` say what it is.
     var manifestChecked = false
     /// Sealed entries already opened, by path: the entry ID (SHA-256 of the plaintext record) each holds, and its key.
@@ -132,6 +146,12 @@ public actor LibrarySyncEngine {
     var sealerVerified: Set<String> = []
     /// What the sealer reported on the last pass that ran it.
     public internal(set) var sealerProgress: SealerProgress?
+    /// Sealed files of a library this one started over from, deleted by this pass (LibrarySyncStartOver.swift).
+    var replacedEntries: Set<String> = []
+    /// The library the journal caches describe (`forgetOtherLibraries`).
+    private var cachedLibraryID: UUID?
+    /// The library each sealed object's header names, by path, once read (`deleteReplacedObjects`).
+    var checkedObjects: [String: UUID] = [:]
     /// The sealer's clock (tests move it past the grace periods).
     var sealerClock: @Sendable () -> Date = { Date() }
     func setSealerClock(_ clock: @escaping @Sendable () -> Date) { sealerClock = clock }
@@ -170,6 +190,7 @@ public actor LibrarySyncEngine {
         try Task.checkCancellation()
         let manifest = try prepareRemote()
         libraryID = manifest.libraryID
+        forgetOtherLibraries(manifest.libraryID)
         // An encrypted library whose key isn't here: nothing is read or written (the library never receives plaintext
         // from this device), and local edits wait. Presence says this device is waiting for the key.
         do { try loadSealing(manifest) } catch {
@@ -188,7 +209,7 @@ public actor LibrarySyncEngine {
         var failedPublications = Set<UUID>()
         var events: [String: SyncEventHeader] = [:]
         var metadata: [String: SyncMetadataRecord] = [:]
-        ownJournalWrites = []
+        ownJournalWrites = []; replacedEntries = []
         let eventEntries = try journalEntries(.event), metadataEntries = try journalEntries(.metadata)
         for entry in eventEntries {
             try Task.checkCancellation()
@@ -212,6 +233,7 @@ public actor LibrarySyncEngine {
                 let header = SyncEventHeader(event)
                 events[hash] = header; eventCache[hash] = header
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
+            catch is SyncReplacedFile { setAside(entry) }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) {
                 warnings.append(markUnreadable(unreadableKey, error)); unreadJournalFiles += 1
@@ -436,15 +458,19 @@ public actor LibrarySyncEngine {
             let liveConversations = Set(grouped.keys).subtracting(deletes)
             let complete = pendingDownloads == 0 && budget.deferred == 0 && !journalIncomplete && !metadataIncomplete
                 && liveConversations.isSubset(of: liveAssets.keys)
-            sealerProgress = runSealer(SealerInput(events: events, metadata: metadata, eventEntries: eventEntries, metadataEntries: metadataEntries,
+            sealerProgress = runSealer(SealerInput(events: events, metadata: metadata,
+                                                   eventEntries: eventEntries.filter { !replacedEntries.contains($0.path) },
+                                                   metadataEntries: metadataEntries.filter { !replacedEntries.contains($0.path) },
                                                    deleted: deletes, liveAssets: liveAssets, complete: complete), budget: &budget, now: sealerClock())
+            // A library that started over: what's left here of the one it replaced goes.
+            deleteReplacedObjects()
         }
         // A coordinated local write is not necessarily uploaded to iCloud yet.
         pendingUploads += try countPendingCloudUploads()
         try saveAudioIndexIfNeeded()
         // Courier deliveries the sync folder now holds, downloaded and identical, aren't needed any more.
         pruneCourierInbox()
-        let listing = Set((eventEntries + metadataEntries).map(\.path)).union(ownJournalWrites)
+        let listing = Set((eventEntries + metadataEntries).map(\.path)).subtracting(replacedEntries).union(ownJournalWrites)
         settledJournalListing = pendingDownloads == 0 && budget.deferred == 0 ? listing : nil
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
@@ -478,6 +504,7 @@ public actor LibrarySyncEngine {
                 try requireSupportedVersion(record.data)
                 metadata[hash] = record; metadataCache[hash] = record
             } catch is SyncPendingDownload { downloading += 1; incomplete = true }
+            catch is SyncReplacedFile { setAside(entry) }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) {
                 warnings.append(markUnreadable(unreadableKey, error))
@@ -510,7 +537,7 @@ public actor LibrarySyncEngine {
         var budget = SyncPassBudget(limits)
         var warnings: [String] = []
         var pendingDownloads = 0, published = 0
-        ownJournalWrites = []
+        ownJournalWrites = []; replacedEntries = []
         let read = try readMetadata(try journalEntries(.metadata), budget: &budget, warnings: &warnings)
         var metadata = read.records
         pendingDownloads += read.downloading
@@ -715,20 +742,39 @@ public actor LibrarySyncEngine {
         if let newer { throw LibrarySyncError.unsupportedVersion(newer) }
         for candidate in candidates { _ = try SyncManifest.checked(candidate) }
         // An encrypted library wins over plaintext ones (whichever ID is smaller): it never becomes plaintext again, and
-        // the others' devices carry on in it once they have its key. Two encrypted libraries can't be merged: sync pauses.
-        let sealedIDs = Set(candidates.filter(\.isSealed).map(\.libraryID))
-        guard sealedIDs.count <= 1 else { throw LibrarySyncError.manifestConflict }
-        guard let winner = sealedIDs.first ?? candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else {
+        // the others' devices carry on in it once they have its key. A library started over (Start Over) gives way to
+        // the one that replaced it, and devices that started over from the same library at once resolve like plaintext
+        // libraries: the smallest new ID wins, and replaces the others too. Two unrelated encrypted libraries can't be
+        // merged: sync pauses.
+        let sealed = candidates.filter(\.isSealed)
+        let startedOver = Set(sealed.flatMap { $0.sealing?.replaces ?? [] })
+        let sealedIDs = Set(sealed.map(\.libraryID)).subtracting(startedOver)
+        var rivals = Set<UUID>()
+        if sealedIDs.count > 1 {
+            let starts = sealedIDs.map { id in Set(sealed.filter { $0.libraryID == id }.flatMap { $0.sealing?.replaces ?? [] }) }
+            guard starts.allSatisfy({ !$0.isEmpty }), !starts.dropFirst().reduce(starts[0], { $0.intersection($1) }).isEmpty else {
+                throw LibrarySyncError.manifestConflict
+            }
+            rivals = sealedIDs
+        }
+        guard sealedIDs.isEmpty == sealed.isEmpty,
+              let winner = sealedIDs.min(by: { $0.uuidString < $1.uuidString }) ?? candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else {
             throw LibrarySyncError.manifestConflict
         }
-        let superseded = Set(candidates.map(\.libraryID) + candidates.flatMap { $0.supersedes ?? [] }).subtracting([winner])
+        rivals.remove(winner)
+        // Libraries started over from, and rival starts, are replaced: nobody carries a checkpoint over from them.
+        let replaced = startedOver.union(rivals)
+        let superseded = Set(candidates.filter { !replaced.contains($0.libraryID) }.flatMap { [$0.libraryID] + ($0.supersedes ?? []) })
+            .subtracting([winner]).subtracting(replaced)
         var resolved = SyncManifest(libraryID: winner)
         resolved.supersedes = superseded.isEmpty ? nil : superseded.sorted { $0.uuidString < $1.uuidString }
         // An encrypted library's manifest changes (keys added, a recovery key saved): its versions merge, keeping every key.
         let sealings = candidates.filter { $0.libraryID == winner }.compactMap(\.sealing)
         if !sealings.isEmpty {
             resolved.schemaVersion = SyncManifest.sealedSchemaVersion
-            resolved.sealing = sealings.dropFirst().reduce(sealings[0]) { $0.merged(with: $1) }
+            var sealing = sealings.dropFirst().reduce(sealings[0]) { $0.merged(with: $1) }
+            if !replaced.isEmpty { sealing.replaces = SyncManifest.Sealing.union(sealing.replaces, Array(replaced)) }
+            resolved.sealing = sealing
         }
         if current != resolved {
             try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(resolved.encoded(), to: $0) }
@@ -894,6 +940,18 @@ public actor LibrarySyncEngine {
         for (id, record) in metadataCache where !metadataHeads.contains(id) && !record.data.isEmpty {
             metadataCache[id]?.data = Data()
         }
+    }
+    /// What this engine remembers of the journal it read (entries by path, what they hold, what couldn't be read)
+    /// describes one library: when the sync folder holds another (it started over, or another identity won a manifest
+    /// conflict), it's read afresh. Checkpoints are per library already.
+    func forgetOtherLibraries(_ library: UUID) {
+        guard cachedLibraryID != library else { return }
+        if cachedLibraryID != nil {
+            eventCache = [:]; snapshotCache = [:]; snapshotsUsed = []; metadataCache = [:]; unreadableJournal = [:]
+            photoLineage = [:]; sealedNames = [:]; sealedKeys = [:]; journalLocations = [:]; sealerVerified = []
+            settledJournalListing = nil; checkedObjects = [:]
+        }
+        cachedLibraryID = library
     }
     /// How much the engine holds in memory (tests).
     func cacheCounts() -> (headers: Int, snapshots: Int, metadataData: Int) {

@@ -166,6 +166,11 @@ Still requires the owner's devices, before turning it on for anyone:
   debugger): the pass reads the key (`kSecAttrAccessibleAfterFirstUnlock`) and syncs.
 - **Recovery key.** Delete the key from one device's Passwords app (or reset iCloud Keychain on a test account): it waits;
   Enter Recovery Key opens the library. A wrong key says it doesn't match.
+- **Start Over.** On a test account, turn encryption on without a recovery key, then delete the key from every device's
+  Passwords app (or reset iCloud Keychain): once each device has synced, both show Start Over…, never while one still
+  holds the key. Start Over on the Mac: the iPhone gets the new key from iCloud Keychain, both devices' conversations
+  appear on both, and the container settles back to about the library's size (the old library's `Sealed/` files are
+  deleted). Press it on both at once (airplane mode, then reconnect): both end in one library, nothing is listed twice.
 - **Accounts.** Sign the iPhone out of iCloud and into another account with a plaintext library: after Sync with This
   Account it syncs that library, without "The library in iCloud is no longer encrypted."
 - **Large recordings.** Seal (upload) and open (install on a second Mac, fetch on the iPhone) 2 to 4 GB recordings: time,

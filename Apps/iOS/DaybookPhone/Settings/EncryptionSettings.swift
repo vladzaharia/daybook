@@ -10,6 +10,7 @@ struct EncryptionRows: View {
     @State private var shownKey: ShownRecoveryKey?
     @State private var enteringKey = false
     @State private var confirmingErase = false
+    @State private var confirmingStartOver = false
     @State private var problem: ReadingAlert?
 
     var body: some View {
@@ -25,6 +26,9 @@ struct EncryptionRows: View {
                     Button("Get Key from \(mac.name)") { Task { await model.requestLibraryKey(from: mac.id) } }
                 }
                 Button("Enter Recovery Key") { enteringKey = true }
+                if model.sync.mayStartOver {
+                    Button("Start Over…", role: .destructive) { confirmingStartOver = true }
+                }
             case .on(let summary):
                 LabeledContent("Encryption", value: Self.status(summary))
                 if summary.hasRecoveryKey {
@@ -47,6 +51,11 @@ struct EncryptionRows: View {
         } message: {
             Text("This can’t be undone.")
         }
+        .confirmationDialog("Start over with a new key?", isPresented: $confirmingStartOver, titleVisibility: .visible) {
+            Button("Start Over", role: .destructive) { startOver() }
+        } message: {
+            Text(LibraryWords.startOverConsequence)
+        }
     }
 
     /// "On", or how far encrypting the library's history has got.
@@ -61,6 +70,15 @@ struct EncryptionRows: View {
             guard let controller = model.sync.controller else { return }
             do { shownKey = ShownRecoveryKey(key: try await controller.createRecoveryKey()) } catch {
                 problem = ReadingAlert(title: "Couldn’t Make a Recovery Key", error: error, fallback: "A recovery key couldn’t be made. Try again.")
+            }
+        }
+    }
+
+    private func startOver() {
+        problem = nil
+        Task {
+            do { try await model.sync.controller?.startOverEncryption() } catch {
+                problem = ReadingAlert(title: "Couldn’t Start Over", error: error, fallback: "The library couldn’t start over. Try again.")
             }
         }
     }
