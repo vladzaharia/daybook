@@ -161,6 +161,8 @@ extension AppState {
     /// A recorder's recording, into `attachTo` when that conversation still exists. Without one, a
     /// multipoint link or a match in time and sound can still add it to an existing conversation.
     func importFromDevice(_ url: URL, identity: DeviceRecordingIdentity, attachTo: UUID?, source: AudioSource) async throws -> UUID {
+        // Another device's import of it may have arrived through sync while it transferred: keep that one.
+        if let held = DeviceLibraryLinks.meeting(holding: identity, in: meetings) { return held }
         let attach = attachTo.flatMap { id in meetings.contains { $0.id == id } ? id : nil }
         guard let id = try await importAudio([url], source: source, attachTo: attach, device: identity).first else {
             throw AppError.invalidAudio(url.lastPathComponent)
