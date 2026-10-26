@@ -105,8 +105,8 @@ sandboxed, and only it carries the manifest that moves the real library:
 `Contents/Resources/container-migration.plist` (after `plutil -lint`), or removes a stale one, before signing.
 
 A container can't be fully removed from the command line: the files inside can, but macOS protects
-`.com.apple.containermanagerd.metadata.plist`, and a container that still has it isn't created again (so its
-manifest never runs again). Remove it in Finder, or rehearse again under a new `DAYBOOK_REHEARSAL_BUNDLE_ID`.
+`.com.apple.containermanagerd.metadata.plist`, and a container that still has it may not count as new, so its
+manifest wouldn't run again. Remove it in Finder, or rehearse again under a new `DAYBOOK_REHEARSAL_BUNDLE_ID`.
 
 ### Entitlements
 
@@ -209,8 +209,8 @@ Then the prerelease:
 2. `gh workflow run release.yml --ref v0.4.0-rc.1 -f apps=mac -f sandbox=true`, then approve that run. The `prepare`
    job says "App Sandbox" in its notice; `package-mac.sh` checks the signed app is the `signed-sandbox` kind before
    notarizing; the draft is published as a prerelease, so it never becomes "Latest".
-3. Install it over the current app, after the backup. The first launch moves the library into the container (the
-   manifest), and the app opens it; Settings › Library shows the container's path. Run the owner checks below.
+3. Quit Daybook, then install it over the current app, after the backup. The first launch moves the library and the
+   preferences into the container (the manifest), and the app opens it; Settings › Library shows the container's path. Run the owner checks below.
 4. To go back: install the previous (unsandboxed) release. It offers **Move Library Back** (above).
 
 Owner checks with the sandboxed prerelease: the first launch on the real library (nothing asked, library intact,
@@ -250,7 +250,7 @@ assumes an unsandboxed app. A sandboxed app that updates with Sparkle needs Spar
 (`SUEnableInstallerLauncherService` in Info.plist) and `com.apple.security.temporary-exception.mach-lookup.global-name`
 for `$(PRODUCT_BUNDLE_IDENTIFIER)-spks` and `$(PRODUCT_BUNDLE_IDENTIFIER)-spki`
 ([Sparkle: Sandboxing](https://sparkle-project.org/documentation/sandboxing/)). Those are temporary exceptions, so
-the entitlement checks below would have to allow exactly them. Nothing here implements Sparkle.
+`check-mac-app.sh` would have to allow exactly them in signed builds. Nothing here implements Sparkle.
 
 ## References
 

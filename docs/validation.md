@@ -1,5 +1,84 @@
 # Validation record
 
+## App Sandbox readiness and the switch (2026-10-26)
+
+The Mac app's move to the App Sandbox (docs/sandbox.md): release N's changes, unsandboxed, and the switch, with signed
+builds still unsandboxed unless built with `--sandbox`. Verified on Apple silicon with Xcode 27.1 and macOS 27, on the
+owner's Mac without touching its library, models, or preferences.
+
+Automated:
+
+- `swift test`: 945 XCTest cases passed across the seven bundles. New coverage: the home folder from the user
+  database and display paths with an injected home; an unreadable highlights sidecar (mode 000) importing without
+  it, and a sidecar chosen with its recording pairing by name; exports into a folder never replacing an earlier one;
+  CloudKit account status mapping, and no container without the entitlement; `Sync/replica.json` restoring the
+  identity after a move with and without preferences, without a keychain, never on another Mac, and on the way back;
+  an empty library under a known device ID publishing no deletions and a lost device ID republishing without
+  deleting; the development library for unbundled runs; sandboxed path flags; the way back out of the container
+  (classification, the move with preferences, setting an older library aside, a failed move undone, Not Now); the
+  launch check's classification, the old keychain item's identity, the verified copy into the container, and the
+  library held while a move is offered; the import folder and the previous sync folder asking to be chosen again;
+  the probe's levels.
+- `scripts/ci/tests/run-tests.sh --require-all`: 294 checks, including `check-mac-app.sh` on stand-in apps signed
+  ad hoc with the repository's entitlements files (each kind, and each way one can be wrong), the sandboxed signed
+  entitlements matching the signed ones plus the sandbox's keys, `build-app.sh --sandbox` and `--sandbox-rehearsal`
+  (and what they refuse), and `package-mac.sh --notarize [--sandbox]` refusing an app of the wrong kind before
+  anything goes to Apple. `actionlint` and `shellcheck` are clean.
+
+The ad hoc build (`scripts/build-app.sh --ad-hoc --debug`): `codesign -d --entitlements -` shows `app-sandbox`,
+audio input, microphone, Bluetooth, network client and server, user-selected files, app-scoped bookmarks, and the
+read-write exception `/private/tmp/daybook/` (plus `get-task-allow`, a debug build's); the bundle ID is
+`local.daybook.app.adhoc` and there's no `container-migration.plist`. Run sandboxed, with
+`log stream --predicate 'sender == "Sandbox"'` open:
+
+- `--library /tmp/daybook/ui --snapshot /tmp/daybook/shots`: the window renders; the app creates
+  `/private/tmp/daybook/` itself when it's missing.
+- `--photo-demo` into `/tmp/daybook/seed`: a conversation with a recording and four photos, read by Vision, written
+  through the exception.
+- `--device-demo none --phone-demo connected`: the link connects on loopback (the listener and the connection, which
+  need `network.server` and `.client`).
+- `--smoke-test --download-models` with Community-1 as the only model: the 21 MB download reached the container's
+  `Models` over the network, the fixture came from `/usr/bin/say` inside the sandbox, and the run then stopped as
+  expected ("can't be used for transcription").
+- A path outside the container, `--library ~/Documents/…`: stops at launch with the message, exit status 2.
+- The only denial for Daybook in every run: `system-info vfs.disk-space`, which macOS 27 also logs for `tccd`, `mds`,
+  and WebKit at the same time; nothing in Daybook asks for disk space.
+
+The migration rehearsal (`--sandbox-rehearsal --debug`), with a synthetic library: the sandboxed demo conversation
+above plus APFS clones of the real `Models` (21 GB, 219 items, cloned in under a second at no cost):
+
+- `local.daybook.app.rehearsal`: the library was in the container 1.2 s after launch (a rename), every item with the
+  same size, `Daybook Rehearsal` gone. `sandboxMigration` recorded `moved`, and the identity came back from
+  `replica.json` (sync device, installation, and link IDs). **The preferences didn't move**: they stayed in
+  `~/Library/Preferences`, so the app showed Welcome. Both manifests now move `${Library}/Preferences/${BundleId}.plist`
+  too.
+- `local.daybook.app.rehearsal2`, with that: the library and the preferences (onboarding, reading scale, a marker)
+  arrived in 1.2 s; the app opened the conversation directly, at the moved reading scale. The only changes in the
+  library were the app's own (`replica.json` rewritten, an empty `Models/.staging` pruned by the model store).
+- `local.daybook.app.rehearsal3`: launched first with nothing to move (`fresh`), then given a library at the old
+  place: `stillAtOldLocation`, nothing created in the container, and the "Move your library" sheet. It was hidden
+  behind Welcome; the library window now opens instead while a move is pending.
+
+The real library: `stat` of `~/Library/Application Support/Daybook` and its first two levels before and after is the
+same (inode, modification and change times, sizes), except one sync checkpoint the owner's running Daybook
+(`/Applications/Daybook.app`) rewrote during the session. No `~/Library/Containers/local.daybook.app` exists. The
+rehearsal and ad hoc containers were emptied afterwards; their protected metadata files can only be removed in Finder.
+
+Not exercised (owner, on real hardware and a signed build):
+
+- The process-tap probe, sandboxed (it needs System Audio Recording), with an app and a browser call.
+- Bonjour while pairing is open (`dns-sd -B _daybook-link._tcp local.`), the local-network prompt, and pairing a real
+  iPhone; Bluetooth (the Soundcore); the microphone and AirPods routes; real calls with the ScreenCaptureKit fallback
+  and meeting detection; live captions and Foundation Models; Continuity Camera.
+- Open and save panels, drops, and paste in the sandbox: Move Library… (the panel's grant, the verified copy, and
+  Move to Trash on the old copy), Export Here, the import panel and drops with a sidecar, Add Photo, the import
+  folder chosen again, the previous sync folder's Choose Folder Again….
+- A signed sandboxed build: the first launch on the real library (prerelease only, after a backup), the sync
+  identity's and the link keys' keychain items across the move, iCloud Drive, CloudKit and the courier, CloudKit's
+  account status, notarization and `spctl`.
+- Going back: an unsandboxed release finding the container's library and moving it back (and whether macOS asks
+  about reading another app's data for a container of the same app and team).
+
 ## Security review fixes (2026-10-25)
 
 Regression tests cover: a pairing refusal believed only before the first commitment, a Mac
