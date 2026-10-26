@@ -51,6 +51,11 @@ public struct DeviceLibraryLinks: Equatable {
                     partial[id] = partial[id] ?? meeting.id
                 } else {
                     imported[device.recordingID] = meeting.id
+                    // Existing libraries used name/size file IDs. Their verified import digest
+                    // also recognizes the new content ID on another device without reimporting.
+                    if device.recordingID.hasPrefix("file:"), !track.sha256.isEmpty {
+                        imported[ImportFolderWatcher.recordingID(sha256: track.sha256)] = meeting.id
+                    }
                 }
                 entries.append(Entry(recordingID: device.recordingID, meetingID: meeting.id, trackID: track.id,
                                      importedAt: track.createdAt, fileName: track.fileName))

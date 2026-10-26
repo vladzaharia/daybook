@@ -6,8 +6,8 @@ import Foundation
 ///
 /// It watches only a folder the person chose. A file must be unchanged across two scans before it
 /// counts, so AirDrop and network copies aren't read half-written. Files are only read: Daybook
-/// copies them into the library and never moves, renames, or deletes them. A file's ID is its name
-/// and size, so a file already in the library is recognised on another Mac too.
+/// copies them into the library and never moves, renames, or deletes them. A file's ID is its
+/// content digest, so different exports cannot collide merely by sharing a name and size.
 @MainActor
 public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     public static let audioExtensions: Set<String> = ["wav", "mp3", "m4a", "aac", "aiff", "aif", "caf", "flac", "mp4", "ogg", "opus"]
@@ -42,6 +42,8 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     private var securityScope = false
     /// Files seen on the previous scan, by path.
     private var observations: [String: FileFingerprint] = [:]
+    private var digests: [String: (fingerprint: FileFingerprint, value: String)] = [:]
+    private var scanGeneration = UUID()
     /// Recording IDs imported before (kept even if the conversation is later deleted, so a file
     /// isn't imported again on its own).
     private var completed: Set<String> = []
@@ -191,6 +193,8 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     }
 
     private func stopWatching() {
+        scanGeneration = UUID()
+        digests = [:]
         task?.cancel(); task = nil
         if securityScope { folder?.stopAccessingSecurityScopedResource() }
         securityScope = false
@@ -207,9 +211,10 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
 
     public func scan() async {
         guard let folder, !scanning else { return }
+        let generation = scanGeneration
         scanning = true
         defer { scanning = false }
-        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey,
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey, .fileResourceIdentifierKey,
                                       .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
         let contents: [URL]
         do {
@@ -224,7 +229,8 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
         var stable: [DeviceRecording] = []
         var found: [String: URL] = [:]
         var seen: [String: FileFingerprint] = [:]
-        for url in contents {
+        var migratedCompletion = false
+        for url in contents.sorted(by: { $0.path < $1.path }) {
             let name = url.lastPathComponent
             // Older iCloud placeholders are hidden ".name.m4a.icloud" files.
             if name.hasPrefix(".") {
@@ -242,16 +248,39 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
             }
             guard values.isRegularFile == true, let size = values.fileSize, size > 0,
                   let modified = values.contentModificationDate else { continue }
-            let fingerprint = FileFingerprint(path: url.path, size: size, modified: modified.timeIntervalSince1970)
+            let fingerprint = FileFingerprint(path: url.path, size: size, modified: modified.timeIntervalSince1970,
+                                              resourceID: values.fileResourceIdentifier.map { String(describing: $0) })
             seen[url.path] = fingerprint
             // Unchanged since the last scan: finished copying.
             guard observations[url.path] == fingerprint else { continue }
-            let id = Self.recordingID(name: name, size: size)
+            let digest: String
+            if let cached = digests[url.path], cached.fingerprint == fingerprint {
+                digest = cached.value
+            } else {
+                let hashed = await Task.detached(priority: .utility) { try? AudioDigest.sha256(fileURL: url) }.value
+                guard generation == scanGeneration, !Task.isCancelled else { return }
+                guard let hashed, let after = try? url.resourceValues(forKeys: Set(keys)),
+                      after.fileSize == size, after.contentModificationDate == modified,
+                      after.fileResourceIdentifier.map({ String(describing: $0) }) == fingerprint.resourceID else { continue }
+                digest = hashed
+                digests[url.path] = (fingerprint, digest)
+            }
+            let id = Self.recordingID(sha256: digest)
+            // Old completion records have no digest. Adopt the first stable file they identify
+            // once, preserving the person's previous import/deletion decision; future versions
+            // and other folders are distinguished by their bytes.
+            if completed.remove(Self.recordingID(name: name, size: size)) != nil {
+                completed.insert(id)
+                migratedCompletion = true
+            }
+            guard found[id] == nil else { continue }
             found[id] = url
             stable.append(DeviceRecording(id: id, startedAt: nil, length: nil, byteCount: UInt64(size), fileName: name,
                                           addedAt: values.creationDate ?? modified))
         }
         observations = seen
+        digests = digests.filter { seen[$0.key] != nil }
+        if migratedCompletion { storage.set(Array(completed).sorted(), Keys.completed) }
         urls = found
         stable.sort { ($0.addedAt ?? .distantPast) > ($1.addedAt ?? .distantPast) }
         let changed = stable != recordings || pending != waitingForICloud
@@ -266,7 +295,9 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
     // MARK: Helpers
 
     /// "file:notes.m4a|20480".
-    public static func recordingID(name: String, size: Int) -> String { "file:\(name)|\(size)" }
+    public nonisolated static func recordingID(name: String, size: Int) -> String { "file:\(name)|\(size)" }
+
+    public nonisolated static func recordingID(sha256: String) -> String { "file:sha256:\(sha256)" }
 
     public static func isAudio(_ name: String) -> Bool {
         audioExtensions.contains((name as NSString).pathExtension.lowercased())
@@ -280,7 +311,6 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
 
     /// One plain sentence for a file that didn't import.
     public static func failureMessage(_ error: Error) -> String {
-        if case DaybookError.invalidAudio? = error as? DaybookError { return "Couldn’t read this file." }
         if case DaybookError.invalidAudio? = error as? DaybookError { return "Couldn’t read this file." }
         if (error as NSError).domain == AVFoundationErrorDomain { return "Couldn’t read this file." }
         if case DeviceTransferError.unreadable(let message)? = error as? DeviceTransferError { return message }
@@ -327,10 +357,12 @@ public struct FileFingerprint: Equatable {
     public let path: String
     public let size: Int
     public let modified: TimeInterval
+    public let resourceID: String?
 
-    public init(path: String, size: Int, modified: TimeInterval) {
+    public init(path: String, size: Int, modified: TimeInterval, resourceID: String? = nil) {
         self.path = path
         self.size = size
         self.modified = modified
+        self.resourceID = resourceID
     }
 }
