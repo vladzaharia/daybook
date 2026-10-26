@@ -110,6 +110,9 @@ public enum MeetingExport {
     /// Each is re-encoded with only its orientation and capture time (`ExportPhoto`), so it carries no
     /// location or camera details; the library's original stays byte for byte. `photoFile` gives each
     /// photo's original (nil skips one that isn't on this device, as does one that can't be read).
+    /// Nothing in `folder` is replaced: when `<name>.md` or `<name> Photos` is taken, the export is
+    /// `<name> 2`, `<name> 3`, and so on (`availableName`). This is the Mac's export with photos, into a
+    /// folder the person chose, which in the App Sandbox is the only place it may create the photos folder.
     /// Returns the Markdown file and the photos folder, if any.
     @discardableResult
     public static func write(_ meeting: Meeting, to folder: URL, name: String,
@@ -117,7 +120,22 @@ public enum MeetingExport {
         guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\") else {
             throw LibraryError.unsafePath(name)
         }
-        return try write(meeting, markdownURL: folder.appendingPathComponent(name + ".md"), photoFile: photoFile)
+        let available = availableName(name, in: folder, withPhotos: !meeting.visiblePhotos.isEmpty)
+        return try write(meeting, markdownURL: folder.appendingPathComponent(available + ".md"), photoFile: photoFile)
+    }
+
+    /// `name`, or `name 2`, `name 3`, …: the first for which neither `<name>.md` nor, with photos,
+    /// `<name> Photos` exists in `folder`.
+    public static func availableName(_ name: String, in folder: URL, withPhotos: Bool) -> String {
+        let fm = FileManager.default
+        func taken(_ candidate: String) -> Bool {
+            fm.fileExists(atPath: folder.appendingPathComponent(candidate + ".md").path)
+                || (withPhotos && fm.fileExists(atPath: folder.appendingPathComponent(candidate + " Photos").path))
+        }
+        guard taken(name) else { return name }
+        var number = 2
+        while taken("\(name) \(number)") { number += 1 }
+        return "\(name) \(number)"
     }
 
     /// Uses the exact file chosen in a save panel. Existing sibling folders are never replaced.
@@ -127,7 +145,8 @@ public enum MeetingExport {
         let fm = FileManager.default
         let folder = url.deletingLastPathComponent()
         let name = url.deletingPathExtension().lastPathComponent
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Only a missing folder is created: in the App Sandbox the chosen folder is writable, but its parents aren't.
+        if !fm.fileExists(atPath: folder.path) { try fm.createDirectory(at: folder, withIntermediateDirectories: true) }
         var links: [UUID: String] = [:]
         var photosFolder: URL?
         var completed = false

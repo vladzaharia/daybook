@@ -17,6 +17,13 @@ final class SandboxReadinessTests: XCTestCase {
         XCTAssertEqual(SettingsPath.display(URL(fileURLWithPath: "/Volumes/Archive/Daybook"), home: home), "/Volumes/Archive/Daybook")
     }
 
+    func testExportNamesHaveNoFolderSeparators() {
+        XCTAssertEqual(AppState.exportName("Q3/Q4 planning"), "Q3-Q4 planning")
+        XCTAssertEqual(AppState.exportName("10:30 sync"), "10-30 sync")
+        XCTAssertEqual(AppState.exportName("  "), "Conversation")
+        XCTAssertEqual(AppState.exportName(".."), "Conversation")
+    }
+
     func testSettingsShowICloudPlacesByName() {
         let drive = URL(fileURLWithPath: "/Users/dana/Library/Mobile Documents/com~apple~CloudDocs/Daybook Sync")
         XCTAssertEqual(SettingsPath.display(drive, home: home), "iCloud Drive › Daybook Sync")

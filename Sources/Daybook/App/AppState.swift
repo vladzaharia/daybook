@@ -879,10 +879,12 @@ final class AppState: ObservableObject {
 
     func export(_ id: UUID, json: Bool = false) {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return }
-        let panel = NSSavePanel(); panel.allowedContentTypes = json ? [.json] : [.plainText]
-        panel.nameFieldStringValue = meeting.title.replacingOccurrences(of: "/", with: "-") + (json ? ".json" : ".md")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
         let directory = library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)", isDirectory: true)
+        // Markdown with photos is a file and a folder beside it: the person chooses where both go.
+        if !json && !meeting.visiblePhotos.isEmpty { exportWithPhotos(meeting, from: directory); return }
+        let panel = NSSavePanel(); panel.allowedContentTypes = json ? [.json] : [.plainText]
+        panel.nameFieldStringValue = Self.exportName(meeting.title) + (json ? ".json" : ".md")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
@@ -896,6 +898,35 @@ final class AppState: ObservableObject {
                 notice = "Exported \(url.lastPathComponent)"
             } catch { errorMessage = error.localizedDescription }
         }
+    }
+
+    /// Markdown with photos goes into a folder the person chooses, as `<title>.md` and `<title> Photos/`, never
+    /// replacing anything there. A save panel grants only the file it names; in the App Sandbox the photos folder beside
+    /// it couldn't be created.
+    private func exportWithPhotos(_ meeting: Meeting, from directory: URL) {
+        let panel = NSOpenPanel()
+        panel.title = "Export “\(meeting.title)”"
+        panel.prompt = "Export Here"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        let name = Self.exportName(meeting.title)
+        Task {
+            do {
+                let written = try await Task.detached(priority: .userInitiated) {
+                    let scoped = folder.startAccessingSecurityScopedResource()
+                    defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+                    return try MeetingExport.write(meeting, to: folder, name: name) { directory.appendingPathComponent($0.relativePath) }
+                }.value
+                notice = "Exported \(written.markdown.lastPathComponent)"
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    /// A conversation's title as an export's file name: no folder separators, never empty.
+    nonisolated static func exportName(_ title: String) -> String {
+        let name = title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty || name == "." || name == ".." ? "Conversation" : name
     }
 
     func audioURL(for track: RecordingTrack, meetingID: UUID) async -> URL? {
