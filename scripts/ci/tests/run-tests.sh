@@ -22,6 +22,7 @@
 #                         (macOS)
 #   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
 #                         the repository (macOS)
+#   package-mac.sh        version and build checks, ZIP, DMG, checksums, with stand-in tools (macOS)
 # Runs on macOS (bash 3.2) and Linux.
 set -euo pipefail
 
@@ -492,6 +493,39 @@ if macos; then
     expect_eq "(none in the calls)" "" "$(grep -- '-allowProvisioning' "$work/stub.log" || true)"
 else
     skip "build-ios.sh (macOS only)"
+fi
+
+# --- package-mac.sh, with stand-in tools ----------------------------------------------------------------
+echo "package-mac.sh"
+if macos; then
+    make_mac_app() {
+        # make_mac_app DIR VERSION BUILD
+        local app="$1/Daybook.app"
+        rm -rf "$app"
+        mkdir -p "$app/Contents/MacOS"
+        plutil -create xml1 "$app/Contents/Info.plist"
+        plutil -insert CFBundleShortVersionString -string "$2" "$app/Contents/Info.plist"
+        plutil -insert CFBundleVersion -string "$3" "$app/Contents/Info.plist"
+    }
+    package() {
+        : > "$work/stub.log"
+        env -u DAYBOOK_ASC_KEY_PATH -u DAYBOOK_ASC_KEY_ID -u DAYBOOK_ASC_ISSUER_ID -u DAYBOOK_TEAM_ID \
+            PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/package-mac.sh" "$@" > "$work/package.out" 2>&1
+    }
+    files_in() { find "$1" -type f -exec basename {} \; | sort | paste -sd ' ' -; }
+    make_mac_app "$work/pkg" 1.4.0 1057
+    expect_ok "packages a local build" package --app "$work/pkg/Daybook.app" --version 1.4.0 --build 1057 --output "$work/pkg-out"
+    expect_eq "a ZIP, an unsigned DMG, and checksums" "Daybook-1.4.0-macOS-arm64.dmg Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" \
+        "$(files_in "$work/pkg-out")"
+    # shellcheck disable=SC2016 # $1 is the inner shell's
+    expect_ok "the checksums verify" bash -c 'cd "$1" && shasum -a 256 -c SHA256SUMS.txt' _ "$work/pkg-out"
+    expect_eq "nothing goes to Apple without --notarize" "" "$(grep -E '^xcrun (notarytool|stapler)' "$work/stub.log" || true)"
+    expect_fail "an app with another build number isn't packaged" package --app "$work/pkg/Daybook.app" --version 1.4.0 --build 1058 --output "$work/pkg-out2"
+    expect_ok "and says which" grep -q "is build '1057' (CFBundleVersion), not 1058" "$work/package.out"
+    expect_fail "nor one with another version" package --app "$work/pkg/Daybook.app" --version 1.5.0 --output "$work/pkg-out2"
+    expect_ok "(nothing was written)" test ! -e "$work/pkg-out2/SHA256SUMS.txt"
+else
+    skip "package-mac.sh (macOS only)"
 fi
 
 # --- secrets.sh -----------------------------------------------------------------------------------------

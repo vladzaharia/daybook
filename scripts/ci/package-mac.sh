@@ -2,8 +2,10 @@
 # Packages the exported Mac app for a GitHub Release: notarizes and staples it, then writes a ZIP, a
 # DMG when one can be signed, and SHA256SUMS.txt.
 #
-#   scripts/ci/package-mac.sh --app dist/Daybook.app --version 1.4.0 --output dist/release [--notarize]
+#   scripts/ci/package-mac.sh --app dist/Daybook.app --version 1.4.0 [--build 1057] --output dist/release [--notarize]
 #
+#   --version, --build   the app's Info.plist must carry these as CFBundleShortVersionString and
+#                CFBundleVersion, or nothing is packaged
 #   --notarize   submit to Apple's notary service with the App Store Connect API key
 #                (DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, DAYBOOK_ASC_ISSUER_ID), wait, and staple.
 #                Requires a Developer ID signature with the iCloud entitlements. Without it (local
@@ -21,6 +23,7 @@ set -euo pipefail
 
 app=""
 version=""
+build=""
 output=""
 notarize=0
 container="${DAYBOOK_ICLOUD_CONTAINER:-iCloud.local.daybook}"
@@ -33,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --app) app="${2-}"; shift ;;
         --version) version="${2-}"; shift ;;
+        --build) build="${2-}"; shift ;;
         --output) output="${2-}"; shift ;;
         --notarize) notarize=1 ;;
         -h|--help) usage; exit 0 ;;
@@ -49,6 +53,13 @@ zip="$output/$name.zip"
 dmg="$output/$name.dmg"
 work="$(mktemp -d)"
 trap '/bin/rm -rf "${work:?}"' EXIT
+
+info="$app/Contents/Info.plist"
+short="$(plutil -extract CFBundleShortVersionString raw -o - "$info" 2>/dev/null || true)"
+long="$(plutil -extract CFBundleVersion raw -o - "$info" 2>/dev/null || true)"
+[[ "$short" == "$version" ]] || fail "$app is version '$short' (CFBundleShortVersionString), not $version"
+[[ -z "$build" || "$long" == "$build" ]] || fail "$app is build '$long' (CFBundleVersion), not $build"
+echo "Version $short ($long)"
 
 codesign --verify --deep --strict --verbose=2 "$app"
 signature="$(codesign -dv --verbose=2 "$app" 2>&1)"

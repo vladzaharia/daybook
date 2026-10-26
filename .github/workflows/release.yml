@@ -347,7 +347,7 @@ jobs:
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-        run: scripts/ci/secrets.sh run -- scripts/ci/package-mac.sh --app dist/Daybook.app --version "$VERSION" --output dist/release --notarize
+        run: scripts/ci/secrets.sh run -- scripts/ci/package-mac.sh --app dist/Daybook.app --version "$VERSION" --build "$BUILD" --output dist/release --notarize
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mac-release

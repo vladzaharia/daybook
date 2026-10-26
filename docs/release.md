@@ -17,7 +17,7 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 | CI | `mac` | `xcode-27` | `scripts/ci/tests/run-tests.sh --require-all` (every group, including the macOS-only ones: CryptoKit's JWT check, the archive checks, the upload retry, the build scripts, and the keychain), then `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
 | Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
 | Release | `iphone` | `xcode-27`, environment `release` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
-| Release | `mac` | `xcode-27`, environment `release` | works out its build number, fetches the packages, archives (`build-app.sh --archive-only`), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`) |
+| Release | `mac` | `xcode-27`, environment `release` | works out its build number, fetches the packages, archives (`build-app.sh --archive-only`), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then checks that the app's `CFBundleShortVersionString` and `CFBundleVersion` are the run's version and build, notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`) |
 | Release | `draft` | `ubuntu-24.04` | tags only, after `mac`: verifies the checksums and creates the GitHub Release as a **draft** with the Mac files (`scripts/ci/github-release.sh draft`). A re-run updates its own draft; it never touches a published release |
 | Release | `publish` | `ubuntu-24.04` | tags only, after `draft` and, when the run releases the iPhone app, after `iphone` succeeded: publishes the draft (`github-release.sh publish`). `draft` and `publish` are the only jobs with `contents: write`, and they hold no Apple secrets |
 
@@ -384,6 +384,6 @@ scripts/ci/version.sh --ref refs/tags/v1.2.3 --run-number 42
 scripts/build-ios.sh --archive --no-sign --marketing-version 1.2.3 --build-number 1042
 scripts/ci/check-ios-archive.sh Apps/iOS/build/DaybookPhone.xcarchive --version 1.2.3 --build 1042
 scripts/build-app.sh --ad-hoc --marketing-version 1.2.3 --build-number 1042
-scripts/ci/package-mac.sh --app dist/Daybook.app --version 1.2.3 --output /tmp/daybook-release   # no --notarize: nothing is sent
+scripts/ci/package-mac.sh --app dist/Daybook.app --version 1.2.3 --build 1042 --output /tmp/daybook-release   # no --notarize: nothing is sent
 scripts/ci/setup-github.sh --asc-key AuthKey_ABC123DEFG.p8 --asc-issuer-id <uuid>               # dry run
 ```
