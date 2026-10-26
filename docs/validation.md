@@ -1,5 +1,39 @@
 # Validation record
 
+## Sync engine review fixes (2026-10-26)
+
+The sync stream fixed the review's sync findings (docs/icloud-sync.md describes the behaviour). Regression
+tests, all on temporary libraries and folders with synthetic data, now cover: two creations of one
+conversation keeping what either set; criss-cross histories (tag, bookmark, photo removal, a revert, three
+devices); a held conversation publishing an edit once; a remote deletion while a device records into the
+conversation, the automatic-trash race, and audio installed before a deletion; restoring a synced deletion
+as a new conversation; unknown enum values, extra fields, newer-schema events and settings; upgrading in
+place from the version 1 engine with an unacknowledged pass and a half-read journal; a crash between
+writing an entry and saving the checkpoint; bounded memory and per-conversation base files; a fresh device
+waiting for iCloud's listing and two manifests resolving to one library; a courier delivery whose
+iCloud Drive copy never arrives; status kept as synced; edits during a pass on the Mac and the iPhone, and
+pull to refresh joining a pass; an account change during a long pass; claims under clock skew and latency;
+the device identity moving to the keychain, copied preferences, and two devices sharing an ID; recording
+activity in presence and settings-only passes while recording; and random histories across an eager Mac,
+an on-demand iPhone, and the version 1 engine from fixed seeds.
+
+Verified on Apple silicon with Xcode 27.1:
+
+- `swift test`: 741 XCTest cases passed across all seven test bundles.
+- `scripts/build-ios.sh --test --simulator <a new iPhone 17 Pro, iOS 27.0>`: 87 tests passed. (The iOS 27.1
+  runtime on this machine accepts only the iPhone Duo device type, so the new simulator used iOS 27.0.)
+
+Not exercised, needing signed builds and real accounts:
+
+- The data-protection keychain item for the device identity on signed Mac and iPhone builds (unsigned
+  `swift test` has no such keychain, so preferences are used), and Migration Assistant or a backup restore
+  producing a Mac that takes a new identity.
+- `NSMetadataQuery`'s first gather on a fresh device against a container that already holds a library,
+  and `NSFileVersion` conflict versions of `daybook-sync.json` from two devices creating a library at once
+  (renamed copies are tested; conflict versions can't be produced on a local volume).
+- A courier delivery promoted into iCloud Drive after a day, observed from a second Mac or a new iPhone.
+- Presence activity seen by the iPhone during a long Mac recording, and a handoff answered during one.
+
 ## Project review fixes (2026-10-25)
 
 The review covered persistence and sync, local pairing, model downloads, recorder integration,
