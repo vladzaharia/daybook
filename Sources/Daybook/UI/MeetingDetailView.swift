@@ -3,15 +3,6 @@ import DaybookCore
 import DaybookKit
 import SwiftUI
 
-enum PlaybackTarget {
-    /// A transcript passage, played from its original recording.
-    case segment(TranscriptSegment)
-    /// A time on the conversation's shared timeline.
-    case timeline(Double)
-    /// A time within one recording's own audio.
-    case source(RecordingTrack, Double)
-}
-
 /// A photo open in the viewer.
 struct PhotoViewerRequest: Identifiable, Equatable { let id: UUID }
 
@@ -62,22 +53,10 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// What a passage, a time, or a recording plays: resolved as on the iPhone (`PlaybackTarget`).
     private func play(_ target: PlaybackTarget) {
-        guard let meeting, !state.isRecording else { return }
-        switch target {
-        case .segment(let segment):
-            guard let track = meeting.tracks.first(where: { $0.id == segment.trackID }) else { return }
-            let originalTime = segment.provenance.first { $0.trackID == track.id }?.start ?? max(0, segment.start - (track.offset ?? 0))
-            requestPlayback(track, at: originalTime)
-        case .timeline(let seconds):
-            if let position = MeetingPlaybackPosition.resolve(seconds, in: meeting), let track = meeting.tracks.first(where: { $0.id == position.trackID }) {
-                requestPlayback(track, at: position.seconds)
-            } else if let track = meeting.tracks.first {
-                requestPlayback(track, at: max(0, seconds - (track.offset ?? 0)))
-            }
-        case .source(let track, let seconds):
-            requestPlayback(track, at: seconds)
-        }
+        guard let meeting, !state.isRecording, let resolved = target.resolve(in: meeting) else { return }
+        requestPlayback(resolved.track, at: resolved.seconds)
     }
 
     private func requestPlayback(_ track: RecordingTrack, at seconds: Double) {

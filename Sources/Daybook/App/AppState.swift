@@ -1009,11 +1009,5 @@ struct NewFolderRequest: Identifiable, Equatable {
     var moving: [UUID] = []
 }
 
-enum PageMode: String, CaseIterable, Identifiable {
-    case summary, transcript
-    var id: String { rawValue }
-    var title: String { self == .summary ? "Summary" : "Transcript" }
-}
-
 /// The library's errors, shared with the devices that import into it.
 typealias AppError = DaybookError
