@@ -101,7 +101,7 @@ public enum MeetingExport {
 
     /// "Photo 01", "Photo 02", … in the order of `visiblePhotos`, for the exported files and for a
     /// photo without a caption.
-    static func photoNames(_ meeting: Meeting) -> [UUID: String] {
+    public static func photoNames(_ meeting: Meeting) -> [UUID: String] {
         Dictionary(uniqueKeysWithValues: meeting.visiblePhotos.enumerated().map { ($1.id, String(format: "Photo %02d", $0 + 1)) })
     }
 

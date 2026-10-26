@@ -133,6 +133,20 @@ extension AppState {
         library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)/\(photo.relativePath)")
     }
 
+    /// Copy: the photo as an export writes it (named "Photo 03", without its location or camera
+    /// details), for this Mac only. The library's original never reaches the pasteboard; Show in
+    /// Finder still reveals it. Returns the copied file.
+    @discardableResult
+    func copyPhoto(_ photo: MeetingPhoto, in id: UUID, to pasteboard: some LocalPasteboardWriting = NSPasteboard.general) async -> URL? {
+        guard let meeting = meetings.first(where: { $0.id == id }) else { return nil }
+        let name = MeetingExport.photoNames(meeting)[photo.id] ?? "Photo"
+        switch await PhotoCopy.copy(photoURL(photo, in: id), name: name, to: pasteboard) {
+        case .copied(let file): return file
+        case .unreadable: notice = "This photo couldn’t be copied."; return nil
+        case .superseded: return nil
+        }
+    }
+
     // MARK: Reading photos
 
     /// Returns how many photos it read. A photo that couldn't be read waits before it's tried again
@@ -289,5 +303,51 @@ extension AppState {
         guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImageFromSource(destination, source, 0, nil)
         return CGImageDestinationFinalize(destination) ? output as Data : nil
+    }
+}
+
+/// What Copy puts on the pasteboard for a photo: a copy re-encoded as an export would be
+/// (`ExportPhoto`: only its orientation and capture time, no GPS, maker notes, camera, or lens), in a
+/// folder of its own under the temporary directory. Only the newest copy is kept, so a quick second
+/// Copy wins even if the first finishes later.
+@MainActor
+enum PhotoCopy {
+    /// Where copies are written (tests use their own).
+    static var folder = FileManager.default.temporaryDirectory.appendingPathComponent("Daybook Copied Photos", isDirectory: true)
+
+    enum Outcome: Equatable {
+        case copied(URL)
+        /// The original isn't an image this Mac can read and write.
+        case unreadable
+        /// A later Copy replaced this one before it was written.
+        case superseded
+    }
+
+    private static var latest: UUID?
+
+    /// Writes the copy off the main actor, then puts it on `pasteboard`.
+    static func copy(_ original: URL, name: String, to pasteboard: some LocalPasteboardWriting) async -> Outcome {
+        let token = UUID()
+        latest = token
+        let destination = folder.appendingPathComponent(token.uuidString, isDirectory: true)
+        let written = await Task.detached(priority: .userInitiated) { () -> URL? in
+            let files = FileManager.default
+            guard (try? files.createDirectory(at: destination, withIntermediateDirectories: true,
+                                              attributes: [.posixPermissions: 0o700])) != nil else { return nil }
+            guard let file = ExportPhoto.write(original, to: destination, name: name) else {
+                try? files.removeItem(at: destination)
+                return nil
+            }
+            return destination.appendingPathComponent(file)
+        }.value
+        guard latest == token else {
+            try? FileManager.default.removeItem(at: destination)
+            return .superseded
+        }
+        guard let written else { return .unreadable }
+        let earlier = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        for copy in earlier where copy.lastPathComponent != token.uuidString { try? FileManager.default.removeItem(at: copy) }
+        LocalPasteboard.copy([written as NSURL], to: pasteboard)
+        return .copied(written)
     }
 }

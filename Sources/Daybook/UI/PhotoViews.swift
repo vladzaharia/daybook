@@ -84,7 +84,8 @@ struct PhotoMenu: View {
 
     var body: some View {
         Button("Open Photo") { openPhoto?(photo) }
-        Button("Copy") { LocalPasteboard.copy([state.photoURL(photo, in: meeting.id) as NSURL]) }
+        // A copy without its location or camera details; Show in Finder reveals the original.
+        Button("Copy") { Task { await state.copyPhoto(photo, in: meeting.id) } }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([state.photoURL(photo, in: meeting.id)]) }
         Divider()
         if photo.hiddenFromSummary == true {
