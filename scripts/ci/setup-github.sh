@@ -133,6 +133,18 @@ say "Actions: workflows get a read-only GITHUB_TOKEN by default and can't approv
 run gh api -X PUT "repos/$repo/actions/permissions/workflow" \
     -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false
 
+say "Actions: every action must be pinned to a full commit SHA (workflows and the actions they use)"
+run gh api -X PUT "repos/$repo/actions/permissions" -F enabled=true -f allowed_actions=all -F sha_pinning_required=true
+
+say "Security: secret scanning with push protection, Dependabot alerts and security updates"
+security_body='{"security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}'
+printf "   \$ echo '%s' | gh api -X PATCH repos/%s --input -\n" "$security_body" "$repo"
+if (( apply )); then
+    printf '%s' "$security_body" | gh api -X PATCH "repos/$repo" --input - --silent
+fi
+run gh api -X PUT "repos/$repo/vulnerability-alerts" --silent
+run gh api -X PUT "repos/$repo/automated-security-fixes" --silent
+
 say "Actions: every outside contributor's pull request waits for approval before workflows run"
 show gh api -X PUT "repos/$repo/actions/permissions/fork-pr-contributor-approval" -f approval_policy=all_external_contributors
 if (( apply )); then

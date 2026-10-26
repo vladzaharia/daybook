@@ -12,6 +12,7 @@
 #                                           in Xcode's Signing & Capabilities.
 #   scripts/build-ios.sh --device --no-sign compile for a device without signing (a CI check)
 #   scripts/build-ios.sh --generate-only    just regenerate Apps/iOS/Daybook.xcodeproj
+#   scripts/build-ios.sh --resolve          regenerate it and fetch the packages at Package.resolved's versions
 #   scripts/build-ios.sh --archive          xcodebuild archive (Release) to Apps/iOS/build/DaybookPhone.xcarchive,
 #                                           with the widget extension; signed like --device. Add --no-sign
 #                                           for an unsigned archive (a local or CI check).
@@ -30,6 +31,9 @@
 #   --test-arg <argument>        pass an argument to the `xcodebuild test` invocation only (repeatable),
 #                                e.g. --test-arg -only-testing:DaybookPhoneTests/ShellTests
 #
+# Xcode resolves packages only to the versions in Package.resolved (-onlyUsePackageVersionsFromResolvedFile),
+# and every build fails if resolving would change that file.
+#
 # Environment:
 #   DAYBOOK_TEAM_ID              Apple Developer team for device builds
 #   DAYBOOK_ICLOUD_CONTAINER     iCloud container for sync (default iCloud.local.daybook)
@@ -40,7 +44,8 @@
 #                                (.github/workflows/release.yml, docs/release.md). With all three set,
 #                                --archive and --export authenticate with the key and pass
 #                                -allowProvisioningUpdates, so Xcode's cloud-managed signing supplies the
-#                                certificates and profiles. Nothing else in this script uses them.
+#                                certificates and profiles. Nothing else in this script uses them, and the
+#                                script refuses them outside release.yml on GitHub Actions (AGENTS.md).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -66,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --no-sign) SIGN=0 ;;
         --test) RUN_TESTS=1 ;;
         --generate-only) MODE=generate ;;
+        --resolve) MODE=resolve ;;
         --archive) MODE=archive ;;
         --export) EXPORT="$2"; shift ;;
         --archive-path) ARCHIVE_PATH="$2"; shift ;;
@@ -102,6 +108,12 @@ for name in DAYBOOK_ASC_KEY_PATH DAYBOOK_ASC_KEY_ID DAYBOOK_ASC_ISSUER_ID; do
     if [[ -n "${!name:-}" ]]; then ASC_SET=$(( ASC_SET + 1 )); fi
 done
 if (( ASC_SET == 3 )); then
+    # The key brings -allowProvisioningUpdates, which only the release pipeline may pass (AGENTS.md).
+    if [[ "${GITHUB_ACTIONS:-}" != true || "${GITHUB_WORKFLOW_REF:-}" != */.github/workflows/release.yml@* ]]; then
+        echo "The App Store Connect API key is for the release pipeline only (.github/workflows/release.yml), because it" >&2
+        echo "passes -allowProvisioningUpdates. Build with existing profiles instead (AGENTS.md, docs/release.md)." >&2
+        exit 2
+    fi
     AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$DAYBOOK_ASC_KEY_PATH"
           -authenticationKeyID "$DAYBOOK_ASC_KEY_ID" -authenticationKeyIssuerID "$DAYBOOK_ASC_ISSUER_ID")
 elif (( ASC_SET > 0 )); then
@@ -126,7 +138,19 @@ fi
 
 [[ "$MODE" == generate ]] && exit 0
 
-COMMON=(-project "$PROJECT" -scheme DaybookPhone -configuration "$CONFIGURATION" -derivedDataPath "$DERIVED")
+PINNED=(-onlyUsePackageVersionsFromResolvedFile)
+if [[ "$MODE" != export ]]; then
+    # Fetch the packages, held to Package.resolved, and make sure Xcode didn't pick other versions.
+    xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme DaybookPhone -derivedDataPath "$DERIVED" "${PINNED[@]}"
+    if ! cmp -s "$ROOT/Package.resolved" "$RESOLVED_DIR/Package.resolved"; then
+        echo "Xcode resolved other package versions than Package.resolved pins:" >&2
+        diff -u "$ROOT/Package.resolved" "$RESOLVED_DIR/Package.resolved" >&2 || true
+        exit 1
+    fi
+fi
+[[ "$MODE" == resolve ]] && exit 0
+
+COMMON=(-project "$PROJECT" -scheme DaybookPhone -configuration "$CONFIGURATION" -derivedDataPath "$DERIVED" "${PINNED[@]}")
 # The xcconfig's default container yields to the environment (command-line settings win).
 [[ -n "${DAYBOOK_ICLOUD_CONTAINER:-}" ]] && COMMON+=("DAYBOOK_ICLOUD_CONTAINER=$DAYBOOK_ICLOUD_CONTAINER")
 (( ${#VERSION_SETTINGS[@]} )) && COMMON+=("${VERSION_SETTINGS[@]}")

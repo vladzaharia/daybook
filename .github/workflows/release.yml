@@ -40,14 +40,24 @@ defaults:
 env:
   # The `xcode-27` image's Xcode 27.1 (27A9275), with the iOS 27.1 SDK (docs/release.md, Runner).
   DAYBOOK_XCODE: /Applications/Xcode_27.1.app
+  # The exact Xcode build a release ships from; the signing jobs fail on any other. When the runner
+  # image moves to a new build, check it in CI, then set the DAYBOOK_RELEASE_XCODE_BUILD variable.
+  DAYBOOK_RELEASE_XCODE_BUILD: ${{ vars.DAYBOOK_RELEASE_XCODE_BUILD || '27A9275' }}
   NSUnbufferedIO: "YES"
 
 jobs:
   validate:
     name: Validate the release commit
     uses: ./.github/workflows/ci.yml
+    with:
+      # The full unsigned Release archive, as the mac job builds it, not CI's usual Debug build.
+      mac_configuration: Release
+    # A ceiling, not a grant: the called jobs ask for contents: read. CI's cache-pruning job asks for
+    # actions: write and runs only for pushes to main, never here, but GitHub checks a called
+    # workflow's permissions against the caller's before the run starts.
     permissions:
       contents: read
+      actions: write
 
   prepare:
     name: Version and notes
@@ -55,9 +65,12 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read # the run's creation time, below
+    # No build number here: "Re-run failed jobs" doesn't re-run this job, so the iphone and mac jobs
+    # work theirs out from their own github.run_attempt.
     outputs:
       marketing_version: ${{ steps.version.outputs.marketing_version }}
-      build_number: ${{ steps.version.outputs.build_number }}
+      run_created_at: ${{ steps.created.outputs.created_at }}
       tag: ${{ steps.version.outputs.tag }}
       is_tag: ${{ steps.version.outputs.is_tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
@@ -65,25 +78,24 @@ jobs:
       mac: ${{ steps.apps.outputs.mac }}
       testflight_group: ${{ steps.apps.outputs.testflight_group }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A v* tag must point at a commit on main (pushed or picked in a manual run); a manual run from a
+      # branch must be from main. Nothing else releases.
       - name: Check the ref
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          case "$REF" in
-            refs/tags/v*) ;;
-            "refs/heads/$DEFAULT_BRANCH")
-              if [[ "$EVENT" != workflow_dispatch ]]; then
-                echo "::error::Only a v* tag push or a manual run starts a release."; exit 1
-              fi ;;
-            *) echo "::error::Releases run from a v* tag or from $DEFAULT_BRANCH, not $REF."; exit 1 ;;
-          esac
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Version and build number
+          if ! scripts/ci/check-ref.sh --event "$EVENT" --ref "$REF" --sha "$GITHUB_SHA" --default-branch "$DEFAULT_BRANCH" 2> "$RUNNER_TEMP/ref.txt"; then
+            echo "::error::$(cat "$RUNNER_TEMP/ref.txt")"
+            exit 1
+          fi
+      # Prints attempt 1's build number for the log only; the signing jobs work out their own.
+      - name: Version
         id: version
         env:
           REF: ${{ github.ref }}
@@ -95,6 +107,18 @@ jobs:
           args=(--ref "$REF" --run-number "$RUN_NUMBER" --run-attempt "$RUN_ATTEMPT" --offset "$OFFSET")
           if [[ -n "$VERSION" ]]; then args+=(--version "$VERSION"); fi
           scripts/ci/version.sh "${args[@]}" | tee -a "$GITHUB_OUTPUT"
+      # The same for every attempt of the run: an App Store Connect build uploaded before it can't be
+      # this run's (asc-testflight.sh --find-build --uploaded-after).
+      - name: When the run was created
+        id: created
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          created="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .created_at)"
+          [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || { echo "::error::Unexpected creation time '$created'"; exit 1; }
+          echo "created_at=$created" | tee -a "$GITHUB_OUTPUT"
       - name: Apps and TestFlight group
         id: apps
         env:
@@ -134,12 +158,14 @@ jobs:
             scripts/ci/release-notes.sh --ref "$ref" --format text > notes/testflight.txt
           fi
           cat notes/release.md >> "$GITHUB_STEP_SUMMARY"
+      # Artifacts belong to the run, not the attempt: "Re-run all jobs" replaces this one.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
           path: notes/
           retention-days: 30
           if-no-files-found: error
+          overwrite: true
 
   iphone:
     name: iPhone to TestFlight
@@ -153,7 +179,7 @@ jobs:
     env:
       DAYBOOK_TEAM_ID: ${{ vars.DAYBOOK_TEAM_ID }}
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
-      BUILD: ${{ needs.prepare.outputs.build_number }}
+      RUN_CREATED_AT: ${{ needs.prepare.outputs.run_created_at }}
     steps:
       - name: Check the configuration
         run: |
@@ -163,42 +189,96 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build number for this attempt
+        env:
+          REF: ${{ github.ref }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          OFFSET: ${{ vars.DAYBOOK_BUILD_NUMBER_OFFSET || '1000' }}
+        run: |
+          numbers="$(scripts/ci/version.sh --ref "$REF" --version "$VERSION" --run-number "$RUN_NUMBER" \
+            --run-attempt "$RUN_ATTEMPT" --offset "$OFFSET" | grep '^build_')"
+          printf '%s\n' "$numbers"
+          {
+            echo "BUILD=$(printf '%s\n' "$numbers" | sed -n 's/^build_number=//p')"
+            echo "BUILD_CANDIDATES=$(printf '%s\n' "$numbers" | sed -n 's/^build_candidates=//p')"
+          } >> "$GITHUB_ENV"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-notes
           path: notes
       - name: Select Xcode
-        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1
+        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
-      - name: Write the App Store Connect API key
+      # Secrets: each step that needs the API key gets it from the environment and runs inside
+      # `scripts/ci/secrets.sh run`, which writes the key for that command only and deletes it after.
+      # A re-run after an upload that went through (the job then failed waiting for processing, say)
+      # finds that build and goes straight to TestFlight instead of uploading a duplicate.
+      - name: Look for this run's build in App Store Connect
+        id: earlier
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
-        run: scripts/ci/secrets.sh setup
-      # Automatic signing with the API key: Xcode's cloud-managed signing supplies the certificates
-      # and profiles (no exported .p12 for the iPhone app).
+        run: |
+          found="$(scripts/ci/secrets.sh run -- scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone \
+            --version "$VERSION" --find-build "$BUILD_CANDIDATES" --uploaded-after "$RUN_CREATED_AT" | sed -n 's/^found=//p')"
+          echo "build=$found" >> "$GITHUB_OUTPUT"
+          if [[ -n "$found" ]]; then
+            echo "BUILD=$found" >> "$GITHUB_ENV"
+            echo "::notice title=Already uploaded::Daybook $VERSION ($found) is in App Store Connect from an earlier attempt; skipping the archive and upload"
+          fi
+      # Package checkouts and manifests run before any secret exists.
+      - name: Fetch the packages at their pinned versions
+        if: steps.earlier.outputs.build == ''
+        run: scripts/build-ios.sh --resolve
+      # Automatic signing creates the runner's development certificate and profiles through the API
+      # key while the archive builds, so the key has to exist while third-party package code compiles
+      # (docs/release.md, "Secrets on the runner"). It exists for this step only.
       - name: Archive DaybookPhone with its widget extension
-        run: scripts/build-ios.sh --archive --marketing-version "$VERSION" --build-number "$BUILD"
+        if: steps.earlier.outputs.build == ''
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: scripts/ci/secrets.sh run -- scripts/build-ios.sh --archive --marketing-version "$VERSION" --build-number "$BUILD"
       - name: Check the archive (export compliance, icon, versions, entitlements)
+        if: steps.earlier.outputs.build == ''
         run: scripts/ci/check-ios-archive.sh Apps/iOS/build/DaybookPhone.xcarchive --version "$VERSION" --build "$BUILD"
-      - name: Export and upload to App Store Connect
-        run: scripts/build-ios.sh --export upload
+      - name: Export and upload to App Store Connect (unless the build is there already)
+        if: steps.earlier.outputs.build == ''
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          found="$(scripts/ci/secrets.sh run -- scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone \
+            --version "$VERSION" --find-build "$BUILD_CANDIDATES" --uploaded-after "$RUN_CREATED_AT" | sed -n 's/^found=//p')"
+          if [[ -n "$found" ]]; then
+            echo "BUILD=$found" >> "$GITHUB_ENV"
+            echo "::warning title=Upload skipped::Daybook $VERSION ($found) is already in App Store Connect; not uploading it again"
+          else
+            scripts/ci/secrets.sh run -- scripts/build-ios.sh --export upload
+          fi
       - name: Wait for processing, set What to Test, add to the beta group
         env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
           GROUP: ${{ needs.prepare.outputs.testflight_group }}
         run: |
           args=(--bundle-id local.daybook.phone --version "$VERSION" --build "$BUILD"
                 --notes-file notes/testflight.txt --timeout 3600)
           if [[ -n "$GROUP" ]]; then args+=(--group "$GROUP"); fi
-          scripts/ci/asc-testflight.sh "${args[@]}"
+          scripts/ci/secrets.sh run -- scripts/ci/asc-testflight.sh "${args[@]}"
           where=""
           if [[ -n "$GROUP" ]]; then where=" in the beta group \"$GROUP\""; fi
           {
             echo "### TestFlight"
             echo "Daybook $VERSION ($BUILD) is on TestFlight${where}."
           } >> "$GITHUB_STEP_SUMMARY"
+      # A backstop: every secret is already gone unless a step was killed.
       - name: Remove secrets
         if: always()
         run: scripts/ci/secrets.sh cleanup
@@ -222,10 +302,11 @@ jobs:
     environment: release
     permissions:
       contents: read
+      id-token: write # build provenance: the Sigstore certificate for the attestation
+      attestations: write
     env:
       DAYBOOK_TEAM_ID: ${{ vars.DAYBOOK_TEAM_ID }}
       VERSION: ${{ needs.prepare.outputs.marketing_version }}
-      BUILD: ${{ needs.prepare.outputs.build_number }}
     steps:
       - name: Check the configuration
         run: |
@@ -235,40 +316,111 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Build number for this attempt
+        env:
+          REF: ${{ github.ref }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          OFFSET: ${{ vars.DAYBOOK_BUILD_NUMBER_OFFSET || '1000' }}
+        run: |
+          numbers="$(scripts/ci/version.sh --ref "$REF" --version "$VERSION" --run-number "$RUN_NUMBER" \
+            --run-attempt "$RUN_ATTEMPT" --offset "$OFFSET" | grep '^build_')"
+          printf '%s\n' "$numbers"
+          echo "BUILD=$(printf '%s\n' "$numbers" | sed -n 's/^build_number=//p')" >> "$GITHUB_ENV"
       - name: Select Xcode
-        run: scripts/ci/select-xcode.sh --metal
+        run: scripts/ci/select-xcode.sh --metal --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
+      # A re-run picks up the app notarization an earlier attempt left pending (Apple was still working
+      # on it when that attempt's wait ran out) instead of building and submitting again.
+      - name: Find a notarization an earlier attempt left pending
+        if: github.run_attempt != '1'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mac-notarization-*
+          path: build/notarization-earlier
+          merge-multiple: true
+      - name: Resume it
+        id: resume
+        if: github.run_attempt != '1'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          out="$(scripts/ci/secrets.sh run -- scripts/ci/notary-resume.sh --from build/notarization-earlier \
+            --state-dir "build/notarization/attempt-$GITHUB_RUN_ATTEMPT" --app dist/Daybook.app --version "$VERSION")"
+          submission="$(printf '%s\n' "$out" | sed -n 's/^submission=//p')"
+          echo "submission=$submission" >> "$GITHUB_OUTPUT"
+          if [[ -n "$submission" ]]; then
+            echo "BUILD=$(printf '%s\n' "$out" | sed -n 's/^build=//p')" >> "$GITHUB_ENV"
+            echo "::notice title=Notarization resumed::Waiting for the earlier submission $submission instead of building again"
+          fi
+      # Package checkouts and manifests run before any secret exists.
+      - name: Fetch the packages at their pinned versions
+        if: steps.resume.outputs.submission == ''
+        run: scripts/build-app.sh --resolve-only
+      # The archive signs for development through the API key (automatic signing), so the key has to
+      # exist while third-party package code compiles (docs/release.md, "Secrets on the runner"). It
+      # exists for this step only; the Developer ID identity isn't on the runner yet.
+      - name: Archive
+        if: steps.resume.outputs.submission == ''
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: scripts/ci/secrets.sh run -- scripts/build-app.sh --archive-only --marketing-version "$VERSION" --build-number "$BUILD"
       # The .p12 is optional: without it, -exportArchive signs with Xcode's cloud-managed Developer ID
-      # certificate, which the API key's role may not allow (docs/release.md, Signing).
-      - name: Write the API key (and the Developer ID keychain, if configured)
+      # certificate, which the API key's role may not allow (docs/release.md, Signing). With it, the
+      # export signs manually with its identity and the Developer ID profile (scripts/ci/mac-export.sh).
+      # The keychain exists only during this step and the next, when nothing compiles.
+      - name: Export with Developer ID
+        if: steps.resume.outputs.submission == ''
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-        run: scripts/ci/secrets.sh setup
-      # With the .p12, export signs manually with its identity and the Developer ID profile, because a
-      # team key can't use cloud-managed Developer ID signing (docs/release.md).
-      - name: Install the Developer ID profile
-        run: |
-          if [[ -n "${DAYBOOK_SIGNING_KEYCHAIN:-}" ]]; then
-            uuid=$(scripts/ci/asc-profile.sh --bundle-id local.daybook.app --type MAC_APP_DIRECT --keychain "$DAYBOOK_SIGNING_KEYCHAIN")
-            echo "DAYBOOK_DEVELOPER_ID_PROFILE=$uuid" >> "$GITHUB_ENV"
-          else
-            echo "No Developer ID keychain: the export uses cloud-managed signing."
-          fi
-      - name: Archive and export with Developer ID
-        run: scripts/build-app.sh --marketing-version "$VERSION" --build-number "$BUILD"
+        run: scripts/ci/secrets.sh run -- scripts/ci/mac-export.sh
+      # Each submission waits at most 45 minutes (the DMG's 20), and its ID goes to the run summary. If
+      # Apple is still working on the app's when the wait runs out, the step fails and the next step
+      # keeps the submission for a re-run.
       - name: Notarize, staple, and package
-        run: scripts/ci/package-mac.sh --app dist/Daybook.app --version "$VERSION" --output dist/release --notarize
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          SUBMISSION: ${{ steps.resume.outputs.submission }}
+        run: |
+          args=(--app dist/Daybook.app --version "$VERSION" --build "$BUILD" --output dist/release --notarize
+                --state-dir "build/notarization/attempt-$GITHUB_RUN_ATTEMPT")
+          if [[ -n "$SUBMISSION" ]]; then args+=(--submission "$SUBMISSION"); fi
+          scripts/ci/secrets.sh run -- scripts/ci/package-mac.sh "${args[@]}"
+      - name: Keep the pending notarization for a re-run
+        if: (failure() || cancelled()) && hashFiles('build/notarization/*/pending.json') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-notarization-${{ github.run_attempt }}
+          path: build/notarization/
+          retention-days: 7
+          if-no-files-found: ignore
+      # Signed SLSA build provenance for every file in SHA256SUMS.txt, tied to this workflow, commit, and
+      # run. `gh attestation verify <file> --repo vladzaharia/daybook` checks a download (docs/release.md).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/release/SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mac-release
           path: dist/release/
           retention-days: 30
           if-no-files-found: error
+          overwrite: true
+      # A backstop: every secret is already gone unless a step was killed.
       - name: Remove secrets
         if: always()
         run: scripts/ci/secrets.sh cleanup
@@ -283,16 +435,20 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  publish:
-    name: GitHub Release
+  # The GitHub Release starts as a draft as soon as the Mac app is packaged, and becomes public only
+  # once every app the run releases is out (`publish`). Neither job holds Apple secrets.
+  draft:
+    name: GitHub Release (draft)
     needs: [prepare, mac]
     if: needs.prepare.outputs.is_tag == 'true' && needs.mac.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # The only job that can write: it holds no Apple secrets.
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: mac-release
@@ -304,7 +460,8 @@ jobs:
       - name: Verify checksums
         working-directory: dist
         run: sha256sum -c SHA256SUMS.txt
-      - name: Create or update the release
+      # A re-run updates its own draft (stale files go), but never a published release.
+      - name: Create or update the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -312,13 +469,31 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.marketing_version }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          files=(dist/*)
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
-          else
-            flags=(--repo "$REPO" --title "Daybook $VERSION" --notes-file notes/release.md --verify-tag)
-            if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
-            gh release create "$TAG" "${files[@]}" "${flags[@]}"
-          fi
-          echo "### GitHub Release" >> "$GITHUB_STEP_SUMMARY"
-          gh release view "$TAG" --repo "$REPO" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
+          url="$(scripts/ci/github-release.sh draft --repo "$REPO" --tag "$TAG" --title "Daybook $VERSION" \
+            --notes-file notes/release.md --prerelease "$PRERELEASE" dist/*)"
+          { echo "### GitHub Release (draft)"; echo "$url"; } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish the GitHub Release
+    needs: [prepare, draft, iphone]
+    # After the draft, and after the iPhone build is on TestFlight when this run releases the iPhone
+    # app (`apps: mac` skips the iphone job, and publishing doesn't wait for it then).
+    if: >-
+      !cancelled() && needs.prepare.outputs.is_tag == 'true' && needs.draft.result == 'success' &&
+      (needs.iphone.result == 'success' || (needs.iphone.result == 'skipped' && needs.prepare.outputs.iphone != 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          url="$(scripts/ci/github-release.sh publish --repo "$REPO" --tag "$TAG")"
+          { echo "### GitHub Release"; echo "$url"; } >> "$GITHUB_STEP_SUMMARY"

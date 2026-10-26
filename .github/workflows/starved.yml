@@ -1,0 +1,150 @@
+# Runs the tests under load, nightly and on demand: the Swift package's test bundles at background
+# priority while busy loops (also at background priority) occupy every core, and the iPhone tests
+# three times each. It shows which tests depend on timing, and how much margin they have, before a
+# slow CI runner finds out. It never runs on pull requests, nothing waits for it (a release doesn't
+# call it), and it gets no secrets. docs/release.md, "CI under load".
+name: CI under load
+
+on:
+  schedule:
+    - cron: "37 7 * * *" # nightly, 07:37 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: starved-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The same Xcode as CI (ci.yml).
+  DAYBOOK_XCODE: /Applications/Xcode_27.1.app
+  NSUnbufferedIO: "YES"
+
+jobs:
+  package:
+    name: Swift package tests, starved
+    runs-on: xcode-27
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Xcode
+        run: scripts/ci/select-xcode.sh --metal
+      - name: Cache key
+        id: key
+        env:
+          PACKAGE_HASH: ${{ hashFiles('Package.resolved', 'Package.swift') }}
+        run: echo "build=swiftpm-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${PACKAGE_HASH}" >> "$GITHUB_OUTPUT"
+      # CI's cache from main; this workflow never saves one.
+      - name: Restore the SwiftPM build
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: ${{ steps.key.outputs.build }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-
+      # Built at normal priority: only the tests run starved.
+      - name: Build the package and its tests
+        run: |
+          rm -rf .build/out/Intermediates.noindex/XCBuildData
+          mkdir -p build/test-results
+          swift build --build-tests --force-resolved-versions 2>&1 | tee build/test-results/build.log
+          git diff --exit-code -- Package.resolved
+      - name: Test every bundle at background priority, with every core busy
+        run: |
+          cores="$(sysctl -n hw.ncpu)"
+          pids=()
+          for _ in $(seq "$cores"); do
+            taskpolicy -c background /bin/sh -c 'while :; do :; done' &
+            pids+=("$!")
+          done
+          trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT
+          echo "${#pids[@]} busy loops at background priority; load average $(sysctl -n vm.loadavg)"
+          status=0
+          for bundle in DaybookCoreTests DaybookDevicesTests DaybookKitTests DaybookLinkTests \
+                        DaybookIntelligenceTests DaybookCaptionsTests DaybookTests; do
+            echo "::group::$bundle"
+            if ! taskpolicy -c background swift test --skip-build --filter "^$bundle\\." 2>&1 \
+                | tee "build/test-results/$bundle.log"; then
+              echo "::error title=Failed under load::$bundle"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          echo "load average at the end $(sysctl -n vm.loadavg)"
+          exit "$status"
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: starved-package-test-logs
+          path: build/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  iphone:
+    name: iPhone tests, three iterations
+    runs-on: xcode-27
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Xcode
+        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --sdk iphonesimulator27.1
+      - name: Install XcodeGen
+        run: scripts/ci/install-xcodegen.sh
+      - name: Cache key
+        id: key
+        env:
+          PROJECT_HASH: ${{ hashFiles('Package.resolved', 'Package.swift', 'Apps/iOS/project.yml') }}
+        run: echo "build=ios-dd-${RUNNER_OS}-${DAYBOOK_XCODE_BUILD}-${PROJECT_HASH}" >> "$GITHUB_OUTPUT"
+      - name: Restore derived data
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            Apps/iOS/build/DerivedData
+            !Apps/iOS/build/DerivedData/Logs
+            !Apps/iOS/build/DerivedData/Index.noindex
+          key: ${{ steps.key.outputs.build }}
+          restore-keys: ios-dd-${{ runner.os }}-${{ env.DAYBOOK_XCODE_BUILD }}-
+      - name: Pick a simulator
+        id: simulator
+        run: |
+          udid="$(scripts/ci/pick-simulator.sh 2> "$RUNNER_TEMP/simulator.txt")"
+          cat "$RUNNER_TEMP/simulator.txt"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          xcrun simctl bootstatus "$udid" -b
+      # Every test, the timing ones included, three times in a row: a test that fails any iteration
+      # fails the job, and xcresult-retries.sh names each one that passed some iterations and not others.
+      - name: Every test, three iterations
+        env:
+          UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          mkdir -p build/test-results
+          status=0
+          scripts/build-ios.sh --test --simulator "$UDID" \
+            --test-arg -parallel-testing-enabled --test-arg NO \
+            --test-arg -test-iterations --test-arg 3 \
+            --test-arg -resultBundlePath --test-arg build/test-results/Iterations.xcresult || status=$?
+          scripts/ci/xcresult-retries.sh build/test-results/Iterations.xcresult || true
+          exit "$status"
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: starved-iphone-test-results
+          path: |
+            build/test-results/
+            Apps/iOS/build/DerivedData/Logs/
+          retention-days: 14
+          if-no-files-found: ignore

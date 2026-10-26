@@ -1,0 +1,93 @@
+{
+  "devices": [
+    {
+      "architecture": "arm64",
+      "deviceId": "00000000-0000000000000000",
+      "deviceName": "iPhone 18 Pro",
+      "modelName": "iPhone 18 Pro",
+      "osBuildNumber": "27A000",
+      "osVersion": "27.0",
+      "platform": "iOS Simulator"
+    }
+  ],
+  "testNodes": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "duration": "0.001s",
+                  "durationInSeconds": 0.0010238885879516602,
+                  "name": "testRealTimeSegmentsReachTheDiskAtEachFragmentInterval()",
+                  "nodeIdentifier": "PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "name": "failed - XCTAssertTrue failed - the encoder did not reach the disk within 30 s",
+                          "nodeType": "Failure Message",
+                          "sourceLocation": {
+                            "filePath": "/Users/runner/work/daybook/daybook/Apps/iOS/DaybookPhoneTests/PhoneRecorderTests.swift",
+                            "lineNumber": 8
+                          }
+                        }
+                      ],
+                      "duration": "0.41s",
+                      "durationInSeconds": 0.4084360599517822,
+                      "name": "First Run",
+                      "nodeIdentifier": "1",
+                      "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks",
+                      "nodeType": "Repetition",
+                      "result": "Failed"
+                    },
+                    {
+                      "duration": "0.00059s",
+                      "durationInSeconds": 0.000594019889831543,
+                      "name": "Retry 1",
+                      "nodeIdentifier": "2",
+                      "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks",
+                      "nodeType": "Repetition",
+                      "result": "Passed"
+                    }
+                  ],
+                  "details": "⚠️ Passed after 1 retry",
+                  "duration": "0.2s",
+                  "durationInSeconds": 0.20451503992080688,
+                  "name": "testCrashRecoveryProducesAudioNotesAndBookmarks()",
+                  "nodeIdentifier": "PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "PhoneRecorderTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/DaybookPhoneTests/PhoneRecorderTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            }
+          ],
+          "name": "PhoneRecorderTests",
+          "nodeIdentifierURL": "test://com.apple.xcode/DaybookPhone/PhoneRecorderTests",
+          "nodeType": "Unit test bundle",
+          "result": "Passed"
+        }
+      ],
+      "name": "DaybookPhone",
+      "nodeType": "Test Plan",
+      "result": "Passed"
+    }
+  ],
+  "testPlanConfigurations": [
+    {
+      "configurationId": "1",
+      "configurationName": "Test Scheme Action"
+    }
+  ]
+}

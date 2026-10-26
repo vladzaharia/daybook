@@ -6,7 +6,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml validates the release commit with this workflow, building the Mac app in Release, as
+  # the release does.
   workflow_call:
+    inputs:
+      mac_configuration:
+        description: Mac app configuration (Debug or Release)
+        type: string
+        default: Debug
   workflow_dispatch:
     inputs:
       mac_configuration:
@@ -23,7 +30,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # github.workflow is "Release" when release.yml calls this workflow, so a push to main never queues
+  # behind, or replaces, a release's validation of the same ref.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   # Superseded pull request pushes stop; main keeps every run so its caches are saved.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -64,7 +73,7 @@ jobs:
         # Also runs shellcheck (preinstalled) on every `run:` script.
         run: actionlint
       - name: shellcheck
-        run: shellcheck scripts/build-ios.sh scripts/ci/*.sh scripts/ci/tests/*.sh
+        run: shellcheck scripts/*.sh scripts/ci/*.sh scripts/ci/tests/*.sh
       - name: Release helper tests
         run: scripts/ci/tests/run-tests.sh
 
@@ -74,6 +83,8 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+    outputs:
+      cache_key: ${{ steps.key.outputs.build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,7 +114,9 @@ jobs:
           # and only the Metal shader steps re-run.
           rm -rf .build/out/Intermediates.noindex/XCBuildData
           mkdir -p build/test-results
-          swift build --build-tests 2>&1 | tee build/test-results/build.log
+          # Only the versions Package.resolved pins; fail if resolution would change the file.
+          swift build --build-tests --force-resolved-versions 2>&1 | tee build/test-results/build.log
+          git diff --exit-code -- Package.resolved
       - name: Save the SwiftPM build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -153,6 +166,8 @@ jobs:
     timeout-minutes: 75
     permissions:
       contents: read
+    outputs:
+      cache_key: ${{ steps.key.outputs.build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -195,18 +210,25 @@ jobs:
           scripts/build-ios.sh --test --simulator "$UDID" \
             --test-arg -parallel-testing-enabled --test-arg NO \
             --test-arg -skip-testing:DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks \
+            --test-arg -skip-testing:DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval \
             --test-arg -resultBundlePath --test-arg build/test-results/DaybookPhoneTests.xcresult
-      # Waits up to 30 s for the encoder's utility queue to reach the disk, which a starved VM can
-      # miss. Alone, after the other tests, with one retry (xcodebuild reruns only a failed test).
-      - name: Crash-recovery timing test (alone, one retry)
+      # Both wait for the encoder's utility queue to reach the disk (crash recovery up to 30 s, the
+      # fragment test at each fragment interval), which a starved VM can miss. Alone, after the other
+      # tests, with one retry (xcodebuild reruns only a failed test). xcodebuild calls a pass on the
+      # retry a pass, so xcresult-retries.sh reads the result bundle and leaves a warning for it.
+      - name: Encoder timing tests (alone, one retry)
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
         env:
           UDID: ${{ steps.simulator.outputs.udid }}
         run: |
+          status=0
           scripts/build-ios.sh --test --simulator "$UDID" \
             --test-arg -only-testing:DaybookPhoneTests/PhoneRecorderTests/testCrashRecoveryProducesAudioNotesAndBookmarks \
+            --test-arg -only-testing:DaybookPhoneTests/PhoneRecorderTests/testRealTimeSegmentsReachTheDiskAtEachFragmentInterval \
             --test-arg -retry-tests-on-failure --test-arg -test-iterations --test-arg 2 \
-            --test-arg -resultBundlePath --test-arg build/test-results/CrashRecovery.xcresult
+            --test-arg -resultBundlePath --test-arg build/test-results/EncoderTiming.xcresult || status=$?
+          scripts/ci/xcresult-retries.sh build/test-results/EncoderTiming.xcresult || true
+          exit "$status"
       - name: Save derived data
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true' && steps.test.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -242,14 +264,26 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+    outputs:
+      cache_key: ${{ steps.key.outputs.build }}
     env:
       CONFIGURATION: ${{ inputs.mac_configuration || 'Debug' }}
     steps:
+      - name: Check the configuration
+        run: |
+          case "$CONFIGURATION" in
+            Debug|Release) ;;
+            *) echo "::error::mac_configuration is Debug or Release, not $CONFIGURATION"; exit 1 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --metal
+      # The release helpers' tests again, on macOS, where every group runs: CryptoKit's JWT check, the
+      # archive checks, the upload retry, the build scripts, and the keychain (the lint job is Linux).
+      - name: Release helper tests (macOS, every group)
+        run: scripts/ci/tests/run-tests.sh --require-all
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key
@@ -302,3 +336,29 @@ jobs:
           path: build/macOS/DerivedData/Logs/
           retention-days: 14
           if-no-files-found: ignore
+
+  # After a push to main has saved its caches, the older caches of the same families (superseded
+  # Package.resolved, Package.swift, or project hashes) go, so they don't crowd the 10 GB quota. A
+  # family whose new cache wasn't saved is left alone. The only job that can write to Actions; it
+  # builds nothing and runs only scripts/ci/prune-caches.sh.
+  caches:
+    name: Prune superseded caches
+    needs: [package, iphone, mac]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Delete older caches of this run's families
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEYS: ${{ needs.package.outputs.cache_key }} ${{ needs.iphone.outputs.cache_key }} ${{ needs.mac.outputs.cache_key }}
+        run: |
+          read -r -a keys <<< "$KEYS"
+          scripts/ci/prune-caches.sh --repo "$REPO" --ref refs/heads/main ${keys[@]+"${keys[@]}"}

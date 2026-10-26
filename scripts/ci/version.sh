@@ -8,9 +8,14 @@
 #   marketing_version  X.Y.Z, from the tag vX.Y.Z (or --version on a branch). MARKETING_VERSION, which
 #                      becomes CFBundleShortVersionString in both apps and the widget extension.
 #   build_number       offset + run number, e.g. 1057. CURRENT_PROJECT_VERSION, which becomes
-#                      CFBundleVersion. A re-run (attempt 2, 3, ...) appends .attempt (1057.2), which
-#                      still sorts above 1057 and below 1058, so a re-run never collides with a build
-#                      App Store Connect already has.
+#                      CFBundleVersion. Attempt 2, 3, ... of a run appends .attempt (1057.2), which still
+#                      sorts above 1057 and below 1058, so a re-run never collides with a build App
+#                      Store Connect already has. release.yml's iphone and mac jobs run this script
+#                      themselves with their own github.run_attempt: "Re-run failed jobs" doesn't re-run
+#                      `prepare`, so a number worked out there would repeat attempt 1's.
+#   build_base         offset + run number, without the attempt
+#   build_candidates   every number this run has used up to this attempt, oldest first
+#                      ("1057 1057.2 1057.3"): what an earlier attempt may already have uploaded
 #   tag                the tag name (vX.Y.Z[-suffix]) or empty on a branch
 #   is_tag             true or false
 #   prerelease         true when the tag has a suffix (v1.4.0-rc.1); the GitHub Release is marked so
@@ -57,6 +62,7 @@ is_count "$run_attempt" || fail "--run-attempt must be a positive integer, got '
 [[ "$offset" =~ ^(0|[1-9][0-9]*)$ ]] || fail "--offset must be a non-negative integer, got '${offset}'"
 # Keep the arithmetic well inside 32 bits on any shell.
 (( ${#run_number} <= 9 && ${#offset} <= 9 )) || fail "run number or offset is too large"
+(( run_attempt <= 100 )) || fail "--run-attempt is too large"
 
 tag=""
 is_tag=false
@@ -84,13 +90,18 @@ case "$ref" in
         ;;
 esac
 
-build=$(( offset + run_number ))
-if (( run_attempt > 1 )); then
-    build="${build}.${run_attempt}"
-fi
+base=$(( offset + run_number ))
+build="$base"
+candidates="$base"
+for (( attempt = 2; attempt <= run_attempt; attempt++ )); do
+    build="${base}.${attempt}"
+    candidates+=" $build"
+done
 
 echo "marketing_version=$version"
 echo "build_number=$build"
+echo "build_base=$base"
+echo "build_candidates=$candidates"
 echo "tag=$tag"
 echo "is_tag=$is_tag"
 echo "prerelease=$prerelease"

@@ -140,7 +140,7 @@ The profile stores credentials in Keychain; do not put passwords or API secrets 
 
 GitHub Actions builds every push to `main` and every pull request (`.github/workflows/ci.yml`) on GitHub's Xcode 27 runner (`xcode-27`, Xcode 27.1). It runs the package tests, builds and tests the iPhone app on a simulator, and builds the Mac app ad hoc.
 
-Pushing a `vX.Y.Z` tag starts `.github/workflows/release.yml`. After approval in the `release` environment, the iPhone app goes to TestFlight and the Mac app is signed with Developer ID, notarized, and attached to a GitHub Release with SHA-256 checksums. Both are signed by Xcode's cloud-managed signing with an App Store Connect API key. A Developer ID `.p12` is an optional fallback for the Mac app.
+Pushing a `vX.Y.Z` tag on a commit that's on `main` starts `.github/workflows/release.yml`. After approval in the `release` environment, the iPhone app goes to TestFlight and the Mac app is signed with Developer ID, notarized, and attached to a draft GitHub Release with SHA-256 checksums and signed build provenance; the release is published once both apps are out. Both are signed by Xcode's cloud-managed signing with an App Store Connect API key. A Developer ID `.p12` is an optional fallback for the Mac app.
 
 ```sh
 git tag -a v1.4.0 -m "Daybook 1.4.0" && git push origin v1.4.0
