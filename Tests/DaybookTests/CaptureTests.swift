@@ -1,4 +1,5 @@
 import AVFoundation
+import DaybookTestSupport
 import XCTest
 @testable import Daybook
 
@@ -250,7 +251,7 @@ final class PCMTrackWriterTests: XCTestCase {
         writer.append(audio(), hostTimeSeconds: 50)
         writer.append(audio(), hostTimeSeconds: 49)
         let outcome = await writer.finish()
-        await fulfillment(of: [failure], timeout: 2)
+        await fulfillment(of: [failure], timeout: TestTiming.scaled(2))
         XCTAssertNotNil(outcome.error)
         XCTAssertEqual(outcome.track?.frameCount, 4_800)
     }
