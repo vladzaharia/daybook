@@ -161,6 +161,99 @@ final class MultipointRecordingTests: XCTestCase {
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .attached)
     }
 
+    func testARecorderFoundRecordingOnlyOnceItsListArrivesIsLinkedNotStarted() async throws {
+        // The person pressed record on it before this Mac connected; its status and list come a
+        // moment after the connection, as a real recorder's do.
+        let recorder = FakeRecorder()
+        recorder.listingDelay = .milliseconds(300)
+        let started = Date().addingTimeInterval(-120).rounded
+        recorder.recordingUnseen(since: started)
+        let (rig, _) = try await setUp(recorder)
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        let link = try XCTUnwrap(rig.meeting(id)?.companions?.first)
+        XCTAssertEqual(link.state, .alreadyRecording, "decided from its list, not before it arrived")
+        XCTAssertEqual(link.recordingID, String(UInt32(started.timeIntervalSince1970)))
+        XCTAssertEqual(link.recorderStartedAt, started)
+        XCTAssertEqual(recorder.commands, ["connect"], "never told to start")
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(recorder.commands, ["connect"], "nor to stop: Daybook didn't start it")
+    }
+
+    func testStoppingLeavesARecordingThePersonStartedSinceAlone() async throws {
+        let recorder = FakeRecorder()
+        let (rig, _) = try await setUp(recorder)
+        recorder.audio = try rig.audio("first.wav", frequency: 587)
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        let link = try XCTUnwrap(rig.meeting(id)?.companions?.first)
+        XCTAssertEqual(link.state, .recording)
+        // On the recorder, the person stops it and starts a recording of their own.
+        recorder.personStartsAnother(at: Date().addingTimeInterval(1).rounded)
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertFalse(recorder.commands.contains("pause"), "their recording isn't Daybook's to stop")
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
+        try await rig.waitUntil("Daybook's recording to join") { rig.meeting(id)?.tracks.count == 1 }
+        XCTAssertEqual(recorder.transfers, [link.recordingID!])
+    }
+
+    func testARecorderThatStartedAfterDaybookGaveUpIsStoppedWithTheMac() async throws {
+        let recorder = FakeRecorder()
+        recorder.confirmsLate = true
+        let (rig, _) = try await setUp(recorder)
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .failed)
+        try await rig.waitUntil("it starts after all") { recorder.status?.isRecording == true && !recorder.recordCommandPending }
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(recorder.commands, ["connect", "start", "pause"], "it started after all, from Daybook's command: stopped like one that confirmed")
+        let link = try XCTUnwrap(rig.meeting(id)?.companions?.first)
+        XCTAssertEqual(link.state, .stopped)
+        XCTAssertTrue(link.startedByDaybook)
+        XCTAssertNotNil(link.recordingID)
+    }
+
+    func testARecorderOutOfReachAtStopIsReportedQuietlyAndItsRecordingStillJoins() async throws {
+        let recorder = FakeRecorder()
+        let (rig, _) = try await setUp(recorder)
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        let link = try XCTUnwrap(rig.meeting(id)?.companions?.first)
+        recorder.disconnect()
+        recorder.reachable = false
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopFailed)
+        XCTAssertEqual(rig.state.sources.recorders.status, "Couldn’t reach Soundcore Work to stop it. Stop it on the recorder.")
+        XCTAssertNil(rig.state.recordingID, "the Mac recording finished")
+        XCTAssertNil(rig.state.errorMessage)
+        XCTAssertNil(rig.meeting(id)?.errorMessage)
+        // Stopped by hand and imported later, its recording still joins this conversation.
+        let file = try rig.audio("later-stop.wav", frequency: 698)
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: "FAKE1", recordingID: try XCTUnwrap(link.recordingID))
+        let joined = try await rig.state.importFromDevice(file, identity: identity, attachTo: nil, source: .soundcore)
+        XCTAssertEqual(joined, id)
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .attached)
+    }
+
+    func testARecorderThatDoesntConfirmItsStopIsReportedQuietly() async throws {
+        let recorder = FakeRecorder()
+        let (rig, _) = try await setUp(recorder)
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        recorder.confirms = false
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(recorder.commands, ["connect", "start", "pause"])
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopFailed)
+        XCTAssertEqual(rig.state.sources.recorders.status, "Soundcore Work didn’t confirm it stopped. Stop it on the recorder.")
+        XCTAssertNil(rig.state.recordingID, "the Mac recording finished")
+        XCTAssertNil(rig.state.errorMessage)
+    }
+
     /// The real Soundcore connection against the simulated recorder: Start, Pause, the finished
     /// recording's transfer, and its arrival in the conversation this Mac recorded.
     func testSimulatedSoundcoreWorkRecordsAlongsideAndItsRecordingJoins() async throws {

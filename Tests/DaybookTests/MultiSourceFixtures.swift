@@ -31,11 +31,19 @@ final class FakeRecorder: ObservableObject, RecordControlConnection, ManagedConn
     var reachable = true
     /// Confirms Start and Pause.
     var confirms = true
+    /// Confirms Start, but only after Daybook stopped waiting for it.
+    var confirmsLate = false
+    /// How long after connecting its status and list arrive, as a real recorder's do.
+    var listingDelay: Duration = .zero
     /// Audio handed over for any recording.
     var audio: URL?
     private(set) var commands: [String] = []
     private(set) var transfers: [String] = []
     private var current: UInt32?
+    /// Recording by hand while not connected: Daybook learns it from the list after connecting.
+    private var unseenSince: Date?
+    /// A list the recorder holds that Daybook reads on its next refresh.
+    private var unread: [DeviceRecording]?
 
     func activate() {}
     func connect() {
@@ -44,12 +52,50 @@ final class FakeRecorder: ObservableObject, RecordControlConnection, ManagedConn
         Task {
             try? await Task.sleep(for: .milliseconds(30))
             state = reachable ? .connected : .notConnected
-            if reachable, status == nil { status = DeviceStatus(isRecording: false, serial: "FAKE1", updatedAt: Date()) }
+            onChange?()
+            guard reachable else { return }
+            if listingDelay > .zero { try? await Task.sleep(for: listingDelay) }
+            if let start = unseenSince {
+                unseenSince = nil
+                alreadyRecording(since: start)
+            } else if status == nil {
+                status = DeviceStatus(isRecording: false, serial: "FAKE1", updatedAt: Date())
+            }
+            inventoryUpdatedAt = Date()
             onChange?()
         }
     }
     func disconnect() { state = .notConnected; onChange?() }
-    func refresh() {}
+    func refresh() {
+        guard state.isConnected else { return }
+        isRefreshing = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(30))
+            if let unread { recordings = unread; self.unread = nil }
+            inventoryUpdatedAt = Date()
+            isRefreshing = false
+            onChange?()
+        }
+    }
+
+    /// Recording when Daybook connects (the person pressed the button), seen only once its list arrives.
+    func recordingUnseen(since start: Date) { unseenSince = start }
+
+    /// The person stopped the recording Daybook started and pressed record again: its status says so at
+    /// once; its list, on the next read.
+    func personStartsAnother(at start: Date) {
+        guard let old = current else { return }
+        current = UInt32(start.timeIntervalSince1970)
+        status = DeviceStatus(isRecording: true, recordingStartedAt: start, serial: "FAKE1", updatedAt: Date())
+        var listed = recordings
+        if let index = listed.firstIndex(where: { $0.id == String(old) }) {
+            listed[index].isInProgress = false
+            listed[index].length = .exact(1)
+            listed[index].byteCount = 8_000
+        }
+        listed.insert(DeviceRecording(id: String(current!), startedAt: start, isInProgress: true), at: 0)
+        unread = listed
+    }
     func dismissProblem() { problem = nil }
     func forget() { isSetUp = false }
 
@@ -65,7 +111,7 @@ final class FakeRecorder: ObservableObject, RecordControlConnection, ManagedConn
         guard state.isConnected, !recordCommandPending else { return }
         recordCommandPending = true
         Task {
-            try? await Task.sleep(for: .milliseconds(30))
+            try? await Task.sleep(for: confirmsLate ? .seconds(2.5) : .milliseconds(30))
             if confirms {
                 let start = Date()
                 current = UInt32(start.timeIntervalSince1970)
@@ -185,7 +231,8 @@ struct MultiSourceRig {
         state.sources.alignAudio = { _, _, _, _ in nil }
         // Synthetic recordings last a second or two; real ones overlap by minutes.
         state.sources.policy.minimumOverlap = 0.25
-        state.sources.recorders.timing = .init(connect: .seconds(2), confirm: .seconds(2), listing: .seconds(2), poll: .milliseconds(10))
+        state.sources.recorders.timing = .init(connect: .seconds(2), confirm: .seconds(2), listing: .seconds(2), poll: .milliseconds(10),
+                                               inventory: .seconds(1))
         if models {
             state.installedModels = [state.transcriptionModel, state.summaryModel, state.processingPreferences.speakerModelID]
         }

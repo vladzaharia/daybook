@@ -145,6 +145,8 @@ final class CompanionRecorders: ObservableObject {
         var poll: Duration = .milliseconds(100)
         /// How long a device that answers (Daybook on iPhone) is asked again when its answer doesn't come.
         var answer: Duration = .seconds(45)
+        /// How long to wait for a recorder's list, read on a new connection, before deciding from it.
+        var inventory: Duration = .seconds(5)
     }
 
     /// One line for the recording surfaces: "Also recording on Soundcore Work."
@@ -324,11 +326,15 @@ final class CompanionRecorders: ObservableObject {
             return
         }
         status = "Connecting to \(name)…"
+        let asked = Date(), wasConnected = control.state.isConnected
         guard await connected(control), !stopRequested.contains(meetingID) else {
             update(meetingID, link.id) { $0.state = .unavailable }
             status = stopRequested.contains(meetingID) ? nil : "\(name) isn’t nearby. Recording on this Mac only."
             return
         }
+        // Whether it's recording already, and what, comes with its list, after the connection: decide
+        // nothing before (bounded).
+        if !wasConnected { _ = await wait(timing.inventory) { Self.hasCurrentListing(control, since: asked) } }
         if control.status?.isRecording == true {
             update(meetingID, link.id) {
                 $0.state = .alreadyRecording
@@ -361,12 +367,17 @@ final class CompanionRecorders: ObservableObject {
         let name = link.deviceName
         update(meetingID, link.id) { $0.state = .stopping }
         status = "Stopping \(name)…"
+        let asked = Date()
         guard await connected(control) else {
             update(meetingID, link.id) { $0.state = .stopFailed }
             status = "Couldn’t reach \(name) to stop it. Stop it on the recorder."
             return
         }
-        if control.status?.isRecording == true {
+        // Pause only the recording Daybook started: since then the person may have stopped it and
+        // started another. Its list says which, once read on this connection (bounded).
+        control.refresh()
+        let current = await wait(timing.inventory) { Self.hasCurrentListing(control, since: asked) }
+        if control.status?.isRecording == true, Self.isRecording(link, control, listingIsCurrent: current) {
             control.pauseRecording()
             guard await wait(timing.confirm, until: { control.status?.isRecording == false && !control.recordCommandPending }) else {
                 update(meetingID, link.id) { $0.state = .stopFailed }
@@ -489,6 +500,22 @@ final class CompanionRecorders: ObservableObject {
     /// The recorder's ID for the recording it's making now, from its list.
     static func inProgressID(_ control: any DeviceConnection) -> String? {
         control.recordings.first(where: \.isInProgress)?.id
+    }
+
+    /// Whether the recorder's list was read on this connection (after `since`), so what it says is in
+    /// progress is so now. The hardware integration's `isInventoryCurrent` says the same.
+    static func hasCurrentListing(_ control: any DeviceConnection, since: Date) -> Bool {
+        !control.isRefreshing && (control.inventoryUpdatedAt.map { $0 >= since } ?? false)
+    }
+
+    /// Whether what the recorder is recording now is the link's recording: by its ID in a current
+    /// list, else by its start; with nothing to compare, as before (it is).
+    static func isRecording(_ link: CompanionRecording, _ control: any DeviceConnection, listingIsCurrent: Bool) -> Bool {
+        if listingIsCurrent, let id = link.recordingID { return inProgressID(control) == id }
+        if let started = control.status?.recordingStartedAt, let ours = link.recorderStartedAt {
+            return abs(started.timeIntervalSince(ours)) <= 5
+        }
+        return link.recordingID.map { id in inProgressID(control).map { $0 == id } ?? true } ?? true
     }
 
     private static func serial(_ session: DeviceSession, _ control: any DeviceConnection) -> String? {
