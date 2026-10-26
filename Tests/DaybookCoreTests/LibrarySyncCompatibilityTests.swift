@@ -213,4 +213,25 @@ final class LibrarySyncCompatibilityTests: XCTestCase {
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: remote.appendingPathComponent("daybook-sync.json"))) as? [String: Any])
         XCTAssertEqual((manifest["supersedes"] as? [String])?.count, 1)
     }
+
+    func testAJournalFileStillSettlingIsReadAgainOnTheNextPass() async throws {
+        let a = try engine("A"), b = try engine("B")
+        try await pass(a, "A", [Meeting(title: "First")])
+        try await pass(b, "B")
+        // An entry whose bytes don't match its name yet (iCloud still writing it) is retried, not set aside.
+        let meeting = Meeting(title: "Arriving")
+        let event: [String: Any] = ["schemaVersion": 1, "meetingID": meeting.id.uuidString, "deviceID": "A", "sequence": 9,
+                                    "parents": [String](), "snapshot": try object(meeting), "deleted": false, "assets": [Any]()]
+        let bytes = try JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+        let name = SyncDigest.sha256(data: bytes)
+        let url = remote.appendingPathComponent("Events/\(name).json")
+        try Data(bytes.prefix(bytes.count / 2)).write(to: url)
+        let partial = try await pass(b, "B")
+        XCTAssertGreaterThan(partial.pendingDownloads, 0)
+        XCTAssertFalse(partial.meetings.contains { $0.id == meeting.id })
+        try bytes.write(to: url)
+        let complete = try await pass(b, "B")
+        XCTAssertTrue(complete.meetings.contains { $0.id == meeting.id }, "read again without relaunching")
+        XCTAssertEqual(complete.pendingDownloads, 0)
+    }
 }

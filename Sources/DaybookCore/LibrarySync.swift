@@ -170,7 +170,8 @@ public actor LibrarySyncEngine {
                 events[hash] = header; eventCache[hash] = header
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
             catch let error as CancellationError { throw error }
-            catch { warnings.append(markUnreadable(name, error)); unreadJournalFiles += 1 }
+            catch where Self.isPermanent(error) { warnings.append(markUnreadable(name, error)); unreadJournalFiles += 1 }
+            catch { warnings.append(error.localizedDescription); pendingDownloads += 1; unreadJournalFiles += 1 }
         }
         let metadataRead = try readMetadata(metadataURLs, budget: &budget, warnings: &warnings)
         metadata = metadataRead.records
@@ -415,7 +416,8 @@ public actor LibrarySyncEngine {
                 metadata[hash] = record; metadataCache[hash] = record
             } catch is SyncPendingDownload { downloading += 1; incomplete = true }
             catch let error as CancellationError { throw error }
-            catch { warnings.append(markUnreadable(name, error)) }
+            catch where Self.isPermanent(error) { warnings.append(markUnreadable(name, error)) }
+            catch { warnings.append(error.localizedDescription); downloading += 1; incomplete = true }
         }
         return (metadata, incomplete, downloading)
     }
@@ -778,6 +780,13 @@ public actor LibrarySyncEngine {
     }
     /// Remembers an entry that can't be read, so later passes neither read it again nor wait for it: its content
     /// never changes. A newer Daybook's entries say so; anything else says it couldn't be read.
+    /// A failure that reading the same bytes again would repeat: a newer format, a shape that doesn't decode, a
+    /// snapshot that doesn't validate. Bytes that don't match their name (a file still settling) and file errors
+    /// are retried every pass.
+    static func isPermanent(_ error: Error) -> Bool {
+        if error is SyncHashMismatch { return false }
+        return error is DecodingError || error is LibrarySyncError || error is LibraryError
+    }
     private func markUnreadable(_ name: String, _ error: Error) -> String {
         let reason: String
         switch error {
@@ -789,7 +798,8 @@ public actor LibrarySyncEngine {
     }
     private func eventHash(_ url: URL, bytes: Data) throws -> String {
         let expected = url.deletingPathExtension().lastPathComponent
-        guard SyncFiles.isHash(expected), SyncDigest.sha256(data: bytes) == expected else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
+        guard SyncFiles.isHash(expected) else { throw LibrarySyncError.invalidEvent(url.lastPathComponent) }
+        guard SyncDigest.sha256(data: bytes) == expected else { throw SyncHashMismatch(name: url.lastPathComponent) }
         return expected
     }
     private func writeRecord<T: Encodable>(_ record: T, directory: String) throws -> String {
@@ -1202,6 +1212,11 @@ private struct SyncPendingApply: Codable {
 struct VerifiedAsset: Codable, Equatable { var digest: String; var size: UInt64; var modified: Date; var inode: UInt64 }
 struct SyncPendingDownload: LocalizedError {
     var errorDescription: String? { "Waiting for iCloud to download a change." }
+}
+/// A journal file whose bytes don't match its name: damaged, or still settling. Read again next pass.
+struct SyncHashMismatch: LocalizedError {
+    var name: String
+    var errorDescription: String? { LibrarySyncError.invalidEvent(name).errorDescription }
 }
 /// Work left for a later pass because this one reached its `SyncPassLimits`. Never surfaced as a warning.
 struct SyncDeferredWork: Error {}
