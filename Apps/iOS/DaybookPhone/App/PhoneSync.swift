@@ -298,7 +298,8 @@ final class PhoneSync {
         case .unavailable(let reason): return reason
         case .connected:
             if isSyncing { return changesInFlight > 0 ? "Syncing \(Self.changes(changesInFlight))" : "Syncing…" }
-            if let lastError { return "Sync paused: \(lastError)" }
+            // The reason is the system's words; Settings shows it behind Details.
+            if lastError != nil { return "Sync paused" }
             if pendingUploads > 0 { return "Uploading \(pendingUploads) \(pendingUploads == 1 ? "item" : "items") to iCloud" }
             if let line = courierLine() { return line }
             if hasMoreWork { return "Syncing… more to come" }

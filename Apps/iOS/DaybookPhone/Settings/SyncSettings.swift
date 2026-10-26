@@ -6,6 +6,7 @@ import UIKit
 struct SyncSection: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.openURL) private var openURL
+    @State private var showingDetails = false
 
     var body: some View {
         let sync = model.sync
@@ -26,6 +27,9 @@ struct SyncSection: View {
                 .accessibilityElement(children: .combine)
             }
             if sync.isConnected {
+                if sync.lastError != nil {
+                    Button("Details") { showingDetails = true }
+                }
                 Button {
                     Task { await model.sync.synchronize(.manual) }
                 } label: {
@@ -46,6 +50,7 @@ struct SyncSection: View {
         } footer: {
             if let footer { Text(footer) }
         }
+        .sheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: model.sync.lastError ?? "") }
     }
 
     private var devicesSummary: String {

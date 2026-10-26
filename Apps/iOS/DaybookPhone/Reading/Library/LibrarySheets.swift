@@ -5,8 +5,8 @@ import SwiftUI
 struct TrashList: View {
     @ObservedObject var library: LibraryController
     let rootURL: URL
+    @Environment(ReadingSession.self) private var session
     @State private var trashed: [Meeting] = []
-    @State private var restoreError: String?
 
     var body: some View {
         List {
@@ -45,9 +45,7 @@ struct TrashList: View {
             }
         }
         .task(id: library.meetings.map(\.id)) { reload() }
-        .alert("Couldn’t Restore", isPresented: Binding(get: { restoreError != nil }, set: { if !$0 { restoreError = nil } })) {
-            Button("OK", role: .cancel) { }
-        } message: { Text(restoreError ?? "") }
+
     }
 
     private func reload() {
@@ -60,7 +58,7 @@ struct TrashList: View {
                 try await library.restoreFromTrash(id)
                 reload()
             } catch {
-                restoreError = error.localizedDescription
+                session.alert = ReadingAlert(title: "Couldn’t Restore", error: error, fallback: "Try again.")
             }
         }
     }

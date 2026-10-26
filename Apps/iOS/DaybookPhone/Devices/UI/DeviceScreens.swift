@@ -495,7 +495,7 @@ private struct SetupScreen: View {
                         try files.watch(url)
                         done(session.id)
                     } catch {
-                        folderError = error.localizedDescription
+                        folderError = "Daybook can’t read that folder. Choose another one."
                     }
                 }
             }
