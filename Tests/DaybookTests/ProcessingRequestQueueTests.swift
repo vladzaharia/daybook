@@ -10,6 +10,30 @@ import XCTest
 /// temporary libraries, and a temporary sync folder; no models, no microphone.
 @MainActor
 final class ProcessingRequestQueueTests: XCTestCase {
+    func testBackgroundPhotosFinishBeforeAQueuedSummaryStarts() async throws {
+        let rig = try await MultiSourceRig.make()
+        let audio = try rig.audio("photo-queue.wav", frequency: 440)
+        try rig.inference.script(audio, [(0, "Plan the launch.")])
+        let id = try await rig.macConversation("Planning", at: Date(), seconds: 5, audio: audio)
+        let bytes = try XCTUnwrap(PhotoDemo.jpeg(PhotoDemo.board(["LAUNCH PLAN"])))
+        await rig.state.library.acquireLock()
+        let photo = try await rig.state.library.addPhoto(data: bytes, to: id)
+        rig.state.library.releaseLock()
+        rig.inference.blockPhotos(true)
+        rig.state.readPhotosWhenIdle(id)
+        try await rig.waitUntil("photo reading") { rig.inference.readingPhotos }
+        rig.state.enqueue(id)
+        XCTAssertNil(rig.state.processingID)
+        XCTAssertEqual(rig.state.queuedIDs, [id])
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+        rig.inference.blockPhotos(false)
+        try await rig.waitUntil("photo reading to finish") { rig.state.readingPhotoID == nil }
+        try await rig.processed()
+        XCTAssertNotNil(rig.meeting(id)?.photo(photo.id)?.analysis)
+        XCTAssertEqual(rig.inference.summarized.count, 1)
+        XCTAssertEqual(rig.meeting(id)?.status, .ready, rig.meeting(id)?.errorMessage ?? "")
+        await rig.tearDown()
+    }
     private func rig(models: Bool = true) async throws -> MultiSourceRig {
         let rig = try await MultiSourceRig.make(models: models)
         rig.state.requestTiming = RequestTiming(lease: 600, renewInterval: .milliseconds(40))

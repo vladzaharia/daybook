@@ -41,6 +41,6 @@ extension AppState {
         return ProcessingJob(meetingID: meetingID, mode: mode, transcriptionModelID: route.transcription.model, summaryModelID: summaryModel,
                              detectSpeakers: detectSpeakers, preferences: preferences, templateID: templateID,
                              revisions: frozenModelRevisions, voiceEmbeddingModelID: route.voiceEmbedder,
-                             languageFallbackModelID: route.transcription.fallback, smallTasksModelID: smallTasksModel)
+                             languageFallbackModelID: route.transcription.fallback, smallTasksModelID: smallTasksModel, photoModelID: photoModel?.id)
     }
 }

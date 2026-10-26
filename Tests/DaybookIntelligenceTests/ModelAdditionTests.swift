@@ -38,7 +38,7 @@ final class ModelAdditionTests: XCTestCase {
         XCTAssertEqual(added.latestRevision?.id, "c0ffee")
         XCTAssertEqual(added.latestRevision?.artifacts.first?.files.map(\.path),
                        ["config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json"])
-        XCTAssertEqual(added.variant.minimumEngineVersion, 2, "Entries record the engine version that checked them")
+        XCTAssertEqual(added.variant.minimumEngineVersion, 3, "Entries record the engine version that checked them")
         XCTAssertEqual(added.capabilities.structuredOutput, true, "Guided generation works with any MLX model")
 
         // Persisted in the person's manifest and read back by the next launch.

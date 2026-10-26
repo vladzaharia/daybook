@@ -91,11 +91,14 @@ public struct SummaryRequest: Sendable {
     public var highlightEvidence: String?
     /// What the summary records as its model: the variant key.
     public var modelID: String
+    /// Photos the summary may place under its sections (`PhotoPlacement.candidates`).
+    public var photos: [PhotoEvidence]
 
     public init(transcript: String, notes: String, template: MeetingKind = .auto, glossary: [String] = [],
-                templateInstructions: String? = nil, highlightEvidence: String? = nil, modelID: String) {
+                templateInstructions: String? = nil, highlightEvidence: String? = nil, modelID: String, photos: [PhotoEvidence] = []) {
         self.transcript = transcript; self.notes = notes; self.template = template; self.glossary = glossary
         self.templateInstructions = templateInstructions; self.highlightEvidence = highlightEvidence; self.modelID = modelID
+        self.photos = photos
     }
 }
 
@@ -117,7 +120,8 @@ public struct ModelEngineRegistry: Sendable {
             MLXLanguageEngine(),
             ParakeetEngine(),
             NemotronDiarizerEngine(),
-            AppleFoundationModelsEngine()
+            AppleFoundationModelsEngine(),
+            AppleVisionEngine()
         ])
     }
 

@@ -79,6 +79,7 @@ struct ConversationMoreMenu: View {
     @Environment(ReadingSession.self) private var session
 
     var body: some View {
+        Button { session.sheet = .importPhotos(meeting.id) } label: { Label("Add Photos…", systemImage: "photo.badge.plus") }
         ExportMenu(meeting: meeting)
         if meeting.summary != nil {
             Button { UIPasteboard.general.string = MeetingExport.summaryMarkdown(meeting) } label: {
@@ -150,8 +151,15 @@ struct ExportMenu: View {
     }
 
     private func shareMarkdown() {
-        do { session.sheet = .share([try ExportFiles.markdown(meeting)]) }
-        catch { session.alert = "The Markdown couldn’t be prepared: \(error.localizedDescription)" }
+        Task {
+            do {
+                var originals: [UUID: URL] = [:]
+                for photo in meeting.visiblePhotos { originals[photo.id] = try await provider.localPhoto(for: photo, in: meeting.id) }
+                let files = originals
+                let url = try await Task.detached { try ExportFiles.markdownWithPhotos(meeting, originals: files) }.value
+                session.sheet = .share([url])
+            } catch { session.alert = "The Markdown couldn’t be prepared: \(error.localizedDescription)" }
+        }
     }
 
     private func shareAudio() {

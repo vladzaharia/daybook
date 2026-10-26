@@ -53,6 +53,14 @@ public enum MeetingMerge {
         result.transcripts = items("transcript-run", local.transcripts, remote.transcripts, base?.transcripts ?? [])
         result.speakers = items("speaker", local.speakers, remote.speakers, base?.speakers ?? [])
         result.highlights = items("highlight", local.highlights, remote.highlights, base?.highlights ?? [])
+        // Photos are originals: every copy's survive, merged field by field (Photos.swift).
+        if local.photos != nil || remote.photos != nil {
+            result.photos = MeetingPhoto.mergedList(base: base?.photos ?? [], local: local.photos ?? [], remote: remote.photos ?? []) { field, smaller, larger in
+                let id = SyncEncoding.uuid("\(local.id):\(field):\(smaller):\(larger)")
+                conflicts.append(MeetingRevision(id: id, date: max(local.updatedAt, remote.updatedAt), field: "sync:\(field)", oldValue: smaller, newValue: larger))
+                warnings.append("Concurrent edits to a photo in \(local.title) were preserved in History.")
+            }
+        }
         result.speakerMatches = items("speaker-match", local.speakerMatches ?? [], remote.speakerMatches ?? [], base?.speakerMatches ?? [])
         if result.speakerMatches?.isEmpty == true { result.speakerMatches = nil }
         // A multipoint link made on one Mac lets the recorder's recording join on another.

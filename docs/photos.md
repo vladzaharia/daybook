@@ -1,0 +1,43 @@
+# Photos
+
+Attach whiteboards, slides, sketches, and other images to a conversation on either Mac or iPhone.
+
+- **Mac:** use Add Photo in the conversation menu, drop an image onto the page, or use Paste Photo. The page also accepts image providers from Continuity Camera. HEIC, JPEG, and PNG originals are kept byte for byte; other supported image formats are converted to PNG.
+- **iPhone:** More → Add Photos opens the system photo picker or Files. Only selected photos are shared with Daybook; broad photo-library access is unnecessary. HEIC, JPEG, and PNG are supported. This pass adds import and viewing; an in-app camera is not included.
+- **Reading:** photos appear in a strip after your notes, beside their time in the transcript, and under relevant summary sections. Open a photo to edit its caption, move between photos, play from its time, or jump to its transcript entry. Deleting keeps the original and a Version History entry; Mac Undo or Version History can restore it.
+- **Export:** Mac Markdown export copies originals into a sibling Photos folder and uses relative links. Existing sibling folders are preserved. iPhone Markdown sharing includes photos in a ZIP so the links and originals travel together. Photos without a known recording time still appear in the gallery and export.
+
+## Storage and time
+
+`Meeting.photos` and `SummarySection.photoIDs` are optional, so old libraries decode without migration. Each `MeetingPhoto` records its original path, digest, type, size, capture date and its source, optional recording/time anchor, origin, user caption, analysis, and removal marker. Originals live under `Meetings/<meeting>/Originals/Photos/`. Reimporting the same bytes restores the existing photo instead of creating a second one.
+
+`PhotoMetadata` reads EXIF capture time, UTC offset, subseconds, and orientation. Unknown capture dates fall back to the addition time. Pixel dimensions reflect the upright image; thumbnails apply EXIF orientation during decoding. Provider-suggested names are retained as display metadata and never used as temporary file paths.
+
+`Meeting.timelineTime(of:)` follows an explicit recording anchor through its alignment offset and drift. Otherwise it uses capture time and the conversation's known start, with a five-minute margin around the recordings. A photo outside that window stays in the gallery without a transcript marker. Photos added while this Mac records an additional source move onto that source when capture ends.
+
+## Local understanding
+
+The `imageDescription` model role defaults to built-in Apple Vision. No model download is required for OCR, image labels, sharpness checks, or comparisons for near duplicates. The default caption combines the recognized subject and first useful line of text.
+
+Gemma 4 E2B and E4B can optionally supply richer captions through MLXVLM, using their existing model installation. Apple Vision still supplies OCR and quality measurements. Each photo records the engine that actually produced its caption; a failed optional caption model falls back to Vision with a notice. Queued jobs freeze the photo model and revision. Background analysis yields to the processing/download queues instead of competing with them.
+
+The summarizer receives bounded photo evidence as untrusted source data. It may reference only offered photo labels. `PhotoPlacement` validates placements, removes duplicate references and hidden or uninformative photos, and uses a time-based fallback for relevant photos the model omitted. Remove from Summary keeps the photo in the gallery. Photos that arrive after a summary can be analyzed and placed without rewriting its prose.
+
+## Sync
+
+Photo originals use the existing content-addressed blob journal, including the CloudKit courier. Eager Mac replicas wait for all referenced originals; on-demand iPhone replicas apply metadata immediately and fetch a photo when displayed or shared. Fetching verifies the digest before installation and uses the existing cache budget.
+
+Photo captions, summary visibility, analysis, timing, and removal merge independently. Conflicting edits remain in Version History; analysis ties resolve deterministically. Removal is a tombstone, preserving originals and recovery history. An old replica that lacks photo metadata cannot silently remove the photos a newer replica knows about.
+
+## Reproducing the preview
+
+Use a temporary library, with synthetic photos drawn by the app:
+
+```sh
+.build/debug/Daybook --library /tmp/daybook-photo-preview \
+  --snapshot /tmp/daybook-photo-summary --snapshot-delay 45 --photo-demo
+.build/debug/Daybook --library /tmp/daybook-photo-preview \
+  --snapshot /tmp/daybook-photo-viewer --snapshot-delay 5 --photo-demo --open-photo
+```
+
+First-run Vision processing can take longer than the usual four-second snapshot delay. In a debug iPhone simulator build, `--select "Spring launch review" --sheet photo` opens the first photo, and `--sheet photos` opens the importer. See [validation](validation.md#photos-2026-10-25) for tests and hardware limitations.

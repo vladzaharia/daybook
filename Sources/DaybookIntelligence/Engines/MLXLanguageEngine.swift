@@ -5,6 +5,7 @@ import MLX
 import MLXGuidedGeneration
 import MLXLLM
 import MLXLMCommon
+import MLXVLM
 
 /// Language models on the GPU through mlx-swift-lm. Any MLX conversion whose `config.json`
 /// `model_type` this mlx-swift-lm registers can run: a new family of an existing architecture is
@@ -13,7 +14,9 @@ import MLXLMCommon
 ///
 /// Version 2 (mlx-swift-lm 3.32.3) adds Gemma 4 (`gemma4`, `gemma4_unified`) and Qwen 3.5/3.6
 /// (`qwen3_5`, `qwen3_5_moe`), constrained JSON output for variants that declare
-/// `structuredOutput`, and the `thinking` engine option.
+/// `structuredOutput`, and the `thinking` engine option. Version 3 serves `imageDescription` too:
+/// a variant that declares the role (and `imageInput`) is loaded through MLXVLM to caption photos
+/// (`MLXVisionDescriber`), from the same install that writes summaries.
 public struct MLXLanguageEngine: ModelEngine {
     /// Whether this mlx-swift-lm can build a model from a `config.json`. The default asks
     /// `LLMTypeRegistry` whether it registers the architecture, then instantiates it from the
@@ -35,8 +38,8 @@ public struct MLXLanguageEngine: ModelEngine {
     }
 
     public let descriptor = ModelEngineDescriptor(
-        id: .mlxLanguage, name: "MLX language models", version: 2, runtime: "mlx-swift-lm 3.32.3",
-        roles: [.summarization], platforms: [.macOS, .iOS], residency: .exclusive)
+        id: .mlxLanguage, name: "MLX language models", version: 3, runtime: "mlx-swift-lm 3.32.3",
+        roles: [.summarization, .imageDescription], platforms: [.macOS, .iOS], residency: .exclusive)
 
     /// The files the summary pipeline has always fetched for an MLX model.
     public static let include = ["*.safetensors", "*.json", "*.jinja"]
@@ -72,7 +75,16 @@ public struct MLXLanguageEngine: ModelEngine {
         guard let modelType = config?["model_type"] as? String else {
             throw ModelAdditionError.invalid(problems + ["Its config.json doesn’t name an architecture (model_type)."])
         }
-        if await !supportsArchitecture(modelType, data) {
+        let describesPhotos = request.role == .imageDescription
+        if describesPhotos {
+            // Photos need a vision-language model: MLXVLM's architecture and an image processor.
+            if !repository.contains("processor_config.json") && !repository.contains("preprocessor_config.json") {
+                problems.append("It has no image processor (processor_config.json), so it can’t read photos.")
+            }
+            if await !VLMTypeRegistry.shared.contains(modelType) {
+                problems.append("Its architecture (\(modelType)) can’t read photos in this version of Daybook.")
+            }
+        } else if await !supportsArchitecture(modelType, data) {
             problems.append("Its architecture (\(modelType)) doesn’t run in this version of Daybook.")
         }
         guard problems.isEmpty else { throw ModelAdditionError.invalid(problems) }
@@ -84,12 +96,17 @@ public struct MLXLanguageEngine: ModelEngine {
         let context = (config?["max_position_embeddings"] as? Int) ?? (text?["max_position_embeddings"] as? Int)
         return ModelAdditionProposal(
             artifacts: [model],
-            capabilities: ModelCapabilities(contextLength: context, structuredOutput: true),
+            capabilities: ModelCapabilities(contextLength: context, structuredOutput: true, imageInput: describesPhotos ? true : nil),
             engineOptions: ["architecture": modelType], recommendedMemoryGB: memory)
     }
 
     public func load(_ installation: ModelInstallation, role: ModelRole,
                      progress: @escaping IntelligenceProgressHandler) async throws -> any LoadedModel {
+        if role == .imageDescription {
+            // The catalog says which variants serve the role (`LocalIntelligenceRuntime.resolve`); an
+            // install made before photos has the same files, so its receipt isn't consulted.
+            return try await MLXVisionDescriber.load(from: installation.folder(for: "model"), engineOptions: installation.engineOptions)
+        }
         Memory.cacheLimit = 256 * 1_024 * 1_024
         let started = Date()
         let container = try await LLMModelFactory.shared.loadContainer(
@@ -118,7 +135,8 @@ final class MLXSummarizer: Summarizing, @unchecked Sendable {
         var notes = try await MeetingSynthesis.generate(model: model, modelID: request.modelID, transcript: request.transcript,
                                                         notes: request.notes, template: request.template, glossary: request.glossary,
                                                         templateInstructions: request.templateInstructions,
-                                                        highlightEvidence: request.highlightEvidence, progress: progress)
+                                                        highlightEvidence: request.highlightEvidence, photos: request.photos,
+                                                        progress: progress)
         var statistics = model.statistics
         statistics.loadSeconds = loadSeconds
         notes.statistics = statistics

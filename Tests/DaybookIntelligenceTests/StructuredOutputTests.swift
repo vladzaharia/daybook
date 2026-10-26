@@ -143,7 +143,7 @@ final class StructuredOutputTests: XCTestCase {
     }
 
     func testEnginesRecordTheUpgradedRuntimes() {
-        XCTAssertEqual(MLXLanguageEngine().descriptor.versionString, "2 (mlx-swift-lm 3.32.3)")
+        XCTAssertEqual(MLXLanguageEngine().descriptor.versionString, "3 (mlx-swift-lm 3.32.3)")
         XCTAssertEqual(WhisperKitEngine().descriptor.versionString, "2 (argmax-oss-swift 1.1.1)")
     }
 

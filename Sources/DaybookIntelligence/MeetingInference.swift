@@ -24,6 +24,14 @@ public protocol MeetingInference: Sendable {
     /// A title, the meeting kind, and vocabulary suggestions from the small-tasks model (`SmallTasks`).
     func performSmallTasks(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,
                            progress: @escaping IntelligenceProgressHandler) async throws -> SmallTaskResult
+    /// What photos show (`DescribingImages`): Apple Vision, or a vision-language model's captions.
+    func describeImages(_ requests: [ImageDescriptionRequest], model: ModelReference,
+                        progress: @escaping IntelligenceProgressHandler) async throws -> [ImageDescription]
+    /// A summary that may place `photos` under its sections (`MeetingSynthesis`). The default ignores
+    /// the photos, for inference that predates them.
+    func summarize(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,
+                   templateInstructions: String?, highlightEvidence: String?, photos: [PhotoEvidence],
+                   progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes
 }
 
 extension MeetingInference {
@@ -42,6 +50,18 @@ extension MeetingInference {
     public func performSmallTasks(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,
                                   progress: @escaping IntelligenceProgressHandler) async throws -> SmallTaskResult {
         throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "titles")
+    }
+
+    public func describeImages(_ requests: [ImageDescriptionRequest], model: ModelReference,
+                               progress: @escaping IntelligenceProgressHandler) async throws -> [ImageDescription] {
+        throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "photos")
+    }
+
+    public func summarize(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,
+                          templateInstructions: String?, highlightEvidence: String?, photos: [PhotoEvidence],
+                          progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes {
+        try await summarize(transcript: transcript, notes: notes, template: template, glossary: glossary, model: model,
+                            templateInstructions: templateInstructions, highlightEvidence: highlightEvidence, progress: progress)
     }
 }
 

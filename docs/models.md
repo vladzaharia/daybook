@@ -259,6 +259,10 @@ FluidAudio 0.17.7 already contained Parakeet Ultra (`AsrModelVersion.ultra`), so
 
 **Nemotron 3 Diarization** is the same shape: `NemotronDiarizerEngine` (`.nemotronDiarizer`, `Diarizing`) and `Families/nemotron-3-diarization.json` with variants `offline` (the 30.4 s batch preset in `monolithic/v2/`, 199 MB) and `compact` (the split-graph W8A8 build `c128-split-w8a8`, 102 MB including the host-side projection, which FluidInference reports runs entirely on the Neural Engine; not in a preset), both `maxSpeakers: 8` without `voiceEmbeddings`, from `FluidInference/nemotron-3-diarization-coreml` at `25a90f9…` (the general-access weights). Each run reads the recording in 30 s blocks through one converter into FluidAudio's streaming path (`appendAudio` / `processBufferedAudio` / `finishStream`, frame-exact with `processComplete` but without holding the whole recording), and `SpeakerActivity` turns the 10 ms probabilities into turns as they arrive: active above 0.5, same-speaker gaps under 0.25 s bridged, turns under 0.2 s dropped. Voice profiles come from Community-1 (see "Routing").
 
+## Photos
+
+The `imageDescription` role uses Apple Vision by default (`apple-vision/system`, engine `appleVision`): OCR, labels, sharpness, and near-duplicate detection, with no download. Gemma 4 E2B and E4B also serve this role through MLXVLM and the existing installation. Their optional captions retain exact provenance; Vision remains the fallback. See [Photos](photos.md#local-understanding).
+
 ## What the next changes touch
 
 | Change | What to do | Pipeline edits |

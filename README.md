@@ -4,6 +4,8 @@ A native Mac app for conversations you want to remember. Record microphone and c
 
 Requires an Apple silicon Mac and macOS 15 or newer. This is a working preview with local inference, iCloud sync, and direct Soundcore Work support over Bluetooth (verified against a simulator; not yet on physical hardware). Live-call, physical-device, and real multi-Mac iCloud acceptance checks remain.
 
+[Photos](docs/photos.md) can be added on Mac or iPhone, viewed beside the transcript, and included in summaries and exports. The Mac reads their text locally with Apple Vision; originals and captions sync with the conversation.
+
 ## Run
 
 Open `dist/Daybook.app`, or build it from source:

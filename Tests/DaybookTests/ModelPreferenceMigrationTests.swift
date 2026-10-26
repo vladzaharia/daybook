@@ -67,8 +67,9 @@ final class ModelPreferenceMigrationTests: XCTestCase {
         XCTAssertEqual(relaunched.processingPreferences.speakerModelID, "nemotron-3-diarization/offline")
         XCTAssertEqual(ModelPreset.current(in: relaunched), .balanced)
         XCTAssertEqual(ModelPreset.detailed.modelIDs, ["parakeet/ultra", ModelRecommendations.summary(for: .current, quality: .detailed),
-                                                       "nemotron-3-diarization/offline", "community-1/offline", "apple-foundation-models/system"],
-                       "Transcription, summaries, and speakers first, then voice profiles and small tasks")
+                                                       "nemotron-3-diarization/offline", "community-1/offline", "apple-foundation-models/system",
+                                                       "apple-vision/system"],
+                       "Transcription, summaries, and speakers first, then voice profiles, small tasks, and photos")
         // Selections saved before the voice-profile role had a model still get one for Nemotron's speakers.
         relaunched.modelSelections[.speakerEmbedding] = nil
         XCTAssertEqual(relaunched.voiceEmbeddingModel, "community-1/offline")
@@ -85,6 +86,19 @@ final class ModelPreferenceMigrationTests: XCTestCase {
                                               .large: "gemma-4/26b-a4b-qat-4bit", .workstation: "gemma-4/26b-a4b-qat-4bit"]
         XCTAssertEqual(state.summaryModel, expected[DeviceTier.current])
         XCTAssertEqual(state.modelSelections[.smallTasks], "apple-foundation-models/system")
+    }
+
+    func testPhotoJobsFreezeTheSelectedModelAndItsRevision() throws {
+        let state = AppState(libraryURL: try library(), defaults: defaults())
+        state.modelSelections[.imageDescription] = "gemma-4/e2b-4bit"
+        state.installedModels.insert("gemma-4/e2b-4bit")
+        state.installedRevisions["gemma-4/e2b-4bit"] = "original"
+        let job = state.makeJob(meetingID: UUID(), mode: .summaryOnly)
+        state.modelSelections[.imageDescription] = "apple-vision/system"
+        state.installedRevisions["gemma-4/e2b-4bit"] = "updated"
+        XCTAssertEqual(job.engineConfiguration.photoModel, ModelReference("gemma-4/e2b-4bit", revision: "original"))
+        XCTAssertTrue(job.modelReferences.contains(ModelReference("gemma-4/e2b-4bit", revision: "original")))
+        XCTAssertEqual(try JSONDecoder().decode(ProcessingJob.self, from: JSONEncoder().encode(job)), job)
     }
 
     func testSmallTasksJoinASelectionMadeBeforeThemOnce() throws {

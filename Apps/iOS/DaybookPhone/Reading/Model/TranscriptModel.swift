@@ -13,11 +13,13 @@ enum PageMode: String, CaseIterable, Identifiable, Hashable {
 enum TranscriptBlock: Identifiable, Equatable {
     case turn(id: String, speakerID: String?, segments: [TranscriptSegment])
     case note(TimedNote)
+    case photo(MeetingPhoto, Double)
 
     var id: String {
         switch self {
         case .turn(let id, _, _): return "turn:" + id
         case .note(let note): return "note:\(note.id)"
+        case .photo(let photo, _): return "photo:\(photo.id)"
         }
     }
 
@@ -33,6 +35,7 @@ enum TranscriptBlock: Identifiable, Equatable {
                     blocks.append(.turn(id: segment.id.uuidString, speakerID: segment.speakerID, segments: [segment]))
                 }
             case .note(let note): blocks.append(.note(note))
+            case .photo(let photo, let time): blocks.append(.photo(photo, time))
             case .highlight: break
             }
         }

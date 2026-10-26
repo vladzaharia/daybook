@@ -222,8 +222,12 @@ public struct SummarySection: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var heading: String
     public var body: String
-    public init(id: UUID = UUID(), heading: String, body: String) {
+    /// Photos this section shows (`MeetingPhoto.id`), in order. Nil for none, and in summaries
+    /// written before photos.
+    public var photoIDs: [UUID]?
+    public init(id: UUID = UUID(), heading: String, body: String, photoIDs: [UUID]? = nil) {
         self.id = id; self.heading = heading; self.body = body
+        self.photoIDs = photoIDs?.isEmpty == true ? nil : photoIDs
     }
 }
 
@@ -305,6 +309,9 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     /// Processing asked for on one device for another to carry out (the iPhone asks, a Mac runs it).
     /// Nil until the first request; merged by ID across devices (`ProcessingRequest.merged`).
     public var processingRequests: [ProcessingRequest]?
+    /// Photos taken or added for the conversation (`Photos.swift`), deleted ones included. Nil until
+    /// the first photo.
+    public var photos: [MeetingPhoto]?
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
                 updatedAt: Date = Date(), kind: MeetingKind = .auto, notes: String = "",
                 tracks: [RecordingTrack] = [], transcripts: [TrackTranscript] = [],

@@ -249,7 +249,8 @@ extension AppState {
     func prepareSourceCapture(_ id: UUID) {
         guard let meeting = meetings.first(where: { $0.id == id }) else { sources.captures[id] = nil; return }
         sources.captures[id] = .init(preexistingTrackIDs: Set(meeting.tracks.map(\.id)), date: meeting.date,
-                                     noteIDs: Set((meeting.timedNotes ?? []).map(\.id)), highlightIDs: Set(meeting.highlights.map(\.id)))
+                                     noteIDs: Set((meeting.timedNotes ?? []).map(\.id)), highlightIDs: Set(meeting.highlights.map(\.id)),
+                                     photoIDs: Set((meeting.photos ?? []).map(\.id)))
     }
 
     /// This Mac is recording: recorders set to record alongside it start too. Their trouble only
@@ -300,6 +301,8 @@ extension AppState {
                 meeting.highlights[index].trackID = lead.id
                 meeting.highlights[index].time = max(0, meeting.highlights[index].time - (lead.offset ?? 0))
             }
+            // Photos taken meanwhile follow the microphone recording too, like bookmarks.
+            meeting.movePhotos(onto: lead, except: context.photoIDs)
             meeting.date = context.date
             meeting.revisions.append(MeetingRevision(field: "source:\(lead.id.uuidString)", oldValue: "", newValue: "Added \(self.sourceName(lead))"))
         }

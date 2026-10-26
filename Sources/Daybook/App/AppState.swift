@@ -72,6 +72,8 @@ final class AppState: ObservableObject {
     }
     @Published var isReady = false
     @Published var processingID: UUID?
+    var readingPhotoID: UUID?
+    var pendingPhotoReadings = Set<UUID>()
     @Published var processingProgress = IntelligenceProgress(0, "Ready") {
         didSet { processingProgressChanged() }
     }
@@ -153,7 +155,7 @@ final class AppState: ObservableObject {
     let storageURL: URL
     private let preferences: UserDefaults
     let runtime: LocalIntelligenceRuntime
-    private var processingTask: Task<Void, Never>?
+    var processingTask: Task<Void, Never>?
     private(set) var currentRequest: Task<Void, Error>?
     /// How requests from other devices are claimed and kept (tests shorten these).
     var requestTiming = RequestTiming()
@@ -266,6 +268,14 @@ final class AppState: ObservableObject {
                 defaults.set(true, forKey: "modelSelections.smallTasksAdded")
                 if stored[.smallTasks] == nil, let initial = ModelRecommendations.initialSelections()[.smallTasks] {
                     stored[.smallTasks] = initial
+                    if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: "modelSelections") }
+                }
+            }
+            // Photos came later still: the same, once, for the photo role (Apple Vision).
+            if !defaults.bool(forKey: "modelSelections.imageDescriptionAdded") {
+                defaults.set(true, forKey: "modelSelections.imageDescriptionAdded")
+                if stored[.imageDescription] == nil, let initial = ModelRecommendations.initialSelections()[.imageDescription] {
+                    stored[.imageDescription] = initial
                     if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: "modelSelections") }
                 }
             }
@@ -433,7 +443,7 @@ final class AppState: ObservableObject {
     }
 
     func runQueue() {
-        guard processingTask == nil, downloadingID == nil, !library.isApplyingSync, !processingQueue.isEmpty else { return }
+        guard processingTask == nil, readingPhotoID == nil, downloadingID == nil, !library.isApplyingSync, !processingQueue.isEmpty else { return }
         processingTask = Task { [weak self] in
             guard let self else { return }
             while !self.processingQueue.isEmpty && !Task.isCancelled {
@@ -477,6 +487,7 @@ final class AppState: ObservableObject {
             self.processingProgress = IntelligenceProgress(0, "Ready")
             self.collectOldModelRevisions()
             self.startPendingDownload()
+            self.readNextPhotosWhenIdle()
         }
     }
 
@@ -581,6 +592,7 @@ final class AppState: ObservableObject {
         try Task.checkCancellation()
         await realign(id)
         if await sourcesAfterTranscription(id) { return }
+        _ = try await readPhotos(id, engine: engine, progress: progress)
         guard let current = meetings.first(where: { $0.id == id }) else { return }
         let transcript = MeetingEvidence.transcript(current)
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }
@@ -592,7 +604,7 @@ final class AppState: ObservableObject {
         try Task.checkCancellation()
         let inputsChanged = meetings.first(where: { $0.id == id }).map {
             $0.notes != current.notes || $0.kind != current.kind || $0.templateID != current.templateID || $0.tracks != current.tracks ||
-            $0.unifiedTranscript != current.unifiedTranscript || $0.speakers != current.speakers || $0.highlights != current.highlights || $0.timedNotes != current.timedNotes
+            $0.unifiedTranscript != current.unifiedTranscript || $0.speakers != current.speakers || $0.highlights != current.highlights || $0.timedNotes != current.timedNotes || $0.photos != current.photos
         } ?? false
         update(id) { meeting in
             meeting.setSummary(generated.summary)
@@ -627,6 +639,7 @@ final class AppState: ObservableObject {
             for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) { enqueue(id) }
         }
         pickUpRequests(start: false)
+        for meeting in meetings where meeting.visiblePhotos.contains(where: { $0.analysis == nil }) { readPhotosWhenIdle(meeting.id) }
     }
 
     func realign(_ id: UUID) async { await library.realign(id) }
@@ -634,6 +647,10 @@ final class AppState: ObservableObject {
     func setOffset(_ id: UUID, trackID: UUID, seconds: Double?) { library.setOffset(id, trackID: trackID, seconds: seconds) }
 
     func download(_ modelID: String) {
+        if readingPhotoID != nil {
+            if !pendingDownloads.contains(modelID) { pendingDownloads.append(modelID) }
+            return
+        }
         guard downloadingID == nil, processingID == nil else { return }
         downloadingID = modelID; downloadProgress = IntelligenceProgress(0, "Preparing download…")
         downloadTask = Task { [weak self] in
@@ -653,6 +670,7 @@ final class AppState: ObservableObject {
                 self.pendingDownloads.removeAll()
                 if self.canProcess { for id in self.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) { self.enqueue(id) } }
                 self.runQueue()
+                self.readNextPhotosWhenIdle()
             }
         }
     }
@@ -669,8 +687,8 @@ final class AppState: ObservableObject {
     var missingSelectedModels: [String] {
         routedRequiredModelIDs.reduce(into: [String]()) { if !installedModels.contains($1) && !$0.contains($1) { $0.append($1) } }
     }
-    private func startPendingDownload() {
-        guard downloadingID == nil, processingID == nil, let next = pendingDownloads.first else { return }
+    func startPendingDownload() {
+        guard downloadingID == nil, processingID == nil, readingPhotoID == nil, let next = pendingDownloads.first else { return }
         pendingDownloads.removeFirst(); download(next)
     }
     /// Models still to download after the current one.
@@ -727,7 +745,7 @@ final class AppState: ObservableObject {
     /// The revisions a job queued now freezes, for its models.
     var frozenModelRevisions: [String: String] {
         let route = speechRoute
-        let keys = [route.transcription.model, summaryModel, route.speakerModel] + [route.voiceEmbedder, route.transcription.fallback].compactMap { $0 }
+        let keys = [route.transcription.model, summaryModel, route.speakerModel] + [route.voiceEmbedder, route.transcription.fallback, photoModel?.id].compactMap { $0 }
         return installedRevisions.filter { keys.contains($0.key) }
     }
 
@@ -770,11 +788,20 @@ final class AppState: ObservableObject {
         let panel = NSSavePanel(); panel.allowedContentTypes = json ? [.json] : [.plainText]
         panel.nameFieldStringValue = meeting.title.replacingOccurrences(of: "/", with: "-") + (json ? ".json" : ".md")
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            if json { let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; try encoder.encode(meeting).write(to: url, options: .atomic) }
-            else { try MeetingExport.markdown(meeting).write(to: url, atomically: true, encoding: .utf8) }
-            notice = "Exported \(url.lastPathComponent)"
-        } catch { errorMessage = error.localizedDescription }
+        let directory = library.rootURL.appendingPathComponent("Meetings/\(id.uuidString)", isDirectory: true)
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    if json {
+                        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                        try encoder.encode(meeting).write(to: url, options: .atomic)
+                    } else {
+                        try MeetingExport.write(meeting, markdownURL: url) { directory.appendingPathComponent($0.relativePath) }
+                    }
+                }.value
+                notice = "Exported \(url.lastPathComponent)"
+            } catch { errorMessage = error.localizedDescription }
+        }
     }
 
     func audioURL(for track: RecordingTrack, meetingID: UUID) async -> URL? {

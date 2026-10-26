@@ -22,6 +22,8 @@ final class MultiSourceCoordinator: ObservableObject {
         var date: Date
         var noteIDs: Set<UUID>
         var highlightIDs: Set<UUID>
+        /// Photos already there; ones taken while this Mac records follow its recording.
+        var photoIDs: Set<UUID> = []
     }
 
     /// A recording moving into another conversation keeps its transcript, speakers, and placement,

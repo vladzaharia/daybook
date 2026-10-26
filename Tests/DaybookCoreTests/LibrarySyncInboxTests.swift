@@ -224,4 +224,30 @@ final class LibrarySyncInboxTests: XCTestCase {
         let cached = await phone.cachedAudio()
         XCTAssertEqual(cached.map(\.origin), [.fetched])
     }
+
+    func testOnDemandPhotoFetchUsesTheCourierWhileICloudIsUnavailable() async throws {
+        let mac = try mac(), phone = try phone()
+        let store = try MeetingStore(rootURL: local("Mac"))
+        var meeting = Meeting(title: "Whiteboard")
+        try await store.save(meeting)
+        let bytes = SyntheticPhotos.data(.jpeg)
+        let source = try SyntheticPhotos.write(bytes, named: "board.jpg", in: root)
+        let photo = try await store.storePhoto(from: source, in: meeting, capturedAt: Date(), capturedAtSource: .added)
+        meeting.addPhoto(photo)
+        try await store.save(meeting)
+        let published = try await pass(mac, "Mac", [meeting])
+        let blob = try XCTUnwrap(published.writtenFiles.first { $0.path == "Blobs/\(photo.sha256)" })
+        try await pass(phone, "Phone")
+        let known = await phone.libraryID
+        let libraryID = try XCTUnwrap(known)
+        let staged = try stage([blob], from: mac)
+        try cloud.evict(remote.appendingPathComponent(blob.path))
+        cloud.holdDownloads(true)
+        let received = try await phone.receiveCourierFile(blob, libraryID: libraryID, contents: XCTUnwrap(staged[blob]))
+        XCTAssertEqual(received, .stored)
+        let url = try await phone.fetchPhoto(photo, in: meeting.id,
+                                            options: AudioFetchOptions(pollInterval: .milliseconds(5), timeout: .seconds(2)))
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertTrue(phone.isPhotoLocal(photo, in: meeting.id))
+    }
 }

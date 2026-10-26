@@ -63,6 +63,20 @@ public struct SummaryProcessingOutput: Sendable {
     }
 }
 
+/// One photo to read, with its original's file.
+public struct PhotoProcessingInput: Sendable {
+    public var photo: MeetingPhoto
+    public var url: URL
+    public init(photo: MeetingPhoto, url: URL) { self.photo = photo; self.url = url }
+}
+
+/// What processing found in a conversation's photos, by photo.
+public struct PhotoProcessingOutput: Sendable {
+    public var analyses: [UUID: PhotoAnalysis]
+    public var notices: [String]
+    public init(analyses: [UUID: PhotoAnalysis] = [:], notices: [String] = []) { self.analyses = analyses; self.notices = notices }
+}
+
 /// Everything one pass over a conversation produced (`ProcessingEngine.process`).
 public struct ProcessingOutput: Sendable {
     /// The conversation with the new runs, speakers, fusion, and summary applied.
@@ -88,6 +102,17 @@ public protocol ProcessingEngine: Sendable {
     /// Summarizes a conversation from its transcript, notes, and bookmarks, with a template (nil for Automatic).
     func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],
                    progress: @escaping ProcessingProgressHandler) async throws -> SummaryProcessingOutput
+    /// Reads a conversation's photos: the text in them, what they show, a short caption, and whether
+    /// each is worth a place in a summary. The default reads nothing (an engine without image models).
+    func describePhotos(_ meeting: Meeting, photos: [PhotoProcessingInput],
+                        progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput
+}
+
+extension ProcessingEngine {
+    public func describePhotos(_ meeting: Meeting, photos: [PhotoProcessingInput],
+                               progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput {
+        PhotoProcessingOutput()
+    }
 }
 
 extension ProcessingEngine {
@@ -96,9 +121,17 @@ extension ProcessingEngine {
     /// (`LibraryController.audioURL`). Nothing is saved; the caller applies `meeting`.
     public func process(_ meeting: Meeting, tracks: [(track: RecordingTrack, url: URL)], mode: ProcessingRequest.Mode,
                         template: SummaryTemplate?, vocabulary: [String] = [], matching: SpeakerMatchingConfiguration? = nil,
+                        photos: [PhotoProcessingInput] = [],
                         progress: @escaping ProcessingProgressHandler = { _ in }) async throws -> ProcessingOutput {
         var working = meeting
-        var transcripts: [TrackTranscript] = [], speakers: [Speaker] = [], notices: [String] = []
+        var photoNotices: [String] = []
+        if !photos.isEmpty {
+            // Photos first, so the summary knows what each shows.
+            let read = try await describePhotos(working, photos: photos, progress: progress)
+            working.applyPhotoAnalyses(read.analyses)
+            photoNotices = read.notices
+        }
+        var transcripts: [TrackTranscript] = [], speakers: [Speaker] = [], notices: [String] = photoNotices
         if mode != .summaryOnly {
             for (track, url) in tracks where meeting.transcribableTracks.contains(where: { $0.id == track.id }) {
                 try Task.checkCancellation()

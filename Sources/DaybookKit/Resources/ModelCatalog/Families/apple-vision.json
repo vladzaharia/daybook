@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "apple-vision",
+      "name": "Apple Vision",
+      "maker": "Apple",
+      "engine": "appleVision",
+      "roles": [
+        "imageDescription"
+      ],
+      "summary": "Reads the text in photos and recognizes what they show.",
+      "homepage": "https://developer.apple.com/documentation/vision",
+      "license": {
+        "id": "Apple-Vision",
+        "name": "Part of macOS and iOS",
+        "url": "https://www.apple.com/legal/sla/",
+        "allowsCommercialUse": true
+      },
+      "variants": [
+        {
+          "id": "system",
+          "name": "Apple Vision",
+          "detail": "Reads text and recognizes what's shown.",
+          "capabilities": {
+            "imageInput": true
+          },
+          "minimumEngineVersion": 1,
+          "systemProvided": true,
+          "revisions": []
+        }
+      ]
+    }
+  ]
+}

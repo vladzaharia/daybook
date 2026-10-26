@@ -110,12 +110,14 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
     /// Chooses the title, kind, and vocabulary suggestions (Apple Foundation Models) when it was
     /// selected and available as the job was queued; nil leaves them to the summary model.
     let smallTasksModelID: String?
+    /// Optional photo captions; nil uses built-in Apple Vision.
+    let photoModelID: String?
 
     init(id: UUID = UUID(), meetingID: UUID, createdAt: Date = Date(), mode: Mode = .newAudio,
          transcriptionModelID: String, summaryModelID: String, detectSpeakers: Bool = true,
          preferences: ProcessingPreferences = .init(), requestID: UUID? = nil, templateID: String? = nil,
          revisions: [String: String]? = nil, voiceEmbeddingModelID: String? = nil, languageFallbackModelID: String? = nil,
-         smallTasksModelID: String? = nil) {
+         smallTasksModelID: String? = nil, photoModelID: String? = nil) {
         self.id = id; self.meetingID = meetingID; self.createdAt = createdAt; self.mode = mode
         self.transcriptionModelID = transcriptionModelID; self.summaryModelID = summaryModelID
         self.detectSpeakers = detectSpeakers; self.preferences = preferences.normalized
@@ -124,6 +126,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
         self.voiceEmbeddingModelID = voiceEmbeddingModelID
         self.languageFallbackModelID = languageFallbackModelID
         self.smallTasksModelID = smallTasksModelID
+        self.photoModelID = photoModelID
     }
 
     /// The same job, carrying out `request`.
@@ -132,12 +135,12 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
                       summaryModelID: summaryModelID, detectSpeakers: detectSpeakers, preferences: preferences,
                       requestID: request.id, templateID: request.templateID ?? templateID, revisions: revisions,
                       voiceEmbeddingModelID: voiceEmbeddingModelID, languageFallbackModelID: languageFallbackModelID,
-                      smallTasksModelID: smallTasksModelID)
+                      smallTasksModelID: smallTasksModelID, photoModelID: photoModelID)
     }
 
     /// The models the job runs, each with the revision it froze.
     var modelReferences: [ModelReference] {
-        ([transcriptionModelID, summaryModelID] + [languageFallbackModelID].compactMap { $0 }
+        ([transcriptionModelID, summaryModelID] + [languageFallbackModelID, photoModelID].compactMap { $0 }
             + (detectSpeakers ? [preferences.speakerModelID] + [voiceEmbeddingModelID].compactMap { $0 } : []))
             .map(reference)
     }
@@ -168,13 +171,14 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
             let voiceEmbeddingModelID: String?
             let languageFallbackModelID: String?
             let smallTasksModelID: String?
+            let photoModelID: String?
         }
         // Nil optional models (fallback, small tasks) are left out of the encoding, so earlier jobs keep their fingerprints.
         let value = Configuration(transcriptionModelID: transcriptionModelID, summaryModelID: summaryModelID,
                                   detectSpeakers: detectSpeakers, preferences: preferences.normalized,
                                   revisions: revisions, voiceEmbeddingModelID: voiceEmbeddingModelID,
                                   languageFallbackModelID: languageFallbackModelID,
-                                  smallTasksModelID: smallTasksModelID)
+                                  smallTasksModelID: smallTasksModelID, photoModelID: photoModelID)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         // All fields are finite normalized primitives; this encoding cannot fail.
@@ -192,6 +196,7 @@ extension ProcessingJob {
             smallTasksModel: smallTasksModelID.map(reference),
             speakerOptions: preferences.speakerOptions, fingerprint: configurationFingerprint,
             speakerMatchThreshold: preferences.speakerMatchThreshold, speakerMatchMargin: preferences.speakerMatchMargin,
-            transcriptionLanguage: preferences.transcriptionLanguage, languageFallbackModel: languageFallbackModelID.map(reference))
+            transcriptionLanguage: preferences.transcriptionLanguage, languageFallbackModel: languageFallbackModelID.map(reference),
+            photoModel: photoModelID.map(reference))
     }
 }

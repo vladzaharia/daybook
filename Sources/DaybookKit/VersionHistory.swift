@@ -20,6 +20,10 @@ public enum RevisionRestore {
         case "summary":
             guard let summary = decodedSummary(revision.oldValue) else { return false }
             return summary != meeting.summary
+        case "photo":
+            // A deleted photo can be put back; adding one isn't undone from here (delete it instead).
+            guard revision.newValue == "removed", let uuid = UUID(uuidString: id(revision)), let photo = meeting.photo(uuid) else { return false }
+            return photo.isRemoved
         default: return false
         }
     }
@@ -37,6 +41,8 @@ public enum RevisionRestore {
             meeting.renameSpeaker(id: id(revision), name: revision.oldValue)
         case "summary":
             if let summary = decodedSummary(revision.oldValue) { meeting.setSummary(summary) }
+        case "photo":
+            if let uuid = UUID(uuidString: id(revision)) { meeting.restorePhoto(uuid) }
         default: break
         }
     }
@@ -59,6 +65,13 @@ public enum RevisionText {
         case "correction-transfer": return "Correction reviewed"
         case "sync": return "Edited on two Macs"
         case "source": return revision.newValue
+        case "photo":
+            switch revision.newValue {
+            case "added": return "Photo added"
+            case "removed": return "Photo deleted"
+            default: return "Photo put back"
+            }
+        case "photo-caption": return "Photo caption edited"
         default: return "Edited"
         }
     }
@@ -81,6 +94,8 @@ public enum RevisionText {
         case "summary": return "text.alignleft"
         case "correction-transfer": return "checkmark.circle"
         case "source": return "waveform"
+        case "photo": return "photo"
+        case "photo-caption": return "text.below.photo"
         default: return "arrow.triangle.branch"
         }
     }

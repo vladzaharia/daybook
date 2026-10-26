@@ -9,7 +9,7 @@ import Foundation
 ///     --place work|personal|trash|folder:<name>
 ///     --search "<query>"                 the library search
 ///     --select-many <n>                  multi-select the first n conversations
-///     --sheet info|history|correct|heard|move|tags
+///     --sheet info|history|correct|heard|move|tags|photo|photos
 ///     --scroll-to "<words>"              bring the passage containing these words into view
 ///     --summary-scroll notes|bookmarks|next-steps|colophon   bring that part of the summary into view
 ///     --play [<seconds>]                 start playback there, silently
@@ -97,6 +97,9 @@ struct ReadingLaunch {
             session.showInTranscript(segment.id, flash: false, switchPage: page == .transcript)
         }
         switch sheet {
+        case "photos"?: session.sheet = .importPhotos(meeting.id)
+        case "photo"?:
+            if let photo = meeting.visiblePhotos.first { session.sheet = .photo(meetingID: meeting.id, photoID: photo.id) }
         case "info"?: session.sheet = .info(meeting.id)
         case "history"?: session.sheet = .history(meeting.id)
         case "move"?: session.sheet = .move([meeting.id])

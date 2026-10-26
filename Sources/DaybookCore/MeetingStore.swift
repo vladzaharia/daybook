@@ -163,6 +163,9 @@ public actor MeetingStore {
         result.transcripts += stored.transcripts.filter { transcript in !result.transcripts.contains { $0.id == transcript.id } }
         result.revisions += stored.revisions.filter { revision in !result.revisions.contains { $0.id == revision.id } }
         result.revisions.sort { $0.date < $1.date }
+        // Photos are originals too: a stale snapshot can't drop one (deleting one marks it instead).
+        let missingPhotos = (stored.photos ?? []).filter { photo in !(result.photos ?? []).contains { $0.id == photo.id } }
+        if !missingPhotos.isEmpty { result.photos = (result.photos ?? []) + missingPhotos }
         return result
     }
 
@@ -273,6 +276,11 @@ public actor MeetingStore {
         guard meeting.highlights.allSatisfy({
             $0.time.isFinite && $0.time >= 0 && ($0.duration == nil || ($0.duration!.isFinite && $0.duration! >= 0))
         }) else { throw LibraryError.invalidHighlight }
+        for photo in meeting.photos ?? [] {
+            guard photo.relativePath.hasPrefix(MeetingPhoto.folder + "/") else { throw LibraryError.unsafePath(photo.relativePath) }
+            _ = try LocalFiles.relativeURL(photo.relativePath, in: directory)
+            guard photo.time.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw LibraryError.invalidHighlight }
+        }
     }
 }
 

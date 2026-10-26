@@ -203,6 +203,9 @@ public struct ModelCapabilities: Hashable, Sendable {
     public var contextLength: Int?
     /// Can constrain output to a JSON schema.
     public var structuredOutput: Bool?
+    // Images
+    /// Takes images as input (a vision-language model, or Apple Vision).
+    public var imageInput: Bool?
     // Running
     public var streaming: Bool?
     /// Resident memory while running, in GB.
@@ -213,12 +216,12 @@ public struct ModelCapabilities: Hashable, Sendable {
     public init(wordTimestamps: Bool? = nil, wordConfidence: Bool? = nil, languages: [String]? = nil, vocabularyPrompt: Bool? = nil,
                 maxSpeakers: Int? = nil, voiceEmbeddings: VoiceEmbeddingSpace? = nil, expectedSpeakerCount: Bool? = nil,
                 contextLength: Int? = nil, structuredOutput: Bool? = nil, streaming: Bool? = nil, memoryGB: Double? = nil,
-                realTimeFactor: Double? = nil) {
+                realTimeFactor: Double? = nil, imageInput: Bool? = nil) {
         self.wordTimestamps = wordTimestamps; self.wordConfidence = wordConfidence; self.languages = languages
         self.vocabularyPrompt = vocabularyPrompt; self.maxSpeakers = maxSpeakers; self.voiceEmbeddings = voiceEmbeddings
         self.expectedSpeakerCount = expectedSpeakerCount; self.contextLength = contextLength
         self.structuredOutput = structuredOutput; self.streaming = streaming; self.memoryGB = memoryGB
-        self.realTimeFactor = realTimeFactor
+        self.realTimeFactor = realTimeFactor; self.imageInput = imageInput
     }
 }
 
@@ -628,7 +631,7 @@ extension ModelLicense: Codable {
 extension ModelCapabilities: Codable {
     private enum CodingKeys: String, CodingKey {
         case wordTimestamps, wordConfidence, languages, vocabularyPrompt, maxSpeakers, voiceEmbeddings, expectedSpeakerCount
-        case contextLength, structuredOutput, streaming, memoryGB, realTimeFactor
+        case contextLength, structuredOutput, streaming, memoryGB, realTimeFactor, imageInput
     }
 
     /// Each field on its own: one a newer manifest types differently is dropped, not the variant.
@@ -647,6 +650,7 @@ extension ModelCapabilities: Codable {
         streaming = optional(Bool.self, .streaming)
         memoryGB = optional(Double.self, .memoryGB)
         realTimeFactor = optional(Double.self, .realTimeFactor)
+        imageInput = optional(Bool.self, .imageInput)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -663,6 +667,7 @@ extension ModelCapabilities: Codable {
         try values.encodeIfPresent(streaming, forKey: .streaming)
         try values.encodeIfPresent(memoryGB, forKey: .memoryGB)
         try values.encodeIfPresent(realTimeFactor, forKey: .realTimeFactor)
+        try values.encodeIfPresent(imageInput, forKey: .imageInput)
     }
 }
 

@@ -38,6 +38,9 @@ struct TranscriptPage: View {
                     case .note(let note):
                         NoteBlock(note: note) { play(.timeline(note.time ?? 0)) } open: { state.pageMode = .summary }
                             .padding(.top, Space.s3)
+                    case .photo(let photo, let time):
+                        TranscriptPhotoBlock(state: state, meeting: meeting, photo: photo, time: time) { play(.timeline(time)) }
+                            .padding(.top, Space.s3)
                     }
                 }
             }
@@ -133,11 +136,14 @@ struct TranscriptPage: View {
 enum TranscriptBlock: Identifiable {
     case turn(id: String, speakerID: String?, segments: [TranscriptSegment])
     case note(TimedNote)
+    /// A photo at the moment it was taken.
+    case photo(MeetingPhoto, Double)
 
     var id: String {
         switch self {
         case .turn(let id, _, _): return "turn:" + id
         case .note(let note): return "note:\(note.id)"
+        case .photo(let photo, _): return "photo:\(photo.id)"
         }
     }
 
@@ -154,6 +160,7 @@ enum TranscriptBlock: Identifiable {
                     blocks.append(.turn(id: segment.id.uuidString, speakerID: segment.speakerID, segments: [segment]))
                 }
             case .note(let note): blocks.append(.note(note))
+            case .photo(let photo, let time): blocks.append(.photo(photo, time))
             case .highlight: break
             }
         }

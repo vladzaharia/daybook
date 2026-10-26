@@ -1,5 +1,25 @@
 # Validation record
 
+## Photos (2026-10-25)
+
+Recovered the unfinished Mac photo feature and completed iPhone import/viewing against the current CloudKit courier code.
+
+- Full `swift test`: 684 tests passed before the final runtime, courier-photo, and queue-ordering regressions were added. All 50 focused photo, courier inbox, processing queue, and model-selection tests then passed on the final code.
+- iPhone simulator build and `DaybookPhoneTests/ReadingTests`: 22 tests passed. Coverage includes image import, local/missing originals, thumbnail decoding, timed transcript entries, and a ZIP export containing Markdown and photos.
+- Synthetic photo tests cover old-library decoding, byte-preserving imports, EXIF rotation/time zones, duplicate imports, restoration, concurrent edits, deterministic analysis ties, timeline/drift placement, summary evidence, OCR, image quality, and model provenance/fallback.
+- The real `LocalIntelligenceRuntime` read a synthetic image through Apple Vision without installing models. Mac demo processing saved all four analyses, placed the three informative images under Budget, Hiring, and Packaging, and excluded the blurred image.
+- Inspected Mac summary/viewer screenshots and the iPhone Duo cover-display importer, viewer, and transcript. Local screenshots are under ignored `build/photo-review/`. The inactive Duo display produces black screenshots; the cover uses `simctl io <device> screenshot --display=1`.
+
+```sh
+swift test
+swift test --filter 'Photo|LibrarySyncInboxTests|ProcessingRequestQueueTests|ModelPreferenceMigrationTests'
+scripts/build-ios.sh --test --test-arg -only-testing:DaybookPhoneTests/ReadingTests
+```
+
+Still requires real-device acceptance: choosing HEIC originals from an iCloud Photos library, Continuity Camera delivery, background/offline photo transfers through the signed CloudKit container, and richer captions from actual Gemma 4 VLM weights. No model weights were downloaded, no surroundings were recorded, and no personal photos were used for these checks.
+
+## Earlier validation
+
 Run on 2026-10-23 on Apple silicon, macOS 27.0, Xcode 27.1 / Swift 6.4, 64 GB memory. The deployment target is macOS 15; earlier supported OS releases have not been exercised on separate hardware.
 
 ## Automated tests
