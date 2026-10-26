@@ -85,6 +85,41 @@ final class ModelStoreTests: XCTestCase {
         XCTAssertEqual(Array(fetcher.written.dropFirst(before)), ["bundle/weights.bin"], "Only the bad file downloads again")
     }
 
+    /// A file the manifest gives no checksum for can't be checked, so nothing installs: size alone
+    /// would let a swapped file of the same length through.
+    func testAFileWithoutADigestInstallsNothing() async throws {
+        let fetcher = FakeFetcher()
+        var (artifact, contents) = SyntheticModels.artifact("model", repository: "toy/small", revision: "rev-a", root: "bundle",
+                                                            files: [("bundle/weights.bin", "weights"), ("bundle/config.json", "{}")])
+        artifact.files[0].sha256 = nil
+        artifact.files[0].gitOID = nil
+        fetcher.add(contents)
+        let model = ModelCatalog(builtIn: SyntheticModels.manifest(revisions: [
+            ModelRevisionEntry(id: "rev-a", releaseDate: "2026-01-01", artifacts: [artifact])])).models[0]
+        let store = ModelStore(root: root)
+        do {
+            _ = try await store.install(model, revision: model.revisions[0], fetcher: fetcher)
+            XCTFail("An unverifiable file must not install")
+        } catch let error as ModelStoreError {
+            XCTAssertEqual(error, .unverifiable(model: "Toy Small", file: "bundle/weights.bin"))
+            XCTAssertTrue(error.localizedDescription.contains("no checksum"), error.localizedDescription)
+        }
+        let inventory = await store.inventory()
+        XCTAssertTrue(inventory.revisions.isEmpty)
+    }
+
+    func testDigestChecksFailClosedWithoutADigest() throws {
+        let url = root.appendingPathComponent("file.bin")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("weights".utf8).write(to: url)
+        let bare = ModelFile(path: "file.bin", size: 7)
+        XCTAssertThrowsError(try ModelFileDigest.verify(url, against: bare)) { XCTAssertEqual($0 as? ModelFileDigest.Failure, .noDigest) }
+        // The quick size check of an existing install still works.
+        XCTAssertNoThrow(try ModelFileDigest.verify(url, against: bare, checkContent: false))
+        XCTAssertNoThrow(try ModelFileDigest.verify(url, against: SyntheticModels.file("file.bin", "weights").0))
+        XCTAssertNoThrow(try ModelFileDigest.verify(url, against: SyntheticModels.file("file.bin", "weights", lfs: false).0))
+    }
+
     func testAFailedEngineCheckLeavesNoInstall() async throws {
         let (model, fetcher) = toy([("rev-a", "2026-01-01", "a")])
         let store = ModelStore(root: root)

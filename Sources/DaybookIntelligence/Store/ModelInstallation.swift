@@ -153,6 +153,8 @@ public struct ModelDiskUsage: Sendable, Equatable {
 
 public enum ModelStoreError: LocalizedError, Equatable {
     case verificationFailed(model: String, file: String)
+    /// The manifest gives no checksum for a file, so it can't be checked and isn't installed.
+    case unverifiable(model: String, file: String)
     case inUse(String)
     case busy(String)
     case notInstalled(String)
@@ -161,6 +163,8 @@ public enum ModelStoreError: LocalizedError, Equatable {
         switch self {
         case .verificationFailed(let model, let file):
             return "\(model) didn’t download correctly (\(file) didn’t match). Try downloading it again."
+        case .unverifiable(let model, let file):
+            return "\(model) can’t be checked: Hugging Face lists no checksum for \(file), so it wasn’t installed."
         case .inUse(let model): return "\(model) is in use. Try again when processing finishes."
         case .busy(let model): return "\(model) is already downloading."
         case .notInstalled(let model): return "\(model) isn’t downloaded."

@@ -5,9 +5,10 @@ import Foundation
 /// Verifies a downloaded file against its manifest entry: the size, then SHA-256 when the manifest
 /// has it (Hugging Face LFS files), else the git blob ID (SHA-1 over "blob <size>\0" and the
 /// content, which is what Hugging Face publishes for small files). Files are streamed in chunks.
+/// An entry with neither can't be checked, so its file is never trusted (`noDigest`).
 enum ModelFileDigest {
     enum Failure: Error, Equatable {
-        case missing, wrongSize(expected: Int64, actual: Int64), wrongDigest
+        case missing, wrongSize(expected: Int64, actual: Int64), wrongDigest, noDigest
     }
 
     static func verify(_ url: URL, against file: ModelFile, checkContent: Bool = true) throws {
@@ -24,6 +25,8 @@ enum ModelFileDigest {
             guard try sha256(url) == expected else { throw Failure.wrongDigest }
         } else if let expected = file.gitOID {
             guard try gitBlobID(url, size: size) == expected else { throw Failure.wrongDigest }
+        } else {
+            throw Failure.noDigest
         }
     }
 
