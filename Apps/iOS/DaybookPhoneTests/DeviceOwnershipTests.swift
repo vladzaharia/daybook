@@ -8,12 +8,6 @@ import XCTest
 /// say who manages it, and the phone's imports file into the library with a Transcribe request.
 @MainActor
 final class DeviceOwnershipTests: XCTestCase {
-    override func tearDown() async throws {
-        #if DEBUG
-        DeviceHub.demo = DeviceHubDemo()
-        #endif
-    }
-
     /// The simulated recorder these tests reach for, and every transport made for it.
     @MainActor
     final class Recorder {
@@ -33,22 +27,32 @@ final class DeviceOwnershipTests: XCTestCase {
         }
     }
 
-    /// The app's devices against `recorder`, as `--device-simulator` wires them (a new transport for
-    /// each connection, never Bluetooth), with preferences in a throwaway suite. PhoneDevices builds
-    /// its own `DeviceEnvironment`, so `SoundcoreTiming` and `RecorderHandoff.Timing` stay at their
-    /// production values; nothing here waits on them.
+    /// The app's devices against `recorder` (a new transport for each connection, never Bluetooth),
+    /// with preferences in a throwaway suite.
     private func makeDevices(_ library: PhoneLibrary, _ recorder: Recorder, settings: PhoneSettings) throws -> PhoneDevices {
         let suite = "DeviceOwnershipTests-devices-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
-        DeviceHub.demo = DeviceHubDemo(transport: { [recorder] in
+        let devices = PhoneDevices(library: library, settings: settings, mode: .inert, defaults: defaults, timing: Self.timing) { [recorder] in
             let transport = SimulatedSoundcoreTransport(device: recorder.device)
             recorder.transports.append(transport)
             return transport
-        })
-        let devices = PhoneDevices(library: library, settings: settings, mode: .inert, defaults: defaults)
+        }
         addTeardownBlock { devices.shutDown() }
         return devices
+    }
+
+    /// Production timing, except: a request the simulated recorder never answers fails in seconds,
+    /// waits after a stopped transfer or a dropped link are short, and a recorder connected for an
+    /// automatic import isn't let go partway through a slow run (30 s in the app).
+    private static var timing: PhoneDevices.Timing {
+        var timing = PhoneDevices.Timing()
+        timing.soundcore.request = .seconds(3)
+        timing.soundcore.settle = .milliseconds(20)
+        timing.soundcore.backoff = [.milliseconds(40), .milliseconds(80)]
+        timing.soundcore.idleRelease = .seconds(600)
+        timing.soundcore.automaticIdleRelease = .seconds(600)
+        return timing
     }
 
     /// Runs everything already queued on the main queue.
