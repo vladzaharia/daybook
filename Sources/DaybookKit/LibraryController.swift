@@ -633,21 +633,10 @@ public final class LibraryController: ObservableObject {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata),
                                                           limits: limits, protecting: active.map { [$0] } ?? [], scope: scope) else { return nil }
-            // Save edits made while iCloud hydrated files before applying a remote deletion.
+            // Save edits made while iCloud hydrated files before applying the pass.
             await flush()
             try Task.checkCancellation()
             guard sync.canApply(result) else { return nil }
-            for id in result.deletedMeetingIDs {
-                try Task.checkCancellation()
-                guard sync.canApply(result) else { return applied }
-                if meetings.contains(where: { $0.id == id }), id != active {
-                    _ = try await store.moveToTrash(id)
-                    meetings.removeAll { $0.id == id }
-                    // A completed local move must be reflected in memory even if the account changed
-                    // during the store await. Remaining changes from that receipt are discarded.
-                    guard sync.canApply(result) else { return applied }
-                }
-            }
             var mergeWarnings = result.warnings
             savingSyncResult = true
             defer { savingSyncResult = false }
@@ -692,6 +681,21 @@ public final class LibraryController: ObservableObject {
                                   hasMoreWork: result.hasMoreWork, notLocalAudio: result.notLocalAudio)
             if !mergeWarnings.isEmpty { notice = Array(Set(mergeWarnings)).sorted().joined(separator: "\n") }
             try await flushDurably()
+            try Task.checkCancellation()
+            guard sync.canApply(result) else { return applied }
+            // Remote deletions go to the Trash once everything this pass returned is saved: a conversation kept from
+            // a deletion is on disk before the one it came from moves.
+            for id in result.deletedMeetingIDs {
+                try Task.checkCancellation()
+                guard sync.canApply(result) else { return applied }
+                if meetings.contains(where: { $0.id == id }), id != active {
+                    _ = try await store.moveToTrash(id)
+                    meetings.removeAll { $0.id == id }
+                    // A completed local move must be reflected in memory even if the account changed
+                    // during the store await. Remaining changes from that receipt are discarded.
+                    guard sync.canApply(result) else { return applied }
+                }
+            }
             try Task.checkCancellation()
             guard sync.canApply(result) else { return applied }
             try await sync.acknowledge(result)

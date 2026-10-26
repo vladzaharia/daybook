@@ -273,11 +273,13 @@ public actor LibrarySyncEngine {
         var memo = MergeMemo()
         /// Deleted elsewhere but kept here this pass (protected, or waiting to read what the deletion saw).
         var held = Set<UUID>()
+        var examinedDeletions = Set<UUID>()
         let grouped = Dictionary(grouping: events.keys, by: { events[$0]!.meetingID })
         for (meetingID, ids) in grouped.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             try Task.checkCancellation()
             guard !budget.timeExceeded else { budget.deferred += 1; continue }
             if deletes.contains(meetingID) {
+                examinedDeletions.insert(meetingID)
                 // Deleted on another device while this one still has it. A conversation being recorded or
                 // processed here waits; then anything it holds that the deletion never saw (recordings, photos,
                 // bookmarks, notes) is kept as a new conversation instead of disappearing with it.
@@ -344,6 +346,10 @@ public actor LibrarySyncEngine {
             catch { warnings.append(error.localizedDescription); pendingDownloads += 1 }
         }
         state.deletedIDs.formUnion(deletes)
+        // A deleted conversation still here whose journal wasn't examined this pass (deferred by limits, or its
+        // entries still unread) waits for a pass that can tell whether it holds anything the deletion never saw.
+        for id in deletes where output[id] != nil && !deletedHere.contains(id) && !examinedDeletions.contains(id)
+            && (grouped[id] != nil || journalIncomplete) { held.insert(id) }
         deletes.subtract(held)
         for id in deletes { output.removeValue(forKey: id); changed.remove(id); notLocalAudio.removeValue(forKey: id) }
         var sourceMeetings: [String: Set<UUID>] = [:]
@@ -463,8 +469,14 @@ public actor LibrarySyncEngine {
     /// same one. Nil when there's nothing new to keep (the deletion simply applies).
     private func keepContentAddedAfterDeletion(_ local: Meeting, deletions: [String], events: [String: SyncEventHeader],
                                                memo: inout MergeMemo, supplied: [UUID: Meeting]) throws -> Meeting? {
-        let parents = Set(deletions.flatMap { events[$0]?.parents ?? [] }).filter { events[$0]?.deleted == false }
-        // What the device that deleted it had: the merge of the deletion's parents.
+        // The deletion itself, and what the device that deleted it had (the merge of its parents), must be read
+        // before anything is judged new: a parent still downloading or deferred holds the conversation.
+        guard !deletions.isEmpty else { throw SyncPendingDownload() }
+        let allParents = Set(deletions.flatMap { events[$0]?.parents ?? [] })
+        if allParents.contains(where: { events[$0] == nil && unreadableJournal[$0] == nil }) { throw SyncPendingDownload() }
+        let parents = allParents.filter { events[$0]?.deleted == false }
+        // A parent this version can't read: what the deletion saw is unknown, so the deletion simply applies.
+        if parents.count < allParents.filter({ events[$0]?.deleted != true }).count { return nil }
         let seen = parents.isEmpty ? nil : try mergedSnapshot(of: Array(parents), events: events, memo: &memo)
         guard local.hasContent(notIn: seen) else { return nil }
         let forkID = SyncEncoding.uuid("\(local.id.uuidString):kept-after-deletion:\(deletions.sorted().joined(separator: ","))")

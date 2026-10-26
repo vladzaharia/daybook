@@ -68,6 +68,28 @@ final class LibrarySyncDeletionTests: XCTestCase {
         XCTAssertTrue(onMac.deletedMeetingIDs.contains(meeting.id))
     }
 
+    func testADeletionWhoseHistoryHasntArrivedHoldsTheConversationInsteadOfKeepingIt() async throws {
+        let a = try engine("A"), b = try engine("B")
+        let meeting = Meeting(title: "Retro", notes: "First notes")
+        try await pass(a, "A", [meeting]); try await pass(b, "B")
+        // A edits, then deletes; B gets the deletion before the edit it was made after.
+        var edited = meeting; edited.setNotes("First notes\nMore from A")
+        let before = Set(try FileManager.default.contentsOfDirectory(atPath: remote.appendingPathComponent("Events").path))
+        try await pass(a, "A", [edited])
+        let edit = try XCTUnwrap(Set(try FileManager.default.contentsOfDirectory(atPath: remote.appendingPathComponent("Events").path)).subtracting(before).first)
+        try await pass(a, "A", deleting: [meeting.id])
+        let aside = root.appendingPathComponent("aside.json")
+        try FileManager.default.moveItem(at: remote.appendingPathComponent("Events/\(edit)"), to: aside)
+        let early = try await pass(b, "B", [meeting])
+        XCTAssertFalse(early.deletedMeetingIDs.contains(meeting.id), "held until what the deletion saw is read")
+        XCTAssertEqual(early.meetings.map(\.id), [meeting.id], "nothing is kept as a new conversation")
+        XCTAssertGreaterThan(early.pendingDownloads, 0)
+        try FileManager.default.moveItem(at: aside, to: remote.appendingPathComponent("Events/\(edit)"))
+        let later = try await pass(b, "B", [meeting])
+        XCTAssertTrue(later.deletedMeetingIDs.contains(meeting.id))
+        XCTAssertTrue(later.meetings.isEmpty, "B added nothing the deletion didn't see")
+    }
+
     func testTwoDevicesThatKeepTheSameDeletedConversationMakeOneNewOne() async throws {
         let a = try engine("A"), b = try engine("B"), c = try engine("C")
         let meeting = Meeting(title: "Workshop")
