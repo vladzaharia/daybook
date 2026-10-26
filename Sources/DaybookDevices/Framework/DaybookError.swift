@@ -1,15 +1,5 @@
-import Foundation
+import DaybookCore
 
-/// Why the library couldn't take something. Device imports throw and recognize these, so they
-/// live below the library itself; the Mac app calls them `AppError`.
-public enum DaybookError: LocalizedError {
-    case libraryUnavailable, invalidAudio(String), noSpeech, saveFailed(String)
-    public var errorDescription: String? {
-        switch self {
-        case .saveFailed(let message): return "Couldn’t save changes: " + message
-        case .libraryUnavailable: return "Your library is not available yet."
-        case .invalidAudio(let name): return "\(name) contains no readable audio."
-        case .noSpeech: return "No speech was recognized."
-        }
-    }
-}
+/// `DaybookError` moved to DaybookCore, beside the store that throws most of them; device code and
+/// anything importing only DaybookDevices keep this name for it.
+public typealias DaybookError = DaybookCore.DaybookError
