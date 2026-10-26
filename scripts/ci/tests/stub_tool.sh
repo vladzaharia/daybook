@@ -11,6 +11,9 @@
 #   STUB_PLIST_VERSION, STUB_PLIST_BUILD
 #                              CFBundleShortVersionString and CFBundleVersion of the apps it makes
 #   STUB_IDENTITY=1            security find-identity lists a Developer ID Application identity
+#   STUB_IMPORT_FAILS=1        `security import` fails the way security -i reports it
+# `security -i` reads commands from standard input: each line goes to $STUB_LOG as "security-stdin
+# <line>", and its arguments, split as security splits them, to $STUB_LOG.args as a JSON array.
 set -euo pipefail
 tool="$(basename "$0")"
 printf '%s' "$tool" >> "${STUB_LOG:?}"
@@ -110,12 +113,35 @@ case "$tool" in
             cp -R "$src" "$dest"
         fi
         ;;
+    curl) exit 22 ;;
     hdiutil)
         out="${*: -1}"
         printf 'dmg\n' > "$out"
         ;;
     security)
+        if [[ "${1-}" == -i ]]; then
+            while IFS= read -r line; do
+                printf 'security-stdin %s\n' "$line" >> "$STUB_LOG"
+                words="$(python3 -I -c 'import json, shlex, sys; print(json.dumps(shlex.split(sys.argv[1])))' "$line")"
+                printf '%s\n' "$words" >> "$STUB_LOG.args"
+                case "$(printf '%s' "$words" | jq -r '.[0]')" in
+                    create-keychain) : > "$(printf '%s' "$words" | jq -r '.[-1]')" ;;
+                    import)
+                        if [[ "${STUB_IMPORT_FAILS:-0}" == 1 ]]; then
+                            echo "security: SecKeychainItemImport: MAC verification failed during PKCS12 import (wrong password?)"
+                            echo "import: returned -25264"
+                        else
+                            echo "1 identity imported."
+                        fi ;;
+                esac
+            done
+            exit 0
+        fi
         case "${1-}" in
+            list-keychains)
+                has -s "$@" || echo '    "/Users/runner/Library/Keychains/login.keychain-db"'
+                ;;
+            delete-keychain) rm -f "${*: -1}" ;;
             find-identity)
                 if [[ "${STUB_IDENTITY:-0}" == 1 ]]; then
                     echo '  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Example (48H7CLBV8Y)"'

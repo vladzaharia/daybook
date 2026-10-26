@@ -137,7 +137,7 @@ If cloud-managed Developer ID signing isn't permitted for the key, give the Mac 
 
 `secrets.sh setup` then works in this order:
 
-1. It creates a temporary keychain with a random password and imports the `.p12`.
+1. It creates a temporary keychain with a random password and imports the `.p12`. Both passwords reach `security` on its standard input (`security -i`), never on a command line where `ps` would show them.
 2. It deletes the `.p12` file.
 3. It allows codesign to use the key without a prompt (`set-key-partition-list`).
 4. It adds Apple's Developer ID G2 intermediate (downloaded, SHA-256 pinned), because macOS ships only the older intermediate.

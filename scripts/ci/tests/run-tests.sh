@@ -13,6 +13,8 @@
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
+#   secrets.sh            setup/cleanup with the API key; on macOS, the .p12 keychain with a stand-in
+#                         security that checks no password reaches a command line
 #   build-ios.sh          the upload retry, package pinning, and archive calls, with stand-in Xcode tools
 #                         (macOS)
 #   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
@@ -42,6 +44,15 @@ expect_ok() { local name="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$name"
 expect_fail() { local name="$1"; shift; if "$@" >/dev/null 2>&1; then flunk "$name (succeeded)"; else pass "$name"; fi; }
 b64url_decode() { local s="$1"; while (( ${#s} % 4 )); do s="$s="; done; printf '%s' "$s" | tr '_-' '/+' | base64 -d; }
 macos() { [[ "$(uname)" == Darwin ]]; }
+
+# Stand-ins for Xcode's tools, security, and curl (stub_tool.sh). Every test that runs a script which
+# could reach the keychain, Xcode, or the network puts these first on PATH.
+stubs="$work/stubs"
+mkdir -p "$stubs"
+for tool in xcodebuild xcodegen xcrun codesign ditto hdiutil spctl security curl; do
+    cp "$here/stub_tool.sh" "$stubs/$tool"
+    chmod +x "$stubs/$tool"
+done
 
 # --- version.sh ----------------------------------------------------------------------------------------
 echo "version.sh"
@@ -365,12 +376,6 @@ fi
 # --- build-app.sh, with stand-in Xcode tools, in a copy of the repository ------------------------------
 echo "build-app.sh"
 if macos; then
-    stubs="$work/stubs"
-    mkdir -p "$stubs"
-    for tool in xcodebuild xcodegen xcrun codesign ditto hdiutil spctl security; do
-        cp "$here/stub_tool.sh" "$stubs/$tool"
-        chmod +x "$stubs/$tool"
-    done
     mac_repo="$work/mac-repo"
     mkdir -p "$mac_repo/scripts" "$mac_repo/Apps/macOS/Config"
     cp "$ci/../build-app.sh" "$mac_repo/scripts/"
@@ -462,6 +467,55 @@ if macos; then
     expect_eq "(none in the calls)" "" "$(grep -- '-allowProvisioning' "$work/stub.log" || true)"
 else
     echo "  skip  build-ios.sh (macOS only)"
+fi
+
+# --- secrets.sh -----------------------------------------------------------------------------------------
+echo "secrets.sh"
+secrets_env=(RUNNER_TEMP="$work/runner-temp" GITHUB_ENV="$work/github-env" ASC_KEY_ID=ABC123DEFG ASC_ISSUER_ID="$issuer"
+             ASC_KEY_P8_BASE64="$(base64 < "$key" | tr -d '\n')" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log")
+mkdir -p "$work/runner-temp"
+: > "$work/github-env"
+expect_ok "setup writes the key for later steps" env "${secrets_env[@]}" "$ci/secrets.sh" setup
+key_path="$work/runner-temp/daybook-secrets/AuthKey_ABC123DEFG.p8"
+expect_eq "and its path to GITHUB_ENV" "DAYBOOK_ASC_KEY_PATH=$key_path" "$(grep '^DAYBOOK_ASC_KEY_PATH=' "$work/github-env")"
+# shellcheck disable=SC2012 # only the mode column, the same on macOS and Linux
+expect_eq "mode 600 in a 700 directory" "-rw------- drwx------" \
+    "$(ls -ld "$key_path" | cut -c1-10) $(ls -ld "$(dirname "$key_path")" | cut -c1-10)"
+expect_ok "cleanup removes it" env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup
+expect_ok "(gone)" test ! -e "$work/runner-temp/daybook-secrets"
+expect_fail "a key that isn't a .p8 fails" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(printf 'nope' | base64)" "$ci/secrets.sh" setup
+env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup 2>/dev/null
+expect_ok "raw PEM is accepted too" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(cat "$key")" "$ci/secrets.sh" setup
+env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup 2>/dev/null
+if macos; then
+    # shellcheck disable=SC2016 # a literal $ in the password
+    p12_password='pa ss"wo\rd $HOME '"'"'x'
+    p12_env=("${secrets_env[@]}" DEVELOPER_ID_P12_BASE64="$(printf 'not really a p12' | base64)" DEVELOPER_ID_P12_PASSWORD="$p12_password"
+             STUB_IDENTITY=1)
+    : > "$work/stub.log"
+    : > "$work/stub.log.args"
+    : > "$work/github-env"
+    expect_ok "setup with the .p12: a keychain with the identity" env "${p12_env[@]}" "$ci/secrets.sh" setup
+    keychain="$(sed -n 's/^DAYBOOK_SIGNING_KEYCHAIN=//p' "$work/github-env")"
+    expect_ok "the keychain exists and the .p12 is gone" test -f "$keychain" -a ! -e "$(dirname "$keychain")/developer-id.p12"
+    keychain_password="$(jq -r 'select(.[0] == "create-keychain") | .[2]' "$work/stub.log.args")"
+    expect_eq "the .p12 password reaches security on stdin, intact" "$p12_password" \
+        "$(jq -r 'select(.[0] == "import") | . as $a | ($a | index("-P")) as $i | $a[$i + 1]' "$work/stub.log.args")"
+    expect_eq "so does the keychain password, for create, unlock, and the partition list" "3" \
+        "$(grep -cF -- "$keychain_password" "$work/stub.log.args")"
+    expect_eq "no password on any command line" "" \
+        "$(grep '^security ' "$work/stub.log" | grep -F -e "$keychain_password" -e 'wo\rd' || true)"
+    expect_ok "cleanup" env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup
+    expect_ok "deletes the keychain" grep -q '^security delete-keychain .*daybook-signing.keychain-db' "$work/stub.log"
+    expect_ok "and restores the search list" grep -q '^security list-keychains -d user -s /Users/runner/Library/Keychains/login.keychain-db$' "$work/stub.log"
+    expect_fail "a .p12 without a Developer ID identity fails" env "${p12_env[@]}" STUB_IDENTITY=0 "$ci/secrets.sh" setup
+    expect_fail "a wrong .p12 password fails" env "${p12_env[@]}" STUB_IMPORT_FAILS=1 "$ci/secrets.sh" setup
+    expect_ok "without leaving the .p12" test ! -e "$work/runner-temp/daybook-secrets/developer-id.p12"
+    env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup 2>/dev/null
+    expect_fail "a password with a line break is refused" env "${p12_env[@]}" DEVELOPER_ID_P12_PASSWORD="$(printf 'a\nb')" "$ci/secrets.sh" setup
+    env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup 2>/dev/null
+else
+    echo "  skip  secrets.sh with a .p12 (macOS only)"
 fi
 
 echo

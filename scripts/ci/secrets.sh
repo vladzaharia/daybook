@@ -19,7 +19,8 @@
 #   DAYBOOK_SIGNING_KEYCHAIN        the temporary keychain, only when a .p12 was imported
 #
 # The directory is mode 700 and every file 600. The .p12 is deleted as soon as it's imported; the
-# keychain's random password exists only in this process and the keychain itself.
+# keychain's random password exists only in this process and the keychain itself. Passwords reach
+# `security` on its standard input (`security -i`), never on a command line, where `ps` would show them.
 set -euo pipefail
 
 dir="${DAYBOOK_SECRETS_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/daybook-secrets}"
@@ -39,6 +40,25 @@ export_env() {
     else
         printf 'export %s=%q\n' "$1" "$2"
     fi
+}
+
+# sec_arg VALUE: VALUE quoted as one argument for `security -i`, which splits its input like a shell:
+# inside double quotes, \\ and \" stand for \ and ".
+sec_arg() {
+    [[ "$1" != *$'\n'* ]] || fail "a keychain argument can't contain a line break"
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+}
+
+# security_stdin COMMAND: runs one `security` command read from standard input. `security -i` exits 0
+# even when the command fails, so its "<command>: returned <status>" line decides.
+security_stdin() {
+    local output
+    if ! output="$(printf '%s\n' "$1" | security -i 2>&1)" \
+        || printf '%s\n' "$output" | grep -qE ': returned -?[0-9]+$'; then
+        printf '%s\n' "$output" >&2
+        return 1
+    fi
+    if [[ -n "$output" ]]; then printf '%s\n' "$output"; fi
 }
 
 decode_to() {
@@ -84,22 +104,28 @@ setup() {
     decode_to "$p12" "$DEVELOPER_ID_P12_BASE64"
     password="$(openssl rand -hex 24)"
 
+    [[ "$DEVELOPER_ID_P12_PASSWORD" != *$'\n'* ]] || fail "DEVELOPER_ID_P12_PASSWORD can't contain a line break"
     security list-keychains -d user | sed -E 's/^[[:space:]]*"?//; s/"?[[:space:]]*$//' > "$search_list"
     security delete-keychain "$keychain" 2>/dev/null || true
-    security create-keychain -p "$password" "$keychain"
+    security_stdin "create-keychain -p $(sec_arg "$password") $(sec_arg "$keychain")" \
+        || fail "couldn't create the keychain"
     # Lock after six hours of inactivity, longer than any release job.
     security set-keychain-settings -ut 21600 "$keychain"
-    security unlock-keychain -p "$password" "$keychain"
+    security_stdin "unlock-keychain -p $(sec_arg "$password") $(sec_arg "$keychain")" \
+        || fail "couldn't unlock the keychain"
     local current=()
     while IFS= read -r line; do [[ -n "$line" ]] && current+=("$line"); done < "$search_list"
     # (bash 3.2 treats an empty array as unset under `set -u`, hence the ${a[@]+...} form)
     security list-keychains -d user -s "$keychain" ${current[@]+"${current[@]}"}
 
-    security import "$p12" -k "$keychain" -f pkcs12 -P "$DEVELOPER_ID_P12_PASSWORD" \
-        -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/productbuild >/dev/null
+    if ! security_stdin "import $(sec_arg "$p12") -k $(sec_arg "$keychain") -f pkcs12 -P $(sec_arg "$DEVELOPER_ID_P12_PASSWORD") -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/productbuild" >/dev/null; then
+        /bin/rm -f "${p12:?}"
+        fail "couldn't import the .p12 (is DEVELOPER_ID_P12_PASSWORD its password?)"
+    fi
     /bin/rm -f "${p12:?}"
     # Let codesign use the key without a prompt.
-    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+    security_stdin "set-key-partition-list -S apple-tool:,apple:,codesign: -s -k $(sec_arg "$password") $(sec_arg "$keychain")" >/dev/null \
+        || fail "couldn't allow codesign to use the key"
 
     local g2="$dir/DeveloperIDG2CA.cer"
     if curl -fsSL --retry 3 -o "$g2" "$g2_url" \
