@@ -19,6 +19,13 @@ enum DaybookEntry {
             let code = await SpeechEvaluation.run(arguments: CommandLine.arguments)
             Darwin.exit(code)
         }
+        #if DEBUG
+        // Whether process taps work in the App Sandbox (docs/sandbox.md): the tap alone, nothing recorded.
+        if CommandLine.arguments.contains("--capture-probe") {
+            let code = await CaptureProbe.run(arguments: CommandLine.arguments)
+            Darwin.exit(code)
+        }
+        #endif
         DaybookApp.main()
     }
 }

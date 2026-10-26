@@ -90,6 +90,24 @@ only, ad hoc builds under their own bundle ID so they can never create or migrat
 that offers **Move Library…** when the library didn't move, re-granting folders whose old bookmarks don't resolve,
 and a process-tap probe.
 
+## The process-tap probe
+
+Whether Core Audio process taps work in the sandbox decides whether the switch keeps call-only capture. Debug builds
+have a probe that runs the tap alone, records nothing, and reports each second's peak level:
+
+```sh
+./scripts/build-app.sh --ad-hoc --debug            # sandboxed, bundle ID local.daybook.app.adhoc
+# Play something in Music (or join a test call), then:
+dist/Daybook.app/Contents/MacOS/Daybook --capture-probe com.apple.Music --seconds 15 --output /tmp/daybook/probe.json
+```
+
+macOS asks for System Audio Recording the first time (for `local.daybook.app.adhoc`). The report says whether the
+run was sandboxed, which processes the tap followed, and the peaks. Exit status 0 means audio was heard: taps work
+sandboxed. 1 means the tap ran but heard only silence (the permission is off, or nothing played); 2 means it couldn't
+start (`error` says why). Try a browser call too (`com.google.Chrome`, `com.apple.Safari`), whose audio comes from
+helper processes. If taps don't work sandboxed, the switch still records calls, through ScreenCaptureKit (all Mac
+audio), and docs/capture.md needs a note.
+
 ## Updates (Polaris / Sparkle)
 
 The Polaris integration design (an untracked spec in the owner's checkout, `docs/superpowers/specs/2026-10-24-polaris-key-integration-design.md`)
