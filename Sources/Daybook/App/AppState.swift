@@ -314,6 +314,8 @@ final class AppState: ObservableObject {
                             home: URL = UserHome.url,
                             store: (URL) -> SyncDeviceIdentityStore = { SyncDeviceIdentityStore.keychain(for: $0) }) -> LaunchCheck {
         guard sandboxed else {
+            // Only the app itself goes back: its library is the old place its bundle ID's sandboxed build moved from.
+            guard SandboxMigration.legacyFolderName(bundleIdentifier: bundleIdentifier) == library.lastPathComponent else { return LaunchCheck() }
             let plan = LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleIdentifier, home: home, defaults: defaults)
             return LaunchCheck(offer: plan.map { .returnFromContainer($0) })
         }

@@ -103,6 +103,11 @@ final class LibraryMoveTests: XCTestCase {
                                          priorUse: true, home: home)
         guard case .returnFromContainer(let plan)? = check.offer else { return XCTFail("\(check)") }
         XCTAssertEqual(plan.container, container)
+        // A build under another bundle ID never takes a library into the app's place.
+        let rehearsal = home.appendingPathComponent("Library/Containers/local.daybook.app.rehearsal/Data/Library/Application Support/Daybook")
+        try writeLibrary(at: rehearsal, meeting: "rehearsal")
+        XCTAssertEqual(AppState.launchCheck(library: library, bundleIdentifier: "local.daybook.app.rehearsal", defaults: makeTestDefaults(),
+                                            sandboxed: false, priorUse: true, home: home), .init())
     }
 
     /// With a move offered, the library stays closed until the person answers; Not Now opens it where it is.
