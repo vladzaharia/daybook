@@ -495,6 +495,41 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertTrue(rig.state.sources.recorders.pendingStops.isEmpty)
     }
 
+    /// A stop owed to a phone that's away is kept across a relaunch of this Mac, and goes when the phone
+    /// reconnects to the relaunched Mac.
+    func testAStopOwedToAPhoneIsSentAfterThisMacRelaunches() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        await phone.client.disconnect(from: phone.macID)
+        try await waitUntil("the phone is gone") { rig.state.phoneLink.peers[phone.phoneID] == nil }
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+        XCTAssertEqual(rig.state.sources.recorders.pendingStops[phone.phoneID.uuidString]?.map(\.meetingID), [id])
+        XCTAssertNotNil(rig.defaults.data(forKey: MultiSourceCoordinator.owedStopsKey), "kept in this Mac's preferences")
+
+        // Daybook quits and opens again.
+        await rig.state.phoneLink.shutDown()
+        await rig.state.flush()
+        let relaunched = AppState(libraryURL: rig.root, defaults: rig.defaults)
+        // Its link starts as it opens (a phone is paired): on loopback, with the same pairing.
+        PhoneLinkRig.useLoopback(relaunched, keyStore: phone.macKeyStore)
+        await relaunched.initialize()
+        defer { Task { await phone.client.disconnect(from: phone.macID); await relaunched.phoneLink.shutDown() } }
+        XCTAssertEqual(relaunched.sources.recorders.pendingStops[phone.phoneID.uuidString]?.map(\.meetingID), [id])
+        XCTAssertEqual(relaunched.meetings.first { $0.id == id }?.companions?.first?.state, .stopFailed)
+        XCTAssertEqual(phone.recorder.requests.map(\.action), [.start])
+
+        try await phone.reconnect(to: relaunched)
+        try await waitUntil("the stop on reconnecting") { phone.recorder.requests.map(\.action) == [.start, .stop] }
+        await relaunched.sources.recorders.settle()
+        XCTAssertEqual(phone.recorder.requests.last?.conversationID, id)
+        XCTAssertEqual(relaunched.meetings.first { $0.id == id }?.companions?.first?.state, .stopped)
+        XCTAssertTrue(relaunched.sources.recorders.pendingStops.isEmpty)
+        XCTAssertNil(rig.defaults.data(forKey: MultiSourceCoordinator.owedStopsKey), "nothing left to keep")
+    }
+
     func testAPhoneThatRefusesOrDropsMidStopIsReportedQuietly() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state)

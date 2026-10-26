@@ -69,6 +69,8 @@ struct PhoneLinkRig {
     let events: LinkEvents
     let recorder = PhoneRecorderScript()
     let endpoint: LinkEndpoint
+    /// The Mac's side of the pairing, for a Mac that relaunches (`reconnect(to:)`).
+    let macKeyStore: MemoryLinkKeyStore
 
     nonisolated static let phoneName = "Pocket iPhone"
 
@@ -100,7 +102,7 @@ struct PhoneLinkRig {
                                                        features: features, syncDeviceID: syncID(phoneID)),
                                 keyStore: phoneStore, configuration: configuration)
         let rig = PhoneLinkRig(phoneID: phoneID, macID: macID, client: client, events: LinkEvents(client.events()),
-                               endpoint: LinkEndpoint(host: "127.0.0.1", port: port))
+                               endpoint: LinkEndpoint(host: "127.0.0.1", port: port), macKeyStore: macStore)
         let script = rig.recorder
         await client.setRecordControlHandler { _, request in await script.record(request) }
         try await client.connect(to: macID, via: rig.endpoint)
@@ -111,6 +113,18 @@ struct PhoneLinkRig {
     func tearDown(_ state: AppState) async {
         await client.disconnect(from: macID)
         await state.phoneLink.shutDown()
+    }
+
+    /// Connects the phone to a relaunched Mac (another `AppState` on the same library and preferences,
+    /// so the same Mac and pairing), whose link listens on a new port. Call `useLoopback(_:keyStore:)`
+    /// with `macKeyStore` before that Mac initializes, since its link starts then.
+    func reconnect(to state: AppState) async throws {
+        await state.startPhoneLinkIfPaired()
+        let listening = await state.phoneLink.port
+        let port = try XCTUnwrap(listening)
+        XCTAssertEqual(state.phoneLink.identity.deviceID, macID, "the same Mac")
+        try await client.connect(to: macID, via: LinkEndpoint(host: "127.0.0.1", port: port))
+        try await waitUntil("the phone to reconnect") { state.phoneLink.peers[phoneID] != nil }
     }
 
     /// The phone's sync replica ID, which recorder ownership names it by (it differs from its link ID).

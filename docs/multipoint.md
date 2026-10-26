@@ -218,7 +218,9 @@ phone's clock. The phone answers straight away, so there's no polling:
 When this Mac stops, it asks to stop the phones it started, a phone that never answered, and one
 that says it's recording this conversation after all (`stopped`). A stop the phone refuses is
 `stopFailed`: "Alex's iPhone didn't stop. Stop it on the iPhone." One that doesn't reach it is owed
-until it reconnects: "Couldn't reach Alex's iPhone to stop it. It stops when it reconnects."
+until it reconnects: "Couldn't reach Alex's iPhone to stop it. It stops when it reconnects." An owed
+stop is kept in this Mac's preferences (`multipoint.owedStops`, never synced) for a day, so it still
+goes if Daybook quits or restarts before the phone is back (`OwedStopsStore`).
 
 The device page's **Start Recording on iPhone** asks for a conversation of the phone's own
 (`standalone`), which that Mac may stop.
@@ -232,7 +234,8 @@ recording another conversation (`recordingSomethingElse`, naming it), starting o
 too, since nobody may be at the Mac to answer the prompt). The phone may stop a recording it asked
 for, not one started on the Mac (`declined`); it stops each Mac it started when it stops, including
 one still being asked and one whose answer never came, and owes a stop that didn't arrive until that
-Mac reconnects. A start that comes back after the phone stopped is stopped too.
+Mac reconnects, kept for a day in `owed-stops.json` in its library's folder (never synced), so a
+relaunch still sends it. A start that comes back after the phone stopped is stopped too.
 
 **Who stops whom.** A device that records because the other asked follows it: when the one that
 asked says it isn't recording that conversation any more (as it does on every reconnection), or
@@ -303,8 +306,10 @@ so only the Mac that carries out the request does this (any Mac, for a recording
   phone's recording, so they read before the timeline's zero (−0:42), as its passages do. Daybook
   0.3.0 and earlier reads note times from zero only, so editing those notes there drops their times
   (the notes stay).
-- Stops owed to a device that's away, and starts still being asked, are kept in memory: quitting
-  drops them, and the device's own follow-the-leader check (or the next launch) stops it instead.
+- Starts still being asked are kept in memory: quitting drops them, and the device's own
+  follow-the-leader check (or the next launch) stops it instead. Owed stops are kept for a day; one
+  older than that is dropped, by when the other device has stopped by its own rule or the person
+  has.
 - A Mac reached through a phone's recorder can't measure the recorder's clock; its recording is
   placed by the recorder's own start, then sound and transcript.
 - Record control with the phone, the clock prior on real Wi‑Fi, and a phone that loses the link

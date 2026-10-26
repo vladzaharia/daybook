@@ -51,8 +51,14 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
     /// The Mac whose device page started this recording (a conversation of this iPhone's own).
     @ObservationIgnored private var startedFromMac: UUID?
-    /// Stops this iPhone owes Macs it started, by Mac: the conversation to stop.
-    @ObservationIgnored private(set) var pendingStops: [UUID: UUID] = [:]
+    /// Stops this iPhone owes Macs it started, by Mac: the conversation to stop. Kept in a file in the
+    /// library's folder that never syncs (`owedStops`), so a relaunch still sends them as the Mac connects.
+    @ObservationIgnored private(set) var pendingStops: [UUID: UUID] = [:] {
+        didSet { if pendingStops != oldValue { saveOwedStops() } }
+    }
+    /// When each of `pendingStops` was first owed.
+    @ObservationIgnored private var owedSince: [UUID: Date] = [:]
+    @ObservationIgnored private let owedStops: OwedStopsStore<OwedMacStop>
     @ObservationIgnored private var stopsInFlight: Set<UUID> = []
     private(set) var isForeground = true
 
@@ -83,6 +89,12 @@ final class PhoneAppModel: RecordingCommandHandling {
                                                mode: LaunchOptions.isTestHost ? .inert : (options.deviceSimulator ? .simulator : .live),
                                                defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard)
         audio = SyncAudioProvider(library: library, sync: sync, budget: settings.audioCacheBudget)
+        // Stops a previous run owed, sent as each Mac connects.
+        let owedStops = OwedStopsStore<OwedMacStop>(file: library.rootURL.appendingPathComponent(Self.owedStopsFile))
+        let owed = owedStops.load()
+        self.owedStops = owedStops
+        owedSince = Dictionary(owed.map { ($0.macID, $0.owedAt) }, uniquingKeysWith: { _, later in later })
+        pendingStops = Dictionary(owed.map { ($0.macID, $0.conversationID) }, uniquingKeysWith: { _, later in later })
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options))
         recorder.onChange = { [weak self] in self?.recorderChanged() }
@@ -548,10 +560,20 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
     }
 
-    /// A stop for a Mac this iPhone started: sent now, and again whenever it connects, until it answers.
+    /// A stop for a Mac this iPhone started: sent now, and again whenever it connects, until it answers,
+    /// even after a relaunch.
     private func queueStop(of macID: UUID, conversation: UUID) {
+        if pendingStops[macID] != conversation { owedSince[macID] = Date() }
         pendingStops[macID] = conversation
         sendPendingStop(to: macID)
+    }
+
+    /// Where the stops this iPhone owes are kept, in the library's folder.
+    static let owedStopsFile = "owed-stops.json"
+
+    private func saveOwedStops() {
+        owedSince = owedSince.filter { pendingStops[$0.key] != nil }
+        owedStops.save(pendingStops.map { OwedMacStop(macID: $0.key, conversationID: $0.value, owedAt: owedSince[$0.key] ?? Date()) })
     }
 
     private func sendPendingStop(to macID: UUID) {
@@ -979,4 +1001,12 @@ final class PhoneAppModel: RecordingCommandHandling {
             try? data.write(to: directory.appendingPathComponent(digest + ".json"), options: .atomic)
         }
     }
+}
+
+/// A stop this iPhone owes a Mac it started (`PhoneAppModel.pendingStops`), as kept across relaunches.
+struct OwedMacStop: OwedStop {
+    var macID: UUID
+    /// The conversation the Mac is to stop recording.
+    var conversationID: UUID
+    var owedAt: Date
 }
