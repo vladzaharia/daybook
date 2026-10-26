@@ -248,6 +248,28 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertNil(sync.folder)
     }
 
+    func testAnAccountChangeDuringALongPassReconnectsOnceThePassUnwinds() async throws {
+        let gate = SyncReadGate()
+        defer { gate.release() }
+        let sync = controller(environment())
+        sync.replica.cloud = SyncCloudFiles(requestDownload: { _ in gate.waitForCancellation() }, isUploaded: { _ in true })
+        sync.syncDebounce = nil
+        sync.restore()
+        try await wait("the container") { sync.iCloud == .connected }
+        // A journal entry still in iCloud: the pass waits on its download, as it would copying a long recording.
+        try fm.createDirectory(at: journal.appendingPathComponent("Events"), withIntermediateDirectories: true)
+        try Data().write(to: journal.appendingPathComponent("Events/.\(String(repeating: "b", count: 64)).json.icloud"))
+        let pass = Task { try? await sync.synchronize(meetings: [], deletedMeetingIDs: [], metadata: Data()) }
+        try await wait("the pass to reach iCloud") { gate.entered }
+        NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
+        // The same account comes back while the cancelled pass is still unwinding.
+        try await Task.sleep(for: .milliseconds(200))
+        gate.release()
+        _ = await pass.value
+        try await wait("sync to reconnect") { sync.iCloud == .connected && sync.folder != nil }
+        XCTAssertFalse(sync.isSyncing)
+    }
+
     func testCancellingAnActivePassReachesTheEngineAndLeavesItReadyToRetry() async throws {
         let meeting = try await librarySyncedThroughFolder()
         let event = try XCTUnwrap(try fm.contentsOfDirectory(at: folder.appendingPathComponent("Events"), includingPropertiesForKeys: nil).first)

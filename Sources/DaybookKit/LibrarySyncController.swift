@@ -591,6 +591,12 @@ public final class LibrarySyncController: ObservableObject {
         // The library is bound to this account from here on, so a change mid-migration pauses too.
         defaults.set(account, forKey: Key.account)
         guard await migrateFolder(into: root, identifier: identifier, generation: generation), isCurrent(generation) else { return }
+        // An account change cancels the pass in flight, but it may still be unwinding (a long audio copy): attaching
+        // now would be refused as busy and leave sync off. Wait for it.
+        while isSyncing {
+            await waitForPassToEnd()
+            guard isCurrent(generation) else { return }
+        }
         do {
             try attach(root, transport: .iCloudContainer, monitorChanges: true)
             iCloud = .connected
