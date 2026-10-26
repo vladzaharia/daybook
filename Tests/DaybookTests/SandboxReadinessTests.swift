@@ -27,6 +27,31 @@ final class SandboxReadinessTests: XCTestCase {
         XCTAssertEqual(AppState.libraryURL.lastPathComponent, "Daybook Development")
     }
 
+    /// In the App Sandbox, the path flags may only name the container or the ad hoc build's scratch folder.
+    func testSandboxedLaunchPathsMustBeReachable() {
+        let container = "/Users/dana/Library/Containers/local.daybook.app.adhoc/Data"
+        let roots = [container, "/private/tmp/daybook/"]
+        XCTAssertTrue(LaunchPaths.isReachable("/tmp/daybook/ui", roots: roots))
+        XCTAssertTrue(LaunchPaths.isReachable("/private/tmp/daybook", roots: roots))
+        XCTAssertTrue(LaunchPaths.isReachable(container + "/Library/Application Support/Daybook/Models", roots: roots))
+        XCTAssertFalse(LaunchPaths.isReachable("/tmp/daybook-smoke.json", roots: roots), "a sibling isn't inside the folder")
+        XCTAssertFalse(LaunchPaths.isReachable("/tmp/daybook/../elsewhere", roots: roots))
+        XCTAssertFalse(LaunchPaths.isReachable("/Users/dana/Library/Application Support/Daybook", roots: roots))
+
+        let arguments = ["Daybook", "--library", "/tmp/daybook/ui", "--snapshot", "/Users/dana/Desktop/shots", "--output", "/tmp/smoke.json"]
+        let problems = LaunchPaths.problems(arguments: arguments, sandboxed: true, roots: roots)
+        XCTAssertEqual(problems.count, 2, problems.joined(separator: "\n"))
+        XCTAssertTrue(problems[0].hasPrefix("--snapshot /Users/dana/Desktop/shots:"), problems[0])
+        XCTAssertTrue(problems[0].contains("/private/tmp/daybook/"), problems[0])
+        XCTAssertTrue(problems[1].hasPrefix("--output /tmp/smoke.json:"), problems[1])
+        XCTAssertEqual(LaunchPaths.problems(arguments: arguments, sandboxed: false, roots: roots), [])
+    }
+
+    func testTestsRunOutsideTheSandbox() {
+        XCTAssertFalse(SandboxEnvironment.isSandboxed)
+        XCTAssertEqual(LaunchPaths.problems(arguments: ["Daybook", "--library", "/anywhere"]), [])
+    }
+
     func testExportNamesHaveNoFolderSeparators() {
         XCTAssertEqual(AppState.exportName("Q3/Q4 planning"), "Q3-Q4 planning")
         XCTAssertEqual(AppState.exportName("10:30 sync"), "10-30 sync")

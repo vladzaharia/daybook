@@ -5,6 +5,12 @@ import SwiftUI
 @main
 enum DaybookEntry {
     @MainActor static func main() async {
+        // A sandboxed build can't reach paths outside its container: stop now and say where it can write.
+        let unreachable = LaunchPaths.problems(arguments: CommandLine.arguments)
+        if !unreachable.isEmpty {
+            FileHandle.standardError.write(Data((unreachable.joined(separator: "\n") + "\n").utf8))
+            Darwin.exit(2)
+        }
         if CommandLine.arguments.contains("--smoke-test") {
             let code = await SmokeTest.run(arguments: CommandLine.arguments)
             Darwin.exit(code)
