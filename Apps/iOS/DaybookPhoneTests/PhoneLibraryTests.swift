@@ -137,12 +137,13 @@ final class PhoneLibraryTests: XCTestCase {
         let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
                                   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
         try await model.startRecording()
+        let recordingID = rig.recorder.captureID
         rig.pump(3)
-        await model.addPhoto(syntheticCameraPhoto(capturedAt: rig.clock.now()))
+        await model.addPhoto(syntheticCameraPhoto(capturedAt: rig.clock.now()), recording: recordingID)
         // A Mac stopped the recording while the camera was still open.
         try await model.stopRecording()
         let late = rig.clock.now()
-        await model.addPhoto(syntheticCameraPhoto(capturedAt: late, size: CGSize(width: 50, height: 50)))
+        await model.addPhoto(syntheticCameraPhoto(capturedAt: late, size: CGSize(width: 50, height: 50)), recording: recordingID)
         XCTAssertNil(model.notice)
 
         let filed = try XCTUnwrap(library.conversations.first)

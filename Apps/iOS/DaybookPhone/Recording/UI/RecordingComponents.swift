@@ -185,10 +185,15 @@ struct CameraControl: View {
     @Environment(PhoneAppModel.self) private var model
     var size: CGFloat = 44
     @State private var showingCamera = false
+    /// The recording the camera was opened for: a photo that arrives after it ends still joins it.
+    @State private var recordingID: UUID?
 
     var body: some View {
         let count = model.recorder.photos.count
-        Button { showingCamera = true } label: {
+        Button {
+            recordingID = model.recorder.captureID
+            showingCamera = true
+        } label: {
             Image(systemName: "camera")
                 .font(.system(size: size * 0.4, weight: .medium))
                 .foregroundStyle(PhoneStyle.Ink.title)
@@ -200,7 +205,7 @@ struct CameraControl: View {
         .disabled(!CameraPicker.isAvailable || !model.recorder.isCapturing || model.recorder.state == .starting)
         .sensoryFeedback(.success, trigger: count)
         .accessibilityLabel(count > 0 ? "Take Photo, \(count) so far" : "Take Photo")
-        .cameraCover(isPresented: $showingCamera) { photo in Task { await model.addPhoto(photo) } }
+        .cameraCover(isPresented: $showingCamera) { [recordingID] photo in Task { await model.addPhoto(photo, recording: recordingID) } }
     }
 }
 

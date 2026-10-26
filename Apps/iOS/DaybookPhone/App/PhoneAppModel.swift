@@ -346,20 +346,29 @@ final class PhoneAppModel: RecordingCommandHandling {
         recorder.editNotes(text)
     }
 
-    /// A photo from the camera while recording goes with the recording. If the recording ended while
-    /// the camera was open, it joins the conversation the recording was filed as.
-    func addPhoto(_ photo: CameraPhoto) async {
-        let id = recorder.captureID
+    /// A photo from the camera opened during recording `id`. While that recording runs, the photo
+    /// goes with it. If it ended while the camera was open (a Mac's Stop, a failure), the photo joins
+    /// the conversation it's filed as, once filing (which holds the library's lock) is done.
+    func addPhoto(_ photo: CameraPhoto, recording id: UUID?) async {
         do {
-            if try await recorder.addPhoto(photo) != nil { return }
-            while isFiling { try await Task.sleep(for: .milliseconds(100)) }
-            guard let id = id ?? lastFiledID, library.controller.meeting(id) != nil else { return }
+            if recorder.captureID == id, try await recorder.addPhoto(photo) != nil { return }
+            guard let id else { return }
+            let deadline = Date().addingTimeInterval(Self.lateFilingWait)
+            while library.controller.meeting(id) == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
+            guard library.controller.meeting(id) != nil else {
+                notice = "The photo couldn’t be saved because the recording wasn’t filed."
+                publish()
+                return
+            }
             try await library.controller.addCameraPhoto(photo, to: id)
         } catch {
             notice = "The photo couldn’t be saved: \(error.localizedDescription)"
             publish()
         }
     }
+
+    /// How long a photo taken as the recording ended waits for it to be filed.
+    static let lateFilingWait: TimeInterval = 60
 
     func dismissNotice() { notice = nil }
 
