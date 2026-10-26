@@ -28,6 +28,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertTrue(rig.inference.summarized.isEmpty)
         rig.inference.blockPhotos(false)
         try await rig.waitUntil("photo reading to finish") { rig.state.readingPhotoID == nil }
+        try await rig.waitUntil("the summary") { rig.inference.summarized.count == 1 }
         try await rig.processed()
         XCTAssertNotNil(rig.meeting(id)?.photo(photo.id)?.analysis)
         XCTAssertEqual(rig.inference.summarized.count, 1)
@@ -42,6 +43,15 @@ final class ProcessingRequestQueueTests: XCTestCase {
     }
 
     private func request(_ rig: MultiSourceRig, _ id: UUID) -> ProcessingRequest? { rig.meeting(id)?.processingRequests?.first }
+
+    /// Waits until every request on the conversation has an outcome, then for the queue to be idle.
+    /// (An idle queue alone also holds before queued work has started.)
+    private func answered(_ rig: MultiSourceRig, _ id: UUID) async throws {
+        try await rig.waitUntil("\(rig.meeting(id)?.title ?? "the conversation")'s requests to be answered") {
+            rig.meeting(id)?.processingRequests?.allSatisfy { $0.outcome != nil } == true
+        }
+        try await rig.processed()
+    }
 
     func testClaimsRenewsAndCompletesARequestFromThePhone() async throws {
         let rig = try await rig()
@@ -72,7 +82,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertNotNil(renewed.fraction)
 
         try rig.inference.unblock(audio)
-        try await rig.processed()
+        try await answered(rig, id)
         let done = try XCTUnwrap(request(rig, id))
         XCTAssertEqual(done.outcome?.result, .completed)
         XCTAssertEqual(done.outcome?.device, me)
@@ -89,7 +99,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
 
         // Queued on this Mac for its own reasons (new audio from sync): it takes the request on.
         rig.state.enqueue(id)
-        try await rig.processed()
+        try await answered(rig, id)
         let requests = try XCTUnwrap(rig.meeting(id)?.processingRequests)
         XCTAssertEqual(requests.count, 2)
         XCTAssertTrue(requests.allSatisfy { $0.outcome?.result == .completed }, "Both are done: one carried, one satisfied")
@@ -104,7 +114,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         rig.state.library.requestProcessing(id, mode: .newAudio, by: .phone)
 
         rig.state.pickUpRequests()
-        try await rig.processed()
+        try await answered(rig, id)
         let failed = try XCTUnwrap(request(rig, id))
         XCTAssertEqual(failed.outcome?.result, .failed)
         let reason = try XCTUnwrap(failed.outcome?.message)
@@ -167,7 +177,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
             claim: .init(device: busy, claimedAt: Date(), heartbeat: Date(), expiresAt: Date().addingTimeInterval(600)))) }
 
         rig.state.pickUpRequests()
-        try await rig.processed()
+        try await answered(rig, stale)
         let takenOver = try XCTUnwrap(request(rig, stale))
         XCTAssertEqual(takenOver.outcome?.result, .completed)
         XCTAssertEqual(takenOver.outcome?.device, rig.state.library.thisDevice, "This Mac took over the stale claim")
@@ -212,7 +222,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         // Models arrive: presence says so, and the request is claimed and run.
         rig.state.installedModels = [rig.state.transcriptionModel, rig.state.summaryModel, rig.state.processingPreferences.speakerModelID]
         XCTAssertEqual(rig.state.sync.replica.device?.canProcess, true)
-        try await rig.processed()
+        try await answered(rig, id)
         XCTAssertEqual(request(rig, id)?.outcome?.result, .completed)
         await rig.state.synchronizeLibrary()
         await phone.synchronize()
@@ -252,7 +262,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertTrue(request(a, id)?.isOpen == true, "Mac A neither completes nor fails it")
 
         try a.inference.unblock(audio); try b.inference.unblock(audio)
-        try await b.processed()
+        try await answered(b, id)
         XCTAssertEqual(a.inference.transcribed, [], "Mac A never ran it to the end")
         XCTAssertEqual(b.inference.transcribed.count, 1)
         await b.state.synchronizeLibrary(); await a.state.synchronizeLibrary()
@@ -284,7 +294,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         } else { XCTFail("Mac B shows it processing on Mac A") }
 
         try a.inference.unblock(audio)
-        try await a.processed()
+        try await answered(a, id)
         XCTAssertEqual(b.inference.transcribed, [])
         XCTAssertEqual(request(a, id)?.outcome?.result, .completed)
     }
