@@ -180,6 +180,22 @@ public enum MeetingMerge {
 }
 
 extension Meeting {
+    /// This snapshot with the photos (and summary sections' photo IDs) of `parent`, when it carries none
+    /// while its parent did: it was written by a Daybook that predates photos, which drops them on edit.
+    func restoringPhotos(from parent: Meeting) -> Meeting {
+        guard photos == nil, let parentPhotos = parent.photos else { return self }
+        var result = self
+        result.photos = parentPhotos
+        if var summary = result.summary, let previous = parent.summary {
+            for index in summary.sections.indices where summary.sections[index].photoIDs == nil {
+                let id = summary.sections[index].id
+                if let photoIDs = previous.sections.first(where: { $0.id == id })?.photoIDs { summary.sections[index].photoIDs = photoIDs }
+            }
+            result.summary = summary
+        }
+        return result
+    }
+
     /// The titles Daybook gives a conversation before anyone names it; with no common ancestor, a
     /// title someone chose wins over one of these.
     static func isPlaceholderTitle(_ title: String) -> Bool {

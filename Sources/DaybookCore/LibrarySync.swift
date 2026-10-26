@@ -64,6 +64,8 @@ public actor LibrarySyncEngine {
     private var eventCache: [String: SyncEventRecord] = [:]
     private var metadataCache: [String: SyncMetadataRecord] = [:]
     private var ownJournalWrites: Set<String> = []
+    /// Whether each event or one of its ancestors carries photos (`resolvedSnapshot`).
+    private var photoLineage: [String: Bool] = [:]
     /// Files written into the sync folder that no returned pass has reported yet (`SyncResult.writtenFiles`).
     private var courierWrites: [String: SyncJournalFile] = [:]
     /// Devices that wrote the journal entries seen by the last pass, including ones without presence.
@@ -667,14 +669,37 @@ public actor LibrarySyncEngine {
         memo.merged[ids] = merged
         return merged
     }
+    /// An event's snapshot. One written by a Daybook that predates photos carries no photos, and its
+    /// summary sections no photo IDs; they're taken from its parents, so its edit doesn't remove them.
     private func resolvedSnapshot(_ id: String, events: [String: SyncEventRecord], memo: inout MergeMemo) -> Meeting? {
-        events[id]?.snapshot
+        if let cached = memo.resolved[id] { return cached }
+        guard let event = events[id], var snapshot = event.snapshot else { return nil }
+        if snapshot.photos == nil, !event.parents.isEmpty, event.parents.contains(where: { ancestorHasPhotos($0, events: events) }),
+           let parent = mergedSnapshot(of: event.parents, events: events, memo: &memo) {
+            snapshot = snapshot.restoringPhotos(from: parent)
+        }
+        memo.resolved[id] = snapshot
+        return snapshot
     }
     private func ancestors(of id: String, events: [String: SyncEventRecord], memo: inout MergeMemo) -> Set<String> {
         if let cached = memo.ancestors[id] { return cached }
         let result = ancestorIDs(id, events: events)
         memo.ancestors[id] = result
         return result
+    }
+    /// Whether the event or any ancestor carries photos. Immutable, so remembered across passes.
+    private func ancestorHasPhotos(_ id: String, events: [String: SyncEventRecord]) -> Bool {
+        if let known = photoLineage[id] { return known }
+        var stack = [id]
+        while let current = stack.last {
+            if photoLineage[current] != nil { stack.removeLast(); continue }
+            guard let event = events[current] else { photoLineage[current] = false; stack.removeLast(); continue }
+            let unknown = event.parents.filter { photoLineage[$0] == nil && !stack.contains($0) }
+            if !unknown.isEmpty { stack += unknown; continue }
+            photoLineage[current] = event.snapshot?.photos != nil || event.parents.contains { photoLineage[$0] == true }
+            stack.removeLast()
+        }
+        return photoLineage[id] ?? false
     }
     private func countPendingCloudUploads() throws -> Int {
         var count = 0
@@ -723,6 +748,7 @@ private struct SyncCheckpoint: Codable {
 /// One pass's merges: results by head set, resolved snapshots, and ancestor sets.
 private struct MergeMemo {
     var merged: [[String]: Meeting] = [:]
+    var resolved: [String: Meeting] = [:]
     var ancestors: [String: Set<String>] = [:]
     var warnings: [String] = []
     var depth = 0

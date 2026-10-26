@@ -1,7 +1,7 @@
 import XCTest
 @testable import DaybookCore
 
-/// Histories that branch and join: criss-cross merges.
+/// Histories that branch and join: criss-cross merges, and edits from a Daybook that predates photos.
 /// Independent temporary libraries and a shared temporary folder; synthetic data only.
 final class LibrarySyncHistoryTests: XCTestCase {
     private var root: URL!
@@ -108,5 +108,41 @@ final class LibrarySyncHistoryTests: XCTestCase {
         XCTAssertEqual(resultA, resultB); XCTAssertEqual(resultB, resultC)
         XCTAssertEqual(resultA.title, "Plan A"); XCTAssertEqual(resultA.tags, ["b"]); XCTAssertEqual(resultA.notes, "From C")
         XCTAssertFalse(resultA.revisions.contains { $0.field.hasPrefix("sync:") })
+    }
+
+    /// A Mac still on a Daybook before photos edits a conversation with photos: its snapshot has no photos and its
+    /// summary sections no photo IDs. Current replicas keep both.
+    func testAnEditFromADaybookBeforePhotosKeepsPhotosAndSummaryPlacement() async throws {
+        let a = try engine("A")
+        var meeting = Meeting(title: "Whiteboard", notes: "Draft")
+        let photo = try await addPhoto(to: &meeting, on: "A", seed: 3)
+        let section = SummarySection(heading: "Plan", body: "On the board", photoIDs: [photo.id])
+        meeting.summary = MeetingSummary(overview: "Planning", sections: [section])
+        try await pass(a, "A", meeting)
+
+        let legacy = try LegacyLibrarySyncEngine(localRoot: local("Legacy"), remoteRoot: remote, deviceID: "Legacy")
+        let pulled = try await legacy.synchronize(meetings: [])
+        try await legacy.acknowledge(pulled.checkpointID)
+        // What the older app holds and edits: no photos, and summary sections without photo IDs.
+        var older = try XCTUnwrap(pulled.meetings.first)
+        older.photos = nil
+        older.summary?.sections[0].photoIDs = nil
+        older.setNotes("Edited on the older Mac")
+        let published = try await legacy.synchronize(meetings: [older])
+        XCTAssertEqual(published.publishedEvents, 1)
+        try await legacy.acknowledge(published.checkpointID)
+
+        let onA = try await merged(a, "A", meeting)
+        let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: remote, deviceID: "Phone",
+                                          replica: SyncReplicaConfiguration(audioPolicy: .onDemand))
+        let onPhone = try await merged(phone, "Phone")
+        for merged in [onA, onPhone] {
+            XCTAssertEqual(merged.notes, "Edited on the older Mac")
+            XCTAssertEqual(merged.photos, meeting.photos)
+            XCTAssertEqual(merged.summary?.sections.first?.photoIDs, [photo.id])
+        }
+        // The current device's next edit carries both forward; nothing is republished just to restore them.
+        let again = try await a.synchronize(meetings: [onA])
+        XCTAssertEqual(again.publishedEvents, 0)
     }
 }
