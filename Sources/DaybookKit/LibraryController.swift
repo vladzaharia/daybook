@@ -34,16 +34,36 @@ public final class LibraryController: ObservableObject {
 
     private var store: MeetingStore?
     private var glossaryStore: GlossaryStore?
-    private var persistence: Task<Void, Never>?
-    private var persistenceErrors: [String: String] = [:]
+    /// Saves, coalesced and written in the background (`LibrarySaveQueue`).
+    private let saves = LibrarySaveQueue()
+    /// Saves that failed, by conversation ID, "library-settings", or "glossary", until one succeeds.
+    private var persistenceErrors: [String: String] { saves.failures }
+    /// Edits since the last sync request; the request goes out once they're written.
+    private var syncWanted = false
+    private var lifecycle: AnyCancellable?
     private var notesTasks: [UUID: Task<Void, Never>] = [:]
     private var noteOriginals: [UUID: String] = [:]
     private var locked = false
     private var lockWaiters: [CheckedContinuation<Void, Never>] = []
 
+    /// How long a save waits after an edit, so a burst of edits (typing) writes once.
+    public var saveDelay: Duration {
+        get { saves.delay }
+        set { saves.delay = newValue }
+    }
+
     public init(rootURL: URL, sync: LibrarySyncController?) {
         self.rootURL = rootURL
         self.sync = sync
+        saves.onFailure = { [weak self] key, error in self?.reportSaveFailure(key, error) }
+        saves.onIdle = { [weak self] in
+            guard let self, self.syncWanted else { return }
+            self.syncWanted = false
+            self.sync?.requestSync()
+        }
+        #if canImport(UIKit)
+        lifecycle = flushWhenBackgrounded()
+        #endif
     }
 
     // MARK: Loading
@@ -138,59 +158,91 @@ public final class LibraryController: ObservableObject {
         persist(meetings[index])
     }
 
-    /// Saves are ordered: each waits for the one before, so the last edit is the one on disk.
-    private func persist(_ meeting: Meeting) {
+    /// Saves a conversation in the background. Saves are coalesced: the latest snapshot of each
+    /// conversation is the one written, shortly after the last edit (`saveDelay`), or at `flush`.
+    private func persist(_ meeting: Meeting, requestingSync: Bool = true) {
         guard let store else { return }
-        if !isApplyingSync { sync?.requestSync() }
-        let prior = persistence
-        persistence = Task { [weak self] in
-            await prior?.value
-            do { try await store.save(meeting); self?.persistenceErrors.removeValue(forKey: meeting.id.uuidString) }
-            catch { self?.persistenceErrors[meeting.id.uuidString] = error.localizedDescription; self?.errorMessage = "Couldn’t save \(meeting.title): \(error.localizedDescription)" }
+        if requestingSync && !isApplyingSync { syncWanted = true }
+        let id = meeting.id
+        saves.enqueue(id.uuidString) { [weak self] in
+            // A conversation that left the library (the Trash, a deletion that synced) has nothing to save.
+            guard let self, self.meeting(id) != nil else { return }
+            do { try await store.save(meeting) }
+            catch LibraryError.trashedMeeting, LibraryError.missingMeeting { }
         }
     }
 
-    private func persistMetadata() {
-        if !isApplyingSync { sync?.requestSync() }
-        let snapshot = metadata, url = rootURL.appendingPathComponent("library.json"), prior = persistence
-        persistence = Task { [weak self] in
-            await prior?.value
-            do {
-                let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                try encoder.encode(snapshot).write(to: url, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-                self?.persistenceErrors.removeValue(forKey: "library-settings")
-            } catch { self?.persistenceErrors["library-settings"] = error.localizedDescription; self?.errorMessage = "Couldn’t save library settings: \(error.localizedDescription)" }
+    private func persistMetadata(requestingSync: Bool = true) {
+        if requestingSync && !isApplyingSync { syncWanted = true }
+        let snapshot = metadata, url = rootURL.appendingPathComponent("library.json")
+        saves.enqueue("library-settings") {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(snapshot).write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
     }
 
-    /// Finishes note edits in progress and waits for every save.
+    private func reportSaveFailure(_ key: String, _ error: Error) {
+        switch key {
+        case "library-settings": errorMessage = "Couldn’t save library settings: \(error.localizedDescription)"
+        case "glossary": errorMessage = error.localizedDescription
+        default:
+            let title = meetings.first { $0.id.uuidString == key }?.title ?? "a conversation"
+            errorMessage = "Couldn’t save \(title): \(error.localizedDescription)"
+        }
+    }
+
+    /// Finishes note edits in progress and writes every waiting save now, returning once none is
+    /// left (saves queued meanwhile too). A save that failed before is tried again with what's
+    /// current; one for a conversation no longer in the library is dropped.
     public func flush() async {
         for id in Array(noteOriginals.keys) { finishNoteEdit(id) }
-        await persistence?.value
+        for key in persistenceErrors.keys {
+            switch key {
+            case "library-settings": persistMetadata(requestingSync: false)
+            case "glossary": persistGlossaryFile()
+            default:
+                if let id = UUID(uuidString: key), let meeting = meeting(id) { persist(meeting, requestingSync: false) }
+                else { saves.forget(key) }
+            }
+        }
+        await saves.drain()
     }
 
     /// A durability barrier for operations that discard recovery data or acknowledge a sync pull.
-    /// Waiting for the save queue alone does not mean its writes succeeded.
-    public func flushDurably() async throws {
+    /// Waiting for the save queue alone does not mean its writes succeeded. With `ids`, only those
+    /// conversations' failed saves count (an unrelated conversation that can't be saved doesn't stop
+    /// an import); without, every failure does.
+    public func flushDurably(_ ids: Set<UUID>? = nil) async throws {
         await flush()
-        guard persistenceErrors.isEmpty else {
-            throw DaybookError.saveFailed(persistenceErrors.values.sorted().joined(separator: "\n"))
+        let failures = persistenceErrors.filter { key, _ in
+            guard let ids else { return true }
+            return UUID(uuidString: key).map(ids.contains) ?? false
+        }
+        guard failures.isEmpty else {
+            throw DaybookError.saveFailed(failures.values.sorted().joined(separator: "\n"))
         }
     }
 
+    /// Saves carried out since the library opened (tests count writes per burst of edits).
+    var savesCompleted: Int { saves.completed }
+
     // MARK: Editing a conversation
 
-    /// The notes as typed. The text saves at once; a Version History entry is written once typing
-    /// pauses. `captureTime`, while this conversation is being recorded, timestamps new paragraphs.
+    /// The notes as typed. The text saves shortly after typing (or at `flush`); a Version History
+    /// entry is written once typing pauses. `captureTime`, while this conversation is being recorded, timestamps new paragraphs.
     public func editNotes(_ id: UUID, text: String, captureTime: TimeInterval? = nil) {
         guard let index = meetings.firstIndex(where: { $0.id == id }) else { return }
-        if noteOriginals[id] == nil { noteOriginals[id] = meetings[index].notes }
-        let previous = meetings[index].timedNotes ?? NoteTimeline.reconcile(previous: [], text: meetings[index].notes, captureTime: nil)
-        meetings[index].timedNotes = NoteTimeline.reconcile(previous: previous, text: text, captureTime: captureTime)
-        meetings[index].notes = text
-        // Save the current text immediately, while grouping history entries after typing pauses.
-        meetings[index].updatedAt = Date(); persist(meetings[index])
+        var meeting = meetings[index]
+        if noteOriginals[id] == nil { noteOriginals[id] = meeting.notes }
+        let previous = meeting.timedNotes ?? NoteTimeline.reconcile(previous: [], text: meeting.notes, captureTime: nil)
+        meeting.timedNotes = NoteTimeline.reconcile(previous: previous, text: text, captureTime: captureTime)
+        meeting.notes = text
+        meeting.updatedAt = Date()
+        // One change for observers; the save is coalesced with the rest of the burst, while
+        // history entries are grouped after typing pauses.
+        meetings[index] = meeting
+        persist(meeting)
         notesTasks[id]?.cancel()
         notesTasks[id] = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(900)); self?.finishNoteEdit(id) } catch { }
@@ -455,13 +507,13 @@ public final class LibraryController: ObservableObject {
             } else { metadata.vocabulary.append(.init(id: term.id.uuidString, value: term)) }
         }
         persistMetadata()
+        persistGlossaryFile()
+    }
+
+    private func persistGlossaryFile() {
         guard let glossaryStore else { return }
-        let snapshot = glossary, prior = persistence
-        persistence = Task { [weak self] in
-            await prior?.value
-            do { try await glossaryStore.save(snapshot); self?.persistenceErrors.removeValue(forKey: "glossary") }
-            catch { self?.persistenceErrors["glossary"] = error.localizedDescription; self?.errorMessage = error.localizedDescription }
-        }
+        let snapshot = glossary
+        saves.enqueue("glossary") { try await glossaryStore.save(snapshot) }
     }
 
     // MARK: Trash
@@ -476,6 +528,8 @@ public final class LibraryController: ObservableObject {
         guard allowed(), let store else { return false }
         _ = try await store.moveToTrash(id)
         meetings.removeAll { $0.id == id }
+        // A save queued during the move, or one that failed before it, has nothing left to save.
+        saves.forget(id.uuidString)
         sync?.requestSync()
         return true
     }
@@ -518,7 +572,7 @@ public final class LibraryController: ObservableObject {
     /// Callers hold the lock (`acquireLock()`).
     public func ingest(_ url: URL, into id: UUID, provenance: RecordingProvenance) async throws -> IngestedRecording {
         guard let store else { throw DaybookError.libraryUnavailable }
-        try await flushDurably()
+        try await flushDurably([id])
         guard let meeting = meeting(id) else { throw DaybookError.libraryUnavailable }
         let imported = try await store.importAudio(from: url, into: meeting, source: provenance.source,
                                                    sidecarURL: provenance.sidecarURL, offset: provenance.offset, device: provenance.device)
