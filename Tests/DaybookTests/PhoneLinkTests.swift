@@ -385,17 +385,19 @@ final class PhoneLinkTests: XCTestCase {
         await state.synchronizeLibrary()
         await library.synchronize()
 
-        // The phone files into this Mac's conversation: a note at 5 s by its own clock, a bookmark at 4 s.
+        // The phone files into this Mac's conversation: a note at 1 s by its own clock (before this Mac
+        // started), another at 5 s, and a bookmark at 4 s.
+        let early = TimedNote(time: 1, text: "Leaving the office")
         let note = TimedNote(time: 5, text: "Budget agreed")
         let mark = Highlight(time: 4)
         try await library.file(phoneAudio, recordingID: recordingID, into: conversation, start: phoneStart, duration: 0.5,
-                               notes: [note], bookmarks: [mark])
+                               notes: [early, note], bookmarks: [mark])
         let filed = try XCTUnwrap(library.library.meeting(conversation))
         XCTAssertEqual(filed.title, "Walk with Priya")
-        XCTAssertEqual(filed.timedNotes?.first?.time, 5)
+        XCTAssertEqual(filed.timedNotes?.map(\.time), [1, 5])
         let held = try XCTUnwrap(filed.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id }?.alignment)
         XCTAssertEqual(held.method, .pending)
-        XCTAssertEqual(held.heldNoteIDs, [note.id], "the note waits with the phone's recording")
+        XCTAssertEqual(held.heldNoteIDs, [early.id, note.id], "the notes wait with the phone's recording")
         await library.synchronize()
         await state.synchronizeLibrary()
 
@@ -409,7 +411,10 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertNil(track.alignment?.heldNoteIDs)
         XCTAssertEqual(meeting.timedNotes?.first { $0.id == note.id }?.time ?? -1, 3, accuracy: 0.001,
                        "the note moved onto the timeline with the phone's recording")
-        XCTAssertEqual(meeting.notes, "Budget agreed")
+        XCTAssertEqual(meeting.timedNotes?.first { $0.id == early.id }?.time ?? 99, -1, accuracy: 0.001,
+                       "a note from before this Mac started keeps its place before the timeline's zero")
+        XCTAssertEqual(meeting.paragraphTimes().map { $0.map { ($0 * 1000).rounded() / 1000 } }, [-1, 3])
+        XCTAssertEqual(meeting.notes, "Leaving the office\nBudget agreed")
         XCTAssertEqual(meeting.highlights.map(\.id), [mark.id])
         XCTAssertEqual(meeting.highlights.first?.trackID, track.id, "the bookmark follows the phone's recording")
         XCTAssertEqual(meeting.title, "Walk with Priya")

@@ -251,8 +251,9 @@ starts are compared.
 answered) is filed into that conversation as a source to place: offset unknown, its bookmarks on its
 track, and its notes, matched by ID so nothing doubles, timed by its own clock and held by its track
 (`SourceAlignment.heldNoteIDs`, as for **Record on This Mac**) until it's placed, when they move with
-it. The phone never writes the conversation's title, date, status or message; one that hasn't
-synced to it yet is made as its leader sent it. A recording made alone is a conversation of its own,
+it. A note taken before the recording that sets the timeline began keeps its place before zero (a
+negative time). The phone never writes the conversation's title, date, status or message; one that
+hasn't synced to it yet is made as its leader sent it. A recording made alone is a conversation of its own,
 as before. A recording the phone was killed while making is recovered with the Macs it was made
 with (its journal keeps them): it joins the same way, and the phone stops the Macs it started.
 
@@ -297,8 +298,11 @@ so only the Mac that carries out the request does this (any Mac, for a recording
 - When either device makes the other's conversation before it has synced, both copies carry the
   same title and date, but they meet without a common ancestor: until sync treats that case, a
   differing status is kept in Version History.
-- When the phone led and this Mac joined later, this Mac's recording sets the timeline, so notes the
-  phone took before this Mac started land at its start once the phone's recording is placed.
+- When the phone led and this Mac joined later, this Mac's recording sets the timeline and the phone's
+  is placed before its zero. Notes the phone took before this Mac started keep their time in the
+  phone's recording, so they read before the timeline's zero (−0:42), as its passages do. Daybook
+  0.3.0 and earlier reads note times from zero only, so editing those notes there drops their times
+  (the notes stay).
 - Stops owed to a device that's away, and starts still being asked, are kept in memory: quitting
   drops them, and the device's own follow-the-leader check (or the next launch) stops it instead.
 - A Mac reached through a phone's recorder can't measure the recorder's clock; its recording is

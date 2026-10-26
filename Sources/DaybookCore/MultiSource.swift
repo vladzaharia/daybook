@@ -239,7 +239,9 @@ extension Meeting {
     }
 
     /// Stores placements, and uses their offsets as the recordings' timing. Notes held by a
-    /// recording move onto the timeline once it's placed.
+    /// recording move onto the timeline once it's placed, keeping their times in that recording: one
+    /// taken before the timeline's zero (the iPhone led, and the Mac that sets the timeline joined
+    /// later) is placed before it, at a negative time, as that recording's passages are.
     public mutating func applyPlacements(_ placements: [UUID: SourceAlignment]) {
         var changed = false
         for (trackID, alignment) in placements.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
@@ -250,7 +252,7 @@ extension Meeting {
                 let start = alignment.captureOffset ?? tracks[index].alignment?.captureOffset ?? 0
                 if var notes = timedNotes {
                     for note in notes.indices where held.contains(notes[note].id) {
-                        if let time = notes[note].time { notes[note].time = max(0, offset + alignment.rate * (time - start)) }
+                        if let time = notes[note].time { notes[note].time = offset + alignment.rate * (time - start) }
                     }
                     timedNotes = notes
                 }
