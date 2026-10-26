@@ -198,6 +198,11 @@ extension CoreBluetoothSoundcoreTransport: @preconcurrency CBCentralManagerDeleg
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn { scanning = false; resetLink() }
+        if central.state == .unknown || central.state == .resetting || central.state == .unsupported || central.state == .unauthorized {
+            peripheral?.delegate = nil
+            peripheral = nil
+            peripherals.removeAll()
+        }
         events?.transportRadioChanged(radio)
     }
 
