@@ -21,5 +21,10 @@
 	<array>
 		<string>group.local.daybook.phone</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)local.daybook.phone</string>
+		<string>$(AppIdentifierPrefix)local.daybook.shared</string>
+	</array>
 </dict>
 </plist>

@@ -42,12 +42,15 @@ public struct SyncReplicaConfiguration: Sendable {
     public var presenceRefreshInterval: TimeInterval
     /// File-provider operations. Tests substitute a simulated iCloud.
     public var cloud: SyncCloudFiles
+    /// Where this device keeps library keys (iCloud Keychain in the apps, `KeychainLibraryKeyStore`), to read and write
+    /// an encrypted library (docs/icloud-sync.md, "Encryption"). Nil: this replica can't open one, and waits for a key.
+    public var keyStore: (any LibraryKeyStore)?
 
     public init(audioPolicy: SyncAudioPolicy = .eager, device: SyncDeviceIdentity? = nil,
                 audioCache: AudioCachePolicy? = nil, presenceRefreshInterval: TimeInterval = 600,
-                cloud: SyncCloudFiles = .system) {
+                cloud: SyncCloudFiles = .system, keyStore: (any LibraryKeyStore)? = nil) {
         self.audioPolicy = audioPolicy; self.device = device; self.audioCache = audioCache
-        self.presenceRefreshInterval = presenceRefreshInterval; self.cloud = cloud
+        self.presenceRefreshInterval = presenceRefreshInterval; self.cloud = cloud; self.keyStore = keyStore
     }
 
     public static func mac(displayName: String, canProcess: Bool) -> Self {

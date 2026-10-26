@@ -21,6 +21,8 @@ struct DaybookPhoneApp: App {
         // The phone is an on-demand replica: conversations arrive at once, audio when it's played.
         let sync = LibrarySyncController(localRoot: root, defaults: .standard)
         sync.replica = PhoneSync.replica(displayName: ProcessingRequest.Device.currentName, budget: settings.audioCacheBudget)
+        // An encrypted library's key, from iCloud Keychain (never in tests).
+        if !options.isRunningTests, !LaunchOptions.isTestHost { sync.replica.keyStore = KeychainLibraryKeyStore.system }
         // The courier sends what each pass writes to the Mac through CloudKit, ahead of iCloud Drive
         // (docs/icloud-sync.md, "Courier (CloudKit)"). Never in tests or with a debug sync folder.
         if !options.isRunningTests, !LaunchOptions.isTestHost, options.syncFolder == nil {

@@ -69,11 +69,19 @@ targets:
         com.apple.developer.ubiquity-container-identifiers:
           - $(DAYBOOK_ICLOUD_CONTAINER)
         aps-environment: $(DAYBOOK_APS_ENVIRONMENT)
+        # The app's own group first, so it stays the default for items stored without one (pairing keys, the sync
+        # device ID); then the group the Mac app also lists, for an encrypted library's keys in iCloud Keychain
+        # (KeychainLibraryKeyStore, docs/icloud-sync.md, "Encryption"). Automatic signing's profiles grant <team>.*.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)local.daybook.phone
+          - $(AppIdentifierPrefix)local.daybook.shared
     info:
       path: DaybookPhone/Resources/Info.plist
       properties:
         CFBundleDisplayName: Daybook
         DaybookICloudContainerIdentifier: $(DAYBOOK_ICLOUD_CONTAINER)
+        # The keychain group above, as signing expands it, for KeychainLibraryKeyStore.
+        DaybookKeychainSharedGroup: $(AppIdentifierPrefix)local.daybook.shared
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
