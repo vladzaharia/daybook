@@ -151,11 +151,11 @@ public enum MeetingExport {
 /// A photo as it leaves Daybook in an export: the same picture, re-encoded with only its orientation
 /// and when it was taken. GPS, maker notes (`{MakerApple}` and the like), the camera and lens, editing
 /// software, and everything else in its metadata stay behind.
-enum ExportPhoto {
+public enum ExportPhoto {
     /// Writes `source` as `<name>.<ext>` in `folder` and returns the file's name, or nil when it isn't
     /// an image this device can read and write (nothing is left behind then). HEIC that can't be
     /// encoded here becomes JPEG; PNG stays PNG.
-    static func write(_ source: URL, to folder: URL, name: String) -> String? {
+    public static func write(_ source: URL, to folder: URL, name: String) -> String? {
         guard let image = CGImageSourceCreateWithURL(source as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let type = CGImageSourceGetType(image) as String?,
               let picture = CGImageSourceCreateImageAtIndex(image, 0, nil) else { return nil }

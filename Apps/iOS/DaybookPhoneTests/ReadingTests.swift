@@ -1,7 +1,9 @@
 import DaybookCaptions
 import Combine
 import DaybookKit
+import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 import XCTest
 @testable import DaybookPhone
 
@@ -343,6 +345,34 @@ final class ReadingTests: XCTestCase {
         ExportFiles.clear(in: directory)
         XCTAssertFalse(FileManager.default.fileExists(atPath: ExportFiles.root(in: directory).path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+    }
+
+    /// Share Photo hands over a copy without location or camera details, named after its caption.
+    func testASharedPhotoLeavesLocationBehind() throws {
+        let directory = try temporaryDirectory()
+        let original = directory.appendingPathComponent("IMG_0412.jpg")
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 20)).image { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 40, height: 20))
+        }
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(image.cgImage), [
+            kCGImagePropertyOrientation: 6,
+            kCGImagePropertyGPSDictionary: [kCGImagePropertyGPSLatitude: 37.33, kCGImagePropertyGPSLatitudeRef: "N"]
+        ] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        try (data as Data).write(to: original)
+
+        let shared = try ExportFiles.photo(original, caption: "Whiteboard: Q4 plan", in: directory)
+        XCTAssertEqual(shared.lastPathComponent, "Whiteboard- Q4 plan.jpg")
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(shared as CFURL, nil))
+        let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+        XCTAssertNil(properties[kCGImagePropertyGPSDictionary])
+        XCTAssertEqual(properties[kCGImagePropertyOrientation] as? Int, 6)
+        XCTAssertEqual(try Data(contentsOf: original), data as Data, "the library's original is untouched")
+        ExportFiles.clear([shared], in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: shared.path))
     }
 
     // MARK: Copy

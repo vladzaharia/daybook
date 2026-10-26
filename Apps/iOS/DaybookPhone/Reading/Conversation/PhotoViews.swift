@@ -227,7 +227,8 @@ struct PhotoViewer: View {
                                 Task {
                                     do {
                                         let url = try await provider.localPhoto(for: photo, in: meetingID)
-                                        saveCaption(); session.sheet = .share([url])
+                                        saveCaption()
+                                        session.sheet = .share([try ExportFiles.photo(url, caption: photo.displayCaption)])
                                     } catch { failure = error.localizedDescription }
                                 }
                             }

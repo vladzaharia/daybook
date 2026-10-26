@@ -200,6 +200,18 @@ enum ExportFiles {
         return url
     }
 
+    /// One photo for the share sheet, named after its caption and re-encoded with only its orientation
+    /// and capture time (`ExportPhoto`): no location or camera details. The library's original stays.
+    static func photo(_ original: URL, caption: String?, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        let folder = root(in: directory).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        guard let file = ExportPhoto.write(original, to: folder, name: fileName(caption.map { String($0.prefix(60)) } ?? "Photo")) else {
+            try? FileManager.default.removeItem(at: folder)
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return folder.appendingPathComponent(file)
+    }
+
     /// The recording, under the conversation's name, so the share sheet doesn't offer "iPhone recording.m4a".
     @MainActor
     static func audio(_ source: URL, meeting: Meeting, track: RecordingTrack, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
