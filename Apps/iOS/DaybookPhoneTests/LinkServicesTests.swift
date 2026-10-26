@@ -43,6 +43,48 @@ final class LinkServicesTests: XCTestCase {
         var all: [LinkRecordRequest] { lock.withLock { requests } }
     }
 
+    /// Answers record requests like the Mac app: it records the conversation it's asked to (once per
+    /// request), stops only what it records, and can be slow to start (a microphone prompt).
+    actor RecordingMac {
+        private(set) var log: [LinkRecordRequest] = []
+        private(set) var recording: UUID?
+        private(set) var starts = 0
+        private var gate: CheckedContinuation<Void, Never>?
+        private var held = false
+        var startDelay: Duration?
+
+        func holdStarts() { held = true }
+        func releaseStarts() { held = false; gate?.resume(); gate = nil }
+        func setStartDelay(_ delay: Duration?) { startDelay = delay }
+
+        func handle(_ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
+            log.append(request)
+            switch request.action {
+            case .start:
+                if recording == request.conversationID {
+                    return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), wasAlreadyRecording: true))
+                }
+                if held { await withCheckedContinuation { gate = $0 } }
+                if let startDelay { try? await Task.sleep(for: startDelay) }
+                starts += 1
+                recording = request.conversationID
+                return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "mac-\(starts)"))
+            default:
+                guard recording == request.conversationID else { return .refused(LinkRecordRefusal(reason: .notRecording)) }
+                recording = nil
+                return .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: Date()))
+            }
+        }
+
+        var stops: [LinkRecordRequest] { log.filter { $0.action == .stop } }
+    }
+
+    func recordingMac(_ mac: Mac) async -> RecordingMac {
+        let recorder = RecordingMac()
+        await mac.service.setRecordControlHandler { _, request in await recorder.handle(request) }
+        return recorder
+    }
+
     func makeMac(name: String = "Studio Mac") async throws -> Mac {
         let id = UUID()
         let store = MemoryLinkKeyStore()
@@ -370,6 +412,141 @@ final class LinkServicesTests: XCTestCase {
         let stop = try await studio.service.request(LinkRecordRequest(action: .stop, conversationID: id), from: link.deviceID)
         guard case .accepted = stop.outcome else { return XCTFail("\(stop.outcome)") }
         try await waitUntil("stopped") { !model.recorder.isActive && !model.isFiling }
+    }
+
+    // MARK: Lost answers and stops
+
+    func testAStartWhoseAnswerIsSlowIsAskedAgainAndCountsAsThisIPhones() async throws {
+        let mac = try await makeMac()
+        let macRecorder = await recordingMac(mac)
+        // Longer than a request waits (3 s on loopback): the first ask times out.
+        await macRecorder.setStartDelay(.milliseconds(3_500))
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        await model.recordOnMac(mac.id)
+        let entry = try XCTUnwrap(model.multipoint?.macs.first)
+        XCTAssertEqual(entry.state, .recording, "asked again with the same request, it got the first answer")
+        XCTAssertTrue(entry.startedByPhone, "a repeat answered as the first: this iPhone started it, so it stops it")
+        let starts = await macRecorder.starts
+        XCTAssertEqual(starts, 1)
+        let requests = await macRecorder.log.filter { $0.action == .start }
+        XCTAssertEqual(requests.count, 1, "the Mac's app heard it once")
+        try await model.stopRecording()
+        try await waitUntil("the Mac is stopped") { model.pendingStops.isEmpty }
+        let recording = await macRecorder.recording
+        XCTAssertNil(recording)
+    }
+
+    func testStopWhileAMacIsStillBeingAskedStopsItWhenItsStartComesBack() async throws {
+        let mac = try await makeMac()
+        let macRecorder = await recordingMac(mac)
+        await macRecorder.holdStarts()
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        let asking = Task { await model.recordOnMac(mac.id) }
+        try await waitUntil("asking") { model.multipoint?.macs.first?.state == .asking }
+        try await model.stopRecording()
+        // The Mac wasn't recording yet when the stop came; its start then comes through.
+        try await waitUntil("the first stop") { model.pendingStops.isEmpty }
+        await macRecorder.releaseStarts()
+        await asking.value
+        try await waitUntil("stopped once its start came back", timeout: 5) { model.pendingStops.isEmpty }
+        let stops = await macRecorder.stops.count
+        XCTAssertGreaterThanOrEqual(stops, 2)
+        let recording = await macRecorder.recording
+        XCTAssertNil(recording, "a Mac this iPhone started never outlives its recording")
+        let filed = try XCTUnwrap(model.library.conversations.first)
+        XCTAssertNil(filed.tracks.first?.offset, "it may have recorded: this recording joins its conversation")
+    }
+
+    func testAStopThatDidntReachTheMacGoesWhenItReconnects() async throws {
+        let mac = try await makeMac()
+        let macRecorder = await recordingMac(mac)
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        await model.recordOnMac(mac.id)
+        XCTAssertEqual(model.multipoint?.macs.first?.state, .recording)
+        // The link drops; this iPhone stops meanwhile.
+        await link.client.disconnect(from: mac.id)
+        try await waitUntil("disconnected") { link.macs.first?.isConnected == false }
+        try await model.stopRecording()
+        XCTAssertEqual(model.pendingStops[mac.id], try XCTUnwrap(model.library.conversations.first?.id), "owed until the Mac hears it")
+        var recording = await macRecorder.recording
+        XCTAssertNotNil(recording)
+        try await link.client.connect(to: mac.id, via: mac.endpoint)
+        try await waitUntil("the stop goes on reconnecting") { model.pendingStops.isEmpty }
+        recording = await macRecorder.recording
+        XCTAssertNil(recording)
+    }
+
+    func testAnUnexpectedEndStopsTheMacsThisIPhoneStarted() async throws {
+        let mac = try await makeMac()
+        let macRecorder = await recordingMac(mac)
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        await model.recordOnMac(mac.id)
+        // The encoder fails: the recorder finishes what it has and reports it.
+        let recording = await rig.recorder.stop()
+        rig.recorder.onUnexpectedStop?(recording)
+        try await waitUntil("the Mac is stopped") { model.multipoint == nil && model.pendingStops.isEmpty && !model.library.conversations.isEmpty }
+        let stopped = await macRecorder.recording
+        XCTAssertNil(stopped)
+    }
+
+    func testRecordingForAMacStopsWhenItSaysItStoppedOrCantBeReached() async throws {
+        let mac = try await makeMac()
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: mac)
+        let phoneID = link.deviceID
+        func start() async throws -> UUID {
+            let conversation = UUID()
+            let reply = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation,
+                                                                        timing: LinkTiming(startedAt: Date(), elapsed: 0)), from: phoneID)
+            guard case .accepted = reply.outcome else { XCTFail("\(reply.outcome)"); throw CancellationError() }
+            rig.pump(1)
+            return conversation
+        }
+        // The Mac's stop was lost; it says it's idle (as it does every time this iPhone connects).
+        let first = try await start()
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: first, startedAt: Date())), to: phoneID)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(model.recorder.isActive, "still recording that conversation")
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .idle)), to: phoneID)
+        try await waitUntil("stopped too") { !model.recorder.isActive && !model.isFiling }
+        XCTAssertEqual(model.notice, "Studio Mac stopped recording, so this iPhone stopped too.")
+        XCTAssertNotNil(model.library.controller.meeting(first))
+
+        // Gone for half an hour: this iPhone stops on its own.
+        _ = try await start()
+        await link.client.disconnect(from: mac.id)
+        try await waitUntil("disconnected") { link.macs.first?.isConnected == false }
+        model.checkLead(now: Date().addingTimeInterval(10 * 60))
+        XCTAssertTrue(model.recorder.isActive)
+        model.checkLead(now: Date().addingTimeInterval(31 * 60))
+        try await waitUntil("stopped on its own") { !model.recorder.isActive && !model.isFiling }
+        XCTAssertEqual(model.notice, "Studio Mac couldn’t be reached for 30 minutes, so this iPhone stopped recording.")
     }
 
     func testRecordRequestsCanBeTurnedOff() async throws {

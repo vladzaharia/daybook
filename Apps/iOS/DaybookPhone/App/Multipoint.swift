@@ -17,7 +17,12 @@ struct MultipointSession: Equatable, Sendable {
             case asking
             case recording
             case stopped
+            /// It said no, and why.
             case failed(String)
+            /// It never answered: it may be recording, so it's stopped with this iPhone's recording.
+            case noAnswer(String)
+
+            var isUnanswered: Bool { if case .noAnswer = self { return true } else { return false } }
         }
         var id: UUID
         var name: String
@@ -26,12 +31,24 @@ struct MultipointSession: Equatable, Sendable {
         var startedAt: Date?
         /// This iPhone started it, so this iPhone stops it.
         var startedByPhone: Bool
+        /// The start this iPhone sent it. Asked again with the same request, the Mac answers once, so a
+        /// start whose answer was lost is never mistaken for one the Mac made itself.
+        var startRequestID: UUID?
 
         /// It recorded this conversation too, or may have, so this iPhone's recording joins it.
         var mayHaveRecorded: Bool {
             switch state {
-            case .asking, .recording, .stopped: return true
+            case .asking, .recording, .stopped, .noAnswer: return true
             case .failed: return false
+            }
+        }
+
+        /// This iPhone asked it to record and it may be recording, so this iPhone stops it.
+        var needsStop: Bool {
+            guard startedByPhone else { return false }
+            switch state {
+            case .asking, .recording, .noAnswer: return true
+            case .stopped, .failed: return false
             }
         }
     }
@@ -51,6 +68,9 @@ struct MultipointSession: Equatable, Sendable {
     var date: Date?
 
     var isMacLed: Bool { if case .macLed = role { return true } else { return false } }
+
+    /// The Macs this iPhone owes a stop when its recording ends.
+    var macsToStop: [Mac] { isMacLed ? [] : macs.filter(\.needsStop) }
 
     var recordingMacs: [Mac] { macs.filter { $0.state == .recording } }
 
