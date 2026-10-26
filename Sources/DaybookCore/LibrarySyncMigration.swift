@@ -48,23 +48,31 @@ public struct SyncMigrationOutcome: Sendable {
 ///   engine continues from the same applied heads.
 /// - Files the source is still downloading are skipped and counted; run again to pick them up.
 /// - Presence records (`Devices/`) are copied only where the destination has none for that device.
+/// - A destination that's an encrypted library (docs/icloud-sync.md, "Encryption") gets every journal entry and object
+///   sealed under its current key as it's copied, nothing in plaintext, and no presence; without that key the move
+///   waits (`keyUnavailable`).
 public actor LibrarySyncMigration {
     public nonisolated let source: URL
     public nonisolated let destination: URL
     let localRoot: URL
     let deviceID: String
     let cloud: SyncCloudFiles
+    let keyStore: (any LibraryKeyStore)?
     private let fm = FileManager.default
+    /// The destination's current key, when it's an encrypted library.
+    private var sealingKey: LibraryKey?
     /// Destination paths already confirmed in this process, so retries don't re-hash audio.
     private var confirmed: Set<String> = []
     private var localAudio: [String: URL]?
 
-    public init(source: URL, destination: URL, localRoot: URL, deviceID: String, cloud: SyncCloudFiles = .system) throws {
+    public init(source: URL, destination: URL, localRoot: URL, deviceID: String, cloud: SyncCloudFiles = .system,
+                keyStore: (any LibraryKeyStore)? = nil) throws {
         self.source = source.standardizedFileURL
         self.destination = destination.standardizedFileURL
         self.localRoot = localRoot.standardizedFileURL
         self.deviceID = deviceID
         self.cloud = cloud
+        self.keyStore = keyStore
         let paths = [self.source, self.destination, self.localRoot].map { $0.resolvingSymlinksInPath().path }
         for (index, path) in paths.enumerated() {
             for other in paths[(index + 1)...] where path == other || path.hasPrefix(other + "/") || other.hasPrefix(path + "/") {
@@ -93,6 +101,8 @@ public actor LibrarySyncMigration {
 
         // The manifest decides the library identity, so it goes first.
         let sourceManifest = try manifest(in: source, root: source)
+        // A chosen folder holds a plaintext library; one that's encrypted isn't moved.
+        if case .found(let from) = sourceManifest, from.isSealed { throw LibrarySyncError.unsupportedVersion(from.schemaVersion) }
         var destinationManifest = try manifest(in: destination, root: destination)
         switch (sourceManifest, destinationManifest) {
         case (.pending, _), (_, .pending):
@@ -106,6 +116,15 @@ public actor LibrarySyncMigration {
             progress.completed += 1
         case (_, .found):
             progress.completed += 1
+        }
+        // An encrypted destination: its current key seals what's copied. The source must be plaintext.
+        sealingKey = nil
+        if case .found(let manifest) = destinationManifest, let sealing = manifest.sealing {
+            guard let id = LibraryKey.id(hex: sealing.current),
+                  let key = (try? keyStore?.keys(for: manifest.libraryID))??.first(where: { $0.id == id }) else {
+                throw LibrarySyncError.keyUnavailable(sealing.current)
+            }
+            sealingKey = key
         }
         publish()
 
@@ -164,6 +183,7 @@ public actor LibrarySyncMigration {
     }
 
     private func migrate(_ item: Item) throws -> ItemResult {
+        if let sealingKey { return try migrateSealing(item, key: sealingKey) }
         let target = destination.appendingPathComponent(item.path)
         let origin = source.appendingPathComponent(item.path)
         try SyncFiles.noSymlinks(target, below: destination)
@@ -199,6 +219,52 @@ public actor LibrarySyncMigration {
             return .skipped("\(item.path) in the old sync folder is damaged: its contents don’t match its name. It wasn’t copied.")
         }
         confirmed.insert(item.path)
+        return .copied
+    }
+
+    /// Copies an item into an encrypted destination, sealed under `key` at its sealed name; presence isn't copied.
+    private func migrateSealing(_ item: Item, key: LibraryKey) throws -> ItemResult {
+        guard item.kind != .presence, let hash = item.hash else { return .copied }
+        let kind: SealedKind = item.kind == .blob ? .blob : item.path.hasPrefix("Events/") ? .event : .metadata
+        guard let name = key.objectName(kind, plaintextSHA256: hash), let directory = kind.directory else { return .skipped("\(item.path) can’t be sealed.") }
+        let path = "\(directory)/\(name)"
+        let target = destination.appendingPathComponent(path)
+        let origin = source.appendingPathComponent(item.path)
+        try SyncFiles.noSymlinks(target, below: destination)
+        try SyncFiles.noSymlinks(origin, below: source)
+        if confirmed.contains(path) { return .copied }
+        // Already there (another device sealed it): sealing is deterministic, so the name is the content.
+        if SyncFiles.itemState(target) != .absent { confirmed.insert(path); return .copied }
+        var plaintext = origin, below = source
+        if item.kind == .blob, let local = localAudioIndex()[hash] {
+            plaintext = local; below = localRoot
+        } else {
+            do { try SyncFiles.available(origin, cloud: cloud) } catch is SyncPendingDownload { return .waiting }
+            guard fm.fileExists(atPath: origin.path) else { return .skipped("\(item.path) is no longer in the old sync folder.") }
+        }
+        let folder = target.deletingLastPathComponent()
+        try LocalFiles.directory(folder)
+        let temporary = folder.appendingPathComponent(".migrate-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: temporary) }
+        do {
+            if kind == .blob {
+                _ = try SyncFiles.coordinateRead(plaintext, below: below) {
+                    try SealedObject.sealFile($0, to: temporary, kind: .blob, key: key, plaintextSHA256: hash)
+                }
+            } else {
+                let bytes = try SyncFiles.coordinateRead(plaintext, below: below) { try Data(contentsOf: $0) }
+                guard SyncDigest.sha256(data: bytes) == hash else { throw SealedObjectError.digestMismatch }
+                try SealedObject.seal(bytes, kind: kind, key: key).bytes.write(to: temporary)
+            }
+        } catch is SealedObjectError {
+            return .skipped("\(item.path) in the old sync folder is damaged: its contents don’t match its name. It wasn’t copied.")
+        }
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        try SyncFiles.coordinateWrite(target, below: destination) { url in
+            guard !self.fm.fileExists(atPath: url.path) else { return }
+            try self.fm.moveItem(at: temporary, to: url)
+        }
+        confirmed.insert(path)
         return .copied
     }
 
@@ -243,9 +309,8 @@ public actor LibrarySyncMigration {
 
     // MARK: Manifest and checkpoint
 
-    private struct Manifest: Codable { var format: String; var schemaVersion: Int; var libraryID: UUID }
     private enum ManifestState {
-        case absent, pending, found(Manifest)
+        case absent, pending, found(SyncManifest)
         var libraryID: UUID? { if case .found(let manifest) = self { return manifest.libraryID } else { return nil } }
     }
 
@@ -255,8 +320,10 @@ public actor LibrarySyncMigration {
         do { try SyncFiles.available(url, cloud: cloud) } catch is SyncPendingDownload { return .pending }
         guard fm.fileExists(atPath: url.path) else { return .absent }
         let bytes = try SyncFiles.coordinateRead(url, below: below) { try Data(contentsOf: $0) }
-        guard let manifest = try? JSONDecoder().decode(Manifest.self, from: bytes), manifest.format == "DaybookSync" else { throw LibrarySyncError.invalidManifest }
-        guard manifest.schemaVersion == 1 else { throw LibrarySyncError.unsupportedVersion(manifest.schemaVersion) }
+        let manifest: SyncManifest
+        do { manifest = try SyncManifest.checked(SyncManifest.decode(bytes)) }
+        catch let error as LibrarySyncError { throw error }
+        catch { throw LibrarySyncError.invalidManifest }
         return .found(manifest)
     }
 

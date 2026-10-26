@@ -310,7 +310,7 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(published.tracks[0].fileName).path))
         XCTAssertEqual(((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasPrefix(".") }, [])
         // An eager Mac doesn't apply the conversation with damaged audio.
-        let other = try await try self.mac("Other").synchronize(meetings: [])
+        let other = try await self.mac("Other").synchronize(meetings: [])
         XCTAssertTrue(other.meetings.isEmpty)
         XCTAssertTrue(other.warnings.contains { $0.contains("damaged") })
     }

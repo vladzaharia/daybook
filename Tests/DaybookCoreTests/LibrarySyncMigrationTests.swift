@@ -216,4 +216,44 @@ final class LibrarySyncMigrationTests: XCTestCase {
         XCTAssertThrowsError(try LibrarySyncMigration(source: folder, destination: folder.appendingPathComponent("Inside"),
                                                       localRoot: local("Mac"), deviceID: "Mac"))
     }
+
+    func testMovingIntoAnEncryptedContainerSealsEverythingAsItCopies() async throws {
+        // The old folder holds a plaintext library; the container, an encrypted one another device started.
+        let mac = try engine("Mac", folder)
+        let meeting = try await record(9, on: "Mac", title: "Zanzibar review")
+        try await pass(mac, "Mac", [meeting], metadata: metadata("Quokka"))
+        let keychain = MemoryLibraryKeyStore()
+        let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: container, deviceID: "Phone",
+                                          replica: SyncReplicaConfiguration(cloud: cloud.files, keyStore: keychain))
+        try await pass(phone, "Phone")
+        try await phone.enableSealing()
+        let folderBefore = try snapshot(folder)
+
+        // Without the key the move waits.
+        do { _ = try await LibrarySyncMigration(source: folder, destination: container, localRoot: local("Mac"), deviceID: "Mac",
+                                                cloud: cloud.files, keyStore: MemoryLibraryKeyStore()).run(); XCTFail() }
+        catch LibrarySyncError.keyUnavailable {}
+        let migration = try LibrarySyncMigration(source: folder, destination: container, localRoot: local("Mac"), deviceID: "Mac",
+                                                 cloud: cloud.files, keyStore: keychain)
+        let outcome = try await migration.run()
+        XCTAssertTrue(outcome.progress.isComplete, "\(outcome.progress)")
+        XCTAssertEqual(outcome.progress.skipped, [])
+        XCTAssertEqual(try snapshot(folder), folderBefore, "The old folder is only read")
+        // Nothing plaintext reached the container.
+        for directory in ["Events", "Metadata", "Blobs"] {
+            XCTAssertEqual((try? fm.contentsOfDirectory(atPath: container.appendingPathComponent(directory).path))?.filter { !$0.hasPrefix(".") } ?? [], [])
+        }
+        for (path, _) in try snapshot(container) {
+            let text = String(decoding: try Data(contentsOf: container.appendingPathComponent(path)), as: UTF8.self)
+            XCTAssertFalse(text.contains("Zanzibar") || text.contains("Quokka"), path)
+        }
+        // The Mac continues in the container, with its keys, publishing nothing again.
+        let inContainer = try LibrarySyncEngine(localRoot: local("Mac"), remoteRoot: container, deviceID: "Mac",
+                                                replica: SyncReplicaConfiguration(cloud: cloud.files, keyStore: keychain))
+        let result = try await pass(inContainer, "Mac", try await stored("Mac"), metadata: metadata("Quokka"))
+        XCTAssertEqual(result.warnings, []); XCTAssertEqual(result.publishedEvents, 0)
+        let onPhone = try await pass(phone, "Phone")
+        XCTAssertEqual(onPhone.meetings.map(\.id), [meeting.id])
+        XCTAssertEqual(onPhone.pendingDownloads, 0)
+    }
 }
