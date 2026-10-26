@@ -71,7 +71,8 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(meeting.tracks.count, 1)
         let track = try XCTUnwrap(meeting.tracks.first)
         XCTAssertEqual(track.source, .microphone)
-        XCTAssertEqual(track.device, DeviceRecordingIdentity(kind: "daybook.iphone", serial: "INSTALL-1", recordingID: recording.id.uuidString))
+        XCTAssertEqual(track.device, DeviceRecordingIdentity(kind: "daybook.iphone", serial: "INSTALL-1", recordingID: recording.recordingID.uuidString))
+        XCTAssertNotEqual(recording.recordingID, recording.id, "the recording has its own ID, apart from its conversation's")
         XCTAssertEqual(track.duration ?? 0, 6, accuracy: 0.001)
         XCTAssertEqual(track.offset, 0)
         XCTAssertEqual(track.startedAt, recording.startedAt)
@@ -179,6 +180,56 @@ final class PhoneLibraryTests: XCTestCase {
         let reopened = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         try await reopened.reload()
         XCTAssertEqual(reopened.openRequests(for: again.id).count, 1)
+    }
+
+    func testASecondRecordingIntoTheSameConversationKeepsItsAudio() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let conversation = UUID()
+        func record(seconds: TimeInterval) async throws -> PhoneRecording {
+            let rig = RecorderRig()
+            let recordingID = UUID()
+            try await rig.recorder.start(in: library.stagingURL.appendingPathComponent(recordingID.uuidString), id: conversation,
+                                         recordingID: recordingID, title: "Design review")
+            rig.pump(seconds)
+            return try await rig.stop()
+        }
+        let first = try await record(seconds: 2)
+        _ = try await library.fileRecording(first, join: .init())
+        // A Mac records into the same conversation later and asks this iPhone again.
+        let second = try await record(seconds: 3)
+        XCTAssertEqual(second.id, first.id)
+        XCTAssertNotEqual(second.recordingID, first.recordingID)
+        let filed = try await library.fileRecording(second, join: .init())
+        XCTAssertEqual(filed.meeting.tracks.count, 2, "the second recording is a track of its own")
+        let tracks = filed.meeting.tracks.sorted { ($0.duration ?? 0) < ($1.duration ?? 0) }
+        XCTAssertEqual(tracks.map(\.deviceRecordingID), [first.recordingID.uuidString, second.recordingID.uuidString])
+        XCTAssertEqual(tracks.last?.duration ?? 0, 3, accuracy: 0.001)
+        let stored = try await library.audioURL(for: try XCTUnwrap(tracks.last), in: conversation)
+        XCTAssertEqual(try AVAudioFile(forReading: stored).length, 3 * 48_000, "its own audio, not the first recording's")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.stagingDirectory.path))
+    }
+
+    func testAJournalFromBeforeRecordingIDsRecoversUnderItsConversationsID() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
+        let rig = RecorderRig()
+        let id = UUID()
+        let folder = library.stagingURL.appendingPathComponent(id.uuidString)
+        try await rig.recorder.start(in: folder, id: id, title: "Older")
+        rig.pump(2)
+        await rig.recorder.flush()
+        rig.recorder.prepareForTermination()
+        // As v0.3.0 wrote it: no recording ID.
+        let url = PhoneCaptureJournal.url(in: folder)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        json["recordingID"] = nil
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+
+        let recording = try await PhoneRecorder.recover(in: folder)
+        XCTAssertEqual(recording.recordingID, id)
+        let meeting = try await library.file(recording)
+        XCTAssertEqual(meeting.tracks.first?.deviceRecordingID, id.uuidString, "named as it was before")
     }
 
     func testAppModelRecordsAndFilesEndToEnd() async throws {

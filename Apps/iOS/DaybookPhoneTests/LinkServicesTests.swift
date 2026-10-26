@@ -137,8 +137,9 @@ final class LinkServicesTests: XCTestCase {
         guard case .accepted(let ack) = reply.outcome else { return XCTFail("expected the phone to record, got \(reply.outcome)") }
         XCTAssertEqual(ack.conversationID, conversation)
         XCTAssertFalse(ack.wasAlreadyRecording)
-        XCTAssertEqual(ack.recordingID, conversation.uuidString)
         XCTAssertEqual(model.recorder.captureID, conversation)
+        let recordingID = try XCTUnwrap(model.recorder.recordingID)
+        XCTAssertEqual(ack.recordingID, recordingID.uuidString, "the recording's own ID, which its track carries")
         XCTAssertEqual(model.multipoint?.isMacLed, true)
         XCTAssertEqual(model.multipointLine, "Recording with Studio Mac")
 
@@ -163,6 +164,7 @@ final class LinkServicesTests: XCTestCase {
         // The phone's recording joins the Mac's conversation as a source to place, with its clock.
         let meeting = try XCTUnwrap(model.library.controller.meeting(conversation))
         let track = try XCTUnwrap(meeting.tracks.first)
+        XCTAssertEqual(track.deviceRecordingID, ack.recordingID)
         XCTAssertNil(track.offset, "the Mac places it; its own recording is the timeline's origin")
         let clock = try XCTUnwrap(track.capture?.peerClocks?.first)
         XCTAssertEqual(clock.deviceID, mac.id.uuidString)

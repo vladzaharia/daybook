@@ -67,7 +67,10 @@ final class PhoneRecorder {
     private(set) var level = AudioLevel.silent
     /// Several seconds without a single non-zero sample: muted, unplugged, or blocked.
     private(set) var isMicrophoneSilent = false
+    /// The conversation being recorded.
     private(set) var captureID: UUID?
+    /// This recording's own ID (one conversation can hold several of this iPhone's recordings).
+    private(set) var recordingID: UUID?
     private(set) var title = ""
     /// The conversation's first sample on the wall clock, once audio arrives.
     private(set) var startedAt: Date?
@@ -134,12 +137,12 @@ final class PhoneRecorder {
 
     // MARK: Start, pause, resume, stop
 
-    func start(in directory: URL, id: UUID = UUID(), title: String) async throws {
+    func start(in directory: URL, id: UUID = UUID(), recordingID: UUID = UUID(), title: String) async throws {
         guard state == .idle else { throw PhoneRecorderError.alreadyRecording }
         state = .starting
         cancelStart = false
         lastError = nil; canResume = false; pauseMessage = nil
-        captureID = id; self.title = title; startedAt = nil
+        captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
         notes = ""; timedNotes = []; highlights = []; photos = []
         level = .silent; isMicrophoneSilent = false
         do {
@@ -157,6 +160,7 @@ final class PhoneRecorder {
             try environment.session.activate()
             inputRoute = environment.session.currentInput
             var journal = PhoneCaptureJournal(id: id, title: title, createdAt: environment.clock.now(), format: environment.format)
+            journal.recordingID = recordingID
             journal.routes.append(CaptureRouteEvent(time: 0, input: inputRoute, reason: "start"))
             try journal.write(to: directory)
             self.journal = journal
@@ -522,6 +526,7 @@ final class PhoneRecorder {
         journal = nil
         directory = nil
         captureID = nil
+        recordingID = nil
         startedAt = nil
         canResume = false
         pauseMessage = nil

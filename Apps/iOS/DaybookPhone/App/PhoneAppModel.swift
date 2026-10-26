@@ -267,14 +267,16 @@ final class PhoneAppModel: RecordingCommandHandling {
         do { try await library.reload() }
         catch { notice = "Couldn’t open your library: \(error.localizedDescription)"; throw error }
         let id = requestedID ?? UUID()
+        let recordingID = UUID()
         let title = requestedTitle ?? "Conversation at \(Date().formatted(date: .omitted, time: .shortened))"
-        let directory = library.stagingURL.appendingPathComponent(id.uuidString, isDirectory: true)
+        // Staged by the recording's own ID: the conversation may hold an earlier one still being filed.
+        let directory = library.stagingURL.appendingPathComponent(recordingID.uuidString, isDirectory: true)
         notice = nil
         levels.reset()
         multipoint = session
         recorder.audioTap = captions.prepare(meetingID: id)
         do {
-            try await recorder.start(in: directory, id: id, title: title)
+            try await recorder.start(in: directory, id: id, recordingID: recordingID, title: title)
         } catch {
             multipoint = nil
             recorder.audioTap = nil
@@ -438,7 +440,8 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     /// A Mac's record request: start recording its conversation here (with its timing), or stop.
     func answer(_ mac: PhoneLink.Mac, _ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
-        let recordingID = PhoneDevice.identity(recordingID: request.conversationID, installation: library.installationID).recordingID
+        // The recording's own ID, which its track carries, so the Mac's link finds it when it syncs.
+        var recordingID: String? { recorder.recordingID?.uuidString }
         switch request.action {
         case .start:
             guard settings.acceptsMacRecordRequests else {
@@ -474,10 +477,10 @@ final class PhoneAppModel: RecordingCommandHandling {
             guard recorder.isActive, recorder.captureID == request.conversationID else {
                 return .refused(LinkRecordRefusal(reason: .notRecording, conversationID: recorder.captureID))
             }
-            let stoppedAt = Date()
+            let stoppedAt = Date(), stopped = recordingID
             // Answer now; finishing and filing a long recording can outlast the request's timeout.
             Task { try? await self.stopRecording() }
-            return .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: stoppedAt, recordingID: recordingID))
+            return .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: stoppedAt, recordingID: stopped))
         default:
             return .refused(LinkRecordRefusal(reason: .unsupported))
         }
@@ -530,7 +533,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             let filed = try await library.fileRecording(recording, join: join(for: recording, session: session),
                                                         requestTranscription: settings.requestsTranscription)
             lastFiledID = filed.meeting.id
-            let identity = PhoneDevice.identity(recordingID: recording.id, installation: library.installationID)
+            let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: library.installationID)
             if let track = filed.meeting.tracks.first(where: { $0.device == identity }) {
                 captions.attach(trackID: track.id, meetingID: filed.meeting.id)
             }

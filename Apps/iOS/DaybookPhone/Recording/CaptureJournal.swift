@@ -67,8 +67,12 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     static let finalFileName = "iPhone recording.m4a"
 
     var schemaVersion = 1
-    /// The capture's ID, which is also the conversation's.
+    /// The conversation's ID.
     var id: UUID
+    /// This recording's own ID, the one its track and the link name it by: one conversation can hold
+    /// several of this iPhone's recordings (a Mac recording into it again). Nil in journals written
+    /// before it, whose recordings were named by the conversation's ID.
+    var recordingID: UUID?
     var title: String
     /// When Record was pressed.
     var createdAt: Date
@@ -136,7 +140,10 @@ enum JournalCoding {
 
 /// A finished phone recording, ready to be filed in the library as a new conversation.
 struct PhoneRecording: Sendable, Equatable {
+    /// The conversation's ID.
     var id: UUID
+    /// This recording's own ID (`PhoneCaptureJournal.recordingID`): its track's device recording ID.
+    var recordingID: UUID
     var title: String
     /// One AAC M4A whose timeline is the conversation's: interruptions are silent gaps.
     var audioURL: URL

@@ -87,7 +87,8 @@ final class PhoneLibrary {
         try await reload()
         await controller.acquireLock()
         defer { controller.releaseLock() }
-        let identity = PhoneDevice.identity(recordingID: recording.id, installation: installation)
+        // Named by this recording's own ID: a second recording into the same conversation is a new track.
+        let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: installation)
         let joining = join != nil || controller.meeting(recording.id)?.tracks.contains(where: { $0.device != identity }) == true
         if controller.meeting(recording.id) == nil {
             if let join {
@@ -113,8 +114,10 @@ final class PhoneLibrary {
                 capture: recording.capture, conversationDate: joining ? nil : recording.startedAt, message: warnings))
             track = ingested.track ?? controller.meeting(recording.id)?.tracks.first { $0.device == identity }
         }
-        if joining, let track { addJoinedWork(recording, track: track.id, offset: join?.estimatedOffset) }
-        if let track { try await addCapturedPhotos(recording, track: track.id) }
+        // The staging folder is the only copy until this recording's bytes are in the library.
+        guard let track else { throw DaybookError.saveFailed("The recording wasn’t added to its conversation.") }
+        if joining { addJoinedWork(recording, track: track.id, offset: join?.estimatedOffset) }
+        try await addCapturedPhotos(recording, track: track.id)
         controller.update(recording.id) { $0.status = .imported }
         let request = requestTranscription ? controller.requestProcessing(recording.id, mode: .newAudio) : nil
         try await controller.flushDurably()
