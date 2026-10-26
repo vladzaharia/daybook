@@ -14,6 +14,10 @@ Still requires real devices:
   neither may a screenshot (⇧⌘3, ⇧⌘5) or a QuickTime screen recording. ScreenCaptureKit decides
   whether to honour `sharingType = .none`; if an app still captures the panel on a macOS version,
   record it here and hide the panel while that app shares.
+- **Exported photos.** Export (Mac) and share as Markdown (iPhone) a conversation with a geotagged
+  HEIC taken by an iPhone camera and a portrait JPEG: `exiftool` shows no GPS, MakerApple, Make,
+  Model, or Software in the exported files, the portrait one still opens upright, the capture date
+  is kept, and the library's originals are unchanged (same digest).
 - **Mac keychain move.** With a signed build of the previous version paired to a phone, install the
   new build: the pairing keeps connecting with no keychain prompt, and Keychain Access no longer
   lists a "Daybook link" item in the login keychain. An ad hoc build keeps using the login keychain.
