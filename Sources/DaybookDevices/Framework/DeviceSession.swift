@@ -337,6 +337,16 @@ public final class DeviceSession: ObservableObject, Identifiable {
             queue.suspend()
             return
         }
+        // A recorder is listed again after it connects: until then, what's shown may be a recording
+        // that has since started or grown. The listing publishes, which pumps again.
+        if item.method == .direct, !connection.isInventoryCurrent { return }
+        // Still being recorded (or paused, on firmware that keeps the file open): it isn't ready, and
+        // importing it now would keep only part of it. It's offered again once it's finished.
+        if connection.recordings.contains(where: { $0.id == item.id && $0.isInProgress }) {
+            queue.remove(item.id)
+            if queue.isActive { pump() } else { batchEnded(imported: queue.imported) }
+            return
+        }
         guard let started = queue.startNext() else { return }
         let token = UUID()
         runnerToken = token
@@ -530,7 +540,7 @@ public final class DeviceSession: ObservableObject, Identifiable {
     /// Queues adopted imports the recorder lists. Ones it doesn't list after a fresh listing are
     /// gone from it (or imported already), and are dropped.
     private func importAdopted() {
-        guard !adoptedImports.isEmpty, let direct, direct.state.isConnected, !direct.isRefreshing,
+        guard !adoptedImports.isEmpty, let direct, direct.state.isConnected, direct.isInventoryCurrent,
               let listed = direct.inventoryUpdatedAt else { return }
         let recordings = Dictionary(direct.recordings.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var remaining: [DeviceHandedOffImport] = []

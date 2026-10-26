@@ -61,6 +61,12 @@ public final class SimulatedSoundcore {
     public var advertises = true
     /// Ignores Start and Pause, so the app never sees the state change.
     public var ignoresRecordCommands = false
+    /// Firmware variant: the recording in progress appears among the listing's entries, growing,
+    /// as well as after them as the active one.
+    public var listsActiveRecording = false
+    /// Firmware variant: Pause keeps the recording open (still named as active, not recording) and
+    /// Start resumes it; `finishRecording()` closes it.
+    public var keepsActiveWhilePaused = false
     public var fault: Fault?
     /// Audio slices per notification.
     public var slicesPerPacket = 3
@@ -164,19 +170,44 @@ public final class SimulatedSoundcore {
             streaming = nil
         case (0x18, 0x82):
             guard !ignoresRecordCommands, let action = payload.first else { reply(0x18, 0x82, Data(), status: 0); return }
-            if action == 1 && !isRecording {
-                isRecording = true
-                activeRecording = Recording(id: UInt32(Date().timeIntervalSince1970), frames: Self.frames(seconds: 4, frequency: 520))
-            } else if action == 2 && isRecording {
-                isRecording = false
-                if let active = activeRecording { recordings.insert(active, at: 0) }
-                activeRecording = nil
-            }
+            if action == 1 { record(true) } else if action == 2 { record(false) }
             reply(0x18, 0x82, Data([isRecording ? 1 : 2]))
         default:
             reply(type, command, Data(), status: 0)
         }
     }
+
+    /// Starts or pauses as the recorder does. A new recording's ID is its start on the recorder's clock.
+    private func record(_ on: Bool) {
+        if on && !isRecording {
+            isRecording = true
+            // Firmware that keeps a paused recording open resumes it.
+            if !(keepsActiveWhilePaused && activeRecording != nil) {
+                let now = Date().timeIntervalSince1970 + clockOffset
+                activeRecording = Recording(id: UInt32(now), frames: Self.frames(seconds: 4, frequency: 520))
+            }
+        } else if !on && isRecording {
+            isRecording = false
+            if !keepsActiveWhilePaused { finishRecording() }
+        }
+    }
+
+    /// Closes the recording in progress: it joins the list as a finished recording.
+    public func finishRecording() {
+        isRecording = false
+        if let active = activeRecording { recordings.insert(active, at: 0) }
+        activeRecording = nil
+    }
+
+    /// The recorder's own button: starts or stops recording and reports the new state unasked.
+    public func pressButton() {
+        record(!isRecording)
+        send(SoundcorePacket.frame(type: 0x18, command: 0x82, payload: Data([isRecording ? 1 : 2])))
+    }
+
+    /// The recorder's clock against true time, in seconds (positive: it runs ahead). New recordings'
+    /// IDs are their start by this clock.
+    public var clockOffset: TimeInterval = 0
 
     /// Pushes a battery update, as the recorder does on its own.
     public func pushBattery(recorder: UInt8, case caseLevel: UInt8) {
@@ -232,14 +263,17 @@ public final class SimulatedSoundcore {
 
     private func listPayload(page: Int, extended: Bool) -> Data {
         let start = page * pageSize
-        let entries = start < recordings.count ? Array(recordings[start..<min(recordings.count, start + pageSize)]) : []
+        var listed = recordings
+        if listsActiveRecording, let active = activeRecording { listed.insert(active, at: 0) }
+        let entries = start < listed.count ? Array(listed[start..<min(listed.count, start + pageSize)]) : []
         var data = Data([UInt8(entries.count & 255), UInt8(entries.count >> 8)])
         for recording in entries {
             data.append(littleEndian32(recording.id))
             if extended { data.append(littleEndian32(recording.reportsEnd ? recording.id + recording.seconds : 0)) }
             data.append(littleEndian32(recording.size))
         }
-        data.append(littleEndian32(isRecording ? activeRecording?.id ?? 0 : 0))
+        let open = isRecording || keepsActiveWhilePaused
+        data.append(littleEndian32(open ? activeRecording?.id ?? 0 : 0))
         data.append(Data(repeating: 0, count: 4))
         return data
     }

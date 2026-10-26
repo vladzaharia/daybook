@@ -132,6 +132,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private var activity = 0
     private var listing: [SoundcoreRecording] = []
     private var activeRecordingID: UInt32?
+    /// The recorder has been listed since this connection was confirmed. Until then `recordings` is
+    /// the remembered list, which can name a recording that has since started, grown, or finished.
+    private var listedThisConnection = false
     private var names: [UUID: String] = [:]
     /// Listen Live's captioner, its listeners, and where the live audio has reached (16 kHz frames).
     private var captioner: (any LiveCaptioning)?
@@ -312,9 +315,17 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         }
     }
 
+    /// Listed since this connection was confirmed, and not being listed again.
+    public var isInventoryCurrent: Bool {
+        guard case .connected = phase else { return false }
+        return listedThisConnection && !isRefreshing
+    }
+
     public func automaticImports(links: DeviceLibraryLinks, since: Date, excluding: Set<String>) -> [DeviceRecording] {
         // The device that manages the recorder imports; its recordings arrive here through sync.
-        guard case .connected = phase, importsAutomatically, managedElsewhere == nil else { return [] }
+        // Only from a listing made on this connection: the remembered one may still show a recording
+        // in progress as finished, and importing it early under its final ID would block the rest.
+        guard case .connected = phase, importsAutomatically, managedElsewhere == nil, isInventoryCurrent else { return [] }
         return recordings.filter { recording in
             !recording.isInProgress && links.imported[recording.id] == nil && !excluding.contains(recording.id)
                 && (recording.startedAt ?? .distantPast) >= since
@@ -666,6 +677,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         peripheral = nil
         info = nil
         activeRecordingID = nil
+        listedThisConnection = false
         recordCommandPending = false
         keyExchangeComplete = false
         rebuildRecordings()
@@ -730,6 +742,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         do {
             let status = try await session.readStatus()
             guard self.session === session else { return }
+            listedThisConnection = false
             phase = .connected(id)
             reconnectAttempt = 0
             connectingTo = nil
@@ -772,10 +785,12 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private func applyListing(_ result: SoundcoreSession.Listing) {
         listing = result.recordings.sorted { $0.id > $1.id }
         activeRecordingID = result.activeRecordingID
+        listedThisConnection = true
         inventoryUpdatedAt = Date()
         if var snapshot = remembered {
             snapshot.recordings = Array(listing.prefix(1_000))
             snapshot.recordingsUpdatedAt = inventoryUpdatedAt
+            snapshot.activeRecordingID = activeRecordingID
             remembered = snapshot
             persist()
         }
@@ -800,9 +815,14 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         publish()
     }
 
-    /// The recording in progress is shown as "Recording now" and never offered for import.
+    /// The recording in progress is shown as "Recording now" and never offered for import. It's the
+    /// one the recorder names as active, whether or not it says it's recording: firmware may list the
+    /// file while it grows, or keep it open while paused. Until this connection has listed it, it's
+    /// the one named at the last listing.
     private func rebuildRecordings() {
-        let recordingNow = info?.isRecording == true ? activeRecordingID : nil
+        let listed: Bool
+        if case .connected = phase { listed = listedThisConnection } else { listed = false }
+        let recordingNow = listed ? activeRecordingID : remembered?.activeRecordingID
         var result = listing.map { $0.deviceRecording(inProgress: $0.id == recordingNow) }
         if let recordingNow, !listing.contains(where: { $0.id == recordingNow }) {
             result.insert(SoundcoreRecording(id: recordingNow, size: 0).deviceRecording(inProgress: true), at: 0)

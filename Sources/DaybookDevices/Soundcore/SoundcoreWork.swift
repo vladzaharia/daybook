@@ -151,6 +151,11 @@ public struct SoundcoreSnapshot: Codable, Equatable {
     public var lastConnectedAt: Date?
     public var recordings: [SoundcoreRecording] = []
     public var recordingsUpdatedAt: Date?
+    /// The recording the recorder named as in progress at the last listing, kept across
+    /// disconnects so the remembered list never shows it as finished. Its time is
+    /// `recordingsUpdatedAt`; whether it was recording is `info.isRecording` as of `statusUpdatedAt`.
+    /// Optional, so earlier snapshots decode.
+    public var activeRecordingID: UInt32?
 
     /// The name shown in Settings: "soundcore Work ··7F3A".
     public var displayName: String { serial.isEmpty ? name : "\(name) \(maskedSerial(serial))" }
@@ -171,7 +176,7 @@ public struct SoundcoreSnapshot: Codable, Equatable {
         statusUpdatedAt = date
     }
 
-    public init(deviceID: UUID, name: String, serial: String = "", info: SoundcoreDeviceInfo? = nil, statusUpdatedAt: Date? = nil, lastConnectedAt: Date? = nil, recordings: [SoundcoreRecording] = [], recordingsUpdatedAt: Date? = nil) {
+    public init(deviceID: UUID, name: String, serial: String = "", info: SoundcoreDeviceInfo? = nil, statusUpdatedAt: Date? = nil, lastConnectedAt: Date? = nil, recordings: [SoundcoreRecording] = [], recordingsUpdatedAt: Date? = nil, activeRecordingID: UInt32? = nil) {
         self.deviceID = deviceID
         self.name = name
         self.serial = serial
@@ -180,6 +185,7 @@ public struct SoundcoreSnapshot: Codable, Equatable {
         self.lastConnectedAt = lastConnectedAt
         self.recordings = recordings
         self.recordingsUpdatedAt = recordingsUpdatedAt
+        self.activeRecordingID = activeRecordingID
     }
 }
 
