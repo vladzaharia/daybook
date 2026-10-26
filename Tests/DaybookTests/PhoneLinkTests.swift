@@ -375,6 +375,47 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(state.meetings.count, 1)
     }
 
+    func testABookmarkMadeOnThePhoneIsOneBookmarkAfterSync() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let link = try await PhoneLinkRig.connect(state)
+        defer { Task { await link.tearDown(state) } }
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        defer { library.tearDown() }
+        let recordingID = UUID()
+        link.recorder.answer = { request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: recordingID.uuidString))
+        }
+        let id = macStartsRecording(rig)
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        await state.sources.recorders.settle()
+
+        // The phone marks a moment: the Mac shows it at once, and the phone keeps it with its recording.
+        let mark = Highlight(time: 1.5)
+        try await link.client.send(.bookmark(LinkBookmark(id: mark.id, conversationID: id, recordingTime: mark.time)))
+        try await waitFor("the Mac's copy") { rig.meeting(id)?.highlights.contains { $0.id == mark.id } == true }
+        // The same bookmark again (a resend) doesn't add a second.
+        try await link.client.send(.bookmark(LinkBookmark(id: mark.id, conversationID: id, recordingTime: mark.time)))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(rig.meeting(id)?.highlights.count, 1)
+
+        macStopsRecording(rig, id)
+        await state.sources.recorders.settle()
+        try await storeMacRecording(rig, id, audio: try rig.audio("mac-mark.wav", frequency: 330), start: macStart)
+        await state.synchronizeLibrary()
+        await library.synchronize()
+        try await library.file(try rig.audio("iphone-mark.wav", frequency: 490), recordingID: recordingID, into: id, start: Date(),
+                               duration: 0.5, bookmarks: [mark])
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        XCTAssertEqual(rig.meeting(id)?.highlights.filter { $0.id == mark.id }.count, 1)
+        XCTAssertEqual(rig.meeting(id)?.highlights.count, 1, "One bookmark, not one from each device")
+        await library.synchronize()
+        XCTAssertEqual(library.library.meeting(id)?.highlights.count, 1)
+    }
+
     func testAnUnlinkedPhoneRecordingJoinsByTimeThenSound() async throws {
         let rig = try await rig()
         let state = rig.state

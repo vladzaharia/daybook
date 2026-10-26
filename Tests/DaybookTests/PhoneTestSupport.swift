@@ -134,15 +134,25 @@ struct PhoneLibrarySide {
     /// request for a Mac.
     @discardableResult
     func file(_ audio: URL, recordingID: UUID, into conversation: UUID? = nil, start: Date, duration: TimeInterval,
-              title: String = "iPhone recording", notes: String = "") async throws -> UUID {
+              title: String = "iPhone recording", notes: String = "", bookmarks: [Highlight] = []) async throws -> UUID {
         let id = conversation ?? recordingID
         if library.meeting(id) == nil { library.add(Meeting(id: id, title: title, date: start, notes: notes, status: .imported)) }
         let identity = DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: phoneID.uuidString, recordingID: recordingID.uuidString)
         await library.acquireLock()
-        _ = try await library.ingest(audio, into: id, provenance: RecordingProvenance(
+        let ingested = try await library.ingest(audio, into: id, provenance: RecordingProvenance(
             source: .microphone, device: identity, offset: 0, duration: duration, startedAt: start,
             capture: TrackCaptureDetails(method: "microphone"), conversationDate: conversation == nil ? start : nil))
         library.releaseLock()
+        // Bookmarks stay on the phone's track, as the phone files them.
+        if let track = ingested.track?.id, !bookmarks.isEmpty {
+            library.update(id) { meeting in
+                for mark in bookmarks where !meeting.highlights.contains(where: { $0.id == mark.id }) {
+                    var placed = mark
+                    placed.trackID = track
+                    meeting.highlights.append(placed)
+                }
+            }
+        }
         library.update(id) { $0.status = .imported }
         library.requestProcessing(id, mode: .newAudio, by: device)
         await library.flush()

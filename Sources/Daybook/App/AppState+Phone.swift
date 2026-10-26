@@ -105,10 +105,11 @@ extension AppState {
             Task { await synchronizeLibrary(); pickUpRequests() }
         case .bookmark(let mark):
             // A bookmark on the phone while this Mac records the same conversation, at this Mac's time.
+            // It keeps the phone's ID, so the phone's own copy, arriving with its recording, is the same bookmark.
             guard recordingID == mark.conversationID, let start = recordingStartedAt else { return }
             let clock = phoneLink.peers[phone]?.clock
             let when = clock?.localDate(fromPeer: mark.createdAt) ?? mark.createdAt
-            library.addBookmark(in: mark.conversationID, at: max(0, when.timeIntervalSince(start)))
+            library.addBookmark(id: mark.id, in: mark.conversationID, at: max(0, when.timeIntervalSince(start)))
         case .recordingState, .processingProgress:
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
