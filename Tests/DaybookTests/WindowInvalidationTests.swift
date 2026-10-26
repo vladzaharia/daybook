@@ -7,8 +7,9 @@ import XCTest
 @testable import Daybook
 
 /// What redraws the window: progress reaches the main actor at most ten times a second and redraws
-/// it only when the percent or message changes; search and the visible list are worked out once per
-/// change of the query, the place, or the library.
+/// only the views that follow it; of AppState's parts, only the library and the device list redraw the
+/// window; search and the visible list are worked out once per change of the query, the place, or the
+/// library.
 @MainActor
 final class WindowInvalidationTests: XCTestCase {
     func testProgressFromAnyThreadIsThrottledAndTheLatestWins() async throws {
@@ -31,7 +32,27 @@ final class WindowInvalidationTests: XCTestCase {
         XCTAssertEqual(activity.value.message, "Ready")
     }
 
-    func testTheWindowIsRedrawnOnlyWhenThePercentOrMessageChanges() async throws {
+    func testProgressRedrawsWhatFollowsItNotTheWindow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookWindow-\(UUID().uuidString)")
+        let suite = "local.daybook.tests.window.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        let state = AppState(libraryURL: root, defaults: defaults)
+        await state.initialize()
+        var redraws = 0, followed = 0
+        let counting = state.objectWillChange.sink { redraws += 1 }
+        let following = state.processingActivity.objectWillChange.sink { followed += 1 }
+        defer { counting.cancel(); following.cancel() }
+        state.processingProgress = IntelligenceProgress(0.101, "Transcribing")
+        state.processingProgress = IntelligenceProgress(0.102, "Transcribing")
+        state.processingProgress = IntelligenceProgress(0.11, "Identifying speakers")
+        state.downloadProgress = IntelligenceProgress(0.5, "Downloading")
+        XCTAssertEqual(redraws, 0, "Progress views follow the activity (ActivityReader); the window isn't redrawn")
+        XCTAssertEqual(followed, 3, "Every delivered report reaches what draws it, so a bar moves smoothly")
+        XCTAssertEqual(state.processingActivity.value.message, "Identifying speakers")
+    }
+
+    func testOnlyTheLibraryAndTheDeviceListRedrawTheWindow() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookWindow-\(UUID().uuidString)")
         let suite = "local.daybook.tests.window.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -41,14 +62,12 @@ final class WindowInvalidationTests: XCTestCase {
         var redraws = 0
         let counting = state.objectWillChange.sink { redraws += 1 }
         defer { counting.cancel() }
-        state.processingProgress = IntelligenceProgress(0.101, "Transcribing")
-        state.processingProgress = IntelligenceProgress(0.102, "Transcribing")
-        state.processingProgress = IntelligenceProgress(0.109, "Transcribing")
-        XCTAssertEqual(redraws, 1, "The same whole percent draws nothing new")
-        state.processingProgress = IntelligenceProgress(0.11, "Transcribing")
-        state.processingProgress = IntelligenceProgress(0.11, "Identifying speakers")
-        XCTAssertEqual(redraws, 3)
-        XCTAssertEqual(state.processingActivity.value.message, "Identifying speakers")
+        // Multipoint sources, like sync, call detection, the recorder, and the iPhone link, are observed
+        // by the views that show them.
+        state.sources.matchesImportedFiles.toggle()
+        XCTAssertEqual(redraws, 0)
+        state.newMeeting(title: "A change to the library")
+        XCTAssertGreaterThan(redraws, 0, "The library is what nearly every view reads through AppState")
     }
 
     func testSearchAndTheVisibleListAreWorkedOutOncePerChange() async throws {

@@ -28,6 +28,11 @@ final class FloatingStatusFeed: ObservableObject {
             state.recorderHandoff.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             state.phoneLink.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             state.sync.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            // Not forwarded through AppState: the recorder's state, the processing job's progress, and
+            // the multipoint recorders.
+            state.recorder.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            state.processingActivity.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            state.sources.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             // Every session's own changes: battery, connection, recording, imports.
             state.devices.$sessions
                 .map { sessions in Publishers.MergeMany(sessions.map { $0.objectWillChange.map { _ in () } }).eraseToAnyPublisher() }

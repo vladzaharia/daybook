@@ -253,15 +253,16 @@ final class AppState: ObservableObject {
         self.captionSettings = captionSettings
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: libraryURL),
                                           makeCaptioner: MacCaptioners.recordingFactory(settings: captionSettings))
-        for publisher in [library.objectWillChange.eraseToAnyPublisher(), recorder.objectWillChange.eraseToAnyPublisher(), monitor.objectWillChange.eraseToAnyPublisher(), sync.objectWillChange.eraseToAnyPublisher(), devices.objectWillChange.eraseToAnyPublisher(), sources.objectWillChange.eraseToAnyPublisher(), phoneLink.objectWillChange.eraseToAnyPublisher()] {
+        // Only what nearly every view reads through this object is forwarded: the library, and the
+        // device list (sidebar, menus, pages). The recorder, call detection, sync, multipoint sources,
+        // the iPhone link, and progress change often and are observed directly by the views that show
+        // them (SyncSettingsView, ConversationStatus, ActivityReader, FloatingStatusFeed, …), so a
+        // sync pass or a progress report doesn't redraw the whole window.
+        for publisher in [library.objectWillChange.eraseToAnyPublisher(), devices.objectWillChange.eraseToAnyPublisher()] {
             publisher.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         }
         library.$meetings.sink { [weak self] _ in self?.libraryRevision &+= 1 }.store(in: &subscriptions)
-        processingActivity.onChange = { [weak self] visible in
-            if visible { self?.objectWillChange.send() }
-            self?.processingProgressChanged()
-        }
-        downloadActivity.onChange = { [weak self] visible in if visible { self?.objectWillChange.send() } }
+        processingActivity.onChange = { [weak self] _ in self?.processingProgressChanged() }
         searchMemo.onUpdate = { [weak self] in self?.objectWillChange.send() }
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in

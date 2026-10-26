@@ -24,11 +24,14 @@ struct MenuBarView: View {
         Button("Show Floating Notes") { state.showFloatingNotes(focus: state.recordingID) }
         Divider()
         Toggle("Record Calls Automatically", isOn: $state.automaticRecording)
-        if state.automaticRecording { Text(state.monitor.statusText) }
-        if let activity {
-            // Work in progress is an item that opens it, so it reads at full strength, not as a dimmed status line.
-            Divider()
-            Button(activity, action: showActivity)
+        if state.automaticRecording { DetectionStatusText(monitor: state.monitor) }
+        // The percent follows the job's own progress, not the app's other changes.
+        ActivityReader(processing: state.processingActivity, download: state.downloadActivity) {
+            if let activity {
+                // Work in progress is an item that opens it, so it reads at full strength, not as a dimmed status line.
+                Divider()
+                Button(activity, action: showActivity)
+            }
         }
         DeviceMenuBarItems(state: state)
         Divider()
@@ -64,4 +67,10 @@ struct MenuBarView: View {
         openWindow(id: WindowID.library)
         NSApp.activate()
     }
+}
+
+/// "Listening for calls", from the call detector itself.
+private struct DetectionStatusText: View {
+    @ObservedObject var monitor: MeetingMonitor
+    var body: some View { Text(monitor.statusText) }
 }

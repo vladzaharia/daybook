@@ -252,10 +252,12 @@ private struct EmptyLibraryView: View {
             .controlSize(.large)
             .padding(.top, Space.s2)
             if let id = state.downloadingID {
-                Text("Downloading \(state.modelCatalog.name(for: id)) · \(Int(state.downloadProgress.fraction * 100))%")
-                    .font(TypeStyle.status)
-                    .foregroundStyle(Ink.secondary)
-                    .padding(.top, Space.s6)
+                ActivityReader(download: state.downloadActivity) {
+                    Text("Downloading \(state.modelCatalog.name(for: id)) · \(Int(state.downloadProgress.fraction * 100))%")
+                        .font(TypeStyle.status)
+                        .foregroundStyle(Ink.secondary)
+                        .padding(.top, Space.s6)
+                }
             }
         }
         .offset(y: -24)

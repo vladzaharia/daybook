@@ -8,8 +8,16 @@ import SwiftUI
 struct PhoneOverview: View {
     @ObservedObject var state: AppState
     @ObservedObject var session: DeviceSession
+    /// Whether sync is on, for the byline.
+    @ObservedObject private var sync: LibrarySyncController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
+
+    init(state: AppState, session: DeviceSession) {
+        self.state = state
+        self.session = session
+        sync = state.sync
+    }
 
     private var direct: (any DeviceConnection)? { session.direct }
 
@@ -72,7 +80,7 @@ struct PhoneOverview: View {
         if direct.state.isConnected {
             var parts = ["Connected"]
             if session.status?.isRecording == true { parts.append((direct as? PhoneLinkConnection)?.recordingPhase == .paused ? "Paused" : "Recording") }
-            if state.sync.folder == nil { parts.append("Sync is off") }
+            if sync.folder == nil { parts.append("Sync is off") }
             return parts.joined(separator: " · ")
         }
         if let last = direct.lastConnectedAt { return "Not connected · Last connected \(DeviceDateFormat.lastSeen(last, now: now))" }

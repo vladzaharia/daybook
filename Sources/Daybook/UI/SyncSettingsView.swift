@@ -7,11 +7,16 @@ import SwiftUI
 /// can bring back a chosen folder with `LibrarySyncController.developmentFolderSyncKey`.
 struct SyncSettingsView: View {
     @ObservedObject var state: AppState
+    /// Followed directly: the window doesn't redraw for every sync status change.
+    @ObservedObject private var sync: LibrarySyncController
     @State private var confirmingTurnOff = false
     @State private var confirmingAccount = false
     @State private var confirmingSkip = false
 
-    private var sync: LibrarySyncController { state.sync }
+    init(state: AppState) {
+        self.state = state
+        sync = state.sync
+    }
 
     var body: some View {
         Section {

@@ -229,12 +229,21 @@ private struct PlayPill: View {
 struct ConversationStatus: View {
     @ObservedObject var state: AppState
     let meeting: Meeting
+    /// What the recorders recording along are doing ("Soundcore Work is recording too").
+    @ObservedObject private var sources: MultiSourceCoordinator
     @AppStorage(SettingsPaneKey.storageKey) private var settingsPane = "general"
     @Environment(\.openSettings) private var openSettings
     @State private var showingDetails = false
 
+    init(state: AppState, meeting: Meeting) {
+        self.state = state
+        self.meeting = meeting
+        sources = state.sources
+    }
+
     var body: some View {
-        content
+        // Progress redraws only this line, at its own pace.
+        ActivityReader(processing: state.processingActivity, download: state.downloadActivity) { content }
             .transition(.opacity.combined(with: .move(edge: .top)))
             .animation(.easeOut(duration: 0.2), value: state.processingID)
     }

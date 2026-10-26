@@ -72,12 +72,19 @@ struct SettingsFooter: View {
 
 private struct GeneralSettings: View {
     @ObservedObject var state: AppState
+    /// The import-matching switch lives on the sources coordinator, which the window doesn't follow.
+    @ObservedObject private var sources: MultiSourceCoordinator
     @AppStorage("showsFloatingNotesWhileRecording") private var showsFloatingNotes = true
     @AppStorage("showsMenuBarExtra") private var showsMenuBarExtra = true
     @AppStorage("screenCaptureRequested") private var screenCaptureRequested = false
     @State private var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var screenCapture = CGPreflightScreenCaptureAccess()
     @State private var showingSupportedApps = false
+
+    init(state: AppState) {
+        self.state = state
+        sources = state.sources
+    }
 
     var body: some View {
         Form {
@@ -108,7 +115,7 @@ private struct GeneralSettings: View {
                 }
                 Toggle("Show floating notes while recording", isOn: $showsFloatingNotes)
                     .controlSize(.regular)
-                Toggle("Add imported files to conversations they overlap", isOn: Binding(get: { state.sources.matchesImportedFiles }, set: { state.sources.matchesImportedFiles = $0 }))
+                Toggle("Add imported files to conversations they overlap", isOn: $sources.matchesImportedFiles)
                     .controlSize(.regular)
             }
 
@@ -201,8 +208,15 @@ private struct AllowedLabel: View {
 /// listening, the recording red while a detected call is being recorded.
 private struct DetectionStatusLine: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var monitor: MeetingMonitor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var recording: Bool { state.monitor.isMeetingActive && state.isRecording }
+
+    init(state: AppState) {
+        self.state = state
+        monitor = state.monitor
+    }
+
+    private var recording: Bool { monitor.isMeetingActive && state.isRecording }
     private var color: Color { recording ? Ink.record : DaybookStyle.neonMint }
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
@@ -212,7 +226,7 @@ private struct DetectionStatusLine: View {
                 .neonGlow(color, radius: 3)
                 .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
                 .accessibilityHidden(true)
-            Text(state.monitor.statusText)
+            Text(monitor.statusText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
