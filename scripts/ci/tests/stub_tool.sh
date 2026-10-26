@@ -7,7 +7,8 @@
 #   STUB_RESOLVE_CHANGES=1     -resolvePackageDependencies rewrites the project's Package.resolved
 #   STUB_NOTARY=accepted|invalid|slow|accept-later
 #                              how `xcrun notarytool` answers: slow means `wait` times out with the
-#                              submission still in progress; accept-later means `info` says Accepted
+#                              submission still in progress; accept-later means `info` says Accepted.
+#                              A DMG's submission (ID 2222…) follows STUB_NOTARY_DMG when that's set.
 #   STUB_PLIST_VERSION, STUB_PLIST_BUILD
 #                              CFBundleShortVersionString and CFBundleVersion of the apps it makes
 #   STUB_IDENTITY=1            security find-identity lists a Developer ID Application identity
@@ -70,8 +71,14 @@ case "$tool" in
             notarytool)
                 sub="${2-}"
                 mode="${STUB_NOTARY:-accepted}"
+                [[ "${3-}" == 2222* ]] && mode="${STUB_NOTARY_DMG:-$mode}"
                 case "$sub" in
-                    submit) echo '{"id":"11111111-2222-3333-4444-555555555555","message":"Successfully uploaded file"}' ;;
+                    submit)
+                        if [[ "${3-}" == *.dmg ]]; then
+                            echo '{"id":"22222222-2222-3333-4444-555555555555","message":"Successfully uploaded file"}'
+                        else
+                            echo '{"id":"11111111-2222-3333-4444-555555555555","message":"Successfully uploaded file"}'
+                        fi ;;
                     wait)
                         case "$mode" in
                             accepted) echo "{\"id\":\"$3\",\"status\":\"Accepted\"}" ;;

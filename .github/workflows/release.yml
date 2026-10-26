@@ -316,13 +316,40 @@ jobs:
         run: scripts/ci/select-xcode.sh --metal
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
+      # A re-run picks up the app notarization an earlier attempt left pending (Apple was still working
+      # on it when that attempt's wait ran out) instead of building and submitting again.
+      - name: Find a notarization an earlier attempt left pending
+        if: github.run_attempt != '1'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mac-notarization-*
+          path: build/notarization-earlier
+          merge-multiple: true
+      - name: Resume it
+        id: resume
+        if: github.run_attempt != '1'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          out="$(scripts/ci/secrets.sh run -- scripts/ci/notary-resume.sh --from build/notarization-earlier \
+            --state-dir "build/notarization/attempt-$GITHUB_RUN_ATTEMPT" --app dist/Daybook.app --version "$VERSION")"
+          submission="$(printf '%s\n' "$out" | sed -n 's/^submission=//p')"
+          echo "submission=$submission" >> "$GITHUB_OUTPUT"
+          if [[ -n "$submission" ]]; then
+            echo "BUILD=$(printf '%s\n' "$out" | sed -n 's/^build=//p')" >> "$GITHUB_ENV"
+            echo "::notice title=Notarization resumed::Waiting for the earlier submission $submission instead of building again"
+          fi
       # Package checkouts and manifests run before any secret exists.
       - name: Fetch the packages at their pinned versions
+        if: steps.resume.outputs.submission == ''
         run: scripts/build-app.sh --resolve-only
       # The archive signs for development through the API key (automatic signing), so the key has to
       # exist while third-party package code compiles (docs/release.md, "Secrets on the runner"). It
       # exists for this step only; the Developer ID identity isn't on the runner yet.
       - name: Archive
+        if: steps.resume.outputs.submission == ''
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -333,6 +360,7 @@ jobs:
       # export signs manually with its identity and the Developer ID profile (scripts/ci/mac-export.sh).
       # The keychain exists only during this step and the next, when nothing compiles.
       - name: Export with Developer ID
+        if: steps.resume.outputs.submission == ''
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -340,6 +368,9 @@ jobs:
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
         run: scripts/ci/secrets.sh run -- scripts/ci/mac-export.sh
+      # Each submission waits at most 45 minutes (the DMG's 20), and its ID goes to the run summary. If
+      # Apple is still working on the app's when the wait runs out, the step fails and the next step
+      # keeps the submission for a re-run.
       - name: Notarize, staple, and package
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -347,7 +378,20 @@ jobs:
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
           DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-        run: scripts/ci/secrets.sh run -- scripts/ci/package-mac.sh --app dist/Daybook.app --version "$VERSION" --build "$BUILD" --output dist/release --notarize
+          SUBMISSION: ${{ steps.resume.outputs.submission }}
+        run: |
+          args=(--app dist/Daybook.app --version "$VERSION" --build "$BUILD" --output dist/release --notarize
+                --state-dir "build/notarization/attempt-$GITHUB_RUN_ATTEMPT")
+          if [[ -n "$SUBMISSION" ]]; then args+=(--submission "$SUBMISSION"); fi
+          scripts/ci/secrets.sh run -- scripts/ci/package-mac.sh "${args[@]}"
+      - name: Keep the pending notarization for a re-run
+        if: (failure() || cancelled()) && hashFiles('build/notarization/*/pending.json') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-notarization-${{ github.run_attempt }}
+          path: build/notarization/
+          retention-days: 7
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mac-release

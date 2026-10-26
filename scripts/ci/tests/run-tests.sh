@@ -22,7 +22,8 @@
 #                         (macOS)
 #   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
 #                         the repository (macOS)
-#   package-mac.sh        version and build checks, ZIP, DMG, checksums, with stand-in tools (macOS)
+#   package-mac.sh        version and build checks, ZIP, DMG, checksums, notarization waits, pending
+#                         submissions, and notary-resume.sh, with stand-in tools (macOS)
 # Runs on macOS (bash 3.2) and Linux.
 set -euo pipefail
 
@@ -524,6 +525,73 @@ if macos; then
     expect_ok "and says which" grep -q "is build '1057' (CFBundleVersion), not 1058" "$work/package.out"
     expect_fail "nor one with another version" package --app "$work/pkg/Daybook.app" --version 1.5.0 --output "$work/pkg-out2"
     expect_ok "(nothing was written)" test ! -e "$work/pkg-out2/SHA256SUMS.txt"
+
+    # Notarization, with a stand-in notarytool.
+    notary_env=(DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer"
+                DAYBOOK_TEAM_ID=48H7CLBV8Y GITHUB_STEP_SUMMARY="$work/summary.md" STUB_IDENTITY=1)
+    notarize() {
+        : > "$work/stub.log"
+        : > "$work/summary.md"
+        local vars=()
+        while [[ "$1" != -- ]]; do vars+=("$1"); shift; done
+        shift
+        env PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "${notary_env[@]}" ${vars[@]+"${vars[@]}"} \
+            "$ci/package-mac.sh" --app "$work/pkg/Daybook.app" --version 1.4.0 --build 1057 --notarize "$@" > "$work/package.out" 2>&1
+    }
+    calls() { grep -E "^xcrun (notarytool $1|stapler staple)" "$work/stub.log" | awk '{print $2, $3, $4}' | sed 's|[^ ]*/||g' | paste -sd '|' -; }
+    app_id=11111111-2222-3333-4444-555555555555
+    rm -rf "$work/notary-out" "$work/state"
+    expect_ok "notarizes the app and the DMG" notarize STUB_NOTARY=accepted -- --output "$work/notary-out" --state-dir "$work/state"
+    expect_eq "submits without waiting, then waits with a limit" "notarytool submit submit.zip|notarytool wait $app_id|stapler staple Daybook.app|notarytool submit Daybook-1.4.0-macOS-arm64.dmg|notarytool wait 22222222-2222-3333-4444-555555555555|stapler staple Daybook-1.4.0-macOS-arm64.dmg" \
+        "$(calls '(submit|wait)')"
+    expect_eq "the app's wait is 45 minutes, the DMG's 20" "45m 20m" "$(grep -o -- '--timeout [0-9a-z]*' "$work/stub.log" | awk '{print $2}' | paste -sd ' ' -)"
+    expect_eq "both submissions are in the summary" "2" "$(grep -c 'submission `' "$work/summary.md")"
+    expect_ok "nothing stays pending" test ! -e "$work/state/pending.json"
+    expect_eq "ZIP, DMG, checksums" "Daybook-1.4.0-macOS-arm64.dmg Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" "$(files_in "$work/notary-out")"
+
+    rm -rf "$work/notary-out" "$work/state"
+    status=0
+    notarize STUB_NOTARY=slow -- --output "$work/notary-out" --state-dir "$work/state" || status=$?
+    expect_eq "a submission still in progress stops with 75" "75" "$status"
+    expect_eq "and is kept for a re-run" "$app_id 1.4.0 1057" "$(jq -r '"\(.id) \(.version) \(.build)"' "$work/state/pending.json")"
+    expect_ok "with exactly what was sent" test "$(shasum -a 256 "$work/state/submit.zip" | awk '{print $1}')" = "$(jq -r .sha256 "$work/state/pending.json")"
+    expect_ok "and in the summary" grep -q "submission \`$app_id\`, In Progress" "$work/summary.md"
+    expect_ok "nothing is packaged" test ! -e "$work/notary-out/SHA256SUMS.txt"
+
+    # The re-run: notary-resume.sh finds attempt 1's submission.
+    mkdir -p "$work/earlier/attempt-1"
+    cp "$work/state/pending.json" "$work/state/submit.zip" "$work/earlier/attempt-1/"
+    # resume MODE [VERSION [FROM]]
+    resume() {
+        : > "$work/stub.log"
+        env PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "${notary_env[@]}" STUB_NOTARY="$1" \
+            "$ci/notary-resume.sh" --from "${3:-$work/earlier}" --state-dir "$work/state2" --app "$work/resumed/Daybook.app" \
+            --version "${2:-1.4.0}" 2>"$work/resume.err" | paste -sd ' ' -
+    }
+    expect_eq "a pending submission is picked up" "submission=$app_id build=1057" "$(resume slow)"
+    expect_ok "the submitted app is unpacked" test -f "$work/resumed/Daybook.app/Contents/Info.plist"
+    expect_ok "and its state copied" test -f "$work/state2/pending.json" -a -f "$work/state2/submit.zip"
+    expect_eq "an accepted one too" "submission=$app_id build=1057" "$(resume accepted)"
+    expect_eq "a rejected one isn't" "submission=" "$(resume invalid)"
+    expect_eq "nor one for another version" "submission=" "$(resume slow 1.5.0)"
+    printf 'x' >> "$work/earlier/attempt-1/submit.zip"
+    expect_eq "nor one whose zip changed" "submission=" "$(resume slow)"
+    expect_eq "nothing pending, nothing to do" "submission=" "$(resume slow 1.4.0 "$work/none")"
+
+    # package-mac.sh --submission waits for that submission instead of sending the app again.
+    rm -rf "$work/notary-out"
+    expect_ok "--submission: waits for the earlier submission" notarize STUB_NOTARY=accept-later -- \
+        --output "$work/notary-out" --state-dir "$work/state2" --submission "$app_id"
+    expect_eq "without submitting the app again" "notarytool wait $app_id|stapler staple Daybook.app" "$(calls '(submit|wait)' | cut -d'|' -f1-2)"
+    expect_fail "--submission needs its pending.json" notarize -- --output "$work/notary-out" --state-dir "$work/nowhere" --submission "$app_id"
+
+    rm -rf "$work/notary-out" "$work/state"
+    expect_fail "a rejected app fails" notarize STUB_NOTARY=invalid -- --output "$work/notary-out" --state-dir "$work/state"
+    expect_ok "with Apple's log" grep -q "^xcrun notarytool log $app_id" "$work/stub.log"
+    expect_ok "and nothing pending" test ! -e "$work/state/pending.json"
+    rm -rf "$work/notary-out" "$work/state"
+    expect_ok "a DMG that isn't notarized in time is left out" notarize STUB_NOTARY=accepted STUB_NOTARY_DMG=slow -- --output "$work/notary-out" --state-dir "$work/state"
+    expect_eq "the release ships the ZIP" "Daybook-1.4.0-macOS-arm64.zip SHA256SUMS.txt" "$(files_in "$work/notary-out")"
 else
     skip "package-mac.sh (macOS only)"
 fi

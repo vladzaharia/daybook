@@ -81,7 +81,9 @@ That's the one exception to "nothing but the owner's first-time provisioning pas
   - The iPhone export uses Apple Distribution with the App Store profiles.
   - The Mac export uses Developer ID Application with the Developer ID profile that carries the iCloud container.
   - The iPhone export uses `destination: upload`, which sends the build straight to App Store Connect.
-- **Notarization:** `xcrun notarytool submit --key --key-id --issuer --wait` with the same key. Then `xcrun stapler staple` runs, and `spctl` assesses the result.
+- **Notarization:** `xcrun notarytool submit` with the same key, then `notarytool wait --timeout`: 45 minutes for the app, 20 for the DMG, well inside the job's 150 minutes. Each submission ID goes to the run summary. Then `xcrun stapler staple` runs, and `spctl` assesses the result.
+  - If Apple is still working on the app when the wait runs out, the job fails and keeps that submission (`pending.json` with its ID, and `submit.zip`, exactly what was sent) as the `mac-notarization-<attempt>` artifact for 7 days. Re-run the failed job: `scripts/ci/notary-resume.sh` finds it, asks Apple for its status, and if it's accepted or still in progress, unpacks that app and waits for the same submission instead of building and submitting again. A rejected one, or none, means a fresh build.
+  - If the DMG isn't notarized in time, it's left out with a warning, and the release ships the ZIP.
 
 ### Development certificates
 
@@ -303,6 +305,7 @@ gh workflow run release.yml --ref main -f apps=iphone -f version=1.4.0 \
 ### Re-running
 
 - **Re-run failed jobs** re-runs the failed jobs and the jobs after them, after a new approval. Each re-run job works out its own build number (`1057.2`; see [Versions](#versions)).
+- A re-run Mac job picks up an app notarization its previous attempt left pending (see [How it works](#how-it-works)), so it keeps that attempt's build number.
 - The `draft` job updates its own draft: title, notes, and prerelease flag again, files that this attempt didn't produce (a DMG, say) deleted, the rest replaced.
 - A **published** release is never changed. `draft` fails instead of swapping files people may already have downloaded, and its `SHA256SUMS.txt` would no longer match them. Cut a new version, or roll back first.
 
@@ -362,6 +365,7 @@ xcrun stapler validate /Applications/Daybook.app
 | Signing: "the provisioning profile grants it (`aps-environment`) for the value 'development'" | Something set `DAYBOOK_APS_ENVIRONMENT` to `production`. Keep `development`; the export re-signs it `production` (see [Capabilities and entitlements](#capabilities-and-entitlements)). |
 | TestFlight or Developer ID: recordings reach the Mac only at iCloud Drive's pace | The courier is off. Usually the schema isn't deployed to Production (step 7c); also check the entitlements (step 7d) and that the person is signed in to iCloud. `LibrarySyncController.courierStatus.availability` and `lastError` say why. |
 | Notarization `Invalid` | `package-mac.sh` prints Apple's log; it names each file and the problem (unsigned code, missing hardened runtime, no secure timestamp). |
+| "Notarization still in progress" (exit 75) | Apple took longer than the 45-minute wait. Re-run the failed job within 7 days: it resumes that submission (the run summary has its ID). `xcrun notarytool info <id>` shows its status meanwhile. |
 | Upload rejected: ITMS-90713 or ITMS-90022 (icon) | See [Known blockers](#known-blockers). `check-ios-archive.sh` catches this before the upload. |
 | Upload rejected: the bundle version must be higher, or a redundant binary; or `asc-testflight.sh`: "… was uploaded at …, before this run started" | That build number belongs to an older upload: the offset went down, or `release.yml` was recreated. Raise `DAYBOOK_BUILD_NUMBER_OFFSET` above the highest build number in App Store Connect and run the release again. |
 | `no App Store Connect app has the bundle ID local.daybook.phone` | Create the app record (One-time setup, step 2). |
