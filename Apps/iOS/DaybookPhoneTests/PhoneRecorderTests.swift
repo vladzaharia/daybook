@@ -197,6 +197,33 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertTrue(recording.warnings.contains { $0.contains("Audio services restarted") })
     }
 
+    func testStopDuringMediaServicesRecoveryCannotRestartTheMicrophone() async throws {
+        let clock = ManualRecorderClock()
+        let session = ScriptedAudioSession()
+        let probe = ResetStopProbe()
+        let inputs = InputBox()
+        let environment = PhoneRecorderEnvironment(session: session, makeInput: {
+            let input = SyntheticAudioInput(clock: clock)
+            inputs.all.append(input)
+            return StopObservedInput(input: input) {
+                Task { @MainActor in
+                    probe.recording = await probe.recorder.stop()
+                    probe.finished = true
+                }
+            }
+        }, clock: clock, realTimeEncoding: false)
+        probe.recorder = PhoneRecorder(environment: environment)
+        try await probe.recorder.start(in: try temporaryDirectory().appendingPathComponent("capture"), title: "Reset and stop")
+        inputs.current.pump(seconds: 2)
+        session.send(.mediaServicesReset)
+        try await waitUntil("stop during reset") { probe.finished }
+        XCTAssertNotNil(probe.recording)
+        XCTAssertEqual(probe.recorder.state, .idle)
+        XCTAssertEqual(inputs.all.count, 1, "Recovery must not create a replacement microphone after Stop")
+        XCTAssertFalse(inputs.all.contains(where: \.isRunning))
+        XCTAssertFalse(session.isActive)
+    }
+
     func testRouteChangesAreRecorded() async throws {
         let rig = RecorderRig()
         let folder = try temporaryDirectory().appendingPathComponent("capture")
@@ -369,5 +396,31 @@ final class PhoneRecorderTests: XCTestCase {
         XCTAssertFalse(rig.recorder.isMicrophoneSilent)
         XCTAssertNotNil(rig.recorder.startedAt)
         _ = await rig.recorder.stop()
+    }
+}
+
+@MainActor
+private final class ResetStopProbe {
+    var recorder: PhoneRecorder!
+    var recording: PhoneRecording?
+    var finished = false
+}
+
+private final class StopObservedInput: AudioInputSource {
+    let input: SyntheticAudioInput
+    private var stopped: (() -> Void)?
+    init(input: SyntheticAudioInput, stopped: @escaping () -> Void) {
+        self.input = input
+        self.stopped = stopped
+    }
+    func start(onBuffer: @escaping @Sendable (AVAudioPCMBuffer, TimeInterval) -> Void,
+               onEvent: @escaping @Sendable (AudioInputEvent) -> Void) throws {
+        try input.start(onBuffer: onBuffer, onEvent: onEvent)
+    }
+    func stop() {
+        input.stop()
+        let callback = stopped
+        stopped = nil
+        callback?()
     }
 }
