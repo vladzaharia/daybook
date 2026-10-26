@@ -444,6 +444,10 @@ final class PhoneAppModel: RecordingCommandHandling {
             guard settings.acceptsMacRecordRequests else {
                 return .refused(LinkRecordRefusal(reason: .declined, message: "Recording with a Mac is turned off on this iPhone."))
             }
+            guard settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) else {
+                return .refused(LinkRecordRefusal(reason: .declined,
+                                                  message: "It hasn’t allowed this Mac to start recording. Allow it in Settings › Macs on the iPhone."))
+            }
             if recorder.isActive {
                 if recorder.captureID == request.conversationID {
                     return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: recorder.startedAt,

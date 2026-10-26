@@ -224,7 +224,9 @@ change take seconds instead of a sync round trip. They're app messages, added wi
   `notRecording`, `microphoneUnavailable`, `permissionDenied`, `storageFull`, `busy`, `declined`
   or `unsupported`.
 
-Without a handler, every request is refused as `unsupported`. Requests are idempotent by ID: a
+Without a handler, every request is refused as `unsupported`. The iPhone's handler refuses a start
+from a Mac the person hasn't allowed to start recording there (asked once per pairing;
+docs/iphone.md, "Local link") as `declined`, with a sentence the Mac shows. Requests are idempotent by ID: a
 retry after a lost reply, even on a new connection, gets the first answer and never starts a
 second recording. `LinkTiming` carries the requester's prior: its own start, elapsed timeline,
 and its clock-offset estimate with uncertainty.

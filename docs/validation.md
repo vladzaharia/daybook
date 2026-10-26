@@ -22,6 +22,10 @@ Still requires real devices:
   iCloud › Manage Storage › Backups lists Daybook at the library's size without the downloaded
   audio; with Include in iPhone Backups off, near zero. Restoring a backup made with it on brings
   back the library, and played audio downloads again.
+- **Mac permission to record on the iPhone.** Pair a new Mac: the iPhone asks "Let <Mac> start
+  recording on this iPhone?". After Not Now, a recording the Mac starts with the phone shows the
+  phone's refusal on the Mac; turning on Can Start Recording in that Mac's row lets the next one
+  start. A Mac paired before the update keeps starting recordings without being asked.
 - **Mac keychain move.** With a signed build of the previous version paired to a phone, install the
   new build: the pairing keeps connecting with no keychain prompt, and Keychain Access no longer
   lists a "Daybook link" item in the login keychain. An ad hoc build keeps using the login keychain.
