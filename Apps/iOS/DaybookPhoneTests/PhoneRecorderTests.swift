@@ -244,27 +244,26 @@ final class PhoneRecorderTests: XCTestCase {
     /// audio passes a fragment boundary. In the recorder's real-time mode it does, promptly, whether
     /// the audio is loud or silent (VBR silence is tiny); in non-real-time mode it held back the first
     /// 3 s or more, which made the crash-recovery test depend on the runtime.
-    func testRealTimeSegmentsReachTheDiskAtEachFragmentInterval() throws {
+    func testRealTimeSegmentsReachTheDiskAtEachFragmentInterval() async throws {
         var format = RecordingFormat.speech
         format.fragmentInterval = 1
         for amplitude: Float in [0.3, 0] {
             let url = try temporaryDirectory().appendingPathComponent("segment.m4a")
             let writer = try AACSegmentWriter(url: url, format: format, realTime: true)
+            defer { writer.cancel() }
             let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format.pcmFormat, frameCapacity: 4_800))
             buffer.frameLength = 4_800
             for index in 0..<4_800 { buffer.floatChannelData![0][index] = amplitude * sin(Float(index) * 2 * .pi * 440 / 48_000) }
             for _ in 0..<25 { try writer.append(buffer) }   // 2.5 s, faster than real time
             let copy = url.deletingLastPathComponent().appendingPathComponent("copy.m4a")
             var seconds = 0.0
-            let deadline = Date().addingTimeInterval(30)
-            while seconds < 2, Date() < deadline {
+            try await waitUntil("amplitude \(amplitude): every fragment the audio has passed on disk", timeout: 30, poll: .milliseconds(100),
+                                state: { "\(seconds) s readable" }) {
                 try? FileManager.default.removeItem(at: copy)
                 try FileManager.default.copyItem(at: url, to: copy)
                 seconds = (try? AVAudioFile(forReading: copy)).map { Double($0.length) / format.sampleRate } ?? 0
-                if seconds < 2 { Thread.sleep(forTimeInterval: 0.1) }
+                return seconds >= 2
             }
-            XCTAssertGreaterThanOrEqual(seconds, 2, "amplitude \(amplitude): every fragment the audio has passed is on disk")
-            writer.cancel()
         }
     }
 
@@ -282,21 +281,15 @@ final class PhoneRecorderTests: XCTestCase {
 
         // Copy the folder as it is on disk mid-recording: that is what a killed app leaves behind.
         let crashed = try temporaryDirectory().appendingPathComponent("crashed")
-        var copied: URL?
-        let deadline = Date().addingTimeInterval(30)
-        while copied == nil, Date() < deadline {
+        var readable: Int64 = 0
+        let snapshot = try await waitFor("fragments with 4 s of audio on disk while recording", timeout: 30, poll: .milliseconds(100),
+                                         state: { "\(readable) frames readable" }) { () -> URL? in
             try? FileManager.default.removeItem(at: crashed)
             // A journal write can rename its temporary file mid-copy; copy again, as for short audio.
-            guard (try? FileManager.default.copyItem(at: folder, to: crashed)) != nil else {
-                try await Task.sleep(for: .milliseconds(100)); continue
-            }
-            if let file = try? AVAudioFile(forReading: crashed.appendingPathComponent("segment-000.m4a")), file.length >= 4 * 48_000 {
-                copied = crashed
-            } else {
-                try await Task.sleep(for: .milliseconds(100))
-            }
+            guard (try? FileManager.default.copyItem(at: folder, to: crashed)) != nil else { return nil }
+            readable = (try? AVAudioFile(forReading: crashed.appendingPathComponent("segment-000.m4a")))?.length ?? 0
+            return readable >= 4 * 48_000 ? crashed : nil
         }
-        let snapshot = try XCTUnwrap(copied, "fragments reach the disk while recording")
         XCTAssertNil(try PhoneCaptureJournal.load(from: snapshot).finalFile)
 
         let recording = try await PhoneRecorder.recover(in: snapshot)
