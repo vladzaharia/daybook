@@ -183,7 +183,7 @@ final class Once: @unchecked Sendable {
 }
 
 /// A loopback TCP relay that delays bytes each way, and can freeze (stop forwarding without
-/// closing, like Wi-Fi that silently went away) or drop every connection.
+/// closing, like Wi-Fi that silently went away), refuse new connections, or drop every connection.
 final class DelayingRelay: @unchecked Sendable {
     private let queue = DispatchQueue(label: "test.relay")
     private let listener: NWListener
@@ -277,13 +277,17 @@ final class DelayingRelay: @unchecked Sendable {
         queue.asyncAfter(deadline: head.due) { [weak self] in
             guard let self else { return }
             let item = conveyor.items.removeFirst()
-            if let data = item.data {
-                var delivered = self.lastDelivered[conveyor.pipe] ?? (nil, nil)
-                if conveyor.upstream { delivered.upstream = Date() } else { delivered.downstream = Date() }
-                self.lastDelivered[conveyor.pipe] = delivered
-                conveyor.destination.send(content: data, completion: .contentProcessed { _ in })
-            } else {
-                conveyor.destination.cancel()
+            // Frozen, what was still in flight is lost too, so nothing arrives after the freeze
+            // (however late a starved machine runs this).
+            if !self.frozen.contains(conveyor.pipe) {
+                if let data = item.data {
+                    var delivered = self.lastDelivered[conveyor.pipe] ?? (nil, nil)
+                    if conveyor.upstream { delivered.upstream = Date() } else { delivered.downstream = Date() }
+                    self.lastDelivered[conveyor.pipe] = delivered
+                    conveyor.destination.send(content: data, completion: .contentProcessed { _ in })
+                } else {
+                    conveyor.destination.cancel()
+                }
             }
             self.advance(conveyor)
         }
