@@ -221,7 +221,8 @@ struct MultiSourceRig {
     static func make(models: Bool = true) async throws -> MultiSourceRig {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookMultiSource-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let suite = "local.daybook.tests.multisource.\(UUID().uuidString)"
+        // A suite named by a path inside the test's folder keeps its plist there, not in ~/Library/Preferences.
+        let suite = root.appendingPathComponent("Preferences").path
         let defaults = UserDefaults(suiteName: suite)!
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
@@ -294,6 +295,19 @@ struct MultiSourceRig {
     /// Waits until the processing queue is idle.
     func processed() async throws {
         try await waitUntil("processing to finish") { state.processingID == nil && state.queuedIDs.isEmpty }
+        await state.flush()
+    }
+
+    /// Waits until these conversations are processed, not just until the queue is idle (which it can
+    /// be before their work starts): their requests answered, their status settled, and the queue idle.
+    func processed(_ ids: UUID..., timeout: TimeInterval = 20) async throws {
+        try await waitUntil("processing to finish", timeout: timeout) {
+            state.processingID == nil && state.queuedIDs.isEmpty && ids.allSatisfy { id in
+                guard let meeting = meeting(id) else { return true }
+                let settled = meeting.status == .ready || meeting.status == .failed || state.awaitingModels.contains(id)
+                return settled && (meeting.processingRequests ?? []).allSatisfy { $0.outcome != nil }
+            }
+        }
         await state.flush()
     }
 }

@@ -557,7 +557,7 @@ final class PhoneLinkTests: XCTestCase {
         let id = try await rig.waitingConversation("Progress", audio: audio, script: [(0, "Hello from the Mac.")])
 
         rig.state.enqueue(id)
-        try await rig.processed()
+        try await rig.processed(id)
         try await waitFor("the last message") { phone.events.progress.contains { $0.meetingID == id && $0.phase == .finished } }
         // It waited for models while its recording was stored; from the queue on, the phone hears each step.
         let all = phone.events.progress.filter { $0.meetingID == id }

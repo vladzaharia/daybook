@@ -123,7 +123,8 @@ struct PhoneLibrarySide {
     let phoneID: UUID
 
     static func make(root: URL, cloud: URL, phoneID: UUID) async throws -> PhoneLibrarySide {
-        let suite = "local.daybook.tests.phone.\(UUID().uuidString)"
+        // A suite named by a path inside the test's folder keeps its plist there, not in ~/Library/Preferences.
+        let suite = root.appendingPathComponent("Preferences").path
         let defaults = UserDefaults(suiteName: suite)!
         let local = root.appendingPathComponent("Phone", isDirectory: true)
         try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
