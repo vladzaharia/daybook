@@ -20,6 +20,24 @@ final class StatusSheetModelTests: XCTestCase {
 
     // MARK: The recorder line
 
+    func testARecorderThatIsntLiveHereSaysWhatItWasLastKnownToDo() {
+        let managed = line(recorder { $0.managedBy = "Studio Mac"; $0.isLinked = false; $0.state = .notConnected
+            $0.lastKnown = "Recording since 10:02, as of 10:14" })
+        XCTAssertEqual(managed.text, "Managed by Studio Mac · Recording since 10:02, as of 10:14")
+        XCTAssertEqual(line(recorder { $0.managedBy = "Studio Mac"; $0.isLinked = false }).text, "Managed by Studio Mac",
+                       "nothing said, or too old to say")
+        let away = line(recorder { $0.isLinked = false; $0.state = .notConnected; $0.lastKnown = "Not recording, as of 10:14" })
+        XCTAssertEqual(away.text, "Not recording, as of 10:14")
+        XCTAssertEqual(away.tone, .calm)
+
+        // What it says is shown with its age, then not at all.
+        let asOf = Date()
+        let state = LinkRecorderState(kind: "soundcore.work", isRecording: true, startedAt: asOf.addingTimeInterval(-600), asOf: asOf)
+        XCTAssertEqual(state.summary(now: asOf), "Recording since \(asOf.addingTimeInterval(-600).formatted(date: .omitted, time: .shortened))")
+        XCTAssertTrue(state.summary(now: asOf.addingTimeInterval(120))?.hasSuffix("as of \(asOf.formatted(date: .omitted, time: .shortened))") == true)
+        XCTAssertNil(state.summary(now: asOf.addingTimeInterval(21 * 60)))
+    }
+
     func testRecorderLineSaysWhatTheRecorderIsDoing() {
         XCTAssertEqual(line(nil).text, "None added")
         XCTAssertEqual(line(nil).tone, .calm)

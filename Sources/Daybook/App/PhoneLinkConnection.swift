@@ -60,6 +60,11 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
                             updatedAt: peer.clock?.localDate(fromPeer: recording.sentAt) ?? Date())
     }
 
+    /// The recorders the phone manages, as it last said (on this Mac's clock), still within their lifetime.
+    func recorders(now: Date = Date()) -> [LinkRecorderState] {
+        (link.phoneRecorders[phoneID] ?? []).filter { $0.summary(now: now) != nil }
+    }
+
     /// The conversation the phone is recording (or paused in), when it says it's recording one.
     var recordingConversationID: UUID? {
         guard recordingPhase != nil else { return nil }

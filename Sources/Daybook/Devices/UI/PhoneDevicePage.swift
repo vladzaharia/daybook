@@ -40,6 +40,19 @@ struct PhoneOverview: View {
             }
             .padding(.top, 6)
 
+            // The recorders it manages, as it last said: "Soundcore Work · Recording since 10:02".
+            if let phone = direct as? PhoneLinkConnection {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    ForEach(Array(phone.recorders(now: context.date).enumerated()), id: \.offset) { _, recorder in
+                        if let summary = recorder.summary(now: context.date) {
+                            Text("\(recorder.name ?? "Recorder") · \(summary)")
+                                .font(TypeStyle.byline())
+                                .foregroundStyle(Ink.secondary)
+                        }
+                    }
+                }
+            }
+
             if let status = session.status, status.isRecording == true, session.isLinked {
                 recordingNow(status, paused: (direct as? PhoneLinkConnection)?.recordingPhase == .paused)
                     .padding(.top, Space.s5)

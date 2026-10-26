@@ -61,6 +61,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private var launched = false
     @ObservationIgnored private var published: SharedRecordingState?
     @ObservationIgnored private var lastStateSent = Date.distantPast
+    /// The recorders this iPhone manages, as last sent to Macs.
+    @ObservationIgnored private var lastRecorders: [LinkRecorderState]?
     /// The audio session synthetic demos use, so a script can interrupt the recording.
     @ObservationIgnored var demoAudioSession: ScriptedAudioSession?
     @ObservationIgnored private var subscriptions: Set<AnyCancellable> = []
@@ -100,6 +102,13 @@ final class PhoneAppModel: RecordingCommandHandling {
         self.link.onMacConnected = { [weak self] mac in self?.macConnected(mac) }
         self.devices.onImported = { [weak self] filed in self?.filedElsewhere(filed) }
         wireRecorderHandoff()
+        // Macs hear what the recorders this iPhone manages are doing, when that changes.
+        self.devices.hub.recorderChanges()
+            .sink { [weak self] in
+                guard let self, self.devices.hub.recorderStates() != self.lastRecorders else { return }
+                self.sendRecordingState(force: true)
+            }
+            .store(in: &subscriptions)
         // A conversation moved to the Trash takes its live captions with it.
         library.controller.$meetings.map(\.count).removeDuplicates().dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneCaptions() } }
@@ -747,8 +756,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         case .paused: phase = .paused
         case .stopping: phase = .stopping
         }
+        let recorders = devices.hub.recorderStates()
+        lastRecorders = recorders
         link.sendRecordingState(LinkRecordingState(phase: phase, conversationID: recorder.captureID, startedAt: recorder.startedAt,
-                                                   elapsed: recorder.isActive ? recorder.elapsedTime : 0))
+                                                   elapsed: recorder.isActive ? recorder.elapsedTime : 0, recorders: recorders))
     }
 
     private func activityState() -> RecordingActivityAttributes.ContentState {

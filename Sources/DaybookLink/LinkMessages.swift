@@ -92,14 +92,67 @@ public struct LinkRecordingState: Codable, Sendable, Equatable {
     public var elapsed: TimeInterval
     /// When this was sent, on the sender's clock, so the receiver can keep counting.
     public var sentAt: Date
+    /// The recorders the sender manages (Soundcore Work), as it last knew them. Optional: older builds
+    /// don't send it, and one this build can't read is dropped rather than the whole state.
+    public var recorders: [LinkRecorderState]?
 
     public init(phase: Phase, conversationID: UUID? = nil, startedAt: Date? = nil, elapsed: TimeInterval = 0,
-                sentAt: Date = Date()) {
+                sentAt: Date = Date(), recorders: [LinkRecorderState]? = nil) {
         self.phase = phase
         self.conversationID = conversationID
         self.startedAt = startedAt
         self.elapsed = elapsed
         self.sentAt = sentAt
+        self.recorders = recorders
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        phase = try c.decode(Phase.self, forKey: .phase)
+        conversationID = try c.decodeIfPresent(UUID.self, forKey: .conversationID)
+        startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt)
+        elapsed = try c.decodeIfPresent(TimeInterval.self, forKey: .elapsed) ?? 0
+        sentAt = try c.decode(Date.self, forKey: .sentAt)
+        recorders = try? c.decodeIfPresent([LinkRecorderState].self, forKey: .recorders)
+    }
+}
+
+/// A recorder a device manages (Soundcore Work over Bluetooth), as that device last knew it, so the
+/// other side can show it: "Soundcore Work · Recording since 10:02".
+public struct LinkRecorderState: Codable, Sendable, Equatable {
+    /// The device kind (`soundcore.work`) and its serial number, when known.
+    public var kind: String
+    public var serial: String?
+    /// What the sender calls it.
+    public var name: String?
+    public var isRecording: Bool
+    /// The recorder's ID for the recording it's making.
+    public var recordingID: String?
+    /// When that recording started, on the sender's clock.
+    public var startedAt: Date?
+    /// When the sender last confirmed this, on its clock.
+    public var asOf: Date
+    /// The conversation it records along with, when the sender knows.
+    public var conversationID: UUID?
+
+    public init(kind: String, serial: String? = nil, name: String? = nil, isRecording: Bool, recordingID: String? = nil,
+                startedAt: Date? = nil, asOf: Date, conversationID: UUID? = nil) {
+        self.kind = kind
+        self.serial = serial
+        self.name = name
+        self.isRecording = isRecording
+        self.recordingID = recordingID
+        self.startedAt = startedAt
+        self.asOf = asOf
+        self.conversationID = conversationID
+    }
+
+    /// The same, with its times moved onto another clock (the receiver's).
+    public func moved(by convert: (Date) -> Date) -> LinkRecorderState {
+        var moved = self
+        moved.startedAt = startedAt.map(convert)
+        moved.asOf = convert(asOf)
+        return moved
     }
 }
 

@@ -174,6 +174,49 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(phone.events.states.count, count, "nothing more while idle")
     }
 
+    func testTheRecordersEachSideManagesTravelWithItsState() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state)
+        defer { Task { await phone.tearDown(rig.state) } }
+        // A recorder this Mac manages, recording along with this Mac's recording.
+        let recorder = FakeRecorder()
+        let session = DeviceSession(device: ConfiguredDevice(id: "recorder", kind: SoundcoreWorkIntegration().kind),
+                                    kind: SoundcoreWorkIntegration().kind, connections: [recorder], defaults: rig.defaults)
+        addTeardownBlock { session.shutDown() }
+        let phoneSession = try XCTUnwrap(rig.state.devices.session(phone.phoneID.uuidString))
+        rig.state.sources.recorders.sessions = { [session, phoneSession] }
+        let id = macStartsRecording(rig)
+        await rig.state.sources.recorders.settle()
+        try await waitFor("the recorder in this Mac's state") {
+            phone.events.states.last?.recorders?.first?.isRecording == true
+        }
+        let sent = try XCTUnwrap(phone.events.states.last?.recorders)
+        XCTAssertEqual(sent.count, 1, "only recorders this Mac manages, not the phone itself")
+        XCTAssertEqual(sent.first?.kind, SoundcoreWorkIntegration.id)
+        XCTAssertEqual(sent.first?.serial, "FAKE1")
+        XCTAssertEqual(sent.first?.name, "Soundcore Work")
+        XCTAssertEqual(sent.first?.recordingID, rig.meeting(id)?.companions?.first?.recordingID)
+        XCTAssertEqual(sent.first?.conversationID, id)
+        macStopsRecording(rig, id)
+        await rig.state.sources.recorders.settle()
+
+        // The phone's recorders, on this Mac's iPhone page, with their age; unknown after 20 minutes.
+        let started = Date().addingTimeInterval(-300)
+        try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle, recorders: [
+            LinkRecorderState(kind: SoundcoreWorkIntegration.id, serial: "S2", name: "Soundcore Work", isRecording: true, recordingID: "1", startedAt: started,
+                              asOf: Date().addingTimeInterval(-120))])))
+        let control = try XCTUnwrap(phoneSession.direct as? PhoneLinkConnection)
+        try await waitFor("the phone's recorders") { !control.recorders().isEmpty }
+        let shown = try XCTUnwrap(control.recorders().first)
+        XCTAssertEqual(shown.summary(), "Recording since \(started.formatted(date: .omitted, time: .shortened)), as of \(Date().addingTimeInterval(-120).formatted(date: .omitted, time: .shortened))")
+        XCTAssertEqual(control.recorders(now: Date().addingTimeInterval(17 * 60)).count, 1)
+        XCTAssertTrue(control.recorders(now: Date().addingTimeInterval(19 * 60)).isEmpty, "too old to say: 20 minutes past its as-of")
+        // Still known after the phone disconnects, for as long as it can be trusted.
+        await phone.client.disconnect(from: phone.macID)
+        try await waitFor("disconnected") { rig.state.phoneLink.peers[phone.phoneID] == nil }
+        XCTAssertEqual(control.recorders().count, 1)
+    }
+
     func testRecordingIntoAnEarlierConversationTellsThePhoneWhereItsTimelineBegan() async throws {
         let rig = try await rig()
         let phone = try await PhoneLinkRig.connect(rig.state)

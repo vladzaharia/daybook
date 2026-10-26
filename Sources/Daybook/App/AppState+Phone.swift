@@ -52,6 +52,10 @@ extension AppState {
             .removeDuplicates().dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.phoneLink.sendRecordingState() } }
             .store(in: &subscriptions)
+        // And what the recorders this Mac manages are doing, when that changes.
+        devices.recorderChanges()
+            .sink { [weak self] in self?.phoneLink.sendRecordingState(onlyIfRecordersChanged: true) }
+            .store(in: &subscriptions)
         // The phone's synced recordings list follows sync being on or off.
         sync.$folder.dropFirst().sink { [weak self] _ in
             Task { @MainActor in self?.phoneSessions.forEach { $0.connection(.files)?.refresh() } }
@@ -115,8 +119,14 @@ extension AppState {
     /// This Mac's recorder, as phones see it.
     func macRecordingState(now: Date = Date()) -> LinkRecordingState {
         let phase: LinkRecordingState.Phase = isStoppingRecording ? .stopping : recordingID != nil ? .recording : isStartingRecording ? .starting : .idle
+        // A recorder recording along with this Mac's recording says which conversation.
+        let links = recordingID.flatMap { id in meetings.first { $0.id == id }?.companions } ?? []
+        let recorders = LinkRecorderState.states(of: sources.recorders.sessions()) { session in
+            links.contains { $0.deviceID == session.id && $0.macEndedAt == nil && [.recording, .alreadyRecording].contains($0.state) } ? self.recordingID : nil
+        }
         return LinkRecordingState(phase: phase, conversationID: recordingID, startedAt: recordingStartedAt,
-                                  elapsed: recordingStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0, sentAt: now)
+                                  elapsed: recordingStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0, sentAt: now,
+                                  recorders: recorders)
     }
 
     // MARK: Messages from phones

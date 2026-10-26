@@ -44,6 +44,10 @@ final class PhoneLink: ObservableObject {
     @Published private(set) var peers: [UUID: LinkPeer] = [:]
     /// What each connected phone last said about its recorder.
     @Published private(set) var recordingStates: [UUID: LinkRecordingState] = [:]
+    /// What each phone last said about the recorders it manages, on this Mac's clock; kept after it
+    /// disconnects, for as long as it can be trusted (`LinkRecorderState.lifetime`).
+    @Published private(set) var phoneRecorders: [UUID: [LinkRecorderState]] = [:]
+    private var lastSentRecorders: [LinkRecorderState]?
     @Published private(set) var lastConnected: [UUID: Date] = [:]
     @Published private(set) var isRunning = false
     /// Sent after anything about a phone changed (nil: possibly every phone), so its device
@@ -215,8 +219,10 @@ final class PhoneLink: ObservableObject {
 
     /// Sends this Mac's recording state to every connected phone (or one that just connected), and
     /// again every `recordingStateInterval` while it records. Sends go out one after another, in order.
-    func sendRecordingState(to phoneID: UUID? = nil) {
+    func sendRecordingState(to phoneID: UUID? = nil, onlyIfRecordersChanged: Bool = false) {
         guard let state = localRecordingState?() else { return }
+        if onlyIfRecordersChanged, state.recorders == lastSentRecorders { return }
+        if phoneID == nil { lastSentRecorders = state.recorders }
         let recording = state.phase != .idle
         if !recording { stateBeat?.cancel(); stateBeat = nil }
         else if stateBeat == nil {
@@ -288,6 +294,10 @@ final class PhoneLink: ObservableObject {
         case .received(let message, let from):
             if case .recordingState(let state) = message {
                 recordingStates[from] = state
+                if let recorders = state.recorders {
+                    let clock = peers[from]?.clock
+                    phoneRecorders[from] = recorders.map { $0.moved { clock?.localDate(fromPeer: $0) ?? $0 } }
+                }
                 changes.send(from)
             }
             onMessage?(message, from)

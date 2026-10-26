@@ -29,6 +29,9 @@ final class PhoneLink {
         /// Its sync replica ID (a Mac's equals its link ID) and whether it hands recorders over.
         var syncDeviceID: String?
         var handsOffRecorders = false
+        /// The recorders it manages, as it last said, on this iPhone's clock; kept after it disconnects,
+        /// for as long as that can be trusted (`LinkRecorderState.lifetime`).
+        var recorders: [LinkRecorderState] = []
 
         var isConnected: Bool { state == .connected }
         var isRecording: Bool { recording?.phase == .recording || recording?.phase == .paused || recording?.phase == .starting }
@@ -287,6 +290,13 @@ final class PhoneLink {
         Task { try? await client.send(.bookmark(bookmark)) }
     }
 
+    /// What the Mac managing a recorder last said about it, and that Mac's name; nil once too old to say.
+    func recorderReport(kind: String, serial: String?, now: Date = Date()) -> (mac: String, state: LinkRecorderState)? {
+        macs.flatMap { mac in mac.recorders.filter { $0.describes(kind: kind, serial: serial) }.map { (mac.name, $0) } }
+            .filter { $0.1.summary(now: now) != nil }
+            .max { $0.1.asOf < $1.1.asOf }
+    }
+
     /// Fresh clock samples from every connected Mac (at the start of a recording).
     func sampleClocks() {
         for mac in connectedMacs { Task { await client.sampleClock(of: mac.id) } }
@@ -367,8 +377,12 @@ final class PhoneLink {
             }
         case .recordingState(let state):
             var heard = state
-            heard.sentAt = macs.first(where: { $0.id == macID })?.clock?.localDate(fromPeer: state.sentAt) ?? Date()
-            update(macID) { $0.recording = state.phase == .idle ? nil : heard }
+            let clock = macs.first(where: { $0.id == macID })?.clock
+            heard.sentAt = clock?.localDate(fromPeer: state.sentAt) ?? Date()
+            update(macID) { mac in
+                mac.recording = state.phase == .idle ? nil : heard
+                if let recorders = state.recorders { mac.recorders = recorders.map { $0.moved { clock?.localDate(fromPeer: $0) ?? $0 } } }
+            }
             onMacRecordingState?(macID, heard)
         case .bookmark, .processingNudge:
             // A Mac's bookmarks are on its own recording and arrive with it through sync.

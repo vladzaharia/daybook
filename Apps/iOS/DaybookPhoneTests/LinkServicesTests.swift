@@ -613,6 +613,28 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertNil(recording)
     }
 
+    func testTheRecordersAMacManagesAreKnownHereWithTheirAge() async throws {
+        let mac = try await makeMac()
+        let link = makeLink()
+        _ = try makeModel(link: link, rig: RecorderRig())
+        try await pair(link, with: mac)
+        let started = Date().addingTimeInterval(-600)
+        // Sent with the Mac's state, idle or not.
+        try await mac.service.send(.recordingState(LinkRecordingState(phase: .idle, recorders: [
+            LinkRecorderState(kind: "soundcore.work", serial: "S1", name: "Soundcore Work", isRecording: true, recordingID: "1",
+                              startedAt: started, asOf: Date())])), to: link.deviceID)
+        try await waitUntil("the report") { link.recorderReport(kind: "soundcore.work", serial: "S1") != nil }
+        let report = try XCTUnwrap(link.recorderReport(kind: "soundcore.work", serial: "S1"))
+        XCTAssertEqual(report.mac, "Studio Mac")
+        XCTAssertTrue(report.state.isRecording)
+        XCTAssertNil(link.recorderReport(kind: "soundcore.work", serial: "OTHER"), "another recorder")
+        XCTAssertNil(link.recorderReport(kind: "soundcore.work", serial: "S1", now: Date().addingTimeInterval(21 * 60)), "too old to say")
+        // Kept when the Mac goes away.
+        await link.client.disconnect(from: mac.id)
+        try await waitUntil("disconnected") { link.macs.first?.isConnected == false }
+        XCTAssertNotNil(link.recorderReport(kind: "soundcore.work", serial: "S1"))
+    }
+
     func testRecordRequestsCanBeTurnedOff() async throws {
         let mac = try await makeMac()
         let link = makeLink()

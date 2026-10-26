@@ -1,5 +1,6 @@
 import DaybookCaptions
 import DaybookKit
+import DaybookLink
 import SwiftUI
 
 // The status sheet (docs/iphone.md, "Status sheet"): the recorder, your Mac, and sync at a glance,
@@ -290,6 +291,7 @@ enum StatusSheetInputs {
                             suspended: session.queue.isSuspended)
                     : nil,
                 managedBy: session.managedElsewhere?.ownerName,
+                lastKnown: StatusSheetInputs.lastKnown(session, link: model.link),
                 handoff: devices.handoffState(session),
                 isRecording: session.isLinked && session.status?.isRecording == true,
                 isListeningLive: session.isListeningLive,
@@ -315,6 +317,15 @@ enum StatusSheetInputs {
         inputs.hasLiveCaptions = devices.sessions.contains { $0.isListeningLive }
         inputs.pairedMacs = model.link.macs.count
         return inputs
+    }
+
+    /// A recorder that isn't live here: what the Mac managing it last said, or its last state here.
+    static func lastKnown(_ session: DeviceSession, link: PhoneLink, now: Date = Date()) -> String? {
+        guard !session.isLinked else { return nil }
+        if session.managedElsewhere != nil {
+            return link.recorderReport(kind: session.kind.id, serial: session.recorderSerial, now: now)?.state.summary(now: now)
+        }
+        return LinkRecorderState(session: session)?.summary(now: now)
     }
 }
 

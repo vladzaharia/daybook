@@ -16,6 +16,9 @@ final class LinkWireTests: XCTestCase {
             .refused(Refusal(reason: .incompatibleVersion, versions: LinkVersionRange(1...1))),
             .capabilities(capabilities),
             .app(.recordingState(LinkRecordingState(phase: .paused, conversationID: id, startedAt: t0, elapsed: 3, sentAt: t0))),
+            .app(.recordingState(LinkRecordingState(phase: .idle, sentAt: t0, recorders: [
+                LinkRecorderState(kind: "soundcore.work", serial: "S1", name: "Soundcore Work", isRecording: true, recordingID: "1",
+                                  startedAt: t0, asOf: t0, conversationID: id)]))),
             .app(.bookmark(LinkBookmark(conversationID: id, recordingTime: 1.5, createdAt: t0, label: nil))),
             .app(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .failed, fraction: nil, macName: "M",
                                                             detail: "Out of space"))),
@@ -69,6 +72,12 @@ final class LinkWireTests: XCTestCase {
         let reply = try LinkWire.decode(Data(#"{"v":1,"type":"record.reply","body":{"requestID":"\#(UUID().uuidString)","deferred":{}}}"#.utf8))
         guard case .recordReply(let r) = reply.message, case .refused(let refusal) = r.outcome else { return XCTFail("\(reply)") }
         XCTAssertEqual(refusal.reason.rawValue, "unknown")
+        // Recorders this build can't read are dropped, not the state they came with.
+        let state = try LinkWire.decode(Data(#"{"v":1,"type":"recording.state","body":{"phase":"recording","sentAt":1800000000,"recorders":[{"kind":7}]}}"#.utf8))
+        guard case .app(.recordingState(let decoded)) = state.message else { return XCTFail("\(state)") }
+        XCTAssertEqual(decoded.phase, .recording)
+        XCTAssertNil(decoded.recorders)
+        XCTAssertEqual(decoded.elapsed, 0)
         // A record request from before conversations travelled with it.
         let conversation = UUID(), request = UUID()
         let older = try LinkWire.decode(Data(#"{"v":1,"type":"record.request","body":{"id":"\#(request.uuidString)","action":"start","conversationID":"\#(conversation.uuidString)","sentAt":1800000000}}"#.utf8))
