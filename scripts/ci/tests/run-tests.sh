@@ -1,7 +1,10 @@
 #!/bin/bash
 # Tests for the release helpers in scripts/ci. Offline: nothing here talks to Apple or GitHub.
 #
-#   scripts/ci/tests/run-tests.sh
+#   scripts/ci/tests/run-tests.sh [--require-all]
+#
+# --require-all fails the run if any group was skipped: CI's macOS job passes it, so the macOS-only
+# groups (CryptoKit, archives, build scripts, keychain) can't silently drop out.
 #
 #   version.sh            tag, branch, re-run, and rejection vectors
 #   asc-jwt.sh            fixed header and payload vectors; the signature verified by openssl and, on
@@ -22,6 +25,13 @@
 # Runs on macOS (bash 3.2) and Linux.
 set -euo pipefail
 
+require_all=0
+case "${1-}" in
+    --require-all) require_all=1 ;;
+    "") ;;
+    *) echo "usage: $0 [--require-all]" >&2; exit 2 ;;
+esac
+
 here="$(cd "$(dirname "$0")" && pwd)"
 ci="$(cd "$here/.." && pwd)"
 work="$(mktemp -d)"
@@ -37,6 +47,8 @@ trap cleanup EXIT
 
 passed=0
 failed=0
+skipped=0
+skip() { skipped=$(( skipped + 1 )); echo "  skip  $1"; }
 pass() { passed=$(( passed + 1 )); echo "  ok    $1"; }
 flunk() { failed=$(( failed + 1 )); echo "  FAIL  $1" >&2; }
 expect_eq() { if [[ "$2" == "$3" ]]; then pass "$1"; else flunk "$1: expected [$2], got [$3]"; fi; }
@@ -122,7 +134,7 @@ if macos && command -v swift >/dev/null; then
     expect_eq "CryptoKit verifies the signature" "valid" "$(swift "$here/verify_jwt.swift" "$work/public.pem" "$token" 2>&1)"
     expect_eq "CryptoKit rejects a tampered token" "invalid" "$(swift "$here/verify_jwt.swift" "$work/public.pem" "${header}.${payload}X.${signature}" 2>&1 || true)"
 else
-    echo "  skip  CryptoKit cross-check (macOS only)"
+    skip "CryptoKit cross-check (macOS only)"
 fi
 
 # --- asc-testflight.sh against a mock API ---------------------------------------------------------------
@@ -326,7 +338,7 @@ if macos; then
     make_archive "$work/intent.xcarchive" false yes 1057 '[1]' "Records a conversation with the iPhone's microphone."
     expect_fail "an App Intent naming the iPhone fails" "$ci/check-ios-archive.sh" "$work/intent.xcarchive"
 else
-    echo "  skip  check-ios-archive.sh (macOS only)"
+    skip "check-ios-archive.sh (macOS only)"
 fi
 
 # --- setup-github.sh dry run ----------------------------------------------------------------------------
@@ -370,7 +382,7 @@ STUB
     expect_fail "a rejected upload fails" upload rejected
     expect_eq "without retrying" 1 "$(cat "$work/stub-count")"
 else
-    echo "  skip  build-ios.sh upload retry (macOS only)"
+    skip "build-ios.sh upload retry (macOS only)"
 fi
 
 # --- build-app.sh, with stand-in Xcode tools, in a copy of the repository ------------------------------
@@ -444,7 +456,7 @@ if macos; then
     expect_fail "provisioning updates need a team" build_app -- --allow-provisioning-updates --ad-hoc
     expect_fail "part of the API key is refused" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_ASC_KEY_ID=ABC123DEFG --
 else
-    echo "  skip  build-app.sh (macOS only)"
+    skip "build-app.sh (macOS only)"
 fi
 
 # --- build-ios.sh, with stand-in Xcode tools, in a copy of the repository ------------------------------
@@ -479,7 +491,7 @@ if macos; then
     expect_ok "a device build never passes -allowProvisioningUpdates" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y -- --device
     expect_eq "(none in the calls)" "" "$(grep -- '-allowProvisioning' "$work/stub.log" || true)"
 else
-    echo "  skip  build-ios.sh (macOS only)"
+    skip "build-ios.sh (macOS only)"
 fi
 
 # --- secrets.sh -----------------------------------------------------------------------------------------
@@ -531,9 +543,13 @@ if macos; then
     expect_ok "(nothing left)" test ! -e "$work/runner-temp/daybook-secrets"
     expect_fail "a password with a line break is refused" env "${p12_env[@]}" DEVELOPER_ID_P12_PASSWORD="$(printf 'a\nb')" "$ci/secrets.sh" run -- true
 else
-    echo "  skip  secrets.sh with a .p12 (macOS only)"
+    skip "secrets.sh with a .p12 (macOS only)"
 fi
 
 echo
-echo "$passed passed, $failed failed"
+echo "$passed passed, $failed failed, $skipped skipped"
+if (( require_all && skipped )); then
+    echo "--require-all: $skipped group(s) were skipped" >&2
+    exit 1
+fi
 (( failed == 0 ))

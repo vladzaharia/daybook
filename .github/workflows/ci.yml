@@ -254,6 +254,10 @@ jobs:
           persist-credentials: false
       - name: Select Xcode
         run: scripts/ci/select-xcode.sh --metal
+      # The release helpers' tests again, on macOS, where every group runs: CryptoKit's JWT check, the
+      # archive checks, the upload retry, the build scripts, and the keychain (the lint job is Linux).
+      - name: Release helper tests (macOS, every group)
+        run: scripts/ci/tests/run-tests.sh --require-all
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       - name: Cache key

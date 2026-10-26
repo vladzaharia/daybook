@@ -14,7 +14,7 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 | CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on the scripts (`build-app.sh` and `build-ios.sh` too; every script is bash), and `scripts/ci/tests/run-tests.sh` |
 | CI | `package` | `xcode-27` | `swift build --build-tests` once, then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
 | CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --test` on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), the crash-recovery test alone, then an unsigned Release device archive checked the way a release would be |
-| CI | `mac` | `xcode-27` | `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
+| CI | `mac` | `xcode-27` | `scripts/ci/tests/run-tests.sh --require-all` (every group, including the macOS-only ones: CryptoKit's JWT check, the archive checks, the upload retry, the build scripts, and the keychain), then `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
 | Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
 | Release | `iphone` | `xcode-27`, environment `release` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
 | Release | `mac` | `xcode-27`, environment `release` | works out its build number, fetches the packages, archives (`build-app.sh --archive-only`), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`) |
@@ -379,7 +379,7 @@ None of these uses a team, a secret, or the network beyond package checkouts:
 
 ```sh
 actionlint                                       # uses .github/actionlint.yaml
-scripts/ci/tests/run-tests.sh                    # version, JWT, App Store Connect calls (mock), notes, ref checks, GitHub Release (fake gh), archive checks, setup dry run, build-app.sh (stand-in Xcode tools)
+scripts/ci/tests/run-tests.sh --require-all      # every group on macOS (Linux skips the macOS-only ones): version, JWT, App Store Connect calls (mock), notes, ref checks, GitHub Release (fake gh), archive checks, setup dry run, secrets, build scripts (stand-in Xcode tools)
 scripts/ci/version.sh --ref refs/tags/v1.2.3 --run-number 42
 scripts/build-ios.sh --archive --no-sign --marketing-version 1.2.3 --build-number 1042
 scripts/ci/check-ios-archive.sh Apps/iOS/build/DaybookPhone.xcarchive --version 1.2.3 --build 1042
