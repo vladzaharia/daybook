@@ -71,7 +71,7 @@ final class SyncServicesTests: XCTestCase {
     }
 
     func testStatusSaysWhySyncCantRun() async throws {
-        let library = try PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         let sync = PhoneSync(library: library.controller)
         XCTAssertFalse(sync.isConnected)
         XCTAssertEqual(sync.statusLine, "Sync isn't set up for this library.")
@@ -244,7 +244,7 @@ extension XCTestCase {
             controller.courier = courier(root.appendingPathComponent("Sync/Courier", isDirectory: true))
             controller.courierRole = .send
         }
-        let library = try PhoneLibrary(rootURL: root, sync: controller, installation: UUID().uuidString)
+        let library = PhoneLibrary(rootURL: root, sync: controller, installation: UUID().uuidString)
         try await library.reload()
         let sync = PhoneSync(library: library.controller)
         try sync.connect(toFolder: container, monitor: false)

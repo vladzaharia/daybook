@@ -79,6 +79,26 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertTrue(reopened.folders.isEmpty)
     }
 
+    func testDurableFlushReportsAFailedSaveAndSucceedsAfterStorageRecovers() async throws {
+        let library = try await open()
+        let id = library.newMeeting(title: "Capture")
+        try await library.flushDurably()
+        let folder = root.appendingPathComponent("Meetings/\(id.uuidString)")
+        let primary = folder.appendingPathComponent("meeting.json")
+        let held = folder.appendingPathComponent("held.json")
+        try FileManager.default.moveItem(at: primary, to: held)
+        try FileManager.default.createDirectory(at: primary, withIntermediateDirectories: false)
+        library.update(id) { $0.notes = "Keep this recovery note" }
+        do { try await library.flushDurably(); XCTFail("Cleanup must not be authorized after a failed save") }
+        catch { XCTAssertNotNil(library.errorMessage) }
+        try FileManager.default.removeItem(at: primary)
+        try FileManager.default.moveItem(at: held, to: primary)
+        library.rename(id, to: "Recovered capture")
+        try await library.flushDurably()
+        let reopened = try await open()
+        XCTAssertEqual(reopened.meeting(id)?.notes, "Keep this recovery note")
+    }
+
     func testChoosingATemplateSaysWhetherItChanged() async throws {
         let library = try await open()
         let id = library.newMeeting()

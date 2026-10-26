@@ -63,7 +63,7 @@ final class LinkServicesTests: XCTestCase {
     }
 
     func makeModel(link: PhoneLink, rig: RecorderRig) throws -> PhoneAppModel {
-        let library = try PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
+        let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
         let settings = PhoneSettings(defaults: UserDefaults(suiteName: "LinkServicesTests-\(UUID().uuidString)")!)
         return PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
                              options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),

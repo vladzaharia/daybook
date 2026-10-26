@@ -29,13 +29,8 @@ struct DaybookPhoneApp: App {
             // CKSyncEngine's subscription delivers through push, which needs the app registered for it.
             sync.onCourierAvailable = { UIApplication.shared.registerForRemoteNotifications() }
         }
-        let library: PhoneLibrary
-        if let opened = try? PhoneLibrary(rootURL: root, sync: sync) {
-            library = opened
-        } else {
-            // The library folder couldn't be created; record into a temporary one rather than not at all.
-            library = try! PhoneLibrary(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("Daybook", isDirectory: true))
-        }
+        // Storage errors surface when loading, and retry the same durable location.
+        let library = PhoneLibrary(rootURL: root, sync: sync)
         let model = PhoneAppModel(recorder: PhoneRecorder(environment: environment), library: library,
                                   posture: DevicePosture(arguments: CommandLine.arguments), options: options, settings: settings)
         model.demoAudioSession = environment.session as? ScriptedAudioSession

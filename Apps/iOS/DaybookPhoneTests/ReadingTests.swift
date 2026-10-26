@@ -75,7 +75,7 @@ final class ReadingTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "folders": [], "templates": [], "vocabulary": []] as [String: Any])
             .write(to: root.appendingPathComponent("library.json"))
 
-        let library = try PhoneLibrary(rootURL: root, installation: "TEST")
+        let library = PhoneLibrary(rootURL: root, installation: "TEST")
         var published = 0
         let observation = library.controller.objectWillChange.sink { published += 1 }
         defer { observation.cancel() }
@@ -253,7 +253,7 @@ final class ReadingTests: XCTestCase {
 
     func testThePhotoProviderReadsAnOriginalAndReportsMissingPhotos() async throws {
         let root = try temporaryDirectory()
-        let library = try PhoneLibrary(rootURL: root, installation: "TEST")
+        let library = PhoneLibrary(rootURL: root, installation: "TEST")
         try await library.reload()
         let id = library.controller.newMeeting(title: "Photos")
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 40))
@@ -393,7 +393,7 @@ final class ReadingTests: XCTestCase {
 
     func testTheLocalProviderPlaysOnlyWhatIsOnThisIPhone() async throws {
         let root = try temporaryDirectory()
-        let library = try PhoneLibrary(rootURL: root, installation: "TEST")
+        let library = PhoneLibrary(rootURL: root, installation: "TEST")
         let rig = RecorderRig()
         let id = UUID()
         try await rig.recorder.start(in: library.stagingURL.appendingPathComponent(id.uuidString), id: id, title: "Played")
@@ -428,7 +428,7 @@ final class ReadingTests: XCTestCase {
 
     func testTheTrashListsWhatWasMovedThere() async throws {
         let root = try temporaryDirectory()
-        let library = try PhoneLibrary(rootURL: root, installation: "TEST")
+        let library = PhoneLibrary(rootURL: root, installation: "TEST")
         try await library.reload()
         let kept = library.controller.newMeeting(title: "Kept")
         let trashed = library.controller.newMeeting(title: "Offsite ideas")
