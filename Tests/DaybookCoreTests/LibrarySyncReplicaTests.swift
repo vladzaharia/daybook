@@ -244,7 +244,7 @@ final class LibrarySyncReplicaTests: XCTestCase {
         let waiting = expectation(description: "waiting for upload")
         waiting.assertForOverFulfill = false
         let task = Task { try await phone.fetchAudio(for: track, in: meeting.id, options: fast) { if $0.phase == .waitingForUpload { waiting.fulfill() } } }
-        await fulfillment(of: [waiting], timeout: 5)
+        await fulfillment(of: [waiting], timeout: 5 * (Double(ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"] ?? "") ?? 1))
         task.cancel()
         do { _ = try await task.value; XCTFail("Fetch ignored cancellation") } catch is CancellationError { }
         do {
@@ -456,6 +456,80 @@ final class LibrarySyncReplicaTests: XCTestCase {
         let watch = try XCTUnwrap(devices.first { $0.id == "Watch" })
         XCTAssertEqual(watch.deviceClass, .other); XCTAssertLessThanOrEqual(watch.lastSeen!, Date(), "Clock skew is clamped to now")
         XCTAssertEqual(devices.first { $0.id == "Mac" }?.canProcess, false)
+    }
+
+    func testARecordingMacsActivityShowsInItsPresenceWithoutAPassAndExpires() async throws {
+        let mac = try mac(), phone = try phone()
+        try await pass(mac, "Mac"); try await pass(phone, "Phone")
+        let conversation = UUID(), start = Date()
+        try await mac.publishActivity(SyncDeviceActivity(recordingConversationID: conversation, since: start,
+            recorders: [.init(kind: "soundcore.work", serial: "S1", isRecording: true, recordingID: "r-1", startedAt: start)]))
+        let devices = try await phone.knownDevices()
+        let studio = try XCTUnwrap(devices.first { $0.id == "Mac" })
+        XCTAssertTrue(studio.isRecording())
+        XCTAssertEqual(studio.activity?.recordingConversationID, conversation)
+        XCTAssertEqual(studio.activity?.recorders?.first?.serial, "S1")
+        XCTAssertEqual(devices.recordingMac()?.id, "Mac")
+        XCTAssertNotNil(studio.lastSeen, "written now, though no pass ran")
+        // Nobody renews it: after its expiry it no longer says recording.
+        let expiry = try XCTUnwrap(studio.activity?.expiresAt)
+        XCTAssertFalse(studio.isRecording(at: expiry.addingTimeInterval(1)))
+        // Stopping clears it at once.
+        try await mac.publishActivity(nil)
+        let after = try await phone.knownDevices()
+        XCTAssertFalse(after.contains { $0.isRecording() })
+        // An activity a newer Daybook wrote differently doesn't hide the device.
+        let file = remote.appendingPathComponent("Devices/\(AudioDigest.sha256(data: Data("Mac".utf8))).json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        object["activity"] = ["recordingConversationID": 42, "mode": "holographic"]
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+        let tolerant = try await phone.knownDevices()
+        XCTAssertNotNil(tolerant.first { $0.id == "Mac" }?.lastSeen)
+        XCTAssertNil(tolerant.first { $0.id == "Mac" }?.activity)
+    }
+
+    func testADeletionIsRecordedWithItsTombstoneEvenIfThePassStopsAfterwards() async throws {
+        let mac = try self.mac(), other = try self.mac("Other")
+        let doomed = Meeting(title: "Doomed")
+        try await pass(mac, "Mac", [doomed])
+        let incoming = try await record(audioBytes(3_000, seed: 4), on: "Other", into: Meeting(title: "Incoming"))
+        try await pass(other, "Other", [incoming])
+        // The next pass will stop while copying Other's audio.
+        try cloud.evict(blob(incoming.tracks[0]))
+        cloud.holdDownloads(true)
+        _ = try await MeetingStore(rootURL: local("Mac")).moveToTrash(doomed.id)
+        final class Box: @unchecked Sendable { var task: Task<SyncResult, Error>? }
+        let box = Box()
+        let ready = DispatchSemaphore(value: 0)
+        cloud.whenDownloadRequested { _ in ready.wait(); box.task?.cancel(); ready.signal() }
+        box.task = Task { try await mac.synchronize(meetings: []) }
+        ready.signal()
+        do { _ = try await box.task!.value; XCTFail("the pass was expected to stop") } catch is CancellationError { }
+        cloud.whenDownloadRequested(nil)
+        XCTAssertTrue(LibrarySyncEngine.recordsDeletion(of: doomed.id, localRoot: local("Mac"), deviceID: "Mac"),
+                      "a restore right now must know the deletion was published")
+    }
+
+    func testASettingsOnlyPassAppliesRecorderOwnershipWithoutTouchingConversations() async throws {
+        let mac = try mac(), phone = try phone()
+        let meeting = Meeting(title: "Being recorded on the Mac")
+        try await pass(mac, "Mac", [meeting]); try await pass(phone, "Phone")
+        var onPhone = meeting; onPhone.title = "Renamed on the phone"
+        try await pass(phone, "Phone", [onPhone])
+        var settings = LibraryMetadata()
+        settings.recorders = [.init(id: RecorderOwnership.id(kind: "soundcore.work", serial: "S1"),
+                                    value: RecorderOwnership(kind: "soundcore.work", serial: "S1", ownerID: "Phone", ownerName: "iPhone", ownerClass: .phone))]
+        let phoneSettings = try JSONEncoder().encode(settings)
+        let published = try await phone.synchronize(meetings: [onPhone], libraryMetadata: phoneSettings)
+        try await phone.acknowledge(published.checkpointID)
+        // The Mac is recording: it takes the settings, and the conversation waits.
+        let busy = try await mac.synchronize(meetings: [meeting], libraryMetadata: try JSONEncoder().encode(LibraryMetadata()), scope: .metadataOnly)
+        XCTAssertTrue(busy.meetings.isEmpty); XCTAssertTrue(busy.deletedMeetingIDs.isEmpty)
+        XCTAssertTrue(busy.metadataVersions.contains(phoneSettings))
+        try await mac.acknowledge(busy.checkpointID)
+        let later = try await mac.synchronize(meetings: [meeting])
+        XCTAssertEqual(later.meetings.first?.title, "Renamed on the phone", "a full pass afterwards brings the conversation")
+        XCTAssertEqual(later.publishedEvents, 0)
     }
 
     func testOlderReplicaIgnoresPresenceAndSyncsWithOnDemandPhone() async throws {

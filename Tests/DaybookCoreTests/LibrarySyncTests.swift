@@ -16,7 +16,9 @@ final class LibrarySyncTests: XCTestCase {
     private func apply(_ result: SyncResult, to name: String, using engine: LibrarySyncEngine) async throws {
         let store = try MeetingStore(rootURL: local(name))
         for meeting in result.meetings { try await store.save(meeting) }
-        for id in result.deletedMeetingIDs { _ = try await store.moveToTrash(id) }
+        for id in result.deletedMeetingIDs where FileManager.default.fileExists(atPath: local(name).appendingPathComponent("Meetings/\(id)").path) {
+            _ = try await store.moveToTrash(id)
+        }
         try await engine.acknowledge(result.checkpointID)
     }
     private func publish(_ meeting: Meeting, using engine: LibrarySyncEngine, name: String) async throws -> Meeting {
@@ -86,6 +88,27 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertFalse(mergedB.warnings.isEmpty)
     }
 
+    func testTwoDevicesThatStartedTheSameConversationKeepWhatEitherSet() async throws {
+        let a = try engine("A"), b = try engine("B")
+        let id = UUID(), folder = UUID()
+        // The Mac named it, filed it, and took notes; the phone joined the same conversation ID and only recorded.
+        var mac = Meeting(id: id, title: "Design review", notes: "Ship on Friday", folderID: folder, templateID: "custom-review")
+        mac.timedNotes = [TimedNote(time: 8, text: "Ship on Friday")]
+        let phone = Meeting(id: id, title: "Untitled Conversation", date: mac.date.addingTimeInterval(3), status: .imported)
+        _ = try await publish(mac, using: a, name: "A")
+        let fromB = try await b.synchronize(meetings: [phone]); try await apply(fromB, to: "B", using: b)
+        let fromA = try await a.synchronize(meetings: [mac]); try await apply(fromA, to: "A", using: a)
+        for merged in [fromA.meetings[0], fromB.meetings[0]] {
+            XCTAssertEqual(merged.title, "Design review")
+            XCTAssertEqual(merged.notes, "Ship on Friday")
+            XCTAssertEqual(merged.timedNotes, mac.timedNotes)
+            XCTAssertEqual(merged.folderID, folder)
+            XCTAssertEqual(merged.templateID, "custom-review")
+            XCTAssertFalse(merged.revisions.contains { $0.field.hasPrefix("sync:") })
+        }
+        XCTAssertEqual(fromA.meetings, fromB.meetings)
+    }
+
     func testCrashBeforeAndAfterLocalApplyReoffersUntilAcknowledged() async throws {
         let a = try engine("A")
         let original = try await publish(Meeting(notes: "Initial"), using: a, name: "A")
@@ -128,14 +151,24 @@ final class LibrarySyncTests: XCTestCase {
         let base = try await publish(Meeting(notes: "Recoverable"), using: a, name: "A")
         let initial = try await b.synchronize(meetings: []); try await apply(initial, to: "B", using: b)
         let deleted = try await a.synchronize(meetings: [], deletedMeetingIDs: [base.id]); try await apply(deleted, to: "A", using: a)
+        // An edit the deletion never saw is kept as a new conversation; the deleted one stays deleted.
         var concurrent = base; concurrent.setNotes("Unsynced edit retained in the journal")
         let result = try await b.synchronize(meetings: [concurrent])
-        XCTAssertTrue(result.meetings.isEmpty); XCTAssertTrue(result.deletedMeetingIDs.contains(base.id))
+        XCTAssertTrue(result.deletedMeetingIDs.contains(base.id))
+        XCTAssertFalse(result.meetings.contains { $0.id == base.id })
+        XCTAssertEqual(result.meetings.map(\.notes), [concurrent.notes])
         XCTAssertTrue(try records().contains { ($0["snapshot"] as? [String: Any])?["notes"] as? String == concurrent.notes })
         try await apply(result, to: "B", using: b)
         let restart = try engine("B")
         let stale = try await restart.synchronize(meetings: [base])
         XCTAssertTrue(stale.meetings.isEmpty); XCTAssertEqual(stale.publishedEvents, 0)
+        // An unchanged copy simply goes.
+        let other = try await publish(Meeting(notes: "Nothing new"), using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: []); try await apply(pulled, to: "B", using: b)
+        let gone = try await a.synchronize(meetings: [], deletedMeetingIDs: [other.id]); try await apply(gone, to: "A", using: a)
+        let plain = try await b.synchronize(meetings: [other])
+        XCTAssertTrue(plain.deletedMeetingIDs.contains(other.id))
+        XCTAssertTrue(plain.meetings.isEmpty)
     }
 
     func testMissingOrCorruptBlobNeverAppliesRemoteMetadataAndRetries() async throws {
@@ -156,6 +189,106 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertEqual(ready.meetings.count, 1); XCTAssertEqual(ready.pendingDownloads, 0)
     }
 
+    func testAHeldConversationPublishesALocalEditOnceAcrossManyPasses() async throws {
+        let first = root.appendingPathComponent("first.wav"), second = root.appendingPathComponent("second.wav")
+        try Data("first recording".utf8).write(to: first); try Data("second recording".utf8).write(to: second)
+        let storeA = try MeetingStore(rootURL: local("A"))
+        let a = try engine("A"), b = try engine("B")
+        let base = try await publish(try await storeA.importAudio(from: first, into: Meeting(title: "Review")), using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: []); try await apply(pulled, to: "B", using: b)
+        // A adds a recording whose audio hasn't reached the sync folder: B's copy waits for it.
+        let added = try await storeA.importAudio(from: second, into: base)
+        _ = try await publish(added, using: a, name: "A")
+        try FileManager.default.removeItem(at: remote.appendingPathComponent("Blobs/\(added.tracks[1].sha256)"))
+        var edited = pulled.meetings[0]; edited.setNotes("Edited on B while A's recording uploads")
+        var published = 0
+        for _ in 0..<5 {
+            let result = try await b.synchronize(meetings: [edited])
+            XCTAssertGreaterThan(result.pendingDownloads, 0)
+            XCTAssertEqual(result.meetings.first?.notes, edited.notes, "the held conversation keeps the local edit")
+            published += result.publishedEvents
+            try await b.acknowledge(result.checkpointID)
+        }
+        XCTAssertEqual(published, 1, "a held conversation publishes its edit once, not every pass")
+        XCTAssertEqual(try records().filter { $0["deviceID"] as? String == "B" }.count, 1)
+    }
+
+    func testARevertWhileAPublishedEditIsHeldBackIsPublishedToo() async throws {
+        let first = root.appendingPathComponent("first.wav"), second = root.appendingPathComponent("second.wav")
+        try Data("first recording".utf8).write(to: first); try Data("second recording".utf8).write(to: second)
+        let storeA = try MeetingStore(rootURL: local("A"))
+        let a = try engine("A"), b = try engine("B")
+        var original = try await storeA.importAudio(from: first, into: Meeting(title: "Review"))
+        original.notes = "Original"
+        let base = try await publish(original, using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: []); try await apply(pulled, to: "B", using: b)
+        let onB = pulled.meetings[0]
+        // A's new recording hasn't uploaded, so B's copy is held back while B edits and then reverts.
+        let added = try await storeA.importAudio(from: second, into: base)
+        _ = try await publish(added, using: a, name: "A")
+        let blob = remote.appendingPathComponent("Blobs/\(added.tracks[1].sha256)")
+        let aside = root.appendingPathComponent("blob")
+        try FileManager.default.moveItem(at: blob, to: aside)
+        var changed = onB; changed.notes = "Changed"
+        let edit = try await b.synchronize(meetings: [changed]); try await b.acknowledge(edit.checkpointID)
+        XCTAssertEqual(edit.publishedEvents, 1)
+        let revert = try await b.synchronize(meetings: [onB]); try await b.acknowledge(revert.checkpointID)
+        XCTAssertEqual(revert.publishedEvents, 1, "going back to the base value is an edit too")
+        try FileManager.default.moveItem(at: aside, to: blob)
+        let settled = try await b.synchronize(meetings: [onB])
+        XCTAssertEqual(settled.meetings.first?.notes, "Original")
+        XCTAssertEqual(settled.meetings.first?.tracks.count, 2)
+    }
+
+    func testACrashBetweenWritingAnEntryAndSavingTheCheckpointPublishesTheSameEntry() async throws {
+        let a = try engine("A")
+        let base = try await publish(Meeting(title: "Plan", notes: "First"), using: a, name: "A")
+        let checkpoint = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: local("A").appendingPathComponent("Sync"), includingPropertiesForKeys: nil)
+            .first { $0.pathExtension == "json" })
+        let saved = try Data(contentsOf: checkpoint)
+        var edited = base; edited.setNotes("Second")
+        var renamed = Meeting(title: "Another"); renamed.notes = "Also new"
+        let first = try await a.synchronize(meetings: [edited, renamed])
+        XCTAssertEqual(first.publishedEvents, 2)
+        let written = try records().count
+        // The process stops after writing both entries but before the checkpoint recorded them.
+        try saved.write(to: checkpoint)
+        let restarted = try engine("A")
+        let again = try await restarted.synchronize(meetings: [edited, renamed])
+        XCTAssertEqual(try records().count, written, "the same bytes again, not a second sibling of each")
+        try await apply(again, to: "A", using: restarted)
+        let b = try engine("B")
+        let pulled = try await b.synchronize(meetings: [])
+        XCTAssertEqual(Set(pulled.meetings.map(\.notes)), ["Second", "Also new"])
+        XCTAssertFalse(pulled.meetings.contains { $0.revisions.contains { $0.field.hasPrefix("sync:") } })
+    }
+
+    func testBasesLiveInTheirOwnFilesAndOnlyUsedSnapshotsStayInMemory() async throws {
+        let a = try engine("A"), b = try engine("B")
+        var meeting = try await publish(Meeting(title: "Long history"), using: a, name: "A")
+        for index in 0..<12 {
+            meeting.setNotes("Revision \(index)")
+            meeting = try await publish(meeting, using: a, name: "A")
+        }
+        let other = try await publish(Meeting(title: "Short"), using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: [])
+        try await apply(pulled, to: "B", using: b)
+        let counts = await b.cacheCounts()
+        XCTAssertEqual(counts.headers, 14, "every event's header")
+        XCTAssertEqual(counts.snapshots, 2, "only the two heads' snapshots")
+        let sync = local("B").appendingPathComponent("Sync")
+        let checkpoint = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: sync, includingPropertiesForKeys: nil).first { $0.pathExtension == "json" })
+        let stored = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: checkpoint)) as? [String: Any])
+        XCTAssertEqual((stored["bases"] as? [String: Any])?.count, 0, "no copy of the library in the checkpoint")
+        let bases = sync.appendingPathComponent("Bases/\(checkpoint.deletingPathExtension().lastPathComponent)")
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: bases.path)), ["\(meeting.id).json", "\(other.id).json"])
+        // A restarted engine reads them back: nothing is published again.
+        let restarted = try engine("B")
+        let again = try await restarted.synchronize(meetings: pulled.meetings)
+        XCTAssertEqual(again.publishedEvents, 0)
+        XCTAssertTrue(again.changedMeetingIDs.isEmpty)
+    }
+
     func testFailedLocalUploadPreservesUnsentEdits() async throws {
         let a = try engine("A")
         let base = try await publish(Meeting(notes: "Published base"), using: a, name: "A")
@@ -173,6 +306,7 @@ final class LibrarySyncTests: XCTestCase {
         let fresh = try await differentLibrary.synchronize(meetings: [original])
         XCTAssertEqual(fresh.publishedEvents, 1)
         let checkpoints = try FileManager.default.contentsOfDirectory(at: local("A").appendingPathComponent("Sync"), includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
         XCTAssertEqual(checkpoints.count, 2)
         for checkpoint in checkpoints { try Data("broken".utf8).write(to: checkpoint) }
         let restart = try engine("A")

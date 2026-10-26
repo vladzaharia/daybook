@@ -53,8 +53,9 @@ public enum CourierDelivery: Equatable, Sendable {
 /// The courier inbox, `Sync/Inbox/<library ID>/` in the local library, laid out like the sync folder (`Events/`,
 /// `Metadata/`, `Blobs/`). It holds verified files another device sent by courier until iCloud Drive brings the same
 /// files into the sync folder. The engine lists the journal as the union of the two and reads the inbox's copy only
-/// while the sync folder's isn't downloaded. Nothing from the inbox is ever written into the sync folder: a second
-/// device writing the same file there is how iCloud Drive makes conflict copies.
+/// while the sync folder's isn't downloaded. Nothing from the inbox is written into the sync folder while the sender
+/// may still upload it (a second device writing the same file there is how iCloud Drive makes conflict copies); only a
+/// delivery that has waited `courierPromotionDelay` with no copy there at all is.
 extension LibrarySyncEngine {
     nonisolated var inboxBase: URL { localRoot.appendingPathComponent("Sync/Inbox", isDirectory: true) }
 
@@ -105,7 +106,13 @@ extension LibrarySyncEngine {
         case .absent:
             break
         }
-        return try SyncFiles.coordinateRead(delivered, below: inboxBase) { try Data(contentsOf: $0) }
+        let bytes = try SyncFiles.coordinateRead(delivered, below: inboxBase) { try Data(contentsOf: $0) }
+        // A delivery damaged after it was stored is discarded; iCloud Drive's copy takes over.
+        guard SyncDigest.sha256(data: bytes) == url.deletingPathExtension().lastPathComponent else {
+            discardDelivery(delivered)
+            throw SyncPendingDownload()
+        }
+        return bytes
     }
 
     /// The courier's copy of an audio object to install from while the sync folder's copy isn't downloaded (or hasn't
@@ -150,14 +157,22 @@ extension LibrarySyncEngine {
         guard try SyncDigest.sha256(fileURL: temporary) == file.sha256 else { return .rejected("\(file.path) arrived damaged.") }
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
         try fm.moveItem(at: temporary, to: destination)
+        // When it arrived, for `courierPromotionDelay`.
+        try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: destination.path)
         return .stored
     }
 
+    /// A delivery whose sync-folder copy hasn't appeared after this long (its sender went away before iCloud Drive
+    /// uploaded it, or lost the file) is written into the sync folder from here, so every other device gets it too.
+    /// Its name is its content, so a copy arriving from the sender as well is the same file.
+    public static let courierPromotionDelay: TimeInterval = 24 * 60 * 60
+
     /// Deletes deliveries whose sync-folder copy is now downloaded and identical, and anything an interrupted delivery
     /// left behind. A delivery is never deleted before that: a pass may have applied it, and losing it would roll the
-    /// conversation back. Returns how many deliveries are still waiting for iCloud Drive.
+    /// conversation back. One that has waited `courierPromotionDelay` with no copy in the sync folder at all is written
+    /// there. Returns how many deliveries are still waiting for iCloud Drive.
     @discardableResult
-    public func pruneCourierInbox() -> Int {
+    public func pruneCourierInbox(now: Date = Date()) -> Int {
         guard let root = inboxRoot() else { return 0 }
         var waiting = 0
         for directory in SyncJournalFile.directories {
@@ -169,15 +184,34 @@ extension LibrarySyncEngine {
                 if name.hasPrefix(".") { try? fm.removeItem(at: url); continue }
                 let remote = remoteRoot.appendingPathComponent(directory, isDirectory: true).appendingPathComponent(name)
                 let expected = SyncJournalFile.address(of: name, in: directory)
-                if SyncFiles.itemState(remote) == .local,
+                let state = SyncFiles.itemState(remote)
+                if state == .local,
                    (try? SyncFiles.coordinateRead(remote, below: remoteRoot) { try SyncDigest.sha256(fileURL: $0) }) == expected {
                     try? fm.removeItem(at: url)
                 } else {
+                    if state == .absent, let arrived = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+                       now.timeIntervalSince(arrived) >= Self.courierPromotionDelay {
+                        promoteDelivery(url, to: remote, expected: expected)
+                    }
                     waiting += 1
                 }
             }
         }
         return waiting
+    }
+
+    /// Writes a verified delivery into the sync folder where nothing holds its name. Best effort: a failure leaves it
+    /// waiting in the inbox for the next pass.
+    private func promoteDelivery(_ delivery: URL, to remote: URL, expected: String) {
+        try? SyncFiles.coordinateWrite(remote, below: remoteRoot) { target in
+            guard !self.fm.fileExists(atPath: target.path) else { return }
+            let temporary = target.deletingLastPathComponent().appendingPathComponent(".promote-\(UUID().uuidString)")
+            defer { try? self.fm.removeItem(at: temporary) }
+            try SyncFiles.coordinateRead(delivery, below: inboxBase) { try self.fm.copyItem(at: $0, to: temporary) }
+            guard try SyncDigest.sha256(fileURL: temporary) == expected else { discardDelivery(delivery); return }
+            try self.fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+            try self.fm.moveItem(at: temporary, to: target)
+        }
     }
 
     /// Deliveries in the inbox still waiting for iCloud Drive.

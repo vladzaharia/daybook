@@ -207,13 +207,15 @@ final class PhoneSync {
         if let applied, applied.acknowledged {
             lastSynced = controller.lastSync ?? Date()
             lastError = nil
-            exchanged = fingerprint()
+            exchanged = fingerprint(excluding: applied)
             lastReceived = applied.changed
             passes += 1
             onApplied?(applied)
         } else if controller.status.hasPrefix(Self.pausedPrefix) {
             lastError = String(controller.status.dropFirst(Self.pausedPrefix.count))
         }
+        // Edits made while the pass ran weren't in it: another pass follows right away.
+        if applied?.hasEditsAfterThisPass == true { rerun = rerun ?? .edit }
         recountLocalChanges()
         await refreshDevices()
         scheduleContinuation()
@@ -245,9 +247,9 @@ final class PhoneSync {
 
     // MARK: Background
 
-    /// Asks iOS for a background refresh. Call when the app leaves the foreground.
+    /// Asks iOS for a background refresh. Call when the app leaves the foreground. Scheduled whether or not
+    /// sync is connected: the same task also resumes recorders' automatic imports, and a pass checks itself.
     func scheduleBackgroundRefresh() {
-        guard isConnected else { return }
         let request = BGAppRefreshTaskRequest(identifier: Self.refreshIdentifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: Self.refreshInterval)
         try? BGTaskScheduler.shared.submit(request)
@@ -332,13 +334,22 @@ final class PhoneSync {
     /// What the library looked like when it was last exchanged, to count changes since.
     private struct Fingerprint: Equatable {
         var meetings: [UUID: Date]
-        var metadata: LibraryMetadata
+        /// Nil: settings changed here that no pass has taken yet.
+        var metadata: LibraryMetadata?
         var trash: Set<UUID>
     }
 
     private func fingerprint() -> Fingerprint {
         Fingerprint(meetings: Dictionary(library.meetings.map { ($0.id, $0.updatedAt) }, uniquingKeysWith: { a, _ in a }),
                     metadata: library.metadata, trash: Set(library.trashedMeetingIDs()))
+    }
+
+    /// The library as a pass exchanged it: what was edited while it ran still counts as waiting.
+    private func fingerprint(excluding applied: SyncApplied) -> Fingerprint {
+        var print = fingerprint()
+        for id in applied.editedDuringPass { print.meetings[id] = nil }
+        if applied.settingsEditedDuringPass { print.metadata = nil }
+        return print
     }
 
     private func localChangeCount() -> Int {

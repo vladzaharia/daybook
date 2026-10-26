@@ -283,6 +283,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             publish()
             throw RecordingCommandError.failed(error.localizedDescription)
         }
+        sync.controller?.publishActivity(recording: id, since: Date())
         // Captions start beside the recording, never in its way.
         let locale = settings.captionLocale
         Task { await self.captions.start(locale: locale) }
@@ -323,6 +324,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         }.value
         stopMacsStartedHere(session)
         multipoint = nil
+        sync.controller?.publishActivity(recording: nil)
         sendRecordingState(force: true)
         if !isForeground { Task { await link.setActivity(.background) } }
     }

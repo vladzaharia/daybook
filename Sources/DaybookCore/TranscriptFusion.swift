@@ -6,7 +6,7 @@ public struct TrackAlignment: Codable, Equatable, Identifiable, Sendable {
     public enum Method: String, Codable, Sendable { case reference, provided, anchors, unaligned, audio, timestamps }
     public var id: UUID { trackID }
     public var trackID: UUID
-    public var method: Method
+    @Extensible public var method: Method
     public var offset: TimeInterval
     public var rate: Double
     public var matchedAnchors: Int

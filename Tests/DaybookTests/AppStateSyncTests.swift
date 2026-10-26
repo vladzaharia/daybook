@@ -10,7 +10,8 @@ final class AppStateSyncTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSyncApp-\(UUID())")
         let aURL = root.appendingPathComponent("MacA"), bURL = root.appendingPathComponent("MacB"), cloud = root.appendingPathComponent("Cloud")
         try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
-        let aSuite = "daybook.sync.a.\(UUID())", bSuite = "daybook.sync.b.\(UUID())"
+        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
+        let aSuite = root.appendingPathComponent("PreferencesA").path, bSuite = root.appendingPathComponent("PreferencesB").path
         let aDefaults = UserDefaults(suiteName: aSuite)!, bDefaults = UserDefaults(suiteName: bSuite)!
         let a = AppState(libraryURL: aURL, defaults: aDefaults), b = AppState(libraryURL: bURL, defaults: bDefaults)
         defer {
@@ -19,6 +20,8 @@ final class AppStateSyncTests: XCTestCase {
             try? FileManager.default.removeItem(at: root)
         }
         await a.initialize(); await b.initialize()
+        // The test runs every pass itself; an edit's automatic pass would race it.
+        a.sync.syncDebounce = nil; b.sync.syncDebounce = nil
         let source = root.appendingPathComponent("source.wav")
         try writeAudio(source)
         try await a.importFiles([source], source: .soundcore, attachTo: nil)

@@ -10,10 +10,33 @@ public struct LibraryFolder: Codable, Equatable, Identifiable, Sendable {
 /// A nil value is a durable deletion marker, including for vocabulary entries.
 public struct LibraryValue<Value: Codable & Equatable & Sendable>: Codable, Equatable, Sendable {
     public var id: String
-    public var value: Value?
+    public var value: Value? { didSet { unreadableValue = nil } }
     public var modifiedAt: Date
+    /// A value a newer Daybook wrote in a shape this version can't read. It isn't shown here (`value` is nil),
+    /// isn't a deletion, and is written back exactly as it came, so this device never drops it for the others.
+    public private(set) var unreadableValue: SyncJSONValue?
     public init(id: String, value: Value?, modifiedAt: Date = Date()) {
         self.id = id; self.value = value; self.modifiedAt = modifiedAt
+    }
+
+    /// A deletion marker, as opposed to a value this version can't read.
+    public var isDeletion: Bool { value == nil && unreadableValue == nil }
+
+    private enum CodingKeys: String, CodingKey { case id, value, modifiedAt }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        modifiedAt = try values.decode(Date.self, forKey: .modifiedAt)
+        do { value = try values.decodeIfPresent(Value.self, forKey: .value) }
+        catch { value = nil; unreadableValue = try values.decode(SyncJSONValue.self, forKey: .value) }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(modifiedAt, forKey: .modifiedAt)
+        if let unreadableValue { try values.encode(unreadableValue, forKey: .value) } else { try values.encodeIfPresent(value, forKey: .value) }
     }
 }
 
@@ -31,7 +54,7 @@ public struct RecorderOwnership: Codable, Equatable, Sendable {
     public var ownerID: String
     /// "Alex's iPhone", "Studio Mac".
     public var ownerName: String
-    public var ownerClass: SyncDeviceClass
+    @Extensible public var ownerClass: SyncDeviceClass
     public var claimedAt: Date
 
     public init(kind: String, serial: String, ownerID: String, ownerName: String, ownerClass: SyncDeviceClass, claimedAt: Date = Date()) {
@@ -88,8 +111,8 @@ public struct RecorderHandoffRecord: Codable, Equatable, Sendable {
     /// The device that will manage the recorder.
     public var requesterID: String
     public var requesterName: String
-    public var requesterClass: SyncDeviceClass
-    public var phase: Phase
+    @Extensible public var requesterClass: SyncDeviceClass
+    @Extensible public var phase: Phase
     /// A refusal's words.
     public var message: String?
     /// With `released`: recordings the new owner should import, and recordings the old owner imported
@@ -144,6 +167,13 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         return value
     }
 
+    /// Some settings were written by a newer Daybook in a shape this version can't read.
+    public var hasUnreadableValues: Bool {
+        folders.contains { $0.unreadableValue != nil } || templates.contains { $0.unreadableValue != nil }
+            || vocabulary.contains { $0.unreadableValue != nil } || (recorders ?? []).contains { $0.unreadableValue != nil }
+            || (handoffs ?? []).contains { $0.unreadableValue != nil }
+    }
+
     /// Handoffs under way or answered (cleared ones left out).
     public var recorderHandoffs: [RecorderHandoffRecord] { (handoffs ?? []).compactMap(\.value) }
 
@@ -168,8 +198,8 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
                 if old.modifiedAt > candidate.modifiedAt { continue }
                 if old.modifiedAt == candidate.modifiedAt {
                     // Equal clocks resolve identically regardless of device ordering; deletion wins ties.
-                    if old.value == nil { continue }
-                    if candidate.value != nil {
+                    if old.isDeletion { continue }
+                    if !candidate.isDeletion {
                         let a = (try? encoder.encode(old)) ?? Data(), b = (try? encoder.encode(candidate)) ?? Data()
                         if !a.lexicographicallyPrecedes(b) { continue }
                     }

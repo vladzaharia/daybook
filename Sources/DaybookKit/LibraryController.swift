@@ -54,6 +54,11 @@ public final class LibraryController: ObservableObject {
         get { saves.delay }
         set { saves.delay = newValue }
     }
+    /// Conversations edited (and whether settings were) while the current sync pass ran.
+    private var editedDuringSync = Set<UUID>()
+    private var settingsEditedDuringSync = false
+    /// The saves being made are the pass's own.
+    private var savingSyncResult = false
 
     public init(rootURL: URL, sync: LibrarySyncController?) {
         self.rootURL = rootURL
@@ -93,13 +98,20 @@ public final class LibraryController: ObservableObject {
         } else {
             metadata.vocabulary = glossary.map { .init(id: $0.id.uuidString, value: $0) }
         }
-        for index in meetings.indices where [.transcribing, .summarizing, .recording].contains(meetings[index].status) {
+        // Only work this device was doing: a status synced from another device's job stays as it is.
+        // A library that predates the record (nil) treats every such status as this device's, as before.
+        let ownWork = Self.loadLocalWork(at: localWorkURL)
+        localWork = []
+        for index in meetings.indices where [.transcribing, .summarizing, .recording].contains(meetings[index].status)
+            && ownWork?.contains(meetings[index].id) != false {
             var meeting = meetings[index]
             meeting.status = .imported
             meeting.errorMessage = "Processing was interrupted. Your audio and notes are saved."
             meetings[index] = meeting
             persist(meeting, requestingSync: false)
         }
+        // The sweep is done: from here the record lists only work this run starts.
+        saveLocalWork()
         await saves.drain()
         if !warnings.isEmpty { notice = warnings.joined(separator: "\n") }
         isLoaded = true
@@ -178,7 +190,8 @@ public final class LibraryController: ObservableObject {
     /// conversation is the one written, shortly after the last edit (`saveDelay`), or at `flush`.
     private func persist(_ meeting: Meeting, requestingSync: Bool = true) {
         guard let store else { return }
-        if requestingSync && !isApplyingSync { syncWanted = true }
+        trackLocalWork(meeting)
+        noteChange(meeting.id, requestingSync: requestingSync)
         let id = meeting.id
         saves.enqueue(id.uuidString) { [weak self] in
             // A conversation that left the library (the Trash, a deletion that synced) has nothing to save.
@@ -189,7 +202,7 @@ public final class LibraryController: ObservableObject {
     }
 
     private func persistMetadata(requestingSync: Bool = true) {
-        if requestingSync && !isApplyingSync { syncWanted = true }
+        noteChange(nil, requestingSync: requestingSync)
         // Settings that couldn't be read, or that a newer Daybook wrote, are never overwritten.
         guard let store, metadataWritable else { return }
         let snapshot = metadata
@@ -204,6 +217,47 @@ public final class LibraryController: ObservableObject {
             let title = meetings.first { $0.id.uuidString == key }?.title ?? "a conversation"
             errorMessage = "Couldn’t save \(title): \(error.localizedDescription)"
         }
+    }
+
+    // MARK: Work this device is doing
+
+    /// Conversations this device put into recording, transcribing, or summarizing, kept beside the library
+    /// (never synced), so a launch after a crash resets only its own interrupted work.
+    private var localWork = Set<UUID>()
+    private var localWorkURL: URL { rootURL.appendingPathComponent("local-work.json") }
+
+    private func trackLocalWork(_ meeting: Meeting) {
+        // A status that arrived through sync describes another device's job.
+        guard !savingSyncResult else { return }
+        let active = [.transcribing, .summarizing, .recording].contains(meeting.status)
+        let changed = active ? localWork.insert(meeting.id).inserted : localWork.remove(meeting.id) != nil
+        if changed { saveLocalWork() }
+    }
+
+    /// Written in order on a serial queue, so an older record never lands after a newer one.
+    private func saveLocalWork() {
+        let ids = localWork.map(\.uuidString).sorted(), url = localWorkURL
+        Self.localWorkQueue.async { try? JSONEncoder().encode(ids).write(to: url, options: .atomic) }
+    }
+
+    private static let localWorkQueue = DispatchQueue(label: "local.daybook.library.local-work", qos: .utility)
+
+    /// Waits for record writes queued so far (tests).
+    static func drainLocalWorkWrites() { localWorkQueue.sync {} }
+
+    /// Nil when the library has no record yet (written by an earlier Daybook).
+    static func loadLocalWork(at url: URL) -> Set<UUID>? {
+        guard let data = try? Data(contentsOf: url), let ids = try? JSONDecoder().decode([String].self, from: data) else { return nil }
+        return Set(ids.compactMap(UUID.init(uuidString:)))
+    }
+
+    /// Every save asks for a sync pass (once the saves are written), except the saves that apply one. An
+    /// edit made while a pass runs isn't in that pass: it's remembered, and asks for another pass when this
+    /// one ends.
+    private func noteChange(_ id: UUID?, requestingSync: Bool = true) {
+        guard requestingSync, !savingSyncResult else { return }
+        guard isApplyingSync else { syncWanted = true; return }
+        if let id { editedDuringSync.insert(id) } else { settingsEditedDuringSync = true }
     }
 
     /// Finishes note edits in progress and writes every waiting save now, returning once none is
@@ -228,7 +282,7 @@ public final class LibraryController: ObservableObject {
     /// storage (`MeetingStore.synchronizeWrites`). Waiting for the save queue alone does not mean its
     /// writes succeeded. With `ids`, only those conversations' failed saves count (an unrelated
     /// conversation that can't be saved doesn't stop an import); without, every failure does.
-    public func flushDurably(_ ids: Set<UUID>? = nil) async throws {
+    public func flushDurably(_ ids: Set<UUID>? = nil, includingSettings: Bool = false) async throws {
         await flush()
         // What the saves and imports wrote since the last barrier reaches permanent storage.
         if let store {
@@ -236,7 +290,7 @@ public final class LibraryController: ObservableObject {
         }
         let failures = persistenceErrors.filter { key, _ in
             guard let ids else { return true }
-            return UUID(uuidString: key).map(ids.contains) ?? false
+            return UUID(uuidString: key).map(ids.contains) ?? includingSettings
         }
         guard failures.isEmpty else {
             throw DaybookError.saveFailed(failures.values.sorted().joined(separator: "\n"))
@@ -563,17 +617,43 @@ public final class LibraryController: ObservableObject {
             .compactMap { UUID(uuidString: $0.lastPathComponent) }
     }
 
-    /// Puts a conversation back from the Trash. Refused while sync is on: the sync journal keeps
-    /// deletions final, so the next sync would move it back.
+    /// Puts a conversation back from the Trash. Once sync has published its deletion, that ID stays deleted
+    /// everywhere (the next pass would move it back), so it comes back as a new conversation with the same
+    /// content and a Version History entry; the result says which.
     @discardableResult
     public func restoreFromTrash(_ id: UUID) async throws -> Meeting {
-        guard sync?.folder == nil else { throw LibraryControllerError.restoreWhileSyncing }
         await acquireLock()
         defer { releaseLock() }
         guard let store else { throw DaybookError.libraryUnavailable }
+        if let sync, sync.isSyncedDeletion(id) {
+            let restored = try await restoreAsNewConversation(id, store: store)
+            meetings.append(restored)
+            sync.requestSync()
+            return restored
+        }
         let meeting = try await store.restoreFromTrash(id)
         if self.meeting(id) == nil { meetings.append(meeting) }
         return meeting
+    }
+
+    /// The trashed conversation's files, cloned into a new conversation's folder, and its last saved copy as
+    /// that conversation. The Trash copy is removed once the new one is saved.
+    private func restoreAsNewConversation(_ id: UUID, store: MeetingStore) async throws -> Meeting {
+        let trashed = rootURL.appendingPathComponent("Trash/\(id.uuidString)", isDirectory: true)
+        let newID = UUID()
+        let folder = rootURL.appendingPathComponent("Meetings/\(newID.uuidString)", isDirectory: true)
+        let restored = try await Task.detached(priority: .userInitiated) { () throws -> Meeting in
+            let decoder = JSONDecoder()
+            let saved = [trashed.appendingPathComponent("meeting.json"), trashed.appendingPathComponent("meeting.recovery.json")]
+                .lazy.compactMap { try? decoder.decode(Meeting.self, from: Data(contentsOf: $0)) }.first { $0.id == id }
+            guard let saved else { throw LibraryError.corruptMeeting(id) }
+            try MeetingFolderCopy.copyFiles(from: trashed, to: folder)
+            return saved.keptAs(newID, field: "source:restored", title: "Restored from the Trash")
+        }.value
+        do { try await store.save(restored) }
+        catch { try? FileManager.default.removeItem(at: folder); throw error }
+        try? FileManager.default.removeItem(at: trashed)
+        return restored
     }
 
     // MARK: Bringing in recordings
@@ -672,12 +752,21 @@ public final class LibraryController: ObservableObject {
     /// One sync pass: exchanges changes with the sync folder, applies what arrived (merging
     /// concurrent edits, moving remote deletions to the Trash), and acknowledges it. `protecting`
     /// is a conversation this device is recording, which a remote deletion or status never touches.
-    /// Returns what was applied, or nil when nothing was.
-    public func synchronize(protecting active: UUID? = nil, limits: SyncPassLimits = .unlimited) async -> SyncApplied? {
+    /// Returns what was applied, or nil when nothing was. `scope` `.metadataOnly` exchanges library settings alone
+    /// (recorder ownership, handoffs), for a device busy recording.
+    public func synchronize(protecting active: UUID? = nil, limits: SyncPassLimits = .unlimited, scope: SyncPassScope = .full) async -> SyncApplied? {
         guard !Task.isCancelled, isLoaded, let sync, sync.folder != nil, !isApplyingSync else { return nil }
         isApplyingSync = true
+        editedDuringSync = []; settingsEditedDuringSync = false
         await acquireLock()
-        defer { releaseLock(); isApplyingSync = false }
+        var applied = await applyPass(sync, protecting: active, limits: limits, scope: scope)
+        releaseLock(); isApplyingSync = false
+        applied?.editedDuringPass = editedDuringSync; applied?.settingsEditedDuringPass = settingsEditedDuringSync
+        if !editedDuringSync.isEmpty || settingsEditedDuringSync { sync.requestSync() }
+        return applied
+    }
+
+    private func applyPass(_ sync: LibrarySyncController, protecting active: UUID?, limits: SyncPassLimits, scope: SyncPassScope) async -> SyncApplied? {
         await flush()
         guard let store else { return nil }
         var applied: SyncApplied?
@@ -686,11 +775,66 @@ public final class LibraryController: ObservableObject {
             let snapshot = meetings
             let deleted = Set(trashedMeetingIDs())
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-            guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata), limits: limits) else { return nil }
-            // Save edits made while iCloud hydrated files before applying a remote deletion.
+            guard let result = try await sync.synchronize(meetings: snapshot, deletedMeetingIDs: deleted, metadata: encoder.encode(metadata),
+                                                          limits: limits, protecting: active.map { [$0] } ?? [], scope: scope) else { return nil }
+            // Save edits made while iCloud hydrated files before applying the pass.
             await flush()
             try Task.checkCancellation()
             guard sync.canApply(result) else { return nil }
+            var mergeWarnings = result.warnings
+            savingSyncResult = true
+            defer { savingSyncResult = false }
+            for remote in result.meetings where !result.deletedMeetingIDs.contains(remote.id) {
+                try Task.checkCancellation()
+                var merged = remote
+                let local = meetings.first(where: { $0.id == remote.id })
+                if let local {
+                    let rebased = MeetingMerge.merge(base: snapshot.first { $0.id == remote.id }, local: local, remote: remote)
+                    merged = rebased.meeting; mergeWarnings += rebased.warnings
+                }
+                // A status such as transcribing describes the device doing the work. It's kept as synced: rewriting it
+                // here would publish it back and conflict with that device's next status. Views read processing
+                // from `ProcessingStatus`, which never shows another device's work as running here.
+                if merged != local {
+                    if let index = meetings.firstIndex(where: { $0.id == merged.id }) { meetings[index] = merged } else { meetings.append(merged) }
+                    persist(merged)
+                } else if persistenceErrors[merged.id.uuidString] != nil {
+                    // Retry a prior failed save even when the in-memory snapshot is unchanged.
+                    persist(merged)
+                }
+            }
+            let metadataBeforeMerge = metadata
+            // Each version merges on its own: one this version can't read (a newer format) is left for an update
+            // instead of stopping every pass, and settings inside one it can't read travel on unchanged.
+            for data in result.metadataVersions {
+                guard let remote = try? JSONDecoder().decode(LibraryMetadata.self, from: data), remote.schemaVersion == 1 else {
+                    mergeWarnings.append(Self.newerSettingsWarning); continue
+                }
+                metadata = metadata.merging(remote)
+            }
+            if metadata.hasUnreadableValues { mergeWarnings.append(Self.newerSettingsWarning) }
+            let mergedGlossary = metadata.vocabulary.compactMap(\.value)
+            if mergedGlossary != glossary || metadata != metadataBeforeMerge ||
+                persistenceErrors["library-settings"] != nil || persistenceErrors["glossary"] != nil {
+                glossary = mergedGlossary
+                persistGlossary()
+            }
+            savingSyncResult = false
+            applied = SyncApplied(before: snapshot, received: result.meetings.map(\.id), acknowledged: false,
+                                  changed: result.changedMeetingIDs.union(result.deletedMeetingIDs), published: result.publishedEvents,
+                                  hasMoreWork: result.hasMoreWork, notLocalAudio: result.notLocalAudio)
+            if !mergeWarnings.isEmpty { notice = Array(Set(mergeWarnings)).sorted().joined(separator: "\n") }
+            // What this pass saved must be durable before it's acknowledged: what it received, changed, or
+            // deleted, conversations kept from a deletion (new IDs), and the library settings. An unrelated
+            // conversation's failed save doesn't hold the pass back.
+            let known = Set(snapshot.map(\.id))
+            let passIDs = Set(result.meetings.map(\.id)).union(result.changedMeetingIDs).union(result.deletedMeetingIDs)
+                .union(meetings.map(\.id).filter { !known.contains($0) })
+            try await flushDurably(passIDs, includingSettings: true)
+            try Task.checkCancellation()
+            guard sync.canApply(result) else { return applied }
+            // Remote deletions go to the Trash once everything this pass returned is saved: a conversation kept from
+            // a deletion is on disk before the one it came from moves.
             for id in result.deletedMeetingIDs {
                 try Task.checkCancellation()
                 guard sync.canApply(result) else { return applied }
@@ -702,42 +846,6 @@ public final class LibraryController: ObservableObject {
                     guard sync.canApply(result) else { return applied }
                 }
             }
-            var mergeWarnings = result.warnings
-            for remote in result.meetings where !result.deletedMeetingIDs.contains(remote.id) {
-                try Task.checkCancellation()
-                var merged = remote
-                let local = meetings.first(where: { $0.id == remote.id })
-                if let local {
-                    let rebased = MeetingMerge.merge(base: snapshot.first { $0.id == remote.id }, local: local, remote: remote)
-                    merged = rebased.meeting; mergeWarnings += rebased.warnings
-                }
-                // Remote process status describes another device, not a job running here.
-                if [.recording, .transcribing, .summarizing].contains(merged.status), merged.id != active { merged.status = merged.summary == nil ? .imported : .ready }
-                if merged != local {
-                    if let index = meetings.firstIndex(where: { $0.id == merged.id }) { meetings[index] = merged } else { meetings.append(merged) }
-                    persist(merged)
-                } else if persistenceErrors[merged.id.uuidString] != nil {
-                    // Retry a prior failed save even when the in-memory snapshot is unchanged.
-                    persist(merged)
-                }
-            }
-            let metadataBeforeMerge = metadata
-            for data in result.metadataVersions {
-                let remote = try JSONDecoder().decode(LibraryMetadata.self, from: data)
-                guard remote.schemaVersion == 1 else { throw DaybookError.libraryUnavailable }
-                metadata = metadata.merging(remote)
-            }
-            let mergedGlossary = metadata.vocabulary.compactMap(\.value)
-            if mergedGlossary != glossary || metadata != metadataBeforeMerge ||
-                persistenceErrors["library-settings"] != nil || persistenceErrors["glossary"] != nil {
-                glossary = mergedGlossary
-                persistGlossary()
-            }
-            applied = SyncApplied(before: snapshot, received: result.meetings.map(\.id), acknowledged: false,
-                                  changed: result.changedMeetingIDs.union(result.deletedMeetingIDs), published: result.publishedEvents,
-                                  hasMoreWork: result.hasMoreWork, notLocalAudio: result.notLocalAudio)
-            if !mergeWarnings.isEmpty { notice = Array(Set(mergeWarnings)).sorted().joined(separator: "\n") }
-            try await flushDurably()
             try Task.checkCancellation()
             guard sync.canApply(result) else { return applied }
             try await sync.acknowledge(result)
@@ -745,6 +853,10 @@ public final class LibraryController: ObservableObject {
         } catch { sync.reportFailure(error.localizedDescription) }
         return applied
     }
+}
+
+extension LibraryController {
+    static let newerSettingsWarning = "Some library settings were saved with a newer version of Daybook. Update Daybook to see them."
 }
 
 /// What one sync pass applied.
@@ -763,6 +875,11 @@ public struct SyncApplied: Sendable {
     public var hasMoreWork = false
     /// On an on-demand replica, tracks whose audio stays in iCloud until it's played, by conversation.
     public var notLocalAudio: [UUID: Set<UUID>] = [:]
+    /// Conversations edited here while the pass ran, and whether library settings were: not in this pass.
+    /// Another pass has been asked for.
+    public var editedDuringPass: Set<UUID> = []
+    public var settingsEditedDuringPass = false
+    public var hasEditsAfterThisPass: Bool { !editedDuringPass.isEmpty || settingsEditedDuringPass }
 
     public init(before: [Meeting], received: [UUID], acknowledged: Bool, changed: Set<UUID> = [], published: Int = 0,
                 hasMoreWork: Bool = false, notLocalAudio: [UUID: Set<UUID>] = [:]) {
@@ -827,13 +944,4 @@ public struct IngestedRecording: Sendable {
     public var track: RecordingTrack?
     /// The conversation as the store saved it.
     public var imported: Meeting
-}
-
-public enum LibraryControllerError: LocalizedError {
-    case restoreWhileSyncing
-    public var errorDescription: String? {
-        switch self {
-        case .restoreWhileSyncing: return "Turn off sync to restore a conversation from the Trash."
-        }
-    }
 }

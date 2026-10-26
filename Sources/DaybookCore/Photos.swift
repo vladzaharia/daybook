@@ -89,7 +89,7 @@ public struct MeetingPhoto: Codable, Equatable, Identifiable, Sendable {
     public var pixelHeight: Int?
     /// The exact moment it was taken, by the adding device's clock.
     public var capturedAt: Date
-    public var capturedAtSource: PhotoCaptureDateSource
+    @Extensible public var capturedAtSource: PhotoCaptureDateSource
     public var addedAt: Date
     /// Taken during a recording: with `trackID`, seconds into that recording (it then follows the
     /// recording's placement on the timeline, like a bookmark on a recording); without, seconds on the

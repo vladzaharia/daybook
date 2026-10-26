@@ -127,6 +127,41 @@ final class LibrarySyncInboxTests: XCTestCase {
         XCTAssertFalse(quiet, "The same files arriving again through iCloud Drive aren't news")
     }
 
+    /// The phone sent a recording by courier and was lost before iCloud Drive uploaded it: after a day the Mac puts its
+    /// verified copy into the sync folder, so a second Mac (or a new phone) gets it too.
+    func testADeliveryWhoseSyncFolderCopyNeverArrivesIsWrittenThereAfterADay() async throws {
+        let phone = try phone(), mac = try mac()
+        try await pass(phone, "Phone"); try await pass(mac, "Mac")
+        let known = await phone.libraryID
+        let libraryID = try XCTUnwrap(known)
+        let bytes = audioBytes(5_000, seed: 9)
+        let filed = try await pass(phone, "Phone", [try await record(bytes, on: "Phone", into: Meeting(title: "Lost phone"))])
+        let staged = try stage(filed.writtenFiles, from: phone)
+        // iCloud Drive never gets them: the files are gone from the sync folder for good.
+        for file in filed.writtenFiles { try fm.removeItem(at: remote.appendingPathComponent(file.path)) }
+        for (file, contents) in staged {
+            let delivery = try await mac.receiveCourierFile(file, libraryID: libraryID, contents: contents)
+            XCTAssertEqual(delivery, .stored)
+        }
+        let received = try await pass(mac, "Mac")
+        XCTAssertEqual(received.meetings.map(\.title), ["Lost phone"])
+        for file in filed.writtenFiles { XCTAssertFalse(fm.fileExists(atPath: remote.appendingPathComponent(file.path).path), "not within a day") }
+
+        // A day later, still nothing in the sync folder: the Mac writes its verified copies there.
+        let waiting = await mac.pruneCourierInbox(now: Date().addingTimeInterval(LibrarySyncEngine.courierPromotionDelay + 60))
+        XCTAssertEqual(waiting, filed.writtenFiles.count)
+        for file in filed.writtenFiles {
+            XCTAssertEqual(SyncDigest.sha256(data: try Data(contentsOf: remote.appendingPathComponent(file.path))), file.sha256)
+        }
+        let pruned = await mac.pruneCourierInbox()
+        XCTAssertEqual(pruned, 0, "once the sync folder holds them, the inbox lets go")
+        // A second Mac that never had the courier gets the conversation and its audio.
+        let other = try self.mac("Second Mac")
+        let onSecond = try await pass(other, "Second Mac")
+        XCTAssertEqual(onSecond.meetings.map(\.title), ["Lost phone"])
+        XCTAssertFalse(onSecond.hasPendingTransfers)
+    }
+
     func testCourierFilesThatAreDamagedForeignOrNotJournalFilesAreRejected() async throws {
         let phone = try phone(), mac = try mac()
         try await pass(phone, "Phone")

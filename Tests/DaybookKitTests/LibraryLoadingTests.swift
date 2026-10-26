@@ -71,7 +71,9 @@ final class LibraryLoadingTests: XCTestCase {
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(file)) as? [String: Any])
         var templates = try XCTUnwrap(json["templates"] as? [[String: Any]])
         var value = try XCTUnwrap(templates[0]["value"] as? [String: Any])
-        value["kind"] = "a-kind-from-a-newer-daybook"
+        // A kind from a newer Daybook now reads (and round-trips) as an unknown kind; an entry whose shape this
+        // version can't read at all is the one left out.
+        value["name"] = ["not": "a name"]
         templates[0]["value"] = value
         json["templates"] = templates
         try JSONSerialization.data(withJSONObject: json).write(to: settingsURL)
@@ -80,7 +82,11 @@ final class LibraryLoadingTests: XCTestCase {
         XCTAssertNotNil(library.meeting(id))
         XCTAssertEqual(library.folders.map(\.name), ["Product"])
         XCTAssertFalse(library.templates.contains { $0.id == template.id })
-        XCTAssertNotNil(library.notice)
+        // Kept as it was, not dropped: saving settings writes the unreadable entry back unchanged.
+        library.saveFolder(LibraryFolder(name: "Research"))
+        await library.flush()
+        let saved = try String(contentsOf: settingsURL, encoding: .utf8)
+        XCTAssertTrue(saved.contains(template.id), "the entry a newer or damaged writer left survives")
     }
 
     func testSettingsFromANewerDaybookAreReadButNeverOverwritten() async throws {
@@ -125,5 +131,42 @@ final class LibraryLoadingTests: XCTestCase {
         try await reopened.flushDurably()
         let stored = try await MeetingStore(rootURL: root).load(id)
         XCTAssertEqual(stored.status, .imported, "Retried once the folder can be written")
+    }
+
+    func testOnlyWorkThisDeviceWasDoingIsMarkedInterrupted() async throws {
+        let library = try await open()
+        let own = library.newMeeting(title: "Transcribing here")
+        library.update(own) { $0.status = .transcribing }
+        await library.flush()
+        LibraryController.drainLocalWorkWrites()
+        // Another Mac's job, as a sync pass saves it: the status describes that Mac, not this one.
+        var remote = Meeting(title: "Transcribing on Studio Mac")
+        remote.status = .transcribing
+        try await MeetingStore(rootURL: root).save(remote)
+
+        let reopened = try await open()
+        XCTAssertEqual(reopened.meeting(own)?.status, .imported)
+        XCTAssertNotNil(reopened.meeting(own)?.errorMessage)
+        XCTAssertEqual(reopened.meeting(remote.id)?.status, .transcribing, "another device's work is left alone")
+        XCTAssertNil(reopened.meeting(remote.id)?.errorMessage)
+        await reopened.flush()
+        LibraryController.drainLocalWorkWrites()
+
+        // The sweep cleared the record: the reset conversation, now processed elsewhere, isn't swept again.
+        var elsewhere = try XCTUnwrap(reopened.meeting(own))
+        elsewhere.status = .summarizing
+        try await MeetingStore(rootURL: root).save(elsewhere)
+        let again = try await open()
+        XCTAssertEqual(again.meeting(own)?.status, .summarizing)
+    }
+
+    func testALibraryFromBeforeTheRecordResetsEveryInterruptedConversation() async throws {
+        var meeting = Meeting(title: "Was transcribing")
+        meeting.status = .transcribing
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try await MeetingStore(rootURL: root).save(meeting)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("local-work.json").path))
+        let library = try await open()
+        XCTAssertEqual(library.meeting(meeting.id)?.status, .imported)
     }
 }

@@ -135,7 +135,7 @@ public final class LibrarySyncController: ObservableObject {
     @Published public private(set) var folder: URL?
     @Published public private(set) var isICloudLocation = false
     @Published public private(set) var status = "iCloud sync is off"
-    @Published public private(set) var isSyncing = false
+    @Published public private(set) var isSyncing = false { didSet { if oldValue && !isSyncing { passEnded() } } }
     @Published public private(set) var lastSync: Date?
     @Published public private(set) var warnings: [String] = []
     @Published public private(set) var pendingDownloads = 0
@@ -150,8 +150,14 @@ public final class LibrarySyncController: ObservableObject {
     private let localRoot: URL
     private let defaults: UserDefaults
     public let environment: SyncContainerEnvironment
-    /// This replica's identity in the sync journal, kept in preferences.
-    public let deviceID: String
+    /// This replica's identity in the sync journal, kept on this device (`SyncDeviceIdentityStore`) and mirrored in
+    /// preferences. It changes only when another device turns out to share it.
+    public private(set) var deviceID: String
+    /// A random ID for this installation, in the presence record.
+    public private(set) var installation: String
+    private let identityStore: SyncDeviceIdentityStore
+    /// Another device writes presence under this device ID; a new identity is taken once the pass ends.
+    private var needsNewIdentity = false
     /// The container sync uses, once restored.
     public private(set) var containerIdentifier: String?
     /// The engine for the connected library: on-demand audio (`fetchAudio`, `evictAudio`), presence
@@ -163,6 +169,16 @@ public final class LibrarySyncController: ObservableObject {
     private var pendingReceipt: UUID?
     private var polling: Task<Void, Never>?
     private var debounce: Task<Void, Never>?
+    private var debounceToken = UUID()
+    /// The requested pass is running; a request now waits for it to end.
+    private var debounceRunsPass = false
+    private var requestedDuringPass = false
+    private var passEndWaiters: [CheckedContinuation<Void, Never>] = []
+    /// How long a request waits before it runs a pass, so a burst of edits makes one. Nil: requests never run a
+    /// pass on their own; test rigs drive passes themselves.
+    public var syncDebounce: Duration? = .seconds(2)
+    /// A requested pass is waiting out `syncDebounce` or running.
+    public var hasPendingSyncRequest: Bool { debounce != nil }
     private var query: NSMetadataQuery?
     private var observers: [NSObjectProtocol] = []
     private var scopedURL: URL?
@@ -171,6 +187,8 @@ public final class LibrarySyncController: ObservableObject {
     private var migrationTask: Task<Void, Never>?
     private var containerGeneration = UUID()
     private var accountObserver: NSObjectProtocol?
+    /// iCloud has listed the connected folder once (its metadata query finished gathering).
+    private(set) var containerListed = false
 
     /// Unsigned and ad hoc development builds can't use the iCloud container. Setting this preference
     /// (`-DaybookDevelopmentFolderSync YES` as a launch argument, or `defaults write`) brings back the folder
@@ -184,16 +202,65 @@ public final class LibrarySyncController: ObservableObject {
         static let migration = "syncContainerMigration"
         static let account = "syncICloudAccount"
         static let turnedOff = "syncICloudTurnedOff"
+        static let deviceID = "syncDeviceID"
+        static let installation = "syncInstallation"
+        /// The identity moved to this device's keychain. Seen without the keychain item, the preferences (and the
+        /// library) were copied from another Mac.
+        static let identityStored = "syncDeviceIDInKeychain"
     }
 
-    public init(localRoot: URL, defaults: UserDefaults, environment: SyncContainerEnvironment = .system) {
+    /// `identityStore` defaults to this device's keychain (`SyncDeviceIdentityStore.keychain(for:)`).
+    public init(localRoot: URL, defaults: UserDefaults, environment: SyncContainerEnvironment = .system,
+                identityStore: SyncDeviceIdentityStore? = nil) {
         self.localRoot = localRoot; self.defaults = defaults; self.environment = environment
-        deviceID = defaults.string(forKey: "syncDeviceID") ?? UUID().uuidString
-        defaults.set(deviceID, forKey: "syncDeviceID")
+        let store = identityStore ?? .keychain(for: localRoot)
+        self.identityStore = store
+        let identity = Self.resolveIdentity(store: store, defaults: defaults, localRoot: localRoot)
+        deviceID = identity.deviceID; installation = identity.installation
         lastSync = defaults.object(forKey: "syncLastCompleted") as? Date
         migrationRecord = defaults.data(forKey: Key.migration).flatMap { try? JSONDecoder().decode(SyncMigrationRecord.self, from: $0) }
         let usable = environment.containerIdentifier.map(environment.hasEntitlement) ?? false
         iCloud = usable ? .checking : .unavailableInThisBuild
+    }
+
+    /// The identity from this device's keychain. On the first launch with it, the one in preferences moves there
+    /// unchanged. Preferences that say it moved, with no keychain item here, came from another Mac (Migration
+    /// Assistant, a backup): this Mac takes a new identity and keeps its place in the journal. Without a keychain
+    /// (unsigned builds, tests), preferences hold it as before.
+    static func resolveIdentity(store: SyncDeviceIdentityStore, defaults: UserDefaults, localRoot: URL) -> StoredSyncIdentity {
+        let inPreferences = defaults.string(forKey: Key.deviceID)
+        if let stored = store.read() {
+            if inPreferences != stored.deviceID { defaults.set(stored.deviceID, forKey: Key.deviceID) }
+            return stored
+        }
+        if defaults.bool(forKey: Key.identityStored), let copied = inPreferences {
+            let fresh = StoredSyncIdentity(deviceID: UUID().uuidString, installation: UUID().uuidString)
+            LibrarySyncEngine.carryOverCheckpoints(localRoot: localRoot, from: copied, to: fresh.deviceID)
+            _ = store.write(fresh)
+            defaults.set(fresh.deviceID, forKey: Key.deviceID)
+            return fresh
+        }
+        let identity = StoredSyncIdentity(deviceID: inPreferences ?? UUID().uuidString,
+                                          installation: defaults.string(forKey: Key.installation) ?? UUID().uuidString)
+        if store.write(identity) { defaults.set(true, forKey: Key.identityStored) } else { defaults.set(identity.installation, forKey: Key.installation) }
+        defaults.set(identity.deviceID, forKey: Key.deviceID)
+        return identity
+    }
+
+    /// Another device shares this device ID (presence says so): this one takes a new identity, keeps its place in
+    /// the journal, and reconnects.
+    private func takeNewIdentity() {
+        guard needsNewIdentity, !isSyncing else { return }
+        needsNewIdentity = false
+        let fresh = StoredSyncIdentity(deviceID: UUID().uuidString, installation: installation)
+        LibrarySyncEngine.carryOverCheckpoints(localRoot: localRoot, from: deviceID, to: fresh.deviceID)
+        if !identityStore.write(fresh) { defaults.set(fresh.installation, forKey: Key.installation) }
+        defaults.set(fresh.deviceID, forKey: Key.deviceID)
+        deviceID = fresh.deviceID
+        guard let folder else { return }
+        let transport = self.transport
+        stopMonitoring(); engine = nil
+        try? attach(folder, transport: transport, monitorChanges: true)
     }
 
     /// Whether this build may sync through a chosen folder: only without iCloud, and only when asked for.
@@ -300,13 +367,18 @@ public final class LibrarySyncController: ObservableObject {
         guard root != local, !root.path.hasPrefix(local.path + "/"), !local.path.hasPrefix(root.path + "/") else { throw SyncControllerError.overlappingLibrary }
         stopMonitoring()
         if url.startAccessingSecurityScopedResource() { scopedURL = url }
-        do { engine = try LibrarySyncEngine(localRoot: localRoot, remoteRoot: url, deviceID: deviceID, replica: replica) }
+        // In the container, a fresh device waits for iCloud's first listing before it starts a library of its own.
+        do { engine = try LibrarySyncEngine(localRoot: localRoot, remoteRoot: url, deviceID: deviceID, replica: replica,
+                                            waitsForListing: transport == .iCloudContainer && monitorChanges, installation: installation) }
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = "Connected · preparing sync"; configurationID = UUID()
         isICloudLocation = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true || root.path.contains("/Library/Mobile Documents/")
         // Other devices learn this one exists (and what it is) right away, not only after its first full
         // pass, which can take minutes on a new library. Presence is advisory, so a failure is ignored.
-        if let engine, replica.device != nil { Task { try? await engine.publishPresence() } }
+        if let engine, replica.device != nil {
+            let activity = self.activity
+            Task { if let activity { try? await engine.publishActivity(activity) } else { try? await engine.publishPresence() } }
+        }
         startCourier()
         if monitorChanges { startMonitoring(url); requestSync() }
     }
@@ -332,23 +404,56 @@ public final class LibrarySyncController: ObservableObject {
 
     public func requestSync() {
         guard folder != nil else { return }
-        debounce?.cancel()
+        // A request made by the pass a request started (an edit saved meanwhile, a courier delivery) mustn't cancel
+        // that pass: it runs again once the pass is over.
+        if debounceRunsPass { requestedDuringPass = true; return }
+        debounce?.cancel(); debounce = nil
+        guard let delay = syncDebounce else { return }
+        let token = UUID()
+        debounceToken = token
         debounce = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(2)); guard !Task.isCancelled else { return }; await self?.onSyncRequested?() }
-            catch { }
+            if (try? await Task.sleep(for: delay)) != nil, !Task.isCancelled {
+                self?.debounceRunsPass = true
+                await self?.onSyncRequested?()
+                self?.debounceRunsPass = false
+            }
+            if self?.debounceToken == token { self?.debounce = nil }
+            if self?.requestedDuringPass == true { self?.requestedDuringPass = false; self?.requestSync() }
         }
+    }
+
+    /// Returns once no requested pass is waiting or running: for tests, and for anything that must not overlap one.
+    public func awaitIdle() async {
+        while true {
+            if let task = debounce { await task.value; if debounce == task { debounce = nil }; continue }
+            if isSyncing { await waitForPassToEnd(); continue }
+            return
+        }
+    }
+
+    /// Returns when the pass in flight (if any) has ended: acknowledged, failed, or cancelled and unwound.
+    private func waitForPassToEnd() async {
+        guard isSyncing else { return }
+        await withCheckedContinuation { passEndWaiters.append($0) }
+    }
+
+    private func passEnded() {
+        let waiters = passEndWaiters
+        passEndWaiters = []
+        waiters.forEach { $0.resume() }
     }
 
     public func deferUntilIdle() { if folder != nil && !isSyncing { status = "Waiting for recording or local processing to finish" } }
 
     public func synchronize(meetings: [Meeting], deletedMeetingIDs: Set<UUID>, metadata: Data,
-                            limits: SyncPassLimits = .unlimited) async throws -> SyncResult? {
+                            limits: SyncPassLimits = .unlimited, protecting: Set<UUID> = [], scope: SyncPassScope = .full) async throws -> SyncResult? {
         try Task.checkCancellation()
         guard let engine, !isSyncing else { return nil }
         let generation = configurationID
         isSyncing = true; status = "Syncing recordings and conversations…"
         do {
-            let task = Task { try await engine.synchronize(meetings: meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: metadata, limits: limits) }
+            let task = Task { try await engine.synchronize(meetings: meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: metadata,
+                                                           limits: limits, protecting: protecting, scope: scope) }
             activeTask = task
             let result = try await withTaskCancellationHandler {
                 try await task.value
@@ -358,12 +463,18 @@ public final class LibrarySyncController: ObservableObject {
             activeTask = nil
             try Task.checkCancellation()
             guard generation == configurationID else { isSyncing = false; return nil }
+            if await engine.sharesIdentity { needsNewIdentity = true }
             handToCourier(result.writtenFiles, engine: engine)
             pendingReceipt = result.checkpointID
             pendingDownloads = result.pendingDownloads; pendingUploads = result.pendingUploads; warnings = result.warnings
             hasMoreWork = result.hasMoreWork
             status = "Applying library changes…"
             return result
+        } catch LibrarySyncError.waitingForICloud {
+            // Not a failure: the pass runs again once iCloud has listed the container.
+            activeTask = nil; isSyncing = false; pendingReceipt = nil
+            status = LibrarySyncError.waitingForICloud.localizedDescription
+            return nil
         } catch {
             activeTask = nil; isSyncing = false; pendingReceipt = nil
             status = "Sync paused: \(error.localizedDescription)"; throw error
@@ -379,11 +490,30 @@ public final class LibrarySyncController: ObservableObject {
         guard canApply(result) else { throw SyncControllerError.busy }
         status = result.hasPendingTransfers ? "Waiting for iCloud: \(result.pendingUploads) upload(s), \(result.pendingDownloads) download(s)" : "Library changes exchanged"
         lastSync = Date(); defaults.set(lastSync, forKey: "syncLastCompleted")
+        isSyncing = false
+        takeNewIdentity()
     }
 
-    public func reportFailure(_ message: String) { isSyncing = false; pendingReceipt = nil; status = "Sync paused: " + message }
+    public func reportFailure(_ message: String) {
+        isSyncing = false; pendingReceipt = nil; status = "Sync paused: " + message
+        takeNewIdentity()
+    }
 
     // MARK: Presence
+
+    /// What this device is doing, in its presence record. Kept across reconnections.
+    private var activity: SyncDeviceActivity?
+
+    /// Tells the other devices this one is recording into `conversationID` (nil: it stopped), and which recorders
+    /// it drives. Written at once and kept fresh every few minutes, even while recording holds sync passes back, so
+    /// the iPhone sees this Mac as present and busy rather than asleep.
+    public func publishActivity(recording conversationID: UUID?, since: Date? = nil, recorders: [SyncDeviceActivity.Recorder] = []) {
+        let next = conversationID == nil && recorders.isEmpty ? nil
+            : SyncDeviceActivity(recordingConversationID: conversationID, since: since, recorders: recorders.isEmpty ? nil : recorders)
+        activity = next
+        guard let engine, replica.device != nil else { return }
+        Task { try? await engine.publishActivity(next) }
+    }
 
     /// How this replica describes itself to the other devices (its presence record) and keeps
     /// audio. Set it before connecting; `updatePresence(_:)` changes a connected engine's identity.
@@ -404,6 +534,12 @@ public final class LibrarySyncController: ObservableObject {
     public func knownDevices() async -> [KnownSyncDevice] {
         guard let engine else { return [] }
         return (try? await engine.knownDevices()) ?? []
+    }
+
+    /// Whether sync has published `id`'s deletion from this device's point of view (any library it synced),
+    /// so that ID is deleted everywhere. Works with sync off too.
+    public func isSyncedDeletion(_ id: UUID) -> Bool {
+        LibrarySyncEngine.recordsDeletion(of: id, localRoot: localRoot, deviceID: deviceID)
     }
 
     /// The sync library's ID (its manifest's), once a pass has read it.
@@ -553,6 +689,12 @@ public final class LibrarySyncController: ObservableObject {
         // The library is bound to this account from here on, so a change mid-migration pauses too.
         defaults.set(account, forKey: Key.account)
         guard await migrateFolder(into: root, identifier: identifier, generation: generation), isCurrent(generation) else { return }
+        // An account change cancels the pass in flight, but it may still be unwinding (a long audio copy): attaching
+        // now would be refused as busy and leave sync off. Wait for it.
+        while isSyncing {
+            await waitForPassToEnd()
+            guard isCurrent(generation) else { return }
+        }
         do {
             try attach(root, transport: .iCloudContainer, monitorChanges: true)
             iCloud = .connected
@@ -716,8 +858,12 @@ public final class LibrarySyncController: ObservableObject {
         query.predicate = NSPredicate(format: "%K BEGINSWITH %@", NSMetadataItemPathKey, root.path + "/")
         query.notificationBatchingInterval = 2
         for name in [Notification.Name.NSMetadataQueryDidFinishGathering, Notification.Name.NSMetadataQueryDidUpdate] {
+            let gathered = name == .NSMetadataQueryDidFinishGathering
             observers.append(NotificationCenter.default.addObserver(forName: name, object: query, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.requestSync() }
+                Task { @MainActor in
+                    if gathered, let engine = self?.engine { await engine.listingGathered(); self?.containerListed = true }
+                    self?.requestSync()
+                }
             })
         }
         self.query = query; query.start()
@@ -726,6 +872,8 @@ public final class LibrarySyncController: ObservableObject {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
                 await self?.onSyncRequested?()
+                // Presence stays fresh while passes wait (recording, processing): rewritten when it's due.
+                if let engine = self?.engine { try? await engine.refreshPresence() }
             }
         }
         // The container has its own account handling (`accountDidChange`). A chosen folder disconnects.
@@ -743,7 +891,8 @@ public final class LibrarySyncController: ObservableObject {
     }
 
     private func stopMonitoring() {
-        polling?.cancel(); polling = nil; debounce?.cancel(); debounce = nil
+        polling?.cancel(); polling = nil; debounce?.cancel(); debounce = nil; containerListed = false
+        debounceRunsPass = false; requestedDuringPass = false
         query?.stop(); query = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
         scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil

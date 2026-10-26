@@ -25,7 +25,7 @@ public struct SourceAlignment: Codable, Equatable, Sendable {
         case unaligned
     }
 
-    public var method: Method
+    @Extensible public var method: Method
     /// Seconds on the conversation's timeline where the recording's first second falls. Nil until placed.
     public var offset: TimeInterval?
     /// Conversation seconds per second of this recording (clock drift; 1 means none).
@@ -103,7 +103,7 @@ public struct CompanionRecording: Codable, Equatable, Identifiable, Sendable {
     public var recorderStartedAt: Date?
     /// The recorder's ID for the recording, once it reports one.
     public var recordingID: String?
-    public var state: State
+    @Extensible public var state: State
     /// Daybook started the recorder, so it also stops it. False when it was already recording.
     public var startedByDaybook: Bool
     /// The track its recording became.
@@ -162,7 +162,7 @@ public struct SourceSuggestion: Codable, Equatable, Identifiable, Sendable {
     public var trackID: UUID
     /// Most likely first.
     public var candidateMeetingIDs: [UUID]
-    public var reason: Reason
+    @Extensible public var reason: Reason
     public var confidence: Double?
     /// Where the clocks put the recording on each candidate's timeline, by candidate.
     public var clockOffsets: [UUID: TimeInterval]?

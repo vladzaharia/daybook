@@ -75,6 +75,37 @@ final class ProcessingRequestTests: XCTestCase {
         XCTAssertNil(taken.renewed(by: studio, at: at(3_600)), "Once another Mac took it over, the old holder can't renew")
     }
 
+    func testAClockRunningAheadDoesNotTakeOverALiveClaim() throws {
+        // Each Mac judges leases by its own clock, from when it first saw a heartbeat.
+        let studioClock = ClaimObservations(), laptopClock = ClaimObservations()
+        let skew: TimeInterval = 15 * 60
+        let claimed = try XCTUnwrap(request().claimed(by: studio, at: at(0), lease: 600, observations: studioClock))
+        XCTAssertFalse(claimed.isClaimable(by: laptop, at: at(5 + skew), observations: laptopClock), "live, though the laptop's clock says it expired")
+        XCTAssertNil(claimed.claimed(by: laptop, at: at(5 + skew), observations: laptopClock))
+        // The studio renews; the heartbeat reaches the laptop two minutes later.
+        let renewed = try XCTUnwrap(claimed.renewed(by: studio, at: at(300), lease: 600, observations: studioClock))
+        let seen = at(300 + skew + 120)
+        XCTAssertFalse(renewed.isClaimable(by: laptop, at: seen, observations: laptopClock))
+        XCTAssertTrue(renewed.isClaimed(by: studio, at: at(899), observations: studioClock), "the holder's own view is unchanged")
+        // With no newer heartbeat, it expires a full lease after the laptop first saw the last one.
+        XCTAssertFalse(renewed.isClaimable(by: laptop, at: seen.addingTimeInterval(599), observations: laptopClock))
+        XCTAssertTrue(renewed.isClaimable(by: laptop, at: seen.addingTimeInterval(600), observations: laptopClock))
+        let takeover = try XCTUnwrap(renewed.claimed(by: laptop, at: seen.addingTimeInterval(600), observations: laptopClock))
+        XCTAssertEqual(ProcessingRequest.merged([renewed], [takeover])?.first?.claim?.device, laptop)
+    }
+
+    func testAHeartbeatThatArrivesLateStillGetsItsWholeLease() throws {
+        let studioClock = ClaimObservations(), laptopClock = ClaimObservations()
+        let claimed = try XCTUnwrap(request().claimed(by: studio, at: at(0), lease: 600, observations: studioClock))
+        // Nine minutes in transit: by the timestamps it has a minute left; it gets ten from arrival.
+        XCTAssertFalse(claimed.isClaimable(by: laptop, at: at(540), observations: laptopClock))
+        XCTAssertFalse(claimed.isClaimable(by: laptop, at: at(1_100), observations: laptopClock))
+        XCTAssertTrue(claimed.isClaimable(by: laptop, at: at(1_140), observations: laptopClock))
+        // One whose own expiry is long past by this clock is stale at once, whenever it arrives.
+        let fresh = ClaimObservations()
+        XCTAssertTrue(claimed.isClaimable(by: laptop, at: at(600 + ClaimObservations.staleAfter), observations: fresh))
+    }
+
     func testReleasingHandsTheRequestBackAtOnce() throws {
         let claimed = try XCTUnwrap(request().claimed(by: studio, at: at(0), lease: 600))
         let released = try XCTUnwrap(claimed.released(by: studio, at: at(30)))

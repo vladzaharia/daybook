@@ -7,7 +7,8 @@ import XCTest
 final class SyncReviewTests: XCTestCase {
     func testIdleExchangeDoesNotRewriteLibraryOrScheduleAnotherExchange() async throws {
         let root = try makeRoot()
-        let suite = "daybook.sync.review.\(UUID())"
+        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
+        let suite = root.appendingPathComponent("Preferences").path
         let defaults = UserDefaults(suiteName: suite)!
         let local = root.appendingPathComponent("Local")
         let state = AppState(libraryURL: local, defaults: defaults)
@@ -21,6 +22,7 @@ final class SyncReviewTests: XCTestCase {
         state.saveFolder(LibraryFolder(name: "Unchanged folder"))
         await state.flush()
         try state.sync.connect(to: root.appendingPathComponent("Remote"), monitorChanges: false)
+        state.sync.syncDebounce = .milliseconds(50)
         var scheduled = 0
         state.sync.onSyncRequested = { scheduled += 1 }
         await state.synchronizeLibrary()
@@ -32,14 +34,16 @@ final class SyncReviewTests: XCTestCase {
         await state.synchronizeLibrary()
         XCTAssertEqual(try meetingURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, meetingDate)
         XCTAssertEqual(try metadataURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, metadataDate)
-        // Longer than the controller's two-second edit debounce; no microphone or cloud account needed.
-        try await Task.sleep(for: .milliseconds(2_250))
+        // Any pass these exchanges asked for would have run by now; no microphone or cloud account needed.
+        XCTAssertFalse(state.sync.hasPendingSyncRequest)
+        await state.sync.awaitIdle()
         XCTAssertEqual(scheduled, 0, "Applying unchanged remote data must not create a perpetual sync loop")
     }
 
     func testSyncConfigurationRemainsLockedUntilDurableAcknowledgement() async throws {
         let root = try makeRoot()
-        let suite = "daybook.sync.review.\(UUID())"
+        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
+        let suite = root.appendingPathComponent("Preferences").path
         let defaults = UserDefaults(suiteName: suite)!
         let controller = LibrarySyncController(localRoot: root.appendingPathComponent("Local"), defaults: defaults)
         defer {
@@ -65,7 +69,8 @@ final class SyncReviewTests: XCTestCase {
 
     func testAccountChangeInvalidatesPendingReceiptAndAllowsExplicitReconnect() async throws {
         let root = try makeRoot()
-        let suite = "daybook.sync.review.\(UUID())"
+        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
+        let suite = root.appendingPathComponent("Preferences").path
         let defaults = UserDefaults(suiteName: suite)!
         let controller = LibrarySyncController(localRoot: root.appendingPathComponent("Local"), defaults: defaults)
         defer {

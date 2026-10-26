@@ -22,7 +22,8 @@ final class LibrarySyncContainerTests: XCTestCase {
     override func setUp() async throws {
         root = fm.temporaryDirectory.appendingPathComponent("DaybookContainer-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: containerURL, withIntermediateDirectories: true)
-        suite = "daybook.sync.container.\(UUID())"
+        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
+        suite = root.appendingPathComponent("Preferences").path
         defaults = UserDefaults(suiteName: suite)
         defaults.set("Mac", forKey: "syncDeviceID")
         account = FakeAccount(identity: Data("account-a".utf8), container: containerURL)
@@ -48,13 +49,20 @@ final class LibrarySyncContainerTests: XCTestCase {
         return controller
     }
 
+    /// Waits for `condition`, scaled by `DAYBOOK_TEST_TIMEOUT_SCALE`; throws on timeout with the controller's state.
     private func wait(_ what: String, timeout: Duration = .seconds(10), until condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + timeout
+        let scale = Double(ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"] ?? "") ?? 1
+        let deadline = ContinuousClock.now + timeout * scale
         while !condition() {
-            guard ContinuousClock.now < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            guard ContinuousClock.now < deadline else {
+                let state = controllers.last.map { "iCloud: \($0.iCloud), status: \($0.status)" } ?? "no controller"
+                throw TimedOut(description: "Timed out waiting for \(what) (\(state))")
+            }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
+
+    private struct TimedOut: Error, CustomStringConvertible { var description: String }
 
     /// A library that synced through `folder` as device "Mac", remembered with a bookmark as before.
     @discardableResult
@@ -115,6 +123,8 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertEqual(sync.folder?.standardizedFileURL, journal.standardizedFileURL)
         XCTAssertNil(sync.migrationRecord, "Nothing to migrate without a previous folder")
         XCTAssertNil(defaults.data(forKey: "syncFolderBookmark"))
+        // A new library starts only once iCloud has listed the container.
+        try await wait("iCloud's listing") { sync.containerListed }
         let result = try await sync.synchronize(meetings: [], deletedMeetingIDs: [], metadata: JSONEncoder().encode(LibraryMetadata()))
         let receipt = try XCTUnwrap(result)
         try await sync.acknowledge(receipt)
@@ -246,6 +256,28 @@ final class LibrarySyncContainerTests: XCTestCase {
         NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
         try await wait("signed out") { sync.iCloud == .signedOut }
         XCTAssertNil(sync.folder)
+    }
+
+    func testAnAccountChangeDuringALongPassReconnectsOnceThePassUnwinds() async throws {
+        let gate = SyncReadGate()
+        defer { gate.release() }
+        let sync = controller(environment())
+        sync.replica.cloud = SyncCloudFiles(requestDownload: { _ in gate.waitForCancellation() }, isUploaded: { _ in true })
+        sync.syncDebounce = nil
+        sync.restore()
+        try await wait("the container") { sync.iCloud == .connected && sync.containerListed }
+        // A journal entry still in iCloud: the pass waits on its download, as it would copying a long recording.
+        try fm.createDirectory(at: journal.appendingPathComponent("Events"), withIntermediateDirectories: true)
+        try Data().write(to: journal.appendingPathComponent("Events/.\(String(repeating: "b", count: 64)).json.icloud"))
+        let pass = Task { try? await sync.synchronize(meetings: [], deletedMeetingIDs: [], metadata: Data()) }
+        try await wait("the pass to reach iCloud") { gate.entered }
+        NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
+        // The same account comes back while the cancelled pass is still unwinding.
+        try await Task.sleep(for: .milliseconds(200))
+        gate.release()
+        _ = await pass.value
+        try await wait("sync to reconnect") { sync.iCloud == .connected && sync.folder != nil }
+        XCTAssertFalse(sync.isSyncing)
     }
 
     func testCancellingAnActivePassReachesTheEngineAndLeavesItReadyToRetry() async throws {

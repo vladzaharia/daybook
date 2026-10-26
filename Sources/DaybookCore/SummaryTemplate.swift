@@ -3,7 +3,7 @@ import Foundation
 public struct SummaryTemplate: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var name: String
-    public var kind: MeetingKind
+    @Extensible public var kind: MeetingKind
     public var instructions: String
     public var updatedAt: Date
 

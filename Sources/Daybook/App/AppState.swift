@@ -656,6 +656,12 @@ final class AppState: ObservableObject {
     /// conversation being processed is protected from remote deletion and status, as a recording is.
     func synchronizeLibrary() async {
         guard isReady, sync.folder != nil, !library.isApplyingSync else { return }
+        // While recording, only library settings apply (recorder ownership, handoffs), so another device's handoff
+        // or claim is seen; conversations wait until the recording is filed.
+        if let recordingID, !isStartingRecording, !isStoppingRecording {
+            _ = await library.synchronize(protecting: recordingID, scope: .metadataOnly)
+            return
+        }
         let carryingRequest = processingID != nil && runningJob?.requestID != nil
         guard processingID == nil || carryingRequest, recordingID == nil, !isStartingRecording, !isStoppingRecording else { sync.deferUntilIdle(); return }
         defer { runQueue() }
@@ -897,6 +903,7 @@ extension AppState {
             recordingStartedAt = recorder.startedAt ?? Date()
             update(id) { $0.status = .recording; $0.date = recordingStartedAt ?? Date() }
             recordingDidStart(id)
+            sync.publishActivity(recording: id, since: recordingStartedAt)
             if preferences.object(forKey: "showsFloatingNotesWhileRecording") as? Bool ?? true { showNotes(for: id) }
         } catch {
             finishCaptions()
@@ -922,6 +929,7 @@ extension AppState {
         finishCaptions()
         recordingWillFinish(id, at: result.endedAt)
         recordingID = nil; recordingStartedAt = nil; recordingWasAutomatic = false
+        sync.publishActivity(recording: nil)
         phoneLeads[id] = nil
         do {
             try await ingestCapture(result, meetingID: id)
