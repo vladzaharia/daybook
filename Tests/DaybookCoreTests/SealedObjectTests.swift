@@ -174,6 +174,17 @@ final class SealedObjectTests: XCTestCase {
         }
     }
 
+    func testAnImpossibleLengthIsDamageNotACrash() throws {
+        var sealed = SealedObject.seal(Data("entry".utf8), kind: .event, key: key).bytes
+        for index in 76..<84 { sealed[index] = 0xff }
+        XCTAssertThrowsError(try SealedObject.open(sealed, kind: .event, libraryID: libraryID, keyring: keyring)) {
+            XCTAssertEqual($0 as? SealedObjectError, .malformed)
+        }
+        let url = root.appendingPathComponent("huge")
+        try sealed.write(to: url)
+        XCTAssertThrowsError(try SealedObject.openFile(url, to: nil, kind: .event, libraryID: libraryID, keyring: keyring))
+    }
+
     func testSealingAFileThatIsNotThePlaintextNamedFails() throws {
         let source = root.appendingPathComponent("plain")
         try Data("actual".utf8).write(to: source)

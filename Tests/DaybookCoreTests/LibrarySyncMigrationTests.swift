@@ -256,4 +256,23 @@ final class LibrarySyncMigrationTests: XCTestCase {
         XCTAssertEqual(onPhone.meetings.map(\.id), [meeting.id])
         XCTAssertEqual(onPhone.pendingDownloads, 0)
     }
+
+    func testNothingIsCopiedUntilTheContainersManifestIsDownloaded() async throws {
+        let mac = try engine("Mac", folder)
+        try await pass(mac, "Mac", [try await record(3, on: "Mac", title: "Waiting")])
+        // Another device started the container (perhaps encrypted); its manifest hasn't downloaded here.
+        let phone = try engine("Phone", container)
+        try await pass(phone, "Phone")
+        try cloud.evict(container.appendingPathComponent("daybook-sync.json"))
+        let outcome = try await migration("Mac").run()
+        XCTAssertFalse(outcome.progress.journalComplete)
+        for directory in ["Events", "Metadata", "Blobs"] {
+            XCTAssertEqual((try? fm.contentsOfDirectory(atPath: container.appendingPathComponent(directory).path))?.filter { !$0.hasPrefix(".") } ?? [], [],
+                           "\(directory) got a file before the container's manifest was known")
+        }
+        try cloud.deliver(container.appendingPathComponent("daybook-sync.json"))
+        let resumed = try await migration("Mac").run()
+        XCTAssertTrue(resumed.progress.journalComplete)
+    }
 }
+

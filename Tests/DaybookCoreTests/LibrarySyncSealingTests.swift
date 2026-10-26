@@ -127,6 +127,26 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertThrowsError(try SyncManifest.checked(manifest)) { XCTAssertEqual($0 as? LibrarySyncError, .invalidManifest) }
         manifest.sealing = nil
         XCTAssertThrowsError(try SyncManifest.checked(manifest)) { XCTAssertEqual($0 as? LibrarySyncError, .unsupportedVersion(2)) }
+        // A newer scheme reads as newer whatever shape its description has.
+        let newer = Data(#"{"format":"DaybookSync","schemaVersion":2,"libraryID":"\#(key.libraryID.uuidString)","sealing":{"scheme":"DBSEAL-9","current":5}}"#.utf8)
+        XCTAssertThrowsError(try SyncManifest.decode(newer)) { XCTAssertEqual($0 as? LibrarySyncError, .unsupportedVersion(2)) }
+        let odd = Data(#"{"format":"DaybookSync","schemaVersion":2,"libraryID":"\#(key.libraryID.uuidString)","sealing":"elsewhere"}"#.utf8)
+        XCTAssertThrowsError(try SyncManifest.decode(odd)) { XCTAssertEqual($0 as? LibrarySyncError, .unsupportedVersion(2)) }
+    }
+
+    func testMergingManifestVersionsIsTheSameInEitherOrder() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let a = SyncManifest.Sealing(current: String(repeating: "a", count: 32), sealedSince: start, migrator: "Mac",
+                                     keys: [.init(id: String(repeating: "a", count: 32), created: start, recovery: "wrap-a")])
+        let b = SyncManifest.Sealing(current: String(repeating: "b", count: 32), sealedSince: start.addingTimeInterval(1), migrator: "Phone",
+                                     keys: [.init(id: String(repeating: "a", count: 32), created: start, recovery: "wrap-b"),
+                                            .init(id: String(repeating: "b", count: 32), created: start.addingTimeInterval(1))])
+        XCTAssertEqual(a.merged(with: b), b.merged(with: a))
+        XCTAssertEqual(a.merged(with: b).current, String(repeating: "b", count: 32))
+        XCTAssertEqual(a.merged(with: b).migrator, "Phone")
+        XCTAssertEqual(a.merged(with: b).keys.first?.recovery, "wrap-a")
+        var c = b; c.migrator = "Other"
+        XCTAssertEqual(b.merged(with: c), c.merged(with: b))
     }
 
     func testAPlaintextLibraryIsWrittenExactlyAsBefore() async throws {
@@ -480,7 +500,14 @@ final class LibrarySyncSealingTests: XCTestCase {
         let done = try XCTUnwrap(doneValue)
         XCTAssertTrue(done.oldKeysRetired, "\(done)")
         XCTAssertEqual(try manifest().sealing?.keys.map(\.id), [second.idHex])
-        XCTAssertEqual(try keychain.keys(for: first.libraryID).map(\.id), [second.id])
+        // The old key stays in the keychain (a file sealed with it later stays readable); its files are gone.
+        XCTAssertEqual(Set(try keychain.keys(for: first.libraryID).map(\.id)), [first.id, second.id])
+        for directory in ["Sealed/Events", "Sealed/Metadata", "Sealed/Blobs"] {
+            for name in files(directory) {
+                let header = try XCTUnwrap(SealedObject.header(of: Data(contentsOf: remote.appendingPathComponent("\(directory)/\(name)"))))
+                XCTAssertEqual(header.keyID, second.id, "\(directory)/\(name) is still under the old key")
+            }
+        }
         XCTAssertFalse(files("Sealed/Blobs").contains(goneObject), "A deleted conversation's audio is erased")
         XCTAssertEqual(files("Sealed/Blobs").count, 1)
         // Everything live still syncs, under the new key only.
@@ -634,6 +661,69 @@ final class LibrarySyncSealingTests: XCTestCase {
         let done = try XCTUnwrap(doneValue)
         XCTAssertTrue(done.oldKeysRetired, "\(done)")
         XCTAssertEqual(try manifest().sealing?.keys.map(\.id), [second.idHex])
+    }
+
+    // MARK: Review fixes
+
+    func testPresenceWrittenBeforeAnyPassSaysNothingPrivate() async throws {
+        let mac = try mac()
+        try await pass(mac, "Mac")
+        try await mac.enableSealing()
+        try await pass(mac, "Mac")
+        // Another Mac connects: sync writes its presence at once, before its first pass reads the manifest.
+        let other = try self.mac("Other")
+        try await other.publishActivity(SyncDeviceActivity(recordingConversationID: UUID()))
+        try assertNoPlaintext()
+        // Without the key, nor the manifest downloaded, it still says nothing private.
+        let manifestURL = remote.appendingPathComponent("daybook-sync.json")
+        try cloud.evict(manifestURL)
+        let third = try self.mac("Third", keys: MemoryLibraryKeyStore())
+        try await third.publishPresence()
+        try assertNoPlaintext()
+        try cloud.deliver(manifestURL)
+    }
+
+    func testANewerFormatInsideASealedEntryIsSetAsideNotWaitedFor() async throws {
+        let mac = try mac()
+        try await pass(mac, "Mac")
+        let key = try await mac.enableSealing()
+        let meeting = Meeting(title: "Partly newer")
+        var newer = SyncEventRecord(meetingID: meeting.id, deviceID: "Future", sequence: 1, parents: [], snapshot: meeting, deleted: false, assets: [])
+        newer.schemaVersion = 2
+        let newerBytes = try SyncEncoding.data(newer)
+        let sealedNewer = SealedObject.seal(newerBytes, kind: .event, key: key)
+        try sealedNewer.bytes.write(to: remote.appendingPathComponent("Sealed/Events/\(sealedNewer.name)"))
+        var edited = meeting; edited.title = "Partly newer, edited"
+        let child = SyncEventRecord(meetingID: meeting.id, deviceID: "Future", sequence: 2, parents: [SyncDigest.sha256(data: newerBytes)],
+                                    snapshot: edited, deleted: false, assets: [])
+        let sealedChild = SealedObject.seal(try SyncEncoding.data(child), kind: .event, key: key)
+        try sealedChild.bytes.write(to: remote.appendingPathComponent("Sealed/Events/\(sealedChild.name)"))
+        let result = try await mac.synchronize(meetings: [])
+        XCTAssertEqual(result.pendingDownloads, 0, "A descendant of a newer entry isn't a download to wait for")
+        XCTAssertTrue(result.warnings.contains { $0.contains("newer version") }, "\(result.warnings)")
+        try await mac.acknowledge(result.checkpointID)
+    }
+
+    func testADeletionThatArrivesAfterRetirementStillApplies() async throws {
+        let mac = try mac(), phone = try phone()
+        let unchanged = try await pass(mac, "Mac", [Meeting(title: "Delete me")]).meetings[0]
+        let edited = try await pass(mac, "Mac", [unchanged, Meeting(title: "Keep my notes")]).meetings.first { $0.title == "Keep my notes" }!
+        try await pass(phone, "Phone")
+        // The Mac deletes both while the phone is away; the phone edits one of them meanwhile.
+        try await pass(mac, "Mac", [], deleted: [unchanged.id, edited.id])
+        let start = Date()
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace * 2) }
+        try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac")
+        try await pass(mac, "Mac")
+        XCTAssertNotNil(try manifest().sealing?.legacyRetired)
+        XCTAssertTrue(files("Events").isEmpty)
+        var notes = try await MeetingStore(rootURL: local("Phone")).load(edited.id)
+        notes.setNotes("Written on the phone while it was away")
+        let back = try await pass(phone, "Phone", [try await MeetingStore(rootURL: local("Phone")).load(unchanged.id), notes])
+        XCTAssertEqual(back.pendingDownloads, 0, "\(back.warnings)")
+        XCTAssertTrue(back.deletedMeetingIDs.isSuperset(of: [unchanged.id, edited.id]))
+        XCTAssertEqual(back.meetings.map(\.notes), ["Written on the phone while it was away"], "What it added is kept as a new conversation")
     }
 }
 

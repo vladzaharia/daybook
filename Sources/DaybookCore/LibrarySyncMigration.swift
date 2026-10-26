@@ -104,6 +104,11 @@ public actor LibrarySyncMigration {
         // A chosen folder holds a plaintext library; one that's encrypted isn't moved.
         if case .found(let from) = sourceManifest, from.isSealed { throw LibrarySyncError.unsupportedVersion(from.schemaVersion) }
         var destinationManifest = try manifest(in: destination, root: destination)
+        // A container this device synced encrypted, now without a manifest, gets no plaintext journal.
+        if case .absent = destinationManifest,
+           SealingMemory.load(localRoot: localRoot).remotes[SealingMemory.key(remoteRoot: destination)] != nil {
+            throw LibrarySyncError.sealingRemoved
+        }
         switch (sourceManifest, destinationManifest) {
         case (.pending, _), (_, .pending):
             // Both identities are needed to know whether this device's checkpoint carries over.
@@ -127,6 +132,13 @@ public actor LibrarySyncMigration {
             sealingKey = key
         }
         publish()
+        // Until the container's manifest is downloaded it isn't known whether the library there is encrypted: nothing is
+        // copied, so nothing plaintext can reach an encrypted one.
+        if case .pending = destinationManifest {
+            publish(force: true)
+            return SyncMigrationOutcome(progress: progress, sourceLibraryID: sourceManifest.libraryID, destinationLibraryID: nil,
+                                        adoptedCheckpoint: false)
+        }
 
         for item in items {
             try Task.checkCancellation()

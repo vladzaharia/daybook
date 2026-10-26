@@ -370,7 +370,8 @@ extension LibrarySyncEngine {
         // Retiring keys that aren't current.
         let oldKeys = sealing.keys.values.filter { $0.id != current.id }
         let listedOld = sealing.manifest.keys.filter { $0.id != current.idHex }
-        guard !listedOld.isEmpty || !oldKeys.isEmpty else { progress.oldKeysRetired = true; return }
+        let oldEntriesListed = (input.eventEntries + input.metadataEntries).contains { $0.isSealed && sealedKeys[$0.path] != current.id }
+        guard !listedOld.isEmpty || oldEntriesListed else { progress.oldKeysRetired = true; return }
         progress.oldKeysRetired = false
         var ready = true
         if now.timeIntervalSince(current.createdAt) < Self.retirementGrace { ready = false; progress.waitingFor.append(.gracePeriod) }
@@ -382,9 +383,10 @@ extension LibrarySyncEngine {
         if recent.contains(where: { $0.key != SyncDeviceKeyState(state: .ready, id: current.idHex) }) { ready = false; progress.waitingFor.append(.devicesWithCurrentKey) }
         guard ready else { return }
         let oldEntries = (input.eventEntries + input.metadataEntries).filter { $0.isSealed && sealedKeys[$0.path] != current.id }
-        // An old key's objects: every object the journal ever named, under every old key held.
+        // An old key's objects: every object the journal ever named, under every old key the manifest still lists (once
+        // it doesn't, they're gone; a stray one is left, unreadable to no one with the key).
         var oldBlobs: [(String, Data?)] = []
-        for key in oldKeys {
+        for key in oldKeys where listedOld.contains(where: { $0.id == key.idHex }) {
             for sha in knownShas {
                 guard let name = key.objectName(.blob, plaintextSHA256: sha) else { continue }
                 if SyncFiles.itemState(remoteRoot.appendingPathComponent("Sealed/Blobs/\(name)")) != .absent { oldBlobs.append((sha, key.id)) }
@@ -394,13 +396,13 @@ extension LibrarySyncEngine {
                                         progress: &progress) else { return }
         for url in plan { deleteRemote(url) }
         let retiredIDs = Set(listedOld.map(\.id))
-        if let updated = try? updateManifest({ manifest in manifest.sealing?.keys.removeAll { retiredIDs.contains($0.id) } }),
+        if !retiredIDs.isEmpty, let updated = try? updateManifest({ manifest in manifest.sealing?.keys.removeAll { retiredIDs.contains($0.id) } }),
            let description = updated.sealing {
             self.sealing?.manifest = description
         }
-        for key in oldKeys { try? keyStore?.remove(keyID: key.id, libraryID: key.libraryID) }
-        let remaining = self.sealing?.keys.filter { $0.key == current.id } ?? [:]
-        self.sealing?.keys = remaining
+        // The old key itself stays in iCloud Keychain: a file sealed with it later (a device that was away) or restored
+        // from iCloud.com stays readable, and is sealed again or deleted like this. Its files are what held the
+        // history, and they're gone.
         progress.oldKeysRetired = true
     }
 

@@ -166,7 +166,12 @@ struct SealedHeader: Equatable {
         libraryID = SealedFormat.uuid(Data(bytes[28..<44]))
         name = Data(bytes[44..<76])
         plaintextLength = bytes[76..<84].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+        // Checked before anything is authenticated: a length no file could have is damage, not arithmetic to trap on.
+        guard plaintextLength <= Self.maximumLength else { throw SealedObjectError.malformed }
     }
+
+    /// 256 TiB: far beyond any recording, and small enough that sizes computed from it never overflow.
+    static let maximumLength: UInt64 = 1 << 48
 
     /// Chunks in an object with this plaintext length: at least one, so an empty object still has a final chunk.
     static func chunkCount(_ length: UInt64) -> UInt64 { max(1, (length + UInt64(chunkSize) - 1) / UInt64(chunkSize)) }

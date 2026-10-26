@@ -127,8 +127,11 @@ extension LibrarySyncEngine {
                                       canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation,
                                       activity: stamped)
         record.features = [Self.sealingFeature]
+        // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
+        let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
         else if let waitingForKey { record.key = SyncDeviceKeyState(state: .waiting, id: waitingForKey); record.displayName = ""; record.activity = nil }
+        else if !known { record.displayName = ""; record.activity = nil }
         let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
         let url = directory.appendingPathComponent(SyncPresenceFiles.fileName(for: deviceID))
         // Another installation wrote this device's record recently: two devices share this device ID. The one with

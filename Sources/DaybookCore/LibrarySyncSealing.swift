@@ -40,18 +40,22 @@ extension SyncManifest {
 
         /// One description from two versions written at once: every key of both (a recovery wrap kept from either), the
         /// newest current, the earliest start, and the plaintext retired if either retired it.
+        /// The same whichever order the versions come in.
         func merged(with other: Sealing) -> Sealing {
             var byID: [String: Key] = [:]
             for key in keys + other.keys {
-                if var existing = byID[key.id] { existing.recovery = existing.recovery ?? key.recovery; existing.created = min(existing.created, key.created); byID[key.id] = existing }
-                else { byID[key.id] = key }
+                if var existing = byID[key.id] {
+                    existing.recovery = [existing.recovery, key.recovery].compactMap { $0 }.min()
+                    existing.created = min(existing.created, key.created)
+                    byID[key.id] = existing
+                } else { byID[key.id] = key }
             }
             var result = self
             result.keys = byID.values.sorted { $0.id < $1.id }
             let currents = [current, other.current].compactMap { id in result.keys.first { $0.id == id } }
-            result.current = Self.newest(currents)?.id ?? current
+            result.current = Self.newest(currents)?.id ?? min(current, other.current)
             result.sealedSince = min(sealedSince, other.sealedSince)
-            if result.current == other.current, other.current != current { result.migrator = other.migrator }
+            result.migrator = [self, other].filter { $0.current == result.current }.map(\.migrator).min() ?? min(migrator, other.migrator)
             result.legacyRetired = [legacyRetired, other.legacyRetired].compactMap { $0 }.max()
             return result
         }
@@ -79,11 +83,18 @@ extension SyncManifest {
     /// Decodes a manifest: the version first, so a newer one reads as newer, not as damaged.
     static func decode(_ data: Data) throws -> SyncManifest {
         struct Header: Decodable { var format: String; var schemaVersion: Int }
+        struct Scheme: Decodable { var scheme: String? }
+        struct SealingHeader: Decodable { var sealing: Scheme? }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let header = try decoder.decode(Header.self, from: data)
         guard header.format == "DaybookSync" else { throw LibrarySyncError.invalidManifest }
         guard header.schemaVersion == 1 || header.schemaVersion == sealedSchemaVersion else { throw LibrarySyncError.unsupportedVersion(header.schemaVersion) }
+        // An encryption scheme this version doesn't know is a newer Daybook's, whatever shape the rest has.
+        if header.schemaVersion == sealedSchemaVersion,
+           (try? decoder.decode(SealingHeader.self, from: data))?.sealing?.scheme != Sealing.currentScheme {
+            throw LibrarySyncError.unsupportedVersion(header.schemaVersion)
+        }
         return try decoder.decode(SyncManifest.self, from: data)
     }
 
@@ -190,6 +201,7 @@ extension LibrarySyncEngine {
     /// The keys this device holds for an encrypted library, or `keyUnavailable` when it lacks the current one. Read
     /// again on every pass, so a key iCloud Keychain (or another device) brings is picked up at once.
     func loadSealing(_ manifest: SyncManifest) throws {
+        manifestChecked = true
         guard manifest.isSealed, let description = manifest.sealing else {
             sealing = nil; waitingForKey = nil
             return
@@ -207,6 +219,17 @@ extension LibrarySyncEngine {
         if sealing?.current.id != current.id { sealerVerified = [] }
         sealing = SealingState(libraryID: manifest.libraryID, manifest: description, keys: held, current: current)
         waitingForKey = nil
+    }
+
+    /// Before any pass has read the manifest (presence written when sync connects): reads it when it's downloaded, so a
+    /// name or activity never goes out in plaintext into an encrypted library. False when it's still unknown.
+    func checkManifestForPresence() -> Bool {
+        if manifestChecked { return true }
+        let url = remoteRoot.appendingPathComponent("daybook-sync.json")
+        guard SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
+              let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)) else { return false }
+        try? loadSealing(manifest)
+        return true
     }
 
     /// Records that this device synced an encrypted library in this sync folder (`SealingMemory`).
@@ -388,8 +411,26 @@ extension LibrarySyncEngine {
         return candidates.first { SyncFiles.itemState($0.url) != .absent } ?? candidates[0]
     }
 
-    /// Whether the sync folder (or the journal) has the object, so an on-demand replica can publish it by reference.
+    /// Whether the sync folder has the object.
     func hasRemoteObject(_ sha256: String) -> Bool { SyncFiles.itemState(remoteObject(sha256).url) != .absent }
+
+    /// Whether an on-demand replica may publish an object it doesn't hold by reference: one the journal names or the sync
+    /// folder holds, as always. An encrypted library retires objects only live conversations no longer use, so there the
+    /// object itself must be in the sync folder; one the journal names that isn't there (yet) waits.
+    func mayPublishByReference(_ sha256: String, journalAssets: Set<String>) throws -> Bool {
+        guard sealing != nil else { return journalAssets.contains(sha256) || hasRemoteObject(sha256) }
+        if hasRemoteObject(sha256) { return true }
+        if journalAssets.contains(sha256) { throw SyncPendingDownload() }
+        return false
+    }
+
+    /// The files written since a pass last returned, for the courier. In an encrypted library, only sealed ones: a
+    /// plaintext file left by a pass that stopped before the library was encrypted never goes out now.
+    func takeCourierWrites() -> [SyncJournalFile] {
+        let written = courierWrites.values.filter { sealing == nil || $0.isSealed }.sorted { $0.path < $1.path }
+        courierWrites = [:]
+        return written
+    }
 
     /// A courier delivery of the object, sealed under a held key or plaintext, while the sync folder's copy isn't
     /// downloaded. Asks iCloud for the sync folder's copy, so the delivery can be pruned once it's there.

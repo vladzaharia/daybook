@@ -121,6 +121,8 @@ public actor LibrarySyncEngine {
     var sealing: SealingState?
     /// The current key (hex) of an encrypted library this device can't open yet.
     public internal(set) var waitingForKey: String?
+    /// A manifest has been read (a pass, or presence looking first), so `sealing` and `waitingForKey` say what it is.
+    var manifestChecked = false
     /// Sealed entries already opened, by path: the entry ID (SHA-256 of the plaintext record) each holds, and its key.
     var sealedNames: [String: String] = [:]
     var sealedKeys: [String: Data] = [:]
@@ -211,7 +213,11 @@ public actor LibrarySyncEngine {
                 events[hash] = header; eventCache[hash] = header
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
             catch let error as CancellationError { throw error }
-            catch where Self.isPermanent(error) { warnings.append(markUnreadable(unreadableKey, error)); unreadJournalFiles += 1 }
+            catch where Self.isPermanent(error) {
+                warnings.append(markUnreadable(unreadableKey, error)); unreadJournalFiles += 1
+                // A sealed entry opened but unreadable (a newer format) is unreadable by its ID too, which parents name.
+                if entry.isSealed, let id = sealedNames[entry.path] { unreadableJournal[id] = unreadableJournal[unreadableKey] }
+            }
             catch { warnings.append(error.localizedDescription); pendingDownloads += 1; unreadJournalFiles += 1 }
         }
         let metadataRead = try readMetadata(metadataEntries, budget: &budget, warnings: &warnings)
@@ -341,7 +347,8 @@ public actor LibrarySyncEngine {
                     if protecting.contains(meetingID) { held.insert(meetingID); continue }
                     do {
                         if let fork = try keepContentAddedAfterDeletion(local, deletions: ids.filter { events[$0]?.deleted == true },
-                                                                       events: events, memo: &memo, supplied: output) {
+                                                                       events: events, memo: &memo, supplied: output,
+                                                                       parentsMayBeRetired: !journalIncomplete && sealing?.manifest.legacyRetired != nil) {
                             output[fork.id] = fork; changed.insert(fork.id)
                             if audioPolicy == .onDemand {
                                 let missing = Set(fork.tracks.filter { availability(of: $0, in: fork.id) == .notLocal }.map(\.id))
@@ -441,8 +448,7 @@ public actor LibrarySyncEngine {
         settledJournalListing = pendingDownloads == 0 && budget.deferred == 0 ? listing : nil
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
-        let written = courierWrites.values.sorted { $0.path < $1.path }
-        courierWrites = [:]
+        let written = takeCourierWrites()
         return SyncResult(checkpointID: checkpointID, meetings: output.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date > $1.date },
             deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
             pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
@@ -473,7 +479,10 @@ public actor LibrarySyncEngine {
                 metadata[hash] = record; metadataCache[hash] = record
             } catch is SyncPendingDownload { downloading += 1; incomplete = true }
             catch let error as CancellationError { throw error }
-            catch where Self.isPermanent(error) { warnings.append(markUnreadable(unreadableKey, error)) }
+            catch where Self.isPermanent(error) {
+                warnings.append(markUnreadable(unreadableKey, error))
+                if entry.isSealed, let id = sealedNames[entry.path] { unreadableJournal[id] = unreadableJournal[unreadableKey] }
+            }
             catch { warnings.append(error.localizedDescription); downloading += 1; incomplete = true }
         }
         return (metadata, incomplete, downloading)
@@ -523,8 +532,7 @@ public actor LibrarySyncEngine {
         // Conversations weren't read: the next full pass decides what's new.
         settledJournalListing = nil
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
-        let written = courierWrites.values.sorted { $0.path < $1.path }
-        courierWrites = [:]
+        let written = takeCourierWrites()
         return SyncResult(checkpointID: checkpointID, meetings: [], deletedMeetingIDs: [], metadataVersions: settings.versions,
                           warnings: Array(Set(warnings)).sorted(), pendingDownloads: pendingDownloads, pendingUploads: 0,
                           publishedEvents: published, deferredItems: budget.deferred, writtenFiles: written)
@@ -534,15 +542,25 @@ public actor LibrarySyncEngine {
     /// it all, files included, named deterministically by the deletion so every device that keeps it makes the
     /// same one. Nil when there's nothing new to keep (the deletion simply applies).
     private func keepContentAddedAfterDeletion(_ local: Meeting, deletions: [String], events: [String: SyncEventHeader],
-                                               memo: inout MergeMemo, supplied: [UUID: Meeting]) throws -> Meeting? {
+                                               memo: inout MergeMemo, supplied: [UUID: Meeting],
+                                               parentsMayBeRetired: Bool = false) throws -> Meeting? {
         // The deletion itself, and what the device that deleted it had (the merge of its parents), must be read
         // before anything is judged new: a parent still downloading or deferred holds the conversation.
         guard !deletions.isEmpty else { throw SyncPendingDownload() }
         let allParents = Set(deletions.flatMap { events[$0]?.parents ?? [] })
-        if allParents.contains(where: { events[$0] == nil && unreadableJournal[$0] == nil }) { throw SyncPendingDownload() }
+        var retiredParents = false
+        if allParents.contains(where: { events[$0] == nil && unreadableJournal[$0] == nil }) {
+            // An encrypted library keeps only a deleted conversation's deletion once its plaintext is retired (the
+            // sealer, LibrarySyncSealer.swift): with the journal read in full, a parent that isn't there is gone, not
+            // on its way. Unchanged here since this device last synced it, the deletion applies; with changes of
+            // its own, those are kept as a new conversation.
+            guard parentsMayBeRetired else { throw SyncPendingDownload() }
+            if state.bases[local.id.uuidString] == local { return nil }
+            retiredParents = true
+        }
         let parents = allParents.filter { events[$0]?.deleted == false }
         // A parent this version can't read: what the deletion saw is unknown, so the deletion simply applies.
-        if parents.count < allParents.filter({ events[$0]?.deleted != true }).count { return nil }
+        if !retiredParents, parents.count < allParents.filter({ events[$0]?.deleted != true }).count { return nil }
         let seen = parents.isEmpty ? nil : try mergedSnapshot(of: Array(parents), events: events, memo: &memo)
         guard local.hasContent(notIn: seen) else { return nil }
         let forkID = SyncEncoding.uuid("\(local.id.uuidString):kept-after-deletion:\(deletions.sorted().joined(separator: ","))")
@@ -676,12 +694,18 @@ public actor LibrarySyncEngine {
         var candidates: [SyncManifest] = []
         var current: SyncManifest?
         if fm.fileExists(atPath: url.path) {
-            guard let manifest = decode(try SyncFiles.read(url, below: remoteRoot, cloud: cloud)) else { throw LibrarySyncError.invalidManifest }
+            guard let manifest = decode(try SyncFiles.read(url, below: remoteRoot, cloud: cloud)) else {
+                if let newer { throw LibrarySyncError.unsupportedVersion(newer) }
+                throw LibrarySyncError.invalidManifest
+            }
             current = manifest; candidates.append(manifest)
         }
         for version in conflicts {
             // A version that can't be read yet can't be resolved; the person sees the conflict.
-            guard let data = try? Data(contentsOf: version.url), let manifest = decode(data) else { throw LibrarySyncError.manifestConflict }
+            guard let data = try? Data(contentsOf: version.url), let manifest = decode(data) else {
+                if let newer { throw LibrarySyncError.unsupportedVersion(newer) }
+                throw LibrarySyncError.manifestConflict
+            }
             candidates.append(manifest)
         }
         for copy in copies {
@@ -690,15 +714,19 @@ public actor LibrarySyncEngine {
         }
         if let newer { throw LibrarySyncError.unsupportedVersion(newer) }
         for candidate in candidates { _ = try SyncManifest.checked(candidate) }
-        guard let winner = candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else { throw LibrarySyncError.manifestConflict }
+        // An encrypted library wins over plaintext ones (whichever ID is smaller): it never becomes plaintext again, and
+        // the others' devices carry on in it once they have its key. Two encrypted libraries can't be merged: sync pauses.
+        let sealedIDs = Set(candidates.filter(\.isSealed).map(\.libraryID))
+        guard sealedIDs.count <= 1 else { throw LibrarySyncError.manifestConflict }
+        guard let winner = sealedIDs.first ?? candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else {
+            throw LibrarySyncError.manifestConflict
+        }
         let superseded = Set(candidates.map(\.libraryID) + candidates.flatMap { $0.supersedes ?? [] }).subtracting([winner])
         var resolved = SyncManifest(libraryID: winner)
         resolved.supersedes = superseded.isEmpty ? nil : superseded.sorted { $0.uuidString < $1.uuidString }
-        // An encrypted library's manifest changes (keys added, a recovery key saved): versions of the same library merge,
-        // keeping every key. Versions of different libraries where one is encrypted can't be merged safely: sync pauses.
-        let sealings = candidates.compactMap(\.sealing)
+        // An encrypted library's manifest changes (keys added, a recovery key saved): its versions merge, keeping every key.
+        let sealings = candidates.filter { $0.libraryID == winner }.compactMap(\.sealing)
         if !sealings.isEmpty {
-            guard Set(candidates.map(\.libraryID)).count == 1 else { throw LibrarySyncError.manifestConflict }
             resolved.schemaVersion = SyncManifest.sealedSchemaVersion
             resolved.sealing = sealings.dropFirst().reduce(sealings[0]) { $0.merged(with: $1) }
         }
@@ -947,8 +975,7 @@ public actor LibrarySyncEngine {
             guard fm.fileExists(atPath: url.path) else {
                 // An on-demand replica holds only some audio. A track it never fetched (or evicted) is still
                 // published, unchanged, by reference to the object already in the sync folder or journal.
-                if audioPolicy == .onDemand, SyncFiles.isHash(track.sha256),
-                   journalAssets.contains(track.sha256) || hasRemoteObject(track.sha256) {
+                if audioPolicy == .onDemand, SyncFiles.isHash(track.sha256), try mayPublishByReference(track.sha256, journalAssets: journalAssets) {
                     assets.append(SyncAsset(relativePath: track.relativePath, sha256: track.sha256))
                     byReference.insert(track.relativePath)
                     continue
