@@ -568,20 +568,33 @@ private struct StatusMac: View {
 
 private struct QueueRow: View {
     let entry: StatusQueueEntry
+    @State private var showingDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(entry.title).font(.subheadline).foregroundStyle(PhoneStyle.Ink.body).lineLimit(1)
-            Text("\(Text(entry.line).foregroundStyle(entry.failed ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary))\(Text(entry.requestedHere ? " · Requested from this iPhone" : "").foregroundStyle(PhoneStyle.Ink.meta))")
-                .font(.footnote)
-                .lineLimit(2)
-            if entry.isRunning, let progress = entry.progress {
-                StatusProgressLine(fraction: progress)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.title).font(.subheadline).foregroundStyle(PhoneStyle.Ink.body).lineLimit(1)
+                Text("\(Text(entry.line).foregroundStyle(entry.failed ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary))\(Text(entry.requestedHere ? " · Requested from this iPhone" : "").foregroundStyle(PhoneStyle.Ink.meta))")
+                    .font(.footnote)
+                    .lineLimit(2)
+                if let detail = entry.detail {
+                    Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if entry.isRunning, let progress = entry.progress {
+                    StatusProgressLine(fraction: progress)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            if entry.details != nil {
+                Button("Details") { showingDetails = true }
+                    .buttonStyle(.daybookLink)
+                    .font(.footnote.weight(.semibold))
             }
         }
         .padding(.horizontal, PhoneStyle.Space.s3)
         .padding(.vertical, PhoneStyle.Space.s2)
-        .accessibilityElement(children: .combine)
+        .sheet(isPresented: $showingDetails) { DetailsSheet(text: entry.details ?? "") }
     }
 }
 
@@ -728,7 +741,7 @@ private struct StatusPairing: View {
                     ForEach(model.link.macs) { mac in
                         Button { open(.mac(mac.id)) } label: {
                             HStack {
-                                MacRow(mac: mac)
+                                MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac))
                                 Image(systemName: "chevron.forward").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                             }
                             .padding(.horizontal, PhoneStyle.Space.s3)

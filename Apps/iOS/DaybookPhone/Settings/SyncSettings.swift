@@ -124,6 +124,7 @@ struct LibraryDevicesScreen: View {
 
     private func detail(_ device: KnownSyncDevice, now: Date) -> String {
         var parts: [String] = []
+        if device.deviceClass == .mac, device.isRecording(at: now) { parts.append("Recording now") }
         if device.canProcess == true { parts.append("Transcribes and summarizes") }
         if let seen = device.lastSeen {
             parts.append(device.isCurrentDevice ? "Synced \(MacPresence.age(now.timeIntervalSince(seen)))" : "Last seen \(MacPresence.age(now.timeIntervalSince(seen)))")

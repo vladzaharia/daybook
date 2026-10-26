@@ -175,6 +175,14 @@ final class PhoneAppModel: RecordingCommandHandling {
                                    syncAvailable: sync.isConnected, syncReason: reason, devicesListed: sync.devicesListed)
     }
 
+    /// A paired Mac the link has no recording state for, but whose presence in the library says it's
+    /// recording ("Recording now" in Settings › Macs).
+    func isRecordingBySync(_ mac: PhoneLink.Mac, now: Date = Date()) -> Bool {
+        guard mac.recording == nil else { return false }
+        let id = mac.syncDeviceID ?? mac.id.uuidString
+        return sync.devices.contains { $0.id == id && $0.deviceClass == .mac && $0.isRecording(at: now) }
+    }
+
     /// A Mac's live processing progress by conversation, finer than what sync carries.
     var liveProgress: [UUID: LiveProgress] { link.liveProgress }
 
@@ -209,7 +217,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         case .recorded:
             return "Not transcribed yet"
         case .failed(let failure):
-            return failure.device.map { "\($0.name) couldn't finish: \(failure.reason)" } ?? "Couldn't finish: \(failure.reason)"
+            return failure.device.map { "\($0.name) couldn’t finish" } ?? "Couldn’t finish"
         case .requested, .done:
             return nil
         }

@@ -9,7 +9,7 @@ struct MacsSection: View {
     var body: some View {
         Section {
             ForEach(model.link.macs) { mac in
-                NavigationLink(value: SettingsRoute.mac(mac.id)) { MacRow(mac: mac) }
+                NavigationLink(value: SettingsRoute.mac(mac.id)) { MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac)) }
             }
             Button {
                 showingPairing = true
@@ -24,6 +24,8 @@ struct MacsSection: View {
 
 struct MacRow: View {
     let mac: PhoneLink.Mac
+    /// Its presence in the library says it's recording, while the link has no word from it.
+    var recordingBySync = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -50,6 +52,7 @@ struct MacRow: View {
         if let recording = mac.recording, mac.isRecording {
             return recording.phase == .paused ? "Paused recording" : "Recording now"
         }
+        if recordingBySync { return "Recording now" }
         return mac.stateLine
     }
 }
@@ -65,13 +68,13 @@ struct MacDetailScreen: View {
         if let mac = model.link.macs.first(where: { $0.id == macID }) {
             Form {
                 Section {
-                    MacRow(mac: mac)
+                    MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac))
                 }
                 Section("This Mac") {
                     Toggle("Can Start Recording", isOn: Binding(
                         get: { model.settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) },
                         set: { model.settings.setMacMayStartRecording($0, for: mac.id, pairedAt: mac.pairedAt) }))
-                    LabeledContent("Transcribes", value: mac.canProcess ? "Yes" : mac.isConnected ? "No models yet" : "Unknown until connected")
+                    LabeledContent("Transcribes", value: mac.canProcess ? "Yes" : mac.isConnected ? "Not set up" : "Unknown until connected")
                     if let version = mac.appVersion { LabeledContent("Daybook", value: version) }
                     LabeledContent("Paired", value: mac.pairedAt.formatted(date: .abbreviated, time: .omitted))
                     if let clock = mac.clock {

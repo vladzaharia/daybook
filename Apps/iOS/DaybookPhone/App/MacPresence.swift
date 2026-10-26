@@ -18,6 +18,8 @@ enum MacPresence: Equatable, Sendable {
     case connected(name: String)
     /// A Mac that processes last synced at `lastSeen`, by its presence record.
     case seen(name: String, lastSeen: Date)
+    /// A Mac's presence says it's recording now (and that hasn't expired), with no word over the link.
+    case recording(name: String, lastSeen: Date)
     /// A Mac syncs this library but doesn't process: it has no models yet, or doesn't transcribe
     /// synced recordings. Its presence record says which Mac, not why.
     case notProcessing(name: String, lastSeen: Date)
@@ -31,10 +33,14 @@ enum MacPresence: Equatable, Sendable {
 
     /// Combines the link (live) with sync presence (`KnownSyncDevice`s from `knownDevices()`).
     static func resolve(connectedMac: String?, devices: [KnownSyncDevice], syncAvailable: Bool,
-                        syncReason: String?, devicesListed: Bool) -> MacPresence {
+                        syncReason: String?, devicesListed: Bool, now: Date = Date()) -> MacPresence {
         if let connectedMac { return .connected(name: connectedMac) }
         if let reason = syncReason, !syncAvailable { return .unavailable(reason) }
         guard devicesListed else { return .checking }
+        // A recording Mac keeps its presence fresh, so this is also the Mac seen last.
+        if let mac = devices.recordingMac(at: now) {
+            return .recording(name: mac.displayName ?? "your Mac", lastSeen: mac.lastSeen ?? now)
+        }
         if let mac = devices.latestProcessor, let seen = mac.lastSeen {
             return .seen(name: mac.displayName ?? "your Mac", lastSeen: seen)
         }
@@ -55,7 +61,7 @@ enum MacPresence: Equatable, Sendable {
 
     var macName: String? {
         switch self {
-        case .connected(let name), .seen(let name, _), .notProcessing(let name, _): return name
+        case .connected(let name), .seen(let name, _), .recording(let name, _), .notProcessing(let name, _): return name
         default: return nil
         }
     }
@@ -63,7 +69,7 @@ enum MacPresence: Equatable, Sendable {
     /// Whether a request can expect a Mac soon.
     var isMacAround: Bool {
         switch self {
-        case .connected: return true
+        case .connected, .recording: return true
         case .seen(_, let date): return Date().timeIntervalSince(date) < Self.recentlySeen
         default: return false
         }
@@ -79,6 +85,7 @@ enum MacPresence: Equatable, Sendable {
             let age = now.timeIntervalSince(date)
             if age < Self.recentlySeen { return "Waiting for \(name)" }
             return "Waiting for your Mac · last seen \(Self.age(age))"
+        case .recording(let name, _): return "Waiting for \(name), which is recording"
         case .notProcessing(let name, _): return "Waiting for \(name) to transcribe"
         case .olderMac: return "Waiting for your Mac"
         case .noMac: return "No Mac has synced this library yet"
@@ -94,8 +101,9 @@ enum MacPresence: Equatable, Sendable {
         case .seen(let name, let date):
             let age = now.timeIntervalSince(date)
             return age < Self.recentlySeen ? "\(name) synced just now." : "\(name) last synced \(Self.age(age))."
+        case .recording(let name, _): return "\(name) is recording."
         case .notProcessing(let name, _):
-            return "\(name) isn't set up to transcribe. On it, download models in Daybook › Settings › Models and turn on Transcribe synced recordings in Settings › Library."
+            return "\(name) isn’t set up to transcribe. Finish in Daybook › Settings on \(name)."
         case .olderMac: return "A Mac with an earlier Daybook syncs this library."
         case .noMac: return "No Mac has synced this library yet. Open Daybook on your Mac."
         }
@@ -153,7 +161,7 @@ struct LiveProgress: Equatable, Sendable {
         case .paused: return "Paused"
         case .waitingForModels: return "Waiting for models"
         case .finished: return "Finished"
-        case .failed: return "Couldn't finish"
+        case .failed: return "Couldn’t finish"
         default: return "Working"
         }
     }
@@ -165,7 +173,8 @@ struct LiveProgress: Equatable, Sendable {
         case .waitingForModels: return "Waiting for models on \(macName)"
         case .paused: return "Paused on \(macName)"
         case .finished: return "Finished on \(macName)"
-        case .failed: return detail.map { "\(macName) couldn't finish: \($0)" } ?? "\(macName) couldn't finish"
+        // The Mac's own words (`detail`) stay behind Details.
+        case .failed: return "\(macName) couldn’t finish"
         default:
             let percent = fraction.map { " · \(Int(($0 * 100).rounded(.down)))%" } ?? ""
             return "\(activity) on \(macName)\(percent)"

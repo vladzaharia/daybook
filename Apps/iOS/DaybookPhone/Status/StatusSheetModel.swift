@@ -45,13 +45,17 @@ struct StatusLine: Equatable, Identifiable, Sendable {
 struct StatusQueueEntry: Equatable, Identifiable, Sendable {
     var id: UUID
     var title: String
-    /// "Transcribing on Studio Mac · 40%", "Waiting", "Studio Mac couldn’t finish: …".
+    /// "Transcribing on Studio Mac · 40%", "Waiting", "Studio Mac couldn’t finish".
     var line: String
     /// Asked for on this iPhone ("Requested from this iPhone").
     var requestedHere: Bool
     var progress: Double?
     var isRunning: Bool
     var failed = false
+    /// For a failure: what it means, in plain words ("Something went wrong on Studio Mac. The recording is saved.").
+    var detail: String?
+    /// For a failure: the Mac's own words, shown only behind Details.
+    var details: String?
 }
 
 /// What the sheet shows, top to bottom; each detent adds to the one before.
@@ -264,6 +268,9 @@ enum StatusSheetModel {
             let seen = "Last seen \(MacPresence.age(now.timeIntervalSince(date)))"
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name,
                               text: [seen, waitingText].compactMap { $0 }.joined(separator: " · "), tone: .calm)
+        case .recording(let name, _):
+            return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name,
+                              text: ["Recording", waitingText].compactMap { $0 }.joined(separator: " · "), tone: .recording)
         case .notProcessing(let name, _):
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name, text: "Not set up to transcribe", tone: .attention)
         case .olderMac:
@@ -319,9 +326,13 @@ enum StatusSheetModel {
                                                                     requestedHere: request.requestedBy.id == thisDevice,
                                                                     progress: nil, isRunning: false)))
             case .failed(let failure):
-                let line = failure.device.map { "\($0.name) couldn’t finish: \(failure.reason)" } ?? "Couldn’t finish: \(failure.reason)"
+                // As the page says it: plain words here, the Mac's own behind Details.
+                let silent = FriendlyError.isNoSpeech(failure.reason)
+                let line = silent ? "No speech in this recording" : failure.device.map { "\($0.name) couldn’t finish" } ?? "Couldn’t finish"
+                let detail = silent ? "The audio is saved." : FriendlyError.message(for: failure.reason, device: failure.device?.name)
                 failed.append(StatusQueueEntry(id: meeting.id, title: meeting.title, line: line, requestedHere: requestedHere,
-                                               progress: nil, isRunning: false, failed: true))
+                                               progress: nil, isRunning: false, failed: true, detail: detail,
+                                               details: failure.reason.isEmpty ? nil : failure.reason))
             default:
                 break
             }
