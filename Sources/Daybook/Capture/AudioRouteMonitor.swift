@@ -49,11 +49,18 @@ struct AudioOutputRoute: Codable, Equatable, Sendable {
 
 /// Reads and observes the default output device through Core Audio properties. Reading device
 /// properties needs no permission and shows no prompt.
+///
+/// Its state (the listeners and `onChange`) is touched only on its private queue: `start` and `stop`
+/// hop there from the caller's thread, and Core Audio calls the listeners there. `@unchecked
+/// Sendable` rests on that.
 final class AudioRouteMonitor: @unchecked Sendable {
     private let queue = DispatchQueue(label: "app.daybook.audio-route")
+    private let queueKey = DispatchSpecificKey<Void>()
     private var listener: AudioObjectPropertyListenerBlock?
     private var dataSourceListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
     private var onChange: ((AudioOutputRoute) -> Void)?
+
+    init() { queue.setSpecific(key: queueKey, value: ()) }
 
     static func currentRoute() -> AudioOutputRoute {
         guard let device = defaultOutputDevice() else { return AudioOutputRoute(kind: .unknown, deviceName: "No output device") }
@@ -75,17 +82,36 @@ final class AudioRouteMonitor: @unchecked Sendable {
 
     /// Calls `onChange` (on a private queue) whenever the default output device or its data source changes.
     func start(onChange: @escaping (AudioOutputRoute) -> Void) {
-        stop()
-        self.onChange = onChange
-        var address = CoreAudioProperty.address(kAudioHardwarePropertyDefaultOutputDevice)
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.routeChanged() }
-        if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, block) == noErr {
-            listener = block
+        onQueue {
+            stopListening()
+            self.onChange = onChange
+            var address = CoreAudioProperty.address(kAudioHardwarePropertyDefaultOutputDevice)
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.routeChanged() }
+            if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, block) == noErr {
+                listener = block
+            }
+            observeDataSource()
         }
-        observeDataSource()
     }
 
-    func stop() {
+    func stop() { onQueue { stopListening() } }
+
+    /// Reads the route again and reports it, as a change would.
+    func refresh() { onQueue { routeChanged() } }
+
+    /// Whether `start` is listening (tests).
+    var isListening: Bool { onQueue { onChange != nil } }
+
+    deinit { onQueue { stopListening() } }
+
+    /// Runs `work` on the private queue: directly when already there (a listener calling back, or
+    /// `onChange` stopping the monitor), otherwise synchronously from the caller's thread.
+    private func onQueue<T>(_ work: () -> T) -> T {
+        DispatchQueue.getSpecific(key: queueKey) != nil ? work() : queue.sync(execute: work)
+    }
+
+    private func stopListening() {
+        dispatchPrecondition(condition: .onQueue(queue))
         if let listener {
             var address = CoreAudioProperty.address(kAudioHardwarePropertyDefaultOutputDevice)
             AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, listener)
@@ -95,15 +121,16 @@ final class AudioRouteMonitor: @unchecked Sendable {
         onChange = nil
     }
 
-    deinit { stop() }
-
     private func routeChanged() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard onChange != nil else { return }
         observeDataSource()
         onChange?(Self.currentRoute())
     }
 
     /// Plugging headphones into the built-in jack changes the data source, not the device.
     private func observeDataSource() {
+        dispatchPrecondition(condition: .onQueue(queue))
         removeDataSourceListener()
         guard let device = Self.defaultOutputDevice() else { return }
         var address = CoreAudioProperty.address(kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput)
@@ -117,6 +144,7 @@ final class AudioRouteMonitor: @unchecked Sendable {
     }
 
     private func removeDataSourceListener() {
+        dispatchPrecondition(condition: .onQueue(queue))
         guard let current = dataSourceListener else { return }
         var address = CoreAudioProperty.address(kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput)
         AudioObjectRemovePropertyListenerBlock(current.device, &address, queue, current.block)
