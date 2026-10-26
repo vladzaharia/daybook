@@ -95,6 +95,8 @@ public struct LinkConfiguration: Sendable {
 
     /// Versions this side offers. Only tests and staged rollouts change it.
     var supportedVersions: ClosedRange<Int> = LinkProtocol.supportedVersions
+    /// Mac: whether a connection comes from the local network; tests stand in for other networks.
+    var isLocalEndpoint: (@Sendable (NWEndpoint) -> Bool) = { LinkLocalNetwork.isLocal($0) }
     /// Pairing codes; tests inject fixed ones.
     var codeGenerator: (@Sendable (TimeInterval, Date) -> LinkPairingCode) = { LinkPairingCode.random(validFor: $0, now: $1) }
 

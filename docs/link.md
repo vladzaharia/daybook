@@ -143,6 +143,12 @@ A hello copied into another TLS session, or relayed by a device in the middle, h
 and fails, even when sent by someone who has the key. Connections that don't authenticate within
 the handshake timeout (10 s) are closed. At most 16 unauthenticated connections are held.
 
+**Local connections only.** A listener can't be bound to "the local network", so the Mac drops a
+connection before TLS unless it comes from loopback, a private (RFC 1918) or link-local IPv4
+address, a link-local or unique local (`fc00::/7`) IPv6 address, or a subnet one of its interfaces
+is on (`LinkLocalNetwork`; point-to-point links such as VPN tunnels don't count). A Mac with a
+public address can't be reached for pairing or sessions from the internet.
+
 ## Discovery
 
 The Mac advertises `_daybook-link._tcp` under its name, with this TXT record:
@@ -359,7 +365,7 @@ Both apps' Info.plist:
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 54 tests, about 8 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 60 tests, about 8 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
@@ -393,6 +399,8 @@ the test process, and nothing is advertised.
   the sync ID and feature, and older ones don't; the messages over a loopback session both ways.
   The handoff itself, over loopback with a simulated recorder, is `RecorderHandoffTests` in
   DaybookKit.
+- **Local network:** which addresses count as local (IPv4, IPv6, IPv4-mapped, attached subnets,
+  names), and that the listener drops a connection from elsewhere before any pairing attempt.
 - **Units:** wire round trips, frames, TXT tags, backoff, clock filter, key store.
 
 The relay in `LinkTestSupport.swift` is a loopback TCP proxy with per-direction delay that can
