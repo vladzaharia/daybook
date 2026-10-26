@@ -446,7 +446,8 @@ final class AppState: ObservableObject {
             guard let meeting = meetings.first(where: { $0.id == meetingID }) else { continue }
             let sidecar = url.deletingPathExtension().appendingPathExtension("highlights.json")
             let imported = try await library.ingest(url, into: meetingID, provenance: .file(source: source, device: device,
-                sidecarURL: FileManager.default.fileExists(atPath: sidecar.path) ? sidecar : nil, duration: duration)).imported
+                sidecarURL: FileManager.default.fileExists(atPath: sidecar.path) ? sidecar : nil, duration: duration,
+                recorderClock: device.flatMap(DeviceRecordingStart.clock(of:)))).imported
             await sourceArrived(meetingID, before: meeting, imported: imported, url: url, device: device, plan: plan)
             if device == nil { selectedID = meetingID }
             meetingIDs.append(meetingID)

@@ -740,6 +740,15 @@ public final class LibraryController: ObservableObject {
                     for index in current.tracks.indices where imported.tracks.contains(where: { $0.id == current.tracks[index].id && $0.fileName == url.lastPathComponent })
                         && current.tracks[index].duration == nil { current.tracks[index].duration = duration }
                 }
+                // The recorder's measured clock stays with its recording; the first one recorded is kept.
+                if let clock = provenance.recorderClock, let device = provenance.device {
+                    for index in current.tracks.indices where current.tracks[index].device == device
+                        && imported.tracks.contains(where: { $0.id == current.tracks[index].id }) && current.tracks[index].capture?.recorderClock == nil {
+                        var capture = current.tracks[index].capture ?? TrackCaptureDetails()
+                        capture.recorderClock = clock
+                        current.tracks[index].capture = capture
+                    }
+                }
                 for highlight in imported.highlights where !current.highlights.contains(where: { $0.id == highlight.id }) { current.highlights.append(highlight) }
             }
             if let date = provenance.conversationDate { current.date = date }
@@ -918,6 +927,9 @@ public struct RecordingProvenance: Sendable {
     public var startedAt: Date?
     /// This device recorded it: the capture's devices, formats, and clock. Nil for a file.
     public var capture: TrackCaptureDetails?
+    /// A recorder's file (`device`): the recorder's clock as measured, and whether it dated the
+    /// recording (`DeviceRecordingStart.clock(of:)`). Kept in the track's capture details.
+    public var recorderClock: CaptureRecorderClock?
     /// The original a derived recording was made from (the microphone before echo removal), and how.
     public var derivedFrom: UUID?
     public var processing: String?
@@ -931,16 +943,18 @@ public struct RecordingProvenance: Sendable {
 
     public init(source: AudioSource, device: DeviceRecordingIdentity? = nil, sidecarURL: URL? = nil, offset: TimeInterval? = nil,
                 duration: TimeInterval? = nil, startedAt: Date? = nil, capture: TrackCaptureDetails? = nil,
-                derivedFrom: UUID? = nil, processing: String? = nil, conversationDate: Date? = nil, message: String? = nil) {
+                derivedFrom: UUID? = nil, processing: String? = nil, conversationDate: Date? = nil, message: String? = nil,
+                recorderClock: CaptureRecorderClock? = nil) {
         self.source = source; self.device = device; self.sidecarURL = sidecarURL; self.offset = offset
         self.duration = duration; self.startedAt = startedAt; self.capture = capture
         self.derivedFrom = derivedFrom; self.processing = processing; self.conversationDate = conversationDate; self.message = message
+        self.recorderClock = recorderClock
     }
 
     /// A file imported by hand or from a recorder.
     public static func file(source: AudioSource, device: DeviceRecordingIdentity? = nil, sidecarURL: URL? = nil,
-                            duration: TimeInterval? = nil) -> Self {
-        Self(source: source, device: device, sidecarURL: sidecarURL, duration: duration)
+                            duration: TimeInterval? = nil, recorderClock: CaptureRecorderClock? = nil) -> Self {
+        Self(source: source, device: device, sidecarURL: sidecarURL, duration: duration, recorderClock: recorderClock)
     }
 }
 

@@ -67,7 +67,8 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// Where the recording sits on the conversation's timeline and how that was found. Nil for
     /// recordings placed the way they were before multipoint recording (capture offset or transcript).
     public var alignment: SourceAlignment?
-    /// How Daybook captured this track (capture path, measured clock rate, echo removal). Nil for imports.
+    /// How Daybook captured this track (capture path, measured clock rate, echo removal). Nil for
+    /// imports, except a recorder's with its measured clock (`TrackCaptureDetails.recorderClock`).
     public var capture: TrackCaptureDetails?
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
                 fileName: String, createdAt: Date = Date(), duration: TimeInterval? = nil,

@@ -58,6 +58,8 @@ Keys combine the Xcode build with a hash of `Package.resolved`, `Package.swift`,
 
 After a push to `main`, the `caches` job (`scripts/ci/prune-caches.sh`) deletes the older caches of each family the run used: same key up to the hash, so `swiftpm-macOS-27A9275-…`, `ios-dd-macOS-27A9275-…`, and `mac-dd-macOS-27A9275-Debug-…`. It deletes them only when the run's own cache for that family is saved, so a failed run never removes the last good one. It's the only job with `actions: write`, and it builds nothing: it runs that one script. (When `release.yml` calls CI, its `validate` job grants `actions: write` as a ceiling only, because GitHub checks a called workflow's permissions before the run starts; the `caches` job never runs there.) Caches of an older Xcode build age out after 7 days unused. Run CI manually with `clean` ticked to build without caches.
 
+**Test waits.** Every wait in the tests (`waitUntil`/`waitFor` in `Tests/DaybookTestSupport` and `DaybookPhoneTests/TestSupport.swift`, and the link tests' loopback timeouts) is multiplied by `DAYBOOK_TEST_TIMEOUT_SCALE`. CI's package and iPhone test steps set it to 2 (`TEST_RUNNER_DAYBOOK_TEST_TIMEOUT_SCALE` for `xcodebuild`, which hands it to the test runner without the prefix); CI under load sets 5. The isolated timing steps below keep their own budgets, unscaled.
+
 **Timing-sensitive tests.** Three tests depend on timing that an overloaded machine can miss:
 
 - `AudioAlignerTests.testThirtyMinutePairAlignsWithinBudget` must align a 30-minute pair within 15 s. On a development Mac at load average 50 it takes 1 to 4 s.

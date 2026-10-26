@@ -38,6 +38,9 @@ public final class SimulatedSoundcore {
         /// Goes quiet once after this many slices, then carries on where it left off: a recorder
         /// delivering live audio in bursts. Shorter than the stall timeout, it loses nothing.
         case pause(afterSlices: Int, for: Duration)
+        /// The fault, for the next transfer only: the transfer that takes it disarms it, so a retry
+        /// or a resumed import after a reconnect runs clean.
+        indirect case once(Fault)
     }
 
     public var name = "soundcore Work"
@@ -68,6 +71,9 @@ public final class SimulatedSoundcore {
     /// Start resumes it; `finishRecording()` closes it.
     public var keepsActiveWhilePaused = false
     public var fault: Fault?
+    /// Leaves the key exchange unanswered, as a recorder that went quiet would: a transfer waits in
+    /// it until its request times out or the transfer is stopped.
+    public var answersKeyExchange = true
     /// Audio slices per notification.
     public var slicesPerPacket = 3
     /// Time between audio notifications; nil sends as fast as possible.
@@ -160,6 +166,7 @@ public final class SimulatedSoundcore {
             let page = Int(payload.first ?? 0) | Int(payload.count > 1 ? payload[payload.startIndex + 1] : 0) << 8
             reply(type, 0x0e, listPayload(page: page, extended: type == 0x1b))
         case (0x2e, 0x01):
+            guard answersKeyExchange else { return }
             handshake(payload)
         case (0x1a, 0x07):
             let p = [UInt8](payload)
@@ -291,6 +298,12 @@ public final class SimulatedSoundcore {
     private func startTransfer(id: UInt32, live: Bool) {
         let source = live ? (activeRecording?.id == id ? activeRecording : nil) : recordings.first { $0.id == id }
         guard let recording = source, let sessionKey else { reply(0x1a, 0x07, Data(), status: 0); return }
+        // A transfer takes the fault armed when it starts; a one-shot fault is disarmed as it's taken.
+        var fault = self.fault
+        while case .once(let inner)? = fault {
+            fault = inner
+            self.fault = nil
+        }
         let fileKey = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         let nonce = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
         let iv = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
@@ -305,7 +318,6 @@ public final class SimulatedSoundcore {
         header.append(0)
         reply(0x1a, 0x07, header)
 
-        let fault = self.fault
         let perPacket = max(1, slicesPerPacket)
         let pace = self.pace
         streaming?.cancel()

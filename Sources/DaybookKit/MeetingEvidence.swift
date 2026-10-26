@@ -25,8 +25,11 @@ public enum MeetingEvidence {
         return contexts.map { context in
             let basis = context.isAligned ? "meeting timeline" : "unaligned source-local timeline; do not imply overlap with other sources"
             let speech = context.speechContext.map { "[\(TimeLabel.format($0.start))] \($0.text)" }.joined(separator: "\n")
+            // Named as the export names it: never the recording's file name.
+            let source = meeting.tracks.first { $0.id == context.highlight.trackID }
+                .map { MeetingExport.sourceName(of: $0, in: meeting) } ?? context.sourceName
             return """
-            MARKED MOMENT [\(TimeLabel.format(context.markerTime))], \(context.sourceName), \(basis)
+            MARKED MOMENT [\(TimeLabel.format(context.markerTime))], \(source), \(basis)
             User annotation: \(context.highlight.text)
             Context window: \(TimeLabel.format(context.rangeStart))–\(TimeLabel.format(context.rangeEnd)).
             Recorded speech: \(speech.isEmpty ? "No transcribed speech is available for this marker. Do not invent details." : speech)

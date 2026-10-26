@@ -130,8 +130,10 @@ recorder confirms a Start Daybook sent, the new recording's ID against the send 
 remembered recorder, per serial, and in `SoundcoreClocks` for the importers. Offsets beyond the
 measurement's two-second resolution are taken off every start date: the list, Recording now, the
 status, and a new conversation's date and title (`DeviceRecordingStart`). Device Details'
-technical rows say "In step", or "5 min ahead" past a minute. The offset isn't yet written into the
-imported track's provenance.
+technical rows say "In step", or "5 min ahead" past a minute. An imported recording keeps the
+offset in its track's capture details (`TrackCaptureDetails.recorderClock`: the offset, when it was
+measured, and whether it was applied), through `DeviceRecordingStart.clock(of:)` and the importer's
+`RecordingProvenance.recorderClock`; a recording imported again keeps the first one.
 
 ## What it never does
 

@@ -30,4 +30,16 @@ final class TrackDerivationTests: XCTestCase {
         XCTAssertEqual(again, track)
         XCTAssertEqual(EchoRemovalReport.skipped(.headphones).detail, EchoRemovalSkipReason.headphones.explanation)
     }
+
+    func testARecordersMeasuredClockIsOptionalAndRoundTrips() throws {
+        // A recorder's track as 0.3.0 wrote it (no capture details), and a capture's (no recorder clock).
+        let imported = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","source":"soundcore","relativePath":"Originals/b.wav","fileName":"b.wav","createdAt":0,"sha256":"","deviceKind":"soundcore.work","deviceSerial":"D320","deviceRecordingID":"1780000000"}"#
+        let captured = #"{"id":"7F9619FF-8B86-D011-B42D-00C04FC964FF","source":"microphone","relativePath":"Originals/a.caf","fileName":"a.caf","createdAt":0,"sha256":"","capture":{"method":"microphone","clockRate":1}}"#
+        var track = try JSONDecoder().decode(RecordingTrack.self, from: Data(imported.utf8))
+        XCTAssertNil(track.capture)
+        XCTAssertNil(try JSONDecoder().decode(RecordingTrack.self, from: Data(captured.utf8)).capture?.recorderClock)
+        track.capture = TrackCaptureDetails(recorderClock: CaptureRecorderClock(offset: 301.4, applied: true,
+                                                                                measuredAt: Date(timeIntervalSince1970: 1_780_000_000)))
+        XCTAssertEqual(try JSONDecoder().decode(RecordingTrack.self, from: JSONEncoder().encode(track)), track)
+    }
 }

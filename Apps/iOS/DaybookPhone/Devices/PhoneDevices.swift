@@ -52,13 +52,22 @@ final class PhoneDevices {
 
     static let restoreIdentifier = "local.daybook.phone.soundcore"
 
-    init(library: PhoneLibrary, settings: PhoneSettings, mode: Mode, defaults: UserDefaults = .standard) {
+    /// How long the Soundcore connection and the handoff wait for things. The app uses the
+    /// production values; tests shorten them.
+    struct Timing {
+        var soundcore = SoundcoreTiming()
+        var handoff = RecorderHandoff.Timing()
+    }
+
+    /// `transport`, when given, replaces the mode's link to the recorder (tests: a simulated one).
+    init(library: PhoneLibrary, settings: PhoneSettings, mode: Mode, defaults: UserDefaults = .standard,
+         timing: Timing = Timing(), transport: (() -> any SoundcoreTransport)? = nil) {
         self.library = library
         self.settings = settings
         self.mode = mode
         let staging = library.importsURL.appendingPathComponent("Devices", isDirectory: true)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
+        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging, soundcoreTiming: timing.soundcore)
         weak var weakSelf: PhoneDevices?
         switch mode {
         case .live:
@@ -76,8 +85,9 @@ final class PhoneDevices {
                                            simulatorSuite: "local.daybook.phone.device-simulator")
             #endif
         }
+        if let transport { environment.soundcoreTransport = transport }
         hub = DeviceHub(environment: environment)
-        handoff = RecorderHandoff(library: library.controller, devices: hub, deviceClass: .phone, defaults: defaults)
+        handoff = RecorderHandoff(library: library.controller, devices: hub, deviceClass: .phone, defaults: defaults, timing: timing.handoff)
         weakSelf = self
         hub.importer = { [weak self] url, identity, attachTo, source in
             guard let self else { throw DaybookError.libraryUnavailable }
