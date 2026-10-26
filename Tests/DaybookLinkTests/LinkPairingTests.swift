@@ -113,6 +113,38 @@ final class LinkPairingTests: XCTestCase {
 
     // MARK: Over loopback
 
+    func testClosingReplacingExpiringOrStoppingPairingRevokesAnExchangeAlreadyInProgress() async throws {
+        for action in ["cancel", "replace", "expire", "stop"] {
+            let clock = PairingTestClock()
+            let (service, store, events, _, _) = try await makeService(codes: [123_456, 654_321]) { $0.clock = clock }
+            let code = await service.beginPairing()
+            let port = try await XCTUnwrapAsync(await service.port)
+            let channel = RawChannel(port: port, psk: LinkTransport.pairingPSK)
+            defer { channel.close() }
+            try await channel.open()
+            let exchange = PasskeyExchange(role: .initiator, code: code, local: Fixture.phone().pairingDevice)
+            channel.send(try exchange.start())
+            let accepted = try await XCTUnwrapAsync(try await channel.receive())
+            switch action {
+            case "cancel": await service.endPairing()
+            case "replace": await service.beginPairing()
+            case "expire": clock.advance(to: code.expiresAt.addingTimeInterval(1))
+            default: await service.stop()
+            }
+            for reply in try exchange.receive(accepted) { channel.send(reply) }
+            while let frame = try await channel.receive() {
+                do {
+                    for reply in try exchange.receive(frame) { channel.send(reply) }
+                } catch { break }
+                if exchange.isFinished { break }
+            }
+            XCTAssertFalse(exchange.isFinished, action)
+            XCTAssertTrue(try store.records().isEmpty, action)
+            XCTAssertFalse(events.contains { if case .paired = $0 { return true }; return false }, action)
+            await service.stop()
+        }
+    }
+
     private func makeService(codes: [UInt32], configure: (inout LinkConfiguration) -> Void = { _ in })
         async throws -> (LinkService, MemoryLinkKeyStore, EventRecorder, LinkEndpoint, LinkIdentity) {
         var configuration = LinkConfiguration.loopback()
@@ -364,6 +396,13 @@ final class LinkPairingTests: XCTestCase {
         XCTAssertEqual(answer, .refused(Refusal(reason: .notPaired, versions: nil)))
         await pair.tearDown()
     }
+}
+
+private final class PairingTestClock: LinkClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = Date()
+    func now() -> Date { lock.withLock { value } }
+    func advance(to date: Date) { lock.withLock { value = date } }
 }
 
 func XCTUnwrapAsync<T>(_ value: @autoclosure () async throws -> T?, file: StaticString = #filePath, line: UInt = #line) async throws -> T {

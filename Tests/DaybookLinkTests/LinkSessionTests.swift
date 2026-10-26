@@ -8,6 +8,18 @@ final class LinkSessionTests: XCTestCase {
 
     // MARK: Messages
 
+    func testOutOfRangeHeartbeatClosesTheSessionWithoutCrashing() async throws {
+        for interval in ["1e100", "-1", "0", "301"] {
+            let pair = try await LinkedPair.make(self)
+            try await pair.connect()
+            let frame = Data("{\"v\":1,\"type\":\"ping\",\"body\":{\"sequence\":1,\"interval\":\(interval)}}".utf8)
+            await pair.client.sendRawFrame(frame, to: pair.mac.deviceID)
+            let reason = try await pair.macEvents.next("invalid heartbeat rejected") { $0.disconnectReason }
+            XCTAssertEqual(reason, .protocolError("invalid heartbeat interval"))
+            await pair.tearDown()
+        }
+    }
+
     func testAppMessagesRoundTripBothWays() async throws {
         let pair = try await LinkedPair.make(self)
         let (macSide, phoneSide) = try await pair.connect()
