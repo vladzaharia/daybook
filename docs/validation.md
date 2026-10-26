@@ -26,6 +26,11 @@ Still requires real devices:
   recording on this iPhone?". After Not Now, a recording the Mac starts with the phone shows the
   phone's refusal on the Mac; turning on Can Start Recording in that Mac's row lets the next one
   start. A Mac paired before the update keeps starting recordings without being asked.
+- **Recording while locked.** Record, lock the phone, take a call (an interruption) and return
+  to recording, then Stop from the Live Activity while still locked: the recording is filed with
+  both segments joined and its captions kept, before unlocking. This is why staging stays at
+  `completeUntilFirstUserAuthentication` (docs/iphone.md, "File protection"); repeat it before
+  changing any recording file's protection class.
 - **Mac keychain move.** With a signed build of the previous version paired to a phone, install the
   new build: the pairing keeps connecting with no keychain prompt, and Keychain Access no longer
   lists a "Daybook link" item in the login keychain. An ad hoc build keeps using the login keychain.
