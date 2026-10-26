@@ -116,10 +116,10 @@ extension PhotoOrigin {
 
 extension LibraryController {
     /// A photo from Daybook's camera, placed by its shutter moment. Takes the library's lock.
-    func addCameraPhoto(_ photo: CameraPhoto, to id: UUID) async throws {
+    func addCameraPhoto(_ photo: CameraPhoto, to id: UUID, origin: PhotoOrigin = .thisIPhone()) async throws {
         await acquireLock()
         defer { releaseLock() }
         try await addPhoto(data: photo.data, to: id, fileName: "Photo.\(photo.fileExtension)",
-                           timing: PhotoTimingInput(capturedAt: photo.capturedAt), origin: .thisIPhone())
+                           timing: PhotoTimingInput(capturedAt: photo.capturedAt), origin: origin)
     }
 }

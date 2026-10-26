@@ -82,24 +82,47 @@ final class VisionImageReader: DescribingImages, @unchecked Sendable {
             try handler.perform([featurePrint])
             return (ImageDescription(), featurePrint.results?.first)
         }
-        let text = VNRecognizeTextRequest()
-        text.recognitionLevel = .accurate
-        text.usesLanguageCorrection = true
-        text.automaticallyDetectsLanguage = true
         let classify = VNClassifyImageRequest()
-        try handler.perform([text, classify, featurePrint])
-        let lines = (text.results ?? []).compactMap { observation -> String? in
-            guard let best = observation.topCandidates(1).first, best.confidence >= 0.3 else { return nil }
-            let line = best.string.trimmingCharacters(in: .whitespaces)
-            return line.isEmpty ? nil : line
-        }
-        let recognized = lines.isEmpty ? nil : lines.joined(separator: "\n")
+        try handler.perform([classify, featurePrint])
+        let recognized = recognizeText(handler)
         let labels = (classify.results ?? []).filter { $0.confidence >= labelConfidence }.sorted { $0.confidence > $1.confidence }
             .prefix(4).map { $0.identifier.replacingOccurrences(of: "_", with: " ") }
         let description = ImageDescription(caption: PhotoReading.visionCaption(labels: Array(labels), text: recognized),
                                            recognizedText: recognized, labels: Array(labels), sharpness: sharpness(image))
         return (description, featurePrint.results?.first)
     }
+
+    /// The text in the image, line by line: accurate recognition, else fast. Nil when it reads none, or
+    /// when text recognition can't run here (some virtual machines); the rest of the reading stands.
+    static func recognizeText(_ handler: VNImageRequestHandler) -> String? {
+        for level in [VNRequestTextRecognitionLevel.accurate, .fast] {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = level
+            request.usesLanguageCorrection = true
+            request.automaticallyDetectsLanguage = true
+            guard (try? handler.perform([request])) != nil else { continue }
+            let lines = (request.results ?? []).compactMap { observation -> String? in
+                guard let best = observation.topCandidates(1).first, best.confidence >= 0.3 else { return nil }
+                let line = best.string.trimmingCharacters(in: .whitespaces)
+                return line.isEmpty ? nil : line
+            }
+            return lines.isEmpty ? nil : lines.joined(separator: "\n")
+        }
+        return nil
+    }
+
+    /// Whether this Mac can recognize text at all, at either level.
+    static let canRecognizeText: Bool = {
+        guard let context = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let image = context.makeImage() else { return false }
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        return [VNRequestTextRecognitionLevel.accurate, .fast].contains { level in
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = level
+            return (try? handler.perform([request])) != nil
+        }
+    }()
 
     /// The image upright (its EXIF orientation applied), at most `maxPixels` on its long side.
     static func thumbnail(_ url: URL, maxPixels: Int) -> CGImage? {
