@@ -161,7 +161,7 @@ struct ExportMenu: View {
                 let files = originals
                 let url = try await Task.detached { try ExportFiles.markdownWithPhotos(meeting, originals: files) }.value
                 session.sheet = .share([url])
-            } catch { session.alert = "The Markdown couldn’t be prepared: \(error.localizedDescription)" }
+            } catch { session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The Markdown couldn’t be prepared. Try again.") }
         }
     }
 
@@ -173,7 +173,7 @@ struct ExportMenu: View {
                 let url = try await provider.localAudio(for: track, in: meeting.id) { _ in }
                 session.sheet = .share([try ExportFiles.audio(url, meeting: meeting, track: track)])
             } catch {
-                session.alert = error.localizedDescription
+                session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The audio couldn’t be prepared. Try again.")
             }
         }
     }

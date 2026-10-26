@@ -46,10 +46,12 @@ private extension CGImagePropertyOrientation {
 }
 
 /// The system camera, for still photos. Present it full screen; `finish` runs when it closes, and
-/// `capture` once the photo is encoded (off the main actor).
+/// `capture` once the photo is encoded (off the main actor), or `failed` when a photo was taken but
+/// couldn't be kept, so the person hears about it rather than losing it silently.
 struct CameraPicker: UIViewControllerRepresentable {
     var capture: @MainActor (CameraPhoto) -> Void
     var finish: @MainActor () -> Void
+    var failed: @MainActor () -> Void = {}
 
     /// False in the simulator and when the camera is restricted.
     static var isAvailable: Bool { UIImagePickerController.isSourceTypeAvailable(.camera) }
@@ -81,11 +83,14 @@ struct CameraPicker: UIViewControllerRepresentable {
             nonisolated(unsafe) let image = info[.originalImage] as? UIImage
             nonisolated(unsafe) let metadata = info[.mediaMetadata] as? [String: Any]
             MainActor.assumeIsolated {
-                let capture = parent.capture
+                let capture = parent.capture, failed = parent.failed
                 parent.finish()
-                guard let image else { return }
+                guard let image else { failed(); return }
                 Task.detached(priority: .userInitiated) {
-                    guard let photo = CameraPhoto.encode(image, metadata: metadata, fallback: accepted) else { return }
+                    guard let photo = CameraPhoto.encode(image, metadata: metadata, fallback: accepted) else {
+                        await failed()
+                        return
+                    }
                     await capture(photo)
                 }
             }
@@ -99,9 +104,10 @@ struct CameraPicker: UIViewControllerRepresentable {
 
 extension View {
     /// Daybook's camera over the whole screen while `isPresented`.
-    func cameraCover(isPresented: Binding<Bool>, capture: @escaping @MainActor (CameraPhoto) -> Void) -> some View {
+    func cameraCover(isPresented: Binding<Bool>, capture: @escaping @MainActor (CameraPhoto) -> Void,
+                     failed: @escaping @MainActor () -> Void) -> some View {
         fullScreenCover(isPresented: isPresented) {
-            CameraPicker(capture: capture, finish: { isPresented.wrappedValue = false })
+            CameraPicker(capture: capture, finish: { isPresented.wrappedValue = false }, failed: failed)
                 .ignoresSafeArea()
         }
     }

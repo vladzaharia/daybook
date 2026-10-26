@@ -169,3 +169,17 @@ enum FriendlyError {
         return "Something went wrong on \(mac). The recording is saved."
     }
 }
+
+/// Plain words for an error on this iPhone. Daybook's own errors already say what happened and what
+/// to do; the system's don't, so they get a sentence of their own and keep their words for Details.
+enum PlainError {
+    static func message(for error: Error, fallback: String) -> (message: String, details: String?) {
+        switch error {
+        case is AudioProvidingError, is PhotoProvidingError, is PhoneRecorderError, is PhotoStoreError:
+            return (error.localizedDescription, nil)
+        default:
+            let words = error.localizedDescription
+            return (fallback, words.isEmpty || words == fallback ? nil : words)
+        }
+    }
+}

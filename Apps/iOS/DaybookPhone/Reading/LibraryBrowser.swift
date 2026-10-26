@@ -52,13 +52,18 @@ private struct ReadingLayout: View {
         }
         .fullScreenCover(isPresented: Binding(get: { session.cameraFor != nil }, set: { if !$0 { session.cameraFor = nil } })) {
             if let id = session.cameraFor {
-                CameraPicker(capture: { photo in addPhoto(photo, to: id) }, finish: { session.cameraFor = nil })
+                CameraPicker(capture: { photo in addPhoto(photo, to: id) }, finish: { session.cameraFor = nil },
+                             failed: { session.alert = ReadingAlert(title: "Couldn’t Save Photo", message: "Take it again.") })
                     .ignoresSafeArea()
             }
         }
-        .alert("Daybook", isPresented: Binding(get: { session.alert != nil }, set: { if !$0 { session.alert = nil } })) {
+        .alert(session.alert?.title ?? "", isPresented: Binding(get: { session.alert != nil }, set: { if !$0 { session.alert = nil } }),
+               presenting: session.alert) { alert in
+            if let details = alert.details {
+                Button("Details") { session.sheet = .errorDetails(details) }
+            }
             Button("OK", role: .cancel) { }
-        } message: { Text(session.alert ?? "") }
+        } message: { alert in Text(alert.message) }
         .onChange(of: library.isLoaded, initial: true) { _, loaded in
             guard loaded else { return }
             session.launch.apply(to: session, library: library, provider: provider)
@@ -78,7 +83,7 @@ private struct ReadingLayout: View {
     private func addPhoto(_ photo: CameraPhoto, to id: UUID) {
         Task {
             do { try await library.addCameraPhoto(photo, to: id) }
-            catch { session.alert = "The photo couldn’t be added: \(error.localizedDescription)" }
+            catch { session.alert = ReadingAlert(title: "Couldn’t Save Photo", error: error, fallback: "Take it again.") }
         }
     }
 

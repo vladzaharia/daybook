@@ -34,8 +34,14 @@ final class PhoneAppModel: RecordingCommandHandling {
     let levels = LevelHistory()
     /// Tentative on-device captions while recording (never the transcript).
     let captions: LiveCaptionsController
-    /// One line for the person, when something needs saying.
-    private(set) var notice: String?
+    /// One line for the person, when something needs saying: what happened, in plain words.
+    private(set) var notice: String? {
+        didSet { noticeDetails = nil; noticeFix = nil }
+    }
+    /// The system's own words behind the notice, shown only behind Details.
+    private(set) var noticeDetails: String?
+    /// What the notice's button does, when there's a fix.
+    private(set) var noticeFix: NoticeFix?
     /// The recording is being saved to the library.
     private(set) var isFiling = false
     /// The conversation filed last, for the interface to point at.
@@ -217,7 +223,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         do { try await library.reload() }
         catch {
             launched = false
-            notice = "Couldn’t open your library: \(error.localizedDescription)"
+            say(Self.libraryUnavailable, details: error.localizedDescription)
             return
         }
         if let folder = options.syncFolder {
@@ -284,7 +290,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         guard !recorder.isActive else { return }
         // Intents can start before the first scene loads. Never record into an unopenable library.
         do { try await library.reload() }
-        catch { notice = "Couldn’t open your library: \(error.localizedDescription)"; throw error }
+        catch { say(Self.libraryUnavailable, details: error.localizedDescription); throw error }
         // Another start won while the library loaded (an intent and a Mac at once): leave its recording
         // be. Asked for that same recording, this one is it; asked for another, it can't start.
         guard !recorder.isActive else {
@@ -307,7 +313,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             multipoint = nil
             recorder.audioTap = nil
             await captions.finish()
-            notice = error.localizedDescription
+            sayStartFailed(error)
             publish()
             throw RecordingCommandError.failed(error.localizedDescription)
         }
@@ -341,7 +347,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         // out, a view that went away): an unstructured task doesn't inherit cancellation.
         await Task { @MainActor in
             guard var recording = await self.recorder.stop() else {
-                self.notice = self.recorder.lastError.map { "The recording couldn't be finished: \($0) It's kept and Daybook will try again when it next opens." }
+                if let reason = self.recorder.lastError {
+                    self.say("Couldn’t finish the recording. It’s kept, and Daybook tries again the next time it opens.", details: reason)
+                }
                 self.publish()
                 return
             }
@@ -388,13 +396,13 @@ final class PhoneAppModel: RecordingCommandHandling {
             let deadline = Date().addingTimeInterval(Self.lateFilingWait)
             while library.controller.meeting(id) == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
             guard library.controller.meeting(id) != nil else {
-                notice = "The photo couldn’t be saved because the recording wasn’t filed."
+                say(Self.photoNotSaved)
                 publish()
                 return
             }
             try await library.controller.addCameraPhoto(photo, to: id, origin: .thisIPhone(installation: library.installationID))
         } catch {
-            notice = "The photo couldn’t be saved: \(error.localizedDescription)"
+            say(Self.photoNotSaved, details: error.localizedDescription)
             publish()
         }
     }
@@ -403,6 +411,44 @@ final class PhoneAppModel: RecordingCommandHandling {
     static let lateFilingWait: TimeInterval = 60
 
     func dismissNotice() { notice = nil }
+
+    /// What a notice's button does.
+    enum NoticeFix: Equatable {
+        /// Daybook's page in Settings (the microphone's switch is there).
+        case openSettings
+    }
+
+    /// Shows a notice: `message` in plain words, the system's text behind Details, and a fix if there is one.
+    func say(_ message: String, details: String? = nil, fix: NoticeFix? = nil) {
+        notice = message
+        noticeDetails = details.flatMap { $0.isEmpty || $0 == message ? nil : $0 }
+        noticeFix = fix
+    }
+
+    /// A recording that couldn't start: the recorder's own sentences are already plain; anything
+    /// else (an audio session error) gets one, with its words behind Details.
+    private func sayStartFailed(_ error: Error) {
+        switch error as? PhoneRecorderError {
+        case .microphoneDenied?: say("Allow Daybook to use the microphone in Settings.", fix: .openSettings)
+        case let known?: say(known.localizedDescription)
+        case nil: say("Couldn’t start recording. Try again.", details: error.localizedDescription)
+        }
+    }
+
+    static let libraryUnavailable = "Couldn’t open your library. Close Daybook and open it again."
+    static let photoNotSaved = "Couldn’t save that photo. Take it again."
+
+    /// What the recording screen says about a problem the recorder reported while it keeps recording
+    /// (`PhoneRecorder.lastError`): nil when there's none.
+    static func recorderWarning(_ lastError: String?) -> (message: String, details: String?)? {
+        guard let lastError, !lastError.isEmpty else { return nil }
+        let prefix = PhoneRecorder.journalWarning + ": "
+        guard lastError.hasPrefix(prefix) else { return ("Something went wrong with the recording. It’s still recording.", lastError) }
+        let reason = String(lastError.dropFirst(prefix.count))
+        let full = reason.lowercased().contains("space")
+        return (full ? "Notes and bookmarks aren’t being saved as you go. Free up space on this iPhone."
+                     : "Notes and bookmarks aren’t being saved as you go.", reason)
+    }
 
     func refreshCloud() async {
         await sync.connect()
@@ -661,18 +707,19 @@ final class PhoneAppModel: RecordingCommandHandling {
         guard !urls.isEmpty else { return }
         importing += urls.count
         defer { importing = max(0, importing - urls.count) }
-        var failures: [String] = []
+        var failures: [(name: String, reason: String)] = []
         for url in urls {
             do {
                 let filed = try await library.importFile(url, requestTranscription: settings.requestsTranscription)
                 lastImportedID = filed.meeting.id
                 if let request = filed.request { link.nudge(request) }
             } catch {
-                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                failures.append((url.lastPathComponent, error.localizedDescription))
             }
         }
         if !failures.isEmpty {
-            notice = failures.count == 1 ? "Couldn't import \(failures[0])" : "Couldn't import \(failures.count) files. \(failures.joined(separator: " "))"
+            say(failures.count == 1 ? "Couldn’t import “\(failures[0].name)”." : "Couldn’t import \(failures.count) files.",
+                details: failures.map { "\($0.name): \($0.reason)" }.joined(separator: "\n"))
         }
         sync.synchronizeFinishing(.filed)
         publish()
@@ -702,7 +749,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             if let request = filed.request { link.nudge(request) }
             if !options.isRunningTests { sync.synchronizeFinishing(.filed) }
         } catch {
-            notice = "The recording is safe but couldn't be added to the library (\(error.localizedDescription)). Daybook will try again when it next opens."
+            say("Couldn’t add the recording to your library. It’s saved and will be added next time Daybook opens.", details: error.localizedDescription)
         }
         publish()
     }
@@ -718,7 +765,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         recorder.audioTap = nil
         await captions.finish()
         if let recording { await Task { @MainActor in await self.file(recording, session: session) }.value }
-        notice = "Recording stopped: \(recorder.lastError ?? "the audio couldn't continue."). What was recorded is saved."
+        say("Recording stopped. Everything up to then is saved.", details: recorder.lastError)
         publish()
     }
 
@@ -738,7 +785,7 @@ final class PhoneAppModel: RecordingCommandHandling {
                     try? FileManager.default.removeItem(at: folder)
                 }
             } catch {
-                notice = "Couldn’t recover a recording: \(error.localizedDescription)"
+                say("Couldn’t recover a recording. Daybook tries again the next time it opens.", details: error.localizedDescription)
             }
         }
     }

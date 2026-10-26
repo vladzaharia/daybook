@@ -247,7 +247,9 @@ struct HeardInSheet: View {
 }
 
 /// A Mac's own words about a failure.
+/// The words behind a plain message: a Mac's own reason for a failure, or the system's error.
 struct DetailsSheet: View {
+    var title = "What Your Mac Said"
     let text: String
     @Environment(\.dismiss) private var dismiss
 
@@ -258,7 +260,7 @@ struct DetailsSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(PhoneStyle.Page.gutter)
             }
-            .navigationTitle("What Your Mac Said")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
@@ -295,6 +297,7 @@ struct ReadingSheetContent: View {
         case .correct(let meeting, let segment): PassageCorrectionSheet(library: library, meetingID: meeting, segmentID: segment)
         case .heardIn(let meeting, let segment): HeardInSheet(library: library, meetingID: meeting, segmentID: segment)
         case .details(let text): DetailsSheet(text: text)
+        case .errorDetails(let text): DetailsSheet(title: "Details", text: text)
         }
     }
 }

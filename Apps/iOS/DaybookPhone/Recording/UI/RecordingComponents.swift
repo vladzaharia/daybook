@@ -2,6 +2,7 @@ import DaybookCaptions
 import DaybookCore
 import DaybookLink
 import SwiftUI
+import UIKit
 
 // The pieces the recording surfaces are built from. Each reads the app model itself, so a posture
 // change only rearranges them; nothing about the recording restarts.
@@ -219,7 +220,8 @@ struct CameraControl: View {
         .disabled(!CameraPicker.isAvailable || !model.recorder.isCapturing || model.recorder.state == .starting)
         .sensoryFeedback(.success, trigger: count)
         .accessibilityLabel(count > 0 ? "Take Photo, \(count) so far" : "Take Photo")
-        .cameraCover(isPresented: $showingCamera) { [recordingID] photo in Task { await model.addPhoto(photo, recording: recordingID) } }
+        .cameraCover(isPresented: $showingCamera, capture: { [recordingID] photo in Task { await model.addPhoto(photo, recording: recordingID) } },
+                     failed: { model.say(PhoneAppModel.photoNotSaved) })
     }
 }
 
@@ -436,22 +438,75 @@ struct BookmarkLog: View {
     }
 }
 
-/// One line when something needs saying (a recovered recording, a Mac that declined).
+/// One line when something needs saying (a recovered recording, a Mac that declined, a problem the
+/// recorder reports while it keeps recording): what happened, the fix when there is one, and the
+/// system's own words only behind Details.
 struct RecordingNotice: View {
     @Environment(PhoneAppModel.self) private var model
+    @State private var details: NoticeDetails?
 
     var body: some View {
-        if let notice = model.notice {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.circle").foregroundStyle(PhoneStyle.Ink.warning)
-                Text(notice).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button { model.dismissNotice() } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)) }
-                    .foregroundStyle(PhoneStyle.Ink.meta)
-                    .accessibilityLabel("Dismiss")
+        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
+            if model.recorder.isCapturing, let warning = PhoneAppModel.recorderWarning(model.recorder.lastError) {
+                NoticeRow(message: warning.message, details: warning.details, showDetails: show)
             }
-            .transition(.opacity)
+            if let notice = model.notice {
+                NoticeRow(message: notice, details: model.noticeDetails, fix: model.noticeFix,
+                          dismiss: { model.dismissNotice() }, showDetails: show)
+            }
+        }
+        .transition(.opacity)
+        .sheet(item: $details) { DetailsSheet(title: "Details", text: $0.text) }
+    }
+
+    private func show(_ text: String) { details = NoticeDetails(text: text) }
+
+    private struct NoticeDetails: Identifiable {
+        let text: String
+        var id: String { text }
+    }
+}
+
+/// A notice: the warning glyph, the sentence, its fix and Details as text buttons, and dismiss.
+private struct NoticeRow: View {
+    let message: String
+    var details: String?
+    var fix: PhoneAppModel.NoticeFix?
+    var dismiss: (() -> Void)?
+    let showDetails: (String) -> Void
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.circle").foregroundStyle(PhoneStyle.Ink.warning).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if fix != nil || details != nil {
+                    HStack(spacing: PhoneStyle.Space.s4) {
+                        if fix == .openSettings, let url = URL(string: UIApplication.openSettingsURLString) {
+                            Button("Open Settings") { openURL(url) }
+                        }
+                        if let details {
+                            Button("Details") { showDetails(details) }
+                        }
+                    }
+                    .buttonStyle(.daybookLink)
+                    .font(.footnote.weight(.semibold))
+                }
+            }
+            Spacer(minLength: 0)
+            if let dismiss {
+                Button(action: dismiss) {
+                    Image(systemName: "xmark").font(.footnote.weight(.semibold))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .foregroundStyle(PhoneStyle.Ink.meta)
+                .padding(.vertical, -13)
+                .padding(.trailing, -12)
+                .accessibilityLabel("Dismiss")
+            }
         }
     }
 }
