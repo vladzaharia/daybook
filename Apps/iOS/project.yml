@@ -160,6 +160,12 @@ targets:
     platform: iOS
     sources:
       - path: DaybookPhoneTests
+        excludes:
+          - "Fixtures/**"
+      # Files shipped versions wrote, copied into the bundle as they are (DaybookPhoneTests/Fixtures).
+      - path: DaybookPhoneTests/Fixtures
+        type: folder
+        buildPhase: resources
     dependencies:
       # Hosted in the app, which already links DaybookCore; linking it again would load two copies.
       - target: DaybookPhone

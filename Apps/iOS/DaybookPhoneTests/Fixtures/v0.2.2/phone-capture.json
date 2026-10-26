@@ -1,0 +1,99 @@
+{
+  "bitRate" : 64000,
+  "continuousTimeSeconds" : 1005,
+  "createdAt" : 1792850000000,
+  "highlights" : [
+    {
+      "id" : "BBBBBBBB-CCCC-4DDD-8EEE-FFFFFFFFFFFF",
+      "text" : "",
+      "time" : 2
+    },
+    {
+      "id" : "12345678-9ABC-4DEF-8123-456789ABCDEF",
+      "text" : "Decision",
+      "time" : 6
+    }
+  ],
+  "hostTimeSeconds" : 1000,
+  "id" : "6B1F2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D",
+  "interruptions" : [
+    {
+      "began" : 3,
+      "ended" : 5,
+      "reason" : "A call or another app interrupted the recording.",
+      "resumed" : true
+    }
+  ],
+  "notes" : "Agenda\nShip on Friday",
+  "routes" : [
+    {
+      "input" : {
+        "name" : "iPhone Microphone",
+        "portType" : "MicrophoneBuiltIn"
+      },
+      "reason" : "start",
+      "time" : 0
+    }
+  ],
+  "sampleRate" : 48000,
+  "schemaVersion" : 1,
+  "segments" : [
+    {
+      "clockAnchors" : [
+        {
+          "frame" : 0,
+          "hostTime" : 1000
+        },
+        {
+          "frame" : 48000,
+          "hostTime" : 1001
+        },
+        {
+          "frame" : 96000,
+          "hostTime" : 1002
+        }
+      ],
+      "closed" : true,
+      "fileName" : "segment-000.m4a",
+      "firstSampleHostTime" : 1000,
+      "frameCount" : 144000,
+      "index" : 0,
+      "startOffset" : 0
+    },
+    {
+      "clockAnchors" : [
+        {
+          "frame" : 0,
+          "hostTime" : 1005
+        },
+        {
+          "frame" : 48000,
+          "hostTime" : 1006
+        }
+      ],
+      "closed" : false,
+      "fileName" : "segment-001.m4a",
+      "firstSampleHostTime" : 1005,
+      "frameCount" : 96000,
+      "index" : 1,
+      "startOffset" : 5
+    }
+  ],
+  "startedAt" : 1792850000250,
+  "state" : "recording",
+  "timedNotes" : [
+    {
+      "id" : "11111111-2222-4333-8444-555555555555",
+      "text" : "Agenda"
+    },
+    {
+      "id" : "66666666-7777-4888-8999-AAAAAAAAAAAA",
+      "text" : "Ship on Friday",
+      "time" : 5.5
+    }
+  ],
+  "title" : "Synthetic standup",
+  "warnings" : [
+
+  ]
+}
