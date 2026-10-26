@@ -90,7 +90,7 @@ public final class LibraryController: ObservableObject {
         meetings = try await store.list()
         var warnings = await store.warnings
         do { glossary = try await glossaryStore.list() }
-        catch { glossary = []; warnings.append("Your vocabulary couldn’t be read: \(error.localizedDescription)") }
+        catch { glossary = []; warnings.append("Your vocabulary couldn’t be read.") }
         let settings = await store.loadLibraryMetadata()
         metadataWritable = settings.isWritable
         warnings += settings.warnings

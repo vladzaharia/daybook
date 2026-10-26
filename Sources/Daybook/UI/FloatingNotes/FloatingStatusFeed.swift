@@ -167,12 +167,22 @@ extension FloatingStatusInputs {
         return queue
     }
 
-    /// A paused or failed sync, in the words Settings › Library uses.
+    /// A paused or failed sync, in the words Settings › Library uses. The system's own words stay in Settings, behind
+    /// Details: here a reason is given only when it's one of Daybook's.
     static func syncProblem(_ status: String) -> String? {
         guard status.hasPrefix("Sync paused") || status.hasPrefix("Couldn") || status.hasPrefix("Reconnect")
                 || status.hasPrefix("Apple Account") else { return nil }
-        return status.hasPrefix("Sync paused: ") ? "iCloud sync is paused: " + status.dropFirst("Sync paused: ".count) : status
+        guard let colon = status.range(of: ": ") else { return status }
+        let reason = String(status[colon.upperBound...])
+        if status.hasPrefix("Sync paused") {
+            return ownReasons.contains(reason) ? "iCloud sync is paused: " + reason : "iCloud sync is paused."
+        }
+        return String(status[..<colon.lowerBound]) + "."
     }
+
+    /// Reasons the sync controller gives in its own words.
+    private static let ownReasons: Set<String> = ["the iCloud account changed", "choose the folder this Mac synced through again",
+                                                  "the folder this Mac synced through can’t be found"]
 }
 
 // MARK: - The input device

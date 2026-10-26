@@ -275,7 +275,7 @@ struct Scrubber: View {
         .frame(height: 22)
         .accessibilityElement()
         .accessibilityLabel("Playback position")
-        .accessibilityValue("\(SpokenTime.format(position.rounded(.down))) of \(SpokenTime.format(duration))")
+        .accessibilityValue("\(SpokenTime.format(position)) of \(SpokenTime.format(duration))")
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment: seek(min(duration, position + 15))

@@ -29,6 +29,28 @@ final class PlainWordsTests: XCTestCase {
         XCTAssertNil(model.noticeFix)
     }
 
+    func testRecordingProblemsKeepTheirInternalsForDetails() {
+        let stopped = PlainError.message(for: PhoneRecorderError.encoderUnavailable("join convert"), fallback: "Try again.")
+        XCTAssertEqual(stopped.message, "Recording couldn’t continue. Everything up to then is saved.")
+        XCTAssertEqual(stopped.details, "The audio encoder stopped (join convert).")
+        // A Shortcut, the control, or a Live Activity button gets a sentence of Daybook's own, never the system's words.
+        func said(_ error: RecordingCommandError) -> String { String(localized: error.localizedStringResource) }
+        XCTAssertEqual(said(PhoneAppModel.commandFailure(PhoneRecorderError.encoderUnavailable("convert"), starting: true)),
+                       "Couldn’t start recording. Open Daybook to try again.")
+        XCTAssertEqual(said(PhoneAppModel.commandFailure(CocoaError(.fileWriteOutOfSpace), starting: false)),
+                       "Couldn’t resume recording. Open Daybook to try again.")
+        XCTAssertEqual(said(PhoneAppModel.commandFailure(PhoneRecorderError.noMicrophone, starting: true)), "No microphone is available.")
+        XCTAssertEqual(said(PhoneAppModel.commandFailure(PhoneRecorderError.microphoneDenied, starting: true)),
+                       "Allow Daybook to use the microphone in Settings.")
+        // Sync and audio errors of Daybook's own are shown as they are.
+        XCTAssertEqual(PlainError.message(for: LibrarySyncError.keyAvailable, fallback: "Try again.").message,
+                       "One of your devices has this library’s key. Get the key from it instead.")
+        XCTAssertEqual(PlainError.message(for: AudioFetchError.keyUnavailable, fallback: "Try again.").message,
+                       "This recording plays once this device has the library’s key.")
+        XCTAssertEqual(PlainError.message(for: AudioFetchError.downloadFailed("The network connection was lost."), fallback: "Try again.").message,
+                       "Try again.")
+    }
+
     func testDetailsThatOnlyRepeatTheMessageAreLeftOut() throws {
         let model = try makeModel()
         model.say("No audio was recorded.", details: "No audio was recorded.")

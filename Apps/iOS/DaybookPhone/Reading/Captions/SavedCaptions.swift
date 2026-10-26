@@ -107,7 +107,7 @@ private struct CaptionRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Caption at \(SpokenTime.format(segment.start.rounded(.down)))\(segment.isTentative ? ", tentative" : ""): \(segment.text)")
+        .accessibilityLabel("Caption at \(SpokenTime.format(segment.start))\(segment.isTentative ? ", tentative" : ""): \(segment.text)")
         .accessibilityHint("Plays from here")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, play)

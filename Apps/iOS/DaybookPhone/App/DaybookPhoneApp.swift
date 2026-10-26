@@ -23,6 +23,8 @@ struct DaybookPhoneApp: App {
         sync.replica = PhoneSync.replica(displayName: ProcessingRequest.Device.currentName, budget: settings.audioCacheBudget)
         // An encrypted library's key, from iCloud Keychain (never in tests).
         if !options.isRunningTests, !LaunchOptions.isTestHost { sync.replica.keyStore = KeychainLibraryKeyStore.system }
+        // Sealing an encrypted library's history downloads recordings only on Wi‑Fi (never limited in tests).
+        if !options.isRunningTests, !LaunchOptions.isTestHost { sync.replica.network = { NetworkConditionMonitor.shared.condition } }
         // The courier sends what each pass writes to the Mac through CloudKit, ahead of iCloud Drive
         // (docs/icloud-sync.md, "Courier (CloudKit)"). Never in tests or with a debug sync folder.
         if !options.isRunningTests, !LaunchOptions.isTestHost, options.syncFolder == nil {
@@ -35,10 +37,22 @@ struct DaybookPhoneApp: App {
         }
         // Storage errors surface when loading, and retry the same durable location.
         let library = PhoneLibrary(rootURL: root, sync: sync)
-        BackupExclusion.apply(libraryRoot: root, inbox: library.inboxURL, includesLibrary: settings.includesLibraryInBackups)
+        BackupExclusion.apply(libraryRoot: root, inbox: library.inboxURL, library: BackupExclusion.library(
+            includesLibrary: settings.includesLibraryInBackups, encrypted: LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: root),
+            includesEncryptedLibrary: settings.includesEncryptedLibraryInBackups))
         let model = PhoneAppModel(recorder: PhoneRecorder(environment: environment), library: library,
                                   posture: DevicePosture(arguments: CommandLine.arguments), options: options, settings: settings)
         model.demoAudioSession = environment.session as? ScriptedAudioSession
+        // Back on Wi‑Fi, sealing that waited for it carries on.
+        if !options.isRunningTests, !LaunchOptions.isTestHost {
+            NetworkConditionMonitor.shared.onChange { condition in
+                guard condition == .unrestricted else { return }
+                Task { @MainActor in
+                    guard case .on(let summary) = model.sync.encryption, summary.progress?.waitsForWiFi == true else { return }
+                    await model.sync.synchronize(.manual)
+                }
+            }
+        }
         // Nothing records in a new process yet: a widget state or Live Activity saying so is left from
         // a run that ended, also when iOS relaunches the app in the background (which skips `launch`).
         if !options.isRunningTests, !LaunchOptions.isTestHost { RecordingActivityController.clearLeftoversAtLaunch() }

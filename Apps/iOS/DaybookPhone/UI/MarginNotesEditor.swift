@@ -307,7 +307,7 @@ final class MarginGutterView: UIView {
             }
             button.contentHorizontalAlignment = .trailing
             button.isUserInteractionEnabled = playTime != nil
-            button.accessibilityLabel = "Note at \(SpokenTime.format(label.time.rounded(.down)))"
+            button.accessibilityLabel = "Note at \(SpokenTime.format(label.time))"
             if playTime != nil { button.accessibilityHint = "Plays the recording from here." }
             button.accessibilityTraits = playTime == nil ? .staticText : .button
             let time = label.time

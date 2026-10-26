@@ -47,17 +47,17 @@ struct TimedNotesView: View {
                 TextField("", text: Binding(get: { text }, set: { replaceParagraph(index, with: $0) }), axis: .vertical)
                     .font(.body)
                     .foregroundStyle(PhoneStyle.Ink.body)
-                    .accessibilityLabel(item.time.map { "Note at \(SpokenTime.format($0.rounded(.down)))" } ?? "Note")
+                    .accessibilityLabel(item.time.map { "Note at \(SpokenTime.format($0))" } ?? "Note")
             case .bookmark:
                 Label("Bookmark", systemImage: "bookmark.fill")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(PhoneStyle.bookmark)
-                    .accessibilityLabel(item.time.map { "Bookmark at \(SpokenTime.format($0.rounded(.down)))" } ?? "Bookmark")
+                    .accessibilityLabel(item.time.map { "Bookmark at \(SpokenTime.format($0))" } ?? "Bookmark")
             case .photo:
                 Label("Photo", systemImage: "camera.fill")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(PhoneStyle.Ink.secondary)
-                    .accessibilityLabel(item.time.map { "Photo at \(SpokenTime.format($0.rounded(.down)))" } ?? "Photo")
+                    .accessibilityLabel(item.time.map { "Photo at \(SpokenTime.format($0))" } ?? "Photo")
             }
         }
     }

@@ -30,6 +30,8 @@ public struct SealerProgress: Equatable, Sendable {
     public var oldKeysRetired = true
     /// What retiring the rest waits for, if anything.
     public var waitingFor: [RetirementWait] = []
+    /// An iPhone sealing history waits for Wi‑Fi to download recordings (`SyncReplicaConfiguration.network`).
+    public var waitsForWiFi = false
 
     public enum RetirementWait: String, Sendable {
         /// The grace period (a week after encryption began, or after the key changed).
@@ -68,6 +70,8 @@ extension LibrarySyncEngine {
     static let recentDevice: TimeInterval = 30 * 24 * 60 * 60
     /// A migrator not seen for this long is replaced by the next Mac with the key.
     static let migratorAbsence: TimeInterval = 14 * 24 * 60 * 60
+    /// How many recordings an on-demand replica's sealer has iCloud download at once.
+    static let sealerDownloadBatch = 4
 
     // MARK: Turning it on
 
@@ -279,6 +283,8 @@ extension LibrarySyncEngine {
 
         // Objects live conversations use, sealed by the migrator.
         if isMigrator {
+            // Downloads asked for that arrived, or whose object went, make room for the next batch.
+            sealerDownloads = sealerDownloads.filter { SyncFiles.itemState(remoteRoot.appendingPathComponent($0)) == .inCloud }
             for (meetingID, assets) in input.liveAssets.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where !input.deleted.contains(meetingID) {
                 for asset in assets {
                     guard let name = current.objectName(.blob, plaintextSHA256: asset.sha256) else { continue }
@@ -286,7 +292,7 @@ extension LibrarySyncEngine {
                     let url = remoteRoot.appendingPathComponent(path)
                     if SyncFiles.itemState(url) != .absent || inboxCopy(path) != nil { continue }
                     guard !budget.timeExceeded else { progress.remaining += 1; continue }
-                    if (try? sealObject(asset, meetingID: meetingID, sealing: sealing)) == true { progress.sealed += 1 } else { progress.remaining += 1 }
+                    if (try? sealObject(asset, meetingID: meetingID, sealing: sealing, progress: &progress)) == true { progress.sealed += 1 } else { progress.remaining += 1 }
                 }
             }
         }
@@ -303,8 +309,10 @@ extension LibrarySyncEngine {
     }
 
     /// Seals one object from this device's verified local copy, or from the sync folder's copy (plaintext, or under an
-    /// older key) once it's downloaded. False while it waits for a download or its recording to arrive.
-    private func sealObject(_ asset: SyncAsset, meetingID: UUID, sealing: SealingState) throws -> Bool {
+    /// older key) once it's downloaded. False while it waits for a download or its recording to arrive. An on-demand
+    /// replica (an iPhone) asks for downloads only on an unrestricted network, `sealerDownloadBatch` at a time, and lets
+    /// iCloud drop the downloaded copy once it's sealed.
+    private func sealObject(_ asset: SyncAsset, meetingID: UUID, sealing: SealingState, progress: inout SealerProgress) throws -> Bool {
         let directory = localRoot.appendingPathComponent("Meetings/\(meetingID.uuidString)", isDirectory: true)
         if let local = try? LocalFiles.relativeURL(asset.relativePath, in: directory), (try? verified(local, digest: asset.sha256)) == true {
             try uploadSealed(asset, from: local, sealing: sealing)
@@ -314,7 +322,16 @@ extension LibrarySyncEngine {
             key.objectName(.blob, plaintextSHA256: asset.sha256).map { .sealed(remoteRoot.appendingPathComponent("Sealed/Blobs/\($0)"), name: $0, key: key) }
         } + [.legacy(blobURL(asset.sha256))]
         guard let object = candidates.first(where: { SyncFiles.itemState($0.url) != .absent }) else { return false }
-        guard SyncFiles.itemState(object.url) == .local else { try? cloud.requestDownload(object.url); return false }
+        let path = String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1))
+        guard SyncFiles.itemState(object.url) == .local else {
+            guard audioPolicy == .onDemand else { try? cloud.requestDownload(object.url); return false }
+            if sealerDownloads.contains(path) { return false }
+            guard network() == .unrestricted else { progress.waitsForWiFi = true; return false }
+            guard sealerDownloads.count < Self.sealerDownloadBatch else { return false }
+            sealerDownloads.insert(path)
+            try? cloud.requestDownload(object.url)
+            return false
+        }
         let staging = localRoot.appendingPathComponent("Sync/Sealing", isDirectory: true)
         try LocalFiles.directory(staging)
         let temporary = staging.appendingPathComponent(".seal-\(UUID().uuidString)")
@@ -322,6 +339,11 @@ extension LibrarySyncEngine {
         guard try copyPlaintext(object.url, of: object, below: remoteRoot, libraryID: sealing.libraryID, to: temporary,
                                 expected: asset.sha256) == asset.sha256 else { return false }
         try uploadSealed(asset, from: temporary, sealing: sealing)
+        if audioPolicy == .onDemand {
+            // Downloaded only to seal it, and in iCloud: iCloud may drop this device's copy.
+            sealerDownloads.remove(path)
+            cloud.evictLocalCopy(object.url)
+        }
         return true
     }
 
@@ -354,8 +376,10 @@ extension LibrarySyncEngine {
                 if now.timeIntervalSince(sealing.manifest.sealedSince) < Self.retirementGrace { ready = false; progress.waitingFor.append(.gracePeriod) }
                 if !sealing.hasRecovery, otherDevicesHolding(current.idHex).isEmpty { ready = false; progress.waitingFor.append(.anotherDeviceOrRecoveryKey) }
             }
+            // A library that started over never wrote plaintext: a recording from before nothing uses is the old library's.
             if ready, let plan = retirementPlan(entries: legacyEntries, blobs: legacyBlobs.map { ($0, Optional<Data>.none) }, input: input,
-                                                liveShas: liveShas, knownShas: knownShas, progress: &progress) {
+                                                liveShas: liveShas, knownShas: knownShas, unnamedAreReplaced: sealing.manifest.replaces != nil,
+                                                progress: &progress) {
                 for url in plan { deleteRemote(url) }
                 deleteStalePresence()
                 if sealing.manifest.legacyRetired == nil, let updated = try? updateManifest({ $0.sealing?.legacyRetired = now }), let description = updated.sealing {
@@ -408,9 +432,10 @@ extension LibrarySyncEngine {
 
     /// The files to delete when retiring `entries` and objects `blobs` (by plaintext SHA-256, under the key whose ID is
     /// given, or plaintext with nil), or nil when something isn't safe yet: an entry not read, a live counterpart under
-    /// the current key not read back whole, or not uploaded.
+    /// the current key not read back whole, or not uploaded. An object nothing names is left alone, unless
+    /// `unnamedAreReplaced` (it's a replaced library's).
     private func retirementPlan(entries: [JournalEntry], blobs: [(String, Data?)], input: SealerInput, liveShas: Set<String>,
-                                knownShas: Set<String>, progress: inout SealerProgress) -> [URL]? {
+                                knownShas: Set<String>, unnamedAreReplaced: Bool = false, progress: inout SealerProgress) -> [URL]? {
         guard let sealing else { return nil }
         let current = sealing.current
         var delete: [URL] = []
@@ -432,6 +457,7 @@ extension LibrarySyncEngine {
                 switch confirmSealed(path, kind: kind, id: id) {
                 case .confirmed: break
                 case .uploading: waitingForUploads = true
+                case .waitingForWiFi: waitingForUploads = true; progress.waitsForWiFi = true
                 case .missing: progress.remaining += 1; return nil
                 }
             }
@@ -450,9 +476,10 @@ extension LibrarySyncEngine {
                 switch confirmSealed("Sealed/Blobs/\(name)", kind: .blob, id: sha) {
                 case .confirmed: break
                 case .uploading: waitingForUploads = true
+                case .waitingForWiFi: waitingForUploads = true; progress.waitsForWiFi = true
                 case .missing: progress.remaining += 1; return nil
                 }
-            } else if !knownShas.contains(sha) {
+            } else if !knownShas.contains(sha), !unnamedAreReplaced {
                 // Not named by anything this pass read (an upload whose entry hasn't arrived): left alone.
                 continue
             }
@@ -462,7 +489,7 @@ extension LibrarySyncEngine {
         return delete
     }
 
-    private enum Confirmation { case confirmed, uploading, missing }
+    private enum Confirmation { case confirmed, uploading, missing, waitingForWiFi }
 
     /// Whether the sealed file at `path` (under the current key) was read back whole and iCloud has it.
     private func confirmSealed(_ path: String, kind: SealedKind, id: String) -> Confirmation {
@@ -471,7 +498,10 @@ extension LibrarySyncEngine {
         if !sealerVerified.contains(path) {
             switch SyncFiles.itemState(url) {
             case .absent: return .missing
-            case .inCloud: try? cloud.requestDownload(url); return .uploading
+            case .inCloud:
+                // An iPhone reads a recording back only on Wi‑Fi.
+                if kind == .blob, audioPolicy == .onDemand, network() != .unrestricted { return .waitingForWiFi }
+                try? cloud.requestDownload(url); return .uploading
             case .local: break
             }
             let whole: Bool

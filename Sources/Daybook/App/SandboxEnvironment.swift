@@ -37,7 +37,7 @@ enum LaunchPaths {
             let path = (value as NSString).expandingTildeInPath
             guard !isReachable(path, roots: roots) else { continue }
             let places = roots.map { $0.hasSuffix("/") ? $0 : $0 + "/" }.joined(separator: " or ")
-            problems.append("\(flag) \(value): this build runs in the App Sandbox and can't reach it. Use a path under \(places).")
+            problems.append("\(flag) \(value): this build runs in the App Sandbox and can’t reach it. Use a path under \(places).")
         }
         return problems
     }

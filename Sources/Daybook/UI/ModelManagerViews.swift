@@ -479,7 +479,7 @@ struct ModelDetailsSheet: View {
     @ViewBuilder private func onThisMac(_ model: CatalogModel, row: ModelRow, snapshot: ModelManagerSnapshot) -> some View {
         let installed = model.isSystemModel ? [] : snapshot.inventory.revisions(of: model.key)
         let current = snapshot.inventory.resolve(model.key)?.key
-        Section("On this Mac") {
+        Section("On This Mac") {
             LabeledContent("Status") {
                 Text(row.status.label).monospacedDigit()
             }

@@ -88,7 +88,7 @@ struct SyncSettingsView: View {
                 Button("Sync with This Account…") { confirmingAccount = true }
             }
         case .previousFolderAccessLost(let location):
-            SyncWarning(text: "Daybook can’t open the folder this Mac synced through before.") {
+            SyncWarning(text: "Can’t open the folder this Mac synced through before.") {
                 HStack {
                     Button("Choose Folder Again…") { sync.choosePreviousFolderAgain(near: location) }
                     Button("Sync Without It…") { confirmingSkip = true }
@@ -113,7 +113,7 @@ struct SyncSettingsView: View {
         switch sync.iCloud {
         case .checking: return "Checking iCloud…"
         case .connected: return "On"
-        case .waitingForKey: return "Waiting for the library’s key"
+        case .waitingForKey: return "Waiting for this library’s key"
         case .iCloudDriveOff: return "iCloud is off in System Settings"
         case .signedOut: return "Signed out"
         case .migrating(let progress):

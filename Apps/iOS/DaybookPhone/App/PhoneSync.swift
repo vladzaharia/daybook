@@ -59,6 +59,8 @@ final class PhoneSync {
     private(set) var courier = CourierStatus()
     /// Whether the library in iCloud is encrypted, and whether this iPhone holds its key.
     private(set) var encryption: LibraryEncryptionState = .off
+    /// Waiting for the key, Start Over may be offered (`LibrarySyncController.mayStartOverEncryption`).
+    private(set) var mayStartOver = false
 
     /// Nil for a library without sync (unit tests of other parts).
     let controller: LibrarySyncController?
@@ -91,6 +93,7 @@ final class PhoneSync {
         controller?.onSyncRequested = { [weak self] in await self?.synchronize(.remote) }
         controller?.$courierStatus.sink { [weak self] status in self?.courier = status }.store(in: &subscriptions)
         controller?.$encryption.sink { [weak self] state in self?.encryption = state }.store(in: &subscriptions)
+        controller?.$mayStartOverEncryption.sink { [weak self] may in self?.mayStartOver = may }.store(in: &subscriptions)
         // Count local changes as they happen, shortly after, so a burst of typing counts once.
         library.objectWillChange.sink { [weak self] _ in self?.scheduleRecount() }.store(in: &subscriptions)
     }

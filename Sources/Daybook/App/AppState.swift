@@ -79,7 +79,7 @@ final class AppState: ObservableObject {
     /// A library in the wrong place for this build (docs/sandbox.md): the library doesn't open until the person decides.
     @Published var libraryMoveOffer: LibraryMoveOffer?
     @Published var isMovingLibrary = false
-    @Published var libraryMoveError: String?
+    @Published var libraryMoveError: AppProblem?
     /// A library just copied into the container, before the person decides about the old copy.
     @Published var movedLibrary: MovedLibrary?
     /// Said once the library opens (`LaunchCheck`).
@@ -357,7 +357,7 @@ final class AppState: ObservableObject {
                     AppRelaunch.relaunch()
                 } catch {
                     isMovingLibrary = false
-                    libraryMoveError = "Couldn’t move your library: \(error.localizedDescription)"
+                    libraryMoveError = AppProblem(title: "Couldn’t Move Your Library", fallback: "Your library couldn’t be moved. Try again.", error: error)
                 }
             }
         case .moveIntoContainer(let plan):
@@ -370,7 +370,7 @@ final class AppState: ObservableObject {
                     movedLibrary = MovedLibrary(source: source, scoped: scoped, legacy: plan.legacy)
                 } catch {
                     if scoped { source.stopAccessingSecurityScopedResource() }
-                    libraryMoveError = "Couldn’t move your library: \(error.localizedDescription)"
+                    libraryMoveError = AppProblem(title: "Couldn’t Move Your Library", fallback: "Your library couldn’t be moved. Try again.", error: error)
                 }
                 isMovingLibrary = false
             }
@@ -1070,7 +1070,7 @@ final class AppState: ObservableObject {
                     return try MeetingExport.write(meeting, to: folder, name: name) { directory.appendingPathComponent($0.relativePath) }
                 }.value
                 notice = "Exported \(written.markdown.lastPathComponent)"
-            } catch { errorMessage = error.localizedDescription }
+            } catch { report("Couldn’t Export the Conversation", "It couldn’t be exported. Try again, or choose another folder.", error) }
         }
     }
 
@@ -1233,7 +1233,7 @@ extension AppState {
                 try await ingestCapture(result, meetingID: id)
                 sources.recovered.append((id, result.startedAt, result.endedAt))
                 notice = "Recovered an interrupted recording."
-            } catch { notice = "Couldn’t recover a recording: \(error.localizedDescription)" }
+            } catch { report("Couldn’t Recover a Recording", "An interrupted recording couldn’t be recovered. Its files are kept.", error) }
         }
     }
 }

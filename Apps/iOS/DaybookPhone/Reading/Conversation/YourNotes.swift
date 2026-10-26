@@ -92,7 +92,7 @@ private struct BookmarkRow: View {
                             if value.contains("\n") { draft = value.replacingOccurrences(of: "\n", with: ""); editing = false }
                         }
                         .onChange(of: editing) { _, now in if !now { commit() } }
-                        .accessibilityLabel("Bookmark at \(SpokenTime.format(time.rounded(.down)))")
+                        .accessibilityLabel("Bookmark at \(SpokenTime.format(time))")
                     if hasSpeech {
                         Button { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } } label: {
                             Image(systemName: "chevron.right").font(.caption.weight(.semibold))

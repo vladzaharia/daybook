@@ -65,7 +65,7 @@ struct TimeButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Play from \(SpokenTime.format(time.rounded(.down)))")
+        .accessibilityLabel("Play from \(SpokenTime.format(time))")
     }
 }
 

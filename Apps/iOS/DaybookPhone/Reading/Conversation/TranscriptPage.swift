@@ -395,7 +395,7 @@ private struct NoteRow: View {
             Button { session.showOnSummary(SummaryBlockID.notes) } label: { Label("Show in Your Notes", systemImage: "note.text") }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Your note at \(SpokenTime.format((note.time ?? 0).rounded(.down))): \(note.text)")
+        .accessibilityLabel("Your note at \(SpokenTime.format(note.time ?? 0)): \(note.text)")
     }
 }
 

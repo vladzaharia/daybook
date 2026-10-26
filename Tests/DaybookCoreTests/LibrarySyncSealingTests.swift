@@ -162,6 +162,23 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertFalse(LibrarySyncEngine.sealsNewLibraries, "New libraries stay plaintext until the owner's device checks pass")
     }
 
+    func testADeviceRemembersSyncingAnEncryptedLibraryBeforeAnyPass() async throws {
+        let mac = try mac(), phone = try phone()
+        try await pass(mac, "Mac")
+        try await pass(phone, "Phone")
+        XCTAssertFalse(LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: local("Phone")))
+        try await mac.enableSealing()
+        try await pass(phone, "Phone")
+        XCTAssertTrue(LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: local("Phone")), "the iPhone keeps it out of backups at launch")
+        // Waiting for the key counts too: the library is encrypted.
+        let waiting = try self.phone("Waiting", keys: MemoryLibraryKeyStore())
+        do { _ = try await waiting.synchronize(meetings: []); XCTFail() } catch LibrarySyncError.keyUnavailable {}
+        XCTAssertTrue(LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: local("Waiting")))
+        // Another iCloud account's library may well be plaintext.
+        LibrarySyncEngine.forgetSealedLibrary(localRoot: local("Phone"), remoteRoot: remote)
+        XCTAssertFalse(LibrarySyncEngine.hasSyncedEncryptedLibrary(localRoot: local("Phone")))
+    }
+
     func testADowngradedManifestPausesSync() async throws {
         let mac = try mac()
         try await pass(mac, "Mac", [Meeting(title: "Before")])
@@ -355,6 +372,63 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(published.publishedEvents, 1); XCTAssertEqual(published.warnings, [])
         let onMacAgain = try await pass(mac, "Mac", [sent])
         XCTAssertEqual(onMacAgain.meetings[0].notes, edited.notes)
+    }
+
+    func testAPhoneSealingHistoryDownloadsRecordingsOnlyOnWiFiInBatches() async throws {
+        // A plaintext library with six recordings, made on a Mac; the phone holds none of their audio.
+        let mac = try mac()
+        var recorded: [Meeting] = []
+        for index in 0..<6 { recorded.append(try await record(audioBytes(3000 + index, seed: UInt8(40 + index)), on: "Mac", into: Meeting(title: "Talk \(index)"))) }
+        try await pass(mac, "Mac", recorded)
+        let network = NetworkSwitch(.restricted)
+        let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: remote, deviceID: "Phone", replica: SyncReplicaConfiguration(
+            audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
+            cloud: cloud.files, keyStore: keychain, network: { network.condition }))
+        try await pass(phone, "Phone")
+        let blobs = files("Blobs").map { remote.appendingPathComponent("Blobs/\($0)") }
+        XCTAssertEqual(blobs.count, 6)
+        for blob in blobs { try cloud.evict(blob) }
+        func requested() -> Set<String> { Set(cloud.downloadRequests.filter { $0.contains("/Blobs/") && !$0.contains("/Sealed/") }) }
+        func progress() async throws -> SealerProgress { let value = await phone.sealerProgress; return try XCTUnwrap(value) }
+
+        // The phone turns encryption on, so it seals the history. On cellular it downloads nothing, and says so.
+        try await phone.enableSealing()
+        try await pass(phone, "Phone")
+        var now = try await progress()
+        XCTAssertEqual(now.remaining, 6); XCTAssertTrue(now.waitsForWiFi)
+        XCTAssertTrue(requested().isEmpty, "downloaded a recording off Wi‑Fi")
+        let summary = await phone.sealingSummary()
+        XCTAssertEqual(summary?.progress?.waitsForWiFi, true, "Settings says so")
+        let quiet = await phone.hasRemoteChanges()
+        XCTAssertFalse(quiet)
+
+        // On Wi‑Fi, a batch at a time, never more while those are on their way.
+        network.condition = .unrestricted
+        cloud.holdDownloads(true)
+        try await pass(phone, "Phone")
+        XCTAssertEqual(requested().count, LibrarySyncEngine.sealerDownloadBatch)
+        now = try await progress()
+        XCTAssertFalse(now.waitsForWiFi); XCTAssertEqual(now.sealed, 0)
+        try await pass(phone, "Phone")
+        XCTAssertEqual(requested().count, LibrarySyncEngine.sealerDownloadBatch)
+
+        // The batch arrives: the next pass is due, seals it, lets iCloud drop the downloaded copies, and asks for the rest.
+        let first = requested()
+        for path in first { try cloud.deliver(URL(fileURLWithPath: path)) }
+        let due = await phone.hasRemoteChanges()
+        XCTAssertTrue(due)
+        try await pass(phone, "Phone")
+        now = try await progress()
+        XCTAssertEqual(now.sealed, LibrarySyncEngine.sealerDownloadBatch)
+        XCTAssertEqual(Set(cloud.droppedLocalCopies).intersection(first), first)
+        XCTAssertEqual(requested().count, 6)
+        // Back on cellular, what was asked for is sealed as it arrives; nothing more is asked for.
+        network.condition = .restricted
+        for path in requested().subtracting(first) { try cloud.deliver(URL(fileURLWithPath: path)) }
+        try await pass(phone, "Phone")
+        now = try await progress()
+        XCTAssertEqual(now.remaining, 0); XCTAssertEqual(now.sealed, 2)
+        XCTAssertEqual(files("Sealed/Blobs").count, 6)
     }
 
     func testOriginalsRecordedHereStayUntilAnotherDeviceHoldsTheKey() async throws {
@@ -727,3 +801,13 @@ final class LibrarySyncSealingTests: XCTestCase {
     }
 }
 
+/// The network a test replica is on, switched by the test.
+private final class NetworkSwitch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: SyncNetworkCondition
+    init(_ value: SyncNetworkCondition) { self.value = value }
+    var condition: SyncNetworkCondition {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
+}

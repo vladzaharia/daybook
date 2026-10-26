@@ -125,6 +125,33 @@ Still requires real devices:
   early notes with negative times (−0:42) on the Mac's Transcript page, in Floating Notes, on the
   iPhone, and in exports.
 
+## Finishing the 0.3.0 review (2026-10-26)
+
+Start Over for an encrypted library whose key is lost, an iPhone that seals history only on Wi‑Fi, iPhone backups of an
+encrypted library, times before the start in VoiceOver, and a copy sweep of the code written after the copy pass
+(docs/icloud-sync.md, "Starting over" and "The sealer"; docs/iphone.md, "Backups"; docs/copy-pass-2026-10.md).
+
+- `swift build --build-tests`: no new warnings. `swift test`: 1035 tests, 0 failures, one skipped (the 1 GiB
+  benchmark): DaybookCoreTests 330, DaybookTests 256, DaybookKitTests 164, DaybookDevicesTests 120,
+  DaybookIntelligenceTests 87, DaybookLinkTests 70, DaybookCaptionsTests 8.
+- `scripts/ci/tests/run-tests.sh --require-all`: 294 passed, 0 failed, 0 skipped.
+- `scripts/build-ios.sh --test` on a new iPhone Duo simulator (iOS 27.1), serial: 151 tests passed. The simulator was
+  deleted afterwards.
+- Regression tests:
+  - `LibrarySyncStartOverTests`: two replicas losing the key, then starting over and republishing; refusals while a
+    key is available; two devices starting over at once; unrelated libraries still pausing.
+  - `LibrarySyncEncryptionTests.testStartingOverWhenTheKeyIsLostOnEveryDevice`, through the controller.
+  - `LibrarySyncSealingTests.testAPhoneSealingHistoryDownloadsRecordingsOnlyOnWiFiInBatches` and
+    `testADeviceRemembersSyncingAnEncryptedLibraryBeforeAnyPass`.
+  - `BackupExclusionTests.testAnEncryptedLibraryKeepsItsConversationsOutUnlessIncluded`.
+  - `TimeWordsTests`, `LibraryWordsTests` (the encryption status and the network condition), `ProblemWordsTests`,
+    `PlainWordsTests`, `FloatingNotesStatusTests`, and `ModelManagerTests`.
+
+Still requires the owner's devices: Start Over (above, in "Library encryption"); an iPhone that turned encryption on
+sealing its history on cellular, then on Wi‑Fi ("Waiting for Wi‑Fi", then a few recordings at a time); and an iPhone
+backup of an encrypted library leaving out `Meetings/` (Settings › General › iPhone Storage › Daybook, or a Finder
+backup's size).
+
 ## Library encryption (2026-10-26)
 
 End-to-end encryption of the sync journal (docs/icloud-sync.md, "Encryption"), dark by default: Settings offers Encrypt
@@ -157,7 +184,7 @@ Still requires the owner's devices, before turning it on for anyone:
   `scripts/ci/check-ios-archive.sh` passes on a signed TestFlight archive (it checks the iPhone's groups and their order).
   Existing pairings and the sync device ID still work after updating (the default group didn't move).
 - **The key through iCloud Keychain.** Turn encryption on on the Mac with a few conversations. How long until the iPhone
-  (TestFlight) leaves "Waiting for its key from iCloud Keychain." without a recovery key or the link? Repeat with the iPhone
+  (TestFlight) leaves "Waiting for this library’s key." without a recovery key or the link? Repeat with the iPhone
   turning it on.
 - **iCloud Keychain off** on the iPhone: it waits; Get Key from <Mac> over the link opens the library and the Mac says it
   sent it; turning iCloud Keychain back on changes nothing.
@@ -166,6 +193,11 @@ Still requires the owner's devices, before turning it on for anyone:
   debugger): the pass reads the key (`kSecAttrAccessibleAfterFirstUnlock`) and syncs.
 - **Recovery key.** Delete the key from one device's Passwords app (or reset iCloud Keychain on a test account): it waits;
   Enter Recovery Key opens the library. A wrong key says it doesn't match.
+- **Start Over.** On a test account, turn encryption on without a recovery key, then delete the key from every device's
+  Passwords app (or reset iCloud Keychain): once each device has synced, both show Start Over…, never while one still
+  holds the key. Start Over on the Mac: the iPhone gets the new key from iCloud Keychain, both devices' conversations
+  appear on both, and the container settles back to about the library's size (the old library's `Sealed/` files are
+  deleted). Press it on both at once (airplane mode, then reconnect): both end in one library, nothing is listed twice.
 - **Accounts.** Sign the iPhone out of iCloud and into another account with a plaintext library: after Sync with This
   Account it syncs that library, without "The library in iCloud is no longer encrypted."
 - **Large recordings.** Seal (upload) and open (install on a second Mac, fetch on the iPhone) 2 to 4 GB recordings: time,

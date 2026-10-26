@@ -212,9 +212,15 @@ enum PhoneRecorderError: LocalizedError, Equatable {
         case .microphoneDenied: return "Allow Daybook to use the microphone in Settings › Privacy & Security › Microphone."
         case .noMicrophone: return "No microphone is available."
         case .directoryInUse: return "This recording folder is already in use. Start the recording again."
-        case .encoderUnavailable(let detail): return "Recording couldn’t continue (\(detail)). Everything up to then is saved."
+        case .encoderUnavailable: return "Recording couldn’t continue. Everything up to then is saved."
         case .diskBacklog: return "Storage couldn’t keep up with the recording. Everything up to then is saved."
         case .nothingRecorded: return "No audio was recorded."
         }
+    }
+
+    /// What went wrong, for Details: the encoder's step that failed.
+    var details: String? {
+        if case .encoderUnavailable(let detail) = self { return "The audio encoder stopped (\(detail))." }
+        return nil
     }
 }

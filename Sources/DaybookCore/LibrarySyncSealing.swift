@@ -27,6 +27,10 @@ extension SyncManifest {
         /// When the plaintext files from before were deleted. Nil until then.
         var legacyRetired: Date?
         var keys: [Key]
+        /// Libraries this one started over from (Start Over, LibrarySyncStartOver.swift): their key was lost, so their
+        /// files are deleted where they're found, and no device carries a checkpoint over from them. Nil for a library
+        /// that didn't start over.
+        var replaces: [UUID]?
 
         struct Key: Codable, Equatable {
             var id: String
@@ -39,8 +43,8 @@ extension SyncManifest {
         static func newest(_ keys: [Key]) -> Key? { keys.max { ($0.created, $0.id) < ($1.created, $1.id) } }
 
         /// One description from two versions written at once: every key of both (a recovery wrap kept from either), the
-        /// newest current, the earliest start, and the plaintext retired if either retired it.
-        /// The same whichever order the versions come in.
+        /// newest current, the earliest start, the plaintext retired if either retired it, and every library either
+        /// replaced. The same whichever order the versions come in.
         func merged(with other: Sealing) -> Sealing {
             var byID: [String: Key] = [:]
             for key in keys + other.keys {
@@ -57,7 +61,14 @@ extension SyncManifest {
             result.sealedSince = min(sealedSince, other.sealedSince)
             result.migrator = [self, other].filter { $0.current == result.current }.map(\.migrator).min() ?? min(migrator, other.migrator)
             result.legacyRetired = [legacyRetired, other.legacyRetired].compactMap { $0 }.max()
+            result.replaces = Self.union(replaces, other.replaces)
             return result
+        }
+
+        /// Two lists of replaced libraries as one, sorted; nil when both are.
+        static func union(_ a: [UUID]?, _ b: [UUID]?) -> [UUID]? {
+            guard a != nil || b != nil else { return nil }
+            return Set((a ?? []) + (b ?? [])).sorted { $0.uuidString < $1.uuidString }
         }
     }
 
@@ -120,6 +131,8 @@ struct SealingState {
     var readingOrder: [LibraryKey] { [current] + keys.values.filter { $0.id != current.id }.sorted { $0.idHex < $1.idHex } }
     /// A key the manifest saved a recovery wrap for: the current one.
     var hasRecovery: Bool { manifest.keys.first { $0.id == current.idHex }?.recovery != nil }
+    /// Whether this library started over from `library` (Start Over).
+    func replaces(_ library: UUID) -> Bool { manifest.replaces?.contains(library) == true }
 }
 
 /// What this device remembers about encrypted libraries, beside its checkpoints (`Sync/sealing.json`): once it has
@@ -203,7 +216,7 @@ extension LibrarySyncEngine {
     func loadSealing(_ manifest: SyncManifest) throws {
         manifestChecked = true
         guard manifest.isSealed, let description = manifest.sealing else {
-            sealing = nil; waitingForKey = nil
+            sealing = nil; waitingForKey = nil; waitingSealing = nil
             return
         }
         // Seen encrypted once, never published to in plaintext: remembered even before the key arrives.
@@ -213,12 +226,12 @@ extension LibrarySyncEngine {
             for key in (try? keyStore.keys(for: manifest.libraryID)) ?? [] where key.libraryID == manifest.libraryID { held[key.id] = key }
         }
         guard let currentID = SealedFormat.data(hex: description.current), let current = held[currentID] else {
-            sealing = nil; waitingForKey = description.current
+            sealing = nil; waitingForKey = description.current; waitingSealing = description
             throw LibrarySyncError.keyUnavailable(description.current)
         }
         if sealing?.current.id != current.id { sealerVerified = [] }
         sealing = SealingState(libraryID: manifest.libraryID, manifest: description, keys: held, current: current)
-        waitingForKey = nil
+        waitingForKey = nil; waitingSealing = nil
     }
 
     /// Before any pass has read the manifest (presence written when sync connects): reads it when it's downloaded, so a
@@ -244,6 +257,12 @@ extension LibrarySyncEngine {
     /// Whether this device has synced an encrypted library in this sync folder.
     nonisolated var syncedSealedLibraryHere: Bool {
         SealingMemory.load(localRoot: localRoot).remotes[SealingMemory.key(remoteRoot: remoteRoot)] != nil
+    }
+
+    /// Whether this device has synced an encrypted library in any sync folder: the iPhone keeps that library's
+    /// conversations out of backups (the sealed journal is their backup). Readable before any engine exists.
+    public static func hasSyncedEncryptedLibrary(localRoot: URL) -> Bool {
+        !SealingMemory.load(localRoot: localRoot.standardizedFileURL).remotes.isEmpty
     }
 
     /// Forgets that this sync folder held an encrypted library: the person chose to sync with another iCloud account,
@@ -323,7 +342,11 @@ extension LibrarySyncEngine {
             do {
                 let opened = try SealedObject.open(bytes, kind: kind, libraryID: sealing.libraryID, keyring: sealing.keyring, expectedName: entry.name)
                 return (opened.plaintext, opened.key)
-            } catch let error as SealedObjectError { throw Self.syncError(error, name: entry.path) }
+            } catch let error as SealedObjectError {
+                // A library this one started over from: its files go (LibrarySyncStartOver.swift).
+                if error == .wrongLibrary, let header = SealedObject.header(of: bytes), sealing.replaces(header.libraryID) { throw SyncReplacedFile() }
+                throw Self.syncError(error, name: entry.path)
+            }
         }
         guard let delivered = inboxCopy(entry.path) else {
             return try open(try SyncFiles.read(entry.url, below: remoteRoot, cloud: cloud))
@@ -416,11 +439,16 @@ extension LibrarySyncEngine {
 
     /// Whether an on-demand replica may publish an object it doesn't hold by reference: one the journal names or the sync
     /// folder holds, as always. An encrypted library retires objects only live conversations no longer use, so there the
-    /// object itself must be in the sync folder; one the journal names that isn't there (yet) waits.
+    /// object itself must be in the sync folder; one the journal names that isn't there (yet) waits, as does any for two
+    /// weeks after the library started over, while devices publish their libraries again.
     func mayPublishByReference(_ sha256: String, journalAssets: Set<String>) throws -> Bool {
-        guard sealing != nil else { return journalAssets.contains(sha256) || hasRemoteObject(sha256) }
+        guard let sealing else { return journalAssets.contains(sha256) || hasRemoteObject(sha256) }
         if hasRemoteObject(sha256) { return true }
         if journalAssets.contains(sha256) { throw SyncPendingDownload() }
+        // A library that started over lately: another device may yet publish this recording again.
+        if sealing.manifest.replaces != nil, sealerClock().timeIntervalSince(sealing.manifest.sealedSince) < Self.keyHolderAbsence {
+            throw SyncPendingDownload()
+        }
         return false
     }
 

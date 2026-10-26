@@ -44,6 +44,44 @@ final class BackupExclusionTests: XCTestCase {
         XCTAssertTrue(BackupExclusion.isExcluded(root.appendingPathComponent("Sync/Courier")), "rebuildable copies stay out either way")
     }
 
+    func testAnEncryptedLibraryKeepsItsConversationsOutUnlessIncluded() throws {
+        let base = try temporaryDirectory()
+        let root = base.appendingPathComponent("Daybook", isDirectory: true)
+        let inbox = base.appendingPathComponent("Documents/Inbox", isDirectory: true)
+        let kept = ["Meetings", "Trash", "Sync", "LiveCaptions"]
+        for folder in kept + ["Sync/Courier", "Sync/Inbox", "Staging", "Devices"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+        func excluded(_ folder: String) -> Bool { BackupExclusion.isExcluded(root.appendingPathComponent(folder)) }
+
+        // How the choices combine.
+        XCTAssertEqual(BackupExclusion.library(includesLibrary: true, encrypted: false, includesEncryptedLibrary: false), .whole)
+        XCTAssertEqual(BackupExclusion.library(includesLibrary: false, encrypted: false, includesEncryptedLibrary: true), .none)
+        XCTAssertEqual(BackupExclusion.library(includesLibrary: true, encrypted: true, includesEncryptedLibrary: false), .withoutEncryptedFolders,
+                       "on for the plaintext library doesn't carry over")
+        XCTAssertEqual(BackupExclusion.library(includesLibrary: false, encrypted: true, includesEncryptedLibrary: false), .none,
+                       "off for the plaintext library still keeps the whole folder out")
+        XCTAssertEqual(BackupExclusion.library(includesLibrary: false, encrypted: true, includesEncryptedLibrary: true), .whole,
+                       "turned on for the encrypted library, it's included")
+        let settings = PhoneSettings(defaults: try XCTUnwrap(UserDefaults(suiteName: "BackupExclusionTests-\(UUID())")))
+        XCTAssertFalse(settings.includesEncryptedLibraryInBackups, "off unless turned on")
+
+        BackupExclusion.apply(libraryRoot: root, inbox: inbox, library: .withoutEncryptedFolders)
+        for folder in kept { XCTAssertTrue(excluded(folder), folder) }
+        XCTAssertFalse(BackupExclusion.isExcluded(root), "the library folder itself stays in")
+        XCTAssertFalse(excluded("Staging")); XCTAssertFalse(excluded("Devices"))
+        XCTAssertTrue(excluded("Sync/Courier")); XCTAssertTrue(BackupExclusion.isExcluded(inbox))
+
+        BackupExclusion.apply(libraryRoot: root, inbox: inbox, library: .whole)
+        for folder in kept { XCTAssertFalse(excluded(folder), folder) }
+        XCTAssertTrue(excluded("Sync/Courier"), "rebuildable copies stay out either way")
+        XCTAssertTrue(excluded("Sync/Inbox"))
+
+        BackupExclusion.apply(libraryRoot: root, inbox: inbox, library: .none)
+        XCTAssertTrue(BackupExclusion.isExcluded(root))
+    }
+
     func testApplyingToALibraryThatDoesNotExistYetChangesNothing() throws {
         let base = try temporaryDirectory()
         let root = base.appendingPathComponent("Fresh", isDirectory: true)

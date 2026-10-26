@@ -198,16 +198,17 @@ struct StorageScreen: View {
                 }
             }
             Section {
-                Toggle("Include in iPhone Backups", isOn: $settings.includesLibraryInBackups)
+                // An encrypted library's choice is its own (`BackupExclusion`).
+                Toggle("Include in iPhone Backups", isOn: model.libraryIsEncrypted
+                       ? $settings.includesEncryptedLibraryInBackups : $settings.includesLibraryInBackups)
             }
         }
         .navigationTitle("Storage")
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.audio.refreshUsage() }
         .onChange(of: settings.audioCacheBudget) { _, budget in Task { await model.audio.setBudget(budget) } }
-        .onChange(of: settings.includesLibraryInBackups) { _, included in
-            BackupExclusion.apply(libraryRoot: model.library.rootURL, inbox: model.library.inboxURL, includesLibrary: included)
-        }
+        .onChange(of: settings.includesLibraryInBackups) { model.applyBackupExclusion() }
+        .onChange(of: settings.includesEncryptedLibraryInBackups) { model.applyBackupExclusion() }
     }
 
     private func bytes(_ value: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file) }

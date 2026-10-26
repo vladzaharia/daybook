@@ -15,6 +15,7 @@ struct SyncEncryptionRows: View {
     @State private var enteringKey = false
     @State private var confirmingErase = false
     @State private var confirmingFolder = false
+    @State private var confirmingStartOver = false
     @State private var problem: AppProblem?
 
     init(state: AppState) {
@@ -37,19 +38,22 @@ struct SyncEncryptionRows: View {
                     }
                 }
             case .waitingForKey:
-                EncryptionWarning(text: LibrarySyncError.keyUnavailable("").localizedDescription) {
+                EncryptionWarning(text: "Turn on iCloud Keychain, or get the key from another device.") {
                     HStack {
                         ForEach(phoneLink.peers.values.sorted { $0.name < $1.name }) { phone in
                             Button("Get Key from \(phone.name)") { Task { await state.requestLibraryKey(from: phone.deviceID) } }
                         }
                         Button("Enter Recovery Key…") { enteringKey = true }
+                        if sync.mayStartOverEncryption {
+                            Button("Start Over…") { confirmingStartOver = true }
+                        }
                     }
                 }
             case .on(let summary):
                 LabeledContent("Encryption") {
-                    Text(Self.status(summary)).foregroundStyle(.secondary).monospacedDigit()
+                    Text(LibraryWords.encryptionStatus(summary)).foregroundStyle(.secondary).monospacedDigit()
                 }
-                LabeledContent("Recovery Key") {
+                LabeledContent("Recovery key") {
                     if summary.hasRecoveryKey {
                         Text("Saved").foregroundStyle(.secondary)
                     } else {
@@ -57,7 +61,7 @@ struct SyncEncryptionRows: View {
                     }
                 }
                 if sync.hasRetiredFolderJournal {
-                    LabeledContent("Previous Sync Folder") {
+                    LabeledContent("Previous sync folder") {
                         Button("Delete Its Copy…") { confirmingFolder = true }
                     }
                 }
@@ -80,6 +84,12 @@ struct SyncEncryptionRows: View {
         } message: {
             Text("This can’t be undone.")
         }
+        .alert("Start over with a new key?", isPresented: $confirmingStartOver) {
+            Button("Start Over", role: .destructive) { startOver() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(LibraryWords.startOverConsequence)
+        }
         .alert("Delete the previous sync folder’s copy?", isPresented: $confirmingFolder) {
             Button("Delete", role: .destructive) {
                 do { try sync.deleteRetiredFolderJournal() } catch {
@@ -92,18 +102,20 @@ struct SyncEncryptionRows: View {
         }
     }
 
-    /// "On", or how far encrypting the library's history has got.
-    static func status(_ summary: SealingSummary) -> String {
-        guard let progress = summary.progress, summary.isMigrator else { return "On" }
-        if progress.remaining > 0 { return "Encrypting · \(progress.remaining) left" }
-        return "On"
-    }
-
     private func createRecoveryKey() {
         problem = nil
         Task {
             do { shownKey = ShownRecoveryKey(key: try await sync.createRecoveryKey()) } catch {
-                problem = AppProblem(title: "Couldn’t Make a Recovery Key", fallback: "A recovery key couldn’t be made. Try again.", error: error)
+                problem = AppProblem(title: "Couldn’t Create a Recovery Key", fallback: "A recovery key couldn’t be created. Try again.", error: error)
+            }
+        }
+    }
+
+    private func startOver() {
+        problem = nil
+        Task {
+            do { try await sync.startOverEncryption() } catch {
+                problem = AppProblem(title: "Couldn’t Start Over", fallback: "The library couldn’t start over. Try again.", error: error)
             }
         }
     }

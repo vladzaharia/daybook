@@ -27,6 +27,11 @@ final class PhoneSettings {
     /// The library goes into iPhone backups (Settings › Storage). Copies Daybook can rebuild never do
     /// (`BackupExclusion`).
     var includesLibraryInBackups: Bool { didSet { defaults.set(includesLibraryInBackups, forKey: Keys.includesLibraryInBackups) } }
+    /// The same choice for an encrypted library, off unless turned on there: its conversations stay out of backups
+    /// (`BackupExclusion`).
+    var includesEncryptedLibraryInBackups: Bool {
+        didSet { defaults.set(includesEncryptedLibraryInBackups, forKey: Keys.includesEncryptedLibraryInBackups) }
+    }
 
     var captionLocale: Locale { captionLocaleIdentifier.map(Locale.init(identifier:)) ?? .current }
 
@@ -82,6 +87,7 @@ final class PhoneSettings {
         captionLocaleIdentifier = defaults.string(forKey: Keys.captionLocale)
         handsRecorderBackToMac = defaults.object(forKey: Keys.handsRecorderBackToMac) as? Bool ?? false
         includesLibraryInBackups = defaults.object(forKey: Keys.includesLibraryInBackups) as? Bool ?? true
+        includesEncryptedLibraryInBackups = defaults.object(forKey: Keys.includesEncryptedLibraryInBackups) as? Bool ?? false
         macRecordDecisions = defaults.data(forKey: Keys.macRecordDecisions)
             .flatMap { try? JSONDecoder().decode([String: MacRecordDecision].self, from: $0) } ?? [:]
         if let since = defaults.object(forKey: Keys.macRecordDecisionsSince) as? Date {
@@ -102,6 +108,7 @@ final class PhoneSettings {
         static let captionLocale = "phone.captionLocale"
         static let handsRecorderBackToMac = "phone.handsRecorderBackToMac"
         static let includesLibraryInBackups = "phone.includesLibraryInBackups"
+        static let includesEncryptedLibraryInBackups = "phone.includesEncryptedLibraryInBackups"
         static let macRecordDecisions = "phone.macRecordDecisions"
         static let macRecordDecisionsSince = "phone.macRecordDecisionsSince"
     }

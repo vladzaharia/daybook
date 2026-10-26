@@ -7,26 +7,35 @@ import Foundation
 // `DurationLabel` ("43 min") and `Meeting.duration` live in DaybookDevices, which matches and
 // formats recorder lengths with them; DaybookKit re-exports both.
 
+/// Times on a conversation's timeline. A time before the start (a note an iPhone took before the Mac started recording)
+/// has a minus sign: "−0:12". Whole seconds, toward zero, so a time less than a second before the start is "0:00".
 public enum TimeLabel {
     public static func format(_ seconds: Double) -> String {
-        let safe = seconds.isFinite ? min(abs(seconds), Double(Int.max / 2)) : 0
-        let value = Int(safe), sign = seconds < 0 ? "−" : ""
-        return sign + (value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, (value % 3600) / 60, value % 60) : String(format: "%02d:%02d", value / 60, value % 60))
+        let (value, before) = wholeSeconds(seconds)
+        return (before ? "−" : "") + (value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, (value % 3600) / 60, value % 60) : String(format: "%02d:%02d", value / 60, value % 60))
     }
 
     /// The interface's form, as in Voice Memos: "0:14", "12:31", "1:02:03". Model evidence and
     /// exports keep `format`.
     public static func short(_ seconds: Double) -> String {
-        let safe = seconds.isFinite ? min(abs(seconds), Double(Int.max / 2)) : 0
-        let value = Int(safe), sign = seconds < 0 ? "−" : ""
-        return sign + (value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, (value % 3600) / 60, value % 60) : String(format: "%d:%02d", value / 60, value % 60))
+        let (value, before) = wholeSeconds(seconds)
+        return (before ? "−" : "") + (value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, (value % 3600) / 60, value % 60) : String(format: "%d:%02d", value / 60, value % 60))
+    }
+
+    /// The whole seconds from the start, toward zero, and whether they're before it.
+    static func wholeSeconds(_ seconds: Double) -> (value: Int, before: Bool) {
+        let value = Int(seconds.isFinite ? min(abs(seconds), Double(Int.max / 2)) : 0)
+        return (value, seconds < 0 && value > 0)
     }
 }
 
-/// Spoken form of a time for VoiceOver: "12 minutes 31 seconds".
+/// Spoken form of a time for VoiceOver: "12 minutes 31 seconds", or "12 seconds before the start" for a time before
+/// it. The same whole seconds `TimeLabel` shows, so what's heard matches what's seen.
 public enum SpokenTime {
     public static func format(_ seconds: TimeInterval) -> String {
-        Duration.seconds(max(0, seconds.rounded())).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
+        let (value, before) = TimeLabel.wholeSeconds(seconds)
+        let words = Duration.seconds(value).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
+        return before ? "\(words) before the start" : words
     }
 }
 
@@ -116,6 +125,16 @@ public enum LibraryWords {
     public static func noteTitle(at date: Date) -> String {
         "Note at \(date.formatted(date: .omitted, time: .shortened))"
     }
+
+    /// An encrypted library's status in Settings: "On", or, on the device sealing its history, how much is left
+    /// ("Encrypting · 12 left"), and on an iPhone off Wi‑Fi that it's waiting for it.
+    public static func encryptionStatus(_ summary: SealingSummary) -> String {
+        guard let progress = summary.progress, summary.isMigrator, progress.remaining > 0 else { return "On" }
+        return "Encrypting · \(progress.remaining) left" + (progress.waitsForWiFi ? " · Waiting for Wi‑Fi" : "")
+    }
+
+    /// Under "Start over with a new key?" (an encrypted library whose key is lost): what's lost and what isn't.
+    public static let startOverConsequence = "What’s only in iCloud is lost. Conversations on your devices stay and sync again."
 
     /// Under "Delete the folder “Clients”?": what happens to what's in it.
     public static func folderDeletion(conversations count: Int) -> String {

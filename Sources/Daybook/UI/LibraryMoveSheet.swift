@@ -5,13 +5,23 @@ import SwiftUI
 struct LibraryMoveSheet: View {
     @ObservedObject var state: AppState
     let offer: LibraryMoveOffer
+    @State private var showingDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s3) {
             Text(text.title).font(.headline).foregroundStyle(Ink.title)
             Text(text.message).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true)
-            if let error = state.libraryMoveError {
-                Label(error, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(Ink.warning)
+            if let problem = state.libraryMoveError {
+                HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
+                    Label(problem.message, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(Ink.warning)
+                    Spacer(minLength: Space.s3)
+                    if let details = problem.details {
+                        Button("Details…") { showingDetails = true }
+                            .popover(isPresented: $showingDetails) {
+                                Text(details).textSelection(.enabled).padding(Space.s4).frame(maxWidth: 360, alignment: .leading)
+                            }
+                    }
+                }
             }
             HStack(spacing: Space.s2) {
                 if state.isMovingLibrary {
@@ -41,7 +51,7 @@ struct LibraryMoveSheet: View {
 
     private var text: (title: String, message: String, secondary: String, primary: String) {
         if state.movedLibrary != nil {
-            return ("Library moved", "The old copy is still in its old place, where other apps can read it.", "", "")
+            return ("Library Moved", "The old copy is still in its old place, where other apps can read it.", "", "")
         }
         switch offer {
         case .returnFromContainer(let plan) where plan.replacesOlder:
@@ -50,13 +60,13 @@ struct LibraryMoveSheet: View {
         case .returnFromContainer:
             return ("Move your library back?", "Your library is where a newer Daybook kept it.", "Not Now", "Move Library Back")
         case .moveIntoContainer(let plan) where plan.legacyExists:
-            return ("Move your library", "Daybook keeps its library in a new place now. Choose your library in the next window to move it.",
+            return ("Move Your Library", "Daybook keeps its library in a new place now. Choose your library in the next window to move it.",
                     "Quit", "Move Library…")
         case .moveIntoContainer:
-            return ("Find your library", "Daybook couldn’t find your library. Choose it to move it into place, or start a new one.",
+            return ("Find Your Library", "Daybook couldn’t find your library. Choose it to move it into place, or start a new one.",
                     "Start Fresh", "Move Library…")
         case .oldCopyRemains:
-            return ("An old copy of your library remains", "It’s in its old place, where other apps can read it. Daybook doesn’t use it.",
+            return ("An Old Copy of Your Library Remains", "It’s in its old place, where other apps can read it. Daybook doesn’t use it.",
                     "Keep It", "Show in Finder")
         }
     }

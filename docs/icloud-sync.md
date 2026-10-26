@@ -190,8 +190,9 @@ iCloud on the Mac, Settings › iCloud on the iPhone), and there's no turning it
   courier's CloudKit records hold only sealed bytes. Tampering is detected: every sealed file is authenticated, and a
   manifest replaced by a plaintext one pauses sync on every device that synced the library encrypted.
 - **What it doesn't.** An Apple Account together with a trusted device's passcode; a compromised device; the Mac's
-  working library and Time Machine (FileVault and an encrypted backup do that); the iPhone's iCloud Backup unless
-  Storage › Include in iPhone Backups is off. Still visible to Apple: how many files there are and their sizes, when
+  working library and Time Machine (FileVault and an encrypted backup do that); the iPhone's iCloud Backup when the
+  person includes the encrypted library in it (Storage › Include in iPhone Backups, off by default for an encrypted
+  library: docs/iphone.md, "Backups"). Still visible to Apple: how many files there are and their sizes, when
   they were written, how many devices sync and their kind, the library and key IDs, and the courier records' sizes and
   dates. A Daybook that doesn't encrypt (0.3.0 and earlier) keeps writing its presence record, name included, in
   plaintext. iCloud.com's Data Recovery keeps deleted files for 30 days, and Apple may keep plaintext that long after
@@ -233,19 +234,22 @@ Local library/Sync/sealing.json   # this device synced an encrypted library here
 ```
 
 **The manifest.** `{"format":"DaybookSync","schemaVersion":2,"libraryID":…,"sealing":{"scheme":"DBSEAL-1","current":…,
-"sealedSince":…,"migrator":…,"legacyRetired":…,"keys":[{"id":…,"created":…,"recovery":…}]}}`. Version 2 is the switch:
+"sealedSince":…,"migrator":…,"legacyRetired":…,"keys":[{"id":…,"created":…,"recovery":…}],"replaces":[…]}}` (`replaces` only
+in a library that started over). Version 2 is the switch:
 every earlier Daybook (0.1.0-preview through 0.3.0) stops at it with "This library was synced by a newer Daybook
 (version 2). Update Daybook to sync." and changes nothing; the frozen version 1 engine checks this in the tests. The gate
 stays strict however tolerant decoding is: version 2 with an unknown scheme reads as newer too. Unlike the rest of the
 journal the manifest changes (keys added, a recovery key saved, plaintext retired); versions written at once by devices
 of the same library merge the same way in any order, every key kept and the newest current. An encrypted library wins
 over a plaintext one started beside it (its devices carry on in it once they have the key); two different encrypted
-libraries pause sync.
+libraries pause sync, unless they started over from the same one (below).
 
 **On a pass.** The engine reads the manifest, then the keychain (every pass, so a key that arrives is picked up at once).
 Without the current key it reads and writes nothing (`keyUnavailable`): local recording and editing go on, the courier
-still takes deliveries, presence says it's waiting, and Settings says "Your library in iCloud is encrypted. Waiting for its
-key from iCloud Keychain." with Get Key from (a paired device) and Enter Recovery Key. With the key, an entry's ID is
+still takes deliveries, presence says it's waiting, and the status says "Waiting for this library’s key." (on the Mac,
+"Turn on iCloud Keychain, or get the key from another device.") with Get Key from (a paired device), Enter Recovery
+Key, and, when no device has the key, Start Over (below). A recording that can't open yet says it plays once this device
+has the key (`AudioFetchError.keyUnavailable`). With the key, an entry's ID is
 still the SHA-256 of its plaintext record, so parents, heads, merges, and checkpoints are exactly as before; only the
 files differ. Sealed and plaintext copies of an entry are one entry. Objects are found sealed under any key held here,
 else in plaintext from before; they're written sealed under the current key. Installing an object opens it while hashing
@@ -264,7 +268,13 @@ A Mac that moved from a chosen folder (above) offers to delete that folder's pla
 event of a live conversation, only the deletion of a deleted one (its snapshots and audio are left behind), every settings
 version, and the objects live conversations use (their merged heads and highlight sidecars). The migrator does it, within
 each pass's limits; each device also seals plaintext entries it wrote itself (a pass already running when the manifest
-changed). A migrator not seen for two weeks is replaced by the next Mac with the key.
+changed). A migrator not seen for two weeks is replaced by the next Mac with the key. An iPhone migrator (it turned
+encryption on, or rotated the key) downloads recordings to seal only on an unrestricted network: Wi‑Fi or wired, not
+Low Data Mode (`SyncReplicaConfiguration.network`, from `NetworkConditionMonitor`'s `NWPathMonitor`; restricted until it
+first reports). It asks for `sealerDownloadBatch` (4) at a time, seals each as it arrives (also on cellular, once it's
+here), and then lets iCloud drop the downloaded copy. Reading back what it sealed waits for Wi‑Fi the same way. Off
+Wi‑Fi, Settings says "Encrypting · 12 left · Waiting for Wi‑Fi"; back on Wi‑Fi a pass starts, and a download arriving
+makes the next cheap check (`hasRemoteChanges`) run one.
 
 **Retiring the plaintext.** The migrator deletes a plaintext file only when its sealed counterpart was read back whole and
 iCloud reports it uploaded, another device holds the key or a recovery key was saved, and a week has passed since
@@ -283,6 +293,34 @@ isn't carried over, so it's erased from iCloud. The old key itself stays in iClo
 later (a device that was away) or restored from iCloud.com stays readable and is sealed again, or deleted if it's a
 deleted conversation's. Remove a lost device from the Apple Account before rotating. There are no per-conversation keys:
 a deletion can't shred one key, so erasing is this coarse step.
+
+**Starting over** (`startOver`, LibrarySyncStartOver.swift; "Start Over…" beside the waiting line on both apps, behind a
+confirmation: "What’s only in iCloud is lost. Conversations on your devices stay and sync again."). When the key is lost
+on every device (no device holds it, iCloud Keychain doesn't bring it, and there's no recovery key), a new library
+replaces the old one: a new library ID and a new key (stored and read back first), and a manifest whose `sealing.replaces`
+names the old library. This device becomes the migrator. No checkpoint carries over (`replaces` isn't `supersedes`), so
+every device publishes its own library into the new one as it gets the key, like a device meeting a different library
+identity (above); devices holding the same conversation merge like concurrent edits. The old library's files are
+deleted: at once its plaintext history from before encryption (`Events/`, `Metadata/`, which the new library must never
+read as its own), its sealed objects that aren't downloaded here, and any downloaded sealed file whose header names it;
+later, each sealed entry a pass opens that names a replaced library, and downloaded objects that do (passes on devices
+with the new key), with the courier's inbox for those libraries. Plaintext recordings from before encryption (`Blobs/`)
+stay, so a conversation published again can still use one; the new library's sealer seals what's used and, once
+retirement allows, deletes the rest (a library that started over never wrote plaintext, so a recording nothing names is
+the old library's). For two weeks after the start an iPhone holding a conversation whose recording isn't in the new library
+yet waits for another device to publish it rather than call it missing; a recording that existed only in the old
+library's files is lost, and the iPhone then reports it missing.
+
+- **Only when the key is gone.** Start Over is offered only while this device waits for the key, and not while another
+  device may hold it: one whose presence said so in the last two weeks (`keyHolderAbsence`), or the migrator that made
+  the key that recently and hasn't said it's waiting. Get the key from that device instead. The engine refuses the same
+  way (`keyAvailable`).
+- **Two devices at once.** The new manifest is written after reading the old one again under coordination: a device
+  that finds another's new library there already joins it (and forgets its own new key). Two that both wrote one leave
+  iCloud versions that resolve like any (`resolveManifest`): a library that's replaced gives way to the one replacing it,
+  and of libraries started over from the same one the smallest ID wins and replaces the others, whose files then go the
+  same way and whose devices publish again into the winner. An encrypted library that didn't start over from the same
+  one still pauses sync.
 
 **The courier** carries sealed files in a zone of their own, `SealedCourier` (the same `CourierFile` record type), which
 Daybook 0.3.0 and earlier never fetch or clear. A sealed file's name isn't its bytes' SHA-256: the inbox accepts

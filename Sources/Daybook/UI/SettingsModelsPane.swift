@@ -19,6 +19,7 @@ struct ModelSettings: View {
     @State private var removal: ModelRemoval?
     @State private var details: ModelDetailsRequest?
     @State private var showingAddModel = false
+    @State private var problemDetails: AppProblem?
     @State private var showingAcknowledgements = false
 
     init(state: AppState) {
@@ -83,9 +84,14 @@ struct ModelSettings: View {
         }
         .sheet(isPresented: $showingAcknowledgements) { ModelAcknowledgementsView(catalog: state.modelCatalog) }
         .modelRemovalAlert($removal, manager: manager)
-        .alert(manager.problem ?? "", isPresented: Binding(get: { manager.problem != nil }, set: { if !$0 { manager.problem = nil } })) {
+        .alert(manager.problem?.title ?? "", isPresented: Binding(get: { manager.problem != nil }, set: { if !$0 { manager.problem = nil } }),
+               presenting: manager.problem) { problem in
             Button("OK", role: .cancel) {}
-        }
+            if problem.details != nil {
+                Button("Details…") { problemDetails = problem; manager.problem = nil }
+            }
+        } message: { problem in Text(problem.message) }
+        .sheet(item: $problemDetails) { ProblemDetailsSheet(problem: $0) }
     }
 
     // MARK: Quality

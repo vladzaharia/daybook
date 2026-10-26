@@ -83,7 +83,7 @@ struct MacDetailScreen: View {
                     }
                 }
                 Section {
-                    Button("Unpair \(mac.name)", role: .destructive) { confirmingUnpair = true }
+                    Button("Unpair \(mac.name)…", role: .destructive) { confirmingUnpair = true }
                 }
             }
             .navigationTitle(mac.name)

@@ -175,7 +175,13 @@ enum FriendlyError {
 enum PlainError {
     static func message(for error: Error, fallback: String) -> (message: String, details: String?) {
         switch error {
-        case is AudioProvidingError, is PhotoProvidingError, is PhoneRecorderError, is PhotoStoreError:
+        case let error as PhoneRecorderError:
+            return (error.localizedDescription, error.details)
+        case is AudioProvidingError, is PhotoProvidingError, is PhotoStoreError:
+            return (error.localizedDescription, nil)
+        case let error as LibrarySyncError where error.isPlainSentence:
+            return (error.localizedDescription, nil)
+        case let error as AudioFetchError where error.isPlainSentence:
             return (error.localizedDescription, nil)
         default:
             let words = error.localizedDescription

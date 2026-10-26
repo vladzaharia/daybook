@@ -170,6 +170,11 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertNil(FloatingStatusInputs.syncProblem("iCloud sync is off"))
         XCTAssertEqual(FloatingStatusInputs.syncProblem("Sync paused: the iCloud account changed"),
                        "iCloud sync is paused: the iCloud account changed")
+        // The system's words stay in Settings, behind Details.
+        XCTAssertEqual(FloatingStatusInputs.syncProblem("Sync paused: The file “x” couldn’t be opened because you don’t have permission."),
+                       "iCloud sync is paused.")
+        XCTAssertEqual(FloatingStatusInputs.syncProblem("Couldn’t connect iCloud: The operation couldn’t be completed. (NSCocoaErrorDomain error 4.)"),
+                       "Couldn’t connect iCloud.")
         let inputs = recording { $0.syncProblem = "iCloud sync is paused: the iCloud account changed" }
         XCTAssertEqual(FloatingStatus.chips(inputs).last?.label, "Not syncing")
     }
