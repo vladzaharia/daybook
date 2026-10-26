@@ -332,6 +332,20 @@ extension LibrarySyncEngine {
         }
     }
 
+    /// Where an event's sealed file is, to read its snapshot again: where it was read (if that's still there), else its
+    /// name under the current key, else under another key held here. Nil: only the plaintext one from before.
+    func sealedLocation(of id: String, sealing: SealingState) -> URL? {
+        if let known = journalLocations[id], SyncFiles.itemState(known) != .absent || inboxCopy("Sealed/Events/\(known.lastPathComponent)") != nil {
+            return known
+        }
+        for key in sealing.readingOrder {
+            guard let name = key.objectName(.event, plaintextSHA256: id) else { continue }
+            let url = remoteRoot.appendingPathComponent("Sealed/Events/\(name)")
+            if SyncFiles.itemState(url) != .absent || inboxCopy("Sealed/Events/\(name)") != nil { journalLocations[id] = url; return url }
+        }
+        return nil
+    }
+
     // MARK: Writing
 
     /// Writes a journal record sealed under the current key (the same bytes again for the same record), and reports it

@@ -198,6 +198,8 @@ public actor LibrarySyncEngine {
             guard budget.admitJournalRead() else { continue }
             do {
                 let (hash, bytes) = try readEntry(entry, kind: .event)
+                // Where to read its snapshot again: preferably sealed under the current key, which outlives the rest.
+                if entry.isSealed, journalLocations[hash] == nil || sealedKeys[entry.path] == sealing?.current.id { journalLocations[hash] = entry.url }
                 // The same entry, sealed and from before (or under two keys), is one entry.
                 if let cached = eventCache[hash] { events[hash] = cached; continue }
                 try requireSupportedVersion(bytes)
@@ -207,7 +209,6 @@ public actor LibrarySyncEngine {
                 if let snapshot = event.snapshot { try validate(snapshot: snapshot, assets: event.assets) }
                 let header = SyncEventHeader(event)
                 events[hash] = header; eventCache[hash] = header
-                if entry.isSealed { journalLocations[hash] = entry.url }
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) { warnings.append(markUnreadable(unreadableKey, error)); unreadJournalFiles += 1 }
@@ -1204,8 +1205,8 @@ public actor LibrarySyncEngine {
         snapshotsUsed.insert(id)
         if let cached = snapshotCache[id] { return cached }
         let bytes: Data, url: URL
-        if let sealed = journalLocations[id], let sealing {
-            // Read again from where it was read: a sealed file, opened and checked against the ID.
+        if let sealing, let sealed = sealedLocation(of: id, sealing: sealing) {
+            // Read again from a sealed file, opened and checked against the ID.
             url = sealed
             let directory = "Sealed/Events"
             bytes = try readSealed(JournalEntry(url: sealed, path: "\(directory)/\(sealed.lastPathComponent)", directory: directory,

@@ -487,6 +487,15 @@ final class LibrarySyncSealingTests: XCTestCase {
         let fresh = try await pass(try self.mac("Fresh"), "Fresh")
         XCTAssertEqual(fresh.meetings.map(\.id), [kept.id]); XCTAssertEqual(fresh.pendingDownloads, 0); XCTAssertEqual(fresh.warnings, [])
         XCTAssertEqual(fresh.deletedMeetingIDs, [gone.id])
+        // Concurrent edits after the old key's files are gone merge against a base read again under the new key.
+        var onMac = try await MeetingStore(rootURL: local("Mac")).load(kept.id)
+        var onPhone = try await MeetingStore(rootURL: local("Phone")).load(kept.id)
+        onMac.title = "Kept, renamed"; onPhone.setNotes("Added on the phone")
+        try await pass(mac, "Mac", [onMac])
+        try await pass(phone, "Phone", [onPhone])
+        let merged = try await pass(mac, "Mac", [onMac])
+        XCTAssertEqual(merged.meetings.first?.title, "Kept, renamed"); XCTAssertEqual(merged.meetings.first?.notes, "Added on the phone")
+        XCTAssertEqual(merged.warnings, [])
     }
 
     // MARK: The courier
