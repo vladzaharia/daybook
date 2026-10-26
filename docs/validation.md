@@ -1,5 +1,51 @@
 # Validation record
 
+## Cross-stream follow-ups (2026-10-26)
+
+Regression tests now cover:
+
+- **A recorder handed over mid-recording, its Mac out of reach** (`RecorderHandoffTests`, against
+  `SimulatedSoundcore`): handed to the phone while the Mac's recording had it record too, it stops
+  once the Mac's presence no longer names the conversation, with the link gone, and its recording is
+  imported; or once the conversation arrives through sync with its link to the recorder ended. A
+  recording the recorder was making already, and one the person started on it since, are left alone,
+  and a Mac whose presence goes stale is given up on. The release and the synced record carry the new
+  optional `stopsWithConversation`; older messages and records decode without it.
+- **Owed stops across relaunches**: the Mac's stop owed to a phone that's away is sent when the phone
+  reconnects to the relaunched Mac (`PhoneLinkTests`), the iPhone's to a Mac after the app relaunches
+  (`LinkServicesTests`); each is kept a day (`OwedStopsTests`).
+- **A phone's notes from before the Mac joined** keep their times in the phone's recording, before
+  the timeline's zero, through placement, editing, and a merge (`MultiSourceTests`, `TimedNotesTests`,
+  `PhoneLinkTests`).
+- **iPhone filing**: filing and imports flush only their own conversation, so another that can't be
+  saved doesn't stop them, and an import cancelled while it waits for the library stops waiting and
+  imports nothing (`PhoneLibraryTests`).
+- **Fields a newer Daybook adds**: kept through edits made here in conversations, their recordings,
+  bookmarks, summary, sections, action items, and photos, and in each library setting, merged key by
+  key (deterministic, commutative, idempotent) and through a sync pass (`UnknownFieldsTests`,
+  `LibrarySyncCompatibilityTests`, `LibraryControllerTests`).
+- **Shared capture code**: the level measure and the format converter both apps use
+  (`AudioBuffersTests`, with the Mac's and iPhone's capture suites unchanged).
+- **A stop by a stale list**: a recorder's owner stopping a named recording waits for its list read
+  again, and never pauses the person's own recording on an older one (`MultipointRecordingTests`).
+- The sync and multipoint tests wait and name their preferences through `DaybookTestSupport`.
+
+Verification on Apple silicon with Xcode 27.1: `swift test` passed 917 XCTest cases across all seven
+bundles; `scripts/build-ios.sh --test` on a dedicated iPhone Duo simulator (iOS 27.1, run serially)
+passed 138 tests. No Bluetooth, recording, network beyond loopback, or model downloads.
+
+Still requires real devices:
+
+- **Stopping a handed-over recorder out of reach.** Record on the Mac with a Soundcore Work
+  recording along, use it on the iPhone, take the iPhone off the Mac's Wi‑Fi, and stop the Mac: the
+  iPhone pauses the recorder once iCloud Drive brings the Mac's presence (note how long, with the app
+  in front and in the background), and the recording joins the Mac's conversation.
+- **Owed stops after a real relaunch**: quit Daybook on the Mac while the phone is away, then bring
+  the phone back; force-quit the iPhone app with a stop owed to a Mac, then reopen it near the Mac.
+- **Notes before zero on screen**: a phone-led conversation the Mac joined late shows the phone's
+  early notes with negative times (−0:42) on the Mac's Transcript page, in Floating Notes, on the
+  iPhone, and in exports.
+
 ## Security review fixes (2026-10-25)
 
 Regression tests cover: a pairing refusal believed only before the first commitment, a Mac
