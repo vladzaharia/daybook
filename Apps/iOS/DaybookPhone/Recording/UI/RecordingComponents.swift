@@ -84,7 +84,7 @@ struct RecordingStatusHeader: View {
                 }
             }
             if showsTitle {
-                Text(recorder.title.isEmpty ? "New conversation" : recorder.title)
+                Text(recorder.title.isEmpty ? "Untitled Conversation" : recorder.title)
                     .font(PhoneStyle.Typeface.title(.title3))
                     .foregroundStyle(PhoneStyle.Ink.title)
                     .lineLimit(1)
@@ -99,7 +99,7 @@ struct RecordingStatusHeader: View {
         case .starting: return "Starting"
         case .recording: return "Recording"
         case .paused: return "Paused"
-        case .stopping: return "Saving"
+        case .stopping: return "Saving…"
         case .idle: return "Saved"
         }
     }
@@ -180,7 +180,8 @@ struct BookmarkControl: View {
     }
 }
 
-/// Take Photo while recording: the photo joins the recording at its shutter moment, like a bookmark.
+/// Take Photo while recording: the photo joins the recording at its shutter moment, like a bookmark,
+/// and the count shows on it as Bookmark's does.
 struct CameraControl: View {
     @Environment(PhoneAppModel.self) private var model
     var size: CGFloat = 44
@@ -199,6 +200,19 @@ struct CameraControl: View {
                 .foregroundStyle(PhoneStyle.Ink.title)
                 .frame(width: size, height: size)
                 .contentShape(Circle())
+        }
+        .overlay(alignment: .topTrailing) {
+            if count > 0 {
+                Text("\(count)")
+                    .font(.caption2.weight(.bold).monospacedDigit())
+                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .padding(.horizontal, 5)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(.regularMaterial, in: Capsule())
+                    .offset(x: 4, y: -4)
+                    .contentTransition(.numericText())
+                    .accessibilityHidden(true)
+            }
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
@@ -221,7 +235,7 @@ struct StopControl: View {
             HStack(spacing: 8) {
                 if model.recorder.state == .stopping || model.isFiling {
                     ProgressView().tint(.white)
-                    Text("Saving")
+                    Text("Saving…")
                 } else {
                     Image(systemName: "stop.fill")
                     Text("Stop")
@@ -296,8 +310,8 @@ struct PausedPanel: View {
     private var message: String {
         let recorder = model.recorder
         if recorder.canResume {
-            return isCall ? "The call has ended. Everything so far is saved; resume when you're ready."
-                : (recorder.pauseMessage ?? "Everything so far is saved.") + " Resume when you're ready."
+            return isCall ? "The call has ended. Everything so far is saved; resume when you’re ready."
+                : (recorder.pauseMessage ?? "Everything so far is saved.") + " Resume when you’re ready."
         }
         return isCall ? "Everything so far is saved. Recording can continue when the call ends."
             : (recorder.pauseMessage ?? "Everything so far is saved.")
@@ -371,6 +385,7 @@ struct LiveTimelineBar: View {
 /// This recording's bookmarks, newest first, each with the note written just before it.
 struct BookmarkLog: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let recorder = model.recorder
@@ -399,12 +414,12 @@ struct BookmarkLog: View {
                             .foregroundStyle(PhoneStyle.Ink.secondary)
                             .lineLimit(1)
                     }
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.snappy, value: marks.count)
+        .motion(.snappy, value: marks.count)
     }
 
     /// The paragraph written last before the bookmark.

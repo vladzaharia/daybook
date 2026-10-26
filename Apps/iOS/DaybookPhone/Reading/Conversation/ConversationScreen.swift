@@ -28,7 +28,7 @@ struct ConversationScreen: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 PlayerBar(player: session.player, library: library, meeting: meeting)
             }
-            .animation(.snappy(duration: 0.25), value: session.player.isActive(for: meeting.id))
+            .motion(.snappy(duration: 0.25), value: session.player.isActive(for: meeting.id))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
