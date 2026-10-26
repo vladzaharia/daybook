@@ -168,7 +168,6 @@ private struct ReadingLayout: View {
                     TranscriptPage(library: library, player: session.player, meeting: meeting, showsHeader: false)
                         .safeAreaInset(edge: .bottom, spacing: 0) { PlayerBar(player: session.player, library: library, meeting: meeting) }
                         .navigationBarTitleDisplayMode(.inline)
-                        .toolbar { TranscriptToolbar(meeting: meeting) }
                 }
                 .environment(\.isTwoPage, true)
                 .transition(pageTurn(from: .trailing))
@@ -227,19 +226,6 @@ private struct ReadingLayout: View {
                 session.openID = newest.id
                 session.chosen = false
             }
-        }
-    }
-}
-
-/// The transcript page's own toolbar on two pages: where it's playing, and the speakers' Info.
-private struct TranscriptToolbar: ToolbarContent {
-    let meeting: Meeting
-    @Environment(ReadingSession.self) private var session
-
-    var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Button { session.sheet = .info(meeting.id) } label: { Label("People", systemImage: "person.2") }
-                .disabled(meeting.speakers.isEmpty)
         }
     }
 }
