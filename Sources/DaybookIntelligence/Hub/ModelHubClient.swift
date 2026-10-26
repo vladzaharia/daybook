@@ -105,9 +105,17 @@ public struct HuggingFaceHubClient: ModelHubClient {
     public func data(repository: String, revision: String, path: String, maxBytes: Int) async throws -> Data {
         var url = endpoint.appendingPathComponent(repository).appendingPathComponent("resolve").appendingPathComponent(revision)
         for component in path.split(separator: "/") { url.appendPathComponent(String(component)) }
-        let (data, response) = try await session.data(from: url)
+        guard maxBytes >= 0 else { throw ModelHubError.tooLarge(path) }
+        let (bytes, response) = try await session.bytes(from: url)
+        defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw ModelHubError.notFound(path) }
-        guard data.count <= maxBytes else { throw ModelHubError.tooLarge(path) }
+        guard response.expectedContentLength <= Int64(maxBytes) else { throw ModelHubError.tooLarge(path) }
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < maxBytes else { throw ModelHubError.tooLarge(path) }
+            data.append(byte)
+        }
         return data
     }
 
