@@ -150,8 +150,14 @@ public final class LibrarySyncController: ObservableObject {
     private let localRoot: URL
     private let defaults: UserDefaults
     public let environment: SyncContainerEnvironment
-    /// This replica's identity in the sync journal, kept in preferences.
-    public let deviceID: String
+    /// This replica's identity in the sync journal, kept on this device (`SyncDeviceIdentityStore`) and mirrored in
+    /// preferences. It changes only when another device turns out to share it.
+    public private(set) var deviceID: String
+    /// A random ID for this installation, in the presence record.
+    public private(set) var installation: String
+    private let identityStore: SyncDeviceIdentityStore
+    /// Another device writes presence under this device ID; a new identity is taken once the pass ends.
+    private var needsNewIdentity = false
     /// The container sync uses, once restored.
     public private(set) var containerIdentifier: String?
     /// The engine for the connected library: on-demand audio (`fetchAudio`, `evictAudio`), presence
@@ -193,16 +199,65 @@ public final class LibrarySyncController: ObservableObject {
         static let migration = "syncContainerMigration"
         static let account = "syncICloudAccount"
         static let turnedOff = "syncICloudTurnedOff"
+        static let deviceID = "syncDeviceID"
+        static let installation = "syncInstallation"
+        /// The identity moved to this device's keychain. Seen without the keychain item, the preferences (and the
+        /// library) were copied from another Mac.
+        static let identityStored = "syncDeviceIDInKeychain"
     }
 
-    public init(localRoot: URL, defaults: UserDefaults, environment: SyncContainerEnvironment = .system) {
+    /// `identityStore` defaults to this device's keychain (`SyncDeviceIdentityStore.keychain(for:)`).
+    public init(localRoot: URL, defaults: UserDefaults, environment: SyncContainerEnvironment = .system,
+                identityStore: SyncDeviceIdentityStore? = nil) {
         self.localRoot = localRoot; self.defaults = defaults; self.environment = environment
-        deviceID = defaults.string(forKey: "syncDeviceID") ?? UUID().uuidString
-        defaults.set(deviceID, forKey: "syncDeviceID")
+        let store = identityStore ?? .keychain(for: localRoot)
+        self.identityStore = store
+        let identity = Self.resolveIdentity(store: store, defaults: defaults, localRoot: localRoot)
+        deviceID = identity.deviceID; installation = identity.installation
         lastSync = defaults.object(forKey: "syncLastCompleted") as? Date
         migrationRecord = defaults.data(forKey: Key.migration).flatMap { try? JSONDecoder().decode(SyncMigrationRecord.self, from: $0) }
         let usable = environment.containerIdentifier.map(environment.hasEntitlement) ?? false
         iCloud = usable ? .checking : .unavailableInThisBuild
+    }
+
+    /// The identity from this device's keychain. On the first launch with it, the one in preferences moves there
+    /// unchanged. Preferences that say it moved, with no keychain item here, came from another Mac (Migration
+    /// Assistant, a backup): this Mac takes a new identity and keeps its place in the journal. Without a keychain
+    /// (unsigned builds, tests), preferences hold it as before.
+    static func resolveIdentity(store: SyncDeviceIdentityStore, defaults: UserDefaults, localRoot: URL) -> StoredSyncIdentity {
+        let inPreferences = defaults.string(forKey: Key.deviceID)
+        if let stored = store.read() {
+            if inPreferences != stored.deviceID { defaults.set(stored.deviceID, forKey: Key.deviceID) }
+            return stored
+        }
+        if defaults.bool(forKey: Key.identityStored), let copied = inPreferences {
+            let fresh = StoredSyncIdentity(deviceID: UUID().uuidString, installation: UUID().uuidString)
+            LibrarySyncEngine.carryOverCheckpoints(localRoot: localRoot, from: copied, to: fresh.deviceID)
+            _ = store.write(fresh)
+            defaults.set(fresh.deviceID, forKey: Key.deviceID)
+            return fresh
+        }
+        let identity = StoredSyncIdentity(deviceID: inPreferences ?? UUID().uuidString,
+                                          installation: defaults.string(forKey: Key.installation) ?? UUID().uuidString)
+        if store.write(identity) { defaults.set(true, forKey: Key.identityStored) } else { defaults.set(identity.installation, forKey: Key.installation) }
+        defaults.set(identity.deviceID, forKey: Key.deviceID)
+        return identity
+    }
+
+    /// Another device shares this device ID (presence says so): this one takes a new identity, keeps its place in
+    /// the journal, and reconnects.
+    private func takeNewIdentity() {
+        guard needsNewIdentity, !isSyncing else { return }
+        needsNewIdentity = false
+        let fresh = StoredSyncIdentity(deviceID: UUID().uuidString, installation: installation)
+        LibrarySyncEngine.carryOverCheckpoints(localRoot: localRoot, from: deviceID, to: fresh.deviceID)
+        if !identityStore.write(fresh) { defaults.set(fresh.installation, forKey: Key.installation) }
+        defaults.set(fresh.deviceID, forKey: Key.deviceID)
+        deviceID = fresh.deviceID
+        guard let folder else { return }
+        let transport = self.transport
+        stopMonitoring(); engine = nil
+        try? attach(folder, transport: transport, monitorChanges: true)
     }
 
     /// Whether this build may sync through a chosen folder: only without iCloud, and only when asked for.
@@ -311,7 +366,7 @@ public final class LibrarySyncController: ObservableObject {
         if url.startAccessingSecurityScopedResource() { scopedURL = url }
         // In the container, a fresh device waits for iCloud's first listing before it starts a library of its own.
         do { engine = try LibrarySyncEngine(localRoot: localRoot, remoteRoot: url, deviceID: deviceID, replica: replica,
-                                            waitsForListing: transport == .iCloudContainer && monitorChanges) }
+                                            waitsForListing: transport == .iCloudContainer && monitorChanges, installation: installation) }
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = "Connected · preparing sync"; configurationID = UUID()
         isICloudLocation = (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true || root.path.contains("/Library/Mobile Documents/")
@@ -394,6 +449,7 @@ public final class LibrarySyncController: ObservableObject {
             activeTask = nil
             try Task.checkCancellation()
             guard generation == configurationID else { isSyncing = false; return nil }
+            if await engine.sharesIdentity { needsNewIdentity = true }
             handToCourier(result.writtenFiles, engine: engine)
             pendingReceipt = result.checkpointID
             pendingDownloads = result.pendingDownloads; pendingUploads = result.pendingUploads; warnings = result.warnings
@@ -420,9 +476,14 @@ public final class LibrarySyncController: ObservableObject {
         guard canApply(result) else { throw SyncControllerError.busy }
         status = result.hasPendingTransfers ? "Waiting for iCloud: \(result.pendingUploads) upload(s), \(result.pendingDownloads) download(s)" : "Library changes exchanged"
         lastSync = Date(); defaults.set(lastSync, forKey: "syncLastCompleted")
+        isSyncing = false
+        takeNewIdentity()
     }
 
-    public func reportFailure(_ message: String) { isSyncing = false; pendingReceipt = nil; status = "Sync paused: " + message }
+    public func reportFailure(_ message: String) {
+        isSyncing = false; pendingReceipt = nil; status = "Sync paused: " + message
+        takeNewIdentity()
+    }
 
     // MARK: Presence
 

@@ -85,6 +85,9 @@ public actor LibrarySyncEngine {
     /// Journal file names seen by the last pass that finished with nothing pending or deferred.
     var settledJournalListing: Set<String>?
     var presenceWritten: (record: SyncDeviceRecord, at: Date)?
+    nonisolated let installation: String?
+    /// Another device writes presence under this device ID: this one should take a new identity.
+    public internal(set) var sharesIdentity = false
     /// The sync library's ID, from its manifest, once a pass has read it. The iPhone's local link
     /// tags its Bonjour browsing with it (docs/link.md, "Discovery").
     public internal(set) var libraryID: UUID?
@@ -94,9 +97,12 @@ public actor LibrarySyncEngine {
     /// `waitsForListing`: in the iCloud container, a library (`daybook-sync.json`) isn't created until
     /// `listingGathered()` says iCloud has listed what's there, so a fresh device doesn't start a second library
     /// beside one it can't see yet.
+    /// `installation` (a random ID for this installation) goes in the presence record, so two devices that share a
+    /// device ID can tell (`sharesIdentity`).
     public init(localRoot: URL, remoteRoot: URL, deviceID: String, replica: SyncReplicaConfiguration = SyncReplicaConfiguration(),
-                waitsForListing: Bool = false) throws {
+                waitsForListing: Bool = false, installation: String? = nil) throws {
         mayCreateLibrary = !waitsForListing
+        self.installation = installation
         self.localRoot = localRoot.standardizedFileURL
         self.remoteRoot = remoteRoot.standardizedFileURL
         self.deviceID = deviceID
@@ -608,6 +614,31 @@ public actor LibrarySyncEngine {
             let deletions = try? JSONDecoder().decode(Deletions.self, from: Data(contentsOf: sync.appendingPathComponent(name)))
             return deletions?.deletedIDs?.contains(id) == true
         }
+    }
+    /// A device taking a new identity keeps its place in every library it synced: its checkpoints (and bases) are
+    /// copied to the new device ID, so it continues from the same heads instead of publishing everything again.
+    public static func carryOverCheckpoints(localRoot: URL, from oldDeviceID: String, to newDeviceID: String) {
+        let fm = FileManager.default
+        let sync = localRoot.standardizedFileURL.appendingPathComponent("Sync", isDirectory: true)
+        let suffix = "-\(SyncDigest.sha256(data: Data(oldDeviceID.utf8)).prefix(16)).json"
+        for name in (try? fm.contentsOfDirectory(atPath: sync.path)) ?? [] where name.hasSuffix(suffix) {
+            guard let library = UUID(uuidString: String(name.dropLast(suffix.count))) else { continue }
+            _ = try? adoptCheckpoint(localRoot: localRoot, oldDeviceID: oldDeviceID, newDeviceID: newDeviceID, library: library)
+        }
+    }
+    private static func adoptCheckpoint(localRoot: URL, oldDeviceID: String, newDeviceID: String, library: UUID) throws {
+        let fm = FileManager.default
+        let sync = localRoot.standardizedFileURL.appendingPathComponent("Sync", isDirectory: true)
+        let fromStem = checkpointStem(libraryID: library, deviceID: oldDeviceID), toStem = checkpointStem(libraryID: library, deviceID: newDeviceID)
+        let from = sync.appendingPathComponent("\(fromStem).json"), to = sync.appendingPathComponent("\(toStem).json")
+        guard fm.fileExists(atPath: from.path), !fm.fileExists(atPath: to.path) else { return }
+        let fromBases = sync.appendingPathComponent("Bases/\(fromStem)", isDirectory: true)
+        if fm.fileExists(atPath: fromBases.path) {
+            let toBases = sync.appendingPathComponent("Bases/\(toStem)", isDirectory: true)
+            try? fm.removeItem(at: toBases)
+            try fm.copyItem(at: fromBases, to: toBases)
+        }
+        try LocalFiles.atomicWrite(Data(contentsOf: from), to: to)
     }
     static func checkpointStem(libraryID: UUID, deviceID: String) -> String {
         "\(libraryID.uuidString)-\(SyncDigest.sha256(data: Data(deviceID.utf8)).prefix(16))"

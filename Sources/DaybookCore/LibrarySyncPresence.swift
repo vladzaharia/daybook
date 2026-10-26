@@ -17,6 +17,9 @@ struct SyncDeviceRecord: Codable, Equatable {
     var audioPolicy: String?
     /// When the device last completed a sync pass, by its clock. ISO 8601.
     var lastSeen: Date
+    /// A random ID for this installation. Two devices writing the same record with different ones share a device
+    /// ID (one was cloned from the other), and one of them takes a new identity (`sharesIdentity`).
+    var installation: String?
 
     func sameIdentity(as other: SyncDeviceRecord) -> Bool {
         var copy = self
@@ -49,6 +52,9 @@ enum SyncPresenceFiles {
 }
 
 extension LibrarySyncEngine {
+    /// How recently another installation must have written this device's record to count as a second device.
+    static let sharedIdentityWindow: TimeInterval = 60 * 60
+
     /// Changes how this replica describes itself (for example when a Mac finishes downloading models).
     /// The next pass rewrites the presence record; nil stops writing it.
     public func updateDevice(_ identity: SyncDeviceIdentity?) { device = identity }
@@ -59,13 +65,22 @@ extension LibrarySyncEngine {
     func writePresence(now: Date, force: Bool) throws {
         guard let device else { return }
         let record = SyncDeviceRecord(deviceID: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
-                                      canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now)
+                                      canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation)
+        let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
+        let url = directory.appendingPathComponent(SyncPresenceFiles.fileName(for: deviceID))
+        // Another installation wrote this device's record recently: two devices share this device ID. The one with
+        // the greater installation ID yields (and stops writing the record); the other keeps the ID.
+        if let installation, SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
+           let existing = SyncPresenceFiles.decode(bytes), let other = existing.installation, other != installation,
+           abs(now.timeIntervalSince(existing.lastSeen)) < Self.sharedIdentityWindow {
+            if installation > other { sharesIdentity = true; return }
+            // The other device yields; rewrite the record now, so it reads as this one again.
+            presenceWritten = nil
+        }
         if !force, let last = presenceWritten, last.record.sameIdentity(as: record),
            now.timeIntervalSince(last.at) < presenceRefreshInterval { return }
-        let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
         try SyncFiles.noSymlinks(directory, below: remoteRoot)
         try LocalFiles.directory(directory)
-        let url = directory.appendingPathComponent(SyncPresenceFiles.fileName(for: deviceID))
         let bytes = try SyncPresenceFiles.encode(record)
         try SyncFiles.coordinateWrite(url, below: remoteRoot) { try LocalFiles.atomicWrite(bytes, to: $0) }
         presenceWritten = (record, now)
