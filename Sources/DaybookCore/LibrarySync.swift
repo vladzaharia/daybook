@@ -330,8 +330,11 @@ public actor LibrarySyncEngine {
     public func acknowledge(_ checkpointID: UUID) throws {
         guard let pending = state.pending, pending.id == checkpointID else { throw LibrarySyncError.invalidCheckpoint }
         let previous = state
+        // Forget what was published only where the applied base moved. A conversation held back this pass
+        // (audio pending, a parent missing, an unread journal) keeps it, so the same edit isn't published again.
+        for (id, base) in pending.bases where state.bases[id] != base { state.submittedHashes.removeValue(forKey: id) }
+        for id in state.bases.keys where pending.bases[id] == nil { state.submittedHashes.removeValue(forKey: id) }
         state.bases = pending.bases; state.heads = pending.heads; state.metadataHeads = pending.metadataHeads
-        for id in pending.bases.keys { state.submittedHashes.removeValue(forKey: id) }
         state.pending = nil
         do { try saveCheckpoint() } catch { state = previous; throw error }
     }

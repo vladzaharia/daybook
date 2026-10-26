@@ -177,6 +177,30 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertEqual(ready.meetings.count, 1); XCTAssertEqual(ready.pendingDownloads, 0)
     }
 
+    func testAHeldConversationPublishesALocalEditOnceAcrossManyPasses() async throws {
+        let first = root.appendingPathComponent("first.wav"), second = root.appendingPathComponent("second.wav")
+        try Data("first recording".utf8).write(to: first); try Data("second recording".utf8).write(to: second)
+        let storeA = try MeetingStore(rootURL: local("A"))
+        let a = try engine("A"), b = try engine("B")
+        let base = try await publish(try await storeA.importAudio(from: first, into: Meeting(title: "Review")), using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: []); try await apply(pulled, to: "B", using: b)
+        // A adds a recording whose audio hasn't reached the sync folder: B's copy waits for it.
+        let added = try await storeA.importAudio(from: second, into: base)
+        _ = try await publish(added, using: a, name: "A")
+        try FileManager.default.removeItem(at: remote.appendingPathComponent("Blobs/\(added.tracks[1].sha256)"))
+        var edited = pulled.meetings[0]; edited.setNotes("Edited on B while A's recording uploads")
+        var published = 0
+        for _ in 0..<5 {
+            let result = try await b.synchronize(meetings: [edited])
+            XCTAssertGreaterThan(result.pendingDownloads, 0)
+            XCTAssertEqual(result.meetings.first?.notes, edited.notes, "the held conversation keeps the local edit")
+            published += result.publishedEvents
+            try await b.acknowledge(result.checkpointID)
+        }
+        XCTAssertEqual(published, 1, "a held conversation publishes its edit once, not every pass")
+        XCTAssertEqual(try records().filter { $0["deviceID"] as? String == "B" }.count, 1)
+    }
+
     func testFailedLocalUploadPreservesUnsentEdits() async throws {
         let a = try engine("A")
         let base = try await publish(Meeting(notes: "Published base"), using: a, name: "A")
