@@ -179,7 +179,6 @@ struct RecordingSettingsScreen: View {
             Section {
                 LabeledContent("Format", value: "AAC, 48 kHz mono")
                 LabeledContent("Size", value: "About 29 MB an hour")
-                LabeledContent("Notes and bookmarks", value: "Timed to the recording")
             } header: {
                 Text("Quality")
             } footer: {

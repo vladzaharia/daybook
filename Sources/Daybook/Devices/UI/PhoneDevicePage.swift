@@ -59,7 +59,7 @@ struct PhoneOverview: View {
                     .transition(.deviceNotice(reduceMotion: reduceMotion))
             }
 
-            DeviceHeading("How recordings arrive")
+            DeviceHeading("Import")
             DeviceMethodRows(state: state, session: session)
 
             RecentImports(state: state, session: session, heading: "Recently recorded")
@@ -70,7 +70,7 @@ struct PhoneOverview: View {
     private func byline(now: Date) -> String {
         guard let direct, direct.isSetUp else { return "Not paired" }
         if direct.state.isConnected {
-            var parts = ["Connected over Wi‑Fi"]
+            var parts = ["Connected"]
             if session.status?.isRecording == true { parts.append((direct as? PhoneLinkConnection)?.recordingPhase == .paused ? "Paused" : "Recording") }
             if state.sync.folder == nil { parts.append("Sync is off") }
             return parts.joined(separator: " · ")

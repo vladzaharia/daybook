@@ -112,16 +112,14 @@ struct ReprocessMenu: View {
 
     var body: some View {
         Menu {
-            Section("Your Mac does this") {
-                if meeting.hasUntranscribedAudio {
-                    Button { request(.newAudio) } label: { Label("Transcribe", systemImage: "waveform") }
-                }
-                Button { request(.summaryOnly) } label: { Label("Summarize Again", systemImage: "text.alignleft") }
-                    .disabled(meeting.unifiedTranscript.isEmpty)
-                Button { request(.speakerRefresh) } label: { Label("Identify Speakers Again", systemImage: "person.2") }
-                    .disabled(meeting.transcripts.isEmpty)
-                Button { request(.fullRetranscription) } label: { Label("Transcribe Everything Again", systemImage: "arrow.clockwise") }
+            if meeting.hasUntranscribedAudio {
+                Button { request(.newAudio) } label: { Label("Transcribe", systemImage: "waveform") }
             }
+            Button { request(.summaryOnly) } label: { Label("Summarize Again", systemImage: "text.alignleft") }
+                .disabled(meeting.unifiedTranscript.isEmpty)
+            Button { request(.speakerRefresh) } label: { Label("Identify Speakers Again", systemImage: "person.2") }
+                .disabled(meeting.transcripts.isEmpty)
+            Button { request(.fullRetranscription) } label: { Label("Transcribe Everything Again", systemImage: "arrow.clockwise") }
         } label: {
             Label("Reprocess", systemImage: "laptopcomputer")
         }

@@ -159,11 +159,7 @@ private struct DevicePageContent: View {
                     }
                 }
             } header: {
-                Text("How Recordings Arrive")
-            } footer: {
-                if let restored = model.devices.restoredAt, session.direct != nil {
-                    Text("Reconnected in the background \(DeviceDateFormat.relative(restored)).")
-                }
+                Text("Import")
             }
         }
         .navigationTitle(session.device.name)

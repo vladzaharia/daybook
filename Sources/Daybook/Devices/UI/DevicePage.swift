@@ -139,7 +139,7 @@ private struct DeviceOverview: View {
 
             primaryAction(new)
 
-            DeviceHeading("How recordings arrive")
+            DeviceHeading("Import")
             DeviceMethodRows(state: state, session: session)
 
             RecentImports(state: state, session: session)

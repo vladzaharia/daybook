@@ -241,7 +241,7 @@ The interface is generic and capability-driven:
   folder. A `+` on hover adds a device.
 - **List column**: Recording Now, the queue, New on <device>, and Already in Daybook (collapsed).
 - **Device page**: the glyph hangs in the page margin; a status dot and byline; figure tiles
-  for whatever status the method reports; Import N New; How recordings arrive (each method in
+  for whatever status the method reports; Import N New; Import (each method in
   preference order, with one action); Recently imported. Problems use one banner with at most
   two actions.
 - **Add Device…** (File menu, sidebar, Settings, Welcome): choose a kind, then its methods in

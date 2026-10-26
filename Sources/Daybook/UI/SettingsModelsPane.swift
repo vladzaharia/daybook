@@ -351,9 +351,6 @@ private struct VoiceMatchingSheet: View {
                 }
                 .labelsHidden()
             }
-            Text("Stricter settings name fewer people automatically but make fewer mistakes.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Restore Defaults") {
                     state.processingPreferences.speakerMatchThreshold = 0.82

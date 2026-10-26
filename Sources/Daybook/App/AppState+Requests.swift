@@ -238,7 +238,7 @@ extension AppState {
             currentRequest?.cancel()
             if let request = running.requestID.flatMap({ request($0, in: running.meetingID) }), request.isOpen,
                let holder = request.activeClaim(at: now)?.device.name {
-                notice = "\(holder) is processing “\(meetings.first { $0.id == running.meetingID }?.title ?? "a conversation")”, so this Mac stopped."
+                notice = "\(holder) is transcribing “\(meetings.first { $0.id == running.meetingID }?.title ?? "a conversation")”."
             }
         }
         processingQueue.removeAll(where: lost)
