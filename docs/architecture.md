@@ -98,7 +98,7 @@ Audio filenames inside the library use generated identifiers. Relative paths can
 
 Moving a meeting to local Trash moves its entire directory. Its original ID acts as a persistent tombstone that rejects queued stale saves. Local-only restoration moves it back; once a deletion has synced, recovery requires a new meeting UUID. This is application trash, not permanent erasure or the macOS Trash service.
 
-Files use user-only permissions. This version does not add application-level encryption. Optional iCloud Drive synchronization exchanges the complete meeting library through immutable records and content-addressed originals. Local inference stays independent of sync; see [sync architecture](icloud-sync.md).
+Files use user-only permissions; the local library isn't encrypted by Daybook. Optional iCloud Drive synchronization exchanges the complete meeting library through immutable records and content-addressed originals, sealed end to end once the library is encrypted in iCloud ([encryption](icloud-sync.md#encryption)). Local inference stays independent of sync; see [sync architecture](icloud-sync.md).
 
 Concurrent sync merges keep transcript text, its clock alignment, and correction-review candidates together as one derived view. Notes and their paragraph anchors also travel together, including the alternate version retained in conflict history. During a process lifetime, unchanged local originals reuse an integrity check keyed by digest, size, modification time, and filesystem identity; a restart or file change triggers hashing again. A differing local original is preserved under `SyncConflicts` before verified remote bytes replace it.
 

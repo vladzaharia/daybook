@@ -1,5 +1,65 @@
 # Validation record
 
+## Library encryption (2026-10-26)
+
+End-to-end encryption of the sync journal (docs/icloud-sync.md, "Encryption"), dark by default: Settings offers Encrypt
+Library in iCloud, and `LibrarySyncEngine.sealsNewLibraries` stays false until the checks below pass.
+
+- The format is frozen by known-answer vectors computed by an independent implementation of the specification (pure
+  Python AES-256, GCM, HMAC, and HKDF, itself checked against FIPS-197 and the GCM specification's test case), not by the
+  Swift code (`SealedObjectTests.testKnownAnswerVectorsFreezeTheFormat`).
+- Compatibility: the frozen version 1 engine (`LegacyLibrarySyncFixture`) refuses an encrypted library with
+  `unsupportedVersion(2)` and leaves every byte of the sync folder as it was; a plaintext library's manifest, events,
+  and objects are written as before (`LibrarySyncSealingTests`); every existing sync test passes unchanged.
+- `swift test`: 944 tests passed across all seven bundles (`DaybookCoreTests` 309, one skipped: the 1 GiB benchmark;
+  `DaybookKitTests` 143; `DaybookLinkTests` 69). `scripts/ci/tests/run-tests.sh`: 251 passed. An unsigned iPhone
+  archive (`scripts/build-ios.sh --archive --no-sign`) passes `scripts/ci/check-ios-archive.sh`, which now also checks a
+  signed archive's keychain groups. `scripts/build-ios.sh --test` on an iOS 27.1 simulator: 136 tests passed.
+- An independent review of the engine found plaintext that could reach an encrypted container (a chosen folder moved
+  before the container's manifest downloaded, presence written before the first pass, a courier delivery promoted after
+  a day), a rotation that could leave late files unreadable, deletions and newer-format entries that could hold a
+  conversation forever after retirement, and a crafted length that could crash; each is fixed with a regression test.
+- Performance, `DAYBOOK_SEALED_PERFORMANCE=1 swift test --filter SealedObjectTests`, a 1 GiB original on this Mac
+  (Apple silicon, debug build, quiet runs): copy and SHA-256 (today's upload, an APFS clone) 0.41 to 0.45 s; seal 0.39 to
+  0.48 s (0.88 to 1.10 times); open 0.40 to 0.48 s (0.90 to 1.11 times); at most 6.8 MiB more memory sealing and 3.2 MiB
+  opening. Budget: 1.5 times, 8 MiB. Hashing a file now drains each read, so a long recording's SHA-256 no longer holds the
+  whole file in memory until the pass ends.
+
+Still requires the owner's devices, before turning it on for anyone:
+
+- **Shared keychain group.** `codesign -d --entitlements - --xml /Applications/Daybook.app | plutil -p -` lists
+  `keychain-access-groups` = `48H7CLBV8Y.local.daybook.app`, `48H7CLBV8Y.local.daybook.shared` on the Developer ID build;
+  `scripts/ci/check-ios-archive.sh` passes on a signed TestFlight archive (it checks the iPhone's groups and their order).
+  Existing pairings and the sync device ID still work after updating (the default group didn't move).
+- **The key through iCloud Keychain.** Turn encryption on on the Mac with a few conversations. How long until the iPhone
+  (TestFlight) leaves "Waiting for its key from iCloud Keychain." without a recovery key or the link? Repeat with the iPhone
+  turning it on.
+- **iCloud Keychain off** on the iPhone: it waits; Get Key from <Mac> over the link opens the library and the Mac says it
+  sent it; turning iCloud Keychain back on changes nothing.
+- **No keychain prompts** on the Mac, at launch, on a pass, or when the key arrives.
+- **Locked iPhone.** Lock it and let a background refresh run (or simulate the `local.daybook.phone.sync` task in the
+  debugger): the pass reads the key (`kSecAttrAccessibleAfterFirstUnlock`) and syncs.
+- **Recovery key.** Delete the key from one device's Passwords app (or reset iCloud Keychain on a test account): it waits;
+  Enter Recovery Key opens the library. A wrong key says it doesn't match.
+- **Accounts.** Sign the iPhone out of iCloud and into another account with a plaintext library: after Sync with This
+  Account it syncs that library, without "The library in iCloud is no longer encrypted."
+- **Large recordings.** Seal (upload) and open (install on a second Mac, fetch on the iPhone) 2 to 4 GB recordings: time,
+  memory, and the iPhone's thermals.
+- **The courier in Production.** Record on the iPhone with the Mac open: CloudKit Console › Production › Private Database
+  shows the `SealedCourier` zone with `CourierFile` records (no schema change: the same record type), gone once the Mac has
+  stored them. Nothing new appears in the `Courier` zone.
+- **Retirement.** A week after turning it on, with another device holding the key or a recovery key saved, the container's
+  `Events/`, `Metadata/`, and `Blobs/` are empty on every Mac (`~/Library/Mobile Documents/iCloud~local~daybook/
+  Documents/Daybook`), and the iPhone still plays everything. Restore a deleted plaintext file from iCloud.com › Data
+  Recovery: the next pass on the migrator seals it if it's live and deletes it.
+- **An earlier Daybook.** Daybook 0.3.0 on a second Mac says "This library was synced by a newer Daybook (version 2).
+  Update Daybook to sync." and writes nothing but its presence record (whose plaintext name the migrator deletes and it
+  writes again: a known limitation).
+- **Erase Deleted Conversations from iCloud.** After every device has synced once, a week later the deleted conversation's
+  audio is gone from the container and the live ones still play everywhere.
+- **Backups.** Whether the synchronizable key appears in an iPhone backup and comes back on restore.
+- **Export compliance.** The owner re-confirms the exempt answer (docs/release.md, "Export compliance").
+
 ## Security review fixes (2026-10-25)
 
 Regression tests cover: a pairing refusal believed only before the first commitment, a Mac

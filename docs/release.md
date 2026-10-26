@@ -285,7 +285,11 @@ App Store Connect asks every iOS build whether it uses encryption.
 **The owner has decided:** Daybook uses only **exempt** encryption.
 
 - DaybookLink uses standard TLS, with a pre-shared key from pairing, through Network.framework.
-- Everything else uses CryptoKit and Apple's system frameworks.
+- Everything else uses CryptoKit and Apple's system frameworks. That includes the encrypted library in iCloud
+  (`docs/icloud-sync.md`, "Encryption"): AES-256-GCM, HKDF-SHA256, and HMAC-SHA256 from CryptoKit, keys in iCloud
+  Keychain. It's standard algorithms from the operating system, not an implementation of Daybook's own, so the answer
+  stays exempt; **the owner re-confirms this before the first release that lets people turn encryption on** (App Store
+  Connect's questions: proprietary algorithms, no; standard algorithms instead of or beside the OS's, no).
 - Nothing implements its own encryption.
 
 The answer is recorded in the app: `Apps/iOS/project.yml` sets `ITSAppUsesNonExemptEncryption: false`, which becomes the key in `DaybookPhone/Resources/Info.plist`. App Store Connect then doesn't ask, and builds never wait at "Missing Compliance".

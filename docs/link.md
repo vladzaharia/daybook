@@ -180,6 +180,8 @@ can copy the tags, but it can't complete TLS without the key.
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
 | `recorder.handoff.reply` | `LinkRecorderHandoffReply` | both | accepted (what it finishes first, time left) or refused with a reason; repeated as progress |
 | `recorder.release` | `LinkRecorderRelease` | both | the old owner let go: imports that were waiting, recordings it imported recently |
+| `libraryKey.request` | `LinkLibraryKeyRequest` | both | an encrypted library's ID and the key IDs the sender waits for |
+| `libraryKey.grant` | `LinkLibraryKeyGrant` | both | library ID, key ID, the key's 32 bytes |
 | `ping` / `pong` | sequence, interval | both | presence |
 | `clock.request` / `clock.reply` | t1 / t1 t2 t3 | both | NTP-style samples |
 | `unpair`, `goodbye` | | both | |
@@ -399,9 +401,21 @@ Both apps' Info.plist:
 - Background: the link adds no background mode. It rides on the recorder's `audio` mode while
   recording and is closed otherwise.
 
+## Library keys
+
+An encrypted library's key (docs/icloud-sync.md, "Encryption") normally reaches a device through iCloud Keychain. When
+that's off on a device, or slow, the link carries it: a device waiting for the key shows Get Key from (a connected Mac on
+the iPhone, a connected iPhone on the Mac), which sends `libraryKey.request` with the library's ID and the current key's
+ID. The other device sends one `libraryKey.grant` per key it holds of those asked for, and only when the asker's
+capabilities name the same library as its own and the request does too (`LinkLibraryKeyRequest.grants`); every session
+is with a paired device, and the session is encrypted with the pairing's key. It then says so ("Sent this library’s key
+to Alex’s iPhone."). The receiver keeps a granted key only when its ID matches its bytes and the library is its own, and
+syncs at once. Both types are additive within version 1: an older build ignores them, and the asker keeps waiting for
+iCloud Keychain. There's no Mac-to-Mac path; two Macs rely on iCloud Keychain or a recovery key.
+
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 67 tests, about 8 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 69 tests, about 8 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
@@ -431,6 +445,8 @@ the test process, and nothing is advertised.
     once and gets that answer;
   - unpairing from either side, and a phone the Mac forgot while it was away;
   - pairing identities containing zero bytes.
+- **Library keys:** a request and its grant over a loopback session, only the keys asked for; nothing for a device of
+  another library, or without one (`LinkLibraryKeyTests`).
 - **Recorder handoff:** round trips of the request (take and give), both replies and the release;
   an unreadable reply is a refusal; earlier and later fields and values decode; capabilities carry
   the sync ID and feature, and older ones don't; the messages over a loopback session both ways.
