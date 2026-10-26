@@ -248,7 +248,9 @@ struct PhotoViewer: View {
     let play: (PlaybackTarget) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.undoManager) private var undoManager
+    @Environment(\.readingScale) private var scale
     @State private var caption = ""
+    @FocusState private var editingCaption: Bool
 
     private var meeting: Meeting? { state.meetings.first { $0.id == meetingID } }
     private var photos: [MeetingPhoto] { meeting?.visiblePhotos ?? [] }
@@ -259,7 +261,7 @@ struct PhotoViewer: View {
             if let meeting, let photo {
                 PhotoImage(url: state.photoURL(photo, in: meeting.id), maxPixels: 2400, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black.opacity(0.04))
+                    .background(DaybookStyle.quietFill)
                     .accessibilityLabel(PhotoWords.accessibilityLabel(photo, in: meeting))
                 Divider()
                 details(photo, in: meeting)
@@ -272,8 +274,10 @@ struct PhotoViewer: View {
         .onAppear { caption = photo?.caption ?? "" }
         .onDisappear(perform: saveCaption)
         .onChange(of: photoID) { _, _ in caption = photo?.caption ?? "" }
-        .onKeyPress(.leftArrow) { step(-1); return .handled }
-        .onKeyPress(.rightArrow) { step(1); return .handled }
+        // ← and → move between photos, except while the caption is being edited, where they move the cursor.
+        .onKeyPress(.leftArrow) { editingCaption ? .ignored : { step(-1); return .handled }() }
+        .onKeyPress(.rightArrow) { editingCaption ? .ignored : { step(1); return .handled }() }
+        .onExitCommand { saveCaption(); dismiss() }
     }
 
     private func details(_ photo: MeetingPhoto, in meeting: Meeting) -> some View {
@@ -281,8 +285,9 @@ struct PhotoViewer: View {
         return VStack(alignment: .leading, spacing: Space.s2) {
             TextField(photo.analysis?.caption ?? "Caption", text: $caption)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14))
+                .font(TypeStyle.body(scale))
                 .foregroundStyle(Ink.body)
+                .focused($editingCaption)
                 .onSubmit(saveCaption)
                 .accessibilityLabel("Caption")
             HStack(spacing: Space.s3) {
@@ -300,13 +305,15 @@ struct PhotoViewer: View {
                         }
                     }
                 }
-                Button { step(-1) } label: { Image(systemName: "chevron.left") }.disabled(index == 0).help("Previous Photo")
-                Button { step(1) } label: { Image(systemName: "chevron.right") }.disabled(index == nil || index == photos.count - 1).help("Next Photo")
+                Button { step(-1) } label: { Image(systemName: "chevron.left") }.disabled(index == 0)
+                    .help("Previous Photo").accessibilityLabel("Previous Photo")
+                Button { step(1) } label: { Image(systemName: "chevron.right") }.disabled(index == nil || index == photos.count - 1)
+                    .help("Next Photo").accessibilityLabel("Next Photo")
                 Button(role: .destructive) {
                     let next = photos.indices.contains((index ?? 0) + 1) ? photos[(index ?? 0) + 1].id : (index ?? 0) > 0 ? photos[(index ?? 0) - 1].id : nil
                     state.deletePhoto(photo.id, in: meeting.id, undoManager: undoManager)
                     if let next { photoID = next } else { dismiss() }
-                } label: { Image(systemName: "trash") }.help("Delete Photo")
+                } label: { Image(systemName: "trash") }.help("Delete Photo").accessibilityLabel("Delete Photo")
                 Button("Done") { saveCaption(); dismiss() }.keyboardShortcut(.defaultAction)
             }
             .buttonStyle(.bordered)

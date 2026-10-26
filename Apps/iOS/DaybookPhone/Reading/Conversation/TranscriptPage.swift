@@ -302,7 +302,7 @@ private struct PassageRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if segment.provenance.count > 1 {
                     Button { session.sheet = .heardIn(meetingID: meeting.id, segmentID: segment.id) } label: {
-                        Image(systemName: "square.on.square").font(.caption).foregroundStyle(PhoneStyle.Ink.meta)
+                        Image(systemName: "rectangle.stack").font(.caption).foregroundStyle(PhoneStyle.Ink.meta)
                             .frame(minWidth: 24, minHeight: 24)
                     }
                     .buttonStyle(.plain)
@@ -339,7 +339,7 @@ private struct PassageRow: View {
             } label: { Label("Add Bookmark Here", systemImage: "bookmark") }
             if segment.provenance.count > 1 {
                 Button { session.sheet = .heardIn(meetingID: meeting.id, segmentID: segment.id) } label: {
-                    Label("Heard in \(segment.provenance.count) Recordings…", systemImage: "square.on.square")
+                    Label("Heard in \(segment.provenance.count) Recordings…", systemImage: "rectangle.stack")
                 }
             }
         }
