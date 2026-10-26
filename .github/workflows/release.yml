@@ -94,7 +94,8 @@ jobs:
             echo "::error::$(cat "$RUNNER_TEMP/ref.txt")"
             exit 1
           fi
-      - name: Version and build number
+      # Prints attempt 1's build number for the log only; the signing jobs work out their own.
+      - name: Version
         id: version
         env:
           REF: ${{ github.ref }}
@@ -157,12 +158,14 @@ jobs:
             scripts/ci/release-notes.sh --ref "$ref" --format text > notes/testflight.txt
           fi
           cat notes/release.md >> "$GITHUB_STEP_SUMMARY"
+      # Artifacts belong to the run, not the attempt: "Re-run all jobs" replaces this one.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
           path: notes/
           retention-days: 30
           if-no-files-found: error
+          overwrite: true
 
   iphone:
     name: iPhone to TestFlight
@@ -416,6 +419,7 @@ jobs:
           path: dist/release/
           retention-days: 30
           if-no-files-found: error
+          overwrite: true
       # A backstop: every secret is already gone unless a step was killed.
       - name: Remove secrets
         if: always()
