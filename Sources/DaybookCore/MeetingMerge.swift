@@ -41,12 +41,12 @@ public enum MeetingMerge {
         }
         result.title = choose("title", local.title, remote.title, base?.title)
         result.date = choose("date", local.date, remote.date, base?.date)
-        result.kind = choose("kind", local.kind, remote.kind, base?.kind)
+        result.$kind = choose("kind", local.$kind, remote.$kind, base?.$kind)
         let notes = choose("notes", MergedNotes(local), MergedNotes(remote), base.map(MergedNotes.init))
         result.notes = notes.text; result.timedNotes = notes.anchors
         result.folderID = choose("folder", local.folderID, remote.folderID, base.map(\.folderID))
         result.templateID = choose("template", local.templateID, remote.templateID, base.map(\.templateID))
-        result.placement = choose("placement", local.placement, remote.placement, base.map(\.placement))
+        result.$placement = choose("placement", local.$placement, remote.$placement, base?.$placement)
         if local.tags != nil || remote.tags != nil {
             let old = Set(base?.tags ?? []), a = Set(local.tags ?? []), b = Set(remote.tags ?? [])
             let removed = old.subtracting(a).union(old.subtracting(b))
@@ -104,7 +104,7 @@ public enum MeetingMerge {
         // Requests aren't edits: every device's requests survive, a finished outcome is final, and
         // the newest claim wins, so two Macs never both keep one.
         result.processingRequests = ProcessingRequest.merged(local.processingRequests, remote.processingRequests)
-        result.status = choose("status", local.status, remote.status, base?.status)
+        result.$status = choose("status", local.$status, remote.$status, base?.$status)
         result.errorMessage = choose("processing-message", local.errorMessage, remote.errorMessage, base.map(\.errorMessage))
         var revisions: [UUID: MeetingRevision] = [:]
         for revision in (base?.revisions ?? []) + local.revisions + remote.revisions + conflicts {

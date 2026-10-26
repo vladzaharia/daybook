@@ -25,12 +25,12 @@ public enum FusionSourceRole: String, Codable, Sendable {
 public struct FusionSourceReport: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID { trackID }
     public var trackID: UUID
-    public var role: FusionSourceRole
+    @Extensible public var role: FusionSourceRole
     /// The transcription run that was fused (the latest for the recording).
     public var transcriptID: UUID?
     /// False for unaligned recordings and for originals transcribed through a derived copy.
     public var included: Bool
-    public var method: TrackAlignment.Method
+    @Extensible public var method: TrackAlignment.Method
     /// The recording the timing was measured against, when it wasn't the timeline itself.
     public var referenceTrackID: UUID?
     /// Meeting time = offset + rate × recording time.
@@ -73,7 +73,7 @@ public struct FusionSpeakerMapping: Codable, Equatable, Sendable {
     public var sourceSpeakerID: String?
     public var trackID: UUID
     public var speakerID: String
-    public var reason: Reason
+    @Extensible public var reason: Reason
     /// Share of this label's corroborated words that coincided with `speakerID` (0–1).
     public var share: Double
     public init(sourceSpeakerID: String?, trackID: UUID, speakerID: String, reason: Reason, share: Double) {

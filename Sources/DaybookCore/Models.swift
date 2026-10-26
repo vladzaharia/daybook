@@ -40,7 +40,7 @@ public enum AudioSource: String, Codable, CaseIterable, Sendable {
 
 public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
-    public var source: AudioSource
+    @Extensible public var source: AudioSource
     public var relativePath: String
     public var fileName: String
     public var createdAt: Date
@@ -242,7 +242,7 @@ public struct ActionItem: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct MeetingSummary: Codable, Equatable, Sendable {
-    public var kind: MeetingKind
+    @Extensible public var kind: MeetingKind
     public var title: String
     public var overview: String
     public var sections: [SummarySection]
@@ -276,7 +276,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var title: String
     public var date: Date
     public var updatedAt: Date
-    public var kind: MeetingKind
+    @Extensible public var kind: MeetingKind
     public var notes: String
     public var timedNotes: [TimedNote]?
     public var folderID: UUID?
@@ -284,7 +284,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var templateID: String?
     /// Nil follows the detected kind; set when the person moves the conversation to Work or Personal.
     /// It never changes the kind or the template.
-    public var placement: LibraryPlacement?
+    @ExtensibleOptional public var placement: LibraryPlacement?
     public var tracks: [RecordingTrack]
     /// Original model output remains intact when the unified transcript is corrected.
     public var transcripts: [TrackTranscript]
@@ -294,7 +294,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var revisions: [MeetingRevision]
     public var highlights: [Highlight]
     public var speakers: [Speaker]
-    public var status: MeetingStatus
+    @Extensible public var status: MeetingStatus
     public var errorMessage: String?
     public var correctionTransferIssues: [CorrectionTransferIssue]?
     public var speakerMatches: [SpeakerMatch]?

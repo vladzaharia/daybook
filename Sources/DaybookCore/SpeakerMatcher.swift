@@ -19,7 +19,7 @@ public struct SpeakerMatch: Codable, Equatable, Identifiable, Sendable {
     public var candidateSpeakerID: String?
     public var similarity: Double?
     public var runnerUpSimilarity: Double?
-    public var status: Status
+    @Extensible public var status: Status
     public var reason: String
     public var configuration: SpeakerMatchingConfiguration
     public var createdAt: Date

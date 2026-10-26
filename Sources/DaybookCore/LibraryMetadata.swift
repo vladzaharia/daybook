@@ -31,7 +31,7 @@ public struct RecorderOwnership: Codable, Equatable, Sendable {
     public var ownerID: String
     /// "Alex's iPhone", "Studio Mac".
     public var ownerName: String
-    public var ownerClass: SyncDeviceClass
+    @Extensible public var ownerClass: SyncDeviceClass
     public var claimedAt: Date
 
     public init(kind: String, serial: String, ownerID: String, ownerName: String, ownerClass: SyncDeviceClass, claimedAt: Date = Date()) {
@@ -88,8 +88,8 @@ public struct RecorderHandoffRecord: Codable, Equatable, Sendable {
     /// The device that will manage the recorder.
     public var requesterID: String
     public var requesterName: String
-    public var requesterClass: SyncDeviceClass
-    public var phase: Phase
+    @Extensible public var requesterClass: SyncDeviceClass
+    @Extensible public var phase: Phase
     /// A refusal's words.
     public var message: String?
     /// With `released`: recordings the new owner should import, and recordings the old owner imported

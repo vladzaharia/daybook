@@ -46,7 +46,7 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         public var heartbeat: Date
         public var expiresAt: Date
         /// Coarse progress as of the heartbeat; live progress travels over the local link.
-        public var stage: Stage?
+        @ExtensibleOptional public var stage: Stage?
         public var fraction: Double?
 
         public init(device: Device, claimedAt: Date, heartbeat: Date, expiresAt: Date, stage: Stage? = nil, fraction: Double? = nil) {
@@ -60,7 +60,7 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
     /// How a request ended. Final: a finished request is never claimed again.
     public struct Outcome: Codable, Equatable, Sendable {
         public enum Result: String, Codable, Sendable { case completed, failed }
-        public var result: Result
+        @Extensible public var result: Result
         public var device: Device
         public var finishedAt: Date
         /// The device's reason, for a failure.
@@ -76,7 +76,7 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
 
     public var id: UUID
     public var meetingID: UUID
-    public var mode: Mode
+    @Extensible public var mode: Mode
     /// The template to summarize with; nil uses the conversation's own choice.
     public var templateID: String?
     public var requestedBy: Device
@@ -96,6 +96,10 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
     /// Not finished yet.
     public var isOpen: Bool { outcome == nil }
 
+    /// This version knows what was asked. A request from a newer Daybook (a mode this one doesn't
+    /// know) waits for a device that does: it's never claimed or finished here.
+    public var isUnderstood: Bool { $mode.isKnown }
+
     /// The claim, while its lease lasts.
     public func activeClaim(at now: Date) -> Claim? {
         guard isOpen, let claim, !claim.isExpired(at: now) else { return nil }
@@ -104,7 +108,7 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
 
     /// Open, and unclaimed, claimed by this device, or claimed by one whose lease ran out.
     public func isClaimable(by device: Device, at now: Date) -> Bool {
-        guard isOpen else { return false }
+        guard isOpen, isUnderstood else { return false }
         guard let holder = activeClaim(at: now) else { return true }
         return holder.device.id == device.id
     }
@@ -225,7 +229,7 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
     private struct Asked: Codable, Equatable {
         var id: UUID
         var meetingID: UUID
-        var mode: Mode
+        @Extensible var mode: Mode
         var templateID: String?
         var requestedBy: Device
         var createdAt: Date

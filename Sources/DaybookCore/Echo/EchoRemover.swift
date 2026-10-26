@@ -28,8 +28,8 @@ public struct EchoRemovalReport: Codable, Equatable, Sendable {
         public var confidence: Double
     }
 
-    public var outcome: Outcome
-    public var skipReason: EchoRemovalSkipReason?
+    @Extensible public var outcome: Outcome
+    @ExtensibleOptional public var skipReason: EchoRemovalSkipReason?
     /// Human-readable reason for a skip or failure.
     public var detail: String?
     public var processingSampleRate: Double?
