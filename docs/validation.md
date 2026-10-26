@@ -8,6 +8,12 @@ Still requires real devices:
   over IPv6 (including a network that hands out global IPv6 addresses), to confirm the listener's
   local-network check never drops a phone on the same network. A Mac with a public address should
   not be reachable from another network.
+- **Floating Notes in screen shares.** On macOS 15 and macOS 26, share the entire screen and then
+  just a window in Zoom, Google Meet (in Safari and in Chrome), and Microsoft Teams while Floating
+  Notes shows notes and live captions over the call: the other side must not see the panel, and
+  neither may a screenshot (⇧⌘3, ⇧⌘5) or a QuickTime screen recording. ScreenCaptureKit decides
+  whether to honour `sharingType = .none`; if an app still captures the panel on a macOS version,
+  record it here and hide the panel while that app shares.
 - **Mac keychain move.** With a signed build of the previous version paired to a phone, install the
   new build: the pairing keeps connecting with no keychain prompt, and Keychain Access no longer
   lists a "Daybook link" item in the login keychain. An ad hoc build keeps using the login keychain.
