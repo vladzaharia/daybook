@@ -332,6 +332,31 @@ final class PhoneRecorderTests: XCTestCase {
         let recording = try await PhoneRecorder.recover(in: folder)
         XCTAssertEqual(recording.duration, 3, accuracy: 0.001)
         XCTAssertEqual(recording.highlights.count, 1)
+        XCTAssertEqual(recording.endedAt.timeIntervalSince(recording.startedAt), recording.duration, accuracy: 0.001)
+    }
+
+    func testARecoveredRecordingEndsWhereItsAudioDoesWithASegmentTheJournalMissed() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Orphan")
+        rig.pump(3)
+        rig.session.send(.interruptionBegan(reason: nil))
+        try await waitUntil("paused") { rig.recorder.isPaused && ((try? PhoneCaptureJournal.load(from: folder))?.segments.first?.closed == true) }
+        rig.session.send(.interruptionEnded(shouldResume: true))
+        try await waitUntil("resumed") { rig.recorder.state == .recording }
+        rig.pump(3)
+        await rig.recorder.flush()
+        rig.recorder.prepareForTermination()
+        // The app died right after opening the second part: the journal never heard of it.
+        var journal = try PhoneCaptureJournal.load(from: folder)
+        journal.segments.removeAll { $0.index > 0 }
+        try journal.write(to: folder)
+        XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).segments.count, 1)
+
+        let recording = try await PhoneRecorder.recover(in: folder)
+        XCTAssertGreaterThan(recording.duration, 5.9, "both parts")
+        XCTAssertEqual(recording.endedAt.timeIntervalSince(recording.startedAt), recording.duration, accuracy: 0.001,
+                       "it ended where its audio does, not where the counted frames did")
     }
 
     func testPhotosAreKeptAtTheirShutterTimeAndSurviveAQuit() async throws {

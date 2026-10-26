@@ -354,11 +354,11 @@ final class PhoneRecorder {
             var journal = try PhoneCaptureJournal.load(from: directory)
             let crashed = journal.state != .stopped
             Self.adoptOrphanSegments(&journal, in: directory)
-            if crashed, journal.endedAt == nil {
-                let audio = journal.segments.map { $0.startOffset + Double($0.frameCount) / journal.sampleRate }.max() ?? 0
-                journal.endedAt = (journal.startedAt ?? journal.createdAt).addingTimeInterval(audio)
-            }
-            return try PhoneCaptureFinisher.finish(&journal, in: directory, recovered: crashed)
+            var recording = try PhoneCaptureFinisher.finish(&journal, in: directory, recovered: crashed)
+            // Cut short, it ended where its assembled audio does: counted frames can trail or lead what
+            // reached the disk, and a segment the journal never heard of counts none.
+            if crashed, journal.endedAt == nil { recording.endedAt = recording.startedAt.addingTimeInterval(recording.duration) }
+            return recording
         }.value
     }
 
