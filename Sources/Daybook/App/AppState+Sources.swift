@@ -32,6 +32,7 @@ extension AppState {
         recorders.sessions = { [weak self] in self?.devices.sessions ?? [] }
         recorders.links = { [weak self] id in self?.meetings.first { $0.id == id }?.companions ?? [] }
         recorders.conversation = { [weak self] id in self?.companionConversation(id) }
+        recorders.owner = { [weak self] ownership in self?.phoneManaging(ownership) }
         recorders.write = { [weak self] id, change in
             self?.update(id) { meeting in
                 var links = meeting.companions ?? []

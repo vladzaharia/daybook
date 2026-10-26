@@ -121,7 +121,8 @@ final class PhoneLink {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
         return LinkIdentity(deviceID: UUID(uuidString: installation) ?? UUID(), name: name, deviceClass: .iPhone,
                             appVersion: version, libraryID: libraryID, canProcess: false,
-                            features: ["recordControl", "bookmarks", LinkCapabilities.recorderHandoffFeature], syncDeviceID: syncDeviceID)
+                            features: ["recordControl", "bookmarks", LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature],
+                            syncDeviceID: syncDeviceID)
     }
 
     var deviceID: UUID { identity.deviceID }

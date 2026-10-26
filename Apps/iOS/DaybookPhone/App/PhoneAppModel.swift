@@ -566,6 +566,14 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     /// A Mac's record request: start recording its conversation here (with its timing), or stop.
     func answer(_ mac: PhoneLink.Mac, _ request: LinkRecordRequest) async -> LinkRecordReply.Outcome {
+        // A recorder this iPhone manages, which the Mac records along with through it. A stop names the
+        // recording it means, so it never pauses one the person started since.
+        if let target = request.recorder {
+            guard settings.acceptsMacRecordRequests else {
+                return .refused(LinkRecordRefusal(reason: .declined, message: "Recording with a Mac is turned off on this iPhone."))
+            }
+            return await RecorderRemoteControl.answer(request, target: target, sessions: devices.sessions)
+        }
         // The recording's own ID, which its track carries, so the Mac's link finds it when it syncs.
         var recordingID: String? { recorder.recordingID?.uuidString }
         switch request.action {

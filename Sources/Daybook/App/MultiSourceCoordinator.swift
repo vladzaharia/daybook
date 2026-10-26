@@ -3,6 +3,7 @@ import DaybookCore
 import DaybookDevices
 import DaybookIntelligence
 import DaybookKit
+import DaybookLink
 import Foundation
 
 /// Lines up one recording against another from their sound: `AudioAligner.align` in the app,
@@ -77,7 +78,8 @@ protocol AnsweringRecordControl: RecordControlConnection {
     /// Asks it to record a conversation too. Asking again with the same `requestID` is safe: it
     /// answers a repeat with its first answer.
     func requestStart(_ start: CompanionStart) async -> CompanionAnswer
-    func requestStop(conversationID: UUID, macEndedAt: Date?) async -> CompanionAnswer
+    /// Asks it to stop recording a conversation; with `recorder`, to stop that recorder it manages.
+    func requestStop(conversationID: UUID, macEndedAt: Date?, recorder: LinkRecorderTarget?) async -> CompanionAnswer
     /// The conversation it says it's recording (or paused in), when it says.
     var recordingConversationID: UUID? { get }
     /// Its clock against this Mac's, as measured now.
@@ -97,6 +99,8 @@ struct CompanionStart: Equatable {
     var timelineStart: Date?
     /// A conversation of the device's own (the device page's Start Recording), not one alongside this Mac.
     var standalone = false
+    /// A recorder the device manages, to start rather than the device itself.
+    var recorder: LinkRecorderTarget?
 }
 
 /// A conversation as a device that answers is told about it when asked to record.
@@ -157,6 +161,9 @@ final class CompanionRecorders: ObservableObject {
     var links: (UUID) -> [CompanionRecording] = { _ in [] }
     /// A conversation as devices that answer are told about it when asked to record it.
     var conversation: (UUID) -> CompanionConversation? = { _ in nil }
+    /// The connected device managing a recorder another device owns, when it starts and stops its
+    /// recorders when asked (Daybook on iPhone): multipoint goes through it.
+    var owner: (RecorderOwnership) -> (session: DeviceSession, control: any AnsweringRecordControl)? = { _ in nil }
     var write: (UUID, (inout [CompanionRecording]) -> Void) -> Void = { _, _ in }
     var timing = Timing()
 
@@ -165,8 +172,9 @@ final class CompanionRecorders: ObservableObject {
     private var stopRequested: Set<UUID> = []
     /// Links to devices that answer whose start never got an answer: they may be recording.
     private var unanswered: Set<UUID> = []
-    /// Stops that didn't reach a device that answers, by device: sent again when it reconnects.
-    private(set) var pendingStops: [String: [(meetingID: UUID, linkID: UUID, end: Date)]] = [:]
+    /// Stops that didn't reach a device that answers, by device: sent again when it reconnects. With
+    /// `recorder`, a stop of a recorder that device manages.
+    private(set) var pendingStops: [String: [(meetingID: UUID, linkID: UUID, end: Date, recorder: LinkRecorderTarget?)]] = [:]
     /// When each Mac recording in progress started, so only its own links are stopped.
     private var recordingSince: [UUID: Date] = [:]
 
@@ -298,7 +306,11 @@ final class CompanionRecorders: ObservableObject {
             guard let self else { return }
             for stop in owed {
                 guard let link = self.links(stop.meetingID).first(where: { $0.id == stop.linkID }), link.state != .attached else { continue }
-                await self.stop(session, control, link: link, meetingID: stop.meetingID, at: stop.end)
+                if let recorder = stop.recorder {
+                    await self.stop(link, through: (session, control), recorder: recorder, meetingID: stop.meetingID, at: stop.end)
+                } else {
+                    await self.stop(session, control, link: link, meetingID: stop.meetingID, at: stop.end)
+                }
             }
         }
         stopping[owed[0].meetingID] = task
@@ -320,7 +332,12 @@ final class CompanionRecorders: ObservableObject {
                                       deviceName: name, macStartedAt: start)
         write(meetingID) { $0.append(link) }
         if let owner = session.managedElsewhere {
-            // Another device manages the recorder over Bluetooth; this Mac doesn't reach for it.
+            // Another device manages the recorder over Bluetooth; this Mac doesn't reach for it, but asks
+            // that device to start it when it can (a connected iPhone), so one device drives it.
+            if let through = self.owner(owner) {
+                await self.start(link, of: session, through: through, meetingID: meetingID, at: start)
+                return
+            }
             update(meetingID, link.id) { $0.state = .unavailable }
             status = "\(name) is managed by \(owner.ownerName). Recording on this Mac only."
             return
@@ -365,6 +382,17 @@ final class CompanionRecorders: ObservableObject {
 
     private func stop(_ session: DeviceSession, _ control: any RecordControlConnection, link: CompanionRecording, meetingID: UUID) async {
         let name = link.deviceName
+        if let owner = session.managedElsewhere {
+            // Another device manages it now (handed over while it recorded, or it always did): stop it there.
+            let recorder = LinkRecorderTarget(kind: session.kind.id, serial: link.deviceSerial ?? session.recorderSerial, recordingID: link.recordingID)
+            if let through = self.owner(owner) {
+                await stop(link, through: through, recorder: recorder, meetingID: meetingID, at: link.macEndedAt ?? Date())
+            } else {
+                update(meetingID, link.id) { $0.state = .stopFailed }
+                status = "Couldn’t reach \(name) to stop it. Stop it on \(owner.ownerName)."
+            }
+            return
+        }
         update(meetingID, link.id) { $0.state = .stopping }
         status = "Stopping \(name)…"
         let asked = Date()
@@ -410,18 +438,7 @@ final class CompanionRecorders: ObservableObject {
             return
         }
         status = "Asking \(name) to record…"
-        let conversation = self.conversation(meetingID)
-        let request = CompanionStart(conversationID: meetingID, title: conversation?.title, date: conversation?.date,
-                                     macStartedAt: start, timelineStart: conversation?.timelineStart)
-        var answer = await control.requestStart(request)
-        // No answer yet (a microphone prompt, a reconnect): ask again with the same request, which it
-        // answers once, until this Mac stops or `timing.answer` passes.
-        let deadline = ContinuousClock.now.advanced(by: timing.answer)
-        while answer == .noAnswer, !stopRequested.contains(meetingID), ContinuousClock.now < deadline {
-            guard (try? await Task.sleep(for: timing.poll)) != nil else { break }
-            guard control.state.isConnected else { continue }
-            answer = await control.requestStart(request)
-        }
+        let answer = await ask(control, toStart: companionStart(meetingID, at: start), meetingID: meetingID)
         if answer == .noAnswer { unanswered.insert(link.id) }
         switch answer {
         case .recording(let recordingID, let startedAt, let already, let clock):
@@ -449,11 +466,90 @@ final class CompanionRecorders: ObservableObject {
         }
     }
 
+    /// The start a device that answers is asked for: the conversation as this Mac has it, and its timing.
+    private func companionStart(_ meetingID: UUID, at start: Date, recorder: LinkRecorderTarget? = nil) -> CompanionStart {
+        let conversation = self.conversation(meetingID)
+        return CompanionStart(conversationID: meetingID, title: conversation?.title, date: conversation?.date,
+                              macStartedAt: start, timelineStart: conversation?.timelineStart, recorder: recorder)
+    }
+
+    /// Asks it to start; without an answer yet (a microphone prompt, a reconnect), asks again with the
+    /// same request, which it answers once, until this Mac stops or `timing.answer` passes.
+    private func ask(_ control: any AnsweringRecordControl, toStart request: CompanionStart, meetingID: UUID) async -> CompanionAnswer {
+        var answer = await control.requestStart(request)
+        let deadline = ContinuousClock.now.advanced(by: timing.answer)
+        while answer == .noAnswer, !stopRequested.contains(meetingID), ContinuousClock.now < deadline {
+            guard (try? await Task.sleep(for: timing.poll)) != nil else { break }
+            guard control.state.isConnected else { continue }
+            answer = await control.requestStart(request)
+        }
+        return answer
+    }
+
+    // MARK: Recorders another device manages
+
+    /// Asks the device managing a recorder (a connected iPhone) to start it along with this Mac. Its
+    /// recording joins this conversation by its ID, however it arrives.
+    private func start(_ link: CompanionRecording, of session: DeviceSession, through owner: (session: DeviceSession, control: any AnsweringRecordControl),
+                       meetingID: UUID, at start: Date) async {
+        let name = session.device.name, ownerName = owner.session.device.name
+        status = "Asking \(ownerName) to start \(name)…"
+        let recorder = LinkRecorderTarget(kind: session.kind.id, serial: link.deviceSerial ?? session.recorderSerial)
+        let answer = await ask(owner.control, toStart: companionStart(meetingID, at: start, recorder: recorder), meetingID: meetingID)
+        switch answer {
+        case .recording(let recordingID, let startedAt, let already, _):
+            // Its start is by the recorder's own clock, which the link to the phone doesn't measure.
+            update(meetingID, link.id) {
+                $0.state = already ? .alreadyRecording : .recording
+                $0.startedByDaybook = !already
+                $0.recorderStartedAt = startedAt
+                $0.recordingID = recordingID
+            }
+            status = already ? "\(name) was already recording. Its recording will be added here." : "Also recording on \(name)."
+            if stopRequested.contains(meetingID), !already, let current = links(meetingID).first(where: { $0.id == link.id }) {
+                var target = recorder
+                target.recordingID = recordingID
+                await stop(current, through: owner, recorder: target, meetingID: meetingID, at: Date())
+            }
+        case .refused(let reason):
+            update(meetingID, link.id) { $0.state = .failed }
+            status = "\(name) didn’t record. \(reason) Recording on this Mac only."
+        case .unavailable:
+            update(meetingID, link.id) { $0.state = .unavailable }
+            status = "\(name) is managed by \(ownerName). Recording on this Mac only."
+        case .noAnswer, .stopped:
+            update(meetingID, link.id) { $0.state = .failed }
+            status = "\(ownerName) didn’t answer. Recording on this Mac only."
+        }
+    }
+
+    /// Asks the device managing a recorder to stop the recording this Mac's link names; one it's
+    /// recording since is left alone. Owed until that device reconnects when it can't be reached.
+    private func stop(_ link: CompanionRecording, through owner: (session: DeviceSession, control: any AnsweringRecordControl),
+                      recorder: LinkRecorderTarget, meetingID: UUID, at end: Date) async {
+        let name = link.deviceName, ownerName = owner.session.device.name
+        update(meetingID, link.id) { $0.state = .stopping }
+        status = "Stopping \(name)…"
+        switch await owner.control.requestStop(conversationID: meetingID, macEndedAt: end, recorder: recorder) {
+        case .stopped, .recording:
+            update(meetingID, link.id) { $0.state = .stopped }
+            status = "\(name) stopped. Its recording will be added here."
+        case .refused:
+            update(meetingID, link.id) { $0.state = .stopFailed }
+            status = "\(name) didn’t stop. Stop it on \(ownerName)."
+        case .unavailable, .noAnswer:
+            update(meetingID, link.id) { $0.state = .stopFailed }
+            pendingStops[owner.session.id, default: []].removeAll { $0.linkID == link.id }
+            pendingStops[owner.session.id, default: []].append((meetingID, link.id, end, recorder))
+            status = "Couldn’t reach \(ownerName) to stop \(name). It stops when it reconnects."
+        }
+    }
+
     private func stop(_ session: DeviceSession, _ control: any AnsweringRecordControl, link: CompanionRecording, meetingID: UUID, at end: Date) async {
         let name = link.deviceName
         update(meetingID, link.id) { $0.state = .stopping }
         status = "Stopping \(name)…"
-        switch await control.requestStop(conversationID: meetingID, macEndedAt: end) {
+        switch await control.requestStop(conversationID: meetingID, macEndedAt: end, recorder: nil) {
         case .stopped, .recording:
             unanswered.remove(link.id)
             update(meetingID, link.id) { $0.state = .stopped }
@@ -465,7 +561,7 @@ final class CompanionRecorders: ObservableObject {
             // Owed until it reconnects (it connects to this Mac, never the reverse).
             update(meetingID, link.id) { $0.state = .stopFailed }
             pendingStops[session.id, default: []].removeAll { $0.linkID == link.id }
-            pendingStops[session.id, default: []].append((meetingID, link.id, end))
+            pendingStops[session.id, default: []].append((meetingID, link.id, end, nil))
             status = "Couldn’t reach \(name) to stop it. It stops when it reconnects."
         }
     }

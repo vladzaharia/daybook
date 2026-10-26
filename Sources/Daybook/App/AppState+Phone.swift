@@ -152,6 +152,15 @@ extension AppState {
         }
     }
 
+    /// The connected phone that manages a recorder (by its synced ownership), when it starts and stops
+    /// its recorders when asked: multipoint asks it rather than reaching for the recorder.
+    func phoneManaging(_ ownership: RecorderOwnership) -> (session: DeviceSession, control: any AnsweringRecordControl)? {
+        guard let peer = phoneLink.peers.values.first(where: { ($0.capabilities.syncDeviceID ?? $0.deviceID.uuidString) == ownership.ownerID }),
+              peer.capabilities.controlsRecorders, let session = devices.session(peer.deviceID.uuidString),
+              let control = session.direct as? PhoneLinkConnection else { return nil }
+        return (session, control)
+    }
+
     // MARK: Recording for a phone
 
     /// A phone said what it's recording. When this Mac records because that phone asked, and the

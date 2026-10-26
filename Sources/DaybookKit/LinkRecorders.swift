@@ -65,3 +65,90 @@ extension DeviceHub {
             .eraseToAnyPublisher()
     }
 }
+
+/// Starting and stopping a recorder this device manages because another device asked: multipoint
+/// through the recorder's owner (a Mac records, and the phone that manages its Soundcore Work starts
+/// it alongside), so only one device ever drives the recorder.
+@MainActor
+public enum RecorderRemoteControl {
+    public struct Timing: Sendable {
+        public var connect: Duration = .seconds(20)
+        public var confirm: Duration = .seconds(15)
+        /// For its list, read on this connection, before deciding what it's recording.
+        public var inventory: Duration = .seconds(5)
+        /// For the finished recording to appear in its list, to import it.
+        public var listing: Duration = .seconds(20)
+        public var poll: Duration = .milliseconds(100)
+        public init() {}
+    }
+
+    /// The answer to `request` about `target`, among this device's `sessions`. A start that finds it
+    /// recording already says so (and leaves it to the person); a stop pauses only the recording it
+    /// names, then imports it into the requester's conversation.
+    public static func answer(_ request: LinkRecordRequest, target: LinkRecorderTarget, sessions: [DeviceSession],
+                              timing: Timing = Timing()) async -> LinkRecordReply.Outcome {
+        guard let session = sessions.first(where: { session in
+                  session.kind.id == target.kind && (target.serial == nil || session.recorderSerial == nil || session.recorderSerial == target.serial)
+              }), session.managedElsewhere == nil, let control = session.direct as? any RecordControlConnection else {
+            return .refused(LinkRecordRefusal(reason: .unsupported, message: "This device doesn’t manage that recorder."))
+        }
+        let name = session.device.name
+        let asked = Date()
+        if !control.state.isConnected {
+            guard control.isSetUp, control.state != .unavailable else {
+                return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) isn’t nearby."))
+            }
+            if !control.state.isBusy { control.connect() }
+            guard await wait(timing.connect, timing.poll, until: { control.state.isConnected || control.state == .unavailable }),
+                  control.state.isConnected else {
+                return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) isn’t nearby."))
+            }
+        } else if request.action == .stop {
+            control.refresh()
+        }
+        // What it's recording comes with its list, read on this connection.
+        _ = await wait(timing.inventory, timing.poll) { !control.isRefreshing && (control.inventoryUpdatedAt.map { $0 >= asked } ?? false) }
+        let inProgress = { control.recordings.first(where: \.isInProgress)?.id }
+        switch request.action {
+        case .start:
+            if control.status?.isRecording == true {
+                return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: control.status?.recordingStartedAt,
+                                               recordingID: inProgress(), wasAlreadyRecording: true))
+            }
+            control.startRecording()
+            guard await wait(timing.confirm, timing.poll, until: { control.status?.isRecording == true && !control.recordCommandPending }) else {
+                return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) didn’t start recording."))
+            }
+            return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: control.status?.recordingStartedAt ?? Date(),
+                                           recordingID: inProgress()))
+        case .stop:
+            guard control.status?.isRecording == true, target.recordingID == nil || inProgress() == target.recordingID else {
+                return .refused(LinkRecordRefusal(reason: .notRecording))
+            }
+            control.pauseRecording()
+            guard await wait(timing.confirm, timing.poll, until: { control.status?.isRecording == false && !control.recordCommandPending }) else {
+                return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) didn’t confirm it stopped."))
+            }
+            // Brought in for the requester's conversation once it's finished, which its link joins wherever it lands.
+            if let recordingID = target.recordingID {
+                Task {
+                    let finished = { control.recordings.first { $0.id == recordingID && !$0.isInProgress } }
+                    guard await wait(timing.listing, timing.poll, until: { finished() != nil }), let recording = finished(),
+                          !session.queue.contains(recording.id), session.links.imported[recording.id] == nil else { return }
+                    session.importRecordings([recording], attachTo: request.conversationID, automatic: true)
+                }
+            }
+            return .accepted(LinkRecordAck(conversationID: request.conversationID, stoppedAt: Date(), recordingID: target.recordingID))
+        default:
+            return .refused(LinkRecordRefusal(reason: .unsupported))
+        }
+    }
+
+    private static func wait(_ limit: Duration, _ poll: Duration, until condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: limit)
+        while !condition() {
+            guard ContinuousClock.now < deadline, (try? await Task.sleep(for: poll)) != nil else { return condition() }
+        }
+        return true
+    }
+}

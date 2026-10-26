@@ -28,6 +28,8 @@ final class LinkWireTests: XCTestCase {
             .recordRequest(LinkRecordRequest(action: .start, conversationID: id,
                                              timing: LinkTiming(startedAt: t0, elapsed: 600, timelineStart: t0.addingTimeInterval(-600)),
                                              sentAt: t0, title: "Design review", date: t0)),
+            .recordRequest(LinkRecordRequest(action: .stop, conversationID: id, sentAt: t0,
+                                             recorder: LinkRecorderTarget(kind: "soundcore.work", serial: "S1", recordingID: "1712"))),
             .recordReply(LinkRecordReply(requestID: id, outcome: .accepted(LinkRecordAck(conversationID: id, startedAt: t0,
                                                                                           recordingID: "r1")), sentAt: t0)),
             .recordReply(LinkRecordReply(requestID: id, outcome: .refused(LinkRecordRefusal(reason: .storageFull, message: "Full")),

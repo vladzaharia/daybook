@@ -210,9 +210,13 @@ public struct LinkRecordRequest: Codable, Sendable, Equatable, Identifiable {
     /// recorded alongside the requester. Older builds don't send it; their requests without timing
     /// mean the same.
     public var standalone: Bool?
+    /// Start (or stop) a recorder the receiver manages (Soundcore Work), not the receiver's own
+    /// microphone. Sent only to a receiver whose capabilities list `recorderControlFeature`: an older
+    /// one would record its own microphone instead.
+    public var recorder: LinkRecorderTarget?
 
     public init(id: UUID = UUID(), action: Action, conversationID: UUID, timing: LinkTiming? = nil, sentAt: Date = Date(),
-                title: String? = nil, date: Date? = nil, standalone: Bool? = nil) {
+                title: String? = nil, date: Date? = nil, standalone: Bool? = nil, recorder: LinkRecorderTarget? = nil) {
         self.id = id
         self.action = action
         self.conversationID = conversationID
@@ -221,10 +225,33 @@ public struct LinkRecordRequest: Codable, Sendable, Equatable, Identifiable {
         self.title = title
         self.date = date
         self.standalone = standalone
+        self.recorder = recorder
     }
 
     /// The receiver records a conversation of its own rather than alongside the requester.
-    public var isStandalone: Bool { standalone == true || (action == .start && timing?.startedAt == nil) }
+    public var isStandalone: Bool { standalone == true || (action == .start && timing?.startedAt == nil && recorder == nil) }
+}
+
+/// A recorder a record request is about: one the receiver manages over Bluetooth.
+public struct LinkRecorderTarget: Codable, Sendable, Equatable {
+    /// The device kind (`soundcore.work`) and its serial number, when known.
+    public var kind: String
+    public var serial: String?
+    /// Stopping: the recording to stop, by the recorder's ID for it. One it's recording instead is left alone.
+    public var recordingID: String?
+
+    public init(kind: String, serial: String? = nil, recordingID: String? = nil) {
+        self.kind = kind
+        self.serial = serial
+        self.recordingID = recordingID
+    }
+}
+
+extension LinkCapabilities {
+    /// Starts and stops the recorders it manages when another device asks (`LinkRecordRequest.recorder`).
+    public static let recorderControlFeature = "recorderControl"
+
+    public var controlsRecorders: Bool { features.contains(Self.recorderControlFeature) }
 }
 
 /// The receiver did what was asked.
@@ -275,6 +302,8 @@ public struct LinkRecordRefusal: Codable, Sendable, Equatable {
         public static let declined: Self = "declined"
         /// This device doesn't take record requests.
         public static let unsupported: Self = "unsupported"
+        /// A recorder it was asked to start or stop isn't nearby or didn't confirm.
+        public static let recorderUnavailable: Self = "recorderUnavailable"
     }
 
     public var reason: Reason

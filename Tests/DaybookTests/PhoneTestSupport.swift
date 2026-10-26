@@ -80,7 +80,7 @@ struct PhoneLinkRig {
 
     /// Pairs a phone without the code (as if it had paired before), adds it as a device, starts the
     /// Mac's link, and connects the phone. `clockOffset` is how far the phone's clock is ahead.
-    static func connect(_ state: AppState, clockOffset: TimeInterval = 0) async throws -> PhoneLinkRig {
+    static func connect(_ state: AppState, clockOffset: TimeInterval = 0, features: [String] = []) async throws -> PhoneLinkRig {
         let phoneID = UUID(), macID = state.phoneLink.identity.deviceID
         let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         let psk = Data((0..<16).map { _ in UInt8.random(in: 1...255) })
@@ -95,7 +95,8 @@ struct PhoneLinkRig {
         let port = try XCTUnwrap(listening)
         var configuration = LinkConfiguration.loopback()
         configuration.clock = SkewedClock(offset: clockOffset)
-        let client = LinkClient(identity: LinkIdentity(deviceID: phoneID, name: phoneName, deviceClass: .iPhone, appVersion: "2.0"),
+        let client = LinkClient(identity: LinkIdentity(deviceID: phoneID, name: phoneName, deviceClass: .iPhone, appVersion: "2.0",
+                                                       features: features, syncDeviceID: syncID(phoneID)),
                                 keyStore: phoneStore, configuration: configuration)
         let rig = PhoneLinkRig(phoneID: phoneID, macID: macID, client: client, events: LinkEvents(client.events()),
                                endpoint: LinkEndpoint(host: "127.0.0.1", port: port))
@@ -110,6 +111,10 @@ struct PhoneLinkRig {
         await client.disconnect(from: macID)
         await state.phoneLink.shutDown()
     }
+
+    /// The phone's sync replica ID, which recorder ownership names it by (it differs from its link ID).
+    nonisolated static func syncID(_ phoneID: UUID) -> String { "phone-replica-\(phoneID.uuidString)" }
+    var syncID: String { Self.syncID(phoneID) }
 }
 
 /// The iPhone's library: DaybookKit on an on-demand phone replica of the same sync folder, filing
