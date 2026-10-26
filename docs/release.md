@@ -17,13 +17,13 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 | CI | `mac` | `xcode-27` | `scripts/ci/tests/run-tests.sh --require-all` (every group, including the macOS-only ones: CryptoKit's JWT check, the archive checks, the upload retry, the build scripts, and the keychain), then `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
 | Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
 | Release | `iphone` | `xcode-27`, environment `release` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
-| Release | `mac` | `xcode-27`, environment `release` | works out its build number, fetches the packages, archives (`build-app.sh --archive-only`), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then checks that the app's `CFBundleShortVersionString` and `CFBundleVersion` are the run's version and build, notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`) |
+| Release | `mac` | `xcode-27`, environment `release` | works out its build number, resumes a notarization a previous attempt left pending, fetches the packages, archives (`build-app.sh --archive-only`), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then checks that the app's `CFBundleShortVersionString` and `CFBundleVersion` are the run's version and build, notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`), and attests their build provenance |
 | Release | `draft` | `ubuntu-24.04` | tags only, after `mac`: verifies the checksums and creates the GitHub Release as a **draft** with the Mac files (`scripts/ci/github-release.sh draft`). A re-run updates its own draft; it never touches a published release |
 | Release | `publish` | `ubuntu-24.04` | tags only, after `draft` and, when the run releases the iPhone app, after `iphone` succeeded: publishes the draft (`github-release.sh publish`). `draft` and `publish` are the only jobs with `contents: write`, and they hold no Apple secrets |
 
 Hardening:
 
-- Every workflow starts from `permissions: {}`, and each job asks for `contents: read` (or `write` in `draft` and `publish` only).
+- Every workflow starts from `permissions: {}`, and each job asks for `contents: read` (or `write` in `draft` and `publish` only). The Release `mac` job alone adds `id-token: write` and `attestations: write`, for build provenance.
 - Actions are pinned to commit SHAs, with the version in a comment. Checkouts don't persist credentials.
 - Nothing uses `pull_request_target`.
 - Concurrency groups cancel superseded pull request runs and never cancel a release. CI's group includes the workflow's name, which is "Release" when `release.yml` calls it, so a push to `main` can't queue behind or replace a release's validation.
@@ -332,9 +332,13 @@ If a release turns out to be broken:
 
 ```sh
 shasum -a 256 -c SHA256SUMS.txt
+gh attestation verify Daybook-1.4.0-macOS-arm64.zip --repo vladzaharia/daybook \
+    --signer-workflow vladzaharia/daybook/.github/workflows/release.yml
 spctl -a -vv /Applications/Daybook.app      # "source=Notarized Developer ID"
 xcrun stapler validate /Applications/Daybook.app
 ```
+
+The Mac job attests every file in `SHA256SUMS.txt` with `actions/attest-build-provenance`: a Sigstore-signed SLSA provenance statement naming the repository, `release.yml`, the commit, and the run that built it. `gh attestation verify` checks the file's digest against it, so a download that didn't come from this workflow fails. The attestations are listed under the repository's Actions › Attestations.
 
 ## Known blockers
 
