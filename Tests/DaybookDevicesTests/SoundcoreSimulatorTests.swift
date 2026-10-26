@@ -233,6 +233,50 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(denied.connection.problem?.id, SoundcoreIssue.bluetoothDenied.rawValue)
     }
 
+    func testBluetoothResetReopensTheSessionAndCommandsWorkAgain() async throws {
+        let rig = rig(recorder())
+        try await connectThroughSetup(rig)
+        rig.transport.setRadio(.resetting)
+        try await waitUntil("Bluetooth resetting") { rig.connection.state != .connected }
+        rig.transport.setRadio(.poweredOn)
+        try await waitUntil("reconnected after a Bluetooth reset") { rig.connection.state == .connected && rig.connection.info != nil && !rig.connection.isRefreshing }
+        rig.connection.startRecording()
+        try await waitUntil("record control on the replacement session") { rig.connection.status?.isRecording == true }
+    }
+
+    func testStoppingListenBeforeItsTaskRunsDoesNotStartATransfer() async throws {
+        let device = recorder()
+        device.isRecording = true
+        device.activeRecording = .init(id: base + 600, frames: Self.frames)
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        let commandsBefore = device.received.count
+        rig.connection.startListening()
+        rig.connection.stopListening()
+        try await waitUntil("listening setup cancelled") { !rig.connection.live.isListening }
+        XCTAssertEqual(device.received.count, commandsBefore)
+        XCTAssertTrue(rig.library.imports.isEmpty)
+        XCTAssertTrue(device.isRecording)
+    }
+
+    func testStoppingAQueuedListenerDoesNotWaitForOrCancelADownload() async throws {
+        let device = recorder()
+        device.isRecording = true
+        device.activeRecording = .init(id: base + 600, frames: Self.frames)
+        device.fault = .stall(afterSlices: 3)
+        let rig = rig(device, configure: { $0.stall = .seconds(10) })
+        try await connectThroughSetup(rig)
+        let recording = try XCTUnwrap(rig.session.split.new.first)
+        rig.session.importRecordings([recording])
+        try await waitUntil("download has started") { device.received.contains { $0.type == 0x1a && $0.command == 0x07 } }
+        rig.connection.startListening()
+        // Let the listener enter the exclusive-operation queue behind the stalled download.
+        for _ in 0..<10 { await Task.yield() }
+        rig.connection.stopListening()
+        try await waitUntil("queued listener cancelled", timeout: 2) { !rig.connection.live.isListening }
+        XCTAssertEqual(device.received.filter { $0.type == 0x1a && $0.command == 0x07 }.count, 1)
+    }
+
     func testAnIdleConnectionIsLetGoForThePhone() async throws {
         let rig = rig(recorder(), configure: { $0.idleRelease = .milliseconds(300) })
         try await connectThroughSetup(rig)

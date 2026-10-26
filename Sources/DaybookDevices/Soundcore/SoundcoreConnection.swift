@@ -122,6 +122,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private let captionHooks: LiveCaptionHooks
     private var transport: (any SoundcoreTransport)?
     private var session: SoundcoreSession?
+    private var listeningTask: Task<Void, Never>?
     private var peripheral: UUID?
     private var timer: Task<Void, Never>?
     private var idleTimer: Task<Void, Never>?
@@ -403,7 +404,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         startCaptions()
         publish()
         let staging = stagingDirectory
-        Task {
+        listeningTask = Task {
             do {
                 let result = try await session.listen(
                     destination: { staging.appendingPathComponent("Soundcore-Live-\($0)-\(UUID().uuidString.prefix(8)).wav") },
@@ -417,6 +418,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
                 else if !(error is CancellationError), (error as? SoundcoreError) != .disconnected { self.lastTechnicalProblem = error.localizedDescription }
             }
             self.live.isListening = false
+            self.listeningTask = nil
             self.endCaptions()
             self.liveSleep.hold(false)
             self.endActivity()
@@ -425,7 +427,12 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     }
 
     /// Saves what arrived as a conversation. The recorder keeps recording.
-    public func stopListening() { session?.stopListening() }
+    public func stopListening() {
+        // Finish an active transfer first so its received audio survives; cancellation also
+        // stops setup or removes a listener waiting behind a different transfer.
+        session?.stopListening()
+        listeningTask?.cancel()
+    }
 
     private func liveProgress(_ bytes: UInt64) {
         let now = Date()
@@ -689,7 +696,17 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             let issue: SoundcoreIssue = radio == .poweredOff ? .bluetoothOff : radio == .unauthorized ? .bluetoothDenied : .bluetoothUnsupported
             problem = issue.problem
         case .unknown, .resetting:
-            break
+            let intent: Intent?
+            if case .waitingForRadio(let waiting) = phase { intent = waiting }
+            else if case .searching = phase { intent = remembered == nil ? .discover : .reconnect }
+            else { intent = peripheral != nil ? .reconnect : deferredIntent }
+            cancelTimer()
+            transport?.stopScan()
+            if let peripheral { dropLink(peripheral) }
+            connectingTo = nil
+            deferredIntent = nil
+            if let intent { phase = .waitingForRadio(intent) }
+            else { phase = .unavailable(radio) }
         }
     }
 

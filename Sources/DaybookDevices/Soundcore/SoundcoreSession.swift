@@ -86,7 +86,7 @@ public final class SoundcoreSession {
     private var buffer = SoundcorePacketBuffer()
     private let crypto = SoundcoreCrypto()
     private var busy = false
-    private var waiters: [CheckedContinuation<Void, Error>] = []
+    private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
     private var reply: PendingReply?
     private var transfer: Transfer?
     private var quietUntil: ContinuousClock.Instant?
@@ -232,7 +232,7 @@ public final class SoundcoreSession {
         }
         let waiting = waiters
         waiters = []
-        waiting.forEach { $0.resume(throwing: SoundcoreError.disconnected) }
+        waiting.forEach { $0.continuation.resume(throwing: SoundcoreError.disconnected) }
         crypto.reset()
         buffer.reset()
     }
@@ -242,7 +242,20 @@ public final class SoundcoreSession {
     /// One exchange or transfer at a time: the recorder answers commands in order.
     private func exclusive<T>(_ operation: () async throws -> T) async throws -> T {
         if isClosed { throw SoundcoreError.disconnected }
-        if busy { try await withCheckedThrowingContinuation { waiters.append($0) } } else { busy = true }
+        try Task.checkCancellation()
+        if busy {
+            let id = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    waiters.append((id, continuation))
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    guard let self, let index = self.waiters.firstIndex(where: { $0.id == id }) else { return }
+                    self.waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+                }
+            }
+        } else { busy = true }
         defer { handOff() }
         if isClosed { throw SoundcoreError.disconnected }
         try Task.checkCancellation()
@@ -250,7 +263,7 @@ public final class SoundcoreSession {
     }
 
     private func handOff() {
-        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().continuation.resume() }
     }
 
     private func request(_ type: UInt8, _ command: UInt8, _ payload: Data = Data(), timeout: Duration? = nil,
