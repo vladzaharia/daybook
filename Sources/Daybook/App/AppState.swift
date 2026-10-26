@@ -392,7 +392,8 @@ final class AppState: ObservableObject {
     func chooseImport(attachTo id: UUID? = nil) {
         let panel = NSOpenPanel()
         panel.title = id == nil ? "Import recordings" : "Add another recording of this conversation"
-        panel.allowedContentTypes = [.audio, .movie]; panel.allowsMultipleSelection = true
+        // A recording's bookmarks file ("call.highlights.json") can be chosen with it (`separatingSidecars`).
+        panel.allowedContentTypes = [.audio, .movie, .json]; panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
         Task {
             do { try await importFiles(panel.urls, source: .imported, attachTo: id) }
@@ -415,7 +416,8 @@ final class AppState: ObservableObject {
         defer { releaseImportLock() }
         guard library.isLoaded else { throw AppError.libraryUnavailable }
         var meetingIDs: [UUID] = []
-        for url in urls {
+        let (audioURLs, chosenSidecars) = Self.separatingSidecars(urls)
+        for url in audioURLs {
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             // Validate before creating a library entry; zero-length and unsupported files remain outside the library.
@@ -444,9 +446,10 @@ final class AppState: ObservableObject {
                 ?? newMeeting(title: url.deletingPathExtension().lastPathComponent)
             await flush()
             guard let meeting = meetings.first(where: { $0.id == meetingID }) else { continue }
-            let sidecar = url.deletingPathExtension().appendingPathExtension("highlights.json")
+            let sidecar = readableSidecar(for: url, chosen: chosenSidecars)
+            defer { sidecar.close() }
             let imported = try await library.ingest(url, into: meetingID, provenance: .file(source: source, device: device,
-                sidecarURL: FileManager.default.fileExists(atPath: sidecar.path) ? sidecar : nil, duration: duration,
+                sidecarURL: sidecar.url, duration: duration,
                 recorderClock: device.flatMap(DeviceRecordingStart.clock(of:)))).imported
             await sourceArrived(meetingID, before: meeting, imported: imported, url: url, device: device, plan: plan)
             if device == nil { selectedID = meetingID }
@@ -454,6 +457,46 @@ final class AppState: ObservableObject {
             enqueue(meetingID)
         }
         return meetingIDs
+    }
+
+    /// Recordings to import and the highlights sidecars ("call.highlights.json") chosen or dropped with them, keyed by
+    /// the recording they belong to: its path without the extension. Other JSON files are left out.
+    nonisolated static func separatingSidecars(_ urls: [URL]) -> (audio: [URL], sidecars: [String: URL]) {
+        var audio: [URL] = [], sidecars: [String: URL] = [:]
+        for url in urls {
+            if let recording = sidecarRecordingPath(url) { sidecars[recording] = url }
+            else if url.pathExtension.lowercased() != "json" { audio.append(url) }
+        }
+        return (audio, sidecars)
+    }
+
+    /// "/a/call.highlights.json" → "/a/call"; nil for anything that isn't a highlights sidecar.
+    nonisolated static func sidecarRecordingPath(_ url: URL) -> String? {
+        let suffix = ".highlights.json", name = url.lastPathComponent
+        guard name.lowercased().hasSuffix(suffix), name.count > suffix.count else { return nil }
+        return url.deletingLastPathComponent().appendingPathComponent(String(name.dropLast(suffix.count))).standardizedFileURL.path
+    }
+
+    /// What a drop imports: its recordings and the highlights sidecars beside them; nothing when it holds no recording.
+    nonisolated static func droppedRecordings(_ urls: [URL]) -> [URL] {
+        let audio = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .audiovisualContent) == true }
+        guard !audio.isEmpty else { return [] }
+        return audio + urls.filter { sidecarRecordingPath($0) != nil }
+    }
+
+    /// The highlights sidecar to import with `audio`: one chosen or dropped with it, else the file beside it
+    /// ("call.highlights.json"). One that exists but can't be read is left out with a notice, and the recording imports
+    /// without its bookmarks: in the App Sandbox only files the person chose are readable, so a sidecar beside a chosen
+    /// recording usually isn't.
+    private func readableSidecar(for audio: URL, chosen: [String: URL]) -> ImportSidecar {
+        let recording = audio.deletingPathExtension().standardizedFileURL.path
+        let candidate = chosen[recording] ?? audio.deletingPathExtension().appendingPathExtension("highlights.json")
+        guard FileManager.default.fileExists(atPath: candidate.path) else { return ImportSidecar(url: nil, scoped: false) }
+        let scoped = candidate.startAccessingSecurityScopedResource()
+        if (try? Data(contentsOf: candidate, options: .mappedIfSafe)) != nil { return ImportSidecar(url: candidate, scoped: scoped) }
+        if scoped { candidate.stopAccessingSecurityScopedResource() }
+        post(["Imported “\(audio.lastPathComponent)” without its bookmarks. To include them, choose “\(candidate.lastPathComponent)” with it."])
+        return ImportSidecar(url: nil, scoped: false)
     }
 
     func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio) {
@@ -1031,6 +1074,13 @@ enum ActiveSheet: Identifiable, Equatable {
 struct NewFolderRequest: Identifiable, Equatable {
     let id = UUID()
     var moving: [UUID] = []
+}
+
+/// A highlights sidecar an import reads, with the access it was granted held until the import is done.
+struct ImportSidecar {
+    let url: URL?
+    let scoped: Bool
+    func close() { if scoped { url?.stopAccessingSecurityScopedResource() } }
 }
 
 /// The library's errors, shared with the devices that import into it.

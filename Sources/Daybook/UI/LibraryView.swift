@@ -301,7 +301,7 @@ private struct AddRecordingDrop: ViewModifier {
         content
             .overlay { if targeted { DropOutline(label: "Add to “\(meeting.title)”") } }
             .dropDestination(for: URL.self) { urls, _ in
-                let audio = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .audiovisualContent) == true }
+                let audio = AppState.droppedRecordings(urls)
                 guard !audio.isEmpty, state.recordingID != meeting.id else { return false }
                 Task { do { try await state.importFiles(audio, source: .imported, attachTo: meeting.id) } catch { state.errorMessage = error.localizedDescription } }
                 return true

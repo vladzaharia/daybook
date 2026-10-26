@@ -106,7 +106,7 @@ struct SidebarView: View {
     }
 
     private func importAudio(_ urls: [URL]) -> Bool {
-        let audio = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .audiovisualContent) == true }
+        let audio = AppState.droppedRecordings(urls)
         guard !audio.isEmpty else { return false }
         Task { do { try await state.importFiles(audio, source: .imported, attachTo: nil) } catch { state.errorMessage = error.localizedDescription } }
         return true
