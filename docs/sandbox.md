@@ -108,10 +108,22 @@ A container can't be fully removed from the command line: the files inside can, 
 `.com.apple.containermanagerd.metadata.plist`, and a container that still has it isn't created again (so its
 manifest never runs again). Remove it in Finder, or rehearse again under a new `DAYBOOK_REHEARSAL_BUNDLE_ID`.
 
+### Entitlements
+
+`Resources/Daybook-Local.entitlements` (ad hoc and rehearsal builds) is sandboxed: `app-sandbox`, `device.audio-input`,
+`device.microphone`, `device.bluetooth`, `network.client`, `network.server`, `files.user-selected.read-write`,
+`files.bookmarks.app-scope`, and one temporary exception, read-write `/private/tmp/daybook/`, so the debug flags have a
+place outside the container that a person can find (`--library /tmp/daybook/ui --snapshot /tmp/daybook/shots`).
+
+`scripts/ci/check-mac-app.sh --app <app> --kind adhoc|rehearsal|signed|signed-sandbox` reads what was actually
+signed: the bundle ID, every sandbox capability, the temporary exceptions (only that one, only in ad hoc and
+rehearsal builds), and the manifest (none, the rehearsal's, or the real one). CI runs it on every ad hoc build;
+`scripts/ci/tests/run-tests.sh` checks it against stand-in apps signed with the repository's entitlements files.
+
 ### Still to come
 
-Sandboxed entitlements, a launch check that offers **Move Library…** when the library didn't move, and re-granting
-folders whose old bookmarks don't resolve.
+A launch check that offers **Move Library…** when the library didn't move, and re-granting folders whose old
+bookmarks don't resolve.
 
 ## The process-tap probe
 

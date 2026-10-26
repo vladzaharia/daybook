@@ -32,7 +32,7 @@ xcrun --kill-cache
 
 ### Signing and iCloud
 
-Signed builds use automatic signing with the team from `DAYBOOK_TEAM_ID`: export it, or put `DAYBOOK_TEAM_ID = ABCDE12345` in `Apps/macOS/Config/Signing.local.xcconfig` (ignored by git), which Xcode also reads. Without a team, the script signs ad hoc. Identifiers: `local.daybook.app` and the iCloud container `iCloud.local.daybook` (`DAYBOOK_ICLOUD_CONTAINER`), shared with the iPhone app. The app keeps the hardened runtime. Release builds aren't sandboxed yet: the code is ready for the App Sandbox, which moves the library into the app's container, and the switch ships separately ([docs/sandbox.md](docs/sandbox.md)). Entitlements: `Resources/Daybook.entitlements` for signed builds (audio input; iCloud Documents and CloudKit with the container; push, for the CloudKit courier) and `Resources/Daybook-Local.entitlements` for ad hoc builds (audio input only).
+Signed builds use automatic signing with the team from `DAYBOOK_TEAM_ID`: export it, or put `DAYBOOK_TEAM_ID = ABCDE12345` in `Apps/macOS/Config/Signing.local.xcconfig` (ignored by git), which Xcode also reads. Without a team, the script signs ad hoc. Identifiers: `local.daybook.app` and the iCloud container `iCloud.local.daybook` (`DAYBOOK_ICLOUD_CONTAINER`), shared with the iPhone app. The app keeps the hardened runtime. Release builds aren't sandboxed yet: the code is ready for the App Sandbox, which moves the library into the app's container, and the switch ships separately ([docs/sandbox.md](docs/sandbox.md)). Entitlements: `Resources/Daybook.entitlements` for signed builds (audio input; iCloud Documents and CloudKit with the container; push, for the CloudKit courier) and `Resources/Daybook-Local.entitlements` for ad hoc builds, which run in the App Sandbox under their own bundle ID, `local.daybook.app.adhoc`, with a library of their own in its container.
 
 The script never changes the Apple Developer account unless asked. Signing for iCloud needs profiles that already exist; without them `xcodebuild` stops and says which profile is missing.
 
@@ -120,12 +120,13 @@ The separate diagnostic exercises real embedded models without adding a meeting 
 swift run Daybook --smoke-test --download-models --output /tmp/daybook-smoke.json
 ```
 
-After installation, run the packaged app with networking denied:
+After installation, run it again with networking denied (an unbundled build: the ad hoc app runs in the App
+Sandbox already, and keeps its models in its container):
 
 ```sh
+swift build -c release
 sandbox-exec -p '(version 1) (allow default) (deny network*)' \
-  dist/Daybook.app/Contents/MacOS/Daybook \
-  --smoke-test --notes-highlights --output /tmp/daybook-offline-smoke.json
+  .build/release/Daybook --smoke-test --notes-highlights --output /tmp/daybook-offline-smoke.json
 ```
 
 See [validation](docs/validation.md) for results and remaining live-device checks, [architecture](docs/architecture.md) for implementation detail, [model runtime](docs/model-runtime.md) for offline-loading behavior, and [capture](docs/capture.md) for permissions and timing. [Third-party notices](THIRD_PARTY_NOTICES.md) describe dependencies and model licenses.

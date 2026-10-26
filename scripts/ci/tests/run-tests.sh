@@ -26,6 +26,8 @@
 #                         (macOS)
 #   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
 #                         the repository (macOS)
+#   check-mac-app.sh      bundle IDs, App Sandbox entitlements, and migration manifests of each kind of build,
+#                         on stand-in apps signed ad hoc with the repository's entitlements files (macOS)
 #   package-mac.sh        version and build checks, ZIP, DMG, checksums, notarization waits, pending
 #                         submissions, and notary-resume.sh, with stand-in tools (macOS)
 # Runs on macOS (bash 3.2) and Linux.
@@ -519,6 +521,53 @@ if macos; then
     expect_fail "part of the API key is refused" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_ASC_KEY_ID=ABC123DEFG --
 else
     skip "build-app.sh (macOS only)"
+fi
+
+# --- check-mac-app.sh, on stand-in apps signed ad hoc with the repository's entitlements ----------------
+echo "check-mac-app.sh"
+if macos; then
+    resources="$ci/../../Resources"
+    # fake_app NAME BUNDLE_ID ENTITLEMENTS [MANIFEST]: an app whose executable is a copy of true, signed ad hoc.
+    fake_app() {
+        local app="$work/apps/$1/Daybook.app"
+        /bin/rm -rf "$work/apps/$1"
+        /bin/mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+        /bin/cp /usr/bin/true "$app/Contents/MacOS/Daybook"
+        plutil -create xml1 "$app/Contents/Info.plist"
+        plutil -insert CFBundleIdentifier -string "$2" "$app/Contents/Info.plist"
+        plutil -insert CFBundleExecutable -string Daybook "$app/Contents/Info.plist"
+        if [[ -n "${4-}" ]]; then /bin/cp "$4" "$app/Contents/Resources/container-migration.plist"; fi
+        codesign -s - -f --entitlements "$3" "$app" 2>/dev/null
+        printf '%s' "$app"
+    }
+    check_app() { "$ci/check-mac-app.sh" "$@" > "$work/check-app.out" 2>&1; }
+    local_ent="$resources/Daybook-Local.entitlements"
+    app="$(fake_app adhoc local.daybook.app.adhoc "$local_ent")"
+    expect_ok "the ad hoc entitlements make a sandboxed ad hoc build" check_app --app "$app" --kind adhoc
+    expect_fail "which isn't a signed build" check_app --app "$app" --kind signed
+    expect_fail "an ad hoc build under the app's bundle ID" check_app --app "$(fake_app adhoc-id local.daybook.app "$local_ent")" --kind adhoc
+    expect_ok "is refused for its bundle ID" grep -q "bundle ID is 'local.daybook.app'" "$work/check-app.out"
+    expect_fail "an ad hoc build with a manifest" \
+        check_app --app "$(fake_app adhoc-manifest local.daybook.app.adhoc "$local_ent" "$resources/container-migration.plist")" --kind adhoc
+    expect_ok "is refused: it could move a library" grep -q "mustn't carry container-migration.plist" "$work/check-app.out"
+    plutil -remove 'com\.apple\.security\.device\.bluetooth' -o "$work/no-bluetooth.entitlements" "$local_ent"
+    expect_fail "a sandboxed build without Bluetooth" \
+        check_app --app "$(fake_app no-bluetooth local.daybook.app.adhoc "$work/no-bluetooth.entitlements")" --kind adhoc
+    plutil -replace 'com\.apple\.security\.temporary-exception\.files\.absolute-path\.read-write' -json '["/"]' \
+        -o "$work/wide.entitlements" "$local_ent"
+    expect_fail "an exception wider than /private/tmp/daybook/" \
+        check_app --app "$(fake_app wide local.daybook.app.adhoc "$work/wide.entitlements")" --kind adhoc
+    app="$(fake_app rehearsal local.daybook.app.rehearsal2 "$local_ent" "$resources/container-migration-rehearsal.plist")"
+    expect_ok "a rehearsal build moves only the rehearsal's library" check_app --app "$app" --kind rehearsal
+    expect_fail "a rehearsal with the real manifest" \
+        check_app --app "$(fake_app rehearsal-real local.daybook.app.rehearsal "$local_ent" "$resources/container-migration.plist")" --kind rehearsal
+    app="$(fake_app signed local.daybook.app "$resources/Daybook.entitlements")"
+    expect_ok "the signed entitlements make an unsandboxed signed build" check_app --app "$app" --kind signed
+    expect_fail "which isn't a sandboxed one" check_app --app "$app" --kind signed-sandbox
+    expect_fail "a signed build with a manifest" \
+        check_app --app "$(fake_app signed-manifest local.daybook.app "$resources/Daybook.entitlements" "$resources/container-migration.plist")" --kind signed
+else
+    skip "check-mac-app.sh (macOS only)"
 fi
 
 # --- build-ios.sh, with stand-in Xcode tools, in a copy of the repository ------------------------------
