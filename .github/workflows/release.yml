@@ -43,6 +43,12 @@ env:
   NSUnbufferedIO: "YES"
 
 jobs:
+  validate:
+    name: Validate the release commit
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   prepare:
     name: Version and notes
     runs-on: ubuntu-24.04
@@ -137,7 +143,7 @@ jobs:
 
   iphone:
     name: iPhone to TestFlight
-    needs: prepare
+    needs: [prepare, validate]
     if: needs.prepare.outputs.iphone == 'true'
     runs-on: xcode-27
     timeout-minutes: 120
@@ -209,7 +215,7 @@ jobs:
 
   mac:
     name: Mac, Developer ID and notarized
-    needs: prepare
+    needs: [prepare, validate]
     if: needs.prepare.outputs.mac == 'true'
     runs-on: xcode-27
     timeout-minutes: 150
