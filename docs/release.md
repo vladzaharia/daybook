@@ -1,9 +1,10 @@
 # Releases and CI
 
-Two GitHub Actions workflows build Daybook on GitHub-hosted Macs:
+Three GitHub Actions workflows build Daybook on GitHub-hosted Macs:
 
 - **CI** (`.github/workflows/ci.yml`) builds and tests every push to `main`, every pull request, and manual runs.
 - **Release** (`.github/workflows/release.yml`) ships a `v*` tag, or a manual run from `main`. The iPhone app goes to TestFlight. The Mac app is signed with Developer ID, notarized, and attached to a GitHub Release.
+- **CI under load** (`.github/workflows/starved.yml`) runs the tests on starved machines nightly and on demand, to find timing-dependent tests. Nothing waits for it.
 
 Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A Developer ID `.p12` is an optional fallback for the Mac app.
 
@@ -15,6 +16,9 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 | CI | `package` | `xcode-27` | `swift build --build-tests` once, then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
 | CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --test` on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), the crash-recovery test alone, then an unsigned Release device archive checked the way a release would be |
 | CI | `mac` | `xcode-27` | `scripts/ci/tests/run-tests.sh --require-all` (every group, including the macOS-only ones: CryptoKit's JWT check, the archive checks, the upload retry, the build scripts, and the keychain), then `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input, which a manual run and `release.yml` set; a release's validation always builds Release), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
+| CI | `caches` | `ubuntu-24.04` | pushes to `main` only: deletes the caches this run's keys superseded (`scripts/ci/prune-caches.sh`) |
+| CI under load | `package` | `xcode-27` | nightly and manual: the package's test bundles at background priority while busy loops take every core |
+| CI under load | `iphone` | `xcode-27` | nightly and manual: every iPhone test three times (`-test-iterations 3`) |
 | Release | `validate` | (CI's jobs) | calls `ci.yml` on the release commit with `mac_configuration: Release`, so the Mac app is built the way the release builds it. The signing jobs wait for it |
 | Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
 | Release | `iphone` | `xcode-27`, environment `release` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
@@ -66,6 +70,13 @@ None is disabled. Hosted runners are small shared VMs, so CI runs them **on thei
 - The two iPhone tests run together in "Encoder timing tests" with `-retry-tests-on-failure -test-iterations 2`, which reruns only a failed test and records both attempts in the result bundle. xcodebuild counts a pass on the retry as a pass, so `scripts/ci/xcresult-retries.sh` reads the bundle (`xcresulttool get test-results tests`) and leaves the same "Passed on retry" warning, in the run summary too.
 
 The main runs skip just these tests (`--skip` and `-skip-testing`), and the iPhone tests run with `-parallel-testing-enabled NO`. A real regression fails twice and fails the job. A retry warning that keeps coming back means the budget needs a look. The nightly [CI under load](#ci-under-load) run shows how much margin they have.
+
+**CI under load.** `.github/workflows/starved.yml` runs at 07:37 UTC every night and from Actions › CI under load › Run workflow. It never runs on pull requests, no release calls it, and it has no secrets (no environment, `contents: read`). It restores CI's caches from `main` and never saves one.
+
+- `package` builds normally, then starts one busy loop per core at background priority (`taskpolicy -c background`) and runs each test bundle with `taskpolicy -c background swift test`, so the tests compete with the loops for every core. The timing-budget test runs with the rest, without its retry.
+- `iphone` runs every iPhone test three times in a row (`-test-iterations 3`, no retry), the encoder tests included. A test that fails any iteration fails the job, and `xcresult-retries.sh` names each one that passed some iterations and failed others.
+
+A red night isn't a broken build. It names the tests whose timing assumptions don't hold under load; compare with `docs/validation.md`, and fix the test or its budget before an ordinary CI run starts failing on it.
 
 **Artifacts.** On failure, CI uploads the swift test logs, the iPhone `.xcresult` bundles and Xcode logs, or the Mac build logs. They're kept for 14 days.
 
