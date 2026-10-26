@@ -12,7 +12,7 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 
 | Workflow | Job | Runner | What it does |
 |---|---|---|---|
-| CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on the scripts (`build-app.sh` and `build-ios.sh` too; every script is bash), and `scripts/ci/tests/run-tests.sh` |
+| CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on every script under `scripts/` (all bash), and `scripts/ci/tests/run-tests.sh`, which also compiles the Python helpers with warnings as errors |
 | CI | `package` | `xcode-27` | `swift build --build-tests` once, then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
 | CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --test` on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), the crash-recovery test alone, then an unsigned Release device archive checked the way a release would be |
 | CI | `mac` | `xcode-27` | `scripts/ci/tests/run-tests.sh --require-all` (every group, including the macOS-only ones: CryptoKit's JWT check, the archive checks, the upload retry, the build scripts, and the keychain), then `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input, which a manual run and `release.yml` set; a release's validation always builds Release), then the bundle is checked for its signature, icon, and MLX `default.metallib` |

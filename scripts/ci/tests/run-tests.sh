@@ -6,6 +6,7 @@
 # --require-all fails the run if any group was skipped: CI's macOS job passes it, so the macOS-only
 # groups (CryptoKit, archives, build scripts, keychain) can't silently drop out.
 #
+#   Python helpers        scripts/*.py and the mock compile with warnings as errors
 #   version.sh            tag, branch, re-run, and rejection vectors
 #   asc-jwt.sh            fixed header and payload vectors; the signature verified by openssl and, on
 #                         macOS, by CryptoKit (an independent implementation)
@@ -70,6 +71,16 @@ for tool in xcodebuild xcodegen xcrun codesign ditto hdiutil spctl security curl
     cp "$here/stub_tool.sh" "$stubs/$tool"
     chmod +x "$stubs/$tool"
 done
+
+# --- Python helpers ------------------------------------------------------------------------------------
+echo "Python helpers"
+for script in "$ci"/../*.py "$here"/*.py; do
+    # Compiled in memory with warnings as errors (an invalid escape sequence is a SyntaxWarning), so no
+    # __pycache__ is written.
+    expect_ok "$(basename "$script") compiles cleanly" python3 -I -W error -c \
+        'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), sys.argv[1], "exec")' "$script"
+done
+expect_ok "model-revision.py --help runs offline" python3 -I "$ci/../model-revision.py" --help
 
 # --- version.sh ----------------------------------------------------------------------------------------
 echo "version.sh"
