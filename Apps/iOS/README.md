@@ -136,6 +136,7 @@ xcrun simctl launch <udid> local.daybook.phone --demo-link --open-settings      
 xcrun simctl launch <udid> local.daybook.phone --sync-folder /tmp/container --demo-mac "Studio Mac:2"   # sync through a folder
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --open-settings device   # Soundcore, simulated
 xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --start-recording --demo-notes --demo-captions  # scripted captions
+xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --start-recording --demo-notes --posture partial --interface-orientation preview-portrait --write-notes   # table mode, writing (fold to book first)
 xcrun simctl launch <udid> local.daybook.phone --caption-probe /path/to/audio.m4a   # Documents/caption-probe.json; never downloads
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet (or panel) at a size
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --handoff-demo waiting --open-settings device   # a handoff state

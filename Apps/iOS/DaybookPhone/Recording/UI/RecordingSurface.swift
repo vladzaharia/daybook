@@ -223,7 +223,10 @@ private struct TableRecording: View {
         .onChange(of: model.recorder.isPaused) { _, paused in if paused { wake() } }
         .onChange(of: writing) { wake() }
         .persistentSystemOverlays(.hidden)
-        .onAppear { InterfaceOrientation.apply(model.options.interfaceOrientation) }
+        .onAppear {
+            InterfaceOrientation.apply(model.options.interfaceOrientation)
+            if model.options.writeNotes { writing = true }
+        }
     }
 
     private func wake() {
