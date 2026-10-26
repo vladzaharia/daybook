@@ -86,6 +86,27 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertFalse(mergedB.warnings.isEmpty)
     }
 
+    func testTwoDevicesThatStartedTheSameConversationKeepWhatEitherSet() async throws {
+        let a = try engine("A"), b = try engine("B")
+        let id = UUID(), folder = UUID()
+        // The Mac named it, filed it, and took notes; the phone joined the same conversation ID and only recorded.
+        var mac = Meeting(id: id, title: "Design review", notes: "Ship on Friday", folderID: folder, templateID: "custom-review")
+        mac.timedNotes = [TimedNote(time: 8, text: "Ship on Friday")]
+        let phone = Meeting(id: id, title: "Untitled Conversation", date: mac.date.addingTimeInterval(3), status: .imported)
+        _ = try await publish(mac, using: a, name: "A")
+        let fromB = try await b.synchronize(meetings: [phone]); try await apply(fromB, to: "B", using: b)
+        let fromA = try await a.synchronize(meetings: [mac]); try await apply(fromA, to: "A", using: a)
+        for merged in [fromA.meetings[0], fromB.meetings[0]] {
+            XCTAssertEqual(merged.title, "Design review")
+            XCTAssertEqual(merged.notes, "Ship on Friday")
+            XCTAssertEqual(merged.timedNotes, mac.timedNotes)
+            XCTAssertEqual(merged.folderID, folder)
+            XCTAssertEqual(merged.templateID, "custom-review")
+            XCTAssertFalse(merged.revisions.contains { $0.field.hasPrefix("sync:") })
+        }
+        XCTAssertEqual(fromA.meetings, fromB.meetings)
+    }
+
     func testCrashBeforeAndAfterLocalApplyReoffersUntilAcknowledged() async throws {
         let a = try engine("A")
         let original = try await publish(Meeting(notes: "Initial"), using: a, name: "A")
