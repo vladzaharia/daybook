@@ -1,9 +1,9 @@
 import Foundation
 
 // One way for the package's tests to wait for something to happen. It always fails on timeout (by
-// throwing, which fails the test), says what it was waiting for, where, and what it last saw, and
-// stretches every timeout by DAYBOOK_TEST_TIMEOUT_SCALE so a slow or starved machine gets longer.
-// No XCTest here: the library builds with `swift build` too, and a thrown error fails a test.
+// throwing, which fails the test and stops it), says what it was waiting for, where, and what it
+// last saw, and stretches every timeout by DAYBOOK_TEST_TIMEOUT_SCALE so a slow or starved machine
+// gets longer.
 
 /// Timeouts in tests, stretched on slow machines.
 public enum TestTiming {

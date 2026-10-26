@@ -74,7 +74,8 @@ let package = Package(
             "DaybookCaptions",
             "DaybookDesign"
         ]),
-        // What every test bundle shares: waiting for something to happen (Tests/DaybookTestSupport).
+        // What every test bundle shares (Tests/DaybookTestSupport): waiting for something to happen, and
+        // UserDefaults suites that are removed when a test ends.
         .target(name: "DaybookTestSupport", path: "Tests/DaybookTestSupport"),
         .testTarget(name: "DaybookCoreTests", dependencies: ["DaybookCore", "DaybookTestSupport"]),
         // Device tests decode transferred audio with DaybookIntelligence's reader (macOS).

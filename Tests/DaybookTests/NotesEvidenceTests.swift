@@ -1,5 +1,6 @@
 import DaybookCore
 @testable import DaybookKit
+import DaybookTestSupport
 import XCTest
 @testable import Daybook
 
@@ -176,7 +177,7 @@ final class NotesPersistenceTests: XCTestCase {
     private func makeState() async throws -> (AppState, URL, UserDefaults) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookNotesTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let defaults = UserDefaults(suiteName: "local.daybook.tests.\(root.lastPathComponent)")!
+        let defaults = makeTestDefaults()
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         XCTAssertTrue(state.isReady)
@@ -186,6 +187,5 @@ final class NotesPersistenceTests: XCTestCase {
 
     private func cleanup(_ root: URL, _ defaults: UserDefaults) {
         try? FileManager.default.removeItem(at: root)
-        defaults.removePersistentDomain(forName: "local.daybook.tests.\(root.lastPathComponent)")
     }
 }

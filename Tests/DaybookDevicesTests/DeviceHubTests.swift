@@ -14,14 +14,13 @@ final class DeviceHubTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        suite = "local.daybook.tests.devices.\(UUID().uuidString)"
+        suite = makeTestSuite("local.daybook.tests.devices")
         defaults = UserDefaults(suiteName: suite)
         root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookDevices-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
     override func tearDown() async throws {
-        defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -108,8 +107,8 @@ final class DeviceHubTests: XCTestCase {
         hub.shutDown()
 
         // Another recorder's folder becomes an Other Recorder.
+        removeTestSuiteAtTeardown(suite + ".other")
         let other = UserDefaults(suiteName: suite + ".other")!
-        defer { other.removePersistentDomain(forName: suite + ".other") }
         other.set(bookmark, forKey: "importFolderBookmark")
         other.set("imported", forKey: "importFolderSource")
         var env = environment()
