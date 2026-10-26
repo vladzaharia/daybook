@@ -74,6 +74,9 @@ final class AppState: ObservableObject {
     @Published var processingID: UUID?
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
+    /// Photos that couldn't be read wait before they're tried again (AppState+Photos.swift).
+    var photoBackoff = PhotoReadingBackoff()
+    var photoRetry: Task<Void, Never>?
     @Published var processingProgress = IntelligenceProgress(0, "Ready") {
         didSet { processingProgressChanged() }
     }
@@ -639,7 +642,7 @@ final class AppState: ObservableObject {
             for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) { enqueue(id) }
         }
         pickUpRequests(start: false)
-        for meeting in meetings where meeting.visiblePhotos.contains(where: { $0.analysis == nil }) { readPhotosWhenIdle(meeting.id) }
+        requeueUnreadPhotos()
     }
 
     func realign(_ id: UUID) async { await library.realign(id) }

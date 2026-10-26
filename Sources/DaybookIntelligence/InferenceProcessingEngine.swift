@@ -173,8 +173,10 @@ public struct InferenceProcessingEngine: ProcessingEngine {
 
     /// Reads photos with Apple Vision (text, labels, sharpness, near copies), then, when a caption model
     /// other than Vision is chosen, has it caption the informative ones. Photos analysed before are only
-    /// compared for near copies. A caption model that can't run leaves Vision's captions, with a notice;
-    /// photos never stop a summary.
+    /// compared for near copies. A photo that can't be read is a failure of its own (`failures`) while
+    /// the others are read. A caption model that can't run leaves Vision's captions, with a notice, and
+    /// is recorded on each analysis so it isn't tried again for those photos until it changes; photos
+    /// never stop a summary.
     public func describePhotos(_ meeting: Meeting, photos: [PhotoProcessingInput],
                                progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput {
         let pending = photos.filter { Self.needsReading($0.photo, captionModel: configuration.photoModel) }
@@ -188,13 +190,26 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         do { read = try await inference.describeImages(requests, model: PhotoReading.visionModel, progress: report) }
         catch is CancellationError { throw CancellationError() }
         catch LocalIntelligenceError.busy { throw LocalIntelligenceError.busy }
-        catch { return PhotoProcessingOutput(notices: ["Photos couldn’t be read: \(error.localizedDescription)"]) }
+        catch {
+            // Vision couldn't run at all: every photo waiting is a failure, tried again later.
+            let failures = Dictionary(uniqueKeysWithValues: pending.map { ($0.photo.id, error.localizedDescription) })
+            return PhotoProcessingOutput(notices: ["Photos couldn’t be read: \(error.localizedDescription)"], failures: failures)
+        }
         guard read.count == ordered.count else { return PhotoProcessingOutput() }
+        var failures: [UUID: String] = [:]
+        for (index, input) in ordered.enumerated() where pendingIDs.contains(input.photo.id) {
+            if let failure = read[index].failure { failures[input.photo.id] = failure }
+        }
+        if !failures.isEmpty {
+            notices.append(failures.count == 1 ? "A photo couldn’t be read: \(failures.values.first!)" : "\(failures.count) photos couldn’t be read.")
+        }
+        let readable = pendingIDs.subtracting(failures.keys)
         var captions = read.map(\.caption)
         var captionModels = Array(repeating: PhotoReading.visionModel.id, count: read.count)
         var captionProvenance = read.map(\.provenance)
+        var captionFailed: String?
         if let model = configuration.photoModel, model.id != PhotoReading.visionModel.id {
-            let informative = ordered.indices.filter { pendingIDs.contains(ordered[$0].photo.id) && PhotoReading.isInformative(read[$0], caption: read[$0].caption) }
+            let informative = ordered.indices.filter { readable.contains(ordered[$0].photo.id) && PhotoReading.isInformative(read[$0], caption: read[$0].caption) }
             if !informative.isEmpty {
                 do {
                     let described = try await inference.describeImages(informative.map { ImageDescriptionRequest(url: ordered[$0].url, recognizedText: read[$0].recognizedText) },
@@ -207,12 +222,16 @@ public struct InferenceProcessingEngine: ProcessingEngine {
                         }
                     }
                 } catch is CancellationError { throw CancellationError() }
-                catch { notices.append("Photo captions use Apple Vision: \(error.localizedDescription)") }
+                catch LocalIntelligenceError.busy { throw LocalIntelligenceError.busy }
+                catch {
+                    notices.append("Photo captions use Apple Vision: \(error.localizedDescription)")
+                    captionFailed = model.description
+                }
             }
         }
         var analyses: [UUID: PhotoAnalysis] = [:]
         let now = Date()
-        for (index, input) in ordered.enumerated() where pendingIDs.contains(input.photo.id) {
+        for (index, input) in ordered.enumerated() where readable.contains(input.photo.id) {
             let found = read[index]
             let duplicate = found.duplicateOf.flatMap { (0..<index).contains($0) ? ordered[$0].photo.id : nil }
             var parameters = ["textModel": PhotoReading.visionModel.id]
@@ -220,6 +239,9 @@ public struct InferenceProcessingEngine: ProcessingEngine {
             if !PhotoReading.isInformative(found, caption: found.caption) {
                 // A model change must not repeatedly process photos excluded from captioning.
                 parameters["captionSkipped"] = "uninformative"
+            } else if let captionFailed, captionModels[index] == PhotoReading.visionModel.id {
+                // The chosen caption model failed for this photo: not tried again until it changes.
+                parameters["captionFailed"] = captionFailed
             }
             let settings = ProcessingSettings(modelID: captionModels[index], parameters: parameters, createdAt: now, model: captionProvenance[index])
             analyses[input.photo.id] = PhotoAnalysis(caption: captions[index], recognizedText: found.recognizedText,
@@ -228,16 +250,20 @@ public struct InferenceProcessingEngine: ProcessingEngine {
                                                      isInformative: PhotoReading.isInformative(found, caption: captions[index]),
                                                      settings: settings, createdAt: now)
         }
-        return PhotoProcessingOutput(analyses: analyses, notices: notices)
+        return PhotoProcessingOutput(analyses: analyses, notices: notices, failures: failures)
     }
 
-    /// A photo is read when it has no analysis, or its caption came from another model than the one chosen now.
+    /// A photo is read when it has no analysis, or its caption came from another model than the one
+    /// chosen now, unless that model (this revision of it) already failed to caption it.
     public static func needsReading(_ photo: MeetingPhoto, captionModel: ModelReference?) -> Bool {
         guard !photo.isRemoved else { return false }
         guard let analysis = photo.analysis else { return true }
         if analysis.settings?.parameters["captionSkipped"] == "uninformative" { return false }
         let wanted = captionModel?.id ?? PhotoReading.visionModel.id
-        if analysis.settings?.modelID != wanted { return true }
+        if analysis.settings?.modelID != wanted {
+            if let captionModel, analysis.settings?.parameters["captionFailed"] == captionModel.description { return false }
+            return true
+        }
         if let revision = captionModel?.revision { return analysis.settings?.model?.revision != revision }
         return false
     }

@@ -32,15 +32,18 @@ public struct ImageDescription: Sendable, Equatable {
     public var duplicateOf: Int?
     /// The exact model; the runtime fills this in.
     public var provenance: ModelProvenance?
+    /// Why this image couldn't be read (an unreadable file); the others in the batch still were.
+    public var failure: String?
 
     public init(caption: String? = nil, recognizedText: String? = nil, labels: [String] = [], sharpness: Double? = nil,
-                duplicateOf: Int? = nil, provenance: ModelProvenance? = nil) {
+                duplicateOf: Int? = nil, provenance: ModelProvenance? = nil, failure: String? = nil) {
         self.caption = caption; self.recognizedText = recognizedText; self.labels = labels; self.sharpness = sharpness
-        self.duplicateOf = duplicateOf; self.provenance = provenance
+        self.duplicateOf = duplicateOf; self.provenance = provenance; self.failure = failure
     }
 }
 
-/// Images to descriptions. Results come back in the order of the requests, one each.
+/// Images to descriptions. Results come back in the order of the requests, one each; an image that
+/// can't be read comes back with its `failure` rather than failing the batch.
 public protocol DescribingImages: LoadedModel {
     func describe(_ requests: [ImageDescriptionRequest], progress: @escaping IntelligenceProgressHandler) async throws -> [ImageDescription]
 }

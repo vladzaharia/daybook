@@ -74,7 +74,12 @@ public struct PhotoProcessingInput: Sendable {
 public struct PhotoProcessingOutput: Sendable {
     public var analyses: [UUID: PhotoAnalysis]
     public var notices: [String]
-    public init(analyses: [UUID: PhotoAnalysis] = [:], notices: [String] = []) { self.analyses = analyses; self.notices = notices }
+    /// Photos that couldn't be read this time, and why; the caller decides when to try again
+    /// (`PhotoReadingBackoff`).
+    public var failures: [UUID: String]
+    public init(analyses: [UUID: PhotoAnalysis] = [:], notices: [String] = [], failures: [UUID: String] = [:]) {
+        self.analyses = analyses; self.notices = notices; self.failures = failures
+    }
 }
 
 /// Everything one pass over a conversation produced (`ProcessingEngine.process`).

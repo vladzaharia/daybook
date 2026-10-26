@@ -55,7 +55,15 @@ final class VisionImageReader: DescribingImages, @unchecked Sendable {
         for (index, request) in requests.enumerated() {
             try Task.checkCancellation()
             progress(.init(Double(index) / Double(max(1, requests.count)), "Reading photo \(index + 1) of \(requests.count)"))
-            let read = try await Task.detached(priority: .userInitiated) { try Self.read(request.url, compareOnly: request.compareOnly) }.value
+            let read: (description: ImageDescription, print: VNFeaturePrintObservation?)
+            do {
+                read = try await Task.detached(priority: .userInitiated) { try Self.read(request.url, compareOnly: request.compareOnly) }.value
+            } catch {
+                // One unreadable photo is reported on its own; the rest of the batch is still read.
+                results.append(ImageDescription(failure: error.localizedDescription))
+                prints.append(nil)
+                continue
+            }
             var description = read.description
             if let print = read.print {
                 for (earlier, other) in prints.enumerated() {
