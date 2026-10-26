@@ -120,6 +120,13 @@ final class LinkServicesTests: XCTestCase {
         try await waitUntil("connected") { link.macs.first?.isConnected == true }
     }
 
+    /// Pairs, then answers the pairing sheet's question with Allow, so the Mac may start recording here.
+    func pair(_ link: PhoneLink, with mac: Mac, allowingRecordingOn model: PhoneAppModel) async throws {
+        try await pair(link, with: mac)
+        let paired = try XCTUnwrap(link.macs.first)
+        model.settings.setMacMayStartRecording(true, for: paired.id, pairedAt: paired.pairedAt)
+    }
+
     func testPairsWithTheCodeConnectsAndShowsLiveProgress() async throws {
         let mac = try await makeMac()
         let link = makeLink()
@@ -231,7 +238,7 @@ final class LinkServicesTests: XCTestCase {
         let link = makeLink()
         let rig = RecorderRig()
         let model = try makeModel(link: link, rig: rig)
-        try await pair(link, with: mac)
+        try await pair(link, with: mac, allowingRecordingOn: model)
         try await waitUntil("clock samples") { link.macs.first?.clock != nil }
         let conversation = UUID()
         // The conversation began 130 s before this iPhone starts; the Mac's own recording into it, 30 s before.
@@ -314,7 +321,7 @@ final class LinkServicesTests: XCTestCase {
         let link = makeLink()
         let rig = RecorderRig()
         let model = try makeModel(link: link, rig: rig)
-        try await pair(link, with: mac)
+        try await pair(link, with: mac, allowingRecordingOn: model)
         // From the Mac's device page (and from an older Mac, which sends no timing).
         for request in [LinkRecordRequest(action: .start, conversationID: UUID(), standalone: true),
                         LinkRecordRequest(action: .start, conversationID: UUID())] {
@@ -520,7 +527,7 @@ final class LinkServicesTests: XCTestCase {
         let link = makeLink()
         let rig = RecorderRig()
         let model = try makeModel(link: link, rig: rig)
-        try await pair(link, with: mac)
+        try await pair(link, with: mac, allowingRecordingOn: model)
         let phoneID = link.deviceID
         func start() async throws -> UUID {
             let conversation = UUID()
@@ -558,7 +565,7 @@ final class LinkServicesTests: XCTestCase {
         let link = makeLink()
         let rig = RecorderRig()
         let model = try makeModel(link: link, rig: rig)
-        try await pair(link, with: mac)
+        try await pair(link, with: mac, allowingRecordingOn: model)
         let conversation = UUID()
         let macStart = rig.clock.now().addingTimeInterval(-30)
         let reply = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation,
