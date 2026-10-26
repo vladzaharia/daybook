@@ -236,6 +236,52 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertEqual(forward.meeting.tracks.count, 2); XCTAssertEqual(forward.meeting.tags, ["A", "B"])
     }
 
+    func testBookmarkDeletionSurvivesAnIndependentEditAndConcurrentEditsRemainRecoverable() {
+        let bookmark = Highlight(time: 5, text: "Decision")
+        let base = Meeting(title: "Review", highlights: [bookmark])
+        var deleted = base, renamed = base
+        deleted.highlights = []
+        renamed.title = "Renamed"
+        for (a, b) in [(deleted, renamed), (renamed, deleted), (deleted, deleted)] {
+            XCTAssertTrue(MeetingMerge.merge(base: base, local: a, remote: b).meeting.highlights.isEmpty)
+        }
+        var edited = base
+        edited.highlights[0].text = "Edited decision"
+        let forward = MeetingMerge.merge(base: base, local: deleted, remote: edited)
+        let reverse = MeetingMerge.merge(base: base, local: edited, remote: deleted)
+        XCTAssertEqual(forward.meeting, reverse.meeting)
+        XCTAssertTrue(forward.meeting.revisions.contains { $0.field.hasPrefix("sync:highlight:") })
+    }
+
+    func testRepeatedMergeDiamondsTraverseWithinBudgetAndExpiredPassDefersWork() async throws {
+        let sync = try engine("reader")
+        let initial = try await sync.synchronize(meetings: [])
+        try await sync.acknowledge(initial.checkpointID)
+        let meeting = Meeting(title: "Branching history")
+        var parents: [String] = []
+        for level in 0..<24 {
+            var next: [String] = []
+            for device in ["a", "b"] {
+                let snapshot = try JSONSerialization.jsonObject(with: JSONEncoder().encode(meeting))
+                let event: [String: Any] = ["schemaVersion": 1, "meetingID": meeting.id.uuidString, "deviceID": device,
+                    "sequence": level, "parents": parents, "snapshot": snapshot, "deleted": false, "assets": []]
+                let bytes = try JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+                let digest = SyncDigest.sha256(data: bytes)
+                try bytes.write(to: remote.appendingPathComponent("Events/\(digest).json"))
+                next.append(digest)
+            }
+            parents = next
+        }
+        let start = ContinuousClock.now
+        let result = try await sync.synchronize(meetings: [], limits: SyncPassLimits(timeBudget: .seconds(2)))
+        XCTAssertLessThan(start.duration(to: .now), .seconds(2))
+        XCTAssertEqual(result.meetings.map(\.id), [meeting.id])
+        try await sync.acknowledge(result.checkpointID)
+        let expired = try await sync.synchronize(meetings: result.meetings, limits: SyncPassLimits(timeBudget: .zero))
+        XCTAssertTrue(expired.hasMoreWork)
+        XCTAssertEqual(expired.meetings, result.meetings)
+    }
+
     func testDerivedTranscriptViewKeepsItsOwnAlignmentAndReviewCandidates() {
         let track = UUID(), base = Meeting()
         var a = base, b = base

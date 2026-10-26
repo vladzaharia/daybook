@@ -222,9 +222,11 @@ public actor LibrarySyncEngine {
         var notLocalAudio: [UUID: Set<UUID>] = [:]
         var proposedBases = state.bases
         var proposedHeads = state.heads
+        let completeAncestors = try completeAncestorIDs(events: events, budget: &budget)
         let grouped = Dictionary(grouping: events.keys, by: { events[$0]!.meetingID })
         for (meetingID, ids) in grouped.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             try Task.checkCancellation()
+            guard !budget.timeExceeded else { budget.deferred += 1; continue }
             if deletes.contains(meetingID) {
                 output.removeValue(forKey: meetingID)
                 if ids.contains(where: { events[$0]?.snapshot != nil }) {
@@ -237,7 +239,7 @@ public actor LibrarySyncEngine {
             // Failed uploads must never let an older remote snapshot replace unsent local edits.
             guard !failedPublications.contains(meetingID) else { continue }
             let headIDs = heads(ids: ids, parents: { events[$0]?.parents ?? [] })
-            guard !headIDs.isEmpty, headIDs.allSatisfy({ ancestorsComplete($0, events: events) }) else { continue }
+            guard !headIDs.isEmpty, headIDs.allSatisfy(completeAncestors.contains) else { continue }
             // With part of the journal unread (downloading, or deferred by limits), a conversation whose applied
             // heads weren't read this pass would roll back to an older snapshot. It waits for a fuller read.
             if journalIncomplete, let applied = state.heads[meetingID.uuidString], !applied.allSatisfy({ events[$0] != nil }) { continue }
@@ -605,9 +607,30 @@ public actor LibrarySyncEngine {
         let ancestors = Set(ids.flatMap(parents))
         return ids.filter { !ancestors.contains($0) }.sorted()
     }
-    private func ancestorsComplete(_ id: String, events: [String: SyncEventRecord], visiting: Set<String> = []) -> Bool {
-        guard !visiting.contains(id), let event = events[id] else { return false }
-        return event.parents.allSatisfy { ancestorsComplete($0, events: events, visiting: visiting.union([id])) }
+    /// Visit every edge once. Missing parents and cycles never become ready, while shared
+    /// ancestors in a merge history do not multiply the work or consume the call stack.
+    private func completeAncestorIDs(events: [String: SyncEventRecord], budget: inout SyncPassBudget) throws -> Set<String> {
+        var remaining: [String: Int] = [:]
+        var children: [String: [String]] = [:]
+        var ready: [String] = []
+        for (id, event) in events {
+            try Task.checkCancellation()
+            guard !budget.timeExceeded else { budget.deferred += 1; return [] }
+            remaining[id] = event.parents.count
+            if event.parents.isEmpty { ready.append(id) }
+            for parent in event.parents { children[parent, default: []].append(id) }
+        }
+        var complete = Set<String>()
+        while let id = ready.popLast() {
+            try Task.checkCancellation()
+            guard !budget.timeExceeded else { budget.deferred += 1; break }
+            complete.insert(id)
+            for child in children[id] ?? [] {
+                remaining[child, default: 0] -= 1
+                if remaining[child] == 0 { ready.append(child) }
+            }
+        }
+        return complete
     }
     private func ancestorIDs(_ id: String, events: [String: SyncEventRecord]) -> Set<String> {
         var result = Set<String>(), pending = [id]
@@ -621,10 +644,8 @@ public actor LibrarySyncEngine {
         guard let first = ids.first else { return nil }
         var common = ancestorIDs(first, events: events)
         for id in ids.dropFirst() { common.formIntersection(ancestorIDs(id, events: events)) }
-        return common.sorted { a, b in
-            let da = ancestorIDs(a, events: events).count, db = ancestorIDs(b, events: events).count
-            return da == db ? a > b : da > db
-        }.first
+        return common.map { ($0, ancestorIDs($0, events: events).count) }
+            .max { ($0.1, $0.0) < ($1.1, $1.0) }?.0
     }
     private func countPendingCloudUploads() throws -> Int {
         var count = 0

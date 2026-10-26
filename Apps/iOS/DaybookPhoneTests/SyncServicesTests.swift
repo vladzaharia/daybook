@@ -125,6 +125,21 @@ final class SyncServicesTests: XCTestCase {
 
     // MARK: Audio provider
 
+    func testACancelledBackgroundPassDoesNotStartOrPublish() async throws {
+        let container = try temporaryDirectory("container")
+        let phone = try await makePhone(container, name: "Cancelled background sync")
+        phone.library.controller.newMeeting(title: "Still local")
+        try await phone.library.controller.flushDurably()
+        let pass = Task { await phone.sync.synchronize(.backgroundRefresh) }
+        pass.cancel()
+        await pass.value
+        XCTAssertEqual(phone.sync.passes, 0)
+        XCTAssertFalse(phone.sync.isSyncing)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: container.appendingPathComponent("Events").path))
+        await phone.sync.synchronize(.manual)
+        XCTAssertEqual(phone.sync.passes, 1)
+    }
+
     func testAudioDownloadsOnDemandWithProgressAndCanBeCancelled() async throws {
         let container = try temporaryDirectory("container")
         let recorder = try await makePhone(container, name: "Recording iPhone")

@@ -343,14 +343,20 @@ public final class LibrarySyncController: ObservableObject {
 
     public func synchronize(meetings: [Meeting], deletedMeetingIDs: Set<UUID>, metadata: Data,
                             limits: SyncPassLimits = .unlimited) async throws -> SyncResult? {
+        try Task.checkCancellation()
         guard let engine, !isSyncing else { return nil }
         let generation = configurationID
         isSyncing = true; status = "Syncing recordings and conversations…"
         do {
             let task = Task { try await engine.synchronize(meetings: meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: metadata, limits: limits) }
             activeTask = task
-            let result = try await task.value
+            let result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
             activeTask = nil
+            try Task.checkCancellation()
             guard generation == configurationID else { isSyncing = false; return nil }
             handToCourier(result.writtenFiles, engine: engine)
             pendingReceipt = result.checkpointID

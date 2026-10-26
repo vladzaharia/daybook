@@ -165,7 +165,7 @@ final class PhoneSync {
     /// One pass, or a cheap check when `trigger` allows and nothing changed on either side. A request
     /// while a pass runs is folded into one more pass after it. Returns when the work is done.
     func synchronize(_ trigger: Trigger) async {
-        guard isConnected, library.isLoaded else { return }
+        guard !Task.isCancelled, isConnected, library.isLoaded else { return }
         if let running {
             rerun = rerun ?? trigger
             await running.value
@@ -173,8 +173,13 @@ final class PhoneSync {
         }
         let task = Task { await self.run(trigger) }
         running = task
-        await task.value
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
         running = nil
+        guard !Task.isCancelled else { rerun = nil; return }
         if let again = rerun {
             rerun = nil
             await synchronize(again)
@@ -194,6 +199,7 @@ final class PhoneSync {
         let applied = await library.synchronize(protecting: protectedConversation(), limits: limits)
         isSyncing = false
         changesInFlight = 0
+        guard !Task.isCancelled else { return }
         lastPassAt = Date()
         pendingUploads = controller.pendingUploads
         pendingDownloads = controller.pendingDownloads
@@ -262,12 +268,22 @@ final class PhoneSync {
         var assertion = UIBackgroundTaskIdentifier.invalid
         let pass = Task {
             await self.synchronize(trigger)
+            guard !Task.isCancelled else { return }
             await self.controller?.finishCourierSends()
         }
-        assertion = application.beginBackgroundTask(withName: "Daybook sync") { pass.cancel() }
+        assertion = application.beginBackgroundTask(withName: "Daybook sync") {
+            pass.cancel()
+            if assertion != .invalid {
+                application.endBackgroundTask(assertion)
+                assertion = .invalid
+            }
+        }
         Task {
             await pass.value
-            if assertion != .invalid { application.endBackgroundTask(assertion) }
+            if assertion != .invalid {
+                application.endBackgroundTask(assertion)
+                assertion = .invalid
+            }
         }
     }
 
