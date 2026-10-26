@@ -75,7 +75,7 @@ public struct SyncContainerEnvironment: Sendable {
     /// account or iCloud Drive is off.
     public var accountIdentity: @Sendable () -> Data?
     /// Whether any iCloud account is signed in, to tell "signed out" from "iCloud Drive off"; nil if unknown.
-    public var accountSignedIn: @Sendable () -> Bool?
+    public var accountSignedIn: @Sendable () async -> Bool?
     /// `FileManager.url(forUbiquityContainerIdentifier:)`. Called off the main actor.
     public var resolveContainer: @Sendable (String) -> URL?
     public var cloud: SyncCloudFiles
@@ -83,7 +83,7 @@ public struct SyncContainerEnvironment: Sendable {
     public var retryInterval: Duration
 
     public init(containerIdentifier: String?, hasEntitlement: @escaping @Sendable (String) -> Bool,
-                accountIdentity: @escaping @Sendable () -> Data?, accountSignedIn: @escaping @Sendable () -> Bool? = { nil },
+                accountIdentity: @escaping @Sendable () -> Data?, accountSignedIn: @escaping @Sendable () async -> Bool? = { nil },
                 resolveContainer: @escaping @Sendable (String) -> URL?, cloud: SyncCloudFiles = .system,
                 retryInterval: Duration = .seconds(5)) {
         self.containerIdentifier = Self.valid(containerIdentifier)
@@ -92,8 +92,9 @@ public struct SyncContainerEnvironment: Sendable {
     }
 
     public static var system: SyncContainerEnvironment {
-        SyncContainerEnvironment(
-            containerIdentifier: Bundle.main.object(forInfoDictionaryKey: infoKey) as? String,
+        let containerIdentifier = Bundle.main.object(forInfoDictionaryKey: infoKey) as? String
+        return SyncContainerEnvironment(
+            containerIdentifier: containerIdentifier,
             hasEntitlement: { identifier in
                 #if os(macOS)
                 return signedUbiquityContainers().contains(identifier)
@@ -106,9 +107,9 @@ public struct SyncContainerEnvironment: Sendable {
             },
             accountSignedIn: {
                 #if os(macOS)
-                // Best effort: the Apple Account list in the user's preferences (only whether it's empty is
-                // read). Unknown when it can't be read.
-                return (UserDefaults(suiteName: "MobileMeAccounts")?.array(forKey: "Accounts")).map { !$0.isEmpty }
+                // CloudKit's account status for the app's container (`ICloudAccountCheck`), which works in the App
+                // Sandbox. Unknown without the CloudKit entitlement, or when CloudKit can't tell.
+                return await ICloudAccountCheck.signedIn(containerIdentifier: containerIdentifier)
                 #else
                 return nil
                 #endif
@@ -660,7 +661,9 @@ public final class LibrarySyncController: ObservableObject {
             iCloud = .turnedOff; status = "iCloud sync is off"; return
         }
         guard let account = environment.accountIdentity() else {
-            if environment.accountSignedIn() == false {
+            let signedIn = await environment.accountSignedIn()
+            guard isCurrent(generation) else { return }
+            if signedIn == false {
                 iCloud = .signedOut; status = "Signed out of iCloud"
             } else {
                 iCloud = .iCloudDriveOff; status = "iCloud is off in System Settings"
