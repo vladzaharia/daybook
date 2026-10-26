@@ -241,8 +241,7 @@ enum SummaryLine: Equatable {
         return lines
     }
 
-    /// Inline Markdown (bold, italics, code), keeping whitespace.
-    static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-    }
+    /// Inline Markdown (bold, italics, code), keeping whitespace. A model wrote it, so links are
+    /// dropped (`ModelText.inlineMarkdown`).
+    static func inline(_ text: String) -> AttributedString { ModelText.inlineMarkdown(text) }
 }

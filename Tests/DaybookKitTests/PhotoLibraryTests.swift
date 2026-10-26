@@ -77,7 +77,7 @@ final class PhotoLibraryTests: XCTestCase {
         let copied = try XCTUnwrap(result.photos).appendingPathComponent("Photo 01.jpg")
         XCTAssertEqual(try Data(contentsOf: copied), bytes)
         let markdown = try String(contentsOf: result.markdown, encoding: .utf8)
-        XCTAssertTrue(markdown.contains("![Board (draft)](Plan%20%28draft%29%20Photos"), markdown)
+        XCTAssertTrue(markdown.contains("![Board \\[draft\\]](Plan%20%28draft%29%20Photos"), markdown)
         XCTAssertTrue(markdown.contains("Photo%2001.jpg)"))
         XCTAssertThrowsError(try MeetingExport.write(meeting, to: root, name: "../escape") { _ in source })
     }
