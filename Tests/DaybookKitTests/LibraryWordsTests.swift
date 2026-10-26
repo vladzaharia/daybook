@@ -1,4 +1,4 @@
-import DaybookCore
+@testable import DaybookCore
 import DaybookKit
 import XCTest
 
@@ -8,6 +8,29 @@ final class LibraryWordsTests: XCTestCase {
         XCTAssertEqual(LibraryWords.folderDeletion(conversations: 0), "The folder is empty.")
         XCTAssertEqual(LibraryWords.folderDeletion(conversations: 1), "The conversation in it stays in your library.")
         XCTAssertEqual(LibraryWords.folderDeletion(conversations: 4), "The 4 conversations in it stay in your library.")
+    }
+
+    func testTheEncryptionStatusSaysHowMuchIsLeftAndWhatItWaitsFor() {
+        var progress = SealerProgress()
+        let summary = SealingSummary(currentKey: "k", hasKey: true, hasRecoveryKey: false, isMigrator: true, progress: progress)
+        XCTAssertEqual(LibraryWords.encryptionStatus(summary), "On")
+        progress.remaining = 12
+        XCTAssertEqual(LibraryWords.encryptionStatus(SealingSummary(currentKey: "k", hasKey: true, hasRecoveryKey: false, isMigrator: true,
+                                                                    progress: progress)), "Encrypting · 12 left")
+        progress.waitsForWiFi = true
+        XCTAssertEqual(LibraryWords.encryptionStatus(SealingSummary(currentKey: "k", hasKey: true, hasRecoveryKey: false, isMigrator: true,
+                                                                    progress: progress)), "Encrypting · 12 left · Waiting for Wi‑Fi")
+        // Only the device sealing the history says how far it's got.
+        XCTAssertEqual(LibraryWords.encryptionStatus(SealingSummary(currentKey: "k", hasKey: true, hasRecoveryKey: false, isMigrator: false,
+                                                                    progress: progress)), "On")
+    }
+
+    func testANetworkSuitsLargeDownloadsOnlyOnWiFiOutsideLowDataMode() {
+        XCTAssertEqual(SyncNetworkCondition(satisfied: true, expensive: false, constrained: false), .unrestricted)
+        XCTAssertEqual(SyncNetworkCondition(satisfied: true, expensive: true, constrained: false), .restricted, "cellular, or a hotspot")
+        XCTAssertEqual(SyncNetworkCondition(satisfied: true, expensive: false, constrained: true), .restricted, "Low Data Mode")
+        XCTAssertEqual(SyncNetworkCondition(satisfied: false, expensive: false, constrained: false), .restricted, "offline")
+        XCTAssertEqual(SyncReplicaConfiguration().network(), .unrestricted, "a Mac never waits")
     }
 
     func testAPhotoIsReadWithItsTimeAndCaptionNotItsFileName() {

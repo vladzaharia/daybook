@@ -30,7 +30,7 @@ struct EncryptionRows: View {
                     Button("Start Over…", role: .destructive) { confirmingStartOver = true }
                 }
             case .on(let summary):
-                LabeledContent("Encryption", value: Self.status(summary))
+                LabeledContent("Encryption", value: LibraryWords.encryptionStatus(summary))
                 if summary.hasRecoveryKey {
                     LabeledContent("Recovery Key", value: "Saved")
                 } else {
@@ -56,12 +56,6 @@ struct EncryptionRows: View {
         } message: {
             Text(LibraryWords.startOverConsequence)
         }
-    }
-
-    /// "On", or how far encrypting the library's history has got.
-    static func status(_ summary: SealingSummary) -> String {
-        guard let progress = summary.progress, summary.isMigrator, progress.remaining > 0 else { return "On" }
-        return "Encrypting · \(progress.remaining) left"
     }
 
     private func createRecoveryKey() {

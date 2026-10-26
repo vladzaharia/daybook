@@ -267,7 +267,13 @@ A Mac that moved from a chosen folder (above) offers to delete that folder's pla
 event of a live conversation, only the deletion of a deleted one (its snapshots and audio are left behind), every settings
 version, and the objects live conversations use (their merged heads and highlight sidecars). The migrator does it, within
 each pass's limits; each device also seals plaintext entries it wrote itself (a pass already running when the manifest
-changed). A migrator not seen for two weeks is replaced by the next Mac with the key.
+changed). A migrator not seen for two weeks is replaced by the next Mac with the key. An iPhone migrator (it turned
+encryption on, or rotated the key) downloads recordings to seal only on an unrestricted network: Wi‑Fi or wired, not
+Low Data Mode (`SyncReplicaConfiguration.network`, from `NetworkConditionMonitor`'s `NWPathMonitor`; restricted until it
+first reports). It asks for `sealerDownloadBatch` (4) at a time, seals each as it arrives (also on cellular, once it's
+here), and then lets iCloud drop the downloaded copy. Reading back what it sealed waits for Wi‑Fi the same way. Off
+Wi‑Fi, Settings says "Encrypting · 12 left · Waiting for Wi‑Fi"; back on Wi‑Fi a pass starts, and a download arriving
+makes the next cheap check (`hasRemoteChanges`) run one.
 
 **Retiring the plaintext.** The migrator deletes a plaintext file only when its sealed counterpart was read back whole and
 iCloud reports it uploaded, another device holds the key or a recovery key was saved, and a week has passed since

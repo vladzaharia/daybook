@@ -45,12 +45,18 @@ public struct SyncReplicaConfiguration: Sendable {
     /// Where this device keeps library keys (iCloud Keychain in the apps, `KeychainLibraryKeyStore`), to read and write
     /// an encrypted library (docs/icloud-sync.md, "Encryption"). Nil: this replica can't open one, and waits for a key.
     public var keyStore: (any LibraryKeyStore)?
+    /// The network this device is on now. An on-demand replica sealing an encrypted library's history downloads
+    /// recordings for it only on an unrestricted one (docs/icloud-sync.md, "Encryption"). The iPhone answers from
+    /// `NetworkConditionMonitor`; Macs and tests are always unrestricted.
+    public var network: @Sendable () -> SyncNetworkCondition
 
     public init(audioPolicy: SyncAudioPolicy = .eager, device: SyncDeviceIdentity? = nil,
                 audioCache: AudioCachePolicy? = nil, presenceRefreshInterval: TimeInterval = 600,
-                cloud: SyncCloudFiles = .system, keyStore: (any LibraryKeyStore)? = nil) {
+                cloud: SyncCloudFiles = .system, keyStore: (any LibraryKeyStore)? = nil,
+                network: @escaping @Sendable () -> SyncNetworkCondition = { .unrestricted }) {
         self.audioPolicy = audioPolicy; self.device = device; self.audioCache = audioCache
         self.presenceRefreshInterval = presenceRefreshInterval; self.cloud = cloud; self.keyStore = keyStore
+        self.network = network
     }
 
     public static func mac(displayName: String, canProcess: Bool) -> Self {
@@ -60,6 +66,19 @@ public struct SyncReplicaConfiguration: Sendable {
     public static func phone(displayName: String, canProcess: Bool = false, audioCache: AudioCachePolicy = .phoneDefault) -> Self {
         Self(audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: displayName, canProcess: canProcess),
              audioCache: audioCache)
+    }
+}
+
+/// Whether the network suits large downloads now.
+public enum SyncNetworkCondition: Sendable, Equatable {
+    /// Wi‑Fi or wired, and not Low Data Mode.
+    case unrestricted
+    /// Cellular, a personal hotspot, Low Data Mode, or no network at all.
+    case restricted
+
+    /// From a network path's facts (`NWPath`: satisfied, `isExpensive`, `isConstrained`).
+    public init(satisfied: Bool, expensive: Bool, constrained: Bool) {
+        self = satisfied && !expensive && !constrained ? .unrestricted : .restricted
     }
 }
 

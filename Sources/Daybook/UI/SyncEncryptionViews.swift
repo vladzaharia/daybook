@@ -51,7 +51,7 @@ struct SyncEncryptionRows: View {
                 }
             case .on(let summary):
                 LabeledContent("Encryption") {
-                    Text(Self.status(summary)).foregroundStyle(.secondary).monospacedDigit()
+                    Text(LibraryWords.encryptionStatus(summary)).foregroundStyle(.secondary).monospacedDigit()
                 }
                 LabeledContent("Recovery Key") {
                     if summary.hasRecoveryKey {
@@ -100,13 +100,6 @@ struct SyncEncryptionRows: View {
         } message: {
             Text("This can’t be undone.")
         }
-    }
-
-    /// "On", or how far encrypting the library's history has got.
-    static func status(_ summary: SealingSummary) -> String {
-        guard let progress = summary.progress, summary.isMigrator else { return "On" }
-        if progress.remaining > 0 { return "Encrypting · \(progress.remaining) left" }
-        return "On"
     }
 
     private func createRecoveryKey() {

@@ -152,6 +152,11 @@ public actor LibrarySyncEngine {
     private var cachedLibraryID: UUID?
     /// The library each sealed object's header names, by path, once read (`deleteReplacedObjects`).
     var checkedObjects: [String: UUID] = [:]
+    /// Objects an on-demand replica's sealer asked iCloud to download and hasn't sealed yet, by sync-folder path: a
+    /// bounded batch at a time, and only on a network that suits it (`SyncReplicaConfiguration.network`).
+    var sealerDownloads: Set<String> = []
+    /// The network this device is on now, for the sealer's downloads.
+    let network: @Sendable () -> SyncNetworkCondition
     /// The sealer's clock (tests move it past the grace periods).
     var sealerClock: @Sendable () -> Date = { Date() }
     func setSealerClock(_ clock: @escaping @Sendable () -> Date) { sealerClock = clock }
@@ -169,6 +174,7 @@ public actor LibrarySyncEngine {
         self.remoteRoot = remoteRoot.standardizedFileURL
         self.deviceID = deviceID
         audioPolicy = replica.audioPolicy; cloud = replica.cloud; device = replica.device; keyStore = replica.keyStore
+        network = replica.network
         audioCachePolicy = replica.audioCache; presenceRefreshInterval = replica.presenceRefreshInterval
         let local = localRoot.standardizedFileURL.resolvingSymlinksInPath().path
         let remote = remoteRoot.standardizedFileURL.resolvingSymlinksInPath().path
@@ -617,6 +623,8 @@ public actor LibrarySyncEngine {
     /// True when another replica added journal entries since the last pass that settled (nothing pending or
     /// deferred), or when no pass has settled in this process. Local edits are the caller's to track.
     public func hasRemoteChanges() -> Bool {
+        // A recording the sealer asked for has arrived: a pass seals it.
+        if sealerDownloads.contains(where: { SyncFiles.itemState(remoteRoot.appendingPathComponent($0)) == .local }) { return true }
         guard let settled = settledJournalListing, let listing = try? listingPaths() else { return true }
         return listing != settled
     }

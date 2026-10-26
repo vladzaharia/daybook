@@ -117,6 +117,13 @@ public enum LibraryWords {
         "Note at \(date.formatted(date: .omitted, time: .shortened))"
     }
 
+    /// An encrypted library's status in Settings: "On", or, on the device sealing its history, how much is left
+    /// ("Encrypting · 12 left"), and on an iPhone off Wi‑Fi that it's waiting for it.
+    public static func encryptionStatus(_ summary: SealingSummary) -> String {
+        guard let progress = summary.progress, summary.isMigrator, progress.remaining > 0 else { return "On" }
+        return "Encrypting · \(progress.remaining) left" + (progress.waitsForWiFi ? " · Waiting for Wi‑Fi" : "")
+    }
+
     /// Under "Start over with a new key?" (an encrypted library whose key is lost): what's lost and what isn't.
     public static let startOverConsequence = "What’s only in iCloud is lost. Conversations on your devices stay and sync again."
 
