@@ -2,6 +2,7 @@ import AVFoundation
 import DaybookCore
 @testable import DaybookDevices
 @testable import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -13,18 +14,10 @@ import XCTest
 @MainActor
 final class ShippedFormatTests: XCTestCase {
     private var roots: [URL] = []
-    private var suites: [String] = []
 
     override func tearDown() async throws {
         for root in roots { try? FileManager.default.removeItem(at: root) }
-        for suite in suites {
-            UserDefaults.standard.removePersistentDomain(forName: suite)
-            if let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first {
-                try? FileManager.default.removeItem(at: library.appendingPathComponent("Preferences/\(suite).plist"))
-            }
-        }
         roots = []
-        suites = []
     }
 
     // MARK: Conversations and library settings
@@ -378,9 +371,7 @@ final class ShippedFormatTests: XCTestCase {
     private func loadDefaults(_ version: String) throws -> (UserDefaults, [String: Any]) {
         let data = try Data(contentsOf: fixture(version, "defaults.plist"))
         let values = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        let suite = "local.daybook.tests.shipped.\(UUID().uuidString)"
-        suites.append(suite)
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = makeTestDefaults("local.daybook.tests.shipped")
         for (key, value) in values { defaults.set(value, forKey: key) }
         return (defaults, values)
     }
