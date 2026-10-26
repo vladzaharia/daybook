@@ -36,6 +36,20 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(state.visibleMeetings.map(\.id), [filed])
     }
 
+    func testNewNoteIsTitledAsOnTheIPhoneAndSelected() async throws {
+        let (state, root, defaults) = try await makeState()
+        defer { cleanUp(root, defaults) }
+        state.place = .section(.work)
+        let now = Date()
+        let id = state.newNote(at: now)
+        let note = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertEqual(note.title, "Note at \(now.formatted(date: .omitted, time: .shortened))")
+        XCTAssertEqual(note.title, LibraryWords.noteTitle(at: now), "the iPhone's New Note uses the same words")
+        XCTAssertTrue(note.tracks.isEmpty, "only notes, until Record records into it")
+        XCTAssertEqual(note.placement, .work)
+        XCTAssertEqual(state.selectedID, id)
+    }
+
     func testImportedDeviceRecordingsAreRecognizedFromTheLibrary() async throws {
         let (state, root, defaults) = try await makeState()
         defer { cleanUp(root, defaults) }

@@ -23,7 +23,7 @@ struct MenuBarView: View {
         // While recording, the recording; otherwise the panel's home (status, Record, recent conversations).
         Button("Show Floating Notes") { state.showFloatingNotes(focus: state.recordingID) }
         Divider()
-        Toggle("Record Meetings Automatically", isOn: $state.automaticRecording)
+        Toggle("Record Calls Automatically", isOn: $state.automaticRecording)
         if state.automaticRecording { Text(state.monitor.statusText) }
         if let activity {
             // Work in progress is an item that opens it, so it reads at full strength, not as a dimmed status line.

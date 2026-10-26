@@ -104,7 +104,8 @@ struct DaybookCommands: Commands {
             Button("About Daybook") { AboutPanel.show(catalog: state.modelCatalog) }
         }
         CommandGroup(replacing: .newItem) {
-            Button("New Conversation") { state.place = state.place.isDevice ? .section(.all) : state.place; state.newMeeting(); openWindow(id: WindowID.library) }
+            // A conversation that's only your notes so far, as on the iPhone; Record records into it.
+            Button("New Note") { state.place = state.place.isDevice ? .section(.all) : state.place; state.newNote(); openWindow(id: WindowID.library) }
                 .keyboardShortcut("n")
             Button("New Folder") { state.requestNewFolder() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -183,7 +184,7 @@ struct DaybookCommands: Commands {
             } else if let meeting, state.pausedIDs.contains(meeting.id) {
                 Button("Resume Transcription") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }
             } else {
-                Button("Transcribe Now") { if let meeting { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
+                Button("Transcribe") { if let meeting { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
                     .disabled(meeting?.hasUntranscribedAudio != true || locked || state.queuedIDs.contains(meeting?.id ?? UUID()))
             }
             Divider()

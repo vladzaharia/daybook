@@ -96,7 +96,7 @@ final class ReadingSession {
         case .library(.section(.personal)): placement = .personal
         default: break
         }
-        let id = library.newMeeting(title: "Note at \(now.formatted(date: .omitted, time: .shortened))", date: now,
+        let id = library.newMeeting(title: LibraryWords.noteTitle(at: now), date: now,
                                     folderID: folder, placement: placement)
         focusNotesFor = id
         open(id, mode: .summary)

@@ -97,13 +97,13 @@ private struct GeneralSettings: View {
                         .help("Supported Calls")
                         .accessibilityLabel("Supported calls")
                         .popover(isPresented: $showingSupportedApps, arrowEdge: .bottom) { SupportedCallsPopover() }
-                        Toggle("Record meetings automatically", isOn: automaticRecording)
+                        Toggle("Record calls automatically", isOn: automaticRecording)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.regular)
                     }
                 } label: {
-                    Text("Record meetings automatically")
+                    Text("Record calls automatically")
                     if state.automaticRecording { DetectionStatusLine(state: state) }
                 }
                 Toggle("Show floating notes while recording", isOn: $showsFloatingNotes)
@@ -197,7 +197,7 @@ private struct AllowedLabel: View {
     }
 }
 
-/// The live line under "Record meetings automatically", shown only while it's on: a mint dot while
+/// The live line under "Record calls automatically", shown only while it's on: a mint dot while
 /// listening, the recording red while a detected call is being recorded.
 private struct DetectionStatusLine: View {
     @ObservedObject var state: AppState

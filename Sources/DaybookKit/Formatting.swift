@@ -112,6 +112,11 @@ extension Meeting {
 
 /// Sentences both apps put in the same dialogs, so the Mac and the iPhone say the same thing.
 public enum LibraryWords {
+    /// New Note's title on both apps: "Note at 10:15 AM".
+    public static func noteTitle(at date: Date) -> String {
+        "Note at \(date.formatted(date: .omitted, time: .shortened))"
+    }
+
     /// Under "Delete the folder “Clients”?": what happens to what's in it.
     public static func folderDeletion(conversations count: Int) -> String {
         switch count {

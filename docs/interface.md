@@ -55,7 +55,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
   - Inspector
   - search
 - **Floating Notes:** a non-activating `NSPanel` (`.floating`, on every Space and over full-screen apps) that sits over someone else's call without taking focus from it. Panels normally hide when their app is inactive; this one deliberately doesn't, because that is its whole job. It shows your notes and live captions over the call, so it's left out of screen sharing and screenshots (`sharingType = .none`). It's a floating version of the iPhone's main screen: the iPhone's recording surface while recording, and a small home in the language of its status sheet otherwise. It's one sheet of paper with no glass and no toolbar, so it keeps the smaller titlebar-only corner radius. It opens from Window › Floating Notes (⌥⌘N), the menu bar extra, and the Dock menu: on the recording, else the selected conversation, else its home. The views are in `Sources/Daybook/UI/FloatingNotes/`; the pieces it shares with the iPhone are in `DaybookDesign` (see Design tokens).
-  - **Title band:** the system's 28 pt band, transparent and without a separator. Close (left) and Compact (right, mirroring it) fade in only while the pointer is over the panel; minimize and zoom are hidden. Between them, centred like a window title, the phase in the iPhone's words: "● RECORDING · MacBook Pro Microphone" (the input device; "Mic silent" in `Ink.warning` when the microphone hears nothing, with the fix in its tooltip), "✓ SAVED · 12:41", or "⚠ STOPPED".
+  - **Title band:** the system's 28 pt band, transparent and without a separator. Close (left) and Compact (right, mirroring it) fade in only while the pointer is over the panel; minimize and zoom are hidden. Between them, centred like a window title, the phase in the iPhone's words: "● RECORDING · MacBook Pro Microphone" (the input device; "Microphone silent" in `Ink.warning` when the microphone hears nothing, as on the iPhone, with the fix in its tooltip), "✓ SAVED · 12:41", or "⚠ STOPPED".
   - **Status chips:** a glyph and a short label in a quiet capsule, each a menu whose first line is the whole status in a sentence (also its tooltip and VoiceOver label), then what you can do. In order:
     - Call (while recording): teal when call audio is detected, calm when it's quiet, and "No call audio" in warning ink with the fix when it should be captured and isn't.
     - Each recorder: "Soundcore · 80%" with the red dot while it records along; "Soundcore on Alex's iPhone" when the iPhone manages it (Use on This Mac in its menu, with Show Soundcore Work); "Moving…" during a handoff; "Not recording" when it was asked to record along and didn't start.
@@ -137,7 +137,11 @@ Tokens live in `Sources/Daybook/UI/DaybookStyle.swift`. The values the Mac and t
   - Spacing follows `Space.s1…s8` (4–64 pt). Summary headings sit 32 pt below the block before them; the lede 24 pt below the byline.
 - **Words:**
   - Conversation; Bookmark; Recording / Audio; Version History; Template.
-  - Transcribe, Summarize Again, Identify Speakers Again, Transcribe Everything Again.
+  - Transcribe, Summarize Again, Identify Speakers Again, Transcribe Everything Again (never "Transcribe Now").
+  - New Note (File › New Note, ⌘N; the library's New Note on the iPhone) starts a conversation that's only your notes, titled "Note at 10:15 AM" on both apps; Record records into it.
+  - Record calls automatically (Settings › General and the menu bar extra), beside "Listening for calls".
+  - Add Photos… everywhere; Photo Deleted for a photo that's gone; Microphone silent, never "Mic silent".
+  - Errors: the alert's title names what couldn't be done ("Couldn’t Import Audio"), its message is one plain sentence with what to do, and the system's own words are behind Details… (`AppState.report`, `AppProblem`).
   - Diarization, alignment, offset, and provenance never appear in the main interface.
 
 ## Motion
