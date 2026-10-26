@@ -17,7 +17,7 @@ Foundation, Network, CryptoKit and Security.
 | Transport | TLS 1.2, `TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256`, with the pairing key as PSK; session authentication bound to the TLS session |
 | Framing | `NWProtocolFramer`: 4-byte big-endian length, then one JSON message (max 256 KiB) |
 | Messages | `{"v": version, "type": "...", "body": {...}}`; unknown types and fields are ignored |
-| Keys | Keychain, behind `LinkKeyStore` (`MemoryLinkKeyStore` in tests) |
+| Keys | Data-protection keychain, `…AfterFirstUnlockThisDeviceOnly`, behind `LinkKeyStore` (`MemoryLinkKeyStore` in tests) |
 
 ## Threat model
 
@@ -354,18 +354,25 @@ Both apps' Info.plist:
 - The non-sandboxed Mac app needs no network entitlement. A sandboxed build would need
   `com.apple.security.network.server` and `.client`.
 - Keychain: the default access group works.
-  - On iPhone, items are `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so a recording that
-    continues on the Lock Screen can reconnect.
+  - Items are in the data-protection keychain as `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`,
+    so a recording that continues on the iPhone's Lock Screen can reconnect, and neither iCloud
+    Keychain, a backup, nor Migration Assistant carries a key to another device.
   - If an extension ever needs the link, add a `keychain-access-groups` entry and pass it as
     `KeychainLinkKeyStore(accessGroup:)`.
-  - On macOS the store uses the login keychain, so a Developer ID app without a provisioning
-    profile can use it.
+  - On macOS the data-protection keychain needs a signed build with an application identifier
+    (the provisioning profile the iCloud capability already requires). Earlier versions kept Mac
+    keys in the login keychain; the first use moves them (read, write the new item, delete the
+    old). If any item can't be moved, the store stays on the login keychain for that run so no
+    pairing goes missing, and tries again at the next launch; when both keychains hold a pairing,
+    the newer one wins. Builds that can't use the data-protection keychain (unsigned development
+    and `swift test` builds get `errSecMissingEntitlement`, as do ad hoc builds) keep the login
+    keychain. `LinkKeyStoreTests` cover the move and the fallback against a keychain in memory.
 - Background: the link adds no background mode. It rides on the recorder's `audio` mode while
   recording and is closed otherwise.
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 60 tests, about 8 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 66 tests, about 8 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
@@ -401,7 +408,8 @@ the test process, and nothing is advertised.
   DaybookKit.
 - **Local network:** which addresses count as local (IPv4, IPv6, IPv4-mapped, attached subnets,
   names), and that the listener drops a connection from elsewhere before any pairing attempt.
-- **Units:** wire round trips, frames, TXT tags, backoff, clock filter, key store.
+- **Units:** wire round trips, frames, TXT tags, backoff, clock filter, key store (memory, and
+  the keychain store's move to the data-protection keychain against a keychain in memory).
 
 The relay in `LinkTestSupport.swift` is a loopback TCP proxy with per-direction delay that can
 freeze (hold connections open, pass nothing) or drop every connection.
@@ -421,6 +429,7 @@ freeze (hold connections open, pass nothing) or drop every connection.
     Live Activity, including on the Lock Screen and across calls and interruptions;
   - that `.background` closes cleanly before suspension;
   - the battery cost of 20 s heartbeats.
-- **Keychain.** `KeychainLinkKeyStore` in the signed apps: access after first unlock on iPhone,
-  and the login keychain prompt-free on the Mac. Tests use memory storage.
+- **Keychain.** `KeychainLinkKeyStore` in the signed apps: access after first unlock on iPhone;
+  on the Mac, that a pairing made by an earlier version moves out of the login keychain without a
+  prompt and keeps connecting. Tests use memory storage.
 - **Clock accuracy on real Wi-Fi**, where delay is noisier and more lopsided than the relay's.

@@ -1,5 +1,17 @@
 # Validation record
 
+## Security review fixes (2026-10-25)
+
+Still requires real devices:
+
+- **Link on a real network.** Pair and connect a phone and a Mac on ordinary Wi-Fi, over IPv4 and
+  over IPv6 (including a network that hands out global IPv6 addresses), to confirm the listener's
+  local-network check never drops a phone on the same network. A Mac with a public address should
+  not be reachable from another network.
+- **Mac keychain move.** With a signed build of the previous version paired to a phone, install the
+  new build: the pairing keeps connecting with no keychain prompt, and Keychain Access no longer
+  lists a "Daybook link" item in the login keychain. An ad hoc build keeps using the login keychain.
+
 ## Project review fixes (2026-10-25)
 
 The review covered persistence and sync, local pairing, model downloads, recorder integration,
