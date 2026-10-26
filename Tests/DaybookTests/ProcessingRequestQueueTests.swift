@@ -301,12 +301,13 @@ final class ProcessingRequestQueueTests: XCTestCase {
         let claimed = try XCTUnwrap(request(rig, id)?.claim)
 
         // Asleep past the lease, and nobody took it: waking renews the same claim.
-        rig.state.update(id) { meeting in
-            guard var request = meeting.processingRequests?.first else { return }
-            request.claim?.heartbeat = Date().addingTimeInterval(-1_200)
-            request.claim?.expiresAt = Date().addingTimeInterval(-600)
-            meeting.upsertProcessingRequest(request)
-        }
+        var asleep = try XCTUnwrap(request(rig, id))
+        var stale = try XCTUnwrap(asleep.claim)
+        stale.heartbeat = Date().addingTimeInterval(-1_200)
+        stale.expiresAt = Date().addingTimeInterval(-600)
+        asleep.claim = stale
+        rig.state.update(id) { $0.upsertProcessingRequest(asleep) }
+        XCTAssertEqual(request(rig, id)?.claim, stale)
         await rig.state.systemDidWake()
         let renewed = try XCTUnwrap(request(rig, id)?.claim)
         XCTAssertEqual(renewed.claimedAt, claimed.claimedAt)
@@ -315,11 +316,10 @@ final class ProcessingRequestQueueTests: XCTestCase {
 
         // Another Mac took it over while this one slept: waking stops the work, without pausing it.
         let other = ProcessingRequest.Device(id: "other-mac", name: "Studio Mac")
-        rig.state.update(id) { meeting in
-            guard var request = meeting.processingRequests?.first else { return }
-            request.claim = .init(device: other, claimedAt: Date(), heartbeat: Date(), expiresAt: Date().addingTimeInterval(600))
-            meeting.upsertProcessingRequest(request)
-        }
+        var takenOver = try XCTUnwrap(request(rig, id))
+        takenOver.claim = .init(device: other, claimedAt: Date(), heartbeat: Date(), expiresAt: Date().addingTimeInterval(600))
+        rig.state.update(id) { $0.upsertProcessingRequest(takenOver) }
+        XCTAssertEqual(request(rig, id)?.claim?.device, other)
         await rig.state.systemDidWake()
         try await rig.waitUntil("the job to stop") { rig.state.processingID == nil }
         XCTAssertFalse(rig.state.pausedIDs.contains(id))
