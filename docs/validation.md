@@ -19,7 +19,7 @@ an on-demand iPhone, and the version 1 engine from fixed seeds.
 
 Verified on Apple silicon with Xcode 27.1:
 
-- `swift test`: 741 XCTest cases passed across all seven test bundles.
+- `swift test`: 747 XCTest cases passed across all seven test bundles.
 - `scripts/build-ios.sh --test --simulator <a new iPhone 17 Pro, iOS 27.0>`: 87 tests passed. (The iOS 27.1
   runtime on this machine accepts only the iPhone Duo device type, so the new simulator used iOS 27.0.)
 
