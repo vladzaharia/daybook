@@ -14,7 +14,8 @@ import UniformTypeIdentifiers
 /// members are forwarded so views and menus read them here as before.
 @MainActor
 final class AppState: ObservableObject {
-    nonisolated static let libraryURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Daybook", isDirectory: true)
+    /// `Application Support/Daybook` for the app; `Daybook Development` for unbundled runs (`LibraryLocation`).
+    nonisolated static let libraryURL = LibraryLocation.standard
     /// The library: conversations, folders, templates, vocabulary, and every edit.
     let library: LibraryController
     var meetings: [Meeting] {

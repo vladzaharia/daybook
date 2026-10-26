@@ -20,7 +20,7 @@ Use Xcode with Swift 6.2 or newer, the Metal compiler component, and XcodeGen (`
 - `./scripts/build-app.sh`: generate the Mac Xcode project from `Apps/macOS/project.yml` (it compiles `Sources/Daybook` in place), archive, export with Developer ID, and package `dist/Daybook.app` and the ZIP; add `--debug` for a debug build, `--ad-hoc` to sign locally without a team (no iCloud), `--generate-only` to only regenerate the project.
 - `DAYBOOK_TEAM_ID=… ./scripts/build-app.sh --allow-provisioning-updates`: first-time provisioning of the Mac app ID, iCloud, and profiles. Only the account owner runs it; nothing else may pass `-allowProvisioningUpdates`, with one exception: the CI release pipeline (`.github/workflows/release.yml`), whose signing jobs authenticate with the App Store Connect API key from the approval-gated `release` environment so Xcode can create each runner's development certificate and profiles. `build-app.sh` and `build-ios.sh` refuse the key anywhere else. Agents and local scripts still never pass the flag, set the key, or call App Store Connect (`scripts/asc-certificates.sh` is the owner's).
 - `open dist/Daybook.app`: launch the packaged app.
-- `swift run Daybook --smoke-test --download-models --output /tmp/daybook-smoke.json`: download weights and exercise real inference with synthetic speech.
+- `swift run Daybook --smoke-test --download-models --output /tmp/daybook-smoke.json`: download weights and exercise real inference with synthetic speech. Unbundled runs (`swift run`, `.build/debug/Daybook`) use their own library, `~/Library/Application Support/Daybook Development`, never the app's.
 
 ## Coding Style & Naming Conventions
 

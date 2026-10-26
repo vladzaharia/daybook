@@ -395,7 +395,7 @@ Not verified with real weights, so still to run before release:
 
 ## Evaluating speech models
 
-`Daybook --evaluate <folder>` runs the speech pipeline as processing does (language routing, transcription, speaker detection, voice profiles, and fusion) over recordings that have references, and scores them. It never records, never touches a library, and downloads only with `--download-models`.
+`Daybook --evaluate <folder>` runs the speech pipeline as processing does (language routing, transcription, speaker detection, voice profiles, and fusion) over recordings that have references, and scores them. It never records, never touches a library, and downloads only with `--download-models`. Models come from the running build's library unless `--models` names a folder: for `swift run`, that's `~/Library/Application Support/Daybook Development/Models`, never the app's.
 
 ```sh
 swift run -c release Daybook --evaluate ~/Recordings/eval --presets quick,balanced,detailed --output /tmp/eval.json

@@ -17,6 +17,16 @@ final class SandboxReadinessTests: XCTestCase {
         XCTAssertEqual(SettingsPath.display(URL(fileURLWithPath: "/Volumes/Archive/Daybook"), home: home), "/Volumes/Archive/Daybook")
     }
 
+    /// `swift run` is never sandboxed: it keeps its own library instead of opening the app's.
+    func testUnbundledRunsUseADevelopmentLibrary() {
+        XCTAssertEqual(LibraryLocation.folderName(bundleURL: URL(fileURLWithPath: "/Applications/Daybook.app")), "Daybook")
+        XCTAssertEqual(LibraryLocation.folderName(bundleURL: URL(fileURLWithPath: "/Users/dana/daybook/.build/arm64-apple-macosx/debug")),
+                       "Daybook Development")
+        XCTAssertEqual(LibraryLocation.folderName(bundleURL: URL(fileURLWithPath: "/Users/dana/daybook/.build/debug")), "Daybook Development")
+        // `swift test` is unbundled too.
+        XCTAssertEqual(AppState.libraryURL.lastPathComponent, "Daybook Development")
+    }
+
     func testExportNamesHaveNoFolderSeparators() {
         XCTAssertEqual(AppState.exportName("Q3/Q4 planning"), "Q3-Q4 planning")
         XCTAssertEqual(AppState.exportName("10:30 sync"), "10-30 sync")
