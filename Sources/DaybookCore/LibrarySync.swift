@@ -223,6 +223,7 @@ public actor LibrarySyncEngine {
         var proposedBases = state.bases
         var proposedHeads = state.heads
         let completeAncestors = try completeAncestorIDs(events: events, budget: &budget)
+        var memo = MergeMemo()
         let grouped = Dictionary(grouping: events.keys, by: { events[$0]!.meetingID })
         for (meetingID, ids) in grouped.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             try Task.checkCancellation()
@@ -243,14 +244,9 @@ public actor LibrarySyncEngine {
             // With part of the journal unread (downloading, or deferred by limits), a conversation whose applied
             // heads weren't read this pass would roll back to an older snapshot. It waits for a fuller read.
             if journalIncomplete, let applied = state.heads[meetingID.uuidString], !applied.allSatisfy({ events[$0] != nil }) { continue }
-            guard let firstID = headIDs.first, var merged = events[firstID]?.snapshot else { continue }
-            var folded = [firstID]
-            for nextID in headIDs.dropFirst() {
-                guard let next = events[nextID]?.snapshot else { continue }
-                let ancestor = commonAncestor(folded + [nextID], events: events).flatMap { events[$0]?.snapshot }
-                let result = MeetingMerge.merge(base: ancestor, local: merged, remote: next)
-                merged = result.meeting; warnings += result.warnings; folded.append(nextID)
-            }
+            memo.warnings = []
+            guard let merged = mergedSnapshot(of: headIDs, events: events, memo: &memo) else { continue }
+            warnings += memo.warnings
             let assets = mergedAssets(for: merged, eventIDs: ids, events: events)
             do {
                 try validate(snapshot: merged, assets: assets)
@@ -643,12 +639,42 @@ public actor LibrarySyncEngine {
         }
         return result
     }
-    private func commonAncestor(_ ids: [String], events: [String: SyncEventRecord]) -> String? {
-        guard let first = ids.first else { return nil }
-        var common = ancestorIDs(first, events: events)
-        for id in ids.dropFirst() { common.formIntersection(ancestorIDs(id, events: events)) }
-        return common.map { ($0, ancestorIDs($0, events: events).count) }
-            .max { ($0.1, $0.0) < ($1.1, $1.0) }?.0
+    /// The merge of `ids` (heads of one conversation), folding each into the result against a virtual base:
+    /// the merge of all their maximal common ancestors, computed the same way (git's recursive strategy).
+    /// After a criss-cross, where two devices each applied the same merge and then edited, the base is that
+    /// merge rather than one arbitrary parent of it, so a tag removed or a bookmark deleted there stays gone.
+    private func mergedSnapshot(of ids: [String], events: [String: SyncEventRecord], memo: inout MergeMemo) -> Meeting? {
+        let ids = ids.sorted()
+        if let cached = memo.merged[ids] { return cached }
+        // Only the heads' own merge reports conflicts; a virtual base's were reported when it was made.
+        let reports = memo.depth == 0
+        memo.depth += 1
+        defer { memo.depth -= 1 }
+        guard let first = ids.first, var merged = resolvedSnapshot(first, events: events, memo: &memo) else { return nil }
+        var folded = [first]
+        for next in ids.dropFirst() {
+            guard let snapshot = resolvedSnapshot(next, events: events, memo: &memo) else { continue }
+            var common = Set<String>()
+            for id in folded { common.formUnion(ancestors(of: id, events: events, memo: &memo)) }
+            common.formIntersection(ancestors(of: next, events: events, memo: &memo))
+            // The maximal common ancestors: those no other common ancestor descends from.
+            let maximal = common.subtracting(common.flatMap { events[$0]?.parents ?? [] }).filter { events[$0]?.snapshot != nil }
+            let base = maximal.isEmpty ? nil : mergedSnapshot(of: Array(maximal), events: events, memo: &memo)
+            let result = MeetingMerge.merge(base: base, local: merged, remote: snapshot)
+            merged = result.meeting; folded.append(next)
+            if reports { memo.warnings += result.warnings }
+        }
+        memo.merged[ids] = merged
+        return merged
+    }
+    private func resolvedSnapshot(_ id: String, events: [String: SyncEventRecord], memo: inout MergeMemo) -> Meeting? {
+        events[id]?.snapshot
+    }
+    private func ancestors(of id: String, events: [String: SyncEventRecord], memo: inout MergeMemo) -> Set<String> {
+        if let cached = memo.ancestors[id] { return cached }
+        let result = ancestorIDs(id, events: events)
+        memo.ancestors[id] = result
+        return result
     }
     private func countPendingCloudUploads() throws -> Int {
         var count = 0
@@ -693,6 +719,13 @@ private struct SyncCheckpoint: Codable {
     var metadataHeads: [String] = []
     var metadataSubmittedHash: String?
     var pending: SyncPendingApply?
+}
+/// One pass's merges: results by head set, resolved snapshots, and ancestor sets.
+private struct MergeMemo {
+    var merged: [[String]: Meeting] = [:]
+    var ancestors: [String: Set<String>] = [:]
+    var warnings: [String] = []
+    var depth = 0
 }
 private struct SyncPendingApply: Codable {
     var id: UUID
