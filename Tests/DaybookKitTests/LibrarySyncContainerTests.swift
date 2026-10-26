@@ -22,7 +22,8 @@ final class LibrarySyncContainerTests: XCTestCase {
     override func setUp() async throws {
         root = fm.temporaryDirectory.appendingPathComponent("DaybookContainer-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: containerURL, withIntermediateDirectories: true)
-        suite = "daybook.sync.container.\(UUID())"
+        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
+        suite = root.appendingPathComponent("Preferences").path
         defaults = UserDefaults(suiteName: suite)
         defaults.set("Mac", forKey: "syncDeviceID")
         account = FakeAccount(identity: Data("account-a".utf8), container: containerURL)
@@ -48,13 +49,20 @@ final class LibrarySyncContainerTests: XCTestCase {
         return controller
     }
 
+    /// Waits for `condition`, scaled by `DAYBOOK_TEST_TIMEOUT_SCALE`; throws on timeout with the controller's state.
     private func wait(_ what: String, timeout: Duration = .seconds(10), until condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + timeout
+        let scale = Double(ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"] ?? "") ?? 1
+        let deadline = ContinuousClock.now + timeout * scale
         while !condition() {
-            guard ContinuousClock.now < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            guard ContinuousClock.now < deadline else {
+                let state = controllers.last.map { "iCloud: \($0.iCloud), status: \($0.status)" } ?? "no controller"
+                throw TimedOut(description: "Timed out waiting for \(what) (\(state))")
+            }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
+
+    private struct TimedOut: Error, CustomStringConvertible { var description: String }
 
     /// A library that synced through `folder` as device "Mac", remembered with a bookmark as before.
     @discardableResult

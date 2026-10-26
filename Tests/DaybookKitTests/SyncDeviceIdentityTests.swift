@@ -26,7 +26,8 @@ final class SyncDeviceIdentityTests: XCTestCase {
     }
 
     private func defaults() throws -> UserDefaults {
-        let suite = "daybook.identity.\(UUID())"
+        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
+        let suite = root.appendingPathComponent("Preferences-\(UUID().uuidString)").path
         suites.append(suite)
         return try XCTUnwrap(UserDefaults(suiteName: suite))
     }

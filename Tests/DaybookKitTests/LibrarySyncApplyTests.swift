@@ -27,7 +27,8 @@ final class LibrarySyncApplyTests: XCTestCase {
     /// A library connected to the shared folder. Passes run only when a test asks.
     private func library(_ name: String, phone: Bool = false, cloud: SyncCloudFiles = .system) async throws -> LibraryController {
         let libraryRoot = root.appendingPathComponent(name, isDirectory: true)
-        let suite = "daybook.apply.\(UUID())"
+        // Preferences in this test's folder, so nothing is left in ~/Library/Preferences.
+        let suite = root.appendingPathComponent("Preferences-\(name)").path
         suites.append(suite)
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(name, forKey: "syncDeviceID")
@@ -212,13 +213,19 @@ final class LibrarySyncApplyTests: XCTestCase {
         XCTAssertEqual(mac.meeting(id)?.title, "Renamed on the phone")
     }
 
+    /// Waits for `condition`, scaled by `DAYBOOK_TEST_TIMEOUT_SCALE`; throws on timeout with the controllers' state.
     private func waitUntil(_ what: String, timeout: Duration = .seconds(10), _ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + timeout
+        let scale = Double(ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"] ?? "") ?? 1
+        let deadline = ContinuousClock.now + timeout * scale
         while !condition() {
-            guard ContinuousClock.now < deadline else { return XCTFail("Timed out waiting for \(what)") }
+            guard ContinuousClock.now < deadline else {
+                throw TimedOut(description: "Timed out waiting for \(what) (\(controllers.map(\.status).joined(separator: "; ")))")
+            }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
+
+    private struct TimedOut: Error, CustomStringConvertible { var description: String }
 }
 
 /// Holds the first cloud-provider call until released; later ones pass straight through.

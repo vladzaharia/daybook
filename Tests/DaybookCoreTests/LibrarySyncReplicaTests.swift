@@ -244,7 +244,7 @@ final class LibrarySyncReplicaTests: XCTestCase {
         let waiting = expectation(description: "waiting for upload")
         waiting.assertForOverFulfill = false
         let task = Task { try await phone.fetchAudio(for: track, in: meeting.id, options: fast) { if $0.phase == .waitingForUpload { waiting.fulfill() } } }
-        await fulfillment(of: [waiting], timeout: 5)
+        await fulfillment(of: [waiting], timeout: 5 * (Double(ProcessInfo.processInfo.environment["DAYBOOK_TEST_TIMEOUT_SCALE"] ?? "") ?? 1))
         task.cancel()
         do { _ = try await task.value; XCTFail("Fetch ignored cancellation") } catch is CancellationError { }
         do {
