@@ -12,6 +12,7 @@
 #                                           in Xcode's Signing & Capabilities.
 #   scripts/build-ios.sh --device --no-sign compile for a device without signing (a CI check)
 #   scripts/build-ios.sh --generate-only    just regenerate Apps/iOS/Daybook.xcodeproj
+#   scripts/build-ios.sh --resolve          regenerate it and fetch the packages at Package.resolved's versions
 #   scripts/build-ios.sh --archive          xcodebuild archive (Release) to Apps/iOS/build/DaybookPhone.xcarchive,
 #                                           with the widget extension; signed like --device. Add --no-sign
 #                                           for an unsigned archive (a local or CI check).
@@ -29,6 +30,9 @@
 #   --archive-path <path>        default Apps/iOS/build/DaybookPhone.xcarchive
 #   --test-arg <argument>        pass an argument to the `xcodebuild test` invocation only (repeatable),
 #                                e.g. --test-arg -only-testing:DaybookPhoneTests/ShellTests
+#
+# Xcode resolves packages only to the versions in Package.resolved (-onlyUsePackageVersionsFromResolvedFile),
+# and every build fails if resolving would change that file.
 #
 # Environment:
 #   DAYBOOK_TEAM_ID              Apple Developer team for device builds
@@ -66,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --no-sign) SIGN=0 ;;
         --test) RUN_TESTS=1 ;;
         --generate-only) MODE=generate ;;
+        --resolve) MODE=resolve ;;
         --archive) MODE=archive ;;
         --export) EXPORT="$2"; shift ;;
         --archive-path) ARCHIVE_PATH="$2"; shift ;;
@@ -126,7 +131,19 @@ fi
 
 [[ "$MODE" == generate ]] && exit 0
 
-COMMON=(-project "$PROJECT" -scheme DaybookPhone -configuration "$CONFIGURATION" -derivedDataPath "$DERIVED")
+PINNED=(-onlyUsePackageVersionsFromResolvedFile)
+if [[ "$MODE" != export ]]; then
+    # Fetch the packages, held to Package.resolved, and make sure Xcode didn't pick other versions.
+    xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme DaybookPhone -derivedDataPath "$DERIVED" "${PINNED[@]}"
+    if ! cmp -s "$ROOT/Package.resolved" "$RESOLVED_DIR/Package.resolved"; then
+        echo "Xcode resolved other package versions than Package.resolved pins:" >&2
+        diff -u "$ROOT/Package.resolved" "$RESOLVED_DIR/Package.resolved" >&2 || true
+        exit 1
+    fi
+fi
+[[ "$MODE" == resolve ]] && exit 0
+
+COMMON=(-project "$PROJECT" -scheme DaybookPhone -configuration "$CONFIGURATION" -derivedDataPath "$DERIVED" "${PINNED[@]}")
 # The xcconfig's default container yields to the environment (command-line settings win).
 [[ -n "${DAYBOOK_ICLOUD_CONTAINER:-}" ]] && COMMON+=("DAYBOOK_ICLOUD_CONTAINER=$DAYBOOK_ICLOUD_CONTAINER")
 (( ${#VERSION_SETTINGS[@]} )) && COMMON+=("${VERSION_SETTINGS[@]}")

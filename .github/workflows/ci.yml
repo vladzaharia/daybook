@@ -105,7 +105,9 @@ jobs:
           # and only the Metal shader steps re-run.
           rm -rf .build/out/Intermediates.noindex/XCBuildData
           mkdir -p build/test-results
-          swift build --build-tests 2>&1 | tee build/test-results/build.log
+          # Only the versions Package.resolved pins; fail if resolution would change the file.
+          swift build --build-tests --force-resolved-versions 2>&1 | tee build/test-results/build.log
+          git diff --exit-code -- Package.resolved
       - name: Save the SwiftPM build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

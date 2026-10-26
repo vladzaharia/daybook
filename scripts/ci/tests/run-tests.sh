@@ -12,7 +12,8 @@
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
-#   build-ios.sh          the upload retry, with a stand-in xcodebuild (macOS)
+#   build-ios.sh          the upload retry, package pinning, and archive calls, with stand-in Xcode tools
+#                         (macOS)
 #   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
 #                         the repository (macOS)
 # Runs on macOS (bash 3.2) and Linux.
@@ -23,7 +24,10 @@ ci="$(cd "$here/.." && pwd)"
 work="$(mktemp -d)"
 mock_pid=""
 cleanup() {
-    if [[ -n "$mock_pid" ]]; then kill "$mock_pid" 2>/dev/null || true; fi
+    if [[ -n "$mock_pid" ]]; then
+        kill "$mock_pid" 2>/dev/null || true
+        wait "$mock_pid" 2>/dev/null || true
+    fi
     /bin/rm -rf "${work:?}"
 }
 trap cleanup EXIT
@@ -382,10 +386,46 @@ if macos; then
     expect_eq "the export signs manually, without the key" "" "$(xcb '-exportArchive' | grep -- '-authenticationKey' || true)"
     expect_eq "manual export options" "manual 01234567-89ab-cdef-0123-456789abcdef" \
         "$(plutil -extract signingStyle raw "$export_options") $(plutil -extract 'provisioningProfiles.local\.daybook\.app' raw "$export_options")"
+    expect_ok "packages are fetched at the pinned versions" build_app -- --resolve-only
+    expect_eq "and nothing is built" "xcodebuild -resolvePackageDependencies" "$(grep '^xcodebuild' "$work/stub.log" | cut -d' ' -f1-2)"
+    expect_ok "resolution is held to Package.resolved" grep -q -- '-onlyUsePackageVersionsFromResolvedFile' <<< "$(xcb resolvePackageDependencies)"
+    expect_fail "a resolution that changes Package.resolved fails" build_app STUB_RESOLVE_CHANGES=1 -- --ad-hoc
+    expect_ok "and says so" grep -q "other package versions" "$work/build-app.out"
+    expect_eq "before building anything" "" "$(xcb ' archive ')"
+    build_app -- --ad-hoc || true
+    expect_ok "the archive is held to the pinned versions too" grep -q -- '-onlyUsePackageVersionsFromResolvedFile' <<< "$(xcb ' archive ')"
     expect_fail "provisioning updates need a team" build_app -- --allow-provisioning-updates --ad-hoc
     expect_fail "part of the API key is refused" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_ASC_KEY_ID=ABC123DEFG --
 else
     echo "  skip  build-app.sh (macOS only)"
+fi
+
+# --- build-ios.sh, with stand-in Xcode tools, in a copy of the repository ------------------------------
+echo "build-ios.sh"
+if macos; then
+    ios_repo="$work/ios-repo"
+    mkdir -p "$ios_repo/scripts" "$ios_repo/Apps/iOS/Config"
+    cp "$ci/../build-ios.sh" "$ios_repo/scripts/"
+    cp "$ci/../../Package.resolved" "$ios_repo/"
+    : > "$ios_repo/Apps/iOS/project.yml"
+    build_ios() {
+        local vars=()
+        while [[ "$1" != -- ]]; do vars+=("$1"); shift; done
+        shift
+        rm -f "$work/stub.log"
+        env -u DAYBOOK_TEAM_ID -u DAYBOOK_ASC_KEY_PATH -u DAYBOOK_ASC_KEY_ID -u DAYBOOK_ASC_ISSUER_ID -u DAYBOOK_IOS_DERIVED_DATA \
+            PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" XCODEGEN="$stubs/xcodegen" ${vars[@]+"${vars[@]}"} \
+            "$ios_repo/scripts/build-ios.sh" "$@" > "$work/build-ios.out" 2>&1
+    }
+    expect_ok "packages are fetched at the pinned versions" build_ios -- --resolve
+    expect_eq "and nothing is built" "xcodebuild -resolvePackageDependencies" "$(grep '^xcodebuild' "$work/stub.log" | cut -d' ' -f1-2)"
+    expect_ok "resolution is held to Package.resolved" grep -q -- '-onlyUsePackageVersionsFromResolvedFile' <<< "$(xcb resolvePackageDependencies)"
+    expect_fail "a resolution that changes Package.resolved fails" build_ios STUB_RESOLVE_CHANGES=1 -- --archive --no-sign
+    expect_eq "before building anything" "" "$(xcb ' archive')"
+    expect_ok "an unsigned archive" build_ios -- --archive --no-sign --marketing-version 1.4.0 --build-number 1057
+    expect_ok "is held to the pinned versions" grep -q -- '-onlyUsePackageVersionsFromResolvedFile .*archive CODE_SIGNING_ALLOWED=NO' <<< "$(xcb ' archive')"
+else
+    echo "  skip  build-ios.sh (macOS only)"
 fi
 
 echo

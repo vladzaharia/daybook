@@ -15,6 +15,10 @@
 #                                         profile. For the account owner, once (README.md, "First-time
 #                                         provisioning"). Without it the script never changes the account.
 #   scripts/build-app.sh --generate-only  just regenerate the Xcode project
+#   scripts/build-app.sh --resolve-only   regenerate it and fetch the packages at Package.resolved's versions
+#
+# Xcode resolves packages only to the versions in Package.resolved (-onlyUsePackageVersionsFromResolvedFile),
+# and the script fails if resolving would change that file.
 #   scripts/build-app.sh --marketing-version 1.4.0 --build-number 1057
 #                                         set MARKETING_VERSION and CURRENT_PROJECT_VERSION (Info.plist's
 #                                         CFBundleShortVersionString and CFBundleVersion); the release
@@ -52,6 +56,7 @@ dist_dir="$repo_dir/dist"
 configuration=Release
 signing=""
 generate_only=0
+resolve_only=0
 provisioning=()
 version_settings=()
 
@@ -63,6 +68,7 @@ while (( $# )); do
         --ad-hoc) signing=local ;;
         --allow-provisioning-updates) provisioning=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration) ;;
         --generate-only) generate_only=1 ;;
+        --resolve-only) resolve_only=1 ;;
         --marketing-version) version_settings+=("MARKETING_VERSION=${2-}"); shift ;;
         --build-number) version_settings+=("CURRENT_PROJECT_VERSION=${2-}"); shift ;;
         -h|--help) usage; exit 0 ;;
@@ -99,6 +105,17 @@ mkdir -p "$resolved_dir"
 /bin/cp -f "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"
 if (( generate_only )); then exit 0; fi
 
+# Fetch the packages, held to Package.resolved, and make sure Xcode didn't pick other versions.
+pinned=(-onlyUsePackageVersionsFromResolvedFile)
+xcodebuild -resolvePackageDependencies -project "$project" -scheme Daybook \
+    -clonedSourcePackagesDirPath "$packages_dir" "${pinned[@]}"
+if ! cmp -s "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"; then
+    echo "Xcode resolved other package versions than Package.resolved pins:" >&2
+    diff -u "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved" >&2 || true
+    exit 1
+fi
+if (( resolve_only )); then exit 0; fi
+
 team="${DAYBOOK_TEAM_ID:-}"
 local_config="$spec_dir/Config/Signing.local.xcconfig"
 if [[ -z "$team" && -f "$local_config" ]]; then
@@ -126,7 +143,7 @@ if [[ -n "$team" ]]; then settings+=("DAYBOOK_TEAM_ID=$team"); fi
 if [[ -n "${DAYBOOK_ICLOUD_CONTAINER:-}" ]]; then settings+=("DAYBOOK_ICLOUD_CONTAINER=$DAYBOOK_ICLOUD_CONTAINER"); fi
 settings+=(${version_settings[@]+"${version_settings[@]}"})
 common=(-project "$project" -scheme Daybook -configuration "$configuration"
-        -derivedDataPath "$derived_dir" -clonedSourcePackagesDirPath "$packages_dir")
+        -derivedDataPath "$derived_dir" -clonedSourcePackagesDirPath "$packages_dir" "${pinned[@]}")
 
 mkdir -p "$work_dir" "$dist_dir"
 if [[ "$configuration" == Debug ]]; then
