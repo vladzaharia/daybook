@@ -337,6 +337,41 @@ final class LinkServicesTests: XCTestCase {
         try await model.stopRecording()
     }
 
+    func testOnlyTheMacARecordingIsWithMayStopIt() async throws {
+        let studio = try await makeMac()
+        let laptop = try await makeMac(name: "MacBook Air")
+        await studio.service.setRecordControlHandler { _, request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: Date(), recordingID: "mac-1"))
+        }
+        let link = makeLink()
+        let rig = RecorderRig()
+        let model = try makeModel(link: link, rig: rig)
+        try await pair(link, with: studio)
+        let code = await laptop.service.beginPairing()
+        _ = try await link.pair(with: laptop.endpoint, code: code.digits)
+        try await waitUntil("both connected") { link.connectedMacs.count == 2 }
+
+        try await model.startRecording()
+        rig.pump(1)
+        rig.recorder.updateLevels()
+        let id = try XCTUnwrap(model.recorder.captureID)
+        // Recorded on this iPhone alone: no Mac may stop it.
+        let early = try await studio.service.request(LinkRecordRequest(action: .stop, conversationID: id), from: link.deviceID)
+        guard case .refused(let refusal) = early.outcome else { return XCTFail("\(early.outcome)") }
+        XCTAssertEqual(refusal.reason, .declined)
+        XCTAssertTrue(model.recorder.isActive)
+
+        // Recording along with Studio Mac: it may; the MacBook Air, which has nothing to do with it, may not.
+        await model.recordOnMac(studio.id)
+        let other = try await laptop.service.request(LinkRecordRequest(action: .stop, conversationID: id), from: link.deviceID)
+        guard case .refused(let declined) = other.outcome else { return XCTFail("\(other.outcome)") }
+        XCTAssertEqual(declined.reason, .declined)
+        XCTAssertTrue(model.recorder.isActive)
+        let stop = try await studio.service.request(LinkRecordRequest(action: .stop, conversationID: id), from: link.deviceID)
+        guard case .accepted = stop.outcome else { return XCTFail("\(stop.outcome)") }
+        try await waitUntil("stopped") { !model.recorder.isActive && !model.isFiling }
+    }
+
     func testRecordRequestsCanBeTurnedOff() async throws {
         let mac = try await makeMac()
         let link = makeLink()

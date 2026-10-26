@@ -448,6 +448,12 @@ final class PhoneAppModel: RecordingCommandHandling {
         publish()
     }
 
+    /// Whether a Mac may stop this iPhone's recording: the one that started it, or one this iPhone
+    /// asked to record along. The person can always stop it here.
+    private func mayStop(_ macID: UUID) -> Bool {
+        startedFromMac == macID || multipoint?.macs.contains(where: { $0.id == macID }) == true
+    }
+
     /// A Mac connected: it hears this iPhone's recording state at once.
     private func macConnected(_ macID: UUID) {
         sendRecordingState(force: true)
@@ -504,6 +510,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         case .stop:
             guard recorder.isActive, recorder.captureID == request.conversationID else {
                 return .refused(LinkRecordRefusal(reason: .notRecording, conversationID: recorder.captureID))
+            }
+            // Only the Mac this recording is with: the one that started it, or one this iPhone asked to record.
+            guard mayStop(mac.id) else {
+                return .refused(LinkRecordRefusal(reason: .declined, message: "This recording was started on the iPhone. Stop it there."))
             }
             let stoppedAt = Date(), stopped = recordingID
             // Answer now; finishing and filing a long recording can outlast the request's timeout.
