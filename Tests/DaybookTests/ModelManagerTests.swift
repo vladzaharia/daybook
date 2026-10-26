@@ -1,6 +1,7 @@
 import DaybookCore
 @testable import DaybookIntelligence
 @testable import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -12,11 +13,9 @@ import XCTest
 @MainActor
 final class ModelManagerTests: XCTestCase {
     private var roots: [URL] = []
-    private var suites: [String] = []
 
     override func tearDown() async throws {
         for root in roots { try? FileManager.default.removeItem(at: root) }
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
     }
 
     // MARK: A synthetic catalog
@@ -280,10 +279,12 @@ final class ModelManagerTests: XCTestCase {
         let removal = try XCTUnwrap(manager.removal(of: "whisper/small"))
         XCTAssertEqual(removal.message, "Frees 489 MB. Transcription will use Whisper Base.")
         await manager.confirm(removal)
-        for _ in 0..<100 where state.installedModels.contains("whisper/small") { try await Task.sleep(for: .milliseconds(20)) }
-        for _ in 0..<50 where state.transcriptionModel != "whisper/base" { try await Task.sleep(for: .milliseconds(20)) }
-        XCTAssertFalse(state.installedModels.contains("whisper/small"))
-        XCTAssertEqual(state.transcriptionModel, "whisper/base")
+        try await waitUntil("Whisper Small to be removed", state: { "installed \(state.installedModels.sorted())" }) {
+            !state.installedModels.contains("whisper/small")
+        }
+        try await waitUntil("transcription to fall back to Whisper Base", state: { "\(state.transcriptionModel)" }) {
+            state.transcriptionModel == "whisper/base"
+        }
         XCTAssertEqual(state.notice, "Transcription now uses Whisper Base.")
         await manager.refresh()
         XCTAssertEqual(manager.snapshot.row(for: "whisper/small")?.status, .notDownloaded)
@@ -489,9 +490,7 @@ final class ModelManagerTests: XCTestCase {
     }
 
     private func defaults() -> UserDefaults {
-        let suite = "local.daybook.tests.manager.\(UUID().uuidString)"
-        suites.append(suite)
-        return UserDefaults(suiteName: suite)!
+        makeTestDefaults("local.daybook.tests.manager")
     }
 
     private func installed(_ model: CatalogModel, _ revision: ModelRevisionEntry, damaged: Bool = false) -> InstalledModelRevision {

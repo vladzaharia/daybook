@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCaptions
 import DaybookCore
+import DaybookTestSupport
 import XCTest
 @testable import Daybook
 
@@ -63,14 +64,6 @@ final class LiveCaptionsTests: XCTestCase {
         let zoom = CallAppTarget(bundleID: "us.zoom.xos", displayName: "Zoom", isBrowser: false)
         try await rig.recorder.start(in: root.appendingPathComponent("Staging-\(meeting.uuidString)"), includeSystemAudio: true, callApp: zoom)
         await rig.captions.start(locale: Locale(identifier: "en_US"))
-    }
-
-    private func waitUntil(_ what: String, timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { XCTFail("Timed out waiting for \(what)"); throw CancellationError() }
-            try await Task.sleep(for: .milliseconds(5))
-        }
     }
 
     private func line(_ text: String, _ start: TimeInterval, _ end: TimeInterval, tentative: Bool = false) -> LiveCaptionSegment {
@@ -246,7 +239,7 @@ final class LiveCaptionsTests: XCTestCase {
     // MARK: macOS 15
 
     func testWithoutSpeechSupportThereAreNoCaptionsAndNoErrors() async throws {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "LiveCaptionsTests-\(UUID().uuidString)"))
+        let defaults = makeTestDefaults("LiveCaptionsTests")
         let settings = LiveCaptionSettings(defaults: defaults)
         XCTAssertTrue(settings.isEnabled, "on by default, as on the iPhone")
         // macOS 15 has no SpeechAnalyzer: the system makes no captioner, whatever the setting.
