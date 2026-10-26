@@ -66,7 +66,7 @@ jobs:
         # Also runs shellcheck (preinstalled) on every `run:` script.
         run: actionlint
       - name: shellcheck
-        run: shellcheck scripts/build-ios.sh scripts/ci/*.sh scripts/ci/tests/*.sh
+        run: shellcheck scripts/build-app.sh scripts/build-ios.sh scripts/ci/*.sh scripts/ci/tests/*.sh
       - name: Release helper tests
         run: scripts/ci/tests/run-tests.sh
 

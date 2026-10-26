@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 # Builds Daybook for Mac with Xcode and packages dist/Daybook.app and dist/Daybook-macOS-arm64.zip.
 # Generates Apps/macOS/DaybookMac.xcodeproj from Apps/macOS/project.yml with XcodeGen first; the app
 # target compiles Sources/Daybook and links the package's libraries.
@@ -41,8 +41,8 @@
 #                             ask for cloud signing, which a team API key can't use for Developer ID.
 set -euo pipefail
 
-script_path="${0:A}"
-repo_dir="${script_path:h:h}"
+script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+repo_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 spec_dir="$repo_dir/Apps/macOS"
 project="$spec_dir/DaybookMac.xcodeproj"
 work_dir="$repo_dir/build/macOS"
@@ -63,10 +63,10 @@ while (( $# )); do
         --ad-hoc) signing=local ;;
         --allow-provisioning-updates) provisioning=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration) ;;
         --generate-only) generate_only=1 ;;
-        --marketing-version) version_settings+=(MARKETING_VERSION="$2"); shift ;;
-        --build-number) version_settings+=(CURRENT_PROJECT_VERSION="$2"); shift ;;
+        --marketing-version) version_settings+=("MARKETING_VERSION=${2-}"); shift ;;
+        --build-number) version_settings+=("CURRENT_PROJECT_VERSION=${2-}"); shift ;;
         -h|--help) usage; exit 0 ;;
-        *) print -u2 "Unknown option: $1"; usage >&2; exit 2 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
     shift
 done
@@ -74,30 +74,30 @@ done
 # The App Store Connect API key (release pipeline): all three variables or none.
 asc_set=0
 for name in DAYBOOK_ASC_KEY_PATH DAYBOOK_ASC_KEY_ID DAYBOOK_ASC_ISSUER_ID; do
-    if [[ -n "${(P)name:-}" ]]; then (( asc_set += 1 )); fi
+    if [[ -n "${!name:-}" ]]; then asc_set=$(( asc_set + 1 )); fi
 done
 if (( asc_set > 0 && asc_set < 3 )); then
-    print -u2 "Set all of DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, and DAYBOOK_ASC_ISSUER_ID, or none."
+    echo "Set all of DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, and DAYBOOK_ASC_ISSUER_ID, or none." >&2
     exit 2
 fi
 
-xcodegen_path="${XCODEGEN:-$(command -v xcodegen || print /opt/homebrew/bin/xcodegen)}"
+xcodegen_path="${XCODEGEN:-$(command -v xcodegen || echo /opt/homebrew/bin/xcodegen)}"
 if [[ ! -x "$xcodegen_path" ]]; then
-    print -u2 "XcodeGen is required: brew install xcodegen"
+    echo "XcodeGen is required: brew install xcodegen" >&2
     exit 1
 fi
 if ! xcrun metal --version >/dev/null 2>&1; then
-    print -u2 "The Xcode Metal compiler is required. Run: xcodebuild -downloadComponent MetalToolchain"
+    echo "The Xcode Metal compiler is required. Run: xcodebuild -downloadComponent MetalToolchain" >&2
     exit 1
 fi
 
-print "Generating $project"
+echo "Generating $project"
 "$xcodegen_path" generate --spec "$spec_dir/project.yml" --project "$spec_dir" --quiet
 # Pin the package graph to the repository's resolved versions, as `swift build` does.
 resolved_dir="$project/project.xcworkspace/xcshareddata/swiftpm"
 mkdir -p "$resolved_dir"
 /bin/cp -f "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"
-(( generate_only )) && exit 0
+if (( generate_only )); then exit 0; fi
 
 team="${DAYBOOK_TEAM_ID:-}"
 local_config="$spec_dir/Config/Signing.local.xcconfig"
@@ -108,35 +108,35 @@ if [[ -z "$signing" ]]; then
     if [[ -n "$team" ]]; then signing=signed; else signing=local; fi
 fi
 if (( asc_set == 3 )) && [[ "$signing" == signed ]]; then
-    (( ${#provisioning} )) || provisioning=(-allowProvisioningUpdates)
+    if (( ${#provisioning[@]} == 0 )); then provisioning=(-allowProvisioningUpdates); fi
     provisioning+=(-authenticationKeyPath "$DAYBOOK_ASC_KEY_PATH" -authenticationKeyID "$DAYBOOK_ASC_KEY_ID"
                    -authenticationKeyIssuerID "$DAYBOOK_ASC_ISSUER_ID")
 fi
 if [[ "$signing" == local ]]; then
-    if (( ${#provisioning} )); then
-        print -u2 "--allow-provisioning-updates needs DAYBOOK_TEAM_ID and can't be combined with --ad-hoc."
+    if (( ${#provisioning[@]} )); then
+        echo "--allow-provisioning-updates needs DAYBOOK_TEAM_ID and can't be combined with --ad-hoc." >&2
         exit 2
     fi
-    print "Signing ad hoc: no team, so this build has no iCloud entitlements and keeps sync off."
+    echo "Signing ad hoc: no team, so this build has no iCloud entitlements and keeps sync off."
 fi
 
 # ARCHS on the command line reaches the package targets too: Apple silicon only, as before.
-settings=(ARCHS=arm64 DAYBOOK_SIGNING="$signing" DAYBOOK_SOURCE_PACKAGES="$packages_dir")
-[[ -n "$team" ]] && settings+=(DAYBOOK_TEAM_ID="$team")
-[[ -n "${DAYBOOK_ICLOUD_CONTAINER:-}" ]] && settings+=(DAYBOOK_ICLOUD_CONTAINER="$DAYBOOK_ICLOUD_CONTAINER")
-settings+=("${version_settings[@]}")
+settings=(ARCHS=arm64 "DAYBOOK_SIGNING=$signing" "DAYBOOK_SOURCE_PACKAGES=$packages_dir")
+if [[ -n "$team" ]]; then settings+=("DAYBOOK_TEAM_ID=$team"); fi
+if [[ -n "${DAYBOOK_ICLOUD_CONTAINER:-}" ]]; then settings+=("DAYBOOK_ICLOUD_CONTAINER=$DAYBOOK_ICLOUD_CONTAINER"); fi
+settings+=(${version_settings[@]+"${version_settings[@]}"})
 common=(-project "$project" -scheme Daybook -configuration "$configuration"
         -derivedDataPath "$derived_dir" -clonedSourcePackagesDirPath "$packages_dir")
 
 mkdir -p "$work_dir" "$dist_dir"
 if [[ "$configuration" == Debug ]]; then
-    xcodebuild "${common[@]}" -destination 'platform=macOS,arch=arm64' "${provisioning[@]}" build "${settings[@]}"
+    xcodebuild "${common[@]}" -destination 'platform=macOS,arch=arm64' ${provisioning[@]+"${provisioning[@]}"} build "${settings[@]}"
     built="$derived_dir/Build/Products/Debug/Daybook.app"
 else
     archive="$work_dir/Daybook.xcarchive"
     /bin/rm -rf "${archive:?}"
     xcodebuild "${common[@]}" -destination 'generic/platform=macOS' -archivePath "$archive" \
-        "${provisioning[@]}" archive "${settings[@]}"
+        ${provisioning[@]+"${provisioning[@]}"} archive "${settings[@]}"
     if [[ "$signing" == signed ]]; then
         # Re-sign for distribution outside the App Store with Developer ID and its provisioning profile,
         # which carries the iCloud container. Xcode picks (or, with -allowProvisioningUpdates, creates) it.
@@ -151,7 +151,7 @@ else
         # Outside the App Store, an app with iCloud containers must name the container environment;
         # a release uses Production.
         plutil -insert iCloudContainerEnvironment -string Production "$export_options"
-        export_provisioning=("${provisioning[@]}")
+        export_provisioning=(${provisioning[@]+"${provisioning[@]}"})
         if [[ -n "${DAYBOOK_DEVELOPER_ID_PROFILE:-}" ]]; then
             # Manual: the Developer ID identity in a keychain and the profile scripts/ci/asc-profile.sh
             # installed. With a team API key, automatic export insists on cloud-managed Developer ID
@@ -165,7 +165,7 @@ else
             plutil -insert signingStyle -string automatic "$export_options"
         fi
         xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
-            -exportOptionsPlist "$export_options" "${export_provisioning[@]}"
+            -exportOptionsPlist "$export_options" ${export_provisioning[@]+"${export_provisioning[@]}"}
         built="$export_dir/Daybook.app"
     else
         built="$archive/Products/Applications/Daybook.app"
@@ -175,7 +175,7 @@ fi
 app_dir="$dist_dir/Daybook.app"
 zip_path="$dist_dir/Daybook-macOS-arm64.zip"
 # Resolved package licenses can be read-only; make the previous bundle removable.
-[[ -d "$app_dir" ]] && chmod -R u+w "$app_dir"
+if [[ -d "$app_dir" ]]; then chmod -R u+w "$app_dir"; fi
 /bin/rm -rf "${app_dir:?}"
 ditto "$built" "$app_dir"
 codesign --verify --deep --strict --verbose=2 "$app_dir"
@@ -184,7 +184,7 @@ ditto -c -k --keepParent "$app_dir" "$zip_path"
 
 if [[ -n "${DAYBOOK_NOTARY_PROFILE:-}" ]]; then
     if [[ "$configuration" != Release || "$signing" != signed ]]; then
-        print -u2 "Notarization needs the Release Developer ID export: DAYBOOK_TEAM_ID set, without --debug or --ad-hoc."
+        echo "Notarization needs the Release Developer ID export: DAYBOOK_TEAM_ID set, without --debug or --ad-hoc." >&2
         exit 1
     fi
     xcrun notarytool submit "$zip_path" --keychain-profile "$DAYBOOK_NOTARY_PROFILE" --wait
@@ -193,6 +193,6 @@ if [[ -n "${DAYBOOK_NOTARY_PROFILE:-}" ]]; then
     ditto -c -k --keepParent "$app_dir" "$zip_path"
 fi
 
-print "App: $app_dir"
-print "Archive: $zip_path"
+echo "App: $app_dir"
+echo "Archive: $zip_path"
 codesign -dv "$app_dir" 2>&1 | grep -E '^(Authority|TeamIdentifier|Signature)=' | head -3 || true

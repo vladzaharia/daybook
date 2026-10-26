@@ -11,7 +11,7 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 
 | Workflow | Job | Runner | What it does |
 |---|---|---|---|
-| CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on the scripts, and `scripts/ci/tests/run-tests.sh` |
+| CI | `lint` | `ubuntu-24.04` | actionlint (pinned, checksum-verified, with shellcheck on every `run:` block), shellcheck on the scripts (`build-app.sh` and `build-ios.sh` too; every script is bash), and `scripts/ci/tests/run-tests.sh` |
 | CI | `package` | `xcode-27` | `swift build --build-tests` once, then `swift test --skip-build` per test-target group, then the timing-budget test alone (see below) |
 | CI | `iphone` | `xcode-27` | `scripts/build-ios.sh --test` on a simulator (iPhone Duo if the image has one, otherwise iPhone 18 Pro), the crash-recovery test alone, then an unsigned Release device archive checked the way a release would be |
 | CI | `mac` | `xcode-27` | `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
@@ -341,7 +341,7 @@ None of these uses a team, a secret, or the network beyond package checkouts:
 
 ```sh
 actionlint                                       # uses .github/actionlint.yaml
-scripts/ci/tests/run-tests.sh                    # version, JWT, App Store Connect calls (mock), notes, archive checks, setup dry run
+scripts/ci/tests/run-tests.sh                    # version, JWT, App Store Connect calls (mock), notes, ref checks, GitHub Release (fake gh), archive checks, setup dry run, build-app.sh (stand-in Xcode tools)
 scripts/ci/version.sh --ref refs/tags/v1.2.3 --run-number 42
 scripts/build-ios.sh --archive --no-sign --marketing-version 1.2.3 --build-number 1042
 scripts/ci/check-ios-archive.sh Apps/iOS/build/DaybookPhone.xcarchive --version 1.2.3 --build 1042

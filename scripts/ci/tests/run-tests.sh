@@ -12,6 +12,9 @@
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
+#   build-ios.sh          the upload retry, with a stand-in xcodebuild (macOS)
+#   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
+#                         the repository (macOS)
 # Runs on macOS (bash 3.2) and Linux.
 set -euo pipefail
 
@@ -330,6 +333,59 @@ STUB
     expect_eq "without retrying" 1 "$(cat "$work/stub-count")"
 else
     echo "  skip  build-ios.sh upload retry (macOS only)"
+fi
+
+# --- build-app.sh, with stand-in Xcode tools, in a copy of the repository ------------------------------
+echo "build-app.sh"
+if macos; then
+    stubs="$work/stubs"
+    mkdir -p "$stubs"
+    for tool in xcodebuild xcodegen xcrun codesign ditto hdiutil spctl security; do
+        cp "$here/stub_tool.sh" "$stubs/$tool"
+        chmod +x "$stubs/$tool"
+    done
+    mac_repo="$work/mac-repo"
+    mkdir -p "$mac_repo/scripts" "$mac_repo/Apps/macOS/Config"
+    cp "$ci/../build-app.sh" "$mac_repo/scripts/"
+    cp "$ci/../../Package.resolved" "$mac_repo/"
+    : > "$mac_repo/Apps/macOS/project.yml"
+    # build_app [VAR=value...] -- ARGS: build-app.sh with only the given DAYBOOK_* variables.
+    build_app() {
+        local vars=()
+        while [[ "$1" != -- ]]; do vars+=("$1"); shift; done
+        shift
+        rm -f "$work/stub.log"
+        env -u DAYBOOK_TEAM_ID -u DAYBOOK_ASC_KEY_PATH -u DAYBOOK_ASC_KEY_ID -u DAYBOOK_ASC_ISSUER_ID \
+            -u DAYBOOK_DEVELOPER_ID_PROFILE -u DAYBOOK_NOTARY_PROFILE -u DAYBOOK_MAC_DERIVED_DATA \
+            PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" XCODEGEN="$stubs/xcodegen" ${vars[@]+"${vars[@]}"} \
+            "$mac_repo/scripts/build-app.sh" "$@" > "$work/build-app.out" 2>&1
+    }
+    xcb() { grep "^xcodebuild .*$1" "$work/stub.log" || true; }
+    asc_vars=(DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer")
+    export_options="$mac_repo/build/macOS/ExportOptions.plist"
+
+    expect_ok "an ad hoc debug build" build_app -- --debug --ad-hoc
+    expect_ok "builds Debug, signed locally" grep -q -- '-configuration Debug .* build .*DAYBOOK_SIGNING=local' <<< "$(xcb ' build ')"
+    expect_ok "packages dist/Daybook.app and the ZIP" test -d "$mac_repo/dist/Daybook.app" -a -f "$mac_repo/dist/Daybook-macOS-arm64.zip"
+    expect_eq "a local build never asks to change the account" "" "$(grep -- '-allowProvisioning' "$work/stub.log" || true)"
+    expect_ok "an ad hoc release archive" build_app -- --ad-hoc
+    expect_eq "is archived, not exported" "1 0" "$(xcb ' archive ' | wc -l | tr -d ' ') $(xcb '-exportArchive' | wc -l | tr -d ' ')"
+    expect_ok "the release pipeline's signed build" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" -- \
+        --marketing-version 1.4.0 --build-number 1057
+    expect_ok "archives with the key and versions" grep -q -- "-allowProvisioningUpdates -authenticationKeyPath $key .* archive .*MARKETING_VERSION=1.4.0 CURRENT_PROJECT_VERSION=1057" <<< "$(xcb ' archive ')"
+    expect_eq "never registers devices" "" "$(grep -- '-allowProvisioningDeviceRegistration' "$work/stub.log" || true)"
+    expect_ok "exports with cloud-managed signing" grep -q -- '-exportArchive .*-allowProvisioningUpdates -authenticationKeyPath' <<< "$(xcb '-exportArchive')"
+    expect_eq "export options" "developer-id automatic Production" \
+        "$(plutil -extract method raw "$export_options") $(plutil -extract signingStyle raw "$export_options") $(plutil -extract iCloudContainerEnvironment raw "$export_options")"
+    expect_ok "with the Developer ID profile" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" \
+        DAYBOOK_DEVELOPER_ID_PROFILE=01234567-89ab-cdef-0123-456789abcdef --
+    expect_eq "the export signs manually, without the key" "" "$(xcb '-exportArchive' | grep -- '-authenticationKey' || true)"
+    expect_eq "manual export options" "manual 01234567-89ab-cdef-0123-456789abcdef" \
+        "$(plutil -extract signingStyle raw "$export_options") $(plutil -extract 'provisioningProfiles.local\.daybook\.app' raw "$export_options")"
+    expect_fail "provisioning updates need a team" build_app -- --allow-provisioning-updates --ad-hoc
+    expect_fail "part of the API key is refused" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_ASC_KEY_ID=ABC123DEFG --
+else
+    echo "  skip  build-app.sh (macOS only)"
 fi
 
 echo
