@@ -12,6 +12,8 @@
 #   STUB_PLIST_VERSION, STUB_PLIST_BUILD
 #                              CFBundleShortVersionString and CFBundleVersion of the apps it makes
 #   STUB_IDENTITY=1            security find-identity lists a Developer ID Application identity
+#   STUB_XCODE_VERSION, STUB_XCODE_BUILD
+#                              what `xcodebuild -version` reports (default Xcode 27.1, 27A9275)
 #   STUB_IMPORT_FAILS=1        `security import` fails the way security -i reports it
 # `security -i` reads commands from standard input: each line goes to $STUB_LOG as "security-stdin
 # <line>", and its arguments, split as security splits them, to $STUB_LOG.args as a JSON array.
@@ -45,6 +47,16 @@ make_app() {
 
 case "$tool" in
     xcodebuild)
+        if has -version "$@"; then
+            printf 'Xcode %s\nBuild version %s\n' "${STUB_XCODE_VERSION:-27.1}" "${STUB_XCODE_BUILD:-27A9275}"
+            exit 0
+        elif has -showsdks "$@"; then
+            printf '\tiOS 27.1 -sdk iphoneos27.1\n\tiOS Simulator 27.1 -sdk iphonesimulator27.1\n'
+            exit 0
+        elif has -showComponent "$@"; then
+            printf 'Build Version: 27A266a\nStatus: installed\n'
+            exit 0
+        fi
         scheme="$(value_of -scheme "$@")"
         app_name=Daybook
         [[ "$scheme" == DaybookPhone ]] && app_name=DaybookPhone

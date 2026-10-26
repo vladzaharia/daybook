@@ -16,6 +16,7 @@
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
+#   select-xcode.sh       version and exact-build checks, SDKs, and the summary, with stand-in tools
 #   secrets.sh            run/setup/cleanup with the API key; on macOS, the .p12 keychain with a
 #                         stand-in security that checks no password reaches a command line
 #   build-ios.sh          the upload retry, package pinning, and archive calls, with stand-in Xcode tools
@@ -63,7 +64,7 @@ macos() { [[ "$(uname)" == Darwin ]]; }
 # could reach the keychain, Xcode, or the network puts these first on PATH.
 stubs="$work/stubs"
 mkdir -p "$stubs"
-for tool in xcodebuild xcodegen xcrun codesign ditto hdiutil spctl security curl; do
+for tool in xcodebuild xcodegen xcrun codesign ditto hdiutil spctl security curl swift; do
     cp "$here/stub_tool.sh" "$stubs/$tool"
     chmod +x "$stubs/$tool"
 done
@@ -595,6 +596,29 @@ if macos; then
 else
     skip "package-mac.sh (macOS only)"
 fi
+
+# --- select-xcode.sh, with stand-in tools ----------------------------------------------------------------
+echo "select-xcode.sh"
+fake_xcode="$work/Xcode_27.1.app"
+mkdir -p "$fake_xcode/Contents/Developer"
+select_xcode() {
+    : > "$work/xcode-env"
+    : > "$work/xcode-summary"
+    env PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" GITHUB_ENV="$work/xcode-env" GITHUB_STEP_SUMMARY="$work/xcode-summary" \
+        "$@" > "$work/select-xcode.out" 2>&1
+}
+expect_ok "the expected Xcode" select_xcode "$ci/select-xcode.sh" --xcode "$fake_xcode" --sdk iphoneos27.1 --metal
+expect_eq "is selected for later steps" "DEVELOPER_DIR=$fake_xcode/Contents/Developer DAYBOOK_XCODE_BUILD=27A9275" \
+    "$(paste -sd ' ' - < "$work/xcode-env")"
+expect_ok "the summary records Xcode" grep -qF -- "- Xcode 27.1 (27A9275)" "$work/xcode-summary"
+expect_ok "and the Metal toolchain" grep -qF -- "- Metal toolchain 27A266a: Apple metal version" "$work/xcode-summary"
+expect_ok "a release asserts the exact build" select_xcode "$ci/select-xcode.sh" --xcode "$fake_xcode" --expect-build 27A9275
+expect_fail "and refuses another" select_xcode env STUB_XCODE_BUILD=27A9300 "$ci/select-xcode.sh" --xcode "$fake_xcode" --expect-build 27A9275
+expect_ok "naming the variable to change" grep -q DAYBOOK_RELEASE_XCODE_BUILD "$work/select-xcode.out"
+expect_ok "a patch release still matches 27.1" select_xcode env STUB_XCODE_VERSION=27.1.1 "$ci/select-xcode.sh" --xcode "$fake_xcode"
+expect_fail "27.10 doesn't" select_xcode env STUB_XCODE_VERSION=27.10 "$ci/select-xcode.sh" --xcode "$fake_xcode"
+expect_fail "a missing SDK fails" select_xcode "$ci/select-xcode.sh" --xcode "$fake_xcode" --sdk iphoneos28.0
+expect_fail "a missing Xcode fails" select_xcode "$ci/select-xcode.sh" --xcode "$work/Xcode_none.app"
 
 # --- secrets.sh -----------------------------------------------------------------------------------------
 echo "secrets.sh"

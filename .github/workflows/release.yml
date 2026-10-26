@@ -40,6 +40,9 @@ defaults:
 env:
   # The `xcode-27` image's Xcode 27.1 (27A9275), with the iOS 27.1 SDK (docs/release.md, Runner).
   DAYBOOK_XCODE: /Applications/Xcode_27.1.app
+  # The exact Xcode build a release ships from; the signing jobs fail on any other. When the runner
+  # image moves to a new build, check it in CI, then set the DAYBOOK_RELEASE_XCODE_BUILD variable.
+  DAYBOOK_RELEASE_XCODE_BUILD: ${{ vars.DAYBOOK_RELEASE_XCODE_BUILD || '27A9275' }}
   NSUnbufferedIO: "YES"
 
 jobs:
@@ -198,7 +201,7 @@ jobs:
           name: release-notes
           path: notes
       - name: Select Xcode
-        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1
+        run: scripts/ci/select-xcode.sh --sdk iphoneos27.1 --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       # Secrets: each step that needs the API key gets it from the environment and runs inside
@@ -318,7 +321,7 @@ jobs:
           printf '%s\n' "$numbers"
           echo "BUILD=$(printf '%s\n' "$numbers" | sed -n 's/^build_number=//p')" >> "$GITHUB_ENV"
       - name: Select Xcode
-        run: scripts/ci/select-xcode.sh --metal
+        run: scripts/ci/select-xcode.sh --metal --expect-build "$DAYBOOK_RELEASE_XCODE_BUILD"
       - name: Install XcodeGen
         run: scripts/ci/install-xcodegen.sh
       # A re-run picks up the app notarization an earlier attempt left pending (Apple was still working
