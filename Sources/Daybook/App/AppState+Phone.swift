@@ -295,10 +295,11 @@ extension AppState {
     ///   be lined up, from the clock prior.
     func phoneRecordingsArrived(_ id: UUID, job: ProcessingJob) async -> Bool {
         guard let meeting = meetings.first(where: { $0.id == id }), job.requestID != nil || meeting.openProcessingRequests.isEmpty else { return false }
-        // Not yet seen here: no transcript, and not yet a source of this conversation (the phone may
-        // have filed it as one still to place, holding the notes typed on it).
+        // Not yet seen here: from a device (the phone, or a recorder another device imported), no
+        // transcript, and not yet a source of this conversation (the phone may have filed it as one
+        // still to place, holding the notes typed on it). Recordings this Mac imported were placed then.
         let arriving = meeting.tracks.filter { track in
-            track.deviceKind == DaybookPhoneIntegration.id && !meeting.transcripts.contains { $0.trackID == track.id }
+            track.deviceKind != nil && !meeting.transcripts.contains { $0.trackID == track.id }
                 && (track.alignment == nil
                     || (track.alignment?.isPending == true && !meeting.revisions.contains { $0.field == "source:\(track.id.uuidString)" }))
         }
@@ -309,7 +310,7 @@ extension AppState {
             if meeting.companions?.contains(where: { $0.deviceKind == DaybookPhoneIntegration.id && $0.deviceID == track.deviceSerial }) == true {
                 return false
             }
-            return await phoneRecordingArrivedAlone(track, in: meeting)
+            return await deviceRecordingArrivedAlone(track, in: meeting)
         }
         // With recordings of this Mac's placed already, the phone's waits to be lined up.
         let placed = meeting.tracks.contains { $0.deviceKind != DaybookPhoneIntegration.id && meeting.timelinePlacement(of: $0.id) != nil }
@@ -326,10 +327,20 @@ extension AppState {
         return false
     }
 
-    private func phoneRecordingArrivedAlone(_ track: RecordingTrack, in meeting: Meeting) async -> Bool {
-        guard let identity = track.device, let url = await audioURL(for: track, meetingID: meeting.id) else { return false }
+    /// A recording from Daybook on iPhone finds its conversation by its link, then overlap in time,
+    /// then the sound. A recorder's recording another device imported (the phone, after a handoff)
+    /// joins only by its multipoint link: this Mac would have matched it by time and sound if it had
+    /// imported it itself, and its link waits for it here.
+    private func deviceRecordingArrivedAlone(_ track: RecordingTrack, in meeting: Meeting) async -> Bool {
+        guard let identity = track.device else { return false }
+        let fromPhone = track.deviceKind == DaybookPhoneIntegration.id
         // Its start on this Mac's clock (the phone stamps it by its own).
         let start = (date: trackStart(track) ?? track.createdAt as Date?, reliable: true)
+        if !fromPhone {
+            let others = meetings.filter { $0.id != meeting.id }
+            guard SourceMatcher.linked(Self.fullRecording(identity), start: start.date, in: others, policy: sources.policy) != nil else { return false }
+        }
+        guard let url = await audioURL(for: track, meetingID: meeting.id) else { return false }
         guard let plan = await planArrival(url: url, duration: track.duration ?? 0, device: identity, start: start, excluding: [meeting.id]) else { return false }
         if let target = plan.attachTo, canMoveSource(into: target), let title = meetings.first(where: { $0.id == target })?.title {
             let stays = meeting.hasPersonMadeContent
@@ -340,12 +351,13 @@ extension AppState {
             do { _ = try await importAudio([url], source: track.source, attachTo: target, device: identity) }
             catch { movedPhoneRecordings.remove(meeting.id); errorMessage = error.localizedDescription; return false }
             guard !stays else {
-                notice = "Added the iPhone recording to “\(title)”. “\(meeting.title)” stays, with your notes."
+                notice = "Added the \(sourceName(track)) to “\(title)”. “\(meeting.title)” stays, with your notes."
                 return false
             }
             trashWhenIdle(meeting.id, addedTo: title)
             return true
         }
+        guard fromPhone else { return false }
         // It stays: filed as a source to place (it may have joined a Mac's recording that never came),
         // it's this conversation's own recording after all, and sets its timeline.
         update(meeting.id) { $0.makeTimelineOrigin(track.id) }

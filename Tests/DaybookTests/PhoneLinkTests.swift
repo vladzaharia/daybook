@@ -859,6 +859,50 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(meeting.timedNotes?.first?.time, 3)
     }
 
+    func testARecorderRecordingThePhoneImportedJoinsTheMacsConversationByItsLink() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let library = try await PhoneLibrarySide.make(root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { library.tearDown() }
+        // Soundcore Work records along with this Mac.
+        let recorder = FakeRecorder()
+        let session = DeviceSession(device: ConfiguredDevice(id: "recorder", kind: SoundcoreWorkIntegration().kind),
+                                    kind: SoundcoreWorkIntegration().kind, connections: [recorder], defaults: rig.defaults)
+        addTeardownBlock { session.shutDown() }
+        state.sources.recorders.sessions = { [session] }
+        let macAudio = try rig.audio("mac-handoff.wav", frequency: 345)
+        let recorderAudio = try rig.audio("soundcore-handoff.wav", frequency: 545)
+        try rig.inference.script(macAudio, [(0, "Handing it over.")])
+        try rig.inference.script(recorderAudio, [(0, "Handing it over.")])
+        let id = macStartsRecording(rig)
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        await state.sources.recorders.settle()
+        let link = try XCTUnwrap(rig.meeting(id)?.companions?.first)
+        XCTAssertEqual(link.state, .recording)
+        // The recorder moves to the phone mid-recording; this Mac can't reach it to stop it.
+        recorder.disconnect()
+        recorder.reachable = false
+        macStopsRecording(rig, id)
+        await state.sources.recorders.settle()
+        try await storeMacRecording(rig, id, audio: macAudio, start: macStart)
+        await state.synchronizeLibrary()
+        // The phone imports its recording into a conversation of its own, which syncs here.
+        let identity = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: "FAKE1", recordingID: try XCTUnwrap(link.recordingID))
+        let own = try await library.fileFromRecorder(recorderAudio, identity: identity, start: try XCTUnwrap(link.recorderStartedAt))
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitFor("the recorder's recording to join by its link", timeout: 20) {
+            rig.meeting(id)?.tracks.count == 2 && rig.meeting(own) == nil && state.processingID == nil && state.queuedIDs.isEmpty
+        }
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let track = try XCTUnwrap(meeting.tracks.first { $0.deviceKind == SoundcoreWorkIntegration.id })
+        XCTAssertEqual(track.deviceRecordingID, link.recordingID)
+        XCTAssertEqual(meeting.companions?.first?.state, .attached, "no longer waiting for it")
+        XCTAssertEqual(meeting.companions?.first?.trackID, track.id)
+    }
+
     func testAnUnlinkedPhoneRecordingJoinsByTimeThenSound() async throws {
         let rig = try await rig()
         let state = rig.state

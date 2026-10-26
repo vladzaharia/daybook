@@ -165,6 +165,19 @@ struct PhoneLibrarySide {
         return id
     }
 
+    /// A recorder's recording the phone imported (it manages the recorder now), into a conversation
+    /// of its own, with a Transcribe request for a Mac, as the phone's device hub files it.
+    @discardableResult
+    func fileFromRecorder(_ audio: URL, identity: DeviceRecordingIdentity, start: Date) async throws -> UUID {
+        let id = library.newMeeting(title: "Soundcore Work at \(start.formatted(date: .omitted, time: .shortened))", date: start)
+        await library.acquireLock()
+        _ = try await library.ingest(audio, into: id, provenance: .file(source: .soundcore, device: identity, duration: 0.5))
+        library.releaseLock()
+        library.requestProcessing(id, mode: .newAudio, by: device)
+        await library.flush()
+        return id
+    }
+
     func synchronize() async { _ = await library.synchronize() }
 
     func tearDown() {
