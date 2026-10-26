@@ -150,7 +150,7 @@ enum PhoneCaptureFinisher {
             hostTimeSeconds: journal.hostTimeSeconds, notes: journal.notes, timedNotes: journal.timedNotes,
             highlights: journal.highlights, capture: captureDetails(journal, joined: final.joined),
             warnings: journal.warnings.uniqued(),
-            stagingDirectory: directory, recovered: recovered)
+            stagingDirectory: directory, recovered: recovered, photos: journal.photos ?? [])
     }
 
     /// How the phone captured the track, in the library's terms.

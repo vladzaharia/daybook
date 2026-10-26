@@ -8,7 +8,8 @@ import SwiftUI
 /// - **Notebook** (open): notes on the left page; the clock, level, live timeline, bookmarks, and
 ///   multipoint status on the right. Split at the crease, never across it.
 /// - **Table** (partly open, standing): glanceable from across a table. A large clock and level on
-///   one page, a large Bookmark target on the other; dims between touches.
+///   one page, a large Bookmark target on the other; dims between touches. Write Notes swaps the
+///   clock's page for the notes (and stops dimming) until Done.
 ///
 /// Folding mid-recording only rearranges the same pieces: nothing about the recording restarts.
 /// `RootView` shows it whenever `model.isRecordingActive`.
@@ -38,9 +39,10 @@ private struct PocketRecording: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 RecordingStatusHeader()
-                HStack(alignment: .lastTextBaseline) {
+                HStack(alignment: .center) {
                     RecordingClockText(size: RecordingStyle.Clock.pocket, weight: .medium)
                     Spacer(minLength: 8)
+                    CameraControl()
                 }
                 if recorder.isPaused {
                     PausedPanel()
@@ -133,6 +135,7 @@ private struct RecorderPage: View {
             HStack(alignment: .top) {
                 RecordingStatusHeader(showsTitle: false)
                 Spacer(minLength: 0)
+                CameraControl()
             }
             RecordingClockText(size: RecordingStyle.Clock.notebook, weight: .medium)
             if recorder.isPaused {
@@ -181,25 +184,26 @@ private struct TableRecording: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var dimmed = false
     @State private var lastTouch = Date()
+    @State private var writing = false
 
     var body: some View {
         GeometryReader { proxy in
             // Turned a quarter turn like a laptop (flex mode), the hinge runs across: the standing half
             // is on top. Standing like a book, the hinge runs down the middle.
             if proxy.size.height > proxy.size.width {
-                FlexTable(wake: wake)
+                FlexTable(writing: $writing, wake: wake)
             } else if model.options.interfaceOrientation == "preview-portrait" {
                 // Debug: the simulator can't turn the device, so draw flex mode turned within the
                 // landscape window, as the turned display would show it.
                 let full = CGSize(width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
                                   height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom)
-                FlexTable(wake: wake)
+                FlexTable(writing: $writing, wake: wake)
                     .frame(width: full.height, height: full.width)
                     .rotationEffect(.degrees(-90))
                     .frame(width: full.width, height: full.height)
                     .offset(x: -proxy.safeAreaInsets.leading, y: -proxy.safeAreaInsets.top)
             } else {
-                BookTable(wake: wake)
+                BookTable(writing: $writing, wake: wake)
             }
         }
         // Dimmed, it goes dark: black ground (cheap on OLED), the clock and target in their dark
@@ -212,10 +216,11 @@ private struct TableRecording: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: dimmed)
         .task(id: lastTouch) {
             try? await Task.sleep(for: RecordingStyle.dimAfter)
-            guard !Task.isCancelled, !model.recorder.isPaused else { return }
+            guard !Task.isCancelled, !model.recorder.isPaused, !writing else { return }
             dimmed = true
         }
         .onChange(of: model.recorder.isPaused) { _, paused in if paused { wake() } }
+        .onChange(of: writing) { wake() }
         .persistentSystemOverlays(.hidden)
         .onAppear { InterfaceOrientation.apply(model.options.interfaceOrientation) }
     }
@@ -227,9 +232,11 @@ private struct TableRecording: View {
 }
 
 /// Flex mode: the top half stands facing the room (captions, the clock, the level), the bottom half
-/// lies flat under the hand (Bookmark and Stop).
+/// lies flat under the hand (Bookmark and Stop). Writing, the notes take the standing half and the
+/// keyboard the flat one, like a laptop.
 private struct FlexTable: View {
     @Environment(PhoneAppModel.self) private var model
+    @Binding var writing: Bool
     var wake: () -> Void
 
     var body: some View {
@@ -239,14 +246,24 @@ private struct FlexTable: View {
                 HStack(alignment: .center) {
                     RecordingStatusHeader(showsTitle: false)
                     MultipointStatus(compact: true)
+                    if writing {
+                        Spacer(minLength: 0)
+                        RecordingClockText(size: 34, weight: .medium)
+                    }
                 }
-                HStack(alignment: .center, spacing: PhoneStyle.Space.s5) {
-                    RecordingClockText(size: 92, weight: .light)
-                        .fixedSize()
-                    RollingMeter(height: RecordingStyle.Meter.tableHeight)
+                if writing {
+                    RecordingNotesEditor()
+                        .padding(.horizontal, -PhoneStyle.Space.s4)
+                        .frame(maxHeight: .infinity)
+                } else {
+                    HStack(alignment: .center, spacing: PhoneStyle.Space.s5) {
+                        RecordingClockText(size: 92, weight: .light)
+                            .fixedSize()
+                        RollingMeter(height: RecordingStyle.Meter.tableHeight)
+                    }
+                    LiveCaptionsView(style: .stage)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
                 }
-                LiveCaptionsView(style: .stage)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
             }
             .padding(.horizontal, PhoneStyle.Space.s6)
             .padding(.top, PhoneStyle.Space.s5)
@@ -258,36 +275,58 @@ private struct FlexTable: View {
                 } else {
                     FlexBookmarkTarget(touched: wake)
                 }
-                StopControl(height: 140)
-                    .frame(maxWidth: 170)
+                VStack(spacing: PhoneStyle.Space.s3) {
+                    StopControl(height: 84)
+                    TableTools(writing: $writing, size: 48)
+                }
+                .frame(maxWidth: 170)
             }
             .padding(.horizontal, PhoneStyle.Space.s6)
             .padding(.vertical, PhoneStyle.Space.s5)
             .frame(maxHeight: .infinity)
         }
+        // The keyboard covers the flat half instead of squeezing both.
+        .ignoresSafeArea(.keyboard)
     }
 }
 
 /// Standing like a book: the clock and level on one page, the Bookmark target on the other.
+/// Writing, the notes take the clock's page.
 private struct BookTable: View {
     @Environment(PhoneAppModel.self) private var model
+    @Binding var writing: Bool
     var wake: () -> Void
 
     var body: some View {
         let recorder = model.recorder
         CreaseSplit {
-            VStack(spacing: PhoneStyle.Space.s4) {
-                Spacer(minLength: 0)
-                RecordingStatusHeader(showsTitle: false, alignment: .center)
-                RecordingClockText(size: RecordingStyle.Clock.table, weight: .light)
-                RollingMeter(height: RecordingStyle.Meter.tableHeight)
-                    .frame(maxWidth: 360)
-                MultipointStatus(compact: true)
-                LiveCaptionsView(style: .strip)
-                    .frame(maxWidth: 380)
-                Spacer(minLength: 0)
+            if writing {
+                VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
+                    HStack(alignment: .center) {
+                        RecordingStatusHeader(showsTitle: false)
+                        Spacer(minLength: 0)
+                        RecordingClockText(size: 34, weight: .medium)
+                    }
+                    .padding(.horizontal, PhoneStyle.Space.s6)
+                    RecordingNotesEditor()
+                        .padding(.horizontal, PhoneStyle.Space.s2)
+                        .frame(maxHeight: .infinity)
+                }
+                .padding(.top, PhoneStyle.Space.s4)
+            } else {
+                VStack(spacing: PhoneStyle.Space.s4) {
+                    Spacer(minLength: 0)
+                    RecordingStatusHeader(showsTitle: false, alignment: .center)
+                    RecordingClockText(size: RecordingStyle.Clock.table, weight: .light)
+                    RollingMeter(height: RecordingStyle.Meter.tableHeight)
+                        .frame(maxWidth: 360)
+                    MultipointStatus(compact: true)
+                    LiveCaptionsView(style: .strip)
+                        .frame(maxWidth: 380)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, PhoneStyle.Space.s6)
             }
-            .padding(.horizontal, PhoneStyle.Space.s6)
         } trailing: {
             VStack(spacing: PhoneStyle.Space.s5) {
                 Spacer(minLength: 0)
@@ -297,10 +336,35 @@ private struct BookTable: View {
                     TableBookmarkTarget(touched: wake)
                 }
                 Spacer(minLength: 0)
-                StopControl(height: 52).frame(maxWidth: 220)
+                HStack(spacing: PhoneStyle.Space.s3) {
+                    TableTools(writing: $writing, size: 52)
+                    StopControl(height: 52).frame(maxWidth: 220)
+                }
             }
             .padding(.horizontal, PhoneStyle.Space.s5)
             .padding(.vertical, PhoneStyle.Space.s4)
+        }
+    }
+}
+
+/// Write Notes (Done while writing) and Take Photo, beside Stop.
+private struct TableTools: View {
+    @Binding var writing: Bool
+    var size: CGFloat
+
+    var body: some View {
+        HStack(spacing: PhoneStyle.Space.s3) {
+            Button { writing.toggle() } label: {
+                Image(systemName: writing ? "keyboard.chevron.compact.down" : "square.and.pencil")
+                    .font(.system(size: size * 0.4, weight: .medium))
+                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .frame(width: size, height: size)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel(writing ? "Done Writing" : "Write Notes")
+            CameraControl(size: size)
         }
     }
 }

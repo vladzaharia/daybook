@@ -54,6 +54,15 @@ final class ShellTests: XCTestCase {
         XCTAssertEqual(items.map(\.isBookmark), [false, true, false, false, true])
     }
 
+    func testPhotosSitBetweenTheParagraphsAroundThemWithBookmarks() {
+        let anchors = [TimedNote(time: 2, text: "One"), TimedNote(time: 10, text: "Two")]
+        let photo = CapturePhoto(fileName: "photo-a.heic", capturedAt: Date(), time: 6)
+        let items = NotesTimeline.items(notes: "One\nTwo", anchors: anchors, bookmarks: [Highlight(time: 4, text: "")], photos: [photo])
+        XCTAssertEqual(items.map(\.time), [2, 4, 6, 10])
+        XCTAssertEqual(items.map(\.id).dropFirst().first?.hasPrefix("b"), true)
+        XCTAssertEqual(items[2].kind, .photo("photo-a.heic"))
+    }
+
     func testIntentsRouteToTheApp() async throws {
         let previous = RecordingCommands.handler
         defer { RecordingCommands.handler = previous }

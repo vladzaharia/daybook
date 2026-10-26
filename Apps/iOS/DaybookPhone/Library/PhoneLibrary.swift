@@ -114,12 +114,29 @@ final class PhoneLibrary {
             track = ingested.track ?? controller.meeting(recording.id)?.tracks.first { $0.device == identity }
         }
         if joining, let track { addJoinedWork(recording, track: track.id, offset: join?.estimatedOffset) }
+        if let track { try await addCapturedPhotos(recording, track: track.id) }
         controller.update(recording.id) { $0.status = .imported }
         let request = requestTranscription ? controller.requestProcessing(recording.id, mode: .newAudio) : nil
         try await controller.flushDurably()
         try? FileManager.default.removeItem(at: recording.stagingDirectory)
         guard let meeting = controller.meeting(recording.id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)
+    }
+
+    /// Photos taken while recording, anchored to the phone's track so they follow its placement. One
+    /// that isn't a readable image is left out rather than holding up the recording.
+    private func addCapturedPhotos(_ recording: PhoneRecording, track: UUID) async throws {
+        for photo in recording.photos {
+            let url = recording.stagingDirectory.appendingPathComponent(photo.fileName)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do {
+                try await controller.addPhoto(from: url, to: recording.id,
+                                              timing: PhotoTimingInput(capturedAt: photo.capturedAt, trackID: track, time: photo.time),
+                                              origin: .thisIPhone(installation: installation), fileName: "Photo.\(url.pathExtension)")
+            } catch PhotoStoreError.unsupportedImage {
+                continue
+            }
+        }
     }
 
     /// A joined recording's bookmarks stay on its track (they follow its placement); its notes are

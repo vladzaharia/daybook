@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookKit
 import XCTest
 @testable import DaybookPhone
 
@@ -331,6 +332,66 @@ final class PhoneRecorderTests: XCTestCase {
         let recording = try await PhoneRecorder.recover(in: folder)
         XCTAssertEqual(recording.duration, 3, accuracy: 0.001)
         XCTAssertEqual(recording.highlights.count, 1)
+    }
+
+    func testPhotosAreKeptAtTheirShutterTimeAndSurviveAQuit() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Whiteboard")
+        rig.pump(5)
+        // Accepted two seconds after the shutter: the camera's review step.
+        let shutter = rig.clock.now().addingTimeInterval(-2)
+        let keptPhoto = try await rig.recorder.addPhoto(syntheticCameraPhoto(capturedAt: shutter))
+        let kept = try XCTUnwrap(keptPhoto)
+        XCTAssertEqual(kept.time, 3, accuracy: 1e-6)
+        XCTAssertEqual(kept.capturedAt, shutter)
+        XCTAssertEqual(rig.recorder.photos, [kept])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent(kept.fileName).path))
+        // A clock that disagrees by more than a slow review places the photo at the moment it arrived.
+        let strayPhoto = try await rig.recorder.addPhoto(syntheticCameraPhoto(capturedAt: shutter.addingTimeInterval(-3_600)))
+        let stray = try XCTUnwrap(strayPhoto)
+        XCTAssertEqual(stray.time, 0, accuracy: 1e-6)
+        rig.pump(1)
+        await rig.recorder.flush()
+        rig.recorder.prepareForTermination()
+
+        XCTAssertEqual(try PhoneCaptureJournal.load(from: folder).photos, [kept, stray])
+        let recording = try await PhoneRecorder.recover(in: folder)
+        XCTAssertEqual(recording.photos, [kept, stray])
+    }
+
+    func testAPhotoArrivingAfterStopIsNotKeptWithTheRecording() async throws {
+        let rig = RecorderRig()
+        let folder = try temporaryDirectory().appendingPathComponent("capture")
+        try await rig.recorder.start(in: folder, title: "Late")
+        rig.pump(2)
+        let recording = try await rig.stop()
+        let late = try await rig.recorder.addPhoto(syntheticCameraPhoto(capturedAt: rig.clock.now()))
+        XCTAssertNil(late)
+        XCTAssertEqual(recording.photos, [])
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        XCTAssertFalse(files.contains { $0.hasPrefix("photo-") })
+    }
+
+    func testTheCameraKeepsItsShutterMomentAndOrientation() throws {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 60, height: 20)).image { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 60, height: 20))
+        }
+        let rotated = try XCTUnwrap(image.cgImage.map { UIImage(cgImage: $0, scale: 1, orientation: .right) })
+        let exif: [String: Any] = [kCGImagePropertyExifDateTimeOriginal as String: "2026:10:24 14:03:12",
+                                   kCGImagePropertyExifOffsetTimeOriginal as String: "+00:00",
+                                   kCGImagePropertyExifSubsecTimeOriginal as String: "250"]
+        let accepted = Date(timeIntervalSince1970: 1_900_000_000)
+        let photo = try XCTUnwrap(CameraPhoto.encode(rotated, metadata: [kCGImagePropertyExifDictionary as String: exif], fallback: accepted))
+        XCTAssertTrue(["heic", "jpg"].contains(photo.fileExtension))
+        XCTAssertEqual(photo.capturedAt.timeIntervalSince1970, 1_792_850_592.25, accuracy: 0.001)
+        let metadata = PhotoMetadata.read(photo.data)
+        XCTAssertEqual(metadata.pixelWidth, 20 * Int(image.scale), "upright: the orientation tag turns it")
+        XCTAssertEqual(metadata.pixelHeight, 60 * Int(image.scale))
+
+        let plain = try XCTUnwrap(CameraPhoto.encode(image, metadata: nil, fallback: accepted))
+        XCTAssertEqual(plain.capturedAt, accepted, "no EXIF: the moment it was accepted")
     }
 
     func testTimedNotesAndBookmarksUseTheConversationClockAsOnTheMac() async throws {

@@ -251,6 +251,10 @@ struct LibraryPage: View {
             }
         } else {
             ToolbarItem(placement: .topBarTrailing) {
+                Button(action: newNote) { Label("New Note", systemImage: "square.and.pencil") }
+                    .disabled(session.place == .trash)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button { withAnimation { session.isSelecting = true; session.selection = [] } } label: {
                     Label("Select", systemImage: "checkmark.circle")
                 }
@@ -296,6 +300,10 @@ struct LibraryPage: View {
     }
 
     // MARK: Actions
+
+    private func newNote() {
+        session.newNote(in: library)
+    }
 
     private func trash(_ ids: [UUID]) {
         Task {

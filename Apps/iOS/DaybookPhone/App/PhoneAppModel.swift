@@ -346,6 +346,21 @@ final class PhoneAppModel: RecordingCommandHandling {
         recorder.editNotes(text)
     }
 
+    /// A photo from the camera while recording goes with the recording. If the recording ended while
+    /// the camera was open, it joins the conversation the recording was filed as.
+    func addPhoto(_ photo: CameraPhoto) async {
+        let id = recorder.captureID
+        do {
+            if try await recorder.addPhoto(photo) != nil { return }
+            while isFiling { try await Task.sleep(for: .milliseconds(100)) }
+            guard let id = id ?? lastFiledID, library.controller.meeting(id) != nil else { return }
+            try await library.controller.addCameraPhoto(photo, to: id)
+        } catch {
+            notice = "The photo couldn’t be saved: \(error.localizedDescription)"
+            publish()
+        }
+    }
+
     func dismissNotice() { notice = nil }
 
     func refreshCloud() async {
@@ -541,7 +556,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             } catch PhoneRecorderError.nothingRecorded {
                 // No audio at all. Keep the folder only if it holds notes worth saving.
                 let journal = try? PhoneCaptureJournal.load(from: folder)
-                if journal?.notes.isEmpty != false, journal?.highlights.isEmpty != false {
+                if journal?.notes.isEmpty != false, journal?.highlights.isEmpty != false, journal?.photos?.isEmpty != false {
                     try? FileManager.default.removeItem(at: folder)
                 }
             } catch {

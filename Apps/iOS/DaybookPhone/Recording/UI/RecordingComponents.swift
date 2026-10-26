@@ -180,6 +180,30 @@ struct BookmarkControl: View {
     }
 }
 
+/// Take Photo while recording: the photo joins the recording at its shutter moment, like a bookmark.
+struct CameraControl: View {
+    @Environment(PhoneAppModel.self) private var model
+    var size: CGFloat = 44
+    @State private var showingCamera = false
+
+    var body: some View {
+        let count = model.recorder.photos.count
+        Button { showingCamera = true } label: {
+            Image(systemName: "camera")
+                .font(.system(size: size * 0.4, weight: .medium))
+                .foregroundStyle(PhoneStyle.Ink.title)
+                .frame(width: size, height: size)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .disabled(!CameraPicker.isAvailable || !model.recorder.isCapturing || model.recorder.state == .starting)
+        .sensoryFeedback(.success, trigger: count)
+        .accessibilityLabel(count > 0 ? "Take Photo, \(count) so far" : "Take Photo")
+        .cameraCover(isPresented: $showingCamera) { photo in Task { await model.addPhoto(photo) } }
+    }
+}
+
 /// Stop: the red control. Its own colours, so it reads as Stop in either appearance.
 struct StopControl: View {
     @Environment(PhoneAppModel.self) private var model

@@ -86,6 +86,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSMicrophoneUsageDescription: Daybook records your conversations with the microphone.
+        NSCameraUsageDescription: Daybook takes photos of whiteboards, slides, and notes for your conversations.
         # Asked only if on-device live captions turn out to need it (see DaybookCaptions' LiveCaptionAuthorization).
         NSSpeechRecognitionUsageDescription: Daybook shows live captions while it records.
         NSLocalNetworkUsageDescription: Daybook finds your Mac on this network to record together.

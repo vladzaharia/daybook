@@ -7,6 +7,7 @@ struct YourNotes: View {
     @ObservedObject var library: LibraryController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
+    @Environment(ReadingSession.self) private var session
 
     private var bookmarks: [(highlight: Highlight, time: TimeInterval, context: HighlightContext?)] {
         let contexts = Dictionary(meeting.highlightContexts().map { ($0.highlight.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -25,7 +26,9 @@ struct YourNotes: View {
                 placeholder: "Add a note…",
                 // The lane appears only when a note has a recording time; notes typed while reading have none.
                 lane: timed ? PhoneStyle.Page.lane : 0,
-                playTime: meeting.tracks.isEmpty ? nil : { play(.timeline($0)) })
+                focusOnAppear: session.focusNotesFor == meeting.id,
+                playTime: meeting.tracks.isEmpty ? nil : { play(.timeline($0)) },
+                onFocusChange: { focused in if focused, session.focusNotesFor == meeting.id { session.focusNotesFor = nil } })
                 .padding(.top, PhoneStyle.Space.s2)
                 .padding(.leading, timed ? -leadingHang : 0)
             let marks = bookmarks

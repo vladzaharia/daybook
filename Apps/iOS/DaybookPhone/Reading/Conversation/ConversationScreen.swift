@@ -79,6 +79,9 @@ struct ConversationMoreMenu: View {
     @Environment(ReadingSession.self) private var session
 
     var body: some View {
+        if CameraPicker.isAvailable {
+            Button { session.cameraFor = meeting.id } label: { Label("Take Photo", systemImage: "camera") }
+        }
         Button { session.sheet = .importPhotos(meeting.id) } label: { Label("Add Photos…", systemImage: "photo.badge.plus") }
         ExportMenu(meeting: meeting)
         if meeting.summary != nil {
