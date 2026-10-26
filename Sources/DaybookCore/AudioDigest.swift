@@ -5,11 +5,16 @@ import Foundation
 /// are never loaded into memory. The same digests `SyncDigest` makes.
 public enum AudioDigest {
     public static func sha256(fileURL: URL) throws -> String {
+        try sha256(fileURL: fileURL) { Task.isCancelled }
+    }
+
+    /// The same, checking `isCancelled` between chunks (work on a dispatch queue has no task to check).
+    static func sha256(fileURL: URL, isCancelled: () -> Bool) throws -> String {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         var hasher = SHA256()
         while let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty {
-            try Task.checkCancellation()
+            if isCancelled() { throw CancellationError() }
             hasher.update(data: bytes)
         }
         return hex(hasher.finalize())
