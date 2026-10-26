@@ -170,16 +170,38 @@ enum LegacyLibraryReturn {
     }
 }
 
-/// A library in the wrong place for this build, offered to the person at launch before the library opens.
+/// A library in the wrong place for this build, offered to the person at launch.
 enum LibraryMoveOffer: Identifiable, Equatable {
     /// Unsandboxed, after a sandboxed Daybook kept the library in its container (`LegacyLibraryReturn`).
     case returnFromContainer(LegacyLibraryReturn.Plan)
+    /// Sandboxed, with the library still at its old place (`SandboxMigration`, `.stillAtOldLocation`).
+    case moveIntoContainer(SandboxMigration.MovePlan)
+    /// Sandboxed, with the library in place and an old copy left behind, readable by other apps (`.bothPresent`).
+    case oldCopyRemains(URL)
 
     var id: String {
         switch self {
         case .returnFromContainer: return "return"
+        case .moveIntoContainer: return "move"
+        case .oldCopyRemains: return "old-copy"
         }
     }
+
+    /// Whether the library stays closed until the person answers. An old copy left behind is only a warning.
+    var holdsLibrary: Bool {
+        switch self {
+        case .returnFromContainer, .moveIntoContainer: return true
+        case .oldCopyRemains: return false
+        }
+    }
+}
+
+/// A library copied into the container, and the grant to its old copy, until the person decides about that copy.
+struct MovedLibrary: Equatable {
+    var source: URL
+    var scoped: Bool
+    /// Where the old library was expected, remembered when the copy is kept.
+    var legacy: URL
 }
 
 /// Opens a new instance of the app and quits this one: after a library move, everything starts over with the library

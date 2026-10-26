@@ -76,6 +76,10 @@ final class AppState: ObservableObject {
     @Published var libraryMoveOffer: LibraryMoveOffer?
     @Published var isMovingLibrary = false
     @Published var libraryMoveError: String?
+    /// A library just copied into the container, before the person decides about the old copy.
+    @Published var movedLibrary: MovedLibrary?
+    /// Said once the library opens (`LaunchCheck`).
+    var launchNotice: String?
     @Published var processingID: UUID?
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
@@ -204,14 +208,14 @@ final class AppState: ObservableObject {
     let searchMemo = LibrarySearchMemo()
 
     init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard) {
+        // Where the library is, before anything here writes preferences or sync resolves its identity (docs/sandbox.md).
+        let launch = Self.launchCheck(library: libraryURL, defaults: defaults)
         let storedPreferences = defaults.data(forKey: "processingPreferences").flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
         var processingPreferences = storedPreferences ?? .init()
         let selections = Self.loadModelSelections(defaults: defaults, speakerModel: storedPreferences?.speakerModelID)
         processingPreferences.speakerModelID = selections[.diarization] ?? processingPreferences.speakerModelID
         modelSelections = selections
         self.processingPreferences = processingPreferences
-        // A library that moved (into the App Sandbox's container, or back out) brings this Mac's identity with it.
-        ReplicaIdentity.restore(library: libraryURL, defaults: defaults, machine: ReplicaIdentity.currentMachine)
         let sync = LibrarySyncController(localRoot: libraryURL, defaults: defaults)
         // Presence: other devices see this Mac and whether it can process. Updated as models change.
         sync.replica = .mac(displayName: ProcessingRequest.Device.currentName, canProcess: false)
@@ -282,49 +286,124 @@ final class AppState: ObservableObject {
         wireDevices()
         wirePhones()
         wireCaptions()
-        libraryMoveOffer = Self.launchLibraryOffer(library: libraryURL, defaults: defaults)
+        libraryMoveOffer = launch.offer
+        launchNotice = launch.notice
     }
 
-    /// A move this build should offer before it opens its library; only for the app's own library, never `--library`,
-    /// `swift run`, or tests.
-    static func launchLibraryOffer(library: URL, defaults: UserDefaults, bundle: Bundle = .main,
-                                   sandboxed: Bool = SandboxEnvironment.isSandboxed) -> LibraryMoveOffer? {
+    /// What the launch check found: a move to offer, or something to say once the library opens.
+    struct LaunchCheck: Equatable {
+        var offer: LibraryMoveOffer?
+        var notice: String?
+    }
+
+    /// Where the library is, before anything writes preferences or sync resolves its identity (docs/sandbox.md). A
+    /// library that moved gets this Mac's identity back (`ReplicaIdentity`). Then, for the app's own library only (never
+    /// `--library`, `swift run`, or tests): unsandboxed, whether to move it back out of the sandboxed build's container
+    /// (`LegacyLibraryReturn`); sandboxed, whether it's in place in the container (`SandboxMigration`).
+    static func launchCheck(library: URL, defaults: UserDefaults, bundle: Bundle = .main,
+                            sandboxed: Bool = SandboxEnvironment.isSandboxed) -> LaunchCheck {
+        let priorUse = SandboxMigration.preferencesShowPriorUse(defaults)
+        ReplicaIdentity.restore(library: library, defaults: defaults, machine: ReplicaIdentity.currentMachine)
         guard library.standardizedFileURL.path == LibraryLocation.standard.standardizedFileURL.path,
               LibraryLocation.folderName(bundleURL: bundle.bundleURL) == LibraryLocation.appFolder,
-              let identifier = bundle.bundleIdentifier else { return nil }
-        if !sandboxed {
-            return LegacyLibraryReturn.plan(library: library, bundleIdentifier: identifier, defaults: defaults).map { .returnFromContainer($0) }
-        }
-        return nil
+              let identifier = bundle.bundleIdentifier else { return LaunchCheck() }
+        return launchCheck(library: library, bundleIdentifier: identifier, defaults: defaults, sandboxed: sandboxed, priorUse: priorUse)
     }
 
-    /// Moves the library as offered, then starts over with it in place.
+    static func launchCheck(library: URL, bundleIdentifier: String, defaults: UserDefaults, sandboxed: Bool, priorUse: Bool,
+                            home: URL = UserHome.url,
+                            store: (URL) -> SyncDeviceIdentityStore = { SyncDeviceIdentityStore.keychain(for: $0) }) -> LaunchCheck {
+        guard sandboxed else {
+            let plan = LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleIdentifier, home: home, defaults: defaults)
+            return LaunchCheck(offer: plan.map { .returnFromContainer($0) })
+        }
+        guard let legacy = SandboxMigration.legacyLibrary(bundleIdentifier: bundleIdentifier, home: home) else { return LaunchCheck() }
+        switch SandboxMigration.check(library: library, legacy: legacy, defaults: defaults, priorUse: priorUse, store: store) {
+        case .fresh, .moved:
+            return LaunchCheck()
+        case .stillAtOldLocation:
+            return LaunchCheck(offer: .moveIntoContainer(.init(legacy: legacy, library: library, legacyExists: LibraryContents.looksLikeLibrary(legacy))))
+        case .bothPresent:
+            guard defaults.string(forKey: SandboxMigration.keptOldCopyKey) != legacy.path else { return LaunchCheck() }
+            return LaunchCheck(offer: .oldCopyRemains(legacy))
+        case .identityMissing:
+            return LaunchCheck(notice: "If your iPhone can’t find this Mac, pair it again in Settings › Devices.")
+        }
+    }
+
+    /// Moves the library as offered. Back out of the container: moved, then the app starts over. Into the container: the
+    /// person chooses the old library (the sandbox can read it only then), it's copied into place, and the sheet asks
+    /// about the old copy (`finishLibraryMove`).
     func acceptLibraryMove() {
         guard let offer = libraryMoveOffer, !isMovingLibrary else { return }
-        isMovingLibrary = true; libraryMoveError = nil
-        Task {
-            do {
-                switch offer {
-                case .returnFromContainer(let plan):
+        libraryMoveError = nil
+        switch offer {
+        case .returnFromContainer(let plan):
+            isMovingLibrary = true
+            Task {
+                do {
                     _ = try await Task.detached(priority: .userInitiated) { try LegacyLibraryReturn.move(plan) }.value
                     LegacyLibraryReturn.finish(plan, defaults: preferences)
+                    AppRelaunch.relaunch()
+                } catch {
+                    isMovingLibrary = false
+                    libraryMoveError = "Couldn’t move your library: \(error.localizedDescription)"
                 }
-                AppRelaunch.relaunch()
-            } catch {
-                isMovingLibrary = false
-                libraryMoveError = "Couldn’t move your library: \(error.localizedDescription)"
             }
+        case .moveIntoContainer(let plan):
+            guard let source = SandboxMigration.chooseLibrary(near: plan.legacy) else { return }
+            isMovingLibrary = true
+            let scoped = source.startAccessingSecurityScopedResource()
+            Task {
+                do {
+                    try await Task.detached(priority: .userInitiated) { try SandboxMigration.copyLibrary(from: source, to: plan.library) }.value
+                    movedLibrary = MovedLibrary(source: source, scoped: scoped, legacy: plan.legacy)
+                } catch {
+                    if scoped { source.stopAccessingSecurityScopedResource() }
+                    libraryMoveError = "Couldn’t move your library: \(error.localizedDescription)"
+                }
+                isMovingLibrary = false
+            }
+        case .oldCopyRemains(let legacy):
+            NSWorkspace.shared.activateFileViewerSelecting([legacy])
+            keepOldLibraryCopy(legacy)
         }
     }
 
-    /// Not Now: the library opens where it is.
+    /// After a move into the container: the old copy goes to the Trash or stays, and the app starts over with the
+    /// library in place.
+    func finishLibraryMove(trashingOldCopy: Bool) {
+        guard let moved = movedLibrary else { return }
+        var trashed = false
+        if trashingOldCopy {
+            trashed = (try? FileManager.default.trashItem(at: moved.source, resultingItemURL: nil)) != nil
+            if !trashed { NSWorkspace.shared.activateFileViewerSelecting([moved.source]) }
+        }
+        if !trashed { preferences.set(moved.legacy.path, forKey: SandboxMigration.keptOldCopyKey) }
+        if moved.scoped { moved.source.stopAccessingSecurityScopedResource() }
+        AppRelaunch.relaunch()
+    }
+
+    /// Not Now (or Quit, Start Fresh, Keep It), depending on the offer.
     func declineLibraryMove() async {
         guard let offer = libraryMoveOffer, !isMovingLibrary else { return }
         switch offer {
         case .returnFromContainer(let plan): LegacyLibraryReturn.decline(plan, defaults: preferences)
+        case .moveIntoContainer(let plan):
+            // With a library at the old place, nothing opens without it; with none there, start a new one.
+            guard !plan.legacyExists else { NSApp.terminate(nil); return }
+            preferences.set(true, forKey: SandboxMigration.startedFreshKey)
+        case .oldCopyRemains(let legacy):
+            keepOldLibraryCopy(legacy)
+            return
         }
         libraryMoveOffer = nil
         await initialize()
+    }
+
+    private func keepOldLibraryCopy(_ legacy: URL) {
+        preferences.set(legacy.path, forKey: SandboxMigration.keptOldCopyKey)
+        libraryMoveOffer = nil
     }
 
     var selectedMeeting: Meeting? { meetings.first { $0.id == selectedID } }
@@ -385,10 +464,11 @@ final class AppState: ObservableObject {
     func initialize() async {
         guard !isReady else { return }
         // A library to move first: nothing opens until the person decides (`libraryMoveOffer`).
-        guard libraryMoveOffer == nil else { return }
+        guard libraryMoveOffer?.holdsLibrary != true else { return }
         do {
             try await library.load()
             recordReplicaIdentity()
+            if let launchNotice { post([launchNotice]); self.launchNotice = nil }
             // Installs from before the model system move into the store first, without downloading.
             let migration = await runtime.prepare()
             if !migration.failed.isEmpty {

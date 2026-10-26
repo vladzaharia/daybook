@@ -95,9 +95,14 @@ final class LibraryMoveTests: XCTestCase {
     }
 
     /// Only the app's own library is ever moved: never a `--library`, `swift run`, or a test's.
-    func testOnlyTheAppsOwnLibraryIsOffered() {
-        XCTAssertNil(AppState.launchLibraryOffer(library: AppState.libraryURL, defaults: makeTestDefaults()))
-        XCTAssertNil(AppState.launchLibraryOffer(library: library, defaults: makeTestDefaults(), sandboxed: false))
+    func testOnlyTheAppsOwnLibraryIsOffered() throws {
+        try writeLibrary(at: container, meeting: "sandboxed")
+        XCTAssertEqual(AppState.launchCheck(library: AppState.libraryURL, defaults: makeTestDefaults(), sandboxed: false), .init())
+        XCTAssertEqual(AppState.launchCheck(library: library, defaults: makeTestDefaults(), sandboxed: false), .init(), "a test isn't the app")
+        let check = AppState.launchCheck(library: library, bundleIdentifier: bundleID, defaults: makeTestDefaults(), sandboxed: false,
+                                         priorUse: true, home: home)
+        guard case .returnFromContainer(let plan)? = check.offer else { return XCTFail("\(check)") }
+        XCTAssertEqual(plan.container, container)
     }
 
     /// With a move offered, the library stays closed until the person answers; Not Now opens it where it is.

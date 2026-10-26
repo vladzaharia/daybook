@@ -120,10 +120,39 @@ signed: the bundle ID, every sandbox capability, the temporary exceptions (only 
 rehearsal builds), and the manifest (none, the rehearsal's, or the real one). CI runs it on every ad hoc build;
 `scripts/ci/tests/run-tests.sh` checks it against stand-in apps signed with the repository's entitlements files.
 
+### Moving the library
+
+macOS moves the library into the container once, through the manifest, when it creates the container. That's the
+expected path, and it's a rename on the same volume. Everything else is the launch check's (`SandboxMigration`, at the
+top of `AppState.init`, before anything writes preferences or sync resolves its identity), for the app's own library
+in a sandboxed build:
+
+1. `ReplicaIdentity` restores the identity of a library that moved (above). If sync's keychain item is still named
+   after the old place, it's copied to the new folder's name: the item never leaves this Mac, so it's always this
+   Mac's identity, even if `replica.json` predates the move.
+2. The launch is classified from four facts: whether the old place (`~/Library/Application Support/Daybook`, which the
+   sandbox can't read but can see) holds a library, whether the container's library holds anything (conversations,
+   models, the Trash, settings), whether preferences show an earlier launch, and whether the identity was found.
+
+| Outcome | When | What happens |
+|---|---|---|
+| `fresh` | nothing anywhere | a new library |
+| `moved` | the library is in the container, nothing at the old place | nothing: the usual case after the manifest |
+| `stillAtOldLocation` | the container's library is empty, and the old place has one or preferences say there was one | **Move Library…** before anything opens (below) |
+| `bothPresent` | both have one | the container's opens; a sheet says the old copy is still readable by other apps (**Keep It** or **Show in Finder**), once |
+| `identityMissing` | the library is in place but no identity was found | the library opens; sync takes a new ID (republishing, never deleting) and a notice says to pair the iPhone again if it can't find the Mac |
+
+The outcome is recorded in preferences (`sandboxMigration`). **Move Library…** holds the library closed (no devices,
+sync, iPhone link, or requests), then: an open panel beside the old place (the sandbox can read the old library only
+once the person chooses it); an APFS clone of it into a hidden folder in the container, checked item by item (path,
+kind, size) against the original, then renamed into place; an empty folder already there is replaced, one with
+anything in it never is; the old library is only read. Then **Move to Trash** or **Keep It** for the old copy, and the
+app starts over with the library in place. With nothing at the old place, **Start Fresh** opens a new library instead
+of **Quit**.
+
 ### Still to come
 
-A launch check that offers **Move Library…** when the library didn't move, and re-granting folders whose old
-bookmarks don't resolve.
+Re-granting folders whose old bookmarks don't resolve.
 
 ## The process-tap probe
 
