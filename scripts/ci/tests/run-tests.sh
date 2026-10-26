@@ -7,6 +7,7 @@
 #   asc-jwt.sh            fixed header and payload vectors; the signature verified by openssl and, on
 #                         macOS, by CryptoKit (an independent implementation)
 #   asc-testflight.sh     the full request sequence against a local mock of the App Store Connect API
+#   asc-certificates.sh   the dry run and --revoke against the mock (fixture certificates)
 #   release-notes.sh      annotated and lightweight tags in a throwaway repository
 #   check-ref.sh          tags on and off main, manual runs, in a throwaway clone
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
@@ -171,6 +172,28 @@ expect_ok "the collision says to raise the offset" grep -q "Raise DAYBOOK_BUILD_
 expect_eq "without a start time it's simply found" "found=3001" "$(find_build --find-build "3001")"
 expect_fail "find mode rejects a malformed list" find_build --find-build "1057;rm"
 expect_fail "find mode rejects a malformed time" find_build --find-build "2001" --uploaded-after yesterday
+
+# --- asc-certificates.sh against the mock ----------------------------------------------------------------
+echo "asc-certificates.sh"
+certificates() {
+    : > "$log"
+    ASC_API_BASE="http://127.0.0.1:$port" DAYBOOK_NOW=1793000000 \
+        DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
+        "$ci/../asc-certificates.sh" "$@" > "$work/certificates.out" 2>&1
+}
+expect_ok "the dry run lists them" certificates
+expect_eq "only GETs, and both pages" "GET /v1/certificates GET /v1/certificates" "$(jq -r '"\(.method) \(.path)"' "$log" | paste -sd ' ' -)"
+expect_eq "asks for development certificates only" "DEVELOPMENT,IOS_DEVELOPMENT,MAC_APP_DEVELOPMENT" \
+    "$(jq -r 'select(.query["filter[certificateType]"]) | .query["filter[certificateType]"][0]' "$log")"
+expect_eq "the pipeline's three, two of them old" "cert-fresh keep|cert-old revoke|cert-old-mac revoke" \
+    "$(awk '$1 ~ /^cert-/ {print $1, $NF}' "$work/certificates.out" | paste -sd '|' -)"
+expect_ok "and says nothing changed" grep -q "Dry run: nothing was changed" "$work/certificates.out"
+expect_ok "--revoke" certificates --revoke
+expect_eq "revokes only the old ones" "DELETE /v1/certificates/cert-old|DELETE /v1/certificates/cert-old-mac" \
+    "$(jq -r 'select(.method == "DELETE") | "\(.method) \(.path)"' "$log" | paste -sd '|' -)"
+expect_ok "--older-than 200 --revoke" certificates --older-than 200 --revoke
+expect_eq "keeps everything newer" "DELETE /v1/certificates/cert-old-mac" "$(jq -r 'select(.method == "DELETE") | "\(.method) \(.path)"' "$log")"
+expect_fail "a bad age is refused" certificates --older-than soon
 
 # --- release-notes.sh -----------------------------------------------------------------------------------
 echo "release-notes.sh"
@@ -358,14 +381,16 @@ if macos; then
         local vars=()
         while [[ "$1" != -- ]]; do vars+=("$1"); shift; done
         shift
-        rm -f "$work/stub.log"
+        : > "$work/stub.log"
         env -u DAYBOOK_TEAM_ID -u DAYBOOK_ASC_KEY_PATH -u DAYBOOK_ASC_KEY_ID -u DAYBOOK_ASC_ISSUER_ID \
             -u DAYBOOK_DEVELOPER_ID_PROFILE -u DAYBOOK_NOTARY_PROFILE -u DAYBOOK_MAC_DERIVED_DATA \
             PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" XCODEGEN="$stubs/xcodegen" ${vars[@]+"${vars[@]}"} \
             "$mac_repo/scripts/build-app.sh" "$@" > "$work/build-app.out" 2>&1
     }
     xcb() { grep "^xcodebuild .*$1" "$work/stub.log" || true; }
-    asc_vars=(DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer")
+    pipeline=(GITHUB_ACTIONS=true GITHUB_WORKFLOW_REF=example/daybook/.github/workflows/release.yml@refs/tags/v1.4.0)
+    asc_vars=("${pipeline[@]}" DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer")
+    no_pipeline=(DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer")
     export_options="$mac_repo/build/macOS/ExportOptions.plist"
 
     expect_ok "an ad hoc debug build" build_app -- --debug --ad-hoc
@@ -394,6 +419,10 @@ if macos; then
     expect_eq "before building anything" "" "$(xcb ' archive ')"
     build_app -- --ad-hoc || true
     expect_ok "the archive is held to the pinned versions too" grep -q -- '-onlyUsePackageVersionsFromResolvedFile' <<< "$(xcb ' archive ')"
+    expect_fail "the API key is refused outside the release pipeline" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${no_pipeline[@]}" --
+    expect_eq "before anything runs" "" "$(grep '^xcodebuild' "$work/stub.log" || true)"
+    expect_fail "and in another workflow" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${no_pipeline[@]}" GITHUB_ACTIONS=true \
+        GITHUB_WORKFLOW_REF=example/daybook/.github/workflows/ci.yml@refs/heads/main --
     expect_fail "provisioning updates need a team" build_app -- --allow-provisioning-updates --ad-hoc
     expect_fail "part of the API key is refused" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_ASC_KEY_ID=ABC123DEFG --
 else
@@ -412,7 +441,7 @@ if macos; then
         local vars=()
         while [[ "$1" != -- ]]; do vars+=("$1"); shift; done
         shift
-        rm -f "$work/stub.log"
+        : > "$work/stub.log"
         env -u DAYBOOK_TEAM_ID -u DAYBOOK_ASC_KEY_PATH -u DAYBOOK_ASC_KEY_ID -u DAYBOOK_ASC_ISSUER_ID -u DAYBOOK_IOS_DERIVED_DATA \
             PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" XCODEGEN="$stubs/xcodegen" ${vars[@]+"${vars[@]}"} \
             "$ios_repo/scripts/build-ios.sh" "$@" > "$work/build-ios.out" 2>&1
@@ -424,6 +453,13 @@ if macos; then
     expect_eq "before building anything" "" "$(xcb ' archive')"
     expect_ok "an unsigned archive" build_ios -- --archive --no-sign --marketing-version 1.4.0 --build-number 1057
     expect_ok "is held to the pinned versions" grep -q -- '-onlyUsePackageVersionsFromResolvedFile .*archive CODE_SIGNING_ALLOWED=NO' <<< "$(xcb ' archive')"
+    expect_ok "the release pipeline's signed archive" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" -- --archive
+    expect_ok "authenticates with the key" grep -q -- "-allowProvisioningUpdates -authenticationKeyPath $key .* archive DAYBOOK_TEAM_ID=48H7CLBV8Y" <<< "$(xcb ' archive')"
+    expect_eq "never registers devices" "" "$(grep -- '-allowProvisioningDeviceRegistration' "$work/stub.log" || true)"
+    expect_fail "the API key is refused outside the release pipeline" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y "${no_pipeline[@]}" -- --archive
+    expect_eq "before anything runs" "" "$(grep '^xcodebuild' "$work/stub.log" || true)"
+    expect_ok "a device build never passes -allowProvisioningUpdates" build_ios DAYBOOK_TEAM_ID=48H7CLBV8Y -- --device
+    expect_eq "(none in the calls)" "" "$(grep -- '-allowProvisioning' "$work/stub.log" || true)"
 else
     echo "  skip  build-ios.sh (macOS only)"
 fi

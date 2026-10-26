@@ -44,7 +44,8 @@
 #                                (.github/workflows/release.yml, docs/release.md). With all three set,
 #                                --archive and --export authenticate with the key and pass
 #                                -allowProvisioningUpdates, so Xcode's cloud-managed signing supplies the
-#                                certificates and profiles. Nothing else in this script uses them.
+#                                certificates and profiles. Nothing else in this script uses them, and the
+#                                script refuses them outside release.yml on GitHub Actions (AGENTS.md).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -107,6 +108,12 @@ for name in DAYBOOK_ASC_KEY_PATH DAYBOOK_ASC_KEY_ID DAYBOOK_ASC_ISSUER_ID; do
     if [[ -n "${!name:-}" ]]; then ASC_SET=$(( ASC_SET + 1 )); fi
 done
 if (( ASC_SET == 3 )); then
+    # The key brings -allowProvisioningUpdates, which only the release pipeline may pass (AGENTS.md).
+    if [[ "${GITHUB_ACTIONS:-}" != true || "${GITHUB_WORKFLOW_REF:-}" != */.github/workflows/release.yml@* ]]; then
+        echo "The App Store Connect API key is for the release pipeline only (.github/workflows/release.yml), because it" >&2
+        echo "passes -allowProvisioningUpdates. Build with existing profiles instead (AGENTS.md, docs/release.md)." >&2
+        exit 2
+    fi
     AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$DAYBOOK_ASC_KEY_PATH"
           -authenticationKeyID "$DAYBOOK_ASC_KEY_ID" -authenticationKeyIssuerID "$DAYBOOK_ASC_ISSUER_ID")
 elif (( ASC_SET > 0 )); then

@@ -2,13 +2,14 @@
 
     python3 -I mock_asc.py <request-log.jsonl> <port-file>
 
-Serves the requests asc-testflight.sh makes, records each one (method, path, query, body, and the
+Serves the requests asc-testflight.sh and asc-certificates.sh make, records each one (method, path, query, body, and the
 JWT's header and payload) as a JSON line, and reports processing as "not listed", then PROCESSING,
 then VALID, so the script's polling is exercised. Never talks to Apple.
 """
 import base64
 import json
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -23,6 +24,23 @@ UPLOADED = {
     "2001.2": ("FAILED", "2026-10-24T21:00:00Z"),
     "3001": ("VALID", "2026-01-01T00:00:00Z"),
 }
+
+
+# Development certificates, ages relative to NOW (run-tests.sh passes the same DAYBOOK_NOW): two pages.
+NOW = 1793000000
+
+
+def expires_in(days):
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000+0000", time.gmtime(NOW + days * 86400))
+
+
+CERTIFICATES = [
+    [("cert-fresh", "DEVELOPMENT", "Apple Development: Created via API", "Created via API", expires_in(360)),
+     ("cert-old", "DEVELOPMENT", "Apple Development: Created via API", "Created via API", expires_in(200)),
+     ("cert-person", "DEVELOPMENT", "Apple Development: Vlad Zaharia", "Vlad Zaharia", expires_in(10))],
+    [("cert-old-mac", "MAC_APP_DEVELOPMENT", "Mac Development: Created via API", "Created via API", expires_in(100)),
+     ("cert-dist", "DISTRIBUTION", "Apple Distribution: Created via API", "Created via API", expires_in(5))],
+]
 
 
 def decode_segment(segment):
@@ -79,6 +97,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"data": [{"type": "builds", "id": BUILD_ID, "attributes": {
                     "version": query["filter[version]"][0], "processingState": processing,
                     "usesNonExemptEncryption": False, "expired": False}}]})
+        elif path == "/v1/certificates":
+            page = int(query.get("cursor", ["0"])[0])
+            body = {"data": [{"type": "certificates", "id": c[0], "attributes": {
+                "certificateType": c[1], "name": c[2], "displayName": c[3], "serialNumber": c[0].upper(),
+                "expirationDate": c[4]}} for c in CERTIFICATES[page]], "links": {}}
+            if page + 1 < len(CERTIFICATES):
+                body["links"]["next"] = f"http://{self.headers['Host']}/v1/certificates?cursor={page + 1}&limit=200"
+            self.reply(200, body)
         elif path == f"/v1/builds/{BUILD_ID}/betaBuildLocalizations":
             self.reply(200, {"data": []})
         elif path == "/v1/betaGroups":
@@ -103,6 +129,13 @@ class Handler(BaseHTTPRequestHandler):
                                          "title": "Builds cannot be assigned to this internal group."}]})
         elif path == "/v1/betaAppReviewSubmissions":
             self.reply(201, {"data": {"type": "betaAppReviewSubmissions", "id": "review-1"}})
+        else:
+            self.reply(404, {"errors": [{"status": "404", "code": "NOT_FOUND", "title": "not mocked"}]})
+
+    def do_DELETE(self):
+        entry = self.record()
+        if entry["path"].startswith("/v1/certificates/"):
+            self.reply(204)
         else:
             self.reply(404, {"errors": [{"status": "404", "code": "NOT_FOUND", "title": "not mocked"}]})
 

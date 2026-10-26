@@ -72,15 +72,32 @@ The main runs skip just these tests (`--skip` and `-skip-testing`), and the iPho
 
 Every release job authenticates Xcode with the App Store Connect API key. The key goes to xcodebuild as `-authenticationKeyPath`, `-authenticationKeyID`, and `-authenticationKeyIssuerID`, together with `-allowProvisioningUpdates`. The release jobs never pass `-allowProvisioningDeviceRegistration`, so runners are never registered as devices.
 
+That's the one exception to "nothing but the owner's first-time provisioning passes `-allowProvisioningUpdates`" (AGENTS.md): the release pipeline, authenticated by the key in the approval-gated `release` environment. `build-app.sh` and `build-ios.sh` refuse the key unless they run on GitHub Actions under `release.yml`, so a local build or an agent can't reach that path by setting the variables.
+
 - **Archive** (`build-ios.sh --archive`, `build-app.sh`): automatic signing with Apple Development.
   - A fresh runner has no development certificate, so Xcode creates one through the key. It appears in the account as *Apple Development: Created via API*.
   - Xcode fetches or creates the development profiles for the existing identifiers.
-  - These certificates sign nothing that ships, and revoking old ones is harmless.
+  - These certificates sign nothing that ships, and revoking old ones is harmless: see [Development certificates](#development-certificates).
 - **Export** (`-exportArchive`): the archive is re-signed for distribution with a **cloud-managed** certificate. The private key stays with Apple, so no certificate or `.p12` is exported anywhere.
   - The iPhone export uses Apple Distribution with the App Store profiles.
   - The Mac export uses Developer ID Application with the Developer ID profile that carries the iCloud container.
   - The iPhone export uses `destination: upload`, which sends the build straight to App Store Connect.
 - **Notarization:** `xcrun notarytool submit --key --key-id --issuer --wait` with the same key. Then `xcrun stapler staple` runs, and `spctl` assesses the result.
+
+### Development certificates
+
+Each release run's archives add an *Apple Development: Created via API* certificate to the team. `scripts/asc-certificates.sh` lists them and revokes old ones; it's for the owner, with the Admin key:
+
+```sh
+export DAYBOOK_ASC_KEY_PATH=~/keys/AuthKey_ABC123DEFG.p8 DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID=<issuer uuid>
+scripts/asc-certificates.sh                      # dry run: lists them, with their age; changes nothing
+scripts/asc-certificates.sh --revoke             # revokes the ones older than 30 days (--older-than N)
+```
+
+- It considers only development certificates (Apple, iOS, or Mac Development) named "Created via API". Distribution and Developer ID certificates, and people's own development certificates, are never touched.
+- Age comes from the expiration date (development certificates last a year). The 30-day default keeps the certificate of any release run that might still be going.
+- When: every few months, after a run of releases, or when Certificates, Identifiers & Profiles lists more than a handful, or Xcode reports that the team has reached its certificate limit. Run the dry run first and read the list.
+- Nothing shipped depends on these certificates: TestFlight and Developer ID builds are re-signed for distribution at export.
 
 ### Capabilities and entitlements
 
@@ -332,7 +349,8 @@ xcrun stapler validate /Applications/Daybook.app
 | `no beta group named …` | The message lists the app's groups. Fix `DAYBOOK_TESTFLIGHT_GROUP` or the `testflight_group` input. |
 | Beta App Review submission fails | An external group needs the app's Test Information filled in once in TestFlight. |
 | Build not processed within the timeout | App Store Connect is slow. The build usually finishes later; set What to Test and the group in App Store Connect. |
-| The account fills with "Apple Development: Created via API" certificates | Each fresh runner's archive creates one. Revoke old ones in Certificates, Identifiers & Profiles; nothing shipped depends on them. |
+| The account fills with "Apple Development: Created via API" certificates | Each fresh runner's archive creates one. Run `scripts/asc-certificates.sh`, then `--revoke` ([Development certificates](#development-certificates)); nothing shipped depends on them. |
+| `build-app.sh` or `build-ios.sh`: "The App Store Connect API key is for the release pipeline only" | The `DAYBOOK_ASC_*` variables are set outside `release.yml` on GitHub Actions. Unset them; build with your Xcode account and existing profiles. |
 | The tag was pushed and nothing ran | Check Actions › Release: the run is waiting for approval in `release`. A tag that isn't `vX.Y.Z[-suffix]` fails in `prepare`. |
 | `prepare`: "v1.4.0 points at …, which isn't on main" | The tag is on a commit that isn't merged. Delete the tag (an admin, with the ruleset), merge, and tag the merged commit. |
 

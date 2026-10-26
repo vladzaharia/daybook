@@ -37,7 +37,8 @@
 #                             build authenticates with the key and passes -allowProvisioningUpdates (never
 #                             device registration), so Xcode's cloud-managed signing supplies the
 #                             Developer ID certificate and profile; a Developer ID identity already in a
-#                             keychain is used instead when there is one.
+#                             keychain is used instead when there is one. Refused outside release.yml on
+#                             GitHub Actions (AGENTS.md).
 #   DAYBOOK_DEVELOPER_ID_PROFILE
 #                             UUID of an installed Developer ID profile for local.daybook.app
 #                             (scripts/ci/asc-profile.sh). The export then signs manually with the
@@ -84,6 +85,12 @@ for name in DAYBOOK_ASC_KEY_PATH DAYBOOK_ASC_KEY_ID DAYBOOK_ASC_ISSUER_ID; do
 done
 if (( asc_set > 0 && asc_set < 3 )); then
     echo "Set all of DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, and DAYBOOK_ASC_ISSUER_ID, or none." >&2
+    exit 2
+fi
+# The key brings -allowProvisioningUpdates, which only the release pipeline may pass (AGENTS.md).
+if (( asc_set == 3 )) && [[ "${GITHUB_ACTIONS:-}" != true || "${GITHUB_WORKFLOW_REF:-}" != */.github/workflows/release.yml@* ]]; then
+    echo "The App Store Connect API key is for the release pipeline only (.github/workflows/release.yml), because it" >&2
+    echo "passes -allowProvisioningUpdates. Use your Xcode account and existing profiles instead (AGENTS.md)." >&2
     exit 2
 fi
 
