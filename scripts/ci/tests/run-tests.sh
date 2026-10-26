@@ -13,8 +13,8 @@
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
-#   secrets.sh            setup/cleanup with the API key; on macOS, the .p12 keychain with a stand-in
-#                         security that checks no password reaches a command line
+#   secrets.sh            run/setup/cleanup with the API key; on macOS, the .p12 keychain with a
+#                         stand-in security that checks no password reaches a command line
 #   build-ios.sh          the upload retry, package pinning, and archive calls, with stand-in Xcode tools
 #                         (macOS)
 #   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
@@ -424,6 +424,19 @@ if macos; then
     expect_eq "before building anything" "" "$(xcb ' archive ')"
     build_app -- --ad-hoc || true
     expect_ok "the archive is held to the pinned versions too" grep -q -- '-onlyUsePackageVersionsFromResolvedFile' <<< "$(xcb ' archive ')"
+    expect_ok "--archive-only: the archive step alone" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" -- \
+        --archive-only --marketing-version 1.4.0 --build-number 1057
+    expect_eq "archives with the key, exports nothing" "1 0" \
+        "$(xcb ' archive ' | grep -c -- '-authenticationKeyPath') $(xcb '-exportArchive' | wc -l | tr -d ' ')"
+    expect_ok "--export-only: the export step alone, from that archive" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" \
+        DAYBOOK_DEVELOPER_ID_PROFILE=01234567-89ab-cdef-0123-456789abcdef -- --export-only
+    expect_eq "neither generates, resolves, nor archives" "xcodebuild -exportArchive" \
+        "$(grep -E '^(xcodebuild|xcodegen)' "$work/stub.log" | cut -d' ' -f1-2 | paste -sd '|' -)"
+    expect_ok "and packages the export" test -d "$mac_repo/dist/Daybook.app"
+    rm -rf "$mac_repo/build/macOS/Daybook.xcarchive"
+    expect_fail "--export-only without an archive fails" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --export-only
+    expect_fail "--archive-only is for Release" build_app -- --archive-only --debug
+    expect_fail "one mode at a time" build_app -- --archive-only --export-only
     expect_fail "the API key is refused outside the release pipeline" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${no_pipeline[@]}" --
     expect_eq "before anything runs" "" "$(grep '^xcodebuild' "$work/stub.log" || true)"
     expect_fail "and in another workflow" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${no_pipeline[@]}" GITHUB_ACTIONS=true \
@@ -475,18 +488,24 @@ secrets_env=(RUNNER_TEMP="$work/runner-temp" GITHUB_ENV="$work/github-env" ASC_K
              ASC_KEY_P8_BASE64="$(base64 < "$key" | tr -d '\n')" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log")
 mkdir -p "$work/runner-temp"
 : > "$work/github-env"
-expect_ok "setup writes the key for later steps" env "${secrets_env[@]}" "$ci/secrets.sh" setup
-key_path="$work/runner-temp/daybook-secrets/AuthKey_ABC123DEFG.p8"
-expect_eq "and its path to GITHUB_ENV" "DAYBOOK_ASC_KEY_PATH=$key_path" "$(grep '^DAYBOOK_ASC_KEY_PATH=' "$work/github-env")"
-# shellcheck disable=SC2012 # only the mode column, the same on macOS and Linux
-expect_eq "mode 600 in a 700 directory" "-rw------- drwx------" \
-    "$(ls -ld "$key_path" | cut -c1-10) $(ls -ld "$(dirname "$key_path")" | cut -c1-10)"
+# shellcheck disable=SC2016 # expanded by the inner shell, inside `run`
+seen="$(env "${secrets_env[@]}" "$ci/secrets.sh" run -- bash -c \
+    'printf "%s %s %s\n" "$DAYBOOK_ASC_KEY_ID" "$(ls -ld "$DAYBOOK_ASC_KEY_PATH" | cut -c1-10)" "$(ls -ld "$(dirname "$DAYBOOK_ASC_KEY_PATH")" | cut -c1-10)"; echo "$DAYBOOK_ASC_KEY_PATH" > "'"$work"'/key-path"' 2>/dev/null)"
+expect_eq "run: the command sees the key, mode 600 in a 700 directory" "ABC123DEFG -rw------- drwx------" "$seen"
+expect_ok "named AuthKey_<id>.p8" grep -q '/daybook-secrets/AuthKey_ABC123DEFG.p8$' "$work/key-path"
+expect_ok "and it's gone afterwards" test ! -e "$(cat "$work/key-path")" -a ! -e "$work/runner-temp/daybook-secrets"
+expect_eq "nothing reaches GITHUB_ENV" "" "$(cat "$work/github-env")"
+status=0
+env "${secrets_env[@]}" "$ci/secrets.sh" run -- sh -c 'exit 7' 2>/dev/null || status=$?
+expect_eq "the command's exit status comes through" "7" "$status"
+expect_ok "and the files are still removed" test ! -e "$work/runner-temp/daybook-secrets"
+expect_fail "a key that isn't a .p8 fails" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(printf 'nope' | base64)" "$ci/secrets.sh" run -- true
+expect_ok "leaving nothing behind" test ! -e "$work/runner-temp/daybook-secrets"
+expect_ok "raw PEM is accepted too" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(cat "$key")" "$ci/secrets.sh" run -- true
+expect_ok "setup (for later steps) writes GITHUB_ENV" env "${secrets_env[@]}" "$ci/secrets.sh" setup
+expect_eq "with the key's path" "DAYBOOK_ASC_KEY_PATH=$work/runner-temp/daybook-secrets/AuthKey_ABC123DEFG.p8" "$(grep '^DAYBOOK_ASC_KEY_PATH=' "$work/github-env")"
 expect_ok "cleanup removes it" env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup
 expect_ok "(gone)" test ! -e "$work/runner-temp/daybook-secrets"
-expect_fail "a key that isn't a .p8 fails" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(printf 'nope' | base64)" "$ci/secrets.sh" setup
-env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup 2>/dev/null
-expect_ok "raw PEM is accepted too" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(cat "$key")" "$ci/secrets.sh" setup
-env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup 2>/dev/null
 if macos; then
     # shellcheck disable=SC2016 # a literal $ in the password
     p12_password='pa ss"wo\rd $HOME '"'"'x'
@@ -494,10 +513,9 @@ if macos; then
              STUB_IDENTITY=1)
     : > "$work/stub.log"
     : > "$work/stub.log.args"
-    : > "$work/github-env"
-    expect_ok "setup with the .p12: a keychain with the identity" env "${p12_env[@]}" "$ci/secrets.sh" setup
-    keychain="$(sed -n 's/^DAYBOOK_SIGNING_KEYCHAIN=//p' "$work/github-env")"
-    expect_ok "the keychain exists and the .p12 is gone" test -f "$keychain" -a ! -e "$(dirname "$keychain")/developer-id.p12"
+    # shellcheck disable=SC2016 # expanded by the inner shell, inside `run`
+    expect_ok "run with the .p12: a keychain with the identity" env "${p12_env[@]}" "$ci/secrets.sh" run -- \
+        bash -c 'test -f "$DAYBOOK_SIGNING_KEYCHAIN" && test ! -e "$(dirname "$DAYBOOK_SIGNING_KEYCHAIN")/developer-id.p12"'
     keychain_password="$(jq -r 'select(.[0] == "create-keychain") | .[2]' "$work/stub.log.args")"
     expect_eq "the .p12 password reaches security on stdin, intact" "$p12_password" \
         "$(jq -r 'select(.[0] == "import") | . as $a | ($a | index("-P")) as $i | $a[$i + 1]' "$work/stub.log.args")"
@@ -505,15 +523,13 @@ if macos; then
         "$(grep -cF -- "$keychain_password" "$work/stub.log.args")"
     expect_eq "no password on any command line" "" \
         "$(grep '^security ' "$work/stub.log" | grep -F -e "$keychain_password" -e 'wo\rd' || true)"
-    expect_ok "cleanup" env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup
-    expect_ok "deletes the keychain" grep -q '^security delete-keychain .*daybook-signing.keychain-db' "$work/stub.log"
-    expect_ok "and restores the search list" grep -q '^security list-keychains -d user -s /Users/runner/Library/Keychains/login.keychain-db$' "$work/stub.log"
-    expect_fail "a .p12 without a Developer ID identity fails" env "${p12_env[@]}" STUB_IDENTITY=0 "$ci/secrets.sh" setup
-    expect_fail "a wrong .p12 password fails" env "${p12_env[@]}" STUB_IMPORT_FAILS=1 "$ci/secrets.sh" setup
-    expect_ok "without leaving the .p12" test ! -e "$work/runner-temp/daybook-secrets/developer-id.p12"
-    env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup 2>/dev/null
-    expect_fail "a password with a line break is refused" env "${p12_env[@]}" DEVELOPER_ID_P12_PASSWORD="$(printf 'a\nb')" "$ci/secrets.sh" setup
-    env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup 2>/dev/null
+    expect_ok "the keychain is deleted afterwards" grep -q '^security delete-keychain .*daybook-signing.keychain-db' "$work/stub.log"
+    expect_ok "and the search list restored" grep -q '^security list-keychains -d user -s /Users/runner/Library/Keychains/login.keychain-db$' "$work/stub.log"
+    expect_ok "(nothing left)" test ! -e "$work/runner-temp/daybook-secrets"
+    expect_fail "a .p12 without a Developer ID identity fails" env "${p12_env[@]}" STUB_IDENTITY=0 "$ci/secrets.sh" run -- true
+    expect_fail "a wrong .p12 password fails" env "${p12_env[@]}" STUB_IMPORT_FAILS=1 "$ci/secrets.sh" run -- true
+    expect_ok "(nothing left)" test ! -e "$work/runner-temp/daybook-secrets"
+    expect_fail "a password with a line break is refused" env "${p12_env[@]}" DEVELOPER_ID_P12_PASSWORD="$(printf 'a\nb')" "$ci/secrets.sh" run -- true
 else
     echo "  skip  secrets.sh with a .p12 (macOS only)"
 fi

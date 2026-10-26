@@ -17,7 +17,7 @@ Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A 
 | CI | `mac` | `xcode-27` | `scripts/build-app.sh --debug --ad-hoc` (Release with the `mac_configuration` input), then the bundle is checked for its signature, icon, and MLX `default.metallib` |
 | Release | `prepare` | `ubuntu-24.04` | checks the ref (`scripts/ci/check-ref.sh`: a `v*` tag must point at a commit on `main`), works out the version (`scripts/ci/version.sh`) and when the run was created, and writes release notes and What to Test (`scripts/ci/release-notes.sh`) |
 | Release | `iphone` | `xcode-27`, environment `release` | works out its build number (see [Versions](#versions)), looks for this run's build in App Store Connect, archives `DaybookPhone` with `DaybookPhoneWidgets` (`build-ios.sh --archive`), checks the archive (`check-ios-archive.sh`), exports with `app-store-connect` and uploads it (`build-ios.sh --export upload`), then waits for processing, sets What to Test, and adds the build to the beta group (`asc-testflight.sh`) |
-| Release | `mac` | `xcode-27`, environment `release` | archives and exports with `developer-id` (`build-app.sh`), then notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`) |
+| Release | `mac` | `xcode-27`, environment `release` | works out its build number, fetches the packages, archives (`build-app.sh --archive-only`), exports with `developer-id` (`mac-export.sh`, which runs `build-app.sh --export-only`), then notarizes, staples, and writes the ZIP, a DMG when possible, and `SHA256SUMS.txt` (`package-mac.sh`) |
 | Release | `draft` | `ubuntu-24.04` | tags only, after `mac`: verifies the checksums and creates the GitHub Release as a **draft** with the Mac files (`scripts/ci/github-release.sh draft`). A re-run updates its own draft; it never touches a published release |
 | Release | `publish` | `ubuntu-24.04` | tags only, after `draft` and, when the run releases the iPhone app, after `iphone` succeeded: publishes the draft (`github-release.sh publish`). `draft` and `publish` are the only jobs with `contents: write`, and they hold no Apple secrets |
 
@@ -27,8 +27,7 @@ Hardening:
 - Actions are pinned to commit SHAs, with the version in a comment. Checkouts don't persist credentials.
 - Nothing uses `pull_request_target`.
 - Concurrency groups cancel superseded pull request runs and never cancel a release. CI's group includes the workflow's name, which is "Release" when `release.yml` calls it, so a push to `main` can't queue behind or replace a release's validation.
-- Secrets are environment secrets in `release`. Only jobs that a reviewer approved can read them, and only from `main` or a `v*` tag. Each secret is passed to the one step that needs it.
-- Secrets become files only in `$RUNNER_TEMP/daybook-secrets` (mode 700, files 600). A temporary keychain holds the `.p12`. `scripts/ci/secrets.sh cleanup` deletes both in an `always()` step.
+- Secrets are environment secrets in `release`. Only jobs that a reviewer approved can read them, and only from `main` or a `v*` tag. Each secret is passed only to the steps that need it, and becomes a file only while such a step runs: see [Secrets on the runner](#secrets-on-the-runner).
 - Runners are GitHub-hosted only. The repository's `.github/actionlint.yaml` lists `xcode-27` under actionlint's `self-hosted-runner` key only because actionlint 1.7.12 predates the label. It's GitHub-hosted.
 
 ## Runner and Xcode
@@ -111,6 +110,26 @@ scripts/asc-certificates.sh --revoke             # revokes the ones older than 3
 - **Push is `development` in the files and `production` in what ships.** `DAYBOOK_APS_ENVIRONMENT` in each `Config/Signing.xcconfig` is `development`, which is what Apple Development profiles grant, and archives are signed that way. The exports re-sign with the distribution profile, so TestFlight (App Store profile) and Developer ID builds carry `production` and use CloudKit's **Production** environment, Xcode setting `com.apple.developer.icloud-container-environment` to `Production`. Writing `production` into the files instead fails development signing: "the provisioning profile grants it for the value 'development'". Apple's guidance is the same: keep `development` and let the export re-sign it.
 - Ad hoc and local builds (`build-app.sh --ad-hoc`, `Resources/Daybook-Local.entitlements`, `swift run`), simulator builds, and CI's unsigned builds carry neither CloudKit nor push, create no courier, and need no profile.
 
+### Secrets on the runner
+
+Third-party code runs on the release runners: package manifests, swift-syntax macros, and the compilers' work on MLX, WhisperKit, FluidAudio, swift-transformers, and swift-jinja. So the signing material exists only in the steps that use it:
+
+- Each such step gets the secrets in its environment and runs its command inside `scripts/ci/secrets.sh run -- …`. That writes the API key as `$RUNNER_TEMP/daybook-secrets/AuthKey_<id>.p8` (directory 700, file 600) and, when the step has the `.p12`, creates a temporary keychain with it; runs the command; and deletes both when the command ends, however it ends (including SIGINT and SIGTERM). Nothing reaches `$GITHUB_ENV`, so later steps don't even see the paths.
+- Packages are fetched (`build-ios.sh --resolve`, `build-app.sh --resolve-only`) before any secret is written, so package manifests never run next to one.
+- **The archive steps need the API key while third-party code compiles.** Archiving signs for development with automatic signing, which creates the runner's development certificate and profiles through the key (`-allowProvisioningUpdates`). That's the constraint: an unsigned archive would lose its entitlements at export. The key exists for that step only, and the `.p12` isn't on the runner yet.
+- The Developer ID `.p12` is imported only for the Mac export and the notarize-and-package step, after everything has compiled, and its keychain is deleted at the end of each. Its password and the keychain's reach `security` on standard input, never a command line.
+- The steps that only talk to App Store Connect (looking for an earlier upload, the upload itself, TestFlight) get the key the same way, one command at a time.
+- A final `always()` step runs `secrets.sh cleanup` as a backstop, for a step that was killed before it could clean up.
+
+| Step | API key | Developer ID `.p12` | Compiles third-party code |
+|---|---|---|---|
+| Fetch the packages | | | manifests only |
+| Look for this run's build (iPhone) | yes | | |
+| Archive (iPhone, Mac) | yes | | **yes** |
+| Upload (iPhone), TestFlight (iPhone) | yes | | |
+| Export with Developer ID (Mac) | yes | when configured | |
+| Notarize, staple, package (Mac) | yes | when configured (signs the DMG) | |
+
 ### API key roles
 
 Apple ties each capability to the role of a **team** key, created under App Store Connect › Users and Access › Integrations. The table follows Apple's documentation at the time of writing. The first release run is what confirms it for this team.
@@ -135,7 +154,7 @@ If cloud-managed Developer ID signing isn't permitted for the key, give the Mac 
 2. Export it with its private key from Keychain Access (My Certificates, the certificate › Export, `.p12`) with a strong password.
 3. Store it: `DEVELOPER_ID_P12_PASSWORD='…' scripts/ci/setup-github.sh … --developer-id-p12 path/to/developer-id.p12 --apply`.
 
-`secrets.sh setup` then works in this order:
+In the steps that get it (see [Secrets on the runner](#secrets-on-the-runner)), `secrets.sh` works in this order:
 
 1. It creates a temporary keychain with a random password and imports the `.p12`. Both passwords reach `security` on its standard input (`security -i`), never on a command line where `ps` would show them.
 2. It deletes the `.p12` file.
@@ -143,12 +162,12 @@ If cloud-managed Developer ID signing isn't permitted for the key, give the Mac 
 4. It adds Apple's Developer ID G2 intermediate (downloaded, SHA-256 pinned), because macOS ships only the older intermediate.
 5. It checks that a Developer ID Application identity is present.
 
-Automatic export doesn't work even then: with a team key it still asks for cloud-managed Developer ID signing and fails before it looks for the profile. So the Mac job signs manually:
+Automatic export doesn't work even then: with a team key it still asks for cloud-managed Developer ID signing and fails before it looks for the profile. So the Mac job's export step (`scripts/ci/mac-export.sh`) signs manually when the keychain is there:
 
-1. **Install the Developer ID profile** runs `scripts/ci/asc-profile.sh`. It downloads the newest active, **manually managed** Developer ID (`MAC_APP_DIRECT`) profile for `local.daybook.app` through the API, checks that the profile contains the certificate of the keychain's Developer ID identity, installs it, and sets `DAYBOOK_DEVELOPER_ID_PROFILE` to its UUID. It only reads. Xcode refuses its own managed profiles ("Mac Team Direct Provisioning Profile: …") for a manual export, so the team has a separate one, **"Daybook Developer ID"**, created once through the API on 2026-10-24 with the Developer ID Application (G2) certificate; it expires with that certificate in 2031.
-2. `build-app.sh` sees `DAYBOOK_DEVELOPER_ID_PROFILE` and exports with `signingStyle` manual, the "Developer ID Application" certificate, and that profile, leaving the API key out of the export. The archive step still uses the key for development signing.
+1. It runs `scripts/ci/asc-profile.sh`. It downloads the newest active, **manually managed** Developer ID (`MAC_APP_DIRECT`) profile for `local.daybook.app` through the API, checks that the profile contains the certificate of the keychain's Developer ID identity, installs it, and sets `DAYBOOK_DEVELOPER_ID_PROFILE` to its UUID. It only reads. Xcode refuses its own managed profiles ("Mac Team Direct Provisioning Profile: …") for a manual export, so the team has a separate one, **"Daybook Developer ID"**, created once through the API on 2026-10-24 with the Developer ID Application (G2) certificate; it expires with that certificate in 2031.
+2. `build-app.sh --export-only` sees `DAYBOOK_DEVELOPER_ID_PROFILE` and exports with `signingStyle` manual, the "Developer ID Application" certificate, and that profile, leaving the API key out of the export. The archive step still uses the key for development signing.
 
-If the certificate is replaced, step 1 fails with that message: create a new manually managed Developer ID profile for `local.daybook.app` with the new certificate (Certificates, Identifiers & Profiles, or `POST /v1/profiles` with the Admin key), and export the new certificate's `.p12`. With a local identity, `package-mac.sh` can also sign, notarize, and staple a **DMG**; cloud signing only works inside `-exportArchive`, so a cloud-signed release ships the ZIP alone. The cleanup step deletes the keychain and restores the keychain search list.
+If the certificate is replaced, step 1 fails with that message: create a new manually managed Developer ID profile for `local.daybook.app` with the new certificate (Certificates, Identifiers & Profiles, or `POST /v1/profiles` with the Admin key), and export the new certificate's `.p12`. With a local identity, `package-mac.sh` can also sign, notarize, and staple a **DMG**; cloud signing only works inside `-exportArchive`, so a cloud-signed release ships the ZIP alone. When the step's command ends, `secrets.sh` deletes the keychain and restores the keychain search list.
 
 The iPhone app doesn't need a fallback: cloud-managed Apple Distribution is available to an Admin key.
 

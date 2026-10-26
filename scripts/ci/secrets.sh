@@ -1,6 +1,11 @@
 #!/bin/bash
 # Turns the release secrets into short-lived files on the runner, and removes them afterwards.
 #
+#   scripts/ci/secrets.sh run -- COMMAND [ARGUMENTS...]
+#                                    set up as below, run COMMAND with the outputs in its environment,
+#                                    then clean up, whatever COMMAND's outcome (also on SIGINT/SIGTERM).
+#                                    release.yml wraps each step that needs a secret in this, so the key
+#                                    file and keychain exist only while that step runs.
 #   scripts/ci/secrets.sh setup      write the App Store Connect API key; with a Developer ID .p12,
 #                                    also create a temporary keychain and import it
 #   scripts/ci/secrets.sh cleanup    delete the keychain (restoring the keychain search list) and the
@@ -13,7 +18,8 @@
 #   DEVELOPER_ID_P12_PASSWORD       key exported as .p12, base64-encoded, and its password
 #   DAYBOOK_SECRETS_DIR           where the files go (default $RUNNER_TEMP/daybook-secrets)
 #
-# Outputs (appended to $GITHUB_ENV when it's set, otherwise printed):
+# Outputs (with `run`, exported to COMMAND; with `setup`, appended to $GITHUB_ENV when it's set,
+# otherwise printed):
 #   DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, DAYBOOK_ASC_ISSUER_ID   read by build-app.sh,
 #                                   build-ios.sh, notarize.sh, and asc-testflight.sh
 #   DAYBOOK_SIGNING_KEYCHAIN        the temporary keychain, only when a .p12 was imported
@@ -34,8 +40,11 @@ g2_sha256="f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a"
 fail() { echo "secrets.sh: $*" >&2; exit 1; }
 note() { echo "secrets.sh: $*" >&2; }
 
+in_process=0
 export_env() {
-    if [[ -n "${GITHUB_ENV:-}" ]]; then
+    if (( in_process )); then
+        export "$1=$2"
+    elif [[ -n "${GITHUB_ENV:-}" ]]; then
         printf '%s=%s\n' "$1" "$2" >> "$GITHUB_ENV"
     else
         printf 'export %s=%q\n' "$1" "$2"
@@ -109,8 +118,8 @@ setup() {
     security delete-keychain "$keychain" 2>/dev/null || true
     security_stdin "create-keychain -p $(sec_arg "$password") $(sec_arg "$keychain")" \
         || fail "couldn't create the keychain"
-    # Lock after six hours of inactivity, longer than any release job.
-    security set-keychain-settings -ut 21600 "$keychain"
+    # Lock after two hours of inactivity, longer than any step that uses it; `run` deletes it sooner.
+    security set-keychain-settings -ut 7200 "$keychain"
     security_stdin "unlock-keychain -p $(sec_arg "$password") $(sec_arg "$keychain")" \
         || fail "couldn't unlock the keychain"
     local current=()
@@ -161,8 +170,24 @@ cleanup() {
     fi
 }
 
+run() {
+    [[ "${1-}" == -- ]] && shift
+    (( $# )) || { echo "usage: $0 run -- COMMAND [ARGUMENTS...]" >&2; exit 2; }
+    in_process=1
+    # Leftovers of a step that was killed before it could clean up.
+    cleanup 2>/dev/null
+    trap 'cleanup' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    setup
+    local status=0
+    "$@" || status=$?
+    exit "$status"
+}
+
 case "${1-}" in
+    run) shift; run "$@" ;;
     setup) setup ;;
     cleanup) cleanup ;;
-    *) echo "usage: $0 setup|cleanup" >&2; exit 2 ;;
+    *) echo "usage: $0 run -- COMMAND... | setup | cleanup" >&2; exit 2 ;;
 esac

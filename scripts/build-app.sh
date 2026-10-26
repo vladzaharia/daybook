@@ -16,6 +16,10 @@
 #                                         provisioning"). Without it the script never changes the account.
 #   scripts/build-app.sh --generate-only  just regenerate the Xcode project
 #   scripts/build-app.sh --resolve-only   regenerate it and fetch the packages at Package.resolved's versions
+#   scripts/build-app.sh --archive-only   Release: generate, resolve, and archive, then stop
+#   scripts/build-app.sh --export-only    Release: export the archive --archive-only made, then package dist/.
+#                                         The release pipeline splits the two so that each step gets only
+#                                         the secrets it needs (docs/release.md, "Secrets on the runner").
 #
 # Xcode resolves packages only to the versions in Package.resolved (-onlyUsePackageVersionsFromResolvedFile),
 # and the script fails if resolving would change that file.
@@ -58,6 +62,8 @@ configuration=Release
 signing=""
 generate_only=0
 resolve_only=0
+archive_only=0
+export_only=0
 provisioning=()
 version_settings=()
 
@@ -70,6 +76,8 @@ while (( $# )); do
         --allow-provisioning-updates) provisioning=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration) ;;
         --generate-only) generate_only=1 ;;
         --resolve-only) resolve_only=1 ;;
+        --archive-only) archive_only=1 ;;
+        --export-only) export_only=1 ;;
         --marketing-version) version_settings+=("MARKETING_VERSION=${2-}"); shift ;;
         --build-number) version_settings+=("CURRENT_PROJECT_VERSION=${2-}"); shift ;;
         -h|--help) usage; exit 0 ;;
@@ -94,34 +102,45 @@ if (( asc_set == 3 )) && [[ "${GITHUB_ACTIONS:-}" != true || "${GITHUB_WORKFLOW_
     exit 2
 fi
 
-xcodegen_path="${XCODEGEN:-$(command -v xcodegen || echo /opt/homebrew/bin/xcodegen)}"
-if [[ ! -x "$xcodegen_path" ]]; then
-    echo "XcodeGen is required: brew install xcodegen" >&2
-    exit 1
+if (( archive_only + export_only + resolve_only + generate_only > 1 )); then
+    echo "Choose one of --generate-only, --resolve-only, --archive-only, and --export-only." >&2
+    exit 2
 fi
-if ! xcrun metal --version >/dev/null 2>&1; then
-    echo "The Xcode Metal compiler is required. Run: xcodebuild -downloadComponent MetalToolchain" >&2
-    exit 1
+if (( archive_only || export_only )) && [[ "$configuration" == Debug ]]; then
+    echo "--archive-only and --export-only are for Release builds; drop --debug." >&2
+    exit 2
 fi
 
-echo "Generating $project"
-"$xcodegen_path" generate --spec "$spec_dir/project.yml" --project "$spec_dir" --quiet
-# Pin the package graph to the repository's resolved versions, as `swift build` does.
-resolved_dir="$project/project.xcworkspace/xcshareddata/swiftpm"
-mkdir -p "$resolved_dir"
-/bin/cp -f "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"
-if (( generate_only )); then exit 0; fi
-
-# Fetch the packages, held to Package.resolved, and make sure Xcode didn't pick other versions.
 pinned=(-onlyUsePackageVersionsFromResolvedFile)
-xcodebuild -resolvePackageDependencies -project "$project" -scheme Daybook \
-    -clonedSourcePackagesDirPath "$packages_dir" "${pinned[@]}"
-if ! cmp -s "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"; then
-    echo "Xcode resolved other package versions than Package.resolved pins:" >&2
-    diff -u "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved" >&2 || true
-    exit 1
+if (( ! export_only )); then
+    xcodegen_path="${XCODEGEN:-$(command -v xcodegen || echo /opt/homebrew/bin/xcodegen)}"
+    if [[ ! -x "$xcodegen_path" ]]; then
+        echo "XcodeGen is required: brew install xcodegen" >&2
+        exit 1
+    fi
+    if ! xcrun metal --version >/dev/null 2>&1; then
+        echo "The Xcode Metal compiler is required. Run: xcodebuild -downloadComponent MetalToolchain" >&2
+        exit 1
+    fi
+
+    echo "Generating $project"
+    "$xcodegen_path" generate --spec "$spec_dir/project.yml" --project "$spec_dir" --quiet
+    # Pin the package graph to the repository's resolved versions, as `swift build` does.
+    resolved_dir="$project/project.xcworkspace/xcshareddata/swiftpm"
+    mkdir -p "$resolved_dir"
+    /bin/cp -f "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"
+    if (( generate_only )); then exit 0; fi
+
+    # Fetch the packages, held to Package.resolved, and make sure Xcode didn't pick other versions.
+    xcodebuild -resolvePackageDependencies -project "$project" -scheme Daybook \
+        -clonedSourcePackagesDirPath "$packages_dir" "${pinned[@]}"
+    if ! cmp -s "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved"; then
+        echo "Xcode resolved other package versions than Package.resolved pins:" >&2
+        diff -u "$repo_dir/Package.resolved" "$resolved_dir/Package.resolved" >&2 || true
+        exit 1
+    fi
+    if (( resolve_only )); then exit 0; fi
 fi
-if (( resolve_only )); then exit 0; fi
 
 team="${DAYBOOK_TEAM_ID:-}"
 local_config="$spec_dir/Config/Signing.local.xcconfig"
@@ -158,9 +177,17 @@ if [[ "$configuration" == Debug ]]; then
     built="$derived_dir/Build/Products/Debug/Daybook.app"
 else
     archive="$work_dir/Daybook.xcarchive"
-    /bin/rm -rf "${archive:?}"
-    xcodebuild "${common[@]}" -destination 'generic/platform=macOS' -archivePath "$archive" \
-        ${provisioning[@]+"${provisioning[@]}"} archive "${settings[@]}"
+    if (( export_only )); then
+        [[ -d "$archive" ]] || { echo "No archive at $archive: run --archive-only first." >&2; exit 1; }
+    else
+        /bin/rm -rf "${archive:?}"
+        xcodebuild "${common[@]}" -destination 'generic/platform=macOS' -archivePath "$archive" \
+            ${provisioning[@]+"${provisioning[@]}"} archive "${settings[@]}"
+    fi
+    if (( archive_only )); then
+        echo "Archive: $archive"
+        exit 0
+    fi
     if [[ "$signing" == signed ]]; then
         # Re-sign for distribution outside the App Store with Developer ID and its provisioning profile,
         # which carries the iCloud container. Xcode picks (or, with -allowProvisioningUpdates, creates) it.
