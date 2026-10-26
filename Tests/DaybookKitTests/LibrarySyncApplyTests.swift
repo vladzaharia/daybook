@@ -137,4 +137,23 @@ final class LibrarySyncApplyTests: XCTestCase {
         let back = try await mac.restoreFromTrash(fresh)
         XCTAssertEqual(back.id, fresh)
     }
+
+    func testAnotherDevicesProcessingStatusIsKeptAsSyncedAndNotPublishedBack() async throws {
+        let mac = try await library("Mac"), phone = try await library("Phone", phone: true)
+        let id = mac.newMeeting(title: "Interview")
+        await mac.flush()
+        await sync(mac); await sync(phone)
+        for status in [MeetingStatus.transcribing, .summarizing, .ready] {
+            mac.update(id) { $0.status = status }
+            await mac.flush()
+            await sync(mac)
+            let applied = await sync(phone)
+            XCTAssertEqual(phone.meeting(id)?.status, status)
+            XCTAssertEqual(applied?.published, 0, "the phone doesn't publish the Mac's status back")
+            if let meeting = phone.meeting(id), case .processing = ProcessingStatus(meeting) { XCTFail("nothing runs on the phone") }
+            let again = await sync(mac)
+            XCTAssertEqual(again?.published, 0)
+            XCTAssertFalse(mac.meeting(id)?.revisions.contains { $0.field.hasPrefix("sync:") } ?? true, "no status conflicts")
+        }
+    }
 }

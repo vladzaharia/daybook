@@ -635,8 +635,9 @@ public final class LibraryController: ObservableObject {
                     let rebased = MeetingMerge.merge(base: snapshot.first { $0.id == remote.id }, local: local, remote: remote)
                     merged = rebased.meeting; mergeWarnings += rebased.warnings
                 }
-                // Remote process status describes another device, not a job running here.
-                if [.recording, .transcribing, .summarizing].contains(merged.status), merged.id != active { merged.status = merged.summary == nil ? .imported : .ready }
+                // A status such as transcribing describes the device doing the work. It's kept as synced: rewriting it
+                // here would publish it back and conflict with that device's next status. Views read processing
+                // from `ProcessingStatus`, which never shows another device's work as running here.
                 if merged != local {
                     if let index = meetings.firstIndex(where: { $0.id == merged.id }) { meetings[index] = merged } else { meetings.append(merged) }
                     persist(merged)
