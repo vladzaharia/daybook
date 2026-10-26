@@ -189,6 +189,35 @@ public struct SoundcoreSnapshot: Codable, Equatable {
     }
 }
 
+/// What a Soundcore is recording, as one device knows it: live while connected, otherwise as last
+/// confirmed. `SoundcoreConnection.recordingState` publishes it (for the device page, the iPhone's
+/// Live Activity, and multipoint).
+public struct SoundcoreRecordingState: Equatable, Sendable {
+    /// The recorder said it's recording.
+    public var isRecording: Bool
+    /// The recording it names as in progress: recording, or paused on firmware that keeps the file
+    /// open. Nil when it names none.
+    public var activeRecordingID: UInt32?
+    /// When that recording started, by the recorder's clock corrected by its measured offset.
+    public var startedAt: Date?
+    /// When the recorder last confirmed this.
+    public var asOf: Date
+    /// Connected now: live. Otherwise remembered, and shown with its time.
+    public var isLive: Bool
+    /// This device asked the recorder to start this recording.
+    public var startedHere: Bool
+
+    public init(isRecording: Bool, activeRecordingID: UInt32? = nil, startedAt: Date? = nil, asOf: Date, isLive: Bool,
+                startedHere: Bool = false) {
+        self.isRecording = isRecording
+        self.activeRecordingID = activeRecordingID
+        self.startedAt = startedAt
+        self.asOf = asOf
+        self.isLive = isLive
+        self.startedHere = startedHere
+    }
+}
+
 extension SoundcoreDeviceInfo {
     /// The generic status the device page shows.
     public func status(at date: Date, activeRecordingStart: Date?) -> DeviceStatus {

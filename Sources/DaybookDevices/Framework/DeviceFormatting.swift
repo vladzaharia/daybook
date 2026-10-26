@@ -171,6 +171,11 @@ public enum DeviceDateFormat {
     }
 
     /// "Updated just now" or "as of 2:14 PM".
+    /// "Recording · as of 10:07 AM": a recording last seen while connected, for a recorder that isn't now.
+    public static func recordingAsOf(_ date: Date) -> String {
+        "Recording · as of \(date.formatted(date: .omitted, time: .shortened))"
+    }
+
     public static func updated(_ date: Date, now: Date = Date()) -> String {
         now.timeIntervalSince(date) < 90 ? "Updated just now" : "as of \(date.formatted(date: .omitted, time: .shortened))"
     }

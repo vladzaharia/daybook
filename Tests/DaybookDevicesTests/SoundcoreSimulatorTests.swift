@@ -580,6 +580,52 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(rig.connection.problem?.id, SoundcoreIssue.didNotConfirm.rawValue)
     }
 
+    func testARecordingSeenBeforeTheLinkWentShowsWithItsTimeUntilItExpires() async throws {
+        let device = recorder(count: 1)
+        let rig = rig(device, configure: { $0.lastKnownRecording = .milliseconds(1_500) })
+        try await connectThroughSetup(rig)
+        rig.connection.startRecording()
+        try await waitUntil("recording") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == true }
+        let id = try XCTUnwrap(device.activeRecording?.id)
+        XCTAssertEqual(rig.connection.recordingState?.isLive, true)
+        XCTAssertEqual(rig.connection.recordingState?.startedHere, true, "Daybook started it")
+
+        // Let go (as the idle release does): the recorder keeps recording, and the page says so with its time.
+        rig.connection.disconnect()
+        let status = try XCTUnwrap(rig.connection.status)
+        XCTAssertEqual(status.isRecording, true)
+        XCTAssertEqual(status.recordingStartedAt, SoundcoreRecording(id: id, size: 0).date)
+        let known = try XCTUnwrap(rig.connection.recordingState)
+        XCTAssertFalse(known.isLive)
+        XCTAssertEqual(known.activeRecordingID, id)
+        XCTAssertTrue(known.startedHere)
+        XCTAssertEqual(DeviceDateFormat.recordingAsOf(status.updatedAt),
+                       "Recording · as of \(status.updatedAt.formatted(date: .omitted, time: .shortened))")
+        XCTAssertEqual(rig.session.split.inProgress?.id, String(id), "still Recording now, never offered")
+        XCTAssertTrue(rig.connection.details.contains { $0.label == "Recording" && $0.value.hasPrefix("Recording, as of") })
+
+        // A relaunch remembers it too.
+        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
+        environment.soundcoreTransport = { InertSoundcoreTransport() }
+        environment.soundcoreTiming.lastKnownRecording = .milliseconds(1_500)
+        var configured = rig.configured
+        configured.importsAutomatically = false
+        let relaunched = SoundcoreConnection(device: configured, environment: environment)
+        relaunched.activate()
+        XCTAssertEqual(relaunched.status?.isRecording, true)
+        XCTAssertEqual(relaunched.recordingState?.activeRecordingID, id)
+        XCTAssertEqual(relaunched.recordings.first { $0.id == String(id) }?.isInProgress, true)
+
+        // Nobody can see it stop: after a while it's unknown again, and the page redraws.
+        var redrawn = false
+        let watching = rig.connection.objectWillChange.sink { redrawn = true }
+        try await waitUntil("the remembered recording to expire", timeout: 4) { rig.connection.recordingState == nil }
+        try await waitUntil("the page to redraw") { redrawn && rig.session.split.inProgress == nil }
+        XCTAssertNil(rig.connection.status?.isRecording)
+        XCTAssertNil(relaunched.status?.isRecording)
+        watching.cancel()
+    }
+
     func testTheRecordersButtonListsItAgainOnStartAndOnStop() async throws {
         let rig = rig(recorder(count: 1))
         try await connectThroughSetup(rig)

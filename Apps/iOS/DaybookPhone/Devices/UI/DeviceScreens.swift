@@ -519,6 +519,7 @@ enum PhoneDeviceCopy {
         case .unavailable: return session.problem.map { problem(for: $0.id)?.title ?? $0.title } ?? "Bluetooth isn't available"
         case .notSetUp: return "Not set up"
         case .notConnected:
+            if let status = session.status, status.isRecording == true { return DeviceDateFormat.recordingAsOf(status.updatedAt) }
             if let last = session.direct?.lastConnectedAt { return DeviceDateFormat.lastSeen(last) }
             return session.files != nil ? "Watching a folder" : "Not connected"
         }

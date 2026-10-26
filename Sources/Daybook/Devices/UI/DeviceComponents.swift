@@ -286,6 +286,7 @@ extension DeviceSession {
         case .unavailable: return problem?.title ?? "Not available"
         case .notSetUp: return "Not set up"
         case .notConnected:
+            if let status, status.isRecording == true { return DeviceDateFormat.recordingAsOf(status.updatedAt) }
             if let last = primary?.lastConnectedAt { return "Last connected \(DeviceDateFormat.lastSeen(last))" }
             return "Not connected"
         }
