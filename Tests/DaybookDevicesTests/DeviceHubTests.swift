@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookDevices
@@ -28,14 +29,6 @@ final class DeviceHubTests: XCTestCase {
         var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: root.appendingPathComponent("Staging"))
         environment.soundcoreTransport = { XCTFail("No Bluetooth in hub tests"); return InertSoundcoreTransport() }
         return environment
-    }
-
-    private func waitUntil(_ what: String, timeout: TimeInterval = 15, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { XCTFail("Timed out waiting for \(what)"); throw CancellationError() }
-            try await Task.sleep(for: .milliseconds(20))
-        }
     }
 
     func testSetupJoinsTheSidebarOnlyOnceAMethodIsSetUp() throws {
