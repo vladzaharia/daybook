@@ -80,6 +80,17 @@ public final class RecorderHandoff: ObservableObject {
         public var poll: Duration = .milliseconds(100)
         /// How often the owner updates the requester while it finishes.
         public var progressInterval: TimeInterval = 5
+        /// How often a recording handed over mid-recording looks for its conversation's recording ending.
+        public var followCheck: Duration = .seconds(30)
+        /// How long after the handoff it's watched at all.
+        public var followLimit: TimeInterval = 12 * 3_600
+        /// A recording device whose presence is older than this is out of reach: its recording is left
+        /// to the person.
+        public var followStaleness: TimeInterval = 30 * 60
+        /// How soon a stop that couldn't reach the recorder is tried again.
+        public var followRetry: TimeInterval = 60
+        /// Reaching the recorder to stop it.
+        public var remote = RecorderRemoteControl.Timing()
 
         public init() {}
     }
@@ -163,6 +174,12 @@ public final class RecorderHandoff: ObservableObject {
     private var subscriptions: Set<AnyCancellable> = []
     private var metadataCheckScheduled = false
     private var sending: Task<Void, Never>?
+    /// Recordings handed over mid-recording that stop when their conversation's recording ends
+    /// ("A recording handed over mid-recording", below), kept across relaunches.
+    private(set) var followed: [FollowedRecording] = []
+    private var followTask: Task<Void, Never>?
+    private var isCheckingFollowed = false
+    private var followCheckScheduled = false
 
     public init(library: LibraryController, devices: DeviceHub, deviceClass: SyncDeviceClass, defaults: UserDefaults = .standard,
                 link: Link = .none, timing: Timing = Timing(), deviceName: String? = nil) {
@@ -177,6 +194,9 @@ public final class RecorderHandoff: ObservableObject {
         // `@Published` announces before the value changes: look once it has.
         library.$metadata.dropFirst().sink { [weak self] _ in self?.scheduleMetadataCheck() }.store(in: &subscriptions)
         scheduleMetadataCheck()
+        // A conversation whose recording a recorder here follows may arrive, with that recording ended.
+        library.$meetings.dropFirst().sink { [weak self] _ in self?.scheduleFollowCheck() }.store(in: &subscriptions)
+        loadFollowed()
     }
 
     /// This device, as handoffs and ownership name it.
@@ -336,7 +356,8 @@ public final class RecorderHandoff: ObservableObject {
                      requestID: release.requestID,
                      pending: release.pendingImports.map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
                      imported: release.importedRecordingIDs,
-                     inProgress: release.recordingInProgress.map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) })
+                     inProgress: release.recordingInProgress.map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) },
+                     inProgressStopsWithConversation: release.recordingInProgress?.stopsWithConversation == true)
         default:
             break
         }
@@ -480,7 +501,7 @@ public final class RecorderHandoff: ObservableObject {
         let pending = session.takeWaitingImports()
         let imported = Self.recentImports(session)
         let recording = session.isLinked ? session.status?.isRecording : nil
-        let inProgress = recordingInProgress(session, kind: kind, serial: serial)
+        let (inProgress, stopsWithConversation) = recordingInProgress(session, kind: kind, serial: serial)
         // Recording the new owner first means this device's connection won't reach for it again.
         library.claimRecorder(kind: kind, serial: serial, deviceClass: Self.syncClass(newOwner.deviceClass),
                               by: ProcessingRequest.Device(id: newOwner.syncID, name: newOwner.name))
@@ -496,7 +517,10 @@ public final class RecorderHandoff: ObservableObject {
             pendingImports: pending.map { RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
             importedRecordingIDs: imported, recorderIsRecording: recording,
             requestedAt: existing?.id == requestID ? existing?.requestedAt ?? Date() : Date())
-        record.recordingInProgress = inProgress.map { RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) }
+        record.recordingInProgress = inProgress.map {
+            RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true,
+                                                stopsWithConversation: stopsWithConversation ? true : nil)
+        }
         library.saveRecorderHandoff(record)
         releasing[id] = nil
         releaseTasks[id] = nil
@@ -506,7 +530,10 @@ public final class RecorderHandoff: ObservableObject {
                 requestID: requestID, kind: kind, serial: serial, newOwner: newOwner,
                 pendingImports: pending.map { LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
                 importedRecordingIDs: imported, recorderIsRecording: recording,
-                recordingInProgress: inProgress.map { LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) })
+                recordingInProgress: inProgress.map {
+                    LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true,
+                                      stopsWithConversation: stopsWithConversation ? true : nil)
+                })
             send(.recorderRelease(release), to: peer.linkID)
         }
     }
@@ -526,7 +553,7 @@ public final class RecorderHandoff: ObservableObject {
             let pending = session.takeWaitingImports()
             let imported = Self.recentImports(session)
             let kind = session.kind.id
-            let inProgress = self.recordingInProgress(session, kind: kind, serial: serial)
+            let (inProgress, stopsWithConversation) = self.recordingInProgress(session, kind: kind, serial: serial)
             session.disconnect(.direct)
             session.endHandoffHold()
             self.releasing[id] = nil
@@ -538,14 +565,20 @@ public final class RecorderHandoff: ObservableObject {
                 requesterID: owner.ownerID, requesterName: owner.ownerName, requesterClass: owner.ownerClass, phase: .released,
                 pendingImports: pending.map { RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
                 importedRecordingIDs: imported)
-            record.recordingInProgress = inProgress.map { RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) }
+            record.recordingInProgress = inProgress.map {
+                RecorderHandoffRecord.PendingImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true,
+                                                    stopsWithConversation: stopsWithConversation ? true : nil)
+            }
             self.library.saveRecorderHandoff(record)
             if let peer = self.peer(syncID: owner.ownerID) {
                 self.send(.recorderRelease(LinkRecorderRelease(
                     requestID: requestID, kind: kind, serial: serial, newOwner: newOwner,
                     pendingImports: pending.map { LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
                     importedRecordingIDs: imported,
-                    recordingInProgress: inProgress.map { LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) })),
+                    recordingInProgress: inProgress.map {
+                        LinkHandoffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true,
+                                          stopsWithConversation: stopsWithConversation ? true : nil)
+                    })),
                           to: peer.linkID)
             }
         }
@@ -557,7 +590,7 @@ public final class RecorderHandoff: ObservableObject {
     /// waiting, and connect.
     private func takeOver(kind: String, serial: String, from ownerName: String?, requestID: UUID?,
                           pending: [DeviceHandedOffImport], imported: [String], inProgress: DeviceHandedOffImport? = nil,
-                          previousOwner: RecorderOwnership? = nil) {
+                          inProgressStopsWithConversation: Bool = false, previousOwner: RecorderOwnership? = nil) {
         if let requestID {
             // The record is done with either way (it may arrive through sync after the link's release).
             library.clearRecorderHandoff(kind: kind, serial: serial, onlyID: requestID)
@@ -572,8 +605,12 @@ public final class RecorderHandoff: ObservableObject {
         guard let session = session(kind: kind, serial: serial) else { return }
         if library.recorderOwner(kind: kind, serial: serial)?.ownerID != thisDevice.id { claim(kind: kind, serial: serial) } else { applyOwnership() }
         if let before, before.ownerID != thisDevice.id { rememberHome(id, from: before) }
-        // The recording it's making waits here too, for the conversation that asked for it.
+        // The recording it's making waits here too, for the conversation that asked for it, and stops
+        // when that conversation's recording does if Daybook started it for that recording.
         session.adoptHandedOffImports(pending + (inProgress.map { [$0] } ?? []), alreadyImported: imported)
+        if inProgressStopsWithConversation, let inProgress, let conversation = inProgress.attachTo {
+            follow(FollowedRecording(kind: kind, serial: serial, recordingID: inProgress.recordingID, conversationID: conversation, since: Date()))
+        }
         if session.isLinked {
             if states[id]?.isPending == true { states[id] = .done(at: Date()); clearLater(id) }
         } else {
@@ -669,6 +706,7 @@ public final class RecorderHandoff: ObservableObject {
                              pending: (record.pendingImports ?? []).map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: $0.isAutomatic) },
                              imported: record.importedRecordingIDs ?? [],
                              inProgress: record.recordingInProgress.map { DeviceHandedOffImport(recordingID: $0.recordingID, attachTo: $0.attachTo, isAutomatic: true) },
+                             inProgressStopsWithConversation: record.recordingInProgress?.stopsWithConversation == true,
                              previousOwner: RecorderOwnership(kind: record.kind, serial: record.serial, ownerID: record.ownerID,
                                                               ownerName: record.ownerName, ownerClass: deviceClass == .mac ? .phone : .mac))
                 case .refused:
@@ -763,16 +801,20 @@ public final class RecorderHandoff: ObservableObject {
 
     /// The recording the recorder is making as it's let go (live, or as last seen), and the
     /// conversation waiting for it: one whose recording asked the recorder to record too and hasn't
-    /// got its recording yet. The new owner imports it there once it's finished.
-    private func recordingInProgress(_ session: DeviceSession, kind: String, serial: String) -> DeviceHandedOffImport? {
-        guard let id = session.split.inProgress?.id else { return nil }
-        let waiting = library.meetings.first { meeting in
-            meeting.companions?.contains { link in
-                link.deviceKind == kind && (link.deviceSerial ?? serial) == serial && link.recordingID == id
-                    && link.trackID == nil && link.expectsRecording
-            } == true
+    /// got its recording yet. The new owner imports it there once it's finished. `stopsWithConversation`:
+    /// Daybook started it for that conversation's recording, which is still going here, so the new
+    /// owner stops it when that recording ends.
+    private func recordingInProgress(_ session: DeviceSession, kind: String, serial: String)
+        -> (recording: DeviceHandedOffImport?, stopsWithConversation: Bool) {
+        guard let id = session.split.inProgress?.id else { return (nil, false) }
+        func waits(_ link: CompanionRecording) -> Bool {
+            link.deviceKind == kind && (link.deviceSerial ?? serial) == serial && link.recordingID == id
+                && link.trackID == nil && link.expectsRecording
         }
-        return DeviceHandedOffImport(recordingID: id, attachTo: waiting?.id, isAutomatic: true)
+        let waiting = library.meetings.first { $0.companions?.contains(where: waits) == true }
+        let link = waiting?.companions?.first(where: waits)
+        return (DeviceHandedOffImport(recordingID: id, attachTo: waiting?.id, isAutomatic: true),
+                link.map { $0.startedByDaybook && $0.macEndedAt == nil } ?? false)
     }
 
     /// Recordings imported here in the last day: they may not have reached the new owner yet.
@@ -816,6 +858,166 @@ public final class RecorderHandoff: ObservableObject {
 
     private func noteChosenHere(_ id: String) { defaults.set(Date(), forKey: Self.chosenKey(id)) }
     private func chosenHereAt(_ id: String) -> Date? { defaults.object(forKey: Self.chosenKey(id)) as? Date }
+}
+
+// MARK: A recording handed over mid-recording
+
+extension RecorderHandoff {
+    /// A recording the recorder was making when it was handed to this device, which Daybook started
+    /// for another device's recording of a conversation that hadn't ended (`stopsWithConversation`).
+    /// Over the link, that device stops it through this one (`RecorderRemoteControl`); out of reach, it
+    /// can't, so this device stops it when that recording ends: when that device's presence in the
+    /// sync folder, which names the conversation while it records (`SyncDeviceActivity`), no longer
+    /// does, or when the conversation arrives with its link to the recorder ended (`macEndedAt`). Only
+    /// that recording is paused, never one the person started since, and it's imported into the
+    /// conversation. docs/devices.md, "Handing a recorder over".
+    struct FollowedRecording: Codable, Equatable, Sendable {
+        var kind: String
+        var serial: String
+        var recordingID: String
+        var conversationID: UUID
+        /// When the recorder was handed here, by this device's clock.
+        var since: Date
+        /// The device recording the conversation, once its presence said so, and that presence
+        /// record's time (by that device's clock, as `knownDevices` lists it).
+        var recordingDevice: String?
+        var seenRecordingAt: Date?
+        /// When this device last tried to stop it.
+        var triedAt: Date?
+
+        var recorderID: String { RecorderOwnership.id(kind: kind, serial: serial) }
+    }
+
+    private enum FollowVerdict {
+        case keep(FollowedRecording)
+        case stop(FollowedRecording)
+        case drop
+    }
+
+    private static let followedKey = "recorderHandoff.following"
+
+    func follow(_ recording: FollowedRecording) {
+        followed.removeAll { $0.recorderID == recording.recorderID }
+        followed.append(recording)
+        saveFollowed()
+        startFollowing()
+    }
+
+    private func loadFollowed() {
+        guard let data = defaults.data(forKey: Self.followedKey),
+              let saved = try? JSONDecoder().decode([FollowedRecording].self, from: data) else { return }
+        followed = saved.filter { Date().timeIntervalSince($0.since) <= timing.followLimit }
+        startFollowing()
+    }
+
+    private func saveFollowed() {
+        if followed.isEmpty { defaults.removeObject(forKey: Self.followedKey) }
+        else if let data = try? JSONEncoder().encode(followed) { defaults.set(data, forKey: Self.followedKey) }
+    }
+
+    /// Looks every `followCheck` while anything is followed, and whenever the library changes.
+    private func startFollowing() {
+        guard followTask == nil, !followed.isEmpty else { return }
+        let interval = timing.followCheck
+        followTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard await self?.checkFollowed() == true else { break }
+                try? await Task.sleep(for: interval)
+            }
+            self?.followTask = nil
+        }
+    }
+
+    private func scheduleFollowCheck() {
+        guard !followed.isEmpty, !followCheckScheduled else { return }
+        followCheckScheduled = true
+        Task { @MainActor [weak self] in
+            self?.followCheckScheduled = false
+            await self?.checkFollowed()
+        }
+    }
+
+    /// Looks at each followed recording once, stopping those whose conversation's recording ended.
+    /// Returns whether any is still followed.
+    @discardableResult
+    func checkFollowed(now: Date = Date()) async -> Bool {
+        guard !followed.isEmpty, !isCheckingFollowed else { return !followed.isEmpty }
+        isCheckingFollowed = true
+        defer { isCheckingFollowed = false }
+        let devices = await library.sync?.knownDevices() ?? []
+        for recorderID in followed.map(\.recorderID) {
+            guard let recording = followed.first(where: { $0.recorderID == recorderID }) else { continue }
+            switch followVerdict(recording, devices: devices, now: now) {
+            case .keep(let updated):
+                replaceFollowed(recorderID, with: updated)
+            case .drop:
+                replaceFollowed(recorderID, with: nil)
+            case .stop(var updated):
+                if let tried = updated.triedAt, now.timeIntervalSince(tried) < timing.followRetry {
+                    replaceFollowed(recorderID, with: updated)
+                    continue
+                }
+                updated.triedAt = now
+                replaceFollowed(recorderID, with: updated)
+                let target = LinkRecorderTarget(kind: updated.kind, serial: updated.serial, recordingID: updated.recordingID)
+                let request = LinkRecordRequest(action: .stop, conversationID: updated.conversationID, recorder: target)
+                let outcome = await RecorderRemoteControl.answer(request, target: target, sessions: self.devices.sessions, timing: timing.remote)
+                switch outcome {
+                case .refused(let refusal) where refusal.reason == .recorderUnavailable:
+                    // Not nearby, or it didn't confirm: tried again later, while it's followed.
+                    break
+                default:
+                    // Stopped (and imported into the conversation), or no longer recording that recording.
+                    replaceFollowed(recorderID, with: nil)
+                }
+            }
+        }
+        return !followed.isEmpty
+    }
+
+    private func replaceFollowed(_ recorderID: String, with recording: FollowedRecording?) {
+        let before = followed
+        followed.removeAll { $0.recorderID == recorderID }
+        if let recording { followed.append(recording) }
+        if followed != before { saveFollowed() }
+    }
+
+    private func followVerdict(_ recording: FollowedRecording, devices: [KnownSyncDevice], now: Date) -> FollowVerdict {
+        guard now.timeIntervalSince(recording.since) <= timing.followLimit,
+              let session = session(kind: recording.kind, serial: recording.serial), isManagedHere(session) else { return .drop }
+        // It finished another way (the person stopped it): it imports as handed over; nothing to stop.
+        if let direct = session.direct, direct.state.isConnected, direct.isInventoryCurrent,
+           direct.recordings.contains(where: { $0.id == recording.recordingID && !$0.isInProgress }) { return .drop }
+        var updated = recording
+        // The conversation, once it's here: only a recording Daybook started is stopped, and its link
+        // says when that recording ended.
+        let link = library.meeting(recording.conversationID)?.companions?.first { link in
+            link.deviceKind == recording.kind && (link.deviceSerial ?? recording.serial) == recording.serial
+                && link.recordingID == recording.recordingID
+        }
+        if let link {
+            guard link.startedByDaybook else { return .drop }
+            if link.macEndedAt != nil { return .stop(updated) }
+        }
+        // The device recording it, by its presence: recording now…
+        if let device = devices.first(where: { device in
+               guard !device.isCurrentDevice, let activity = device.activity else { return false }
+               return activity.recordingConversationID == recording.conversationID && activity.expiresAt > now
+           }), let seen = device.lastSeen {
+            updated.recordingDevice = device.id
+            updated.seenRecordingAt = max(seen, updated.seenRecordingAt ?? seen)
+            return .keep(updated)
+        }
+        // …or, in a later record of that device's, no longer. Until it has been seen recording, a
+        // record that doesn't name the conversation says nothing (it may predate it, or come from a
+        // Daybook that doesn't say what it records).
+        guard let id = updated.recordingDevice, let seenAt = updated.seenRecordingAt,
+              let device = devices.first(where: { $0.id == id }), let lastSeen = device.lastSeen else { return .keep(updated) }
+        if lastSeen >= seenAt, device.activity?.recordingConversationID != recording.conversationID { return .stop(updated) }
+        // It said it was recording, too long ago to believe: its recording is left to the person.
+        if now.timeIntervalSince(lastSeen) > timing.followStaleness { return .drop }
+        return .keep(updated)
+    }
 }
 
 #if DEBUG

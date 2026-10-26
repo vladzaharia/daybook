@@ -87,8 +87,10 @@ own) is left alone; Daybook's recording has ended, so it's imported. A recorder 
 `failed` but turns out to be recording, live, since Daybook's command is stopped too. One that a
 phone now manages (handed over mid-recording) is stopped through that phone, by the recording's ID;
 when it can't be, the line names it: "Couldn't reach Soundcore Work to stop it. Stop it on Alex's
-iPhone." Only links made by this recording are acted on; a link an interrupted session left behind
-never stops a recorder.
+iPhone." That phone, which can't be told, stops it itself once it sees this Mac's recording end (its
+presence, or the conversation arriving through sync; docs/devices.md, "Handing a recorder over").
+Only links made by this recording are acted on; a link an interrupted session left behind never stops
+a recorder.
 
 Quitting waits up to 5 s for these stops to leave; going to sleep stops the recording (as before)
 and holds sleep back, through the power notification, for up to 5 s while they do. After a crash,

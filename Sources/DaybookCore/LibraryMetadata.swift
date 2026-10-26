@@ -95,9 +95,14 @@ public struct RecorderHandoffRecord: Codable, Equatable, Sendable {
         public var recordingID: String
         public var attachTo: UUID?
         public var isAutomatic: Bool
+        /// For `recordingInProgress`: Daybook started it for `attachTo`'s recording, which is still going,
+        /// so the new owner stops it when that recording ends. Optional, so earlier records decode and
+        /// earlier versions ignore it.
+        public var stopsWithConversation: Bool?
 
-        public init(recordingID: String, attachTo: UUID? = nil, isAutomatic: Bool = false) {
+        public init(recordingID: String, attachTo: UUID? = nil, isAutomatic: Bool = false, stopsWithConversation: Bool? = nil) {
             self.recordingID = recordingID; self.attachTo = attachTo; self.isAutomatic = isAutomatic
+            self.stopsWithConversation = stopsWithConversation
         }
     }
 

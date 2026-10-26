@@ -195,11 +195,16 @@ public struct LinkHandoffImport: Codable, Sendable, Equatable {
     public var attachTo: UUID?
     /// Queued by automatic import rather than by the person.
     public var isAutomatic: Bool
+    /// For a recording in progress: Daybook started it for `attachTo`'s recording, which is still going,
+    /// so it stops when that recording ends (the new owner watches for that). Optional; older builds
+    /// neither send nor read it, and without it the recording is left to the person.
+    public var stopsWithConversation: Bool?
 
-    public init(recordingID: String, attachTo: UUID? = nil, isAutomatic: Bool = false) {
+    public init(recordingID: String, attachTo: UUID? = nil, isAutomatic: Bool = false, stopsWithConversation: Bool? = nil) {
         self.recordingID = recordingID
         self.attachTo = attachTo
         self.isAutomatic = isAutomatic
+        self.stopsWithConversation = stopsWithConversation
     }
 
     public init(from decoder: Decoder) throws {
@@ -207,6 +212,7 @@ public struct LinkHandoffImport: Codable, Sendable, Equatable {
         recordingID = try c.decode(String.self, forKey: .recordingID)
         attachTo = try c.decodeIfPresent(UUID.self, forKey: .attachTo)
         isAutomatic = try c.decodeIfPresent(Bool.self, forKey: .isAutomatic) ?? false
+        stopsWithConversation = try? c.decodeIfPresent(Bool.self, forKey: .stopsWithConversation)
     }
 }
 

@@ -179,7 +179,7 @@ can copy the tags, but it can't complete TLS without the key.
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
 | `recorder.handoff.reply` | `LinkRecorderHandoffReply` | both | accepted (what it finishes first, time left) or refused with a reason; repeated as progress |
-| `recorder.release` | `LinkRecorderRelease` | both | the old owner let go: imports that were waiting, recordings it imported recently |
+| `recorder.release` | `LinkRecorderRelease` | both | the old owner let go: imports that were waiting, recordings it imported recently, the recording in progress and the conversation waiting for it (with whether it stops when that conversation's recording does; optional) |
 | `ping` / `pong` | sequence, interval | both | presence |
 | `clock.request` / `clock.reply` | t1 / t1 t2 t3 | both | NTP-style samples |
 | `unpair`, `goodbye` | | both | |
