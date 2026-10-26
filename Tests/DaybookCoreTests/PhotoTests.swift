@@ -39,6 +39,21 @@ final class PhotoTests: XCTestCase {
 
     // MARK: Storage
 
+    func testDamagedStoredPhotoDoesNotSuppressAHealthyReimport() async throws {
+        let store = try MeetingStore(rootURL: library)
+        var meeting = Meeting(title: "Photo recovery")
+        let original = try source("original.png")
+        let first = try await store.storePhoto(from: original, in: meeting, capturedAt: Date(), capturedAtSource: .added)
+        meeting.addPhoto(first)
+        let damagedURL = try await store.photoURL(for: first, in: meeting.id)
+        try Data("damaged".utf8).write(to: damagedURL)
+        let recovered = try await store.storePhoto(from: original, in: meeting, capturedAt: Date(), capturedAtSource: .added)
+        let recoveredURL = try await store.photoURL(for: recovered, in: meeting.id)
+        XCTAssertNotEqual(recovered.id, first.id)
+        XCTAssertEqual(try Data(contentsOf: recoveredURL), try Data(contentsOf: original))
+        XCTAssertEqual(try Data(contentsOf: damagedURL), Data("damaged".utf8), "Retain the damaged artifact for recovery history")
+    }
+
     func testPhotoOriginalIsStoredAsIsAndSurvivesAStaleSnapshotTrashAndRestore() async throws {
         let store = try MeetingStore(rootURL: library)
         var meeting = Meeting(title: "Whiteboard review")

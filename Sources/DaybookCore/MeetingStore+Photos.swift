@@ -70,7 +70,8 @@ extension MeetingStore {
         let digest = try AudioDigest.sha256(fileURL: staged)
         if let existing = (meeting.photos ?? []).first(where: { $0.sha256 == digest }),
            let url = try? LocalFiles.relativeURL(existing.relativePath, in: directory),
-           fm.fileExists(atPath: url.path) {
+           (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+           (try? AudioDigest.sha256(fileURL: url)) == digest {
             return existing
         }
         let relativePath = MeetingPhoto.relativePath(id: id, extension: format.fileExtension)
