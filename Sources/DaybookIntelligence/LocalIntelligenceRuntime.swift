@@ -11,6 +11,10 @@ import Foundation
 /// releases every other model; loading any other model releases exclusive ones. That keeps today's
 /// behaviour: speech and speaker models share memory, the language model has it to itself. A system
 /// model (Apple Foundation Models) lives outside Daybook's memory: it neither releases nor is released.
+///
+/// Models Daybook holds itself are released once nothing has used them for `idleUnloadDelay`, and at
+/// once when the system warns that memory is short (after the job using them, if one is running), so
+/// an always-running menu-bar app doesn't keep a 16–34 GB language model resident.
 public actor LocalIntelligenceRuntime {
     public let modelsDirectory: URL
     public let store: ModelStore
@@ -24,6 +28,15 @@ public actor LocalIntelligenceRuntime {
     private let fetcher: any ModelArtifactFetcher
     private var busy = false
     private var loaded: [ModelRole: Loaded] = [:]
+    /// How long loaded models stay after the last operation before they're released; the next
+    /// operation loads them again.
+    public private(set) var idleUnloadDelay: Duration = .seconds(120)
+    /// Bumped when an operation starts, so an idle release scheduled before it stands down.
+    private var activity = 0
+    private var idleRelease: Task<Void, Never>?
+    /// Memory ran short while an operation held the models: release them when it ends.
+    private var releaseWhenIdle = false
+    private let memoryPressure: DispatchSourceMemoryPressure
 
     private struct Loaded {
         let key: ModelInstallKey
@@ -43,6 +56,18 @@ public actor LocalIntelligenceRuntime {
         self.builtIn = builtIn
         self.fetcher = fetcher ?? HubSnapshotFetcher()
         self.catalog = Self.makeCatalog(builtIn: builtIn, user: UserModelManifest(url: modelsDirectory.appendingPathComponent("UserModels.json")))
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .global(qos: .utility))
+        memoryPressure = source
+        source.setEventHandler { [weak self] in Task { await self?.memoryPressureRaised() } }
+        source.resume()
+    }
+
+    deinit { memoryPressure.cancel() }
+
+    /// How long models stay loaded once nothing uses them.
+    public func setIdleUnloadDelay(_ delay: Duration) {
+        idleUnloadDelay = delay
+        if !busy { scheduleIdleRelease() }
     }
 
     private var userManifest: UserModelManifest { UserModelManifest(url: modelsDirectory.appendingPathComponent("UserModels.json")) }
@@ -113,7 +138,7 @@ public actor LocalIntelligenceRuntime {
     /// Downloads a variant's newest revision (or the revision `modelID` names with "@"), beside any
     /// revision already installed. Downloads resume; every file is verified before it counts.
     public func download(modelID: String, progress: @escaping IntelligenceProgressHandler = { _ in }) async throws {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         let reference = ModelReference(modelID)
         guard let model = catalog.model(reference.id) else { throw LocalIntelligenceError.unknownModel(modelID) }
         let availability = model.availability(engines: engines)
@@ -131,7 +156,7 @@ public actor LocalIntelligenceRuntime {
     /// Removes every revision of a variant and its partial download. The selection fallback
     /// (`ModelSelections.removing`) is the caller's.
     public func remove(modelID: String) async throws {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         let key = catalog.model(modelID)?.key ?? ModelReference(modelID).id
         guard catalog.model(modelID) != nil || key.contains("/") else { throw LocalIntelligenceError.unknownModel(modelID) }
         for (role, entry) in loaded where entry.key.variantKey == key { await release(role) }
@@ -139,9 +164,18 @@ public actor LocalIntelligenceRuntime {
     }
 
     public func unload() async throws {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         for role in Array(loaded.keys) { await release(role) }
     }
+
+    /// The system warned that memory is short: models Daybook holds are released now, or as soon as
+    /// the operation using them ends. System models (Apple Vision, Foundation Models) stay.
+    func memoryPressureRaised() {
+        if busy { releaseWhenIdle = true } else { releaseResidentModels() }
+    }
+
+    /// Whether a model Daybook holds itself is loaded (tests).
+    var holdsResidentModels: Bool { loaded.values.contains { $0.residency != .system } }
 
     /// Removes revisions newer ones replaced, keeping those `protecting` references resolve to
     /// (selections, queued jobs), pinned ones, and loaded ones.
@@ -238,7 +272,7 @@ public actor LocalIntelligenceRuntime {
     /// `language` (a BCP-47 code) reaches transcribers that take a hint; nil detects it.
     public func transcribe(url: URL, model: ModelReference, glossary: [String] = [], language: String?,
                            progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> RecognitionResult {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         let (loaded, provenance) = try await use(model, for: .transcription, message: "Loading speech model locally", progress: progress)
         guard let transcriber = loaded as? any Transcribing else {
             throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "transcription")
@@ -250,7 +284,7 @@ public actor LocalIntelligenceRuntime {
 
     public func diarize(url: URL, model: ModelReference, options: SpeakerAnalysisOptions = .init(),
                         progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> SpeakerAnalysis {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         let (loaded, provenance) = try await use(model, for: .diarization, message: nil, progress: progress)
         guard let diarizer = loaded as? any Diarizing else {
             throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "speaker detection")
@@ -262,7 +296,7 @@ public actor LocalIntelligenceRuntime {
 
     public func embedVoices(url: URL, analysis: SpeakerAnalysis, model: ModelReference,
                             progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> SpeakerAnalysis {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         let (loaded, provenance) = try await use(model, for: .speakerEmbedding, message: nil, progress: progress)
         guard let embedder = loaded as? any EmbeddingVoices else {
             throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "voice profiles")
@@ -285,7 +319,7 @@ public actor LocalIntelligenceRuntime {
                           model: ModelReference, templateInstructions: String? = nil, highlightEvidence: String? = nil,
                           photos: [PhotoEvidence],
                           progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> GeneratedMeetingNotes {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         let (loaded, provenance) = try await use(model, for: .summarization, message: "Loading language model locally", progress: progress)
         guard let summarizer = loaded as? any Summarizing else {
             throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "summaries")
@@ -305,7 +339,7 @@ public actor LocalIntelligenceRuntime {
     public func performSmallTasks(transcript: String, notes: String, template: MeetingKind = .auto, glossary: [String] = [],
                                   model: ModelReference,
                                   progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> SmallTaskResult {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         let (loaded, provenance) = try await use(model, for: .smallTasks, message: nil, progress: progress)
         guard let worker = loaded as? any PerformingSmallTasks else {
             throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "titles")
@@ -321,7 +355,7 @@ public actor LocalIntelligenceRuntime {
     /// or a vision-language model for captions. One result per request, in order.
     public func describeImages(_ requests: [ImageDescriptionRequest], model: ModelReference,
                                progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> [ImageDescription] {
-        try begin(); defer { busy = false }
+        try begin(); defer { finish() }
         let (loaded, provenance) = try await use(model, for: .imageDescription, message: "Loading photo model locally", progress: progress)
         guard let describer = loaded as? any DescribingImages else {
             throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "photos")
@@ -392,5 +426,45 @@ public actor LocalIntelligenceRuntime {
         try Task.checkCancellation()
         guard !busy else { throw LocalIntelligenceError.busy }
         busy = true
+        activity &+= 1
+        idleRelease?.cancel(); idleRelease = nil
+    }
+
+    /// An operation ended: release now if memory ran short meanwhile, otherwise once idle.
+    private func finish() {
+        busy = false
+        if releaseWhenIdle {
+            releaseWhenIdle = false
+            releaseResidentModels()
+        } else {
+            scheduleIdleRelease()
+        }
+    }
+
+    private func scheduleIdleRelease() {
+        idleRelease?.cancel(); idleRelease = nil
+        guard holdsResidentModels else { return }
+        let generation = activity, delay = idleUnloadDelay
+        idleRelease = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            await self?.releaseIfIdle(since: generation)
+        }
+    }
+
+    private func releaseIfIdle(since generation: Int) {
+        guard !busy, activity == generation else { return }
+        releaseResidentModels()
+    }
+
+    /// Releases every model Daybook holds itself, at once: the entries leave `loaded` before any
+    /// await, so an operation starting meanwhile loads afresh. Their leases end right after.
+    private func releaseResidentModels() {
+        idleRelease?.cancel(); idleRelease = nil
+        let resident = loaded.filter { $0.value.residency != .system }
+        guard !resident.isEmpty else { return }
+        for role in resident.keys { loaded[role] = nil }
+        for entry in resident.values { entry.model.unload() }
+        let leases = resident.values.map(\.lease), store = store
+        Task { for lease in leases { await store.endLease(lease) } }
     }
 }
