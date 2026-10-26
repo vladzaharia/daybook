@@ -322,6 +322,27 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(ExportFiles.fileName("  ...  "), "Conversation")
     }
 
+    // MARK: Copy
+
+    private final class PasteboardRecorder: LocalPasteboardWriting {
+        var writes: [(items: [[String: Any]], options: [UIPasteboard.OptionsKey: Any])] = []
+        func setItems(_ items: [[String: Any]], options: [UIPasteboard.OptionsKey: Any]) { writes.append((items, options)) }
+    }
+
+    func testCopiedTextStaysOnThisIPhone() {
+        let recorder = PasteboardRecorder()
+        LocalPasteboard.copy("We agreed on Friday.", to: recorder)
+        XCTAssertEqual(recorder.writes.count, 1)
+        XCTAssertEqual(recorder.writes.first?.options[.localOnly] as? Bool, true, "never Universal Clipboard")
+        XCTAssertNil(recorder.writes.first?.options[.expirationDate])
+        XCTAssertEqual(recorder.writes.first?.items.first?["public.utf8-plain-text"] as? String, "We agreed on Friday.")
+
+        let pasteboard = UIPasteboard.withUniqueName()
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        LocalPasteboard.copy("Ship it", to: pasteboard)
+        XCTAssertEqual(pasteboard.string, "Ship it")
+    }
+
     // MARK: The session across folds
 
     func testANewNoteIsAConversationWithoutAudioInThePlaceBeingViewed() async throws {

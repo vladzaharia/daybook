@@ -1,6 +1,8 @@
 import DaybookKit
 import Foundation
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 /// Marks what changed between two versions word by word: removed words struck through in magenta,
 /// inserted words washed in mint. Whitespace stays with the word before it, so the text reads
@@ -202,6 +204,21 @@ enum ExportFiles {
         return cleaned.isEmpty ? "Conversation" : String(cleaned.prefix(120))
     }
 }
+
+/// Copy for conversation content: it stays on this iPhone (`.localOnly`) rather than going to
+/// Universal Clipboard on nearby devices signed in to the same Apple Account.
+enum LocalPasteboard {
+    static func copy(_ text: String, to pasteboard: some LocalPasteboardWriting = UIPasteboard.general) {
+        pasteboard.setItems([[UTType.utf8PlainText.identifier: text]], options: [.localOnly: true])
+    }
+}
+
+/// What copying needs of a pasteboard, so tests can watch it.
+protocol LocalPasteboardWriting {
+    func setItems(_ items: [[String: Any]], options: [UIPasteboard.OptionsKey: Any])
+}
+
+extension UIPasteboard: LocalPasteboardWriting {}
 
 /// Marks every match of the library search on the page and in the transcript.
 enum FindHighlight {

@@ -85,7 +85,7 @@ struct ConversationMoreMenu: View {
         Button { session.sheet = .importPhotos(meeting.id) } label: { Label("Add Photos…", systemImage: "photo.badge.plus") }
         ExportMenu(meeting: meeting)
         if meeting.summary != nil {
-            Button { UIPasteboard.general.string = MeetingExport.summaryMarkdown(meeting) } label: {
+            Button { LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting)) } label: {
                 Label("Copy Summary", systemImage: "doc.on.doc")
             }
         }
