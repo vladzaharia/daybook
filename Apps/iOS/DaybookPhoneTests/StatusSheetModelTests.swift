@@ -52,6 +52,14 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(recording.text, "Recording · 80%")
         XCTAssertEqual(recording.tone, .recording, "the red dot: recording right now")
 
+        // Too narrow for all of it, the line keeps what matters instead of cutting the end off.
+        XCTAssertEqual(connected.shortText, "80% · 2 new", "a battery level and new recordings say it's connected")
+        XCTAssertEqual(line(recorder { $0.batteryCharging = true; $0.newCount = 1 }).shortText, "80%, charging · 1 new")
+        XCTAssertEqual(line(recorder { $0.isRecording = true; $0.newCount = 2 }).text, "Recording · 80% · 2 new")
+        XCTAssertEqual(line(recorder { $0.isRecording = true; $0.newCount = 2 }).shortText, "Recording · 80%")
+        XCTAssertNil(recording.shortText, "nothing to drop")
+        XCTAssertNil(line(recorder { $0.batteryLevel = nil }).shortText, "Connected alone stays")
+
         let importing = line(recorder { $0.importing = .init(position: 1, total: 3, fraction: 0.25) })
         XCTAssertEqual(importing.text, "Importing 1 of 3")
         XCTAssertEqual(importing.tone, .working)

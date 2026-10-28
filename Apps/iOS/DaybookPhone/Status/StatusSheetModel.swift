@@ -194,10 +194,15 @@ enum StatusSheetModel {
         if let problem = recorder.problem, !recorder.isLinked { return line(problem, .attention) }
         switch recorder.state {
         case .connected where recorder.isDirect || recorder.isLinked:
-            var parts = [recorder.isRecording ? "Recording" : "Connected"]
-            if let level = recorder.batteryLevel { parts.append(recorder.batteryCharging ? "\(level)%, charging" : "\(level)%") }
-            if recorder.newCount > 0 { parts.append("\(recorder.newCount) new") }
-            return line(parts.joined(separator: " · "), recorder.isRecording ? .recording : .linked)
+            let state = recorder.isRecording ? "Recording" : "Connected"
+            let battery = recorder.batteryLevel.map { recorder.batteryCharging ? "\($0)%, charging" : "\($0)%" }
+            let new = recorder.newCount > 0 ? "\(recorder.newCount) new" : nil
+            let parts = [state, battery, new].compactMap { $0 }
+            // Narrow (the notebook's panel), it keeps what matters: a battery level or new recordings
+            // already say it's connected; while recording, the word and the battery.
+            let short = recorder.isRecording ? [state, battery].compactMap { $0 } : [battery, new].compactMap { $0 }
+            return line(parts.joined(separator: " · "), recorder.isRecording ? .recording : .linked,
+                        short: short.isEmpty || short == parts ? nil : short.joined(separator: " · "))
         case .connected:
             return line(recorder.newCount > 0 ? "\(recorder.newCount) new in its folder" : "Watching its folder", .calm)
         case .searching, .connecting, .reconnecting:
