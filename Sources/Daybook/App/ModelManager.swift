@@ -333,9 +333,12 @@ struct ModelManagerSnapshot {
     }
 
     private func summary(_ preset: ModelPreset?, keys: [String], recommended: ModelPreset, current: Bool) -> ModelPresetSummary {
-        ModelPresetSummary(preset: preset, isRecommended: preset == recommended, isCurrent: current, keys: keys,
-                           names: keys.map { key in catalog.model(key).map { ModelSize.shortName($0, in: catalog) } ?? catalog.name(for: key) },
-                           bytes: ModelSize.bytes(keys, in: catalog), memoryGB: ModelSize.recommendedMemoryGB(keys, in: catalog))
+        // A model with two roles (Community-1 finds speakers and makes voice profiles) is listed once.
+        var seen = Set<String>()
+        let keys = keys.filter { seen.insert($0).inserted }
+        return ModelPresetSummary(preset: preset, isRecommended: preset == recommended, isCurrent: current, keys: keys,
+                                  names: keys.map { key in catalog.model(key).map { ModelSize.shortName($0, in: catalog) } ?? catalog.name(for: key) },
+                                  bytes: ModelSize.bytes(keys, in: catalog), memoryGB: ModelSize.recommendedMemoryGB(keys, in: catalog))
     }
 
     // MARK: Storage

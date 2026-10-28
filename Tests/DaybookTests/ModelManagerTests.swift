@@ -206,6 +206,27 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(snapshot.presets.last?.keys, ["whisp/big", "os/default"])
     }
 
+    func testAModelWithTwoRolesIsListedOnceInItsPreset() {
+        let manifest = ModelManifest(
+            families: [
+                ModelFamilyEntry(id: "duet", name: "Duet", engine: "duetEngine", roles: [.diarization, .speakerEmbedding], license: Self.mit, variants: [
+                    ModelVariantEntry(id: "v1", name: "Duet", revisions: [Self.revision("d1", repository: "x/duet", bytes: 30_000_000)])
+                ])
+            ],
+            presets: [
+                ModelPresetEntry(id: "quick", speakerQuality: "fast",
+                                 choices: .init(roles: ["diarization": ["duet/v1"], "speakerEmbedding": ["duet/v1"]]))
+            ])
+        let engines = [ModelEngineDescriptor(id: "duetEngine", name: "Duet", version: 1, runtime: "Duet 1.0",
+                                             roles: [.diarization, .speakerEmbedding], platforms: [.macOS])]
+        let snapshot = ModelManagerSnapshot(catalog: ModelCatalog(builtIn: manifest, user: nil), engines: engines, appVersion: nil,
+                                            platform: .macOS, tier: .standard, installed: [], selections: ModelSelections([:]))
+        let quick = snapshot.presets.first { $0.preset == .quick }
+        XCTAssertEqual(quick?.names, ["Duet"], "One model finding speakers and making voice profiles is named once")
+        XCTAssertEqual(quick?.keys, ["duet/v1"])
+        XCTAssertEqual(quick?.bytes, 30_000_000)
+    }
+
     func testPresetsOnTheAppStateReadAsCustomOnceAModelChanges() throws {
         let state = AppState(libraryURL: try library(), defaults: defaults())
         ModelPreset.quick.apply(to: state)
