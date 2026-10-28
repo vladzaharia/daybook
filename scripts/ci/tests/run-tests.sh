@@ -449,7 +449,8 @@ if macos; then
     cp "$ci/../build-app.sh" "$mac_repo/scripts/"
     cp "$ci/../../Package.resolved" "$mac_repo/"
     : > "$mac_repo/Apps/macOS/project.yml"
-    # build_app [VAR=value...] -- ARGS: build-app.sh with only the given DAYBOOK_* variables.
+    # build_app [VAR=value...] -- ARGS: build-app.sh with only the given DAYBOOK_* and GitHub workflow variables (a run inside
+    # release.yml must not look like the release pipeline to the tests that say otherwise).
     build_app() {
         local vars=()
         while [[ "$1" != -- ]]; do vars+=("$1"); shift; done
@@ -457,7 +458,7 @@ if macos; then
         : > "$work/stub.log"
         env -u DAYBOOK_TEAM_ID -u DAYBOOK_ASC_KEY_PATH -u DAYBOOK_ASC_KEY_ID -u DAYBOOK_ASC_ISSUER_ID \
             -u DAYBOOK_DEVELOPER_ID_PROFILE -u DAYBOOK_NOTARY_PROFILE -u DAYBOOK_MAC_DERIVED_DATA \
-            -u DAYBOOK_REHEARSAL_BUNDLE_ID -u DAYBOOK_SANDBOX \
+            -u DAYBOOK_REHEARSAL_BUNDLE_ID -u DAYBOOK_SANDBOX -u GITHUB_ACTIONS -u GITHUB_WORKFLOW_REF \
             PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" XCODEGEN="$stubs/xcodegen" ${vars[@]+"${vars[@]}"} \
             "$mac_repo/scripts/build-app.sh" "$@" > "$work/build-app.out" 2>&1
     }
@@ -620,6 +621,7 @@ if macos; then
         shift
         : > "$work/stub.log"
         env -u DAYBOOK_TEAM_ID -u DAYBOOK_ASC_KEY_PATH -u DAYBOOK_ASC_KEY_ID -u DAYBOOK_ASC_ISSUER_ID -u DAYBOOK_IOS_DERIVED_DATA \
+            -u GITHUB_ACTIONS -u GITHUB_WORKFLOW_REF \
             PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" XCODEGEN="$stubs/xcodegen" ${vars[@]+"${vars[@]}"} \
             "$ios_repo/scripts/build-ios.sh" "$@" > "$work/build-ios.out" 2>&1
     }
