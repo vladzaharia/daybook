@@ -92,8 +92,9 @@ extension LibraryController {
 }
 
 extension ProcessingRequest.Device {
-    /// This device's name: the Mac's computer name, or the iPhone's. Looked up once.
-    @MainActor public static let currentName: String = {
+    /// This device's name: the Mac's computer name, or the iPhone's. Looked up once; a demo launch
+    /// sets it before anything reads it, so captures never show the real name.
+    @MainActor public static var currentName: String = {
         #if os(macOS)
         return Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         #elseif canImport(UIKit)

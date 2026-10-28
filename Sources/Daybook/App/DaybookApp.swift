@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookKit
 import SwiftUI
 
 @main
@@ -25,14 +26,19 @@ enum DaybookEntry {
             let code = await CaptureProbe.run(arguments: CommandLine.arguments)
             Darwin.exit(code)
         }
+        if let name = LaunchOptions.deviceName { ProcessingRequest.Device.currentName = name }
         #endif
         DaybookApp.main()
     }
 }
 
 /// `--library <path>` opens a separate library with its own preferences, for demos and UI checks
-/// that must not touch the everyday library.
+/// that must not touch the everyday library. With it, a debug build's `--device-name <name>` is this
+/// Mac's name everywhere Daybook shows or sends it (Add iPhone, photos, sync), for screenshots.
 enum LaunchOptions {
+    #if DEBUG
+    static let deviceName: String? = libraryURL == nil ? nil : value(after: "--device-name")
+    #endif
     static let libraryURL: URL? = value(after: "--library").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
     static let defaults: UserDefaults = libraryURL == nil ? .standard : UserDefaults(suiteName: "local.daybook.app.alternate-library") ?? .standard
     static func value(after flag: String) -> String? {

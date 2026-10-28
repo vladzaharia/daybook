@@ -58,7 +58,7 @@ enum PhotoDemo {
                                   TimedNote(time: 440, text: "Packaging sample by Friday")]
             meeting.status = .ready
         }
-        let origin = PhotoOrigin(kind: PhotoOrigin.macKind, name: Host.current().localizedName)
+        let origin = PhotoOrigin(kind: PhotoOrigin.macKind, name: ProcessingRequest.Device.currentName)
         let shots: [(TimeInterval, String, Data?)] = [
             (30, "IMG_2041.HEIC", jpeg(board(["SPRING LAUNCH", "Marketing  +10%", "Events  −10%", "Launch: May 12"]))),
             (250, "IMG_2042.HEIC", jpeg(board(["HIRING PLAN", "2 designers", "1 recruiter", "before summer"], tint: 0.93))),

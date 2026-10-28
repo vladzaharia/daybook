@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 
 extension AppState {
     /// This Mac, as the device that added a photo.
-    var photoOrigin: PhotoOrigin { PhotoOrigin(kind: PhotoOrigin.macKind, name: Host.current().localizedName) }
+    var photoOrigin: PhotoOrigin { PhotoOrigin(kind: PhotoOrigin.macKind, name: ProcessingRequest.Device.currentName) }
 
     /// The photo-caption model a job uses: the chosen one when it's on this Mac and isn't Apple Vision,
     /// which reads every photo anyway. Nil leaves captions to Vision.
