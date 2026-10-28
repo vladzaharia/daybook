@@ -36,7 +36,7 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.32.3"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7", traits: []),
         // Hub: the model store's downloads. Tokenizers: MLX's tokenizer and chat templates (MLXTokenizerAdapter).
-        .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.1.6")
+        .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.3.5")
     ],
     targets: [
         .target(name: "DaybookCore"),
