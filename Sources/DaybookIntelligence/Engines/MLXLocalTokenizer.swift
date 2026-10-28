@@ -9,7 +9,7 @@ import Tokenizers
 /// Hugging Face client those bring.
 struct MLXLocalTokenizerLoader: MLXLMCommon.TokenizerLoader {
     func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
-        let upstream = try await Tokenizers.AutoTokenizer.from(modelFolder: directory, hubApi: HubApi(useOfflineMode: true))
+        let upstream = try await Tokenizers.AutoTokenizer.from(modelFolder: directory, hubApi: HubApi(cache: nil, useOfflineMode: true))
         return MLXLocalTokenizer(upstream)
     }
 }

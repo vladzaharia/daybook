@@ -12,15 +12,18 @@ public protocol ModelArtifactFetcher: Sendable {
 }
 
 /// The download mechanism Daybook has always used: swift-transformers' `HubApi.snapshot`, pinned
-/// to the artifact's commit and limited to exactly the manifest's files. HubApi keeps
-/// `.incomplete` files and per-file metadata in the directory, so an interrupted download resumes.
+/// to the artifact's commit and limited to exactly the manifest's files. HubApi keeps per-file
+/// metadata in the directory, so an interrupted download resumes with the files it hasn't finished;
+/// since 1.2 (swift-huggingface's client), a file cut off partway starts again.
 public struct HubSnapshotFetcher: ModelArtifactFetcher {
     public init() {}
 
     public func fetch(_ artifact: ModelArtifact, into directory: URL,
                       progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
-        // An empty token keeps HubApi from reading credentials from the environment or disk.
-        let hub = HubApi(downloadBase: directory, hfToken: "", useOfflineMode: false)
+        // An empty token keeps HubApi from reading credentials from the environment or disk. No cache: by default
+        // every file would also be kept in the shared Hugging Face cache (~/.cache/huggingface/hub), out of reach
+        // of Settings › Models, which removes only Daybook's copy.
+        let hub = HubApi(downloadBase: directory, cache: nil, hfToken: "", useOfflineMode: false)
         let folder = try await hub.snapshot(from: artifact.repository, revision: artifact.revision,
                                             matching: artifact.files.map { Self.literalGlob($0.path) }) {
             progress($0.fractionCompleted)
