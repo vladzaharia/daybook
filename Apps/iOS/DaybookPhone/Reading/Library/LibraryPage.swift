@@ -51,7 +51,8 @@ struct LibraryPage: View {
                 }
             }
             .toolbar { toolbar }
-            .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+            // A bar, not an inset: the list's edge effect then runs under Record and the status sheet.
+            .safeAreaBar(edge: .bottom, spacing: 0) { bottomBar }
             .environment(\.editMode, .constant(session.isSelecting ? .active : .inactive))
             .sheet(isPresented: $showingSettings) { SettingsScreen() }
             .alert(naming.map { if case .rename = $0 { return "Rename Folder" } else { return "New Folder" } } ?? "",
@@ -128,6 +129,8 @@ struct LibraryPage: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // Hard, so rows don't read through the glass at the thumb; the soft one leaves them legible.
+        .scrollEdgeEffectStyle(.hard, for: .bottom)
         .paperBackground()
         .contextMenu(forSelectionType: UUID.self) { ids in
             RowMenu(library: library, ids: Array(ids), trash: { session.confirmingTrash = $0 })
