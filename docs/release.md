@@ -250,7 +250,7 @@ In order, by the owner or their delegate:
    ```
 
    Add `--developer-id-p12 …` for the fallback; the password comes from `$DEVELOPER_ID_P12_PASSWORD` or a prompt. Delete the local `.p8` and `.p12` copies afterwards, or keep them only in a password manager.
-7. **The CloudKit courier** (pending; before the first release that includes it). The apps now ask for CloudKit and push, so a signed export fails until a and b are done, and the courier stays off in TestFlight and Developer ID builds until c is.
+7. **The CloudKit courier** (done: a and b before 0.3.0, c on 2026-10-28; d with the first install of 0.4.1). The apps ask for CloudKit and push, so a signed export fails until a and b are done, and the courier stays off in TestFlight and Developer ID builds until c is.
 
    a. **Capabilities on both App IDs.** developer.apple.com › Account › Certificates, IDs & Profiles › Identifiers:
       - Open **`local.daybook.app`**. Under Capabilities, tick **Push Notifications**. For **iCloud**, choose **Include CloudKit support** (not "Compatible with Xcode 5"), then click **Edit** beside iCloud and check that **`iCloud.local.daybook`** is selected. Click **Save**, then **Confirm** in "Modify App Capabilities".
