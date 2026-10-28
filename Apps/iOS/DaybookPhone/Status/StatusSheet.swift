@@ -206,7 +206,7 @@ struct StatusSheetView: View {
                     }
                 }
         }
-        .sheet(isPresented: $showingPairing) { PairingSheet() }
+        .pairingSheet(isPresented: $showingPairing)
         .sheet(isPresented: $showingAddDevice) {
             AddDeviceSheet { id in
                 showingAddDevice = false

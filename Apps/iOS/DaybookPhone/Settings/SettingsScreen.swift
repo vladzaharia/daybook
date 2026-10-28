@@ -73,7 +73,7 @@ struct SettingsScreen: View {
                 case .acknowledgements: AcknowledgementsScreen()
                 }
             }
-            .sheet(isPresented: $showingPairing) { PairingSheet() }
+            .pairingSheet(isPresented: $showingPairing)
             .sheet(isPresented: $showingAddDevice) {
                 AddDeviceSheet { id in
                     showingAddDevice = false

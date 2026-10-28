@@ -112,12 +112,56 @@ struct MacDetailScreen: View {
     }
 }
 
+extension View {
+    /// Pair with Your Mac: a sheet in the hand. Open, a sheet would be a card across the crease (as
+    /// the status panel avoids, docs/iphone.md), so pairing takes the display as two pages instead.
+    func pairingSheet(isPresented: Binding<Bool>) -> some View {
+        modifier(PairingPresentation(isPresented: isPresented))
+    }
+}
+
+private struct PairingPresentation: ViewModifier {
+    @Binding var isPresented: Bool
+    @Environment(\.surfaceStyle) private var surface
+    /// How it was shown, kept until it's dismissed, so a fold doesn't start pairing over.
+    @State private var shownAsPages: Bool?
+
+    func body(content: Content) -> some View {
+        let asPages = shownAsPages ?? (surface != .pocket)
+        content
+            .sheet(isPresented: Binding(get: { isPresented && !asPages }, set: { if !$0 { isPresented = false } })) {
+                PairingSheet()
+            }
+            .fullScreenCover(isPresented: Binding(get: { isPresented && asPages }, set: { if !$0 { isPresented = false } })) {
+                PairingSheet(asPages: true)
+            }
+            .onChange(of: isPresented) { _, shown in shownAsPages = shown ? asPages : nil }
+    }
+}
+
+/// iOS 27 tucks the navigation bar away as content scrolls down, which the code boxes do when the
+/// keyboard comes up; Pair is in that bar.
+private struct KeepsPairInReach: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 27.0, *) {
+            content.toolbarMinimizationBehavior(.never, for: .navigationBar)
+        } else {
+            content
+        }
+    }
+}
+
 /// Pair with a Mac: choose it, then type the six digits it shows. The code proves you can see the Mac's
 /// screen; nothing else is needed (docs/link.md, "Pairing"). No Mac is chosen for you, and the code
 /// boxes appear only once one is, so a code always goes to the Mac that shows it.
+///
+/// Over the whole open iPhone Duo it's two pages: the Macs on the left, the code on the right, at the
+/// top where the keyboard can't cover it.
 struct PairingSheet: View {
+    var asPages = false
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.surfaceStyle) private var surface
     @State private var selection: String?
     @State private var code = ""
     @State private var pairing = false
@@ -130,43 +174,47 @@ struct PairingSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: PhoneStyle.Space.s5) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Image(systemName: "macbook.and.iphone")
-                            .font(.system(size: 40, weight: .light))
-                            .foregroundStyle(PhoneStyle.accent)
-                        Text("Pair with Your Mac")
-                            .font(PhoneStyle.Typeface.title(.title))
-                            .foregroundStyle(PhoneStyle.Ink.title)
-                        Text("On your Mac, open Daybook › Settings › Devices and add your iPhone.")
-                            .font(.callout)
-                            .foregroundStyle(PhoneStyle.Ink.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let paired {
-                        Label("Paired with \(paired)", systemImage: "checkmark.circle.fill")
-                            .font(.headline)
-                            .foregroundStyle(PhoneStyle.accent)
-                    } else {
-                        macList
-                        if let mac = selectedMac {
-                            codeEntry(for: mac)
+            Group {
+                // Folded shut while shown, it's one column again.
+                if asPages, surface != .pocket {
+                    CreaseSplit {
+                        page {
+                            heading(showsMark: false)
+                            if paired == nil { macList }
                         }
-                        if let error {
-                            Label(error, systemImage: "exclamationmark.triangle")
-                                .font(.subheadline)
-                                .foregroundStyle(PhoneStyle.Ink.warning)
-                                .fixedSize(horizontal: false, vertical: true)
+                    } trailing: {
+                        if paired != nil || selectedMac != nil || error != nil {
+                            page { outcome }
+                        } else {
+                            // Until a Mac is chosen the left page says what to do, so this one shows only the mark.
+                            mark.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: PhoneStyle.Space.s5) {
+                                heading(showsMark: true)
+                                if paired == nil { macList }
+                                outcome
+                            }
+                            .padding(PhoneStyle.Space.s5)
+                            .id(Self.column)
+                            .frame(maxWidth: 520, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                        }
+                        // The system shows only the field under the boxes; bring up all of them (they're
+                        // at the foot of the column).
+                        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                            guard codeFocused else { return }
+                            withAnimation { proxy.scrollTo(Self.column, anchor: .bottom) }
                         }
                     }
                 }
-                .padding(PhoneStyle.Space.s5)
-                .frame(maxWidth: 520, alignment: .leading)
-                .frame(maxWidth: .infinity)
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationBarTitleDisplayMode(.inline)
+            .modifier(KeepsPairInReach())
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(paired == nil ? "Cancel" : "Done") { dismiss() } }
                 if paired == nil {
@@ -200,6 +248,56 @@ struct PairingSheet: View {
                 code = ""
                 error = nil
                 codeFocused = chosen != nil
+            }
+        }
+    }
+
+    private static let column = "column"
+
+    /// One of the two pages: a column clear of the crease.
+    private func page(@ViewBuilder _ content: () -> some View) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: PhoneStyle.Space.s5, content: content)
+                .padding(.vertical, PhoneStyle.Space.s5)
+                .pageColumn()
+        }
+    }
+
+    private var mark: some View {
+        Image(systemName: "macbook.and.iphone")
+            .font(.system(size: 40, weight: .light))
+            .foregroundStyle(PhoneStyle.accent)
+            .accessibilityHidden(true)
+    }
+
+    private func heading(showsMark: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showsMark { mark }
+            Text("Pair with Your Mac")
+                .font(PhoneStyle.Typeface.title(.title))
+                .foregroundStyle(PhoneStyle.Ink.title)
+            Text("On your Mac, open Daybook › Settings › Devices and add your iPhone.")
+                .font(.callout)
+                .foregroundStyle(PhoneStyle.Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Paired; or the code for the chosen Mac, and what went wrong.
+    @ViewBuilder private var outcome: some View {
+        if let paired {
+            Label("Paired with \(paired)", systemImage: "checkmark.circle.fill")
+                .font(.headline)
+                .foregroundStyle(PhoneStyle.accent)
+        } else {
+            if let mac = selectedMac {
+                codeEntry(for: mac)
+            }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.subheadline)
+                    .foregroundStyle(PhoneStyle.Ink.warning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

@@ -29,6 +29,7 @@ struct RootView: View {
             }
         }
         .environment(reading)
+        .environment(\.surfaceStyle, SurfaceStyle(layout))
         .environment(\.audioProvider, boundAudioProvider)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: layout)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3), value: model.isRecordingActive)
@@ -75,4 +76,10 @@ enum SurfaceStyle: Equatable {
         case .table: self = .table
         }
     }
+}
+
+extension EnvironmentValues {
+    /// The surface's layout, for what's presented over it: inside a sheet the size class is compact
+    /// even across the open iPhone Duo.
+    @Entry var surfaceStyle: SurfaceStyle = .pocket
 }
