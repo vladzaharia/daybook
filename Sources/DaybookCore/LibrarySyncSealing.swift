@@ -201,10 +201,10 @@ struct SyncKeyPending: LocalizedError {
 }
 
 extension LibrarySyncEngine {
-    /// Whether a library this engine creates is encrypted from the start. Off until the owner's device checks pass
-    /// (docs/icloud-sync.md, "Encryption", "Turning it on for new libraries"); flip this one constant to turn it on.
+    /// Whether a library a device starts is encrypted from the start, when it has somewhere to keep the key
+    /// (docs/icloud-sync.md, "Encryption", "New libraries"). The default for `SyncReplicaConfiguration.sealsNewLibrary`.
     /// Any build reads and writes encrypted libraries either way.
-    public static let sealsNewLibraries = false
+    public static let sealsNewLibraries = true
 
     /// The presence feature saying a device reads and writes encrypted libraries.
     public static let sealingFeature = "sealed-1"

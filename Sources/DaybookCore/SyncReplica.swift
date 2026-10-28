@@ -49,14 +49,18 @@ public struct SyncReplicaConfiguration: Sendable {
     /// recordings for it only on an unrestricted one (docs/icloud-sync.md, "Encryption"). The iPhone answers from
     /// `NetworkConditionMonitor`; Macs and tests are always unrestricted.
     public var network: @Sendable () -> SyncNetworkCondition
+    /// A library this device starts is encrypted from the start, with a `keyStore` (`LibrarySyncEngine.sealsNewLibraries`).
+    /// Tests that turn encryption on later start plaintext ones.
+    public var sealsNewLibrary: Bool
 
     public init(audioPolicy: SyncAudioPolicy = .eager, device: SyncDeviceIdentity? = nil,
                 audioCache: AudioCachePolicy? = nil, presenceRefreshInterval: TimeInterval = 600,
                 cloud: SyncCloudFiles = .system, keyStore: (any LibraryKeyStore)? = nil,
-                network: @escaping @Sendable () -> SyncNetworkCondition = { .unrestricted }) {
+                network: @escaping @Sendable () -> SyncNetworkCondition = { .unrestricted },
+                sealsNewLibrary: Bool = LibrarySyncEngine.sealsNewLibraries) {
         self.audioPolicy = audioPolicy; self.device = device; self.audioCache = audioCache
         self.presenceRefreshInterval = presenceRefreshInterval; self.cloud = cloud; self.keyStore = keyStore
-        self.network = network
+        self.network = network; self.sealsNewLibrary = sealsNewLibrary
     }
 
     public static func mac(displayName: String, canProcess: Bool) -> Self {

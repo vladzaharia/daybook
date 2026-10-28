@@ -23,12 +23,12 @@ final class LibrarySyncStartOverTests: XCTestCase {
     private func mac(_ name: String = "Mac") throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(
             audioPolicy: .eager, device: SyncDeviceIdentity(deviceClass: .mac, displayName: "Studio Mac", canProcess: true),
-            cloud: cloud.files, keyStore: keychain))
+            cloud: cloud.files, keyStore: keychain, sealsNewLibrary: false))
     }
     private func phone(_ name: String = "Phone") throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(
             audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
-            cloud: cloud.files, keyStore: keychain))
+            cloud: cloud.files, keyStore: keychain, sealsNewLibrary: false))
     }
     /// A pass supplying everything the device's library holds, applied and acknowledged.
     @discardableResult
@@ -140,7 +140,7 @@ final class LibrarySyncStartOverTests: XCTestCase {
         // A phone without the key, while the Mac said recently that it holds it: get the key from the Mac.
         let alone = try LibrarySyncEngine(localRoot: local("Alone"), remoteRoot: remote, deviceID: "Alone", replica: SyncReplicaConfiguration(
             audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
-            cloud: cloud.files, keyStore: MemoryLibraryKeyStore()))
+            cloud: cloud.files, keyStore: MemoryLibraryKeyStore(), sealsNewLibrary: false))
         do { _ = try await alone.synchronize(meetings: []); XCTFail() } catch LibrarySyncError.keyUnavailable {}
         let aloneOffered = await alone.mayStartOver()
         XCTAssertFalse(aloneOffered)
@@ -154,7 +154,7 @@ final class LibrarySyncStartOverTests: XCTestCase {
         // A plaintext library has nothing to start over, and a build without a key store can't.
         _ = phone
         let plain = try LibrarySyncEngine(localRoot: local("Plain"), remoteRoot: root.appendingPathComponent("Other"), deviceID: "Plain",
-                                          replica: SyncReplicaConfiguration(cloud: cloud.files, keyStore: keychain))
+                                          replica: SyncReplicaConfiguration(cloud: cloud.files, keyStore: keychain, sealsNewLibrary: false))
         _ = try await plain.synchronize(meetings: [])
         let plainOffered = await plain.mayStartOver()
         XCTAssertFalse(plainOffered)

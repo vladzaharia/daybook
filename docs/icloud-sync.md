@@ -182,8 +182,10 @@ The controller then asks for a pass and returns the settled files (stored, alrea
 ## Encryption
 
 A library can be encrypted in iCloud, end to end: Apple holds only sealed files, and every device that syncs it holds the
-library's key in iCloud Keychain. It's off until someone turns it on (Settings › Library › iCloud Sync › Encrypt Library in
-iCloud on the Mac, Settings › iCloud on the iPhone), and there's no turning it off: resetting means a new library.
+library's key in iCloud Keychain. It turns on by itself: a new library starts encrypted, and an existing one is encrypted
+once every device in use can read it (below, "Turning it on"). Settings can turn it on sooner (Settings › Library › iCloud
+Sync › Encrypt Library in iCloud on the Mac, Settings › iCloud on the iPhone), and there's no turning it off: resetting
+means a new library. Builds that can't keep a key (unsigned and ad hoc, without the keychain group) stay plaintext.
 
 - **What it protects.** The library's content at rest in iCloud without Advanced Data Protection, and from someone who
   has the Apple Account's password but no trusted device's passcode (iCloud Keychain is end-to-end encrypted). The
@@ -257,10 +259,15 @@ the plaintext, into a temporary file that's moved into place only when the SHA-2
 behave as before. Sealing and opening read the file once, in two overlapping lanes, so they take about the time a copy and
 its SHA-256 did (a 1 GiB original seals in 0.4 s on an M-series Mac, within 7 MiB of memory).
 
-**Turning it on** (`enableSealing`, `LibrarySyncController.enableEncryption`). Settings first lists the devices that
-would stop syncing until they're updated (their presence doesn't list the `sealed-1` feature, or they were seen only in
-the journal), and offers a recovery key. Then a new key is stored and read back, and only then is the manifest rewritten
-as version 2 with this device as the migrator. The courier drops plaintext files it still holds and deletes those it sent.
+**Turning it on** (`enableSealing`, `LibrarySyncController.enableEncryption`). After a pass that's acknowledged, a
+device with a plaintext library turns it on by itself (`encryptOnceEveryDeviceCan`) when every other device that synced
+in the last 30 days lists the `sealed-1` feature. One seen longer ago, or only in the journal, doesn't hold it back: if it's
+still on 0.3.0 or earlier, it says "Update Daybook to sync" when it's back and changes nothing. An iPhone leaves it to a Mac
+that synced in that time, which seals the history from its own audio. No recovery key is made then; Settings offers Create
+Recovery Key once it's on. From Settings, turning it on first lists the devices that would stop syncing until they're
+updated (their presence doesn't list the feature, or they were seen only in the journal), and offers a recovery key.
+Either way, a new key is stored and read back, and only then is the manifest rewritten as version 2 with this device as
+the migrator. The courier drops plaintext files it still holds and deletes those it sent.
 A Mac that moved from a chosen folder (above) offers to delete that folder's plaintext copy of the journal
 (`deleteRetiredFolderJournal`): its manifest, `Events/`, `Metadata/`, `Blobs/`, and `Devices/`, nothing else.
 
@@ -341,9 +348,10 @@ into a container this device synced encrypted that has lost its manifest.
 **Downgrades.** Once a device has seen a library encrypted in a sync folder (`Sync/sealing.json`), a plaintext manifest
 there, or none, pauses sync: "The library in iCloud is no longer encrypted." Choosing another iCloud account forgets it.
 
-**Turning it on for new libraries.** `LibrarySyncEngine.sealsNewLibraries` (false) makes a new library encrypted from
-the start, its key stored before the manifest names it. Flip it once the device checks in docs/validation.md ("Library
-encryption") pass on the owner's Mac and iPhone.
+**New libraries.** A library a device starts is encrypted from the start when it can keep a key
+(`SyncReplicaConfiguration.sealsNewLibrary`, from `LibrarySyncEngine.sealsNewLibraries`), its key stored before the
+manifest names it. Turned on in 0.4.1, ahead of the device checks in docs/validation.md ("Library encryption") on the
+owner's Mac and iPhone.
 
 ## Phone cadence and the controller hook
 

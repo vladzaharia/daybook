@@ -1,3 +1,4 @@
+import CryptoKit
 import DaybookCore
 import DaybookLink
 import Foundation
@@ -37,7 +38,9 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         try? fm.removeItem(at: root)
     }
 
-    private func device(_ name: String, phone: Bool, role: CourierRole, keys: MemoryLibraryKeyStore?,
+    /// `automatic`: as the apps do, a new library starts encrypted and a plaintext one encrypts itself. Otherwise a
+    /// library starts plaintext and is encrypted only when a test turns it on, as from Settings.
+    private func device(_ name: String, phone: Bool, role: CourierRole, keys: MemoryLibraryKeyStore?, automatic: Bool = false,
                         zones: Set<String> = [CloudKitCourier.zoneName, CloudKitCourier.sealedZoneName]) async throws -> Device {
         let libraryRoot = root.appendingPathComponent(name, isDirectory: true)
         let suite = root.appendingPathComponent("Preferences-\(name)-\(UUID().uuidString)").path
@@ -48,6 +51,8 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         controllers.append(sync)
         sync.replica = phone ? .phone(displayName: name) : .mac(displayName: name, canProcess: true)
         sync.replica.keyStore = keys
+        sync.replica.sealsNewLibrary = automatic
+        sync.encryptsAutomatically = automatic
         let courier = InMemoryCourier(service: service, directory: libraryRoot.appendingPathComponent("Sync/Courier"), deviceID: name, zones: zones)
         sync.courier = courier
         sync.courierRole = role
@@ -92,6 +97,66 @@ final class LibrarySyncEncryptionTests: XCTestCase {
     private func audioBytes(_ count: Int, seed: UInt8) -> Data { Data((0..<count).map { UInt8(truncatingIfNeeded: $0 &* 29 &+ Int(seed)) }) }
 
     // MARK: Turning it on
+
+    /// A presence record as Daybook 0.3.0 writes one: no features, so that iPhone can't read an encrypted library.
+    private func writeEarlierDaybookPresence(_ deviceID: String, lastSeen: Date) throws {
+        let record: [String: Any] = ["format": "DaybookDevice", "schemaVersion": 1, "deviceID": deviceID, "deviceClass": "phone",
+                                     "displayName": deviceID, "canProcess": false, "audioPolicy": "onDemand",
+                                     "lastSeen": ISO8601DateFormatter().string(from: lastSeen)]
+        let directory = container.appendingPathComponent("Devices", isDirectory: true)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let name = SHA256.hash(data: Data(deviceID.utf8)).map { String(format: "%02x", $0) }.joined() + ".json"
+        try JSONSerialization.data(withJSONObject: record).write(to: directory.appendingPathComponent(name))
+    }
+
+    func testANewLibraryStartsEncrypted() async throws {
+        let keychain = MemoryLibraryKeyStore()
+        let mac = try await device("Mac", phone: false, role: .receive, keys: keychain, automatic: true)
+        await pass(mac)
+        guard case .on(let summary) = mac.sync.encryption else { return XCTFail("\(mac.sync.encryption)") }
+        XCTAssertTrue(summary.hasKey); XCTAssertTrue(summary.isMigrator)
+        // iCloud Keychain brings the key to the iPhone.
+        let phone = try await device("Phone", phone: true, role: .send, keys: keychain, automatic: true)
+        await pass(phone)
+        XCTAssertTrue(phone.sync.encryption.isOn)
+    }
+
+    func testAPlaintextLibraryEncryptsItselfOnceEveryDeviceInUseCanReadIt() async throws {
+        let keychain = MemoryLibraryKeyStore()
+        // A library from before 0.4.1, which an iPhone on Daybook 0.3.0 synced yesterday.
+        let mac = try await device("Mac", phone: false, role: .receive, keys: keychain)
+        await pass(mac)
+        try writeEarlierDaybookPresence("Old iPhone", lastSeen: Date().addingTimeInterval(-86_400))
+        mac.sync.encryptsAutomatically = true
+        await pass(mac)
+        await mac.sync.encryptOnceEveryDeviceCan()
+        XCTAssertEqual(mac.sync.encryption, .off, "That iPhone would stop syncing")
+        // Not seen for more than 30 days, it no longer holds the library back; it says to update when it's back.
+        try writeEarlierDaybookPresence("Old iPhone", lastSeen: Date().addingTimeInterval(-31 * 86_400))
+        await pass(mac)
+        try await wait("encryption to turn on") { mac.sync.encryption.isOn }
+        guard case .on(let summary) = mac.sync.encryption else { return XCTFail("\(mac.sync.encryption)") }
+        XCTAssertTrue(summary.isMigrator); XCTAssertFalse(summary.hasRecoveryKey)
+        await pass(mac)
+        XCTAssertTrue(mac.sync.encryption.isOn)
+    }
+
+    func testAnIPhoneLeavesAutomaticEncryptionToAMacThatsAround() async throws {
+        let keychain = MemoryLibraryKeyStore()
+        let mac = try await device("Mac", phone: false, role: .receive, keys: keychain)
+        await pass(mac)
+        let phone = try await device("Phone", phone: true, role: .send, keys: keychain, automatic: true)
+        await pass(phone)
+        await phone.sync.encryptOnceEveryDeviceCan()
+        XCTAssertEqual(phone.sync.encryption, .off, "The Mac seals the history from its own audio")
+        mac.sync.encryptsAutomatically = true
+        await pass(mac)
+        try await wait("the Mac to turn it on") { mac.sync.encryption.isOn }
+        await pass(phone)
+        XCTAssertTrue(phone.sync.encryption.isOn)
+        guard case .on(let summary) = phone.sync.encryption else { return XCTFail("\(phone.sync.encryption)") }
+        XCTAssertFalse(summary.isMigrator)
+    }
 
     func testTurningEncryptionOnAndADeviceWaitingForItsKey() async throws {
         let keychain = MemoryLibraryKeyStore()

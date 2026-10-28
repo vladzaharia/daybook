@@ -129,6 +129,8 @@ public actor LibrarySyncEngine {
     var audioIndexDirty = false
     /// Where this device keeps library keys (`SyncReplicaConfiguration.keyStore`).
     let keyStore: (any LibraryKeyStore)?
+    /// A library this device starts is encrypted from the start (`SyncReplicaConfiguration.sealsNewLibrary`).
+    let sealsNewLibrary: Bool
     /// An encrypted library's manifest and the keys held here, once a pass has read it (nil: plaintext, or no key).
     var sealing: SealingState?
     /// The current key (hex) of an encrypted library this device can't open yet.
@@ -174,7 +176,7 @@ public actor LibrarySyncEngine {
         self.remoteRoot = remoteRoot.standardizedFileURL
         self.deviceID = deviceID
         audioPolicy = replica.audioPolicy; cloud = replica.cloud; device = replica.device; keyStore = replica.keyStore
-        network = replica.network
+        network = replica.network; sealsNewLibrary = replica.sealsNewLibrary
         audioCachePolicy = replica.audioCache; presenceRefreshInterval = replica.presenceRefreshInterval
         let local = localRoot.standardizedFileURL.resolvingSymlinksInPath().path
         let remote = remoteRoot.standardizedFileURL.resolvingSymlinksInPath().path
@@ -687,11 +689,11 @@ public actor LibrarySyncEngine {
         }
     }
 
-    /// Starts a library: plaintext, or encrypted from the start when `sealsNewLibraries` (its key stored and read
-    /// back before the manifest names it). Another device's manifest written meanwhile is kept instead.
+    /// Starts a library: encrypted from the start when `sealsNewLibrary` (its key stored and read back before the
+    /// manifest names it), plaintext without a key store. Another device's manifest written meanwhile is kept instead.
     private func createLibrary(at manifestURL: URL) throws -> SyncManifest {
         var result = SyncManifest(libraryID: UUID())
-        if Self.sealsNewLibraries, let keyStore {
+        if sealsNewLibrary, let keyStore {
             let key = LibraryKey.generate(libraryID: result.libraryID, createdBy: deviceID)
             try keyStore.store(key)
             result.schemaVersion = SyncManifest.sealedSchemaVersion

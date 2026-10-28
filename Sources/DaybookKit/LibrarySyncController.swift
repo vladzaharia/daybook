@@ -189,6 +189,9 @@ public final class LibrarySyncController: ObservableObject {
     @Published public private(set) var hasMoreWork = false
     /// Whether the library is encrypted here, updated after every pass.
     @Published public private(set) var encryption: LibraryEncryptionState = .off
+    /// A plaintext library is encrypted once every device in use can read it (`encryptOnceEveryDeviceCan`). Rigs that
+    /// check plaintext sync turn it off.
+    public var encryptsAutomatically = true
     /// Waiting for the key, Start Over may be offered: no other device has said it holds the key recently
     /// (`LibrarySyncEngine.mayStartOver`).
     @Published public private(set) var mayStartOverEncryption = false
@@ -577,6 +580,7 @@ public final class LibrarySyncController: ObservableObject {
         lastSync = Date(); defaults.set(lastSync, forKey: "syncLastCompleted")
         isSyncing = false
         takeNewIdentity()
+        if encryptsAutomatically, encryption == .off { Task { await encryptOnceEveryDeviceCan() } }
     }
 
     public func reportFailure(_ message: String) {
@@ -609,6 +613,25 @@ public final class LibrarySyncController: ObservableObject {
             Task { await courier.forgetPlaintext() }
         }
     }
+
+    /// Encrypts a plaintext library on its own once every device in use reads encrypted libraries (docs/icloud-sync.md,
+    /// "Encryption", "Turning it on"): every other device seen in `automaticEncryptionWindow`. One not seen for longer,
+    /// if it's still on an earlier Daybook, says to update when it's back, and changes nothing. An iPhone leaves it to a
+    /// Mac that's around, which seals the history from its own audio rather than downloading it.
+    func encryptOnceEveryDeviceCan(now: Date = Date()) async {
+        guard encryptsAutomatically, encryption == .off, !isSyncing, engine != nil else { return }
+        let others = await knownDevices().filter {
+            !$0.isCurrentDevice && $0.lastSeen.map { now.timeIntervalSince($0) < Self.automaticEncryptionWindow } == true
+        }
+        guard others.allSatisfy(\.readsEncryptedLibraries) else { return }
+        if replica.device?.deviceClass == .phone, others.contains(where: { $0.deviceClass == .mac }) { return }
+        guard encryption == .off, !isSyncing else { return }
+        // A pass that started meanwhile is refused as busy; the next one tries again.
+        try? await enableEncryption()
+    }
+
+    /// How recently a device must have synced for automatic encryption to wait for it to read encrypted libraries.
+    static let automaticEncryptionWindow: TimeInterval = 30 * 86_400
 
     /// Encrypts the library in iCloud from now on (`LibrarySyncEngine.enableSealing`). With `recoveryKey`, its key is
     /// also kept wrapped with it. The next passes seal what's new and the history. There's no turning it off.

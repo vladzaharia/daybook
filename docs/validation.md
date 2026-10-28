@@ -154,8 +154,9 @@ backup's size).
 
 ## Library encryption (2026-10-26)
 
-End-to-end encryption of the sync journal (docs/icloud-sync.md, "Encryption"), dark by default: Settings offers Encrypt
-Library in iCloud, and `LibrarySyncEngine.sealsNewLibraries` stays false until the checks below pass.
+End-to-end encryption of the sync journal (docs/icloud-sync.md, "Encryption"). In 0.4.0 it was dark by default: Settings
+offered Encrypt Library in iCloud. From 0.4.1 it turns on by itself (below, "Automatic encryption"), at the owner's
+request, before the device checks below have run.
 
 - The format is frozen by known-answer vectors computed by an independent implementation of the specification (pure
   Python AES-256, GCM, HMAC, and HKDF, itself checked against FIPS-197 and the GCM specification's test case), not by the
@@ -1099,3 +1100,23 @@ Not verified here:
 
 - The iCloud container on a signed build and a real device: whether iOS posts the account notification at launch there too. Either way the account is compared before sync reacts.
 - Typing the pairing code on the open Duo: the simulator can't tap, so the capture shows the code entry with the number pad up through a launch option.
+
+## Automatic encryption (2026-10-28)
+
+Library encryption turns on by itself (docs/icloud-sync.md, "Encryption"): a new library starts encrypted wherever the
+device can keep a key, and an existing plaintext library encrypts itself after an acknowledged pass once every other
+device that synced in the last 30 days reads encrypted libraries, with an iPhone leaving it to a Mac that's around. The
+owner asked for it on before the device checks in "Library encryption" ran. Run on Apple silicon with Xcode 27.1, against
+in-memory keychains and couriers and temporary folders standing in for iCloud.
+
+- New: `LibrarySyncSealingTests.testANewLibraryStartsEncryptedWhenItsDeviceCanKeepTheKey` (key stored first, version 2
+  manifest, nothing ever written in plaintext); `LibrarySyncEncryptionTests.testANewLibraryStartsEncrypted` (an iPhone
+  sharing the keychain reads it), `testAPlaintextLibraryEncryptsItselfOnceEveryDeviceInUseCanReadIt` (an iPhone on
+  0.3.0 seen yesterday holds it back; seen 31 days ago, it doesn't), and
+  `testAnIPhoneLeavesAutomaticEncryptionToAMacThatsAround`.
+- The engine and controller rigs that turn encryption on by hand start plaintext libraries
+  (`SyncReplicaConfiguration.sealsNewLibrary`, `LibrarySyncController.encryptsAutomatically`).
+
+Still requires the owner's devices, in addition to the "Library encryption" checks: the owner's existing library
+encrypting itself once both the Mac and the iPhone run 0.4.1, the iPhone getting the key through iCloud Keychain, and
+a device left on 0.3.0 or earlier, if any, saying to update (0.4.0 reads encrypted libraries).

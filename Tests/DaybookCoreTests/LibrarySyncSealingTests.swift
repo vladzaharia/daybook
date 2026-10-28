@@ -26,12 +26,12 @@ final class LibrarySyncSealingTests: XCTestCase {
     private func mac(_ name: String = "Mac", keys: MemoryLibraryKeyStore? = nil) throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(
             audioPolicy: .eager, device: SyncDeviceIdentity(deviceClass: .mac, displayName: "Studio Mac", canProcess: true),
-            cloud: cloud.files, keyStore: keys ?? keychain))
+            cloud: cloud.files, keyStore: keys ?? keychain, sealsNewLibrary: false))
     }
     private func phone(_ name: String = "Phone", keys: MemoryLibraryKeyStore? = nil, budget: UInt64? = nil) throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(
             audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
-            audioCache: budget.map { AudioCachePolicy(budgetBytes: $0) }, cloud: cloud.files, keyStore: keys ?? keychain))
+            audioCache: budget.map { AudioCachePolicy(budgetBytes: $0) }, cloud: cloud.files, keyStore: keys ?? keychain, sealsNewLibrary: false))
     }
     private func apply(_ result: SyncResult, to name: String, using engine: LibrarySyncEngine) async throws {
         let store = try MeetingStore(rootURL: local(name))
@@ -159,7 +159,24 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: remote.appendingPathComponent("Sealed").path))
         XCTAssertEqual(files("Events").count, 1)
         XCTAssertEqual(files("Blobs").count, 1)
-        XCTAssertFalse(LibrarySyncEngine.sealsNewLibraries, "New libraries stay plaintext until the owner's device checks pass")
+    }
+
+    func testANewLibraryStartsEncryptedWhenItsDeviceCanKeepTheKey() async throws {
+        XCTAssertTrue(LibrarySyncEngine.sealsNewLibraries)
+        XCTAssertTrue(SyncReplicaConfiguration().sealsNewLibrary, "The apps' default")
+        let mac = try LibrarySyncEngine(localRoot: local("Mac"), remoteRoot: remote, deviceID: "Mac", replica: SyncReplicaConfiguration(
+            audioPolicy: .eager, device: SyncDeviceIdentity(deviceClass: .mac, displayName: "Studio Mac", canProcess: true),
+            cloud: cloud.files, keyStore: keychain))
+        try await pass(mac, "Mac", [try await privateMeeting(audioBytes(1000, seed: 2), on: "Mac")])
+        let started = try manifest()
+        XCTAssertEqual(started.schemaVersion, SyncManifest.sealedSchemaVersion)
+        let current = try XCTUnwrap(started.sealing?.current)
+        XCTAssertEqual(started.sealing?.migrator, "Mac")
+        XCTAssertTrue(try keychain.keys(for: started.libraryID).contains { $0.idHex == current }, "Its key was stored first")
+        XCTAssertEqual(files("Sealed/Events").count, 1)
+        XCTAssertEqual(files("Sealed/Blobs").count, 1)
+        XCTAssertTrue(files("Events").isEmpty, "Nothing was ever written in plaintext")
+        XCTAssertTrue(files("Blobs").isEmpty)
     }
 
     func testADeviceRemembersSyncingAnEncryptedLibraryBeforeAnyPass() async throws {
@@ -383,7 +400,7 @@ final class LibrarySyncSealingTests: XCTestCase {
         let network = NetworkSwitch(.restricted)
         let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: remote, deviceID: "Phone", replica: SyncReplicaConfiguration(
             audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
-            cloud: cloud.files, keyStore: keychain, network: { network.condition }))
+            cloud: cloud.files, keyStore: keychain, network: { network.condition }, sealsNewLibrary: false))
         try await pass(phone, "Phone")
         let blobs = files("Blobs").map { remote.appendingPathComponent("Blobs/\($0)") }
         XCTAssertEqual(blobs.count, 6)
