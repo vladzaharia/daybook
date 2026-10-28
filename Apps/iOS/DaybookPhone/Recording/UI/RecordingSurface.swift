@@ -249,13 +249,32 @@ private struct FlexTable: View {
         HorizontalCreaseSplit {
             VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
                 HStack(alignment: .center, spacing: PhoneStyle.Space.s3) {
-                    RecordingStatusHeader(showsTitle: false)
-                    MultipointStatus(compact: true)
                     if writing {
+                        // The clock, Bookmark, and Done stay whole; beside them, the microphone's name
+                        // goes first, then the Mac's words (its glyph stays).
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: PhoneStyle.Space.s3) {
+                                RecordingStatusHeader(showsTitle: false).fixedSize()
+                                MultipointStatus(compact: true)
+                            }
+                            HStack(spacing: PhoneStyle.Space.s3) {
+                                RecordingStatusHeader(showsTitle: false, showsRoute: false).fixedSize()
+                                MultipointStatus(compact: true)
+                            }
+                            HStack(spacing: PhoneStyle.Space.s3) {
+                                RecordingStatusHeader(showsTitle: false, showsRoute: false).fixedSize()
+                                MultipointStatus(compact: true, iconOnly: true)
+                            }
+                            RecordingStatusHeader(showsTitle: false, showsRoute: false).fixedSize()
+                        }
                         Spacer(minLength: 0)
                         RecordingClockText(size: 34, weight: .medium)
                             .fixedSize()
                         WritingControls(writing: $writing, touched: wake)
+                            .fixedSize()
+                    } else {
+                        RecordingStatusHeader(showsTitle: false)
+                        MultipointStatus(compact: true)
                     }
                 }
                 if writing {

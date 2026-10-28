@@ -63,6 +63,8 @@ struct RollingMeter: View {
 struct RecordingStatusHeader: View {
     @Environment(PhoneAppModel.self) private var model
     var showsTitle = true
+    /// The microphone's name beside the phase; without it, only "Microphone silent" still shows.
+    var showsRoute = true
     var alignment: HorizontalAlignment = .leading
 
     var body: some View {
@@ -77,7 +79,8 @@ struct RecordingStatusHeader: View {
                     .foregroundStyle(recorder.state == .recording ? PhoneStyle.Ink.record : PhoneStyle.Ink.secondary)
                     .textCase(.uppercase)
                     .tracking(0.6)
-                if let route = recorder.inputRoute, recorder.isCapturing {
+                    .fixedSize()
+                if let route = recorder.inputRoute, recorder.isCapturing, showsRoute || recorder.isMicrophoneSilent {
                     Text("· \(recorder.isMicrophoneSilent ? "Microphone silent" : route.name)")
                         .font(.footnote)
                         .foregroundStyle(recorder.isMicrophoneSilent ? PhoneStyle.Ink.warning : PhoneStyle.Ink.meta)
@@ -111,6 +114,8 @@ struct RecordingStatusHeader: View {
 struct MultipointStatus: View {
     @Environment(PhoneAppModel.self) private var model
     var compact = false
+    /// Only the glyphs, where there's no room for the words (and no offer).
+    var iconOnly = false
 
     var body: some View {
         if let line = model.multipointLine {
@@ -121,16 +126,19 @@ struct MultipointStatus: View {
                 if model.multipoint?.recordingMacs.isEmpty == false || model.multipoint?.isMacLed == true {
                     Circle().fill(PhoneStyle.Ink.record).frame(width: 6, height: 6)
                 }
-                Text(line)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
-                    .lineLimit(1)
+                if !iconOnly {
+                    Text(line)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(PhoneStyle.Ink.secondary)
+                        .lineLimit(1)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(RecordingStyle.quietFill, in: Capsule())
             .accessibilityElement(children: .combine)
-        } else if let mac = model.macsToRecordWith.first {
+            .accessibilityLabel(line)
+        } else if !iconOnly, let mac = model.macsToRecordWith.first {
             Button {
                 Task { await model.recordOnMac(mac.id) }
             } label: {
