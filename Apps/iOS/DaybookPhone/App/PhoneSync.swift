@@ -152,6 +152,8 @@ final class PhoneSync {
         identityObserver = NotificationCenter.default.addObserver(forName: .NSUbiquityIdentityDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                // Also posted with the account unchanged (at launch, for one): sync carries on, as the controller does.
+                if self.isConnected, self.controller?.isOnSameAccount == true { return }
                 // The controller lets go of the old account's folder; connect to the new one, if any.
                 self.connection = .checking
                 self.devices = []

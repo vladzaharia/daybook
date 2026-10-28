@@ -65,14 +65,24 @@ final class SyncReviewTests: XCTestCase {
     func testAccountChangeInvalidatesPendingReceiptAndAllowsExplicitReconnect() async throws {
         let root = try makeRoot()
         let defaults = makeTestDefaults("daybook.sync.review")
-        let controller = LibrarySyncController(localRoot: root.appendingPathComponent("Local"), defaults: defaults)
+        let account = AccountBox(Data("account-a".utf8))
+        let environment = SyncContainerEnvironment(containerIdentifier: nil, hasEntitlement: { _ in false },
+                                                   accountIdentity: { account.identity }, resolveContainer: { _ in nil })
+        let controller = LibrarySyncController(localRoot: root.appendingPathComponent("Local"), defaults: defaults, environment: environment)
         defer {
             controller.reportFailure("Test cleanup"); controller.disconnect()
             try? FileManager.default.removeItem(at: root)
         }
-        try controller.connect(to: root.appendingPathComponent("Remote"))
+        let remote = root.appendingPathComponent("Remote")
+        try controller.connect(to: remote)
         let result = try await controller.synchronize(meetings: [], deletedMeetingIDs: [], metadata: JSONEncoder().encode(LibraryMetadata()))
         let receipt = try XCTUnwrap(result)
+        // The notification also arrives with the account unchanged (at launch, for one): the folder stays.
+        NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
+        for _ in 0..<30 { await Task.yield() }
+        XCTAssertEqual(controller.folder, remote)
+        XCTAssertTrue(controller.canApply(receipt))
+        account.identity = Data("account-b".utf8)
         NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
         for _ in 0..<30 where controller.folder != nil { await Task.yield() }
         XCTAssertNil(controller.folder)
@@ -91,4 +101,15 @@ final class SyncReviewTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }
+}
+
+/// The signed-in iCloud account, archived, as a test changes it.
+private final class AccountBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _identity: Data?
+    var identity: Data? {
+        get { lock.withLock { _identity } }
+        set { lock.withLock { _identity = newValue } }
+    }
+    init(_ identity: Data?) { _identity = identity }
 }

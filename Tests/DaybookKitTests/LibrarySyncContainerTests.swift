@@ -268,6 +268,21 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertNil(sync.folder)
     }
 
+    func testTheAccountNotificationWithTheSameAccountLeavesSyncAsItWas() async throws {
+        let sync = controller(environment())
+        sync.restore()
+        try await waitUntil("the container", state: syncState) { sync.iCloud == .connected }
+        let connected = try XCTUnwrap(sync.folder)
+        let status = sync.status
+        // iOS posts it at launch, for one, with nothing changed.
+        NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
+        for _ in 0..<30 { await Task.yield() }
+        XCTAssertTrue(sync.isOnSameAccount)
+        XCTAssertEqual(sync.iCloud, .connected)
+        XCTAssertEqual(sync.folder, connected)
+        XCTAssertEqual(sync.status, status)
+    }
+
     func testAnAccountChangeDuringALongPassReconnectsOnceThePassUnwinds() async throws {
         let gate = SyncReadGate()
         defer { gate.release() }
@@ -281,8 +296,12 @@ final class LibrarySyncContainerTests: XCTestCase {
         try Data().write(to: journal.appendingPathComponent("Events/.\(String(repeating: "b", count: 64)).json.icloud"))
         let pass = Task { try? await sync.synchronize(meetings: [], deletedMeetingIDs: [], metadata: Data()) }
         try await waitUntil("the pass to reach iCloud", state: syncState) { gate.entered }
+        account.identity = nil
         NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
+        try await waitUntil("the pause", state: syncState) { sync.folder == nil }
         // The same account comes back while the cancelled pass is still unwinding.
+        account.identity = Data("account-a".utf8)
+        NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
         try await Task.sleep(for: .milliseconds(200))
         gate.release()
         _ = await pass.value
@@ -307,6 +326,7 @@ final class LibrarySyncContainerTests: XCTestCase {
         do { _ = try await pass.value; XCTFail("The cancelled pass must not return a receipt") }
         catch is CancellationError { }
         XCTAssertTrue(gate.sawCancellation, "The engine task must receive its caller's cancellation")
+        XCTAssertEqual(sync.status, "Connected · preparing sync", "A cancelled pass didn't fail: sync isn't paused")
         XCTAssertFalse(sync.isSyncing)
         try cloud.deliver(event)
         let next = try await sync.synchronize(meetings: [meeting], deletedMeetingIDs: [], metadata: Data())

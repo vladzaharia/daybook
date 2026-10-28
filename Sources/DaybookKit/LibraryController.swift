@@ -882,6 +882,10 @@ public final class LibraryController: ObservableObject {
             guard sync.canApply(result) else { return applied }
             try await sync.acknowledge(result)
             applied?.acknowledged = true
+        } catch is CancellationError {
+            // Cancelled, or sync moved to another account or folder mid-pass: nothing failed, and the next pass
+            // offers the unacknowledged changes again.
+            sync.passCancelled()
         } catch { sync.reportFailure(error.localizedDescription) }
         return applied
     }

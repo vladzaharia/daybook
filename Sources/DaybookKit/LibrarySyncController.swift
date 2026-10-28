@@ -196,6 +196,11 @@ public final class LibrarySyncController: ObservableObject {
     private var courierSealedLibraries = Set<UUID>()
     private var activeTask: Task<SyncResult, Error>?
     private var pendingReceipt: UUID?
+    /// Where sync stood before the pass in flight, which is still true if that pass is cancelled.
+    private var statusBeforePass: String?
+    private static let applyingStatus = "Applying library changes…"
+    /// The account signed in when a chosen folder connected.
+    private var folderAccount: Data?
     private var polling: Task<Void, Never>?
     private var debounce: Task<Void, Never>?
     private var debounceToken = UUID()
@@ -511,6 +516,7 @@ public final class LibrarySyncController: ObservableObject {
         try Task.checkCancellation()
         guard let engine, !isSyncing else { return nil }
         let generation = configurationID
+        statusBeforePass = status
         isSyncing = true; status = "Syncing recordings and conversations…"
         do {
             let task = Task { try await engine.synchronize(meetings: meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: metadata,
@@ -530,7 +536,7 @@ public final class LibrarySyncController: ObservableObject {
             pendingReceipt = result.checkpointID
             pendingDownloads = result.pendingDownloads; pendingUploads = result.pendingUploads; warnings = result.warnings
             hasMoreWork = result.hasMoreWork
-            status = "Applying library changes…"
+            status = Self.applyingStatus
             return result
         } catch LibrarySyncError.waitingForICloud {
             // Not a failure: the pass runs again once iCloud has listed the container.
@@ -550,6 +556,12 @@ public final class LibrarySyncController: ObservableObject {
             return nil
         } catch {
             activeTask = nil; isSyncing = false; pendingReceipt = nil
+            // Nor is a pass that was cancelled (the app left the foreground), or whose account or folder was replaced
+            // while it ran: whatever stopped it says where sync stands.
+            guard !(error is CancellationError), generation == configurationID else {
+                if generation == configurationID, let before = statusBeforePass { status = before }
+                throw CancellationError()
+            }
             status = "Sync paused: \(error.localizedDescription)"; throw error
         }
     }
@@ -569,6 +581,14 @@ public final class LibrarySyncController: ObservableObject {
 
     public func reportFailure(_ message: String) {
         isSyncing = false; pendingReceipt = nil; status = "Sync paused: " + message
+        takeNewIdentity()
+    }
+
+    /// Ends a pass that was cancelled while its changes were being applied. Nothing failed: where sync stood
+    /// before the pass is still true.
+    public func passCancelled() {
+        isSyncing = false; pendingReceipt = nil
+        if status == Self.applyingStatus, let before = statusBeforePass { status = before }
         takeNewIdentity()
     }
 
@@ -1026,9 +1046,24 @@ public final class LibrarySyncController: ObservableObject {
     /// Pauses: the pass in flight is cancelled and its receipt can't be acknowledged. Then the container is
     /// checked again, which waits for the person if the account is now a different one.
     private func accountDidChange() {
-        guard transport != .folder, let identifier = containerIdentifier else { return }
+        guard transport != .folder, !isOnSameAccount, let identifier = containerIdentifier else { return }
         detach()
         startContainer(identifier)
+    }
+
+    /// Whether sync is connected with the account signed in now. The account-change notification also arrives when
+    /// nothing changed (at launch, for one), and then sync carries on.
+    public var isOnSameAccount: Bool {
+        switch transport {
+        case .iCloudContainer: return Self.sameAccount(defaults.data(forKey: Key.account), environment.accountIdentity())
+        case .folder: return Self.sameAccount(folderAccount, environment.accountIdentity())
+        case .none: return false
+        }
+    }
+
+    static func sameAccount(_ a: Data?, _ b: Data?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return sameAccount(a, b)
     }
 
     private func detach() {
@@ -1096,9 +1131,10 @@ public final class LibrarySyncController: ObservableObject {
         }
         // The container has its own account handling (`accountDidChange`). A chosen folder disconnects.
         guard transport == .folder else { return }
+        folderAccount = environment.accountIdentity()
         observers.append(NotificationCenter.default.addObserver(forName: .NSUbiquityIdentityDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.transport == .folder, !self.isOnSameAccount else { return }
                 if self.activeTask == nil { self.isSyncing = false }
                 self.activeTask?.cancel(); self.configurationID = UUID(); self.pendingReceipt = nil; self.stopMonitoring(); self.engine = nil; self.folder = nil
                 self.transport = .none
