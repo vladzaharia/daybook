@@ -1120,3 +1120,29 @@ in-memory keychains and couriers and temporary folders standing in for iCloud.
 Still requires the owner's devices, in addition to the "Library encryption" checks: the owner's existing library
 encrypting itself once both the Mac and the iPhone run 0.4.1, the iPhone getting the key through iCloud Keychain, and
 a device left on 0.3.0 or earlier, if any, saying to update (0.4.0 reads encrypted libraries).
+||||||| parent of 03be095 (Keep model downloads out of the shared Hugging Face cache on swift-transformers 1.3.5)
+
+## swift-transformers 1.3.5 (2026-10-28)
+
+Dependabot's bump from 1.1.6 (#12). It moves `HubApi`'s downloads onto swift-huggingface's `HubClient` and brings
+swift-huggingface 1.0.0, swift-crypto, swift-asn1, EventSource, and yyjson. Checked on Apple silicon against the
+tokenizers installed on the owner's Mac (copies of their tokenizer and config files only) and one real download.
+
+- **Tokenizers.** A 21 KB transcript in many scripts (curly quotes, accents, combining marks, Japanese voiced kana,
+  CJK, Arabic, emoji with skin tones and ZWJ sequences) through both versions, offline as Daybook loads them:
+  - Gemma 4 26B (`GemmaTokenizer`): 1.1.6 made 8,798 tokens and didn't round-trip the text; its chat template output
+    had 16 literal `▁` where spaces belonged (`combining▁é`). 1.3.5 made 7,557 tokens, round-tripped exactly, and
+    rendered the template with plain spaces. Encoding took 0.62 s on 1.1.6 and 0.02 s on 1.3.5.
+  - Qwen 2.5 1.5B and 7B: identical token IDs and round trips. The chat template differs only after the generation
+    prompt: 1.1.6 added a second newline after `<|im_start|>assistant`; 1.3.5 renders `trim_blocks` as Hugging Face
+    does. Encoding is 2.3 times faster.
+  - Whisper base: identical token IDs (WhisperKit reads its tokenizer through argmax's vendored code either way).
+- **Downloads.** `HubSnapshotFetcher`'s exact call (empty token, `cache: nil`, literal globs) fetched
+  `openai_whisper-base/config.json` and the 104 MB `TextDecoder.mlmodelc/weights/weight.bin` from
+  `argmaxinc/whisperkit-coreml` at Daybook's pinned commit: only those two files arrived, the weights' SHA-256
+  matched the catalog's, both matched the installed copies byte for byte, and nothing was written to
+  `~/.cache/huggingface`. With the default cache, every file would also be kept there.
+- **Resuming.** `HubClient` downloads each file with a URLSession download task, so a file cut off partway (the app
+  quit mid-shard) starts again; files that finished are kept, as before. 1.1.6 resumed the file itself.
+- The app links the new packages' licenses and NOTICE files (swift-crypto and swift-asn1 carry NOTICE.txt) in
+  `Contents/Resources/Licenses`, and `THIRD_PARTY_NOTICES.md` lists them.

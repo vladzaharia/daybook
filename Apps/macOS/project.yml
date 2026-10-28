@@ -105,7 +105,7 @@ targets:
           fi
           for package_dir in "${checkouts}"/*/; do
             package="$(basename "${package_dir}")"
-            for name in LICENSE LICENSE.md LICENSE.txt LICENSE-MIT COPYING; do
+            for name in LICENSE LICENSE.md LICENSE.txt LICENSE-MIT COPYING NOTICE NOTICE.txt NOTICES; do
               if [[ -f "${package_dir}${name}" ]]; then
                 /bin/cp -f "${package_dir}${name}" "${resources}/Licenses/${package}-${name}.txt"
               fi

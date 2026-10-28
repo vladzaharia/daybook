@@ -1,6 +1,6 @@
 # Third-party notices
 
-Daybook links native open-source libraries. Package.resolved records the exact dependency versions and revisions; the application bundle includes license files from resolved packages under Contents/Resources/Licenses.
+Daybook links native open-source libraries. Package.resolved records the exact dependency versions and revisions; the application bundle includes license and NOTICE files from resolved packages under Contents/Resources/Licenses.
 
 | Library | Purpose | License / source |
 | --- | --- | --- |
@@ -8,7 +8,11 @@ Daybook links native open-source libraries. Package.resolved records the exact d
 | FluidAudio 0.17.7 | In-process speech recognition (Parakeet) and speaker diarization | Apache-2.0 · https://github.com/FluidInference/FluidAudio |
 | MLX Swift 0.32.3 / MLX Swift LM 3.32.3 | In-process Metal language-model inference and constrained (guided) generation | MIT · https://github.com/ml-explore/mlx-swift and https://github.com/ml-explore/mlx-swift-lm |
 | XGrammar 0.1.30 (vendored in MLX Swift LM) | JSON-schema constrained decoding | Apache-2.0 · https://github.com/mlc-ai/xgrammar |
-| Swift Transformers 1.1.6 | Language-model tokenizers and explicit model downloads | Apache-2.0 · https://github.com/huggingface/swift-transformers |
+| Swift Transformers 1.3.5 | Language-model tokenizers and explicit model downloads | Apache-2.0 · https://github.com/huggingface/swift-transformers |
+| Swift Hugging Face 1.0.0 | The Hugging Face Hub client under Swift Transformers' downloads | Apache-2.0 · https://github.com/huggingface/swift-huggingface |
+| Swift Crypto, Swift ASN.1 | Supporting components of the Hub client | Apache-2.0 · https://github.com/apple/swift-crypto and https://github.com/apple/swift-asn1 |
+| yyjson 0.12.0 | JSON parsing for tokenizer files | MIT · https://github.com/ibireme/yyjson |
+| EventSource 1.5.1 | Server-sent events, linked by the Hub client | MIT · https://github.com/mattt/EventSource |
 | Swift Jinja | Chat prompt formatting | Apache-2.0 · https://github.com/huggingface/swift-jinja |
 | Swift Numerics, Collections, Argument Parser | Supporting Swift components | Apache-2.0 with Swift exception · https://github.com/apple |
 

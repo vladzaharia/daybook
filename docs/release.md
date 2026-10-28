@@ -135,7 +135,7 @@ scripts/asc-certificates.sh --revoke             # revokes the ones older than 3
 
 ### Secrets on the runner
 
-Third-party code runs on the release runners: package manifests, swift-syntax macros, and the compilers' work on MLX, WhisperKit, FluidAudio, swift-transformers, and swift-jinja. So the signing material exists only in the steps that use it:
+Third-party code runs on the release runners: package manifests, swift-syntax macros, and the compilers' work on MLX, WhisperKit, FluidAudio, swift-transformers, swift-huggingface, swift-crypto, and swift-jinja. So the signing material exists only in the steps that use it:
 
 - Each such step gets the secrets in its environment and runs its command inside `scripts/ci/secrets.sh run -- …`. That writes the API key as `$RUNNER_TEMP/daybook-secrets/AuthKey_<id>.p8` (directory 700, file 600) and, when the step has the `.p12`, creates a temporary keychain with it; runs the command; and deletes both when the command ends, however it ends (including SIGINT and SIGTERM). Nothing reaches `$GITHUB_ENV`, so later steps don't even see the paths.
 - Packages are fetched (`build-ios.sh --resolve`, `build-app.sh --resolve-only`) before any secret is written, so package manifests never run next to one.
