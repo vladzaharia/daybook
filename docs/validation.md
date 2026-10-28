@@ -1084,3 +1084,18 @@ Not verified here:
 - The table-mode keyboard itself: the capture shows the writing state before the notes field takes focus (the simulator can't tap), so that the keyboard leaves the header's Bookmark and Done uncovered follows from the layout (they're on the standing half, the keyboard covers the flat one) rather than a capture.
 - VoiceOver on a device: the pairing code field, the notes lane's "Note at …" labels, and the Mac transcript note's Show on Summary action were checked in code and by their accessibility modifiers, not with VoiceOver running.
 - Open Settings lands on Daybook's page in Settings; iOS has no public link to iCloud's own settings, so signing in or turning on iCloud Drive is a step from there.
+
+## Flow screenshot fixes (2026-10-27)
+
+Six problems found while capturing the primary flows on Mac and iPhone. Run on Apple silicon with Xcode 27.1, against fakes and synthetic audio only.
+
+- `swift test`: 1,039 passed, 1 skipped (the 1 GiB benchmark), none failed. New: `ModelManagerTests.testAModelWithTwoRolesIsListedOnceInItsPreset` (Quick listed Community-1 twice) and `LibrarySyncContainerTests.testTheAccountNotificationWithTheSameAccountLeavesSyncAsItWas`. Changed: the long-pass account test now turns iCloud off and on rather than posting the notification with nothing changed, `SyncReviewTests` checks a chosen folder stays through an unchanged account before it disconnects for a new one, and a cancelled pass keeps the status it had ("Connected · preparing sync"), not "Sync paused".
+- `scripts/build-ios.sh --test` on a new iPhone Duo simulator (iOS 27.1): 151 passed. New: the status sheet's narrow recorder line ("80% · 2 new"; "Recording · 80%" while recording) in `StatusSheetModelTests`.
+- iPhone 17 Pro simulator, `--library` and `--sync-folder` in fresh folders: the simulator posts `NSUbiquityIdentityDidChange` at launch. Before, the chosen folder disconnected ("Apple Account changed"), the iCloud row stayed at "Waiting to sync", and the Mac row at "Looking for it…"; with the fix, the first pass wrote the journal and the status sheet read "iCloud Up to date". The container path needs a signed build and wasn't run here; the same check covers it in `LibrarySyncContainerTests`.
+- Mac `--snapshot` with `--phone-demo pairing --device-name "Studio Mac"`: Add iPhone names "Studio Mac", not the computer's name.
+- iPhone Duo captures, open and closed: Pair with Your Mac as two pages when open (Macs on the left, the code above the number pad on the right, nothing across the crease; Pair stays in the bar as the code scrolls up), and one column closed with the code scrolled above the keyboard; flex-mode Write Notes with "RECORDING" on one line, the Mac as its glyph and red dot, and the clock, Bookmark, and Done whole (book, flex, and pocket unchanged); the library's rows no longer legible under Record and the status sheet; and the notebook panel's recorder line whole.
+
+Not verified here:
+
+- The iCloud container on a signed build and a real device: whether iOS posts the account notification at launch there too. Either way the account is compared before sync reacts.
+- Typing the pairing code on the open Duo: the simulator can't tap, so the capture shows the code entry with the number pad up through a launch option.
