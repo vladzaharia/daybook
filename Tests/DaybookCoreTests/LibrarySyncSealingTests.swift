@@ -107,12 +107,12 @@ final class LibrarySyncSealingTests: XCTestCase {
         }
         XCTAssertEqual(try remoteTree(), before, "The version 1 engine changed the sync folder")
 
-        // A newer format than this one reads as newer, and changes nothing either.
+        // A newer format than this one reads as newer, and changes nothing either. (Version 3 is a compacted library.)
         var newer = try JSONSerialization.jsonObject(with: Data(contentsOf: remote.appendingPathComponent("daybook-sync.json"))) as! [String: Any]
-        newer["schemaVersion"] = 3
+        newer["schemaVersion"] = 4
         try JSONSerialization.data(withJSONObject: newer, options: [.sortedKeys]).write(to: remote.appendingPathComponent("daybook-sync.json"))
         let frozen = try remoteTree()
-        do { _ = try await mac.synchronize(meetings: [meeting]); XCTFail() } catch LibrarySyncError.unsupportedVersion(let version) { XCTAssertEqual(version, 3) }
+        do { _ = try await mac.synchronize(meetings: [meeting]); XCTFail() } catch LibrarySyncError.unsupportedVersion(let version) { XCTAssertEqual(version, 4) }
         XCTAssertEqual(try remoteTree(), frozen)
     }
 
@@ -752,6 +752,54 @@ final class LibrarySyncSealingTests: XCTestCase {
         let done = try XCTUnwrap(doneValue)
         XCTAssertTrue(done.oldKeysRetired, "\(done)")
         XCTAssertEqual(try manifest().sealing?.keys.map(\.id), [second.idHex])
+    }
+
+    /// A rotated key leaves iCloud Keychain once it has been retired for 30 days and every device seen lately holds the
+    /// current key; a file found sealed with it after that is a leftover, deleted rather than waited for.
+    func testARetiredKeyLeavesTheKeychainOnceEveryDeviceHasMovedOn() async throws {
+        let mac = try mac(), phone = try phone()
+        let kept = Meeting(title: "Kept")
+        try await pass(mac, "Mac", [kept])
+        let first = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac", [kept])
+        try await pass(phone, "Phone")
+        let start = Date()
+        await mac.setSealerClock { start }
+        let second = try await mac.rotateKey(now: start)
+        try await pass(mac, "Mac", [kept])
+        try await pass(phone, "Phone", [kept])
+        let retiredAt = start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60)
+        await mac.setSealerClock { retiredAt }
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(try manifest().sealing?.keys.map(\.id), [second.idHex])
+        XCTAssertEqual(try manifest().sealing?.retired?.map(\.id), [first.idHex], "the manifest says when it was retired")
+        XCTAssertEqual(Set(try keychain.keys(for: first.libraryID).map(\.id)), [first.id, second.id], "kept a while longer")
+
+        // A month on, a device seen lately that's still waiting for the current key holds it back.
+        let later = retiredAt.addingTimeInterval(LibrarySyncEngine.retiredKeyRemoval + 60)
+        await mac.setSealerClock { later }
+        let waiting = """
+        {"format":"DaybookDevice","schemaVersion":1,"deviceID":"Away","deviceClass":"phone","displayName":"","canProcess":false,
+         "lastSeen":"\(ISO8601DateFormatter().string(from: later.addingTimeInterval(-86_400)))","features":["sealed-1"],
+         "key":{"state":"waiting","id":"\(second.idHex)"}}
+        """
+        let away = remote.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data("Away".utf8))).json")
+        try Data(waiting.utf8).write(to: away)
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(Set(try keychain.keys(for: first.libraryID).map(\.id)), [first.id, second.id])
+        try FileManager.default.removeItem(at: away)
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(try keychain.keys(for: first.libraryID).map(\.id), [second.id], "removed from iCloud Keychain")
+
+        // A file sealed with it that turns up afterwards (a device away all this time) can't be opened by anyone: it's
+        // deleted, not waited for.
+        let leftover = SealedObject.seal(Data(#"{"schemaVersion":1}"#.utf8), kind: .event, key: first)
+        try leftover.bytes.write(to: remote.appendingPathComponent("Sealed/Events/\(leftover.name)"))
+        let after = try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(after.warnings, []); XCTAssertEqual(after.pendingDownloads, 0)
+        XCTAssertFalse(files("Sealed/Events").contains(leftover.name))
+        let onPhone = try await pass(phone, "Phone", [kept])
+        XCTAssertEqual(onPhone.warnings, []); XCTAssertEqual(onPhone.pendingDownloads, 0)
     }
 
     // MARK: Review fixes

@@ -18,10 +18,11 @@ import Foundation
 // reordered, dropped, or the object truncated; the header is authenticated with every chunk. The format is frozen by
 // the known-answer vectors in SealedObjectTests: change nothing here without a new version.
 
-/// What a sealed object holds. Its folder must match (`Sealed/Events`, `Sealed/Metadata`, `Sealed/Blobs`); presence
-/// records carry their sealed part inline.
+/// What a sealed object holds. Its folder must match (`Sealed/Events`, `Sealed/Metadata`, `Sealed/Blobs`,
+/// `Sealed/Compaction`); presence records carry their sealed part inline. Compaction records (kind 5) came after the
+/// rest: an earlier version reads the kind as a newer format, and never lists their folder.
 public enum SealedKind: UInt8, Sendable, CaseIterable {
-    case event = 1, metadata = 2, blob = 3, presence = 4
+    case event = 1, metadata = 2, blob = 3, presence = 4, compaction = 5
 
     /// The folder of the sync folder (and the courier inbox) that holds objects of this kind.
     public var directory: String? {
@@ -30,6 +31,7 @@ public enum SealedKind: UInt8, Sendable, CaseIterable {
         case .metadata: return "Sealed/Metadata"
         case .blob: return "Sealed/Blobs"
         case .presence: return nil
+        case .compaction: return "Sealed/Compaction"
         }
     }
 

@@ -101,8 +101,9 @@ public actor LibrarySyncMigration {
 
         // The manifest decides the library identity, so it goes first.
         let sourceManifest = try manifest(in: source, root: source)
-        // A chosen folder holds a plaintext library; one that's encrypted isn't moved.
-        if case .found(let from) = sourceManifest, from.isSealed { throw LibrarySyncError.unsupportedVersion(from.schemaVersion) }
+        // A chosen folder holds a plaintext library; one that's encrypted (or compacted, whose entries name parents only
+        // its compaction records account for) isn't moved.
+        if case .found(let from) = sourceManifest, from.isSealed || from.isCompacted { throw LibrarySyncError.unsupportedVersion(from.schemaVersion) }
         var destinationManifest = try manifest(in: destination, root: destination)
         // A container this device synced encrypted, now without a manifest, gets no plaintext journal.
         if case .absent = destinationManifest,

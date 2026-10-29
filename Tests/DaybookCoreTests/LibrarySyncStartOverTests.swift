@@ -206,8 +206,9 @@ final class LibrarySyncStartOverTests: XCTestCase {
         XCTAssertEqual(Set(macAgain.meetings.map(\.id)), Set([before, after, onPhone].map(\.id)))
         XCTAssertEqual(try sealedLibraries(), [rivalID])
 
+        // One marker is left: the copy iCloud made is gone once it's resolved.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: remote.appendingPathComponent("daybook-sync 2.json").path))
         // Resolved the same whichever version is the file and which the copy.
-        try FileManager.default.removeItem(at: remote.appendingPathComponent("daybook-sync 2.json"))
         var theirs = rival
         theirs.sealing?.replaces = [old]
         var ours = try manifest()
