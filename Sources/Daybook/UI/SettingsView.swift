@@ -92,7 +92,8 @@ struct ProblemLine<Actions: View>: View {
                 }
                 VStack(alignment: .leading, spacing: Space.s2) {
                     sentence
-                    HStack(spacing: Space.s2) { buttons }
+                    // Wrapped, so several long ones ("Get Key from Alex's iPhone 15 Pro Max") stay inside the row.
+                    FlowLayout(spacing: Space.s2) { buttons }
                         .padding(.leading, Self.glyphWidth + Space.s2)
                 }
             }
