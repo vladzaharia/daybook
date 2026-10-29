@@ -217,11 +217,8 @@ struct StatusSheetView: View {
                 }
         }
         .pairingSheet(isPresented: $showingPairing)
-        .sheet(isPresented: $showingAddDevice) {
-            AddDeviceSheet { id in
-                showingAddDevice = false
-                if let id { open(.device(id)) }
-            }
+        .addRecorderSheet(isPresented: $showingAddDevice) { id in
+            if let id { open(.device(id)) }
         }
         .onChange(of: detent) { _, detent in
             // Collapsing goes back to the overview.

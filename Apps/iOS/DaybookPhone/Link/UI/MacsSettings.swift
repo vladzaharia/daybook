@@ -9,7 +9,7 @@ struct MacsSection: View {
     var body: some View {
         Section {
             ForEach(model.link.macs) { mac in
-                NavigationLink(value: SettingsRoute.mac(mac.id)) { MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac)) }
+                SettingsLink(route: .mac(mac.id)) { MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac)) }
             }
             Button {
                 showingPairing = true
@@ -64,6 +64,7 @@ extension PhoneLink.Mac {
 struct MacDetailScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.settingsPages) private var pages
     let macID: UUID
     @State private var confirmingUnpair = false
 
@@ -109,7 +110,8 @@ struct MacDetailScreen: View {
                     Task {
                         await model.link.unpair(macID)
                         model.settings.forgetMacRecordDecision(macID)
-                        dismiss()
+                        // On the open Duo's right page there's nothing to go back to.
+                        if let pages { pages.leave() } else { dismiss() }
                     }
                 }
             } message: {

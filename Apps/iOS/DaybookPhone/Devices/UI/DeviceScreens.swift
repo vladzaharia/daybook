@@ -6,14 +6,20 @@ import UniformTypeIdentifiers
 
 struct RecordersSection: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.settingsPages) private var pages
     @Binding var showingAddDevice: Bool
 
     var body: some View {
         Section {
             ForEach(model.devices.sessions) { session in
-                NavigationLink(value: SettingsRoute.device(session.id)) { DeviceRow(session: session) }
+                SettingsLink(route: .device(session.id)) { DeviceRow(session: session) }
             }
-            Button { showingAddDevice = true } label: { SettingsActionLabel(title: "Add Recorder…", systemImage: "plus") }
+            // Open, Add Recorder is the right page's; in the hand, a sheet.
+            if pages != nil {
+                SettingsLink(route: .addRecorder) { SettingsActionLabel(title: "Add Recorder…", systemImage: "plus") }
+            } else {
+                Button { showingAddDevice = true } label: { SettingsActionLabel(title: "Add Recorder…", systemImage: "plus") }
+            }
         } header: {
             Text("Recorders")
         }
@@ -70,6 +76,7 @@ struct DevicePage: View {
 private struct DevicePageContent: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.settingsPages) private var pages
     @ObservedObject var session: DeviceSession
     @State private var confirmingRemove = false
     @State private var renaming = false
@@ -172,7 +179,8 @@ private struct DevicePageContent: View {
         .confirmationDialog("Remove \(session.device.name)?", isPresented: $confirmingRemove, titleVisibility: .visible) {
             Button("Remove", role: .destructive) {
                 model.devices.remove(session)
-                dismiss()
+                // On the open Duo's right page there's nothing to go back to.
+                if let pages { pages.leave() } else { dismiss() }
             }
         } message: {
             Text("Recordings already imported stay in your library.")
@@ -462,30 +470,88 @@ struct ProblemBox: View {
 
 // MARK: Add Device
 
+extension View {
+    /// Add Recorder: a sheet in the hand; open, the display as two pages (`pagesPresentation`). Closes
+    /// itself, then says which recorder was added (nil when cancelled).
+    func addRecorderSheet(isPresented: Binding<Bool>, done: @escaping (String?) -> Void) -> some View {
+        pagesPresentation(isPresented: isPresented) { asPages in
+            AddDeviceSheet(asPages: asPages) { id in
+                isPresented.wrappedValue = false
+                done(id)
+            }
+        }
+    }
+}
+
 /// Add Recorder: choose a kind, then its method. Soundcore searches only when you tap Search,
 /// which is when iOS asks to allow Bluetooth.
 struct AddDeviceSheet: View {
+    /// Shown over the whole open display, rather than as a sheet.
+    var asPages = false
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.surfaceStyle) private var surface
     var done: (String?) -> Void
     @State private var session: DeviceSession?
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let session {
-                    SetupScreen(session: session, done: finish)
-                } else {
-                    RecorderKinds { session = model.devices.beginSetup($0) }
-                }
+        // Open, two pages: the kinds on the left, the chosen one's setup on the right.
+        Group {
+            if surface == .pocket {
+                column
+            } else if asPages {
+                DisplayPages { kindsPage } trailing: { setupPage }
+            } else {
+                SheetCreaseSplit { kindsPage } trailing: { setupPage } single: { column }
             }
-            .modifier(AddRecorderBar(title: session?.kind.name ?? "Add Recorder", cancel: cancel))
         }
+        .presentationSizing(SheetPagesSizing(asPages: surface != .pocket))
         .task {
             // `--open-settings add-device`: straight to Soundcore setup.
             if model.options.openSettings == "add-device", session == nil, let kind = DeviceCatalog.kind(SoundcoreWorkIntegration.id) {
                 session = model.devices.beginSetup(kind)
             }
         }
+    }
+
+    private var kindsPage: some View {
+        NavigationStack { kinds(asPages: true).modifier(AddRecorderBar(title: "Add Recorder", cancel: cancel)) }
+    }
+
+    private var setupPage: some View {
+        NavigationStack {
+            if let session {
+                SetupScreen(session: session, done: finish)
+                    .navigationTitle(session.kind.name)
+                    .navigationBarTitleDisplayMode(.inline)
+            } else {
+                // Until a kind is chosen the left page says what to do; this one shows only the mark.
+                Image(systemName: "waveform.badge.microphone")
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(PhoneStyle.Ink.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(uiColor: .systemGroupedBackground))
+                    .accessibilityHidden(true)
+            }
+        }
+        .id(session?.id)
+    }
+
+    /// In the hand: the kinds, then the chosen one's setup in their place.
+    private var column: some View {
+        NavigationStack {
+            Group {
+                if let session {
+                    SetupScreen(session: session, done: finish)
+                } else {
+                    kinds(asPages: false)
+                }
+            }
+            .modifier(AddRecorderBar(title: session?.kind.name ?? "Add Recorder", cancel: cancel))
+        }
+    }
+
+    private func kinds(asPages: Bool) -> some View {
+        RecorderKinds(chosen: asPages ? session?.kind : nil, showsChevrons: !asPages) { session = model.devices.beginSetup($0) }
     }
 
     private func cancel() {
@@ -499,8 +565,61 @@ struct AddDeviceSheet: View {
     }
 }
 
-/// The kinds of recorder this iPhone can add.
+/// Add Recorder on the open Duo's right page: the kinds, then the chosen one's setup in their place.
+/// Cancel goes back to the kinds; choosing another page before it's set up cancels it.
+struct AddRecorderPage: View {
+    @Environment(PhoneAppModel.self) private var model
+    @Environment(\.settingsPages) private var pages
+    @Environment(\.dismiss) private var dismiss
+    @State private var session: DeviceSession?
+    @State private var finished = false
+
+    var body: some View {
+        Group {
+            if let session {
+                SetupScreen(session: session, done: finish)
+            } else {
+                RecorderKinds(chosen: nil, showsChevrons: true) { session = model.devices.beginSetup($0) }
+            }
+        }
+        .navigationTitle(session?.kind.name ?? "Add Recorder")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if session != nil {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        model.devices.cancelSetup()
+                        session = nil
+                    }
+                }
+            }
+        }
+        .onDisappear { if !finished, session != nil { model.devices.cancelSetup() } }
+        .task {
+            // `--open-settings add-device`: straight to Soundcore setup.
+            if model.options.openSettings == "add-device", session == nil, let kind = DeviceCatalog.kind(SoundcoreWorkIntegration.id) {
+                session = model.devices.beginSetup(kind)
+            }
+        }
+    }
+
+    private func finish(_ id: String?) {
+        finished = true
+        if let id {
+            model.devices.commitSetup()
+            if let pages { pages.open(.device(id)) } else { dismiss() }
+        } else {
+            model.devices.cancelSetup()
+            if let pages { pages.leave() } else { dismiss() }
+        }
+    }
+}
+
+/// The kinds of recorder this iPhone can add. Two pages mark the chosen one, whose setup is on the
+/// right page rather than pushed (so no chevrons).
 private struct RecorderKinds: View {
+    var chosen: DeviceKind?
+    var showsChevrons: Bool
     let choose: (DeviceKind) -> Void
 
     var body: some View {
@@ -508,6 +627,7 @@ private struct RecorderKinds: View {
             Section {
                 // Daybook on iPhone is this app: a recorder the Mac adds, not one the iPhone adds.
                 ForEach(DeviceCatalog.kinds.filter { $0.id != DaybookPhoneIntegration.id }) { kind in
+                    let isChosen = chosen == kind
                     Button { choose(kind) } label: {
                         // Explicit inks: in a list, a button tints its label, and `.primary` and
                         // `.secondary` would follow that tint, turning the whole row teal.
@@ -523,13 +643,17 @@ private struct RecorderKinds: View {
                                 Text(PhoneDeviceCopy.kindSummary(kind)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                             }
                             Spacer(minLength: 0)
-                            Image(systemName: "chevron.forward")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(Color(uiColor: .tertiaryLabel))
-                                .accessibilityHidden(true)
+                            if showsChevrons {
+                                Image(systemName: "chevron.forward")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                                    .accessibilityHidden(true)
+                            }
                         }
                         .padding(.vertical, 4)
                     }
+                    .listRowBackground(isChosen ? PhoneStyle.accent.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
+                    .accessibilityAddTraits(isChosen ? .isSelected : [])
                 }
             }
         }

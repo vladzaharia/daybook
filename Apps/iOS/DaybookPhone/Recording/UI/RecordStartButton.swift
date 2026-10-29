@@ -56,7 +56,7 @@ struct RecordStartButton: View {
             guard case .success(let urls) = result else { return }
             Task { await model.importFiles(urls) }
         }
-        .sheet(isPresented: $showingDebugSettings) { SettingsScreen() }
+        .settingsSheet(isPresented: $showingDebugSettings)
         .task {
             if model.options.showImporter {
                 try? await Task.sleep(for: .milliseconds(600))

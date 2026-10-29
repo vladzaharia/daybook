@@ -3,7 +3,8 @@ import SwiftUI
 import XCTest
 @testable import DaybookPhone
 
-/// What Settings and the recorder and Mac pages say: each thing once, in plain words.
+/// What Settings and the recorder and Mac pages say, and where the open iPhone Duo splits a sheet into
+/// pages: each thing once, plain words, nothing across the crease.
 @MainActor
 final class SettingsWordsTests: XCTestCase {
     private let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
@@ -72,5 +73,26 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertEqual(both, "\(StorageScreen.bytes(1_000_000)) downloaded · \(StorageScreen.bytes(2_000_000)) recorded on this iPhone")
         // A count that's briefly ahead of the total never goes negative.
         XCTAssertEqual(StorageScreen.breakdown(bytes: 100, downloaded: 200), "Downloaded for playback")
+    }
+
+    // MARK: The open iPhone Duo
+
+    func testASheetAcrossTheCreaseSplitsWhereTheCreaseFalls() {
+        // The Duo's inner display is 951 pt; the crease is its middle. A sheet centred on it from x = 150.
+        let crease = SheetCreaseSplit<EmptyView, EmptyView, EmptyView>.crease(
+            width: 650, placement: WindowPlacement(windowWidth: 951, minX: 150))
+        XCTAssertEqual(crease ?? 0, 325.5, accuracy: 0.01)
+    }
+
+    func testASheetToOneSideOfTheCreaseStaysOneColumn() {
+        // Partly open, the system keeps a sheet on the left page: no page would be wide enough to read.
+        XCTAssertNil(SheetCreaseSplit<EmptyView, EmptyView, EmptyView>.crease(
+            width: 450, placement: WindowPlacement(windowWidth: 951, minX: 20)))
+        // A sheet that barely reaches past the crease doesn't split into a sliver either.
+        XCTAssertNil(SheetCreaseSplit<EmptyView, EmptyView, EmptyView>.crease(
+            width: 600, placement: WindowPlacement(windowWidth: 951, minX: 0)))
+        // An iPhone in the hand: the crease would be its middle, but a 402 pt window has no room for two pages.
+        XCTAssertNil(SheetCreaseSplit<EmptyView, EmptyView, EmptyView>.crease(
+            width: 402, placement: WindowPlacement(windowWidth: 402, minX: 0)))
     }
 }
