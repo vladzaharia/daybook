@@ -68,6 +68,64 @@ hooks were captured with `--library <scratch> --device-demo none --snapshot`.
 voices, and a news anchor without music (expected to stay in); summaries from real models with notes
 and bookmarks; the waiting line through real iCloud latency with a real iPhone.
 
+## Speakers across conversations (2026-10-29)
+
+From the owner (Balanced: Nemotron 3 for speakers, Community-1 for voice profiles): naming themselves in one
+conversation labelled only that one, though they speak in others; Settings › Models showed "Match voices across
+recordings" greyed out, "Not available with this model".
+
+Why (lines as of 4abb4ba): no identity outlived a conversation. `SpeakerMatcher.match` compared a new recording's
+speakers only with the same conversation's (`Sources/DaybookCore/SpeakerMatcher.swift:35-60`, "It does not maintain a
+global voice identity store"), only while that recording was processed (`Meeting.apply`,
+`Sources/DaybookKit/ProcessingEngine.swift:182`; `AppState.adopt`, `Sources/Daybook/App/AppState+Sources.swift:225`),
+and a rename (`Meeting.renameSpeaker`, `Sources/DaybookCore/Models.swift:506`) changed one label in one conversation.
+Also: the setting's availability read only the speaker model's capabilities (`ModelRouting.supportsVoiceMatching`,
+`Sources/DaybookKit/Models/ModelSelections.swift:75`, used at `Sources/Daybook/UI/SettingsModelsPane.swift:151`), so
+Nemotron greyed it out though its speakers get Community-1 voice profiles in the same space; and the fused microphone
+owner ("Me") has no embedding of its own (`Sources/DaybookCore/MultiSourceFusion.swift:880`), so naming it taught
+nothing and it was never compared.
+
+Now speaker profiles (docs/architecture.md, "Speakers and profiles"; docs/icloud-sync.md, "Speaker profiles"):
+names given on any device teach profiles, the Mac labels and suggests across the whole library (recordings
+processed earlier included) whenever a name, conversation, or profile changes and before each summary, confident
+labels teach profiles within bounds, and profiles and voiceprints sync as library settings.
+
+Automated, with synthetic 64-dimension embeddings in temporary libraries (no models, recording, Bluetooth, or
+network):
+
+- `SpeakerProfileTests` (23): the reported case, retroactively (three conversations, one named); Nemotron and
+  Community-1 runs matching each other and another space never; the fused owner through its microphone speaker;
+  names the person gave (or Daybook didn't) never replaced; loose, short, and ambiguous matches only suggested; two
+  voices of one recording; renaming a label (rejected, forgotten, never offered again) and a placeholder; deleted
+  profiles; learning a new kind of recording; the quality gates (short, overlapped, background); an outlier name;
+  drift (a voice close to learned voiceprints but not the person's stays below a label); bounded learning with
+  retirements that never come back; no self-recognition; recognition off; a rename made meanwhile winning; live
+  identification from synced settings; half-float storage; fields and encodings from a newer Daybook; an earlier
+  Daybook's item-by-item merge; two devices teaching one profile in either order; identity merges.
+- `SpeakerProfileLibraryTests` (6): two Macs syncing through a temporary folder, each teaching Vlad before they
+  sync again (every voiceprint kept, settings identical); a name given on another device teaching the Mac and its
+  labels reaching that device; Not, Yes, profile rename, Forget Learned Voiceprints, and delete; the coordinator
+  following library changes.
+- `SpeakerProfileProcessingTests` (1): a new recording of a known voice is labelled before its summary, which has
+  the name.
+- `ModelSelectionTests.testRoutingUsesCapabilitiesNotModelIDs`: the setting with Nemotron and a voice-profile model.
+
+On Apple silicon with Xcode 27.1, the seven bundles passed 1,084 XCTest cases (one skipped, as before): Captions 8,
+Core 357, Devices 93, Intelligence 120, Kit 174, Link 70, Mac app 262. `swift test` here ran another worktree's test
+bundles (its `DaybookLiveTests`, Kit, and Intelligence) through the shared Swift Build service while both built, so
+each of this worktree's bundles was run with `xcrun xctest` after `swift build --build-tests`. `scripts/build-ios.sh`
+(the simulator build, no tests) succeeded; the iPhone app wasn't changed. Snapshots of a scratch library
+(`.build/debug/Daybook --library … --snapshot`) showed the inspector's Recognized with Not Vlad and Maybe Priya with
+Yes and No, the Speaker Profiles window, and Settings › Models on Balanced with Match Voices Across Recordings
+available.
+
+**Still to check with the owner's library and devices:** how often the owner's voice through the MacBook
+microphone, call audio, a Soundcore Work, and the iPhone is labelled rather than suggested at the default 0.82 / 0.70,
+and that no one else is labelled (the thresholds come from the in-conversation defaults, not real recordings);
+Community-1 profiles of one person across sessions from Nemotron and Community-1 runs; the first reconciliation's
+time on the owner's library, and its sync cost: one new event per relabelled conversation, and settings versions
+about 1 KB larger per voiceprint.
+
 ## Soundcore: a list that doesn't come, and Details (2026-10-28)
 
 From the owner's iPhone (0.4.1): Soundcore Work "Connected · 100%" with "Nothing New to Import" while

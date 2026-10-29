@@ -23,7 +23,7 @@ Everything below is in v1:
   - Audio playback that downloads on demand.
   - Version History, with restore.
 - **Editing that syncs.**
-  - Notes, title, next steps, speaker names, and transcript passage corrections.
+  - Notes, title, next steps, speaker names, and transcript passage corrections. A speaker named here teaches its speaker profile on the Mac, which labels the same voice in other conversations; profiles and their voiceprints sync as library settings ([sync](icloud-sync.md#speaker-profiles)).
   - Folders, tags, Work/Personal placement, the template choice, and bookmarks during playback.
 - **Processing requests.** Transcribe, Summarize Again, a template change, Identify Speakers Again, and Transcribe Everything Again are all available. On the phone they become requests a Mac carries out (see below).
 - **Templates and vocabulary.** Browse and edit them; they sync as library metadata.
