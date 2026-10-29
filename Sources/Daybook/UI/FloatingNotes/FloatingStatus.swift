@@ -118,7 +118,8 @@ struct FloatingStatusInputs: Equatable {
 /// One item in the status bar: a glyph and a short label that open a menu with the whole sentence.
 struct FloatingChip: Identifiable, Equatable {
     enum Target: Equatable {
-        case call, recorder(String), phone(String), processing, sync
+        /// `processing` is the shown conversation's work; `queue` is this Mac's, whichever conversation it's on.
+        case call, recorder(String), phone(String), processing, queue, sync
     }
 
     var target: Target
@@ -136,7 +137,7 @@ struct FloatingChip: Identifiable, Equatable {
     var detail: String
     /// Keeps its words longest as the bar narrows: what's happening to the conversation, and
     /// anything that needs the person.
-    var isProminent: Bool { target == .processing || tone == .attention }
+    var isProminent: Bool { target == .processing || target == .queue || tone == .attention }
 
     var id: String {
         switch target {
@@ -144,6 +145,7 @@ struct FloatingChip: Identifiable, Equatable {
         case .recorder(let id): return "recorder-\(id)"
         case .phone(let id): return "phone-\(id)"
         case .processing: return "processing"
+        case .queue: return "queue"
         case .sync: return "sync"
         }
     }
@@ -320,7 +322,7 @@ enum FloatingStatus {
 
     static func queueChip(_ queue: FloatingStatusInputs.Queue) -> FloatingChip? {
         guard let line = queueLine(queue) else { return nil }
-        return FloatingChip(target: .processing, symbol: "desktopcomputer", label: line.text, shortLabel: line.shortText, tone: line.tone,
+        return FloatingChip(target: .queue, symbol: "desktopcomputer", label: line.text, shortLabel: line.shortText, tone: line.tone,
                             progress: line.progress, detail: line.text)
     }
 

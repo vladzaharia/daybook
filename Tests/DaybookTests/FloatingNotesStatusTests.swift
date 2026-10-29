@@ -167,6 +167,18 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(FloatingStatus.chips(inputs).last?.target, .processing)
     }
 
+    func testConversationWorkAndThisMacsQueueAreSeparateChips() {
+        // Compact, the home shows the focused conversation's work beside this Mac's queue: two
+        // chips with their own identities, so the bar never draws one of them twice.
+        var inputs = FloatingStatusInputs()
+        inputs.work = .ready(summary: true)
+        inputs.queue = .init(running: .transcribing, fraction: 0.4, waiting: 1)
+        let chips = FloatingStatus.chips(inputs, including: [.work, .queue])
+        XCTAssertEqual(chips.map(\.id), ["processing", "queue"])
+        XCTAssertEqual(chips.map(\.label), ["Summary ready", "Transcribing · 40% · 1 waiting"])
+        XCTAssertTrue(chips[1].isProminent, "this Mac's work keeps its words as the bar narrows")
+    }
+
     func testSyncSpeaksOnlyWhenItIsAProblem() {
         XCTAssertNil(FloatingStatusInputs.syncProblem("Up to date"))
         XCTAssertNil(FloatingStatusInputs.syncProblem("iCloud sync is off"))
