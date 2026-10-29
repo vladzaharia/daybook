@@ -461,7 +461,7 @@ both record the conversation and list `sharedNotes`.
 | Preference | Default | Where |
 | --- | --- | --- |
 | Record along with this Mac | On, for recorders with record control, Daybook on iPhone included. For an iPhone it decides both ways: off, the phone's cascading starts are declined too | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); Settings › Devices |
-| Record Along with This iPhone (per recorder, on the iPhone) | On, for a recorder with record control the iPhone manages: whether it records along with the phone, its button starts the phone, and the phone holds its link for that | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); the recorder's page |
+| Record Along (per recorder, on the iPhone's recorder page) | On, for a recorder with record control the iPhone manages: whether it records along with the phone, its button starts the phone, and the phone holds its link for that | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); the recorder's page |
 | Can Start Recording (per Mac, on the iPhone) | On when the Mac is paired | `PhoneSettings.macMayStartRecording`; Settings › Macs › <Mac> |
 | Add imported files to conversations they overlap | Off | `matchesImportedFilesToConversations`; Settings › General |
 
