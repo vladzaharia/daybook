@@ -897,11 +897,16 @@ final class AppState: ObservableObject {
         reconcileClaims()
         await syncedLibraryIdentity()
         guard applied.acknowledged else { return }
-        if processSyncedAudio && canProcess {
+        if canProcess {
             // Only newly received sources trigger automatic work. Failed or paused local
             // jobs remain under manual control, including after a later model download.
-            // Audio another device is already processing for a request is left to it.
-            for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) { enqueue(id) }
+            // Audio another device is already processing for a request is left to it. A recording
+            // a conversation was waiting for is added whatever "Transcribe synced recordings" says:
+            // it completes a recording made with this Mac (docs/multipoint.md, "Mac first").
+            for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) {
+                guard processSyncedAudio || meetings.first(where: { $0.id == id })?.hasAwaitedRecordingToAdd() == true else { continue }
+                enqueue(id)
+            }
         }
         pickUpRequests(start: false)
         requeueUnreadPhotos()

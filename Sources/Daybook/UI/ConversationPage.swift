@@ -317,8 +317,13 @@ struct ConversationStatus: View {
                     Button("Resume") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }.buttonStyle(.daybookLink)
                 }
             case .requested(.device(let request)):
-                // Asked for on another device and waiting for a Mac: this one can take it.
-                if meeting.hasUntranscribedAudio { transcribe(title: "Requested from \(request.requestedBy.name)") } else { info }
+                // Asked for on another device and waiting for a Mac: this one can take it. A recording
+                // still on its way says so, whatever this Mac transcribes.
+                if meeting.hasUntranscribedAudio { transcribe(title: "Requested from \(request.requestedBy.name)") }
+                else if !meeting.awaitedRecordings().isEmpty {
+                    line(symbol: "clock") { Text(ProcessingStatus.awaitingDetail(meeting.awaitedRecordings())) }
+                    info
+                } else { info }
             case .recorded, .failed:
                 if meeting.hasUntranscribedAudio { transcribe() } else { info }
             case .awaitingRecordings(let recordings):
