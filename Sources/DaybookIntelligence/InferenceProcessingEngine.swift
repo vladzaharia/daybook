@@ -150,6 +150,28 @@ public struct InferenceProcessingEngine: ProcessingEngine {
                                      duration: result.duration, notices: notices, backgroundAudio: background)
     }
 
+    /// Voice profiles for a run's speakers that were found without them (`Meeting.runsWithoutVoices`):
+    /// the voice step of Identify Speakers Again, over the saved run's passages instead of a new
+    /// diarization, so the transcript, the speakers, and their names stay as they are. As when voices
+    /// are first made, turns inside background audio are left out and a broadcast voice gets none;
+    /// `protectedSpeakers` (named by the person) are never judged. Nil without a voice-profile model.
+    public func voices(_ input: TrackProcessingInput, run: TrackTranscript, protectedSpeakers: Set<String> = [],
+                       progress: @escaping ProcessingProgressHandler) async throws -> SpeakerAnalysis? {
+        guard let embedder = configuration.voiceEmbeddingModel else { return nil }
+        let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
+        let turns = run.segments.compactMap { segment -> SpeakerTurn? in
+            guard let id = segment.speakerID, segment.end > segment.start else { return nil }
+            return SpeakerTurn(speakerID: id, start: segment.start, end: segment.end, confidence: segment.confidence ?? 1)
+        }
+        guard !turns.isEmpty else { return nil }
+        let verdict = BackgroundAudio.judge(run.segments, analysis: input.track.backgroundAudio, protectedSpeakers: protectedSpeakers)
+        let found = SpeakerAnalysis(turns: turns, embeddings: [:])
+        var embedded = try await inference.embedVoices(url: input.audioURL, analysis: Self.withoutBackground(found, verdict: verdict, segments: run.segments) { $0 },
+                                                       model: embedder, progress: report)
+        for speaker in verdict.speakers.keys { embedded.embeddings[speaker] = nil }
+        return embedded
+    }
+
     /// What the sound classifier hears in the recording: the track's stored analysis when it's
     /// current (the audio hasn't changed), otherwise measured now. Nil when it can't run, so nothing
     /// is left out; that needs no notice.
@@ -164,10 +186,16 @@ public struct InferenceProcessingEngine: ProcessingEngine {
     /// turns at least half inside passages judged music or broadcast, are left out.
     static func withoutBackground(_ analysis: SpeakerAnalysis, verdict: BackgroundAudio.Verdict, segments: [TranscriptSegment],
                                   runID: UUID) -> SpeakerAnalysis {
+        withoutBackground(analysis, verdict: verdict, segments: segments) { "\(runID.uuidString):\($0)" }
+    }
+
+    /// The same, for turns whose speakers are `speakerID(turn.speakerID)` in the run's passages.
+    static func withoutBackground(_ analysis: SpeakerAnalysis, verdict: BackgroundAudio.Verdict, segments: [TranscriptSegment],
+                                  speakerID: (String) -> String) -> SpeakerAnalysis {
         guard !verdict.isEmpty else { return analysis }
         let ranges = segments.filter { verdict.segments[$0.id] != nil }.map { ($0.start, $0.end) }
         let turns = analysis.turns.filter { turn in
-            if verdict.speakers["\(runID.uuidString):\(turn.speakerID)"] != nil { return false }
+            if verdict.speakers[speakerID(turn.speakerID)] != nil { return false }
             let length = turn.end - turn.start
             guard length > 0 else { return true }
             let covered = ranges.reduce(0.0) { $0 + max(0, min($1.1, turn.end) - max($1.0, turn.start)) }

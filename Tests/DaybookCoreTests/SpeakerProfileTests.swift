@@ -638,6 +638,34 @@ final class SpeakerProfileTests: XCTestCase {
         XCTAssertEqual(SummaryNames.replacing("Zoë", with: "Zoe", in: "Zoë’s idea"), "Zoe’s idea")
     }
 
+    // MARK: Speakers found without voices
+
+    /// A run from before voice profiles: speakers without embeddings, given voices later from the
+    /// saved transcript (the Mac does it when idle), teach and are labelled like any other.
+    func testSpeakersGivenVoicesLaterAreRecognizedAndTeachTheNamesTheyHad() throws {
+        var one = meeting("one", daysAgo: 9, [voice("me", nil)])
+        one.renameSpeaker(id: "one:me", name: "Vlad")
+        var meetings = [one, meeting("two", daysAgo: 1, [voice("me", nil), voice("x", SyntheticVoice.near(other, similarity: 0.95, seed: 291))])]
+        var metadata = LibraryMetadata()
+        settle(&meetings, &metadata)
+        XCTAssertTrue(metadata.activeSpeakerProfiles.isEmpty, "A name starts a profile only with a voice")
+        XCTAssertEqual(meetings[0].speakerIdentity("one:me")?.source, .named)
+        XCTAssertEqual(meetings[0].runsWithoutVoices.map(\.speakerIDs), [["one:me"]])
+        XCTAssertTrue(meetings[1].runsWithoutVoices.isEmpty, "Another speaker of the run has a voice: it was made with them")
+
+        XCTAssertFalse(meetings[0].giveVoices(["someone": mine(292)], space: Self.space, model: "community-1"))
+        XCTAssertTrue(meetings[0].giveVoices(["one:me": mine(292)], space: Self.space, model: "community-1"))
+        XCTAssertTrue(meetings[0].runsWithoutVoices.isEmpty)
+        XCTAssertTrue(meetings[1].giveVoices(["two:me": mine(293), "two:x": mine(294)], space: Self.space, model: "community-1"))
+        XCTAssertEqual(meetings[1].speakers[1].embedding, SyntheticVoice.near(other, similarity: 0.95, seed: 291), "A voice it had stays")
+        settle(&meetings, &metadata)
+        let vlad = try profile("Vlad", metadata)
+        XCTAssertEqual(meetings[0].speakerIdentity("one:me")?.profileID, vlad.id)
+        XCTAssertEqual(name(meetings[0], "one:me"), "Vlad")
+        XCTAssertEqual(name(meetings[1], "two:me"), "Vlad")
+        XCTAssertEqual(meetings[1].speakerIdentity("two:me")?.source, .recognized)
+    }
+
     // MARK: The dry-run report
 
     func testTheReportCountsALibraryAsTheMacWouldReconcileItWithoutChangingIt() throws {
