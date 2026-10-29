@@ -100,7 +100,8 @@ struct RecorderWidgetView: View {
                         // A conversation's title is private: hidden while the iPhone is locked.
                         Text(title).font(.caption).lineLimit(2).privacySensitive()
                     } else {
-                        Text("Tap to record").font(.caption).lineLimit(2)
+                        // As the small widget says it; a tap here opens Daybook rather than recording.
+                        Text("No recordings yet").font(.caption).lineLimit(2)
                     }
                 }
             }
