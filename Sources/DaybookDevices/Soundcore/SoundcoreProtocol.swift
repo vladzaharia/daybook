@@ -221,6 +221,8 @@ public struct SoundcoreAudioSlice: Equatable {
 public enum SoundcoreError: LocalizedError, Equatable {
     case invalidPacket, disconnected, unsupported, rejected, invalidEncryption, incompleteTransfer
     case codecUnavailable, corruptAudio, liveFileUnavailable, timedOut, stalled
+    /// Another app on the same link started a transfer of its own before this one's audio arrived.
+    case yielded
 
     public var errorDescription: String? {
         switch self {
@@ -235,6 +237,7 @@ public enum SoundcoreError: LocalizedError, Equatable {
         case .liveFileUnavailable: return "The recorder didn’t identify a recording in progress."
         case .timedOut: return "The recorder didn’t answer in time."
         case .stalled: return "No audio arrived for 45 seconds."
+        case .yielded: return "Another app started a transfer, so this one waits until it’s done."
         }
     }
 }

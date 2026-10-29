@@ -40,6 +40,9 @@ public struct SoundcoreTiming {
     /// A recording the recorder started this recently, found as the held link comes back, counts as its
     /// button pressed while the link was away.
     public var buttonCatchUp: Duration = .seconds(60)
+    /// Audio Daybook didn't ask for (another app's transfer over a link iOS shares between apps) must
+    /// have stopped for this long before Daybook starts a transfer or sends Start or Pause.
+    public var otherAppQuiet: Duration = .seconds(3)
 
     public init(request: Duration = .seconds(10), stall: Duration = .seconds(45), settle: Duration = .seconds(1), scan: Duration = .seconds(15), connect: Duration = .seconds(20), reconnect: Duration = .seconds(10), recordConfirm: Duration = .seconds(10), backoff: [Duration] = [2, 5, 15, 30, 60].map { .seconds($0) }, idleRelease: Duration = .seconds(300), automaticIdleRelease: Duration = .seconds(30), automaticCooldown: Duration = .seconds(900), lastKnownRecording: Duration = .seconds(1_200), relist: [Duration] = [15, 60].map { .seconds($0) }) {
         self.request = request
@@ -110,11 +113,24 @@ public final class SoundcoreSession {
     public private(set) var unrequestedAudio = 0
     /// Replies that matched no request waiting here: late ones, or another app's.
     public private(set) var unrequestedReplies = 0
+    /// Another app's audio arrived within `SoundcoreTiming.otherAppQuiet`: its transfer is under way.
+    public var otherAppIsTransferring: Bool {
+        otherAppAudioAt.map { ContinuousClock.now < $0.advanced(by: timing.otherAppQuiet) } ?? false
+    }
+    /// A transfer or a Start or Pause of this session's is waiting for another app's transfer to finish.
+    public private(set) var isWaitingForOtherApp = false
+    public var onWaitingForOtherApp: ((Bool) -> Void)?
 
     private let send: (Data) throws -> Void
     private let timing: SoundcoreTiming
     private var buffer = SoundcorePacketBuffer()
-    private let crypto = SoundcoreCrypto()
+    private var crypto = SoundcoreCrypto()
+    /// When another app's audio last arrived.
+    private var otherAppAudioAt: ContinuousClock.Instant?
+    private var waitingForOtherApp = 0
+    /// The recording this session last asked the recorder for, so a late file head of its own isn't
+    /// taken for another app's.
+    private var lastRequestedID: UInt32?
     private var busy = false
     private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
     private var reply: PendingReply?
@@ -175,14 +191,11 @@ public final class SoundcoreSession {
             guard b.count >= 2 else { return }
             onPush?(.charging(recorder: b[0] == 1, case: b[1] == 1))
         case (0x1a, 0x07), (0x1b, 0x07):
-            if transfer == nil { unrequestedAudio += 1 }
-            receiveFileKey(packet)
+            if let transfer, transfer.key == nil, Self.head(packet, names: transfer.recordingID) { receiveFileKey(packet) } else { unrequested(packet) }
         case (0x1a, 0x08), (0x1a, 0x12), (0x1b, 0x08), (0x1b, 0x12):
-            if transfer == nil { unrequestedAudio += 1 }
-            receiveAudio(packet)
+            if transfer?.key != nil { receiveAudio(packet) } else { unrequested(packet) }
         case (0x1a, 0x0a), (0x1b, 0x0a):
-            if transfer == nil { unrequestedAudio += 1 }
-            receiveEnd()
+            if transfer?.key != nil { receiveEnd() } else { unrequested(packet) }
         default:
             if let reply, reply.matches(packet) {
                 self.reply = nil
@@ -193,8 +206,33 @@ public final class SoundcoreSession {
                 onPush?(.recording(status == 1))
             } else {
                 unrequestedReplies += 1
+                // Another app exchanged audio keys with the recorder, which keeps one session key: this
+                // session's is stale, and its next transfer exchanges keys again.
+                if packet.type == 0x2e, packet.command == 0x01, packet.succeeded { crypto.reset() }
             }
         }
+    }
+
+    /// A file head for `id`, or the recorder refusing the request (which names nothing).
+    private static func head(_ packet: SoundcorePacket, names id: UInt32) -> Bool {
+        let b = [UInt8](packet.payload)
+        guard packet.succeeded, b.count >= 4 else { return true }
+        return (try? b.le32(at: 0)) == id
+    }
+
+    /// Audio that isn't for a transfer of this session's: a straggler of one it just stopped, or another
+    /// app's transfer over the link iOS shares between apps (Device Details counts both). Another app's
+    /// audio ends this session's transfer, if one is waiting for its head, without a word to the recorder,
+    /// so the other app's transfer carries on; Daybook's own waits until it has finished.
+    private func unrequested(_ packet: SoundcorePacket) {
+        unrequestedAudio += 1
+        let isHead = packet.command == 0x07
+        let names = isHead ? (try? [UInt8](packet.payload).le32(at: 0)) : nil
+        if transfer == nil, let quietUntil, ContinuousClock.now < quietUntil, !isHead || names == lastRequestedID { return }
+        otherAppAudioAt = .now
+        guard let transfer, transfer.outcome == nil else { return }
+        if transfer.isLive, transfer.receivedBytes > 0 { completeLive(transfer) } else { finish(transfer, .failure(SoundcoreError.yielded)) }
+        quietUntil = nil
     }
 
     // MARK: Commands
@@ -213,8 +251,9 @@ public final class SoundcoreSession {
     }
 
     /// Asks the recorder to start (true) or pause (false). Returns the state its reply reports, if any.
+    /// It waits while another app is transferring.
     public func setRecording(_ on: Bool) async throws -> Bool? {
-        try await exclusive {
+        try await exclusiveWhenQuiet {
             let packet = try await request(0x18, 0x82, Data([on ? 1 : 2])) { $0.type == 0x18 && $0.command == 0x82 }
             if let status = packet.payload.first, status <= 2 { return status == 1 }
             guard packet.succeeded else { throw SoundcoreError.rejected }
@@ -223,20 +262,23 @@ public final class SoundcoreSession {
     }
 
     /// Moves one recording to `url` as a 16 kHz WAV. Throws on any gap, mismatch, or decode error,
-    /// after removing the partial file. Cancelling stops the transfer on the recorder too.
+    /// after removing the partial file. Cancelling stops the transfer on the recorder too. It starts once
+    /// no other app is transferring, and throws `yielded` when another app starts a transfer before this
+    /// one's audio arrives.
     public func download(_ recording: SoundcoreRecording, to url: URL,
                   progress: @escaping (TransferPhase, UInt64) -> Void) async throws -> Download {
-        try await exclusive {
+        try await exclusiveWhenQuiet {
             try await transferLocked(recordingID: recording.id, expectedBytes: UInt64(recording.size), live: false,
                                      url: url, onPCM: nil, progress: progress)
         }
     }
 
     /// Receives the recording in progress until `stopListening()`, saving it to the URL `destination`
-    /// returns for its ID. Audio is decoded as it arrives and passed to `onPCM`.
+    /// returns for its ID. Audio is decoded as it arrives and passed to `onPCM`. It starts once no other
+    /// app is transferring.
     public func listen(destination: (UInt32) -> URL, onPCM: @escaping (AVAudioPCMBuffer) -> Void,
                 progress: @escaping (TransferPhase, UInt64) -> Void) async throws -> (recordingID: UInt32, download: Download) {
-        try await exclusive {
+        try await exclusiveWhenQuiet {
             let listing = try await firstPageLocked()
             guard let active = listing.activeRecordingID else { throw SoundcoreError.liveFileUnavailable }
             let result = try await transferLocked(recordingID: active, expectedBytes: 0, live: true, url: destination(active),
@@ -299,6 +341,51 @@ public final class SoundcoreSession {
 
     private func handOff() {
         if waiters.isEmpty { busy = false } else { waiters.removeFirst().continuation.resume() }
+    }
+
+    /// `exclusive`, once no other app's audio has arrived for `SoundcoreTiming.otherAppQuiet`: a transfer
+    /// or a Start or Pause sent over another app's transfer would cut it off. Listing and status don't
+    /// wait, and don't hold up meanwhile.
+    private func exclusiveWhenQuiet<T>(_ operation: () async throws -> T) async throws -> T {
+        var waiting = false
+        defer { if waiting { waitedForOtherApp() } }
+        while true {
+            if otherAppIsTransferring {
+                if !waiting { waiting = true; waitForOtherApp() }
+                try await quietSpell()
+                continue
+            }
+            let result: T? = try await exclusive { () async throws -> T? in
+                guard !otherAppIsTransferring else { return nil }
+                if waiting { waiting = false; waitedForOtherApp() }
+                return try await operation()
+            }
+            if let result { return result }
+        }
+    }
+
+    /// Sleeps until another app's audio has been quiet for `otherAppQuiet`, a little at a time so a
+    /// link that goes away ends the wait.
+    private func quietSpell() async throws {
+        while let since = otherAppAudioAt, ContinuousClock.now < since.advanced(by: timing.otherAppQuiet) {
+            if isClosed { throw SoundcoreError.disconnected }
+            try await Task.sleep(until: min(since.advanced(by: timing.otherAppQuiet), .now.advanced(by: .milliseconds(200))), clock: .continuous)
+        }
+        if isClosed { throw SoundcoreError.disconnected }
+    }
+
+    private func waitForOtherApp() {
+        waitingForOtherApp += 1
+        guard waitingForOtherApp == 1 else { return }
+        isWaitingForOtherApp = true
+        onWaitingForOtherApp?(true)
+    }
+
+    private func waitedForOtherApp() {
+        waitingForOtherApp = max(0, waitingForOtherApp - 1)
+        guard waitingForOtherApp == 0, isWaitingForOtherApp else { return }
+        isWaitingForOtherApp = false
+        onWaitingForOtherApp?(false)
     }
 
     private func request(_ type: UInt8, _ command: UInt8, _ payload: Data = Data(), timeout: Duration? = nil,
@@ -393,6 +480,7 @@ public final class SoundcoreSession {
         let transfer = Transfer(recordingID: recordingID, url: url, isLive: live, decoder: decoder,
                                 expectedBytes: expectedBytes, progress: progress)
         self.transfer = transfer
+        lastRequestedID = recordingID
         var payload = littleEndian32(0)
         payload.append(littleEndian32(recordingID))
         payload.append(live ? 1 : 0)
@@ -529,7 +617,9 @@ public final class SoundcoreSession {
     }
 
     /// Asks the recorder to stop sending. It stops transport only; it doesn't stop or delete a recording.
+    /// Never while another app's transfer is arriving: the recorder would stop that one.
     private func stopTransport() {
+        guard !otherAppIsTransferring else { return }
         try? send(SoundcorePacket.command(type: 0x1a, id: 0x11, payload: Data([1])))
     }
 }

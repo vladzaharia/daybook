@@ -164,6 +164,8 @@ struct StatusInputs: Equatable {
         /// Connected, but it didn't list its recordings (it didn't answer, or refused): the new ones shown
         /// are from its remembered list.
         var notListed = false
+        /// An import or a Start waits for another app's transfer: "Waiting for the Soundcore app to finish".
+        var otherAppWait: String?
     }
 
     /// A Mac paired over Wi‑Fi.
@@ -308,6 +310,7 @@ enum StatusSheetModel {
             return line(recorder.lastKnown.map { "Managed by \(owner) · \($0)" } ?? "Managed by \(owner)", .calm)
         }
         if recorder.isListeningLive { return line("Listening live", .recording) }
+        if let wait = recorder.otherAppWait { return line(wait, .working, short: "Waiting…") }
         if let importing = recorder.importing {
             if importing.suspended {
                 return line(importing.total == 1 ? "1 recording waits to import" : "\(importing.total) recordings wait to import", .calm)
