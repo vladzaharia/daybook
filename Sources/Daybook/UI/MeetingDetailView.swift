@@ -186,7 +186,14 @@ private struct PlayerBar: View {
                         Label(error, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(Ink.warning)
                             .help(player.errorDetails ?? error)
                     }
-                    if player.duration > 0 { controls }
+                    if player.duration > 0 {
+                        // A narrow page gives up the skip buttons, then the speed, before the slider.
+                        ViewThatFits(in: .horizontal) {
+                            controls(skips: true, speed: true)
+                            controls(skips: false, speed: true)
+                            controls(skips: false, speed: false)
+                        }
+                    }
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .frame(maxWidth: DaybookStyle.measure)
@@ -202,10 +209,12 @@ private struct PlayerBar: View {
         return track.source == .imported ? track.fileName : track.source.recordingName
     }
 
-    private var controls: some View {
+    private func controls(skips: Bool, speed: Bool) -> some View {
         HStack(spacing: 10) {
-            SkipButton(symbol: "gobackward.15", help: "Back 15 Seconds (⌥⌘←)") { withAnimation(Motion.state) { player.skip(-15) } }
-                .accessibilityLabel("Back 15 seconds")
+            if skips {
+                SkipButton(symbol: "gobackward.15", help: "Back 15 Seconds (⌥⌘←)") { withAnimation(Motion.state) { player.skip(-15) } }
+                    .accessibilityLabel("Back 15 seconds")
+            }
             Button { player.toggle() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 12, weight: .semibold))
@@ -220,8 +229,10 @@ private struct PlayerBar: View {
             .opacity(state.isRecording ? 0.4 : 1)
             .help(state.isRecording ? "Playback is off while recording" : "Play or Pause")
             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-            SkipButton(symbol: "goforward.15", help: "Forward 15 Seconds (⌥⌘→)") { withAnimation(Motion.state) { player.skip(15) } }
-                .accessibilityLabel("Forward 15 seconds")
+            if skips {
+                SkipButton(symbol: "goforward.15", help: "Forward 15 Seconds (⌥⌘→)") { withAnimation(Motion.state) { player.skip(15) } }
+                    .accessibilityLabel("Forward 15 seconds")
+            }
             VStack(spacing: 0) {
                 if let caption { Text(caption).font(.system(size: 10)).foregroundStyle(Ink.secondary).lineLimit(1) }
                 HStack(spacing: 8) {
@@ -230,6 +241,7 @@ private struct PlayerBar: View {
                         .contentTransition(.numericText(value: player.position))
                     Slider(value: Binding(get: { player.position }, set: { player.seek(to: $0) }), in: 0...max(1, player.duration))
                         .controlSize(.mini)
+                        .frame(minWidth: 72)
                         .tint(DaybookStyle.neonMint)
                         .accessibilityLabel("Playback position")
                         .accessibilityValue("\(SpokenTime.format(player.position)) of \(SpokenTime.format(player.duration))")
@@ -239,18 +251,20 @@ private struct PlayerBar: View {
                 // Explicit inks, not vibrant hierarchy styles: the glass under them adapts to the paper.
                 .foregroundStyle(Ink.secondary)
             }
-            Menu {
-                Picker("Speed", selection: $player.rate) {
-                    ForEach(Self.rates, id: \.self) { rate in Text(rate.formatted() + "×").tag(rate) }
+            if speed {
+                Menu {
+                    Picker("Speed", selection: $player.rate) {
+                        ForEach(Self.rates, id: \.self) { rate in Text(rate.formatted() + "×").tag(rate) }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Text(player.rate.formatted() + "×").font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(DaybookStyle.quietFill, in: Capsule())
                 }
-                .pickerStyle(.inline)
-            } label: {
-                Text(player.rate.formatted() + "×").font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(DaybookStyle.quietFill, in: Capsule())
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                .help("Playback Speed")
             }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("Playback Speed")
             Button {
                 if let trackID = player.trackID { state.addPlaybackHighlight(meeting.id, trackID: trackID, seconds: player.position) }
             } label: { Image(systemName: "bookmark") }
