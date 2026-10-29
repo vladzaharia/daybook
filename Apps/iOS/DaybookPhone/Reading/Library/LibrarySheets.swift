@@ -95,7 +95,8 @@ struct MoveSheet: View {
                 }
                 Section("New Folder") {
                     HStack {
-                        Image(systemName: "folder.badge.plus").foregroundStyle(PhoneStyle.accent)
+                        Image(systemName: "folder.badge.plus").foregroundStyle(PhoneStyle.Ink.secondary)
+                            .frame(width: 28).accessibilityHidden(true)
                         TextField("Name", text: $newFolder)
                             .focused($naming)
                             .submitLabel(.done)
@@ -118,12 +119,10 @@ struct MoveSheet: View {
             library.moveToFolder(ids, folder)
             finish()
         } label: {
-            HStack {
-                Label(name, systemImage: symbol).foregroundStyle(.primary)
-                Spacer()
-                if current == .some(folder) { Image(systemName: "checkmark").foregroundStyle(PhoneStyle.accent).fontWeight(.semibold) }
-            }
+            // Explicit inks: in a list, a button tints its label, and `.primary` would follow that tint.
+            SheetChoiceRow(title: name, systemImage: symbol, mark: current == .some(folder) ? .all : .none)
         }
+        .accessibilityAddTraits(current == .some(folder) ? .isSelected : [])
     }
 
     private func createFolder() {
@@ -155,7 +154,8 @@ struct TagsSheet: View {
             List {
                 Section {
                     HStack {
-                        Image(systemName: "tag").foregroundStyle(PhoneStyle.accent)
+                        Image(systemName: "tag").foregroundStyle(PhoneStyle.Ink.secondary)
+                            .frame(width: 28).accessibilityHidden(true)
                         TextField("New Tag", text: $newTag).submitLabel(.done).onSubmit(addNew)
                         if !newTag.trimmingCharacters(in: .whitespaces).isEmpty {
                             Button("Add", action: addNew).buttonStyle(.daybookLink).fontWeight(.semibold)
@@ -166,15 +166,7 @@ struct TagsSheet: View {
                     Section("Tags") {
                         ForEach(library.allTags, id: \.self) { tag in
                             Button { toggle(tag) } label: {
-                                HStack {
-                                    TagChip(tag: tag)
-                                    Spacer()
-                                    switch state(tag) {
-                                    case .all: Image(systemName: "checkmark").foregroundStyle(PhoneStyle.accent).fontWeight(.semibold)
-                                    case .some: Image(systemName: "minus").foregroundStyle(.secondary)
-                                    case .none: EmptyView()
-                                    }
-                                }
+                                SheetChoiceRow(title: tag, systemImage: "tag", mark: state(tag))
                             }
                             .accessibilityValue(state(tag) == .all ? "On" : state(tag) == .some ? "Some" : "Off")
                         }
@@ -188,9 +180,7 @@ struct TagsSheet: View {
         .presentationDetents([.medium, .large])
     }
 
-    private enum Coverage { case all, some, none }
-
-    private func state(_ tag: String) -> Coverage {
+    private func state(_ tag: String) -> SheetChoiceRow.Mark {
         let count = meetings.filter { ($0.tags ?? []).contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }.count
         return count == 0 ? .none : count == meetings.count ? .all : .some
     }
@@ -216,5 +206,32 @@ struct TagsSheet: View {
     private func finish() {
         if session.isSelecting { session.isSelecting = false; session.selection = [] }
         dismiss()
+    }
+}
+
+/// A choice in Move or Tags: a neutral symbol, the name in the title ink, and a check when it's
+/// chosen (a dash when only some of the conversations have it). The check is the row's only teal.
+struct SheetChoiceRow: View {
+    enum Mark { case all, some, none }
+    let title: String
+    let systemImage: String
+    let mark: Mark
+
+    var body: some View {
+        HStack(spacing: PhoneStyle.Space.s3) {
+            Image(systemName: systemImage)
+                .foregroundStyle(PhoneStyle.Ink.secondary)
+                .frame(width: 28)
+                .accessibilityHidden(true)
+            Text(title)
+                .foregroundStyle(PhoneStyle.Ink.title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            switch mark {
+            case .all: Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(PhoneStyle.accent).accessibilityHidden(true)
+            case .some: Image(systemName: "minus").fontWeight(.semibold).foregroundStyle(PhoneStyle.Ink.secondary).accessibilityHidden(true)
+            case .none: EmptyView()
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
