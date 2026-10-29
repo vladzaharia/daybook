@@ -19,8 +19,10 @@ struct ModelAcknowledgementsView: View {
             Form {
                 ForEach(ModelAcknowledgements.list(from: catalog)) { entry in
                     Section {
-                        LabeledContent("Models") {
-                            Text(entry.models.joined(separator: "\n")).multilineTextAlignment(.trailing)
+                        if let models = entry.otherModels {
+                            LabeledContent("Models") {
+                                Text(models.joined(separator: "\n")).multilineTextAlignment(.trailing)
+                            }
                         }
                         LabeledContent("License") {
                             if let url = URL(string: entry.licenseURL), !entry.licenseURL.isEmpty {
@@ -81,14 +83,20 @@ enum AboutPanel {
         }
         let result = NSMutableAttributedString()
         result.append(text("Models\n", font: bold))
-        for (index, entry) in ModelAcknowledgements.list(from: catalog).enumerated() {
-            if index > 0 { result.append(text("\n")) }
+        for entry in ModelAcknowledgements.list(from: catalog) {
+            // A blank line before each entry, so the heading stands apart from the first one too.
+            result.append(text("\n"))
             result.append(text("\(entry.title)\(entry.maker.map { " · \($0)" } ?? "")\n", font: bold))
-            result.append(text(entry.models.joined(separator: ", ") + "\n", color: .secondaryLabelColor))
+            if let models = entry.otherModels { result.append(text(models.joined(separator: ", ") + "\n", color: .secondaryLabelColor)) }
             result.append(text(entry.licenseName, link: entry.licenseURL.isEmpty ? nil : entry.licenseURL))
             result.append(text(entry.label.map { " · \($0)\n" } ?? "\n", color: .secondaryLabelColor))
             if let attribution = entry.attribution { result.append(text(attribution + "\n", color: .secondaryLabelColor)) }
         }
         return result
     }
+}
+
+extension ModelAcknowledgement {
+    /// The models it covers, unless that's only the one its title already names ("Apple Vision").
+    var otherModels: [String]? { models == [title] ? nil : models }
 }

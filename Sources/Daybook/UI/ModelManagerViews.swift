@@ -396,10 +396,11 @@ struct ModelDetailsSheet: View {
             if let model = snapshot.catalog.model(key) {
                 let row = snapshot.row(model)
                 header(model, row: row)
+                // What it is and its terms, then what's on this Mac, which the buttons below act on.
                 Form {
                     about(model, row: row, snapshot: snapshot)
-                    onThisMac(model, row: row, snapshot: snapshot)
                     license(model)
+                    onThisMac(model, row: row, snapshot: snapshot)
                 }
                 .formStyle(.grouped)
                 footer(row)
@@ -431,8 +432,7 @@ struct ModelDetailsSheet: View {
 
     @ViewBuilder private func about(_ model: CatalogModel, row: ModelRow, snapshot: ModelManagerSnapshot) -> some View {
         Section {
-            LabeledContent("Family", value: model.familyName)
-            LabeledContent("Variant", value: Self.variantName(model))
+            if let family = Self.unnamedFamily(model) { LabeledContent("Family", value: family) }
             if let released = Self.date(model.variant.releaseDate) { LabeledContent("Released", value: released) }
             LabeledContent("Used for", value: model.roles.map(\.title).joined(separator: ", "))
             LabeledContent("Size", value: model.isSystemModel ? "Included with macOS" : ModelSize.format(model.approximateBytes))
@@ -446,8 +446,9 @@ struct ModelDetailsSheet: View {
         }
     }
 
+    /// The license, its credit, and where the model comes from. "Non-commercial" is the chip in the header.
     @ViewBuilder private func license(_ model: CatalogModel) -> some View {
-        Section("License") {
+        Section {
             if let license = model.license {
                 LabeledContent("License") {
                     if let url = URL(string: license.url), !license.url.isEmpty {
@@ -456,7 +457,6 @@ struct ModelDetailsSheet: View {
                         Text(license.name)
                     }
                 }
-                if !license.allowsCommercialUse { LabeledContent("Use", value: "Non-commercial") }
                 if let attribution = license.attribution {
                     Text(attribution)
                         .font(.subheadline)
@@ -533,12 +533,10 @@ struct ModelDetailsSheet: View {
 
     // MARK: Words
 
-    /// "Small" from "Whisper Small", "7B" from "Qwen 2.5 · 7B"; the whole name otherwise.
-    static func variantName(_ model: CatalogModel) -> String {
-        let name = model.name
-        guard name.hasPrefix(model.familyName) else { return name }
-        let rest = name.dropFirst(model.familyName.count).trimmingCharacters(in: CharacterSet(charactersIn: " ·"))
-        return rest.isEmpty ? name : rest
+    /// The family, when the title doesn't already say it: nothing for "Parakeet Ultra" or "Qwen 2.5 · 7B", but
+    /// "Nemotron 3 Diarization" for "Nemotron 3 Speaker Detection". The title says the variant either way.
+    static func unnamedFamily(_ model: CatalogModel) -> String? {
+        model.name.hasPrefix(model.familyName) ? nil : model.familyName
     }
 
     static func date(_ text: String?) -> String? {
