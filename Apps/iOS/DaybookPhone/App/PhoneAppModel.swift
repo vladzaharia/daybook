@@ -314,6 +314,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             return presence.waitingLine(now: now)
         case .recorded:
             return "Not transcribed yet"
+        case .transcribed:
+            return "Not summarized yet"
         case .failed(let failure):
             return failure.device.map { "\($0.name) couldn’t finish" } ?? "Couldn’t finish"
         case .awaitingRecordings(let recordings):

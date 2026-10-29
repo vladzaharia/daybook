@@ -100,6 +100,19 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(StatusPresentation.row(.recorded), RowStatus(kind: .notTranscribed, text: "Not transcribed yet"))
     }
 
+    func testATranscriptWithoutASummaryOffersSummarize() {
+        var meeting = recorded()
+        let words = TranscriptSegment(trackID: meeting.tracks[0].id, start: 0, end: 2, text: "Come back in six months.")
+        meeting.transcripts = [TrackTranscript(trackID: meeting.tracks[0].id, segments: [words], createdAt: now)]
+        meeting.unifiedTranscript = [words]
+        XCTAssertEqual(ProcessingStatus(meeting, now: now), .transcribed)
+        let page = StatusPresentation.page(.transcribed, meeting: meeting, sighting: nil, now: now)
+        XCTAssertEqual(page?.kind, .line)
+        XCTAssertEqual(page?.title, "Not summarized yet")
+        XCTAssertEqual(page?.actions, [.request(.summaryOnly)], "the line offers Summarize, a request your Mac carries out")
+        XCTAssertNil(StatusPresentation.row(.transcribed), "the row shows its preview: the transcript reads")
+    }
+
     func testWaitingSaysWhenAMacWasLastSeen() {
         var meeting = recorded()
         meeting.upsertProcessingRequest(ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now))

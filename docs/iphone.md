@@ -50,6 +50,7 @@ A conversation's processing state comes from its data and is shown the same way 
 | **Recorded** | Audio with no transcript yet; no request yet | "Not transcribed yet". Everything except transcript and summary works |
 | **Requested** | A `ProcessingRequest` is in the library, waiting | "Waiting for your Mac" (with "Last seen 2 h ago" when no Mac has checked in recently) |
 | **Processing** | A Mac claimed it | "Transcribing on <Mac name> · 40%" (live over the local link; coarse over sync) |
+| **Transcribed** | A transcript with no summary, and nothing asked for one (a summary stopped partway, say) | "Not summarized yet" with Summarize, which writes a Summarize request. The list row shows its preview. A Mac's page offers Summarize at its foot, with the template |
 | **Waiting for a recording** | A Mac's audio is transcribed and summarized; a recorder that recorded along hasn't been added yet ([multipoint](multipoint.md#mac-first)) | "Waiting for audio from Soundcore Work" on the page; "Waiting for Soundcore Work audio" in the list |
 | **Done** | Transcript and summary present | Normal page |
 | **Couldn't finish** | The Mac reported a failure | What it means in plain words, Try Again (which writes a new request), and the Mac's own reason behind Details |
