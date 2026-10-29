@@ -34,6 +34,8 @@ import Foundation
 ///     --handoff-demo <state>     with --device-simulator --device-autopilot: a recorder handoff state for screenshots
 ///                                (managed, asking, finishing, waiting, overdue, refused, connecting, done, handing)
 ///     --demo-live-captions       with --device-simulator --device-autopilot: the recorder records and streams scripted captions
+///     --demo-recorder-only <name>  only that recorder records a shared recording; this iPhone's microphone didn't start
+///                                (use with --synthetic-audio; nothing is recorded)
 ///
 /// Release builds ignore all of them except --posture, which only changes layout.
 struct LaunchOptions {
@@ -65,6 +67,7 @@ struct LaunchOptions {
     var statusOpen: String?
     var handoffDemo: String?
     var demoLiveCaptions = false
+    var demoRecorderOnly: String?
     /// Hosted unit tests: no recovery, no Live Activities, an inert UI.
     var isRunningTests = false
 
@@ -103,6 +106,7 @@ struct LaunchOptions {
         scrollEnd = arguments.contains("--scroll-end")
         handoffDemo = Self.value(after: "--handoff-demo", in: arguments)
         demoLiveCaptions = arguments.contains("--demo-live-captions")
+        demoRecorderOnly = Self.value(after: "--demo-recorder-only", in: arguments)
         if arguments.contains("--open-settings") {
             let next = Self.value(after: "--open-settings", in: arguments)
             openSettings = next.flatMap { $0.hasPrefix("--") ? nil : $0 } ?? "root"

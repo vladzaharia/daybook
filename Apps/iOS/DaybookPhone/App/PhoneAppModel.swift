@@ -363,6 +363,12 @@ final class PhoneAppModel: RecordingCommandHandling {
             try? await startRecording()
             runDemoScript()
         }
+        if let name = options.demoRecorderOnly, !recorder.isActive {
+            // After the scene has come forward, which would otherwise record along at once.
+            try? await Task.sleep(for: .seconds(1))
+            recorderOnly = RecorderOnlyRecording(conversationID: UUID(), title: "Conversation at \(Date().formatted(date: .omitted, time: .shortened))",
+                                                 startedAt: Date(), recorderID: "demo", recorderName: name)
+        }
     }
 
     // MARK: Scene phase

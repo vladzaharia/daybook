@@ -389,7 +389,11 @@ including with Daybook in the background (docs/devices.md, "Holding the recorder
   `recording.state` names the conversation in `sharedConversationID`, so a Mac following it keeps
   recording. Opening Daybook (from the notification or otherwise) records on this iPhone too, into the
   same conversation; the recorder's button stopping it, or a Mac's stop, ends it and stops the rest.
-  Never a microphone kept open, never a claim this iPhone records when it doesn't.
+  Never a microphone kept open, never a claim this iPhone records when it doesn't. If the microphone
+  still can't start when Daybook comes forward (it's refused, or a call holds it), the library says so
+  over Record, in the status sheet in the hand and at the foot of the notebook's left page: "Soundcore
+  Work is recording. This iPhone isn't." Record then records on this iPhone too, into the same
+  conversation.
 
 On a Mac that manages the recorder, its button starts and stops this Mac the same way while the Mac
 is connected to it (a Mac lets the recorder go when idle, so the iPhone is where this matters), and
