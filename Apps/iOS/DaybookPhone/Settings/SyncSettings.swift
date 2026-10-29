@@ -97,7 +97,7 @@ struct ICloudScreen: View {
     }
 
     private var devicesSummary: String {
-        let others = model.sync.devices.filter { !$0.isCurrentDevice }
+        let others = model.sync.devices.inUse().filter { !$0.isCurrentDevice }
         return others.isEmpty ? "Only this iPhone" : others.count == 1 ? "1 other" : "\(others.count) others"
     }
 }
@@ -107,11 +107,11 @@ struct LibraryDevicesScreen: View {
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
-        let devices = model.sync.devices
         TimelineView(.periodic(from: .now, by: 60)) { context in
             List {
                 Section {
-                    ForEach(devices) { device in
+                    // Each device once: an earlier identity of a reinstalled one, and one not seen for months, aren't listed.
+                    ForEach(model.sync.devices.inUse(at: context.date)) { device in
                         SettingsRow(title: name(device), detail: Self.detail(device, now: context.date), systemImage: symbol(device))
                     }
                 }
