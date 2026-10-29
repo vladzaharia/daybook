@@ -1,5 +1,59 @@
 # Validation record
 
+## Mac UI follow-ups (2026-10-29)
+
+**Inspector crash.** With the inspector open, opening Daybook on iPhone's page at launch threw
+"Unable to activate constraint … NSHostingView<…InspectorStyleContext>.trailing and
+_NSSplitViewItemViewWrapper.trailing because they have no common ancestor". Traced with lldb: the
+inspector puts the page and itself in a split view of their own (`SystemSplitView`), and whenever the
+page's view identity changed (the `detail` view's branches: an empty page, a conversation, a device
+page), SwiftUI gave the page a new `NSSplitViewItem` (`setSplitViewItems:`), which took the
+inspector's item out and put it back. The inspector's expand animation, deferred at launch until the
+window's other animations finish (`Transaction.addAnimationListener`), then completed on the detached
+wrapper. Both sides of that split are now one view (`ZStack`) whatever they show, so a page switch never
+replaces its items. `LibraryInspectorTests` hosts `LibraryView` in a window and switches between a
+conversation and a device page while the inspector collapses and expands: without the fix the page's
+item changed on every switch and the inspector ended up out of the window; with it the items stay. The
+repro (`--library-demo --inspector --select "Vendor walkthrough" --phone-demo connected --device-demo
+none --window-size 1400x860`) crashed 3 of 5 runs before and 0 of 12 after (6 with the old `PhoneDemo`
+timing, 6 with the new). `PhoneDemo` now waits for `LibraryDemo`'s seeding, so the selection lands
+before the phone's page. Its conversations (audio still to arrive) also couldn't be saved in a library
+named by a `/private` path: `LocalFiles.requireContained` resolved the file's existing ancestors but
+not the conversation folder, which didn't exist yet, and Foundation drops `/private` only from paths
+that exist (`MeetingStoreTests.testANewConversationWithRecordingsStillToArriveSavesInALibraryUnderPrivate`).
+
+**Words and layout.** Floating Notes says what records along once, in its chips (the line under the
+clock is gone; a paused iPhone's chip names it). The iPhone's recording screen has no chips and says it
+once in `MultipointStatus`, so it has no duplication. A first summary reads "Summary written" with no
+empty Before, on the Mac and the iPhone (`RevisionText.hasBefore`). The inspector names each recording
+once and shows timing only for several recordings, without a 0:00 start, confidence, or drift. Device
+pages: method rows leave out what the byline says, "Last import" is capitalized (the shared
+`ImportFolderWatcher.summary`, which the iPhone's method rows show too), the iPhone's page has no
+Import heading or method rows, Listen Live's captions label shares the Listening row's glyph column,
+the More menu hides what doesn't apply (`DeviceMenuOffer`), and the sidebar's import ring is drawn by
+Daybook. Controls says Play or Pause from `PlaybackActivity`, which publishes only whether playback is
+playing (`AudioPlaybackTests`, a silent file played muted). Capture warnings: a device change and a
+recovered track's missing timing file are one plain sentence, the detail in the track's capture notes.
+The photo demo's recording has its own transcript. Floating Notes already carried the copy pass's words.
+
+**The window's content under the toolbar** (the owner's report from 0.2.2). Not reproduced on this
+branch. `--window-actions` drove the window through each suspected trigger before a snapshot, run as an
+app (`open`) so it could take full screen: full screen in and out, the toolbar hidden and shown (also in
+full screen), zoom and back, the sidebar collapsed and expanded, the window against the top of the
+screen, and a recording with live captions on the page with the notes focused. Every column started
+under the toolbar each time. On this Mac (a notched 1512 × 982 display) full screen puts the window
+below the camera band (1512 × 949) with the toolbar in its own window; the report shows the window
+reaching the top of the screen, which none of these produced. The window can't be made shorter than
+its 532 pt minimum (`setFrame` is clamped), so content centred in a too-short window isn't it either.
+
+Verified: `swift test` passed 1,192 XCTest cases across the eight bundles (one skipped, as before): Captions 8,
+Core 374, Devices 101, Intelligence 131, Kit 185, Link 73, Live 30, Mac app 290. `scripts/build-ios.sh --test` on a
+dedicated iPhone 18 Pro simulator clone (deleted afterwards) passed all 177; the iPhone's Version History was
+captured there with a first summary, before and after, in light and dark. Window snapshots, before and after, light and dark where colour is involved, are
+listed in the branch's report. Still to check on hardware: the owner's layout report on their own
+setup (`--window-actions` is there for it), the sidebar ring in an active window on a real import, and
+a real recorder's device change during a recording.
+
 ## The four streams together (2026-10-29)
 
 Processing quality, speaker profiles, live transcription, and recording across devices were built
