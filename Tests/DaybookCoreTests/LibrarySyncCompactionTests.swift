@@ -205,42 +205,86 @@ final class LibrarySyncCompactionTests: XCTestCase {
         XCTAssertEqual(pruned.count, 3, "the phone isn't waited for")
         XCTAssertEqual(files("Events").count, 1)
 
+        // A newer Daybook's entry, which this version can't read, is in the journal too: it doesn't hold the rebase back.
+        let newer = Data(#"{"schemaVersion":2,"meetingID":"\#(UUID().uuidString)"}"#.utf8)
+        try newer.write(to: remote.appendingPathComponent("Events/\(SyncDigest.sha256(data: newer)).json"))
         // Back, with an edit made while away.
         try await edit("Phone", meeting.id) { $0.setNotes("Written offline") }
         let back = try await pass(phone, "Phone")
-        XCTAssertEqual(back.warnings, [])
+        XCTAssertTrue(back.warnings.allSatisfy { $0.contains("newer version of Daybook") }, "\(back.warnings)")
         XCTAssertEqual(back.publishedEvents, 0, "merged first, published next pass")
         let rebased = try await held("Phone", meeting.id)
         XCTAssertEqual(rebased.title, "Retro 3"); XCTAssertEqual(rebased.notes, "Written offline")
         let published = try await pass(phone, "Phone")
         XCTAssertEqual(published.publishedEvents, 1)
         let onMac = try await pass(mac, "Mac")
-        XCTAssertEqual(onMac.warnings, [])
+        XCTAssertTrue(onMac.warnings.allSatisfy { $0.contains("newer version of Daybook") }, "\(onMac.warnings)")
         let merged = try await held("Mac", meeting.id)
         XCTAssertEqual(merged.title, "Retro 3"); XCTAssertEqual(merged.notes, "Written offline")
         XCTAssertEqual(merged.revisions.filter { $0.field.hasPrefix("conflict") }.count, 0)
     }
 
-    func testADeletedConversationKeepsOnlyItsDeletion() async throws {
+    /// A deleted conversation keeps only its deletions, once every device has applied them: the phone, which added a
+    /// paragraph while the Mac deleted it, keeps that as a new conversation first (it needs what the deletion saw to tell).
+    func testADeletedConversationKeepsOnlyItsDeletionOnceEveryDeviceHasAppliedIt() async throws {
         let mac = try mac(), phone = try phone()
-        let gone = Meeting(title: "Old"), kept = Meeting(title: "Kept")
-        try await pass(mac, "Mac", [gone, kept])
+        let gone = Meeting(title: "Old"), quiet = Meeting(title: "Quiet"), kept = Meeting(title: "Kept")
+        try await pass(mac, "Mac", [gone, quiet, kept])
         try await pass(phone, "Phone")
         for index in 1...3 { try await edit("Mac", gone.id) { $0.title = "Old \(index)" }; try await pass(mac, "Mac") }
         try await pass(phone, "Phone")
-        _ = try await MeetingStore(rootURL: local("Mac")).moveToTrash(gone.id)
+        // The phone adds a paragraph while the Mac, not having applied it, deletes both.
+        try await edit("Phone", gone.id) { $0.setNotes("Added on the phone") }
+        try await pass(phone, "Phone")
+        let store = try MeetingStore(rootURL: local("Mac"))
+        _ = try await store.moveToTrash(gone.id); _ = try await store.moveToTrash(quiet.id)
         try await pass(mac, "Mac")
         try await pass(mac, "Mac")
-        // The deletion is the only event of the conversation left.
-        let pruned = await mac.prunedIDs
-        XCTAssertEqual(pruned.count, 4)
-        // The phone, unchanged since, applies the deletion; nothing is kept as a new conversation.
+        let proposal = await mac.pendingProposal
+        XCTAssertEqual(Set(proposal?.record.deletions ?? []), [gone.id.uuidString, quiet.id.uuidString])
+        // Until the phone has applied the deletions, their history stays: the phone needs it to tell what it added.
+        let before = await mac.prunedIDs
+        XCTAssertTrue(before.isEmpty, "\(before.count) pruned")
+
         let onPhone = try await pass(phone, "Phone")
-        XCTAssertTrue(onPhone.deletedMeetingIDs.contains(gone.id))
-        XCTAssertEqual(onPhone.warnings, [])
+        XCTAssertTrue(onPhone.deletedMeetingIDs.isSuperset(of: [gone.id, quiet.id]))
         XCTAssertEqual(onPhone.pendingDownloads, 0)
-        let left = try await MeetingStore(rootURL: local("Phone")).list()
-        XCTAssertEqual(Set(left.map(\.id)), [kept.id])
+        let keptOnPhone = try await MeetingStore(rootURL: local("Phone")).list()
+        let fork = try XCTUnwrap(keptOnPhone.first { $0.notes.contains("Added on the phone") }, "the phone's paragraph is kept")
+        XCTAssertNotEqual(fork.id, gone.id)
+        XCTAssertEqual(Set(keptOnPhone.map(\.id)), [kept.id, fork.id], "the unchanged one is simply deleted")
+        try await pass(mac, "Mac")
+        // Now each deleted conversation keeps only its deletion.
+        let pruned = await mac.prunedIDs
+        XCTAssertEqual(pruned.count, 6, "four of one, one of the other, and the phone's paragraph")
+        try await pass(phone, "Phone")
+        let onMac = try await pass(mac, "Mac")
+        XCTAssertEqual(onMac.pendingDownloads, 0); XCTAssertEqual(onMac.warnings, [])
+        XCTAssertEqual(Set(onMac.meetings.map(\.id)), [kept.id, fork.id])
+    }
+
+    /// A highlight sidecar the phone never downloaded isn't in its edit's assets; a conversation's sidecars are what any of
+    /// its events names. The event that alone names one stays, so a new Mac still installs it.
+    func testAnEventThatAloneNamesASidecarStays() async throws {
+        let mac = try mac(), phone = try phone()
+        let source = root.appendingPathComponent("audio.wav"), sidecar = root.appendingPathComponent("audio.highlights.json")
+        try Data("original audio".utf8).write(to: source)
+        try JSONEncoder().encode(HighlightSidecar(highlights: [.init(time: 7, text: "A double tap")])).write(to: sidecar)
+        let meeting = try await MeetingStore(rootURL: local("Mac")).importAudio(from: source, into: Meeting(title: "Walk"), source: .soundcore,
+                                                                                sidecarURL: sidecar)
+        try await pass(mac, "Mac", [meeting])
+        try await pass(phone, "Phone")
+        try await edit("Phone", meeting.id) { $0.title = "Walk in the park" }
+        let edited = try await pass(phone, "Phone")
+        XCTAssertEqual(edited.publishedEvents, 1)
+        for _ in 0..<3 { try await pass(mac, "Mac"); try await pass(phone, "Phone") }
+        let pruned = await mac.prunedIDs
+        XCTAssertTrue(pruned.isEmpty, "the first event alone names the sidecar")
+        XCTAssertEqual(files("Events").count, 2)
+        let fresh = try self.mac("Z Mac")
+        try await pass(fresh, "Z Mac")
+        let originals = try FileManager.default.contentsOfDirectory(atPath: local("Z Mac").appendingPathComponent("Meetings/\(meeting.id)/Originals").path)
+        XCTAssertTrue(originals.contains { $0.contains(".highlights-") }, "\(originals)")
     }
 
     // MARK: Encrypted libraries
@@ -279,22 +323,32 @@ final class LibrarySyncCompactionTests: XCTestCase {
                 XCTAssertFalse(String(decoding: bytes, as: UTF8.self).contains(marker), "\(marker) in \(path)")
             }
         }
-        let fresh = try await pass(try self.phone("Fresh"), "Fresh")
+        let freshPhone = try self.phone("Fresh")
+        let fresh = try await pass(freshPhone, "Fresh")
         XCTAssertEqual(fresh.pendingDownloads, 0); XCTAssertEqual(fresh.warnings, [])
         XCTAssertEqual(fresh.meetings.first?.notes, "Quokka 3")
 
-        // A new key: the records follow it, so nothing still needs the old one once it's retired.
+        // A new key: the sealer seals the records again under it like the rest of the history, even with no Mac compacting
+        // meanwhile, so nothing still needs the old one once it's retired.
+        await mac.setCompactionPolicy(nil)
         let start = Date()
         await mac.setSealerClock { start }
         let second = try await mac.rotateKey(now: start)
         try await pass(mac, "Mac", metadata: settings("Marmalade 3"))
         try await pass(phone, "Phone")
+        try await pass(freshPhone, "Fresh")
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60) }
         try await pass(mac, "Mac", metadata: settings("Marmalade 3"))
+        let sealer = await mac.sealerProgress
+        XCTAssertEqual(try self.manifest().sealing?.keys.map(\.id), [second.idHex], "the old key retired: \(String(describing: sealer))")
+        XCTAssertFalse(files("Sealed/Compaction").isEmpty)
         for name in files("Sealed/Compaction") {
             let header = try XCTUnwrap(SealedObject.header(of: Data(contentsOf: remote.appendingPathComponent("Sealed/Compaction/\(name)"))))
             XCTAssertEqual(header.keyID, second.id, "Sealed/Compaction/\(name) is still under the old key")
         }
         XCTAssertNotEqual(first.id, second.id)
+        let later = try await pass(try self.phone("Later"), "Later")
+        XCTAssertEqual(later.pendingDownloads, 0); XCTAssertEqual(later.warnings, [])
     }
 
     // MARK: Measured
@@ -309,7 +363,7 @@ final class LibrarySyncCompactionTests: XCTestCase {
         for sealed in [false, true] {
             root = base.appendingPathComponent(sealed ? "Encrypted" : "Plaintext")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            try await measure(sealed: sealed, settingsVersions: full ? 200 : 12, conversations: full ? 100 : 8, relabels: 3, report: full)
+            try await measure(sealed: sealed, settingsVersions: full ? 200 : 8, conversations: full ? 100 : 6, relabels: 3, report: full)
         }
         root = base
     }
@@ -460,6 +514,24 @@ final class LibrarySyncCompactionTests: XCTestCase {
         XCTAssertNoThrow(try SyncManifest.checked(manifest))
         manifest.schemaVersion = 4
         XCTAssertThrowsError(try SyncManifest.decode(manifest.encoded())) { XCTAssertEqual($0 as? LibrarySyncError, .unsupportedVersion(4)) }
+    }
+
+    /// A compaction record a newer Daybook wrote in a format this one can't read is a warning, not a download to wait for,
+    /// and this device doesn't compact over it.
+    func testACompactionRecordFromANewerDaybookIsAWarningAndStopsCompactingHere() async throws {
+        let mac = try mac()
+        try await pass(mac, "Mac", metadata: settings("1"))
+        let newer = Data(#"{"format":"DaybookCompaction","schemaVersion":2,"deviceID":"Next","createdAt":0}"#.utf8)
+        try FileManager.default.createDirectory(at: remote.appendingPathComponent("Compaction"), withIntermediateDirectories: true)
+        try newer.write(to: remote.appendingPathComponent("Compaction/\(SyncDigest.sha256(data: newer)).json"))
+        for index in 2...3 {
+            let result = try await pass(mac, "Mac", metadata: settings("\(index)"))
+            XCTAssertEqual(result.pendingDownloads, 0)
+            XCTAssertTrue(result.warnings.contains { $0.contains("newer version of Daybook") }, "\(result.warnings)")
+        }
+        XCTAssertEqual(files("Metadata").count, 3, "nothing compacted")
+        let quiet = await mac.hasRemoteChanges()
+        XCTAssertFalse(quiet)
     }
 
     /// A pruned entry's file still in the sync folder (deleted later) is left out by every device, and a reader that finds

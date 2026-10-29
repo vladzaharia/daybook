@@ -70,8 +70,9 @@ final class LibrarySyncNewContainerTests: XCTestCase {
         try await pass(try engine("Mac", remote: macView), "Mac", [fromMac])
         try await pass(try engine("Phone", remote: phoneView, phone: true), "Phone", [fromPhone])
         let macLibrary = try manifest(macView).libraryID, phoneLibrary = try manifest(phoneView).libraryID
-        XCTAssertNotNil(try manifest(macView).created)
-        let winner = [macLibrary, phoneLibrary].min { $0.uuidString < $1.uuidString }!
+        // The first one started wins; started the same moment (the manifest keeps whole seconds), the smallest ID.
+        let started = [macLibrary: try XCTUnwrap(try manifest(macView).created), phoneLibrary: try XCTUnwrap(try manifest(phoneView).created)]
+        let winner = [macLibrary, phoneLibrary].min { (started[$0]!, $0.uuidString) < (started[$1]!, $1.uuidString) }!
         let loser = winner == macLibrary ? phoneLibrary : macLibrary
 
         // iCloud brings them together. From now on both devices see the same folder.
@@ -100,10 +101,14 @@ final class LibrarySyncNewContainerTests: XCTestCase {
         }
     }
 
-    /// Whichever marker iCloud kept as the file and which it renamed, every device picks the same winner.
+    /// Whichever marker iCloud kept as the file and which it renamed, every device picks the same winner: the library
+    /// started first (here, an hour before the other, by a device that was offline when the other started), whatever
+    /// the IDs.
     func testTheWinnerIsTheSameWhicheverMarkerIsTheCopy() async throws {
         var resolved: [UUID] = []
-        let first = LibraryKey.generate(libraryID: UUID(), createdBy: "A"), second = LibraryKey.generate(libraryID: UUID(), createdBy: "B")
+        let first = LibraryKey.generate(libraryID: UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000000")!, createdBy: "A",
+                                        now: Date().addingTimeInterval(-3_600))
+        let second = LibraryKey.generate(libraryID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, createdBy: "B")
         for key in [first, second] { try keychain.store(key) }
         func marker(_ key: LibraryKey) -> SyncManifest {
             var manifest = SyncManifest(libraryID: key.libraryID)
@@ -122,7 +127,7 @@ final class LibrarySyncNewContainerTests: XCTestCase {
             XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("daybook-sync 2.json").path))
         }
         XCTAssertEqual(resolved[0], resolved[1])
-        XCTAssertEqual(resolved[0], [first.libraryID, second.libraryID].min { $0.uuidString < $1.uuidString })
+        XCTAssertEqual(resolved[0], first.libraryID, "the first started, though its ID is the larger")
     }
 
     /// Two encrypted libraries started a long time apart aren't a race: they can't be merged, and sync pauses.
