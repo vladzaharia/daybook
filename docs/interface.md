@@ -203,6 +203,10 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --notes-size <W>x<H>                Floating Notes' size, such as 340x228 (compact)
   --notes-contrast                    Floating Notes as Increase Contrast draws it (simulated: the shared tokens and SwiftUI's contrast)
   --play-muted                        plays the selected conversation silently
+  --library-demo                      fills the library with conversations in every list, page, and inspector
+                                      state; see LibraryDemo.swift. With it: --inspector-all (every inspector
+                                      section open), --multi-select "<title>|<title>", --notice "<text>"
+  --window-size <W>x<H>               the main window's size, such as 900x700
   --model-demo <step,…>               Settings › Models states without the network; see models.md
   --sync-demo <state>                 Settings › Library › iCloud Sync in a state, without iCloud; see SyncSettingsDemo
   --sync-sheet encrypt|recovery-key|enter-key   with --sync-demo, one of its sheets

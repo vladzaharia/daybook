@@ -373,7 +373,7 @@ private final class DockMenuItem: NSMenuItem {
 /// Debug-only launch arguments that open a specific surface, so every screen can be captured
 /// without clicking: `--place work|personal|all|device|device:<name>|folder:<name>`, `--select <title>`,
 /// `--page transcript`, `--inspector`, `--open-settings <pane>`, `--open-window <id>`,
-/// `--show-notes`, `--show-setup`, `--simulate-recording <title> [--demo-captions]`.
+/// `--show-notes`, `--show-setup`, `--simulate-recording <title> [--demo-captions]`, `--library-demo`.
 private struct DebugLaunchActions: ViewModifier {
     @ObservedObject var state: AppState
     @Environment(\.openWindow) private var openWindow
@@ -408,6 +408,7 @@ private struct DebugLaunchActions: ViewModifier {
             PhoneDemo.apply(to: state)
             FloatingNotesDemo.apply(to: state)
             PhotoDemo.apply(to: state)
+            LibraryDemo.apply(to: state)
             if let query = LaunchOptions.value(after: "--search") { state.search = query }
             switch LaunchOptions.value(after: "--sheet") {
             case "history": state.activeSheet = .versionHistory
