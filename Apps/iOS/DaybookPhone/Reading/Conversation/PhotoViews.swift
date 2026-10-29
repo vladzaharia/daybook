@@ -201,16 +201,28 @@ struct PhotoViewer: View {
         NavigationStack {
             if let meeting, let photo {
                 VStack(spacing: 12) {
-                    PhotoImage(photo: photo, meetingID: meetingID, maxPixels: 2400, mode: .fit)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityLabel(meeting.photoAccessibilityLabel(photo))
+                    // Swipe between the conversation's photos, as in Photos; the dots show where you are.
+                    TabView(selection: $photoID) {
+                        ForEach(photos) { item in
+                            PhotoImage(photo: item, meetingID: meetingID, maxPixels: 2400, mode: .fit)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .accessibilityLabel(meeting.photoAccessibilityLabel(item))
+                                .accessibilityActions {
+                                    if let index, index > 0 { Button("Previous Photo") { step(-1) } }
+                                    if let index, index < photos.count - 1 { Button("Next Photo") { step(1) } }
+                                }
+                                .tag(item.id)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .always : .never))
+                    .indexViewStyle(.page(backgroundDisplayMode: .always))
                     VStack(alignment: .leading, spacing: 12) {
                         TextField(photo.analysis?.caption ?? "Caption", text: $caption, axis: .vertical)
                             .accessibilityLabel("Caption").onSubmit(saveCaption)
                         Text(photo.capturedAt.formatted(date: .abbreviated, time: .shortened))
                             .font(PhoneStyle.Typeface.byline).foregroundStyle(PhoneStyle.Ink.secondary)
                         if let time = meeting.timelineTime(of: photo), !meeting.tracks.isEmpty {
-                            HStack {
+                            HStack(spacing: PhoneStyle.Space.s5) {
                                 Button("Play from \(TimeLabel.short(time))") {
                                     saveCaption(); session.player.play(.timeline(time), in: meeting, provider: provider); dismiss()
                                 }
@@ -220,7 +232,8 @@ struct PhotoViewer: View {
                                     }
                                 }
                             }
-                            .font(PhoneStyle.Typeface.status)
+                            .buttonStyle(.daybookLink)
+                            .font(PhoneStyle.Typeface.statusLead)
                         }
                         if let failure {
                             Label(failure, systemImage: "exclamationmark.triangle")
@@ -235,7 +248,8 @@ struct PhotoViewer: View {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { saveCaption(); dismiss() } }
                     ToolbarItem(placement: .topBarLeading) {
                         Menu {
-                            Button(photo.hiddenFromSummary == true ? "Use in Summary" : "Remove from Summary") {
+                            Button(photo.hiddenFromSummary == true ? "Use in Summary" : "Remove from Summary",
+                                   systemImage: photo.hiddenFromSummary == true ? "text.badge.plus" : "text.badge.minus") {
                                 library.setPhotoHiddenFromSummary(photo.id, hidden: photo.hiddenFromSummary != true, in: meetingID)
                                 library.update(meetingID) { current in
                                     if let summary = current.summary { current.summary = PhotoPlacement.arrange(summary, in: current) }
@@ -253,11 +267,6 @@ struct PhotoViewer: View {
                             Button("Delete Photo…", systemImage: "trash", role: .destructive) { confirmingDelete = true }
                         } label: { Label("Photo Actions", systemImage: "ellipsis") }
                     }
-                    ToolbarItemGroup(placement: .bottomBar) {
-                        Button("Previous", systemImage: "chevron.left") { step(-1) }.disabled(index == nil || index == 0)
-                        Spacer()
-                        Button("Next", systemImage: "chevron.right") { step(1) }.disabled(index == nil || index == photos.count - 1)
-                    }
                 }
                 .alert("Delete this photo?", isPresented: $confirmingDelete) {
                     Button("Delete Photo", role: .destructive) {
@@ -266,7 +275,11 @@ struct PhotoViewer: View {
                     Button("Cancel", role: .cancel) { }
                 } message: { Text("It stays in Version History.") }
                 .onAppear { caption = photo.caption ?? "" }
-                .onChange(of: photoID) { _, _ in caption = self.photo?.caption ?? "" }
+                .onChange(of: photoID) { previous, _ in
+                    // The caption typed for the photo swiped away is kept before the next one's shows.
+                    saveCaption(for: previous)
+                    caption = self.photo?.caption ?? ""
+                }
                 .onDisappear(perform: saveCaption)
             } else {
                 ContentUnavailableView("Photo Deleted", systemImage: "photo")
@@ -278,10 +291,11 @@ struct PhotoViewer: View {
     private var index: Int? { photos.firstIndex { $0.id == photoID } }
     private func step(_ delta: Int) {
         guard let index, photos.indices.contains(index + delta) else { return }
-        saveCaption(); photoID = photos[index + delta].id
+        photoID = photos[index + delta].id
     }
-    private func saveCaption() {
-        guard let photo, caption != (photo.caption ?? "") else { return }
+    private func saveCaption() { saveCaption(for: photoID) }
+    private func saveCaption(for id: UUID) {
+        guard let photo = photos.first(where: { $0.id == id }), caption != (photo.caption ?? "") else { return }
         library.setPhotoCaption(photo.id, caption: caption, in: meetingID)
     }
 }

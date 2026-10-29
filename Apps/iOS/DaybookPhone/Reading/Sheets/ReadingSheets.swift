@@ -19,16 +19,17 @@ struct VersionHistoryView: View {
                                 ForEach(group.revisions) { revision in
                                     NavigationLink(value: revision.id) {
                                         HStack(spacing: 12) {
-                                            Image(systemName: RevisionText.symbol(revision)).foregroundStyle(PhoneStyle.accent).frame(width: 24)
+                                            Image(systemName: RevisionText.symbol(revision)).foregroundStyle(PhoneStyle.Ink.secondary)
+                                                .frame(width: 24).accessibilityHidden(true)
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text(RevisionText.title(revision, in: meeting))
-                                                Text(RevisionText.subject(revision, in: meeting) == RevisionText.title(revision, in: meeting)
-                                                     ? preview(revision) : RevisionText.subject(revision, in: meeting))
-                                                    .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                                                Text(RevisionText.title(revision, in: meeting)).foregroundStyle(PhoneStyle.Ink.title)
+                                                if let detail = detail(revision, in: meeting) {
+                                                    Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(1)
+                                                }
                                             }
                                             Spacer(minLength: 6)
                                             Text(revision.date.formatted(date: .omitted, time: .shortened))
-                                                .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                                                .font(.footnote.monospacedDigit()).foregroundStyle(PhoneStyle.Ink.secondary)
                                         }
                                     }
                                 }
@@ -41,8 +42,8 @@ struct VersionHistoryView: View {
                         }
                     }
                 } else {
-                    ContentUnavailableView("No Changes Yet", systemImage: "clock.arrow.circlepath",
-                                           description: Text("Edits to notes, the transcript, speaker names, and the summary appear here."))
+                    EmptyPlace(title: "No Changes Yet", systemImage: "clock.arrow.circlepath")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .navigationTitle("Version History")
@@ -61,9 +62,15 @@ struct VersionHistoryView: View {
         return result
     }
 
-    private func preview(_ revision: MeetingRevision) -> String {
+    /// The line under a change's title: what it's about, else what it says now; nothing when that
+    /// only repeats the title ("Photo added", "added").
+    private func detail(_ revision: MeetingRevision, in meeting: Meeting) -> String? {
+        let title = RevisionText.title(revision, in: meeting)
+        let subject = RevisionText.subject(revision, in: meeting)
+        if subject != title { return subject }
         let text = RevisionText.readable(revision.newValue, field: revision.field).replacingOccurrences(of: "\n", with: " ")
-        return text.isEmpty ? "Empty" : text
+        if text.isEmpty { return "Empty" }
+        return title.localizedCaseInsensitiveContains(text) ? nil : text
     }
 }
 
@@ -100,13 +107,15 @@ private struct RevisionDetail: View {
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) {
                 if RevisionRestore.canRestore(revision, in: meeting) {
-                    Button { confirming = true } label: {
-                        Text("Restore Previous Version").font(.headline).frame(maxWidth: .infinity, minHeight: 44)
+                    // Not while a Mac is rewriting the conversation: the restore would be overwritten.
+                    if !isLocked(meeting) {
+                        Button { confirming = true } label: {
+                            Text("Restore Previous Version").font(.headline).frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .tint(PhoneStyle.prominentFill)
+                        .padding(.horizontal, PhoneStyle.Space.s4).padding(.bottom, PhoneStyle.Space.s2)
                     }
-                    .buttonStyle(.glassProminent)
-                    .tint(PhoneStyle.prominentFill)
-                    .disabled(isLocked(meeting))
-                    .padding(.horizontal, PhoneStyle.Space.s4).padding(.bottom, PhoneStyle.Space.s2)
                 }
             }
             .confirmationDialog("Restore the previous version?", isPresented: $confirming, titleVisibility: .visible) {
