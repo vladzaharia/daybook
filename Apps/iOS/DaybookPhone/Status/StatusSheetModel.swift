@@ -82,7 +82,7 @@ enum StatusSection: Hashable, Sendable {
     case recorders
     /// One card: every paired Mac, the queue under the Mac doing it, and Pair with Your Mac….
     case macs
-    /// This iPhone's downloaded audio, and Storage.
+    /// The audio kept on this iPhone, and Storage.
     case iphone
 }
 
@@ -263,8 +263,10 @@ enum StatusSheetModel {
 
     // MARK: This iPhone
 
-    static func downloadedAudio(bytes: UInt64) -> String {
-        bytes == 0 ? "No audio downloaded" : "\(ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)) of audio downloaded"
+    /// The audio kept on this iPhone, as Settings › Storage's row says it: downloads and recordings
+    /// made here together, so not "downloaded".
+    static func audioOnThisIPhone(bytes: UInt64) -> String {
+        bytes == 0 ? "No audio on this iPhone" : "\(ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)) of audio"
     }
 
     // MARK: Lines

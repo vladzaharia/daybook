@@ -1069,7 +1069,7 @@ private struct QueueRow: View {
 
 // MARK: This iPhone
 
-/// The audio downloaded to this iPhone, opening Storage.
+/// The audio kept on this iPhone, opening Storage.
 private struct StatusThisIPhone: View {
     let open: (StatusRoute) -> Void
     @Environment(PhoneAppModel.self) private var model
@@ -1082,7 +1082,7 @@ private struct StatusThisIPhone: View {
                         StatusTile(systemImage: "iphone")
                     } content: {
                         HStack(spacing: PhoneStyle.Space.s2) {
-                            Text(StatusSheetModel.downloadedAudio(bytes: model.audio.usage.bytes))
+                            Text(StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes))
                                 .font(.subheadline)
                                 .foregroundStyle(PhoneStyle.Ink.title)
                                 .fixedSize(horizontal: false, vertical: true)

@@ -274,9 +274,10 @@ final class StatusSheetModelTests: XCTestCase {
     }
 
     func testThisIPhonesDownloadedAudio() {
-        XCTAssertEqual(StatusSheetModel.downloadedAudio(bytes: 0), "No audio downloaded")
-        XCTAssertEqual(StatusSheetModel.downloadedAudio(bytes: 1_200_000_000),
-                       "\(ByteCountFormatter.string(fromByteCount: 1_200_000_000, countStyle: .file)) of audio downloaded")
+        // Downloads and recordings made here together, in Settings' words.
+        XCTAssertEqual(StatusSheetModel.audioOnThisIPhone(bytes: 0), "No audio on this iPhone")
+        XCTAssertEqual(StatusSheetModel.audioOnThisIPhone(bytes: 1_200_000_000),
+                       "\(ByteCountFormatter.string(fromByteCount: 1_200_000_000, countStyle: .file)) of audio")
     }
 
     // MARK: The Mac's queue
