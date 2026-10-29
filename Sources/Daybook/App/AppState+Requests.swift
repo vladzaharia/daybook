@@ -15,8 +15,9 @@ struct RequestTiming {
 ///
 /// - **Pick up.** After every sync pass, a finished job, a model download, and at launch, each open
 ///   request this Mac may take (unclaimed, its own, or with an expired claim) is queued, when this
-///   Mac transcribes synced recordings and has the models for that work. Otherwise it stays
-///   unclaimed (and a claim this Mac held goes back). One job per conversation: a job already
+///   Mac transcribes synced recordings (or the request brings a recording the conversation was
+///   waiting for: Mac first) and has the models for that work. Otherwise it stays unclaimed (and a
+///   claim this Mac held goes back). One job per conversation: a job already
 ///   queued or running for it takes the request on.
 /// - **Claim.** When its job starts, the request is claimed with a lease, unless another device
 ///   holds it, in which case the job is dropped: a request another live Mac holds never runs here.
@@ -53,7 +54,8 @@ extension AppState {
                 }
                 let job = job(for: request, in: meeting)
                 let models = job.requiredModelIDs(hasUntranscribedAudio: meeting.hasUntranscribedTranscribableAudio)
-                guard processSyncedAudio, models.isSubset(of: installedModels), meeting.id != recordingID,
+                // A recording the conversation was waiting for is added whatever the setting (Mac first).
+                guard processSyncedAudio || meeting.hasAwaitedRecordingToAdd(now: now), models.isSubset(of: installedModels), meeting.id != recordingID,
                       !pausedIDs.contains(meeting.id), !movedPhoneRecordings.contains(meeting.id) else {
                     if held { library.releaseProcessingRequest(request.id, in: meeting.id, at: now) }
                     continue

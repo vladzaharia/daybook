@@ -117,6 +117,81 @@ final class MacFirstMultipointTests: XCTestCase {
         XCTAssertEqual(phone.library.processingStatus(for: id), .done)
     }
 
+    /// With "Transcribe synced recordings on this Mac" off, the wait reads the same, and the phone's
+    /// recording is still added when it arrives: it completes this Mac's recording. Another phone
+    /// recording that nothing waited for still waits for a Mac that transcribes synced recordings.
+    func testTheWaitAndTheArrivalDontDependOnTranscribingSyncedRecordings() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        state.processSyncedAudio = false
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let link = try await PhoneLinkRig.connect(state)
+        defer { Task { await link.tearDown(state) } }
+        let phone = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: link.phoneID)
+        defer { phone.tearDown() }
+        let recordingID = UUID()
+        let phoneStart = Date()
+        link.recorder.answer = { request in
+            .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: phoneStart, recordingID: recordingID.uuidString))
+        }
+        let macAudio = try rig.audio("mac.wav", frequency: 310)
+        let phoneAudio = try rig.audio("iphone.wav", frequency: 470)
+        let aloneAudio = try rig.audio("alone.wav", frequency: 620)
+        try rig.inference.script(macAudio, [(0, "Agenda first."), (5, "Then the budget.")])
+        try rig.inference.script(phoneAudio, [(0, "Agenda first."), (5, "Then the budget."), (10, "And someone near the phone agreed.")])
+
+        let id = state.newMeeting(title: "Design review")
+        state.prepareSourceCapture(id)
+        state.recordingID = id
+        state.recordingStartedAt = Date()
+        state.update(id) { $0.status = .recording }
+        state.recordingDidStart(id)
+        let macStart = try XCTUnwrap(state.recordingStartedAt)
+        await state.sources.recorders.settle()
+        state.recordingWillFinish(id, at: Date())
+        state.recordingID = nil
+        state.recordingStartedAt = nil
+        await state.sources.recorders.settle()
+        try await storeMacRecording(rig, id, audio: macAudio, start: macStart)
+        state.enqueue(id)
+        try await rig.processed(id)
+
+        // Waiting for the phone's audio, in the words every place uses.
+        var meeting = try XCTUnwrap(rig.meeting(id))
+        guard case .awaitingRecordings(let awaited) = state.processingStatus(for: meeting) else {
+            return XCTFail("Waiting for the phone's audio, got \(state.processingStatus(for: meeting))")
+        }
+        XCTAssertEqual(ProcessingStatus.awaitingDetail(awaited), "Waiting for audio from \(PhoneLinkRig.phoneName)")
+        XCTAssertEqual(RowStatus(state: state, meeting: meeting).text, "Waiting for iPhone audio")
+
+        // The phone files its recording into the conversation, and another of its own that nothing waits for.
+        await state.synchronizeLibrary()
+        await phone.synchronize()
+        try await phone.file(phoneAudio, recordingID: recordingID, into: id, start: phoneStart, duration: 0.5)
+        let alone = try await phone.file(aloneAudio, recordingID: UUID(), start: phoneStart.addingTimeInterval(-7200), duration: 0.5,
+                                         title: "Walk")
+        await phone.synchronize()
+        await state.synchronizeLibrary()
+
+        // The awaited one is queued here at once, as with the setting on, and the summary written again from both.
+        XCTAssertTrue(state.queuedIDs.contains(id) || state.processingID == id, "Not left waiting for another Mac")
+        try await waitUntil("the phone's recording to be added and summarized", timeout: 20) {
+            rig.meeting(id)?.summary?.overview == "Summary 2" && state.processingID == nil && state.queuedIDs.isEmpty
+        }
+        meeting = try XCTUnwrap(rig.meeting(id))
+        XCTAssertEqual(state.processingStatus(for: meeting), .done)
+        XCTAssertEqual(meeting.companions?.first?.state, .attached)
+        XCTAssertTrue(meeting.unifiedTranscript.contains { $0.text == "And someone near the phone agreed." })
+        XCTAssertEqual(rig.inference.transcribed.count, 2, "This Mac's recording and the phone's, each once")
+
+        // The other waits for a Mac that transcribes synced recordings, as the setting says.
+        let other = try XCTUnwrap(rig.meeting(alone))
+        guard case .requested(.device) = state.processingStatus(for: other) else {
+            return XCTFail("Left for another Mac, got \(state.processingStatus(for: other))")
+        }
+    }
+
     /// This Mac's own recording of `id`, stored as capture stores it, without starting processing.
     private func storeMacRecording(_ rig: MultiSourceRig, _ id: UUID, audio: URL, start: Date) async throws {
         let installed = rig.state.installedModels

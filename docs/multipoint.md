@@ -200,6 +200,12 @@ shows processing shows it, on the Mac and the iPhone:
   never waits for itself; it shows "Waiting for your Mac" for its request until a Mac adds it.
 - When the recording arrives the wait ends: the conversation reads "Not transcribed yet" or "Waiting"
   until it's queued, "Adding iPhone recording…" while it's added, then nothing.
+- The wait and the arrival don't depend on **Transcribe synced recordings on this Mac**. A recording the
+  conversation was waiting for (`Meeting.hasAwaitedRecordingToAdd`: its link recorded and isn't
+  attached, the recording is here untranscribed, within `AwaitedRecording.lifetime`) is queued as soon
+  as it arrives on a Mac with the models, with the request it came with, because it completes a
+  recording made with that Mac. Other synced recordings still follow the setting. While another
+  device's request waits and a recording is still awaited, the page keeps the waiting line.
 
 This status isn't pending: Refresh Summary and the other actions stay available while it shows.
 
@@ -469,9 +475,9 @@ both record the conversation and list `sharedNotes`.
 - Files exported through the Soundcore app or another recorder's folder carry only a file date, which
   copying can change, so they are never placed by clock and need the sound or transcript to match.
 - One status line is shared by all recorders; with two recorders the last message wins.
-- With **Transcribe synced recordings on this Mac** off, a phone's recording that arrives through sync
-  isn't added automatically: its request waits for a Mac that transcribes synced recordings, and the
-  conversation reads "Requested on Alex's iPhone" instead of "Waiting for iPhone audio".
+- Links merge across Macs, so a second Mac with the models also queues an awaited recording that
+  arrives, with **Transcribe synced recordings on this Mac** off too; the request's claim settles which
+  one adds it, within a sync round, as for any request two Macs take at once.
 - A recording that never arrives stops being awaited two days after this Mac's recording ended; the
   conversation then reads as done.
 - Pause and Cancel take effect between steps: a sound comparison already running (synchronous in

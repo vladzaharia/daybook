@@ -85,6 +85,31 @@ final class AwaitedRecordingTests: XCTestCase {
         XCTAssertTrue(unnamed.awaitedRecordings(now: now).isEmpty)
     }
 
+    func testAnArrivedRecordingItWaitedForIsToBeAdded() {
+        XCTAssertFalse(meeting([link()]).hasAwaitedRecordingToAdd(now: now), "Not here yet")
+        let phone = RecordingTrack(source: .microphone, relativePath: "p.m4a", fileName: "p.m4a", sha256: "p",
+                                   device: DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: "phone-1", recordingID: "rec-1"))
+        var arrived = meeting([link()])
+        arrived.tracks.append(phone)
+        XCTAssertTrue(arrived.hasAwaitedRecordingToAdd(now: now))
+        // Once it's added: transcribed, or its link attached.
+        var transcribed = arrived
+        transcribed.transcripts.append(TrackTranscript(trackID: phone.id, segments: []))
+        XCTAssertFalse(transcribed.hasAwaitedRecordingToAdd(now: now))
+        var attached = arrived
+        attached.companions?[0].state = .attached
+        attached.companions?[0].trackID = phone.id
+        XCTAssertFalse(attached.hasAwaitedRecordingToAdd(now: now))
+        // Another phone's recording isn't the one it waited for, and one past the wait is let go.
+        var other = meeting([link()])
+        other.tracks.append(RecordingTrack(source: .microphone, relativePath: "o.m4a", fileName: "o.m4a", sha256: "o",
+                                           device: DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: "phone-2", recordingID: "rec-9")))
+        XCTAssertFalse(other.hasAwaitedRecordingToAdd(now: now))
+        var late = meeting([link(ended: -3 * 86_400)])
+        late.tracks.append(phone)
+        XCTAssertFalse(late.hasAwaitedRecordingToAdd(now: now))
+    }
+
     func testSeveralDevicesShareOneLine() {
         let recorder = link("soundcore.work", name: "Soundcore Work", recordingID: "1800000000")
         let awaited = meeting([link(), recorder]).awaitedRecordings(now: now)
