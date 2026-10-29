@@ -92,8 +92,12 @@ private struct RevisionDetail: View {
                     }
                     let diff = WordDiff.marked(old: RevisionText.readable(revision.oldValue, field: revision.field),
                                                new: RevisionText.readable(revision.newValue, field: revision.field), dark: scheme == .dark)
-                    comparison("Before", diff.old)
-                    comparison("After", diff.new)
+                    if RevisionText.hasBefore(revision) {
+                        comparison("Before", diff.old)
+                        comparison("After", diff.new)
+                    } else {
+                        comparison(nil, diff.new)
+                    }
                     if restored {
                         Label("Restored", systemImage: "checkmark.circle.fill")
                             .font(.subheadline).foregroundStyle(PhoneStyle.Ink.link)
@@ -135,9 +139,11 @@ private struct RevisionDetail: View {
         return false
     }
 
-    private func comparison(_ title: String, _ text: AttributedString) -> some View {
+    private func comparison(_ title: String?, _ text: AttributedString) -> some View {
         VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.secondary).accessibilityAddTraits(.isHeader)
+            if let title {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.secondary).accessibilityAddTraits(.isHeader)
+            }
             Group {
                 if text.characters.isEmpty { Text("Empty").italic().foregroundStyle(PhoneStyle.Ink.meta) }
                 else { Text(text).foregroundStyle(PhoneStyle.Ink.body) }

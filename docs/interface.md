@@ -181,7 +181,7 @@ Animations go through `.motion(_:value:)`, which falls back to a short fade unde
 - `AppState` forwards only the library's and the device list's changes, which nearly every view reads through it. Views that show the recorder, call detection, sync, multipoint sources, the iPhone link, or processing and download progress observe those objects themselves (`ActivityReader` for progress, `@ObservedObject` for the rest), so a sync pass or a progress report redraws only what shows it. A new view that reads `state.sync`, `state.monitor`, `state.sources`, `state.phoneLink`, or `state.recorder` must observe that object directly.
 - A conversation whose kind isn't known yet appears only in All Conversations, never in Work or Personal. The person's placement (`Meeting.placement`) always wins and never changes the template.
 - Choosing a different template summarizes again right away. The earlier summary stays in Version History.
-- Version History can put back the text from before a change (notes, a corrected passage, a speaker's name, or a summary). The restore is itself a change, so the text it replaces stays in Version History.
+- Version History can put back the text from before a change (notes, a corrected passage, a speaker's name, or a summary). The restore is itself a change, so the text it replaces stays in Version History. A conversation's first summary reads "Summary written" and shows on its own, with no empty Before, on both apps (`RevisionText.hasBefore`).
 
 ## Checking the interface without recording or clicking
 
