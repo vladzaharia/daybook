@@ -133,6 +133,8 @@ enum DemoLibrary {
         // In the Trash.
         let trashed = library.newMeeting(title: "Old standup", date: now.addingTimeInterval(-12 * 86_400))
         Task { _ = try? await library.moveToTrash(trashed) }
+        // `--speaker-demo`: speakers recognized, suggested, and named, and their profiles.
+        if SpeakerProfileDemo.isRequested { Task { await SpeakerProfileDemo.seed(library, now: now) } }
     }
 
     /// A conversation with one generated recording of `seconds`, written where the library keeps originals.
