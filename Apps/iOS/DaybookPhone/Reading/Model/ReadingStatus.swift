@@ -8,6 +8,7 @@ import Foundation
 /// | Status | Page | Row |
 /// |---|---|---|
 /// | Recorded | "Not transcribed yet" + Transcribe | "Not transcribed yet" + teal dot |
+/// | Transcribed | "Not summarized yet" + Summarize | the preview |
 /// | Requested | "Waiting for your Mac" (+ "Last seen 2 h ago") | "Waiting for your Mac" + clock |
 /// | Processing | "Transcribing on Studio · 40%" + gradient bar | same words + a 2 pt gradient line |
 /// | Couldn't finish | a box with the Mac's reason, Try Again, Details | "Couldn't finish" + warning |
@@ -49,6 +50,10 @@ struct StatusPresentation: Equatable {
             // The fix is one tap away: ask your Mac (the request waits for one if none is around).
             return StatusPresentation(kind: .line, symbol: "waveform", title: "Not transcribed yet",
                                       actions: meeting.tracks.isEmpty ? [] : [.request(.newAudio)])
+        case .transcribed:
+            // The transcript reads; Summarize asks your Mac for the rest.
+            return StatusPresentation(kind: .line, symbol: "text.alignleft", title: "Not summarized yet",
+                                      actions: [.request(.summaryOnly)])
         case .requested(let waiting):
             let mode: ProcessingRequest.Mode
             if case .device(let request) = waiting { mode = request.mode } else { mode = .newAudio }
@@ -86,7 +91,7 @@ struct StatusPresentation: Equatable {
             return RowStatus(kind: .processing, text: workingTitle(progress), fraction: progress.fraction)
         case .failed: return RowStatus(kind: .failed, text: "Couldn’t finish")
         case .awaitingRecordings(let recordings): return RowStatus(kind: .waiting, text: ProcessingStatus.awaitingLine(recordings))
-        case .done: return nil
+        case .transcribed, .done: return nil
         }
     }
 

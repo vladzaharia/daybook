@@ -33,6 +33,27 @@ final class ProcessingStatusTests: XCTestCase {
         XCTAssertEqual(ProcessingStatus(transcribed(recorded(), summaryAt: now), now: now), .done)
     }
 
+    func testATranscriptWithoutASummaryIsTranscribed() {
+        var meeting = recorded()
+        let track = meeting.tracks[0].id
+        let words = TranscriptSegment(trackID: track, start: 0, end: 2, text: "Agenda first.")
+        meeting.transcripts = [TrackTranscript(trackID: track, segments: [words], createdAt: now)]
+        meeting.unifiedTranscript = [words]
+        XCTAssertEqual(ProcessingStatus(meeting, now: now), .transcribed)
+        XCTAssertFalse(ProcessingStatus(meeting, now: now).isPending, "Summarize can be asked for")
+        XCTAssertEqual(ProcessingStatus(meeting, queue: .init(), now: now), .transcribed, "On a Mac at rest too")
+        // Summarize writes a request, which waits for a Mac; the summary settles it.
+        let request = ProcessingRequest(meetingID: meeting.id, mode: .summaryOnly, requestedBy: phone, createdAt: now)
+        meeting.upsertProcessingRequest(request)
+        XCTAssertEqual(ProcessingStatus(meeting, now: now), .requested(.device(request)))
+        meeting.setSummary(MeetingSummary(overview: "Plans", modelID: "m", createdAt: now.addingTimeInterval(60)))
+        XCTAssertEqual(ProcessingStatus(meeting, now: now), .done)
+        // A transcript without words has nothing to summarize.
+        var silent = recorded()
+        silent.transcripts = [TrackTranscript(trackID: silent.tracks[0].id, segments: [], createdAt: now)]
+        XCTAssertEqual(ProcessingStatus(silent, now: now), .done)
+    }
+
     func testAnOpenRequestWaitsForAMac() {
         var meeting = recorded()
         let request = ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now)

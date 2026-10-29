@@ -50,8 +50,7 @@ struct SummaryPage: View {
             LiveCaptionsSection(captions: state.captions, meeting: meeting, isRecording: state.recordingID == meeting.id)
             // How the page was made, once there is a page; never while recording. A transcript at rest
             // without a summary (one stopped while summarizing) offers Summarize there.
-            if state.recordingID != meeting.id,
-               meeting.summary != nil || (!meeting.unifiedTranscript.isEmpty && state.processingStatus(for: meeting) == .done) {
+            if state.recordingID != meeting.id, meeting.summary != nil || state.processingStatus(for: meeting) == .transcribed {
                 Colophon(state: state, meeting: meeting)
             }
         }
