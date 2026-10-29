@@ -8,35 +8,47 @@ struct ConversationInfo: View {
     let meetingID: UUID
     private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
+    @State private var detent: PresentationDetent = Self.launchDetent
 
     var body: some View {
         NavigationStack {
             Group {
                 if let meeting = library.meeting(meetingID) {
-                    Form {
-                        Section("Details") { details(meeting) }
-                        // Without a recording there are no people or processing to show; Audio says so once.
-                        if !meeting.tracks.isEmpty {
-                            Section("People") { people(meeting) }
-                        }
-                        Section("Audio") {
-                            ForEach(meeting.tracks) { track in AudioSourceRow(meeting: meeting, track: track) }
-                            if meeting.tracks.isEmpty { Text("No recording yet").foregroundStyle(PhoneStyle.Ink.secondary) }
-                        }
-                        if !meeting.tracks.isEmpty {
-                            Section("Processing") { processing(meeting) }
-                        }
-                        if !meeting.revisions.isEmpty {
-                            Section {
-                                Button {
-                                    dismiss()
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.sheet = .history(meeting.id) }
-                                } label: { Label("Version History", systemImage: "clock.arrow.circlepath") }
+                    ScrollViewReader { proxy in
+                        Form {
+                            Section("Details") { details(meeting) }
+                            // Without a recording there are no people or processing to show; Audio says so once.
+                            if !meeting.tracks.isEmpty {
+                                Section("People") { people(meeting) }
+                                    .id("people")
+                            }
+                            Section("Audio") {
+                                ForEach(meeting.tracks) { track in AudioSourceRow(meeting: meeting, track: track) }
+                                if meeting.tracks.isEmpty { Text("No recording yet").foregroundStyle(PhoneStyle.Ink.secondary) }
+                            }
+                            if !meeting.tracks.isEmpty {
+                                Section("Processing") { processing(meeting) }
+                            }
+                            if !meeting.revisions.isEmpty {
+                                Section {
+                                    Button {
+                                        dismiss()
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.sheet = .history(meeting.id) }
+                                    } label: { Label("Version History", systemImage: "clock.arrow.circlepath") }
+                                }
                             }
                         }
+                        .scrollContentBackground(.hidden)
+                        .background(Color(uiColor: .systemGroupedBackground))
+                        #if DEBUG
+                        .task {
+                            // `--info-scroll people`, for screenshots.
+                            guard let index = CommandLine.arguments.firstIndex(of: "--info-scroll"), CommandLine.arguments.indices.contains(index + 1) else { return }
+                            try? await Task.sleep(for: .milliseconds(400))
+                            proxy.scrollTo(CommandLine.arguments[index + 1], anchor: .top)
+                        }
+                        #endif
                     }
-                    .scrollContentBackground(.hidden)
-                    .background(Color(uiColor: .systemGroupedBackground))
                 } else {
                     ContentUnavailableView("Conversation Not Found", systemImage: "doc.questionmark")
                 }
@@ -45,8 +57,17 @@ struct ConversationInfo: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
+    }
+
+    /// `--info-detent large` (debug), for screenshots.
+    private static var launchDetent: PresentationDetent {
+        #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--info-detent"), CommandLine.arguments.indices.contains(index + 1),
+           CommandLine.arguments[index + 1] == "large" { return .large }
+        #endif
+        return .medium
     }
 
     // MARK: Details
@@ -117,6 +138,8 @@ struct ConversationInfo: View {
                 let time = talkTime(speaker.id, in: meeting)
                 SpeakerRow(name: speaker.name, ink: PhoneStyle.speakerInk(index), talkTime: time, share: time / total) { name in
                     library.renameSpeaker(speaker.id, to: name, in: meeting.id)
+                } marker: {
+                    SpeakerIdentityLine(library: library, meeting: meeting, speakerID: speaker.id)
                 }
             }
         }
@@ -191,17 +214,27 @@ private enum PlacementChoice: Hashable {
     }
 }
 
-/// A speaker: their ink, their name (tap to rename), and how much of the talking they did.
-private struct SpeakerRow: View {
+/// A speaker: their ink, their name (tap to rename), and how much of the talking they did; under the
+/// name, what Daybook made of their voice (`SpeakerIdentityLine`).
+private struct SpeakerRow<Marker: View>: View {
     let name: String
     let ink: Color
     let talkTime: TimeInterval
     let share: Double
     let save: (String) -> Void
+    @ViewBuilder var marker: Marker
     @State private var draft = ""
     @FocusState private var focused: Bool
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            nameLine
+            // Lined up with the name, past the ink dot.
+            marker.padding(.leading, 20)
+        }
+    }
+
+    private var nameLine: some View {
         HStack(spacing: 10) {
             Circle().fill(ink).frame(width: 10, height: 10).accessibilityHidden(true)
             TextField("Speaker", text: $draft)
@@ -228,6 +261,59 @@ private struct SpeakerRow: View {
     private func commit() {
         let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.isEmpty { draft = name } else if value != name { save(value) }
+    }
+}
+
+/// Under a speaker, as on the Mac: a name Daybook gave by voice reads Recognized, with Not <name> to
+/// take it back; a profile the voice resembles reads Maybe <name>, with Yes and No. Nothing for names
+/// the person gave. The Mac acts on the answer when it arrives (it forgets what the profile learned
+/// from a Not, and learns from a Yes).
+private struct SpeakerIdentityLine: View {
+    @ObservedObject var library: LibraryController
+    let meeting: Meeting
+    let speakerID: String
+
+    var body: some View {
+        if let identity = meeting.speakerIdentity(speakerID), identity.$source.isKnown,
+           let profile = identity.profileID.flatMap({ library.metadata.speakerProfile($0) }) {
+            switch identity.source {
+            case .recognized:
+                line {
+                    Label("Recognized", systemImage: "waveform")
+                    Spacer(minLength: 8)
+                    answer("Not \(profile.name)") { library.rejectSpeakerProfile(speakerID, in: meeting.id) }
+                }
+            case .suggested:
+                line {
+                    Text("Maybe \(profile.name)")
+                    Spacer(minLength: 8)
+                    answer("Yes", label: "This is \(profile.name)") { library.confirmSpeakerProfile(speakerID, in: meeting.id) }
+                    answer("No", label: "Not \(profile.name)") { library.rejectSpeakerProfile(speakerID, in: meeting.id) }
+                }
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func line<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 4) { content() }
+            .font(.footnote)
+            .foregroundStyle(PhoneStyle.Ink.secondary)
+            .labelStyle(CompactLabelStyle())
+    }
+
+    /// A text button with a 44 pt target that doesn't make the row taller (as `TagEditor`'s remove).
+    private func answer(_ title: String, label: String? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .foregroundStyle(PhoneStyle.Ink.link)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .padding(.vertical, -12)
+        .accessibilityLabel(label ?? title)
     }
 }
 
