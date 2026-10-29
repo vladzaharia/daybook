@@ -273,3 +273,9 @@ private struct SecondaryLabelStyle: LabeledContentStyle {
         }
     }
 }
+
+/// The inspector observes the library itself, so the window redrawing it for the same conversation doesn't
+/// draw it again (`MeetingDetailView` does the same).
+extension MeetingInspector: Equatable {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.meetingID == rhs.meetingID && lhs.state === rhs.state }
+}
