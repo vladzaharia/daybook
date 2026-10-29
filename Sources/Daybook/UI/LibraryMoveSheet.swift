@@ -5,24 +5,13 @@ import SwiftUI
 struct LibraryMoveSheet: View {
     @ObservedObject var state: AppState
     let offer: LibraryMoveOffer
-    @State private var showingDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s3) {
-            Text(text.title).font(.headline).foregroundStyle(Ink.title)
-            Text(text.message).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true)
-            if let problem = state.libraryMoveError {
-                HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
-                    Label(problem.message, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(Ink.warning)
-                    Spacer(minLength: Space.s3)
-                    if let details = problem.details {
-                        Button("Details…") { showingDetails = true }
-                            .popover(isPresented: $showingDetails) {
-                                Text(details).textSelection(.enabled).padding(Space.s4).frame(maxWidth: 360, alignment: .leading)
-                            }
-                    }
-                }
-            }
+            // A sheet is chrome: the system's label colours, not the page's ink.
+            Text(text.title).font(.headline)
+            Text(text.message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let problem = state.libraryMoveError { ProblemLine(problem: problem) }
             HStack(spacing: Space.s2) {
                 if state.isMovingLibrary {
                     ProgressView().controlSize(.small)
@@ -71,3 +60,41 @@ struct LibraryMoveSheet: View {
         }
     }
 }
+
+#if DEBUG
+/// Debug-only: `--move-demo <case>` asks about a library in the wrong place, for screenshots, without moving anything
+/// unless a button is pressed: return, return-newer, move, find, old-copy, moved, failed. Only with `--library`; applied
+/// when Settings › Library opens (`--open-settings library`), and the sheet opens on the main window.
+@MainActor
+enum LibraryMoveDemo {
+    private static var applied = false
+
+    static func apply(to state: AppState) {
+        guard !applied, let scenario = LaunchOptions.value(after: "--move-demo") else { return }
+        applied = true
+        // Places that don't exist, inside the demo's own library, so a button pressed by mistake finds nothing to move.
+        guard let root = LaunchOptions.libraryURL?.appendingPathComponent("Move Demo", isDirectory: true) else { return }
+        let legacy = root.appendingPathComponent("Old Place", isDirectory: true)
+        let container = root.appendingPathComponent("Container", isDirectory: true)
+        func returning(newer: Bool) -> LibraryMoveOffer {
+            .returnFromContainer(.init(container: container, library: legacy, containerPreferences: container, replacesOlder: newer, containerChanged: nil))
+        }
+        let moving = LibraryMoveOffer.moveIntoContainer(.init(legacy: legacy, library: container, legacyExists: true))
+        switch scenario {
+        case "return": state.libraryMoveOffer = returning(newer: false)
+        case "return-newer": state.libraryMoveOffer = returning(newer: true)
+        case "move": state.libraryMoveOffer = moving
+        case "find": state.libraryMoveOffer = .moveIntoContainer(.init(legacy: legacy, library: container, legacyExists: false))
+        case "old-copy": state.libraryMoveOffer = .oldCopyRemains(legacy)
+        case "moved":
+            state.libraryMoveOffer = moving
+            state.movedLibrary = MovedLibrary(source: legacy, scoped: false, legacy: legacy)
+        case "failed":
+            state.libraryMoveOffer = moving
+            state.libraryMoveError = AppProblem(title: "Couldn’t Move Your Library", fallback: "Your library couldn’t be moved. Try again.",
+                                                error: CocoaError(.fileWriteOutOfSpace))
+        default: break
+        }
+    }
+}
+#endif
