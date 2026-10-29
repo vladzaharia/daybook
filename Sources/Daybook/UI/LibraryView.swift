@@ -98,10 +98,13 @@ struct LibraryView: View {
                 .modifier(AddRecordingDrop(state: state, meeting: meeting))
         } else if state.isReady && state.meetings.isEmpty {
             EmptyLibraryView(state: state)
+        } else if !state.isSearching && state.visibleMeetings.isEmpty {
+            // An empty place says so in its list; the page stays blank rather than asking for a choice.
+            DaybookStyle.paper
         } else {
             Text("No Conversation Selected")
                 .font(TypeStyle.heading())
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Ink.faint)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(DaybookStyle.paper)
         }
