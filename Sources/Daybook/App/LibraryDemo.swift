@@ -48,6 +48,7 @@ enum LibraryDemo {
 
     static func apply(to state: AppState) {
         resizeWindow()
+        runWindowActions()
         guard isRequested else { return }
         // Each capture starts from the same chrome: the inspector only with `--inspector`, and
         // `--inspector-all` opens every section of it.
@@ -81,6 +82,33 @@ enum LibraryDemo {
         let parts = value.split(separator: "x").compactMap { Double($0) }
         guard parts.count == 2, let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(WindowID.library) == true || $0.title == "Daybook" }) else { return }
         window.setFrame(NSRect(origin: window.frame.origin, size: NSSize(width: parts[0], height: parts[1])), display: true)
+    }
+
+    /// `--window-actions activate,fullscreen,toolbar,zoom,top,sidebar,…`: what the main window goes
+    /// through, a step every 1.5 s, so a snapshot after them shows whether every column still starts
+    /// under the toolbar. A step named twice undoes itself (full screen in and out, the toolbar hidden
+    /// and shown); `activate` brings the app forward first, which full screen needs and which only an
+    /// app opened through Launch Services (`open`) is allowed to do.
+    private static func runWindowActions() {
+        guard let steps = LaunchOptions.value(after: "--window-actions")?.split(separator: ",").map(String.init) else { return }
+        for (index, step) in steps.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 * Double(index + 1)) {
+                guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(WindowID.library) == true }) else { return }
+                switch step {
+                case "activate":
+                    NSApp.activate(ignoringOtherApps: true)
+                    window.makeKeyAndOrderFront(nil)
+                case "fullscreen": window.toggleFullScreen(nil)
+                case "toolbar": window.toggleToolbarShown(nil)
+                case "zoom": window.zoom(nil)
+                case "top":
+                    // Against the top of the screen, as a window dragged under the menu bar can be.
+                    if let screen = window.screen { window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: screen.frame.maxY)) }
+                case "sidebar": NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+                default: break
+                }
+            }
+        }
     }
 
     /// This Mac's side of the processing states, which aren't stored in the library.
