@@ -116,14 +116,11 @@ private struct NotesPage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// "Today · 10:15 AM · AirPods Pro": the microphone it's recording with, as the header names it.
+    /// "Today · 10:15 AM", as a page's byline. The microphone and a Mac recording too are on the
+    /// recorder's page, beside the clock, so they aren't repeated here.
     private var byline: String {
         let started = model.recorder.startedAt ?? Date()
-        var parts = ["Today", started.formatted(date: .omitted, time: .shortened), model.recorder.inputRoute?.name ?? "iPhone Microphone"]
-        if let mac = model.multipoint?.recordingMacs.first?.name ?? (model.multipoint?.isMacLed == true ? model.multipoint?.macs.first?.name : nil) {
-            parts[2] = "iPhone and \(mac)"
-        }
-        return parts.joined(separator: " · ")
+        return ["Today", started.formatted(date: .omitted, time: .shortened)].joined(separator: " · ")
     }
 }
 
@@ -395,9 +392,11 @@ private struct TableTools: View {
                 .accessibilityLabel(writing ? "Done Writing" : "Write Notes")
                 if showsLabels { label(writing ? "Done" : "Notes") }
             }
-            VStack(spacing: PhoneStyle.Space.s1) {
-                CameraControl(size: size)
-                if showsLabels { label("Photo") }
+            if CameraPicker.isAvailable {
+                VStack(spacing: PhoneStyle.Space.s1) {
+                    CameraControl(size: size)
+                    if showsLabels { label("Photo") }
+                }
             }
         }
     }
@@ -469,10 +468,12 @@ private struct FlexBookmarkTarget: View {
                     .symbolEffect(.bounce, value: count)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Bookmark").font(.title2.weight(.semibold))
-                    Text(count == 0 ? "Tap to mark this moment" : count == 1 ? "1 so far" : "\(count) so far")
-                        .font(.subheadline.monospacedDigit())
-                        .opacity(0.8)
-                        .contentTransition(.numericText())
+                    if count > 0 {
+                        Text(count == 1 ? "1 so far" : "\(count) so far")
+                            .font(.subheadline.monospacedDigit())
+                            .opacity(0.8)
+                            .contentTransition(.numericText())
+                    }
                 }
             }
             .foregroundStyle(PhoneStyle.bookmark)
@@ -503,10 +504,12 @@ private struct TableBookmarkTarget: View {
                     .symbolEffect(.bounce, value: count)
                 Text("Bookmark")
                     .font(.title2.weight(.semibold))
-                Text(count == 0 ? "Tap to mark this moment" : count == 1 ? "1 so far" : "\(count) so far")
-                    .font(.subheadline.monospacedDigit())
-                    .opacity(0.8)
-                    .contentTransition(.numericText())
+                if count > 0 {
+                    Text(count == 1 ? "1 so far" : "\(count) so far")
+                        .font(.subheadline.monospacedDigit())
+                        .opacity(0.8)
+                        .contentTransition(.numericText())
+                }
             }
             .foregroundStyle(PhoneStyle.bookmark)
             .frame(width: RecordingStyle.Control.tableTarget, height: RecordingStyle.Control.tableTarget)

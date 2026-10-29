@@ -200,36 +200,39 @@ struct CameraControl: View {
 
     var body: some View {
         let count = model.recorder.photos.count
-        Button {
-            recordingID = model.recorder.captureID
-            showingCamera = true
-        } label: {
-            Image(systemName: "camera")
-                .font(.system(size: size * 0.4, weight: .medium))
-                .foregroundStyle(PhoneStyle.Ink.title)
-                .frame(width: size, height: size)
-                .contentShape(Circle())
-        }
-        .overlay(alignment: .topTrailing) {
-            if count > 0 {
-                Text("\(count)")
-                    .font(.caption2.weight(.bold).monospacedDigit())
+        // Only where there's a camera: a camera that can't open isn't shown at all.
+        if CameraPicker.isAvailable {
+            Button {
+                recordingID = model.recorder.captureID
+                showingCamera = true
+            } label: {
+                Image(systemName: "camera")
+                    .font(.system(size: size * 0.4, weight: .medium))
                     .foregroundStyle(PhoneStyle.Ink.title)
-                    .padding(.horizontal, 5)
-                    .frame(minWidth: 18, minHeight: 18)
-                    .background(.regularMaterial, in: Capsule())
-                    .offset(x: 4, y: -4)
-                    .contentTransition(.numericText())
-                    .accessibilityHidden(true)
+                    .frame(width: size, height: size)
+                    .contentShape(Circle())
             }
+            .overlay(alignment: .topTrailing) {
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption2.weight(.bold).monospacedDigit())
+                        .foregroundStyle(PhoneStyle.Ink.title)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(.regularMaterial, in: Capsule())
+                        .offset(x: 4, y: -4)
+                        .contentTransition(.numericText())
+                        .accessibilityHidden(true)
+                }
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .disabled(!model.recorder.isCapturing || model.recorder.state == .starting)
+            .sensoryFeedback(.success, trigger: count)
+            .accessibilityLabel(count > 0 ? "Take Photo, \(count) so far" : "Take Photo")
+            .cameraCover(isPresented: $showingCamera, capture: { [recordingID] photo in Task { await model.addPhoto(photo, recording: recordingID) } },
+                         failed: { model.say(PhoneAppModel.photoNotSaved) })
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .disabled(!CameraPicker.isAvailable || !model.recorder.isCapturing || model.recorder.state == .starting)
-        .sensoryFeedback(.success, trigger: count)
-        .accessibilityLabel(count > 0 ? "Take Photo, \(count) so far" : "Take Photo")
-        .cameraCover(isPresented: $showingCamera, capture: { [recordingID] photo in Task { await model.addPhoto(photo, recording: recordingID) } },
-                     failed: { model.say(PhoneAppModel.photoNotSaved) })
     }
 }
 
@@ -281,21 +284,22 @@ struct PausedPanel: View {
                 .font(large ? .body : .subheadline)
                 .foregroundStyle(PhoneStyle.Ink.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button {
-                Task { try? await model.resumeRecording() }
-            } label: {
-                HStack(spacing: 8) {
-                    Circle().fill(PhoneStyle.Ink.record).frame(width: 12, height: 12)
-                    Text("Resume Recording")
+            // Resume only once it can: during a call the message says when it will.
+            if recorder.canResume {
+                Button {
+                    Task { try? await model.resumeRecording() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Circle().fill(PhoneStyle.Ink.record).frame(width: 12, height: 12)
+                        Text("Resume Recording")
+                    }
+                    .font(.headline)
+                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .frame(maxWidth: .infinity, minHeight: large ? 56 : 50)
                 }
-                .font(.headline)
-                .foregroundStyle(PhoneStyle.Ink.title)
-                .frame(maxWidth: .infinity, minHeight: large ? 56 : 50)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.roundedRectangle(radius: 16))
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.roundedRectangle(radius: 16))
-            .disabled(!recorder.canResume)
-            .opacity(recorder.canResume ? 1 : 0.55)
         }
         .padding(large ? 20 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -320,8 +324,9 @@ struct PausedPanel: View {
     private var message: String {
         let recorder = model.recorder
         if recorder.canResume {
-            return isCall ? "The call has ended. Everything so far is saved; resume when you’re ready."
-                : (recorder.pauseMessage ?? "Everything so far is saved.") + " Resume when you’re ready."
+            // Resume is right below: the words don't ask for it.
+            return isCall ? "The call has ended. Everything so far is saved."
+                : (recorder.pauseMessage ?? "Everything so far is saved.")
         }
         return isCall ? "Everything so far is saved. Recording can continue when the call ends."
             : (recorder.pauseMessage ?? "Everything so far is saved.")
@@ -329,7 +334,7 @@ struct PausedPanel: View {
 }
 
 /// The conversation so far on one line: bookmarks in amber and notes in ink at their times, with
-/// "now" at the right edge.
+/// "now" at the right edge. No labels: the clock above has the time, Bookmark has the count.
 struct LiveTimelineBar: View {
     @Environment(PhoneAppModel.self) private var model
 
@@ -339,7 +344,7 @@ struct LiveTimelineBar: View {
             // The conversation's timeline keeps running through a pause, so the bar runs to now.
             let elapsed = max(1, recorder.elapsedTime)
             let notes = NoteTimeline.paragraphTimes(anchors: recorder.timedNotes, text: recorder.notes).compactMap { $0 }
-            VStack(spacing: 4) {
+            VStack(spacing: 0) {
                 GeometryReader { proxy in
                     let width = proxy.size.width
                     ZStack(alignment: .leading) {
@@ -367,32 +372,16 @@ struct LiveTimelineBar: View {
                     }
                 }
                 .frame(height: 14)
-                HStack {
-                    Text("0:00")
-                    Spacer()
-                    Text(notesSummary(notes.count))
-                    Spacer()
-                    Text(TimeLabel.short(recorder.elapsedTime))
-                }
-                .font(PhoneStyle.Typeface.marginTime)
-                .foregroundStyle(PhoneStyle.Ink.meta)
             }
             .accessibilityElement()
             .accessibilityLabel("Timeline")
             .accessibilityValue("\(recorder.bookmarkCount) bookmarks, \(notes.count) notes, \(TimeLabel.short(recorder.elapsedTime)) recorded")
         }
     }
-
-    private func notesSummary(_ notes: Int) -> String {
-        let marks = model.recorder.bookmarkCount
-        var parts: [String] = []
-        if notes > 0 { parts.append(notes == 1 ? "1 note" : "\(notes) notes") }
-        if marks > 0 { parts.append(marks == 1 ? "1 bookmark" : "\(marks) bookmarks") }
-        return parts.joined(separator: " · ")
-    }
 }
 
-/// This recording's bookmarks, newest first, each with the note written just before it.
+/// This recording's bookmarks, newest first, each with the note written just before it. Nothing
+/// until the first one: Bookmark below says what it does, and carries the count.
 struct BookmarkLog: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -401,17 +390,13 @@ struct BookmarkLog: View {
         let recorder = model.recorder
         let marks = recorder.highlights.sorted { $0.time > $1.time }
         VStack(alignment: .leading, spacing: 10) {
-            Text(marks.isEmpty ? "Bookmarks" : "Bookmarks · \(marks.count)")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(PhoneStyle.Ink.meta)
-                .textCase(.uppercase)
-                .tracking(0.6)
-            if marks.isEmpty {
-                Text("Tap Bookmark to mark a moment.")
-                    .font(.subheadline)
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
+            if !marks.isEmpty {
+                Text("Bookmarks")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(PhoneStyle.Ink.meta)
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+                    .accessibilityAddTraits(.isHeader)
                 ForEach(marks) { mark in
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Image(systemName: "bookmark.fill").foregroundStyle(PhoneStyle.bookmark).imageScale(.small)
