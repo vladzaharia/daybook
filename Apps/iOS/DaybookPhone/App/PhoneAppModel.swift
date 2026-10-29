@@ -99,6 +99,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// The audio session synthetic demos use, so a script can interrupt the recording.
     @ObservationIgnored var demoAudioSession: ScriptedAudioSession?
     @ObservationIgnored private var subscriptions: Set<AnyCancellable> = []
+    /// Labelling saved captions' speakers from their recordings (`labelCaptionSpeakers`).
+    @ObservationIgnored private var speakerPass: (id: UUID, task: Task<Void, Never>)?
 
     init(recorder: PhoneRecorder, library: PhoneLibrary, posture: DevicePosture, options: LaunchOptions,
          settings: PhoneSettings? = nil, link: PhoneLink? = nil, devices: PhoneDevices? = nil) {
@@ -388,6 +390,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         switch phase {
         case .active:
             if recorderOnly != nil, !recorder.isActive { Task { await recordAlongWithRecorder() } }
+            labelCaptionSpeakers()
             Task {
                 await sync.synchronize(.foreground)
                 await link.setActivity(.foreground)
@@ -395,12 +398,39 @@ final class PhoneAppModel: RecordingCommandHandling {
                 await link.updateLibrary(libraryID)
             }
         case .background:
+            // Out of sight it stops; it starts over the next time the app is in front.
+            speakerPass?.task.cancel()
+            speakerPass = nil
             sync.scheduleBackgroundRefresh()
             if sync.localChanges > 0 || sync.isSyncing { sync.synchronizeFinishing(.edit) }
             Task { await link.setActivity(recorder.isActive || recorderOnly != nil ? .backgroundRecording : .background) }
         default:
             break
         }
+    }
+
+    /// Captions saved while the live speaker model missed part of the recording (speakers shed under
+    /// heat, Low Power Mode, or a low battery, or the model failed) get their speakers from the
+    /// recording itself (`LiveSpeakerPass`), once the app is in front and not recording. Leaving the
+    /// screen stops it; it starts over next time.
+    func labelCaptionSpeakers() {
+        guard isForeground, !recorder.isActive, speakerPass == nil else { return }
+        let waiting = captions.waitingForSpeakers()
+        guard !waiting.isEmpty else { return }
+        let id = UUID()
+        let task = Task { [weak self] in
+            for saved in waiting {
+                guard let self, !Task.isCancelled, self.isForeground, !self.recorder.isActive else { break }
+                guard let meeting = self.library.controller.meeting(saved.meetingID), meeting.showsLiveCaptions,
+                      let track = meeting.tracks.first(where: { $0.id == saved.trackID }),
+                      let url = try? await self.library.audioURL(for: track, in: meeting.id),
+                      FileManager.default.fileExists(atPath: url.path) else { continue }
+                guard let labelled = try? await self.models.labelSpeakers(saved, recording: url), !Task.isCancelled else { continue }
+                self.captions.saveLabelled(labelled)
+            }
+            if self?.speakerPass?.id == id { self?.speakerPass = nil }
+        }
+        speakerPass = (id, task)
     }
 
     // MARK: RecordingCommandHandling
@@ -942,6 +972,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: library.installationID)
             if let track = filed.meeting.tracks.first(where: { $0.device == identity }) {
                 captions.attach(trackID: track.id, meetingID: filed.meeting.id)
+                // Speakers the live model missed, from the recording, while the app is in front.
+                labelCaptionSpeakers()
             }
             if recording.recovered { notice = "Recovered a recording Daybook was making when it quit." }
             if let request = filed.request { link.nudge(request) }

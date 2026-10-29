@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCaptions
 import DaybookKit
+import DaybookLive
 import Foundation
 import Observation
 
@@ -18,6 +19,8 @@ final class LiveCaptionsController {
     private(set) var segments: [LiveCaptionSegment] = []
     private(set) var meetingID: UUID?
     private(set) var localeIdentifier = Locale.current.identifier
+    /// When captions were last written to the store, so pages showing saved captions read them again.
+    private(set) var lastSave: Date?
 
     let store: LiveCaptionStore
     /// Makes the captioner for a recording; nil when captions are off or can't run in this build.
@@ -116,6 +119,28 @@ final class LiveCaptionsController {
         try? store.save(captions)
     }
 
+    // MARK: Speakers afterwards
+
+    /// Saved captions with stretches the live speaker model didn't hear (`LiveSpeakerPass`), filed
+    /// with their recording, other than the recording in progress.
+    func waitingForSpeakers() -> [LiveCaptions] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: store.directory, includingPropertiesForKeys: nil)) ?? []
+        return files.compactMap { file -> LiveCaptions? in
+            guard file.pathExtension == "json", let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
+                  id != activeMeetingID, let captions = store.captions(for: id), captions.trackID != nil,
+                  LiveSpeakerPass.isNeeded(captions) else { return nil }
+            return captions
+        }
+        .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// Keeps captions labelled afterwards, unless they changed since the pass read them.
+    func saveLabelled(_ labelled: LiveCaptions) {
+        guard labelled.meetingID != activeMeetingID, let current = store.captions(for: labelled.meetingID),
+              current.segments.map(\.id) == labelled.segments.map(\.id), current.trackID == labelled.trackID else { return }
+        do { try store.save(labelled); lastSave = labelled.updatedAt } catch {}
+    }
+
     /// Captions for conversations that went to the Trash go with them.
     func prune(trashed: Set<UUID>) {
         let files = (try? FileManager.default.contentsOfDirectory(at: store.directory, includingPropertiesForKeys: nil)) ?? []
@@ -153,6 +178,6 @@ final class LiveCaptionsController {
         guard let meetingID, !segments.isEmpty else { return }
         let captions = LiveCaptions(meetingID: meetingID, trackID: store.captions(for: meetingID)?.trackID,
                                     localeIdentifier: localeIdentifier, segments: segments, createdAt: createdAt, updatedAt: Date())
-        do { try store.save(captions); dirty = false } catch {}
+        do { try store.save(captions); dirty = false; lastSave = captions.updatedAt } catch {}
     }
 }

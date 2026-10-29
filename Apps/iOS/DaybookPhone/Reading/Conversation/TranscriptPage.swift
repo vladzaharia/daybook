@@ -18,6 +18,7 @@ struct TranscriptPage: View {
     @Environment(\.audioProvider) private var provider
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.liveCaptionStore) private var captionStore
+    @Environment(\.liveCaptionsSaved) private var captionsSaved
     @State private var lastUserScroll = Date.distantPast
     @State private var followSuspended = false
     @State private var consumedToken = 0
@@ -102,7 +103,7 @@ struct TranscriptPage: View {
         .modifier(PageTitle(title: showsHeader ? nil : SavedCaptions.shown(captions, for: meeting) == nil ? "Transcript" : "Live Captions"))
         .onReceive(player.objectWillChange.receive(on: RunLoop.main)) { _ in followPlayhead() }
         .onAppear { followPlayhead() }
-        .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)") {
+        .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)-\(captionsSaved?.timeIntervalSince1970 ?? 0)") {
             // reading: captions come from the store `LibraryBrowser` provides; the Mac's transcript replaces them.
             captions = meeting.showsLiveCaptions ? captionStore?.captions(for: meeting.id) : nil
         }

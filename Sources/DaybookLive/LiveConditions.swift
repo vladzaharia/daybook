@@ -49,6 +49,10 @@ public enum LiveWorkLevel: Int, Comparable, Sendable {
     case paused
     /// Words only: no speaker detection or names.
     case transcriptionOnly
+    /// Words, speakers, and names, the speakers at a lower cadence: the speaker model hears the audio
+    /// in batches of a few seconds, and each voice is embedded for names only now and then. Labels
+    /// arrive later than on screen, which nobody sees in a pocket.
+    case reduced
     /// Words, speakers, and names.
     case full
 
@@ -61,19 +65,19 @@ public struct LiveLoadPolicy: Equatable, Sendable {
     public var lowBattery: Double = 0.2
     /// Below this charge, unplugged, live captions stop.
     public var criticalBattery: Double = 0.1
-    /// Shed speakers while nobody can see the captions (the iPhone in a pocket): words are still
-    /// saved for the conversation page, and the Mac names speakers in the transcript.
-    public var shedsSpeakersWhenHidden: Bool
+    /// The most that runs while nobody can see the captions (the iPhone in a pocket). Captions are
+    /// saved for the conversation page, so speakers keep being labelled there, at a lower cadence.
+    public var whenHidden: LiveWorkLevel
     /// A backlog this full (0…1) sheds speakers until it drains below `recoveredBacklog`.
     public var behindBacklog: Double = 0.5
     public var recoveredBacklog: Double = 0.2
 
-    public init(shedsSpeakersWhenHidden: Bool) { self.shedsSpeakersWhenHidden = shedsSpeakersWhenHidden }
+    public init(whenHidden: LiveWorkLevel) { self.whenHidden = whenHidden }
 
     /// The Mac: plugged in or on a large battery, captions always visible to the conversation page.
-    public static let mac = LiveLoadPolicy(shedsSpeakersWhenHidden: false)
+    public static let mac = LiveLoadPolicy(whenHidden: .full)
     /// The iPhone: battery and heat matter more, and a pocket hides the screen.
-    public static let iPhone = LiveLoadPolicy(shedsSpeakersWhenHidden: true)
+    public static let iPhone = LiveLoadPolicy(whenHidden: .reduced)
 
     /// The level `conditions` allow, before the backlog is considered.
     public func level(for conditions: LiveConditions) -> LiveWorkLevel {
@@ -82,7 +86,7 @@ public struct LiveLoadPolicy: Equatable, Sendable {
         if unplugged, let battery = conditions.batteryLevel, battery <= criticalBattery { return .paused }
         if conditions.thermal >= .serious || conditions.lowPowerMode { return .transcriptionOnly }
         if unplugged, let battery = conditions.batteryLevel, battery <= lowBattery { return .transcriptionOnly }
-        if shedsSpeakersWhenHidden, !conditions.isVisible { return .transcriptionOnly }
+        if !conditions.isVisible { return min(.full, whenHidden) }
         return .full
     }
 }
