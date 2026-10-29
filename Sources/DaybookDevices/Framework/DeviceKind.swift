@@ -155,7 +155,7 @@ public struct ConfiguredDevice: Codable, Identifiable, Hashable {
     /// Automatic imports bring in recordings made after this, so adding a recorder that already
     /// holds months of audio doesn't start a long transfer the person didn't ask for.
     public var automaticImportsSince: Date
-    /// "Record along with this Mac" (on an iPhone, "Record Along with This iPhone"): when the device
+    /// "Record along with this Mac" (on an iPhone, the recorder's "Record Along"): when the device
     /// that manages it starts recording, a recorder with record control starts too, and its recording
     /// joins the same conversation; its button starts that device. Nil (the default) means on.
     public var alsoRecordsWithMac: Bool?

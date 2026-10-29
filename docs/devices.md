@@ -122,7 +122,8 @@ that recording joins the same conversation.
 - **Files**: everything that appears in the watched folder and is unchanged across two scans
   imports on its own, once. A file whose conversation is later deleted is offered again but
   not re-imported automatically.
-- **Direct (Soundcore)**: "Import new recordings automatically" is **on by default**, because
+- **Direct (Soundcore)**: "Import new recordings automatically" (on the iPhone's recorder page,
+  "Import Automatically") is **on by default**, because
   recordings that arrive without effort is what people want most from a wearable. It imports
   only recordings that **started after the recorder was added to Daybook**
   (`automaticImportsSince`), so adding a recorder that already holds months of audio, or
@@ -288,7 +289,7 @@ and hands over what was waiting.
   (at launch). A recording the recorder was making already, or one from a build that doesn't
   say, is never stopped.
 
-**Hand back** (iPhone, off by default; the device page's "Hand Back to My Mac When It’s Nearby"):
+**Hand back** (iPhone, off by default; the device page's "Hand Back to My Mac"):
 a recorder the iPhone took from a Mac goes back to that Mac when the Mac connects over the link,
 the recorder is idle here (no transfer, no Listen Live), and the person hasn't chosen this iPhone in
 the last 10 minutes. It's an offer the Mac accepts only if it has the recorder set up. It never
