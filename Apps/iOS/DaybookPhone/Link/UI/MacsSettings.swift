@@ -42,19 +42,22 @@ struct MacRow: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(mac.name)
-                Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                Text(mac.rowLine(recordingBySync: recordingBySync)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
             }
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
     }
+}
 
-    private var line: String {
-        if let recording = mac.recording, mac.isRecording {
+extension PhoneLink.Mac {
+    /// The line under its name in a list (Settings › Macs, the status sheet): recording, else the link's state.
+    func rowLine(recordingBySync: Bool) -> String {
+        if let recording, isRecording {
             return recording.phase == .paused ? "Paused recording" : "Recording now"
         }
         if recordingBySync { return "Recording now" }
-        return mac.stateLine
+        return stateLine
     }
 }
 

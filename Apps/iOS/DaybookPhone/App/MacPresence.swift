@@ -180,4 +180,15 @@ struct LiveProgress: Equatable, Sendable {
             return "\(activity) on \(macName)\(percent)"
         }
     }
+
+    /// The line without the Mac's name, under that Mac in the status sheet: "Transcribing · 40%".
+    var brief: String {
+        switch phase {
+        case .queued: return detail.map { "In line · \($0)" } ?? "In line"
+        case .failed, .waitingForModels, .paused, .finished: return activity
+        default:
+            let percent = fraction.map { " · \(Int(($0 * 100).rounded(.down)))%" } ?? ""
+            return activity + percent
+        }
+    }
 }

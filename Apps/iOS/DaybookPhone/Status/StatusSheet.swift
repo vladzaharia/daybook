@@ -23,23 +23,33 @@ extension PresentationDetent {
     static let statusCompact = Self.custom(StatusCompactDetent.self)
 }
 
-/// Tall enough for the Record row and three lines at the person's text size, never more than half
-/// the screen.
+/// Tall enough for the Record row and three lines at the person's text size, measured from the
+/// fonts they use: at most about half the screen, or 70% at the accessibility sizes, so nothing is
+/// cut off.
 struct StatusCompactDetent: CustomPresentationDetent {
+    /// Room above Record, so the sheet's grabber sits clearly above it.
+    static let recordTop: CGFloat = 26
+    /// Room between Record and the lines.
+    static let recordGap: CGFloat = PhoneStyle.Space.s4
+    /// The largest text size the Record row takes: beyond it, Record's label would break mid-word
+    /// beside the round buttons. The row is a control bar, with the large content viewer past it.
+    static let recordLargestSize = DynamicTypeSize.accessibility1
+
     static func height(in context: Context) -> CGFloat? {
         height(for: context.dynamicTypeSize, maximum: context.maxDetentValue)
     }
 
     static func height(for size: DynamicTypeSize, maximum: CGFloat) -> CGFloat {
-        let extra: CGFloat
-        switch size {
-        case ...DynamicTypeSize.large: extra = 0
-        case .xLarge: extra = 14
-        case .xxLarge: extra = 28
-        case .xxxLarge: extra = 42
-        default: extra = 120
+        func lineHeight(_ style: UIFont.TextStyle, at size: DynamicTypeSize) -> CGFloat {
+            let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size))
+            return ceil(UIFont.preferredFont(forTextStyle: style, compatibleWith: traits).lineHeight)
         }
-        return min(maximum * 0.55, 196 + extra)
+        // Record is at least 60 pt, taller when its label grows; the glass button adds 4 pt each side.
+        let record = max(60, lineHeight(.title3, at: min(size, recordLargestSize)) + 8) + 8
+        // Three lines, the room between them, and the Mac's progress line under its line.
+        let lines = 3 * lineHeight(.subheadline, at: size) + 2 * PhoneStyle.Space.s2 + 6
+        let content = recordTop + record + recordGap + lines + PhoneStyle.Space.s4
+        return min(maximum * (size.isAccessibilitySize ? 0.7 : 0.55), content)
     }
 }
 
@@ -226,7 +236,8 @@ struct StatusSheetView: View {
     }
 }
 
-/// The sections for the detent, in a scroll view.
+/// The sections for the detent: Record pinned at the top, clear of the grabber and never scrolled
+/// under it, then the lines and groups in a scroll view.
 private struct StatusSections: View {
     @ObservedObject var library: LibraryController
     @Binding var detent: StatusDetent
@@ -240,36 +251,44 @@ private struct StatusSections: View {
     var body: some View {
         let inputs = StatusSheetInputs.make(model, library: library, hostsRecordButton: hostsRecordButton)
         let sections = StatusSheetModel.sections(for: detent, inputs)
-        ScrollView {
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                VStack(alignment: .leading, spacing: PhoneStyle.Space.s4) {
-                    ForEach(sections, id: \.self) { section in
-                        view(for: section, inputs: inputs, now: context.date)
-                            .transition(.opacity)
-                    }
-                }
-                .padding(.horizontal, PhoneStyle.Space.s4)
-                .padding(.top, hostsRecordButton ? PhoneStyle.Space.s4 : PhoneStyle.Space.s1)
-                .padding(.bottom, PhoneStyle.Space.s4)
+        VStack(spacing: 0) {
+            if sections.contains(.quickActions) {
+                StatusQuickActions()
+                    .padding(.horizontal, PhoneStyle.Space.s4)
+                    .padding(.top, StatusCompactDetent.recordTop)
+                    .padding(.bottom, StatusCompactDetent.recordGap)
             }
+            ScrollView {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    VStack(alignment: .leading, spacing: PhoneStyle.Space.s5) {
+                        ForEach(sections.filter { $0 != .quickActions }, id: \.self) { section in
+                            view(for: section, inputs: inputs, now: context.date)
+                                .transition(.opacity)
+                        }
+                    }
+                    .padding(.horizontal, PhoneStyle.Space.s4)
+                    .padding(.top, hostsRecordButton ? 0 : PhoneStyle.Space.s1)
+                    .padding(.bottom, PhoneStyle.Space.s4)
+                }
+            }
+            .scrollDisabled(detent == .compact)
+            .scrollBounceBehavior(.basedOnSize)
+            // `--status-scroll-end`: the foot of the content, for screenshots.
+            .defaultScrollAnchor(model.options.statusScrollEnd ? .bottom : nil)
         }
-        .scrollDisabled(detent == .compact)
-        .scrollBounceBehavior(.basedOnSize)
         .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: sections)
+        .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: detent)
     }
 
     @ViewBuilder
     private func view(for section: StatusSection, inputs: StatusInputs, now: Date) -> some View {
         switch section {
-        case .quickActions: StatusQuickActions()
+        case .quickActions: EmptyView()
         case .lines: StatusLines(lines: StatusSheetModel.lines(inputs, now: now), expand: { if detent == .compact { detent = .medium } })
-        case .recorders: StatusRecorders(open: open, addRecorder: { showingAddDevice = true })
         case .captions: StatusCaptions()
-        case .mac: StatusMac(inputs: inputs, now: now, open: open)
-        case .controls: StatusControls()
-        case .waiting: StatusWaiting(open: open)
-        case .storage: StatusStorage(open: open)
-        case .pairing: StatusPairing(open: open, pair: { showingPairing = true })
+        case .recorders: StatusRecorders(detent: detent, open: open, addRecorder: { showingAddDevice = true })
+        case .macs: StatusMacs(inputs: inputs, now: now, open: open, pair: { showingPairing = true })
+        case .iphone: StatusThisIPhone(open: open)
         }
     }
 }
@@ -280,26 +299,7 @@ enum StatusSheetInputs {
     static func make(_ model: PhoneAppModel, library: LibraryController, hostsRecordButton: Bool) -> StatusInputs {
         let devices = model.devices
         var inputs = StatusInputs()
-        inputs.recorders = devices.sessions.map { session in
-            StatusInputs.Recorder(
-                id: session.id, name: session.device.name, shortName: session.kind.shortName,
-                isDirect: session.direct != nil, state: session.state, isLinked: session.isLinked,
-                batteryLevel: session.status?.battery?.level, batteryCharging: session.status?.battery?.charging == true,
-                newCount: session.managedElsewhere == nil ? session.newRecordings.count : 0,
-                importing: session.queue.isActive
-                    ? .init(position: session.queue.position, total: session.queue.total, fraction: session.importProgress,
-                            suspended: session.queue.isSuspended)
-                    : nil,
-                managedBy: session.managedElsewhere?.ownerName,
-                lastKnown: StatusSheetInputs.lastKnown(session, link: model.link),
-                handoff: devices.handoffState(session),
-                isRecording: session.isLinked && session.status?.isRecording == true,
-                isListeningLive: session.isListeningLive,
-                problem: session.problem.map { PhoneDeviceCopy.problem($0).title },
-                lastConnected: session.direct?.lastConnectedAt ?? session.primary?.lastConnectedAt,
-                storageHours: session.status?.storage?.hoursLeft,
-                storageIsLow: session.status?.storage.map(StorageFormat.isLow) ?? false)
-        }
+        inputs.recorders = devices.sessions.map { recorder($0, model: model) }
         inputs.mac = model.macPresence
         inputs.liveProgress = model.liveProgress.values.sorted { $0.receivedAt > $1.receivedAt }
         inputs.queue = StatusSheetModel.queue(meetings: library.meetings, liveProgress: model.liveProgress, thisDevice: library.thisDevice.id)
@@ -315,8 +315,38 @@ enum StatusSheetInputs {
         }
         inputs.hostsRecordButton = hostsRecordButton
         inputs.hasLiveCaptions = devices.sessions.contains { $0.isListeningLive }
-        inputs.pairedMacs = model.link.macs.count
+        inputs.pairedMacs = model.link.macs.map { mac in
+            StatusInputs.Mac(id: mac.id, name: mac.name, line: mac.rowLine(recordingBySync: model.isRecordingBySync(mac)),
+                             isConnected: mac.isConnected)
+        }
         return inputs
+    }
+
+    /// One recorder's facts.
+    static func recorder(_ session: DeviceSession, model: PhoneAppModel) -> StatusInputs.Recorder {
+        let control = session.direct as? any RecordControlConnection
+        return StatusInputs.Recorder(
+            id: session.id, name: session.device.name, shortName: session.kind.shortName,
+            isDirect: session.direct != nil, state: session.state, isLinked: session.isLinked,
+            batteryLevel: session.status?.battery?.level, batteryCharging: session.status?.battery?.charging == true,
+            newCount: session.managedElsewhere == nil ? session.newRecordings.count : 0,
+            importing: session.queue.isActive
+                ? .init(position: session.queue.position, total: session.queue.total, fraction: session.importProgress,
+                        suspended: session.queue.isSuspended)
+                : nil,
+            managedBy: session.managedElsewhere?.ownerName,
+            lastKnown: StatusSheetInputs.lastKnown(session, link: model.link),
+            handoff: model.devices.handoffState(session),
+            isRecording: session.isLinked && session.status?.isRecording == true,
+            isListeningLive: session.isListeningLive,
+            problem: session.problem.map { PhoneDeviceCopy.problem($0).title },
+            lastConnected: session.direct?.lastConnectedAt ?? session.primary?.lastConnectedAt,
+            storageHours: session.status?.storage?.hoursLeft,
+            storageIsLow: session.status?.storage.map(StorageFormat.isLow) ?? false,
+            hasRecordControl: control != nil,
+            hasLiveListening: session.direct is any LiveListeningConnection,
+            canConnect: !session.isLinked && !session.state.isBusy && session.direct?.isSetUp == true,
+            importRunning: session.queue.current != nil)
     }
 
     /// A recorder that isn't live here: what the Mac managing it last said, or its last state here.
@@ -350,7 +380,9 @@ private struct StatusQuickActions: View {
             .foregroundStyle(PhoneStyle.Ink.title)
             .accessibilityLabel("Search")
             .accessibilityHint("Searches titles, notes, transcripts, and summaries")
+            .accessibilityShowsLargeContentViewer()
         }
+        .dynamicTypeSize(...StatusCompactDetent.recordLargestSize)
     }
 }
 
@@ -454,8 +486,9 @@ struct StatusProgressLine: View {
     }
 }
 
-// MARK: Medium
+// MARK: Groups and cards
 
+/// A group's heading: a generic label ("Recorders", "Macs"), never a device's name.
 private struct StatusHeading: View {
     let text: String
     var body: some View {
@@ -467,23 +500,421 @@ private struct StatusHeading: View {
     }
 }
 
-/// Every recorder, with handoff.
+/// A group below the lines: its heading, then its card (or a card per recorder).
+private struct StatusGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
+            StatusHeading(text: title).padding(.horizontal, StatusCardMetrics.padding)
+            content
+        }
+    }
+}
+
+/// The measurements every status card shares, so rows in every card line up.
+enum StatusCardMetrics {
+    static let radius: CGFloat = 16
+    /// Inside a card, on every side of every row.
+    static let padding: CGFloat = PhoneStyle.Space.s3
+    static let rowVertical: CGFloat = 10
+    /// Between the glyph column and the text.
+    static let gap: CGFloat = PhoneStyle.Space.s3
+    /// The glyph column at the default text size; it grows with Dynamic Type up to `glyphLimit`.
+    static let glyph: CGFloat = 32
+    static let glyphLimit: CGFloat = 44
+}
+
+/// The glyph column's width at the person's text size.
+private struct StatusGlyphWidth: DynamicProperty {
+    @ScaledMetric(relativeTo: .subheadline) private var scaled = StatusCardMetrics.glyph
+    var value: CGFloat { min(scaled, StatusCardMetrics.glyphLimit) }
+}
+
+/// One full-width card: the quiet fill, radius 16, an inset divider between rows.
+struct StatusCard<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Group(subviews: content) { rows in
+                ForEach(rows) { row in
+                    if row.id != rows.first?.id { StatusDivider() }
+                    row
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PhoneStyle.quietFill, in: RoundedRectangle(cornerRadius: StatusCardMetrics.radius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: StatusCardMetrics.radius, style: .continuous))
+    }
+}
+
+/// The divider between a card's rows, from where the text starts.
+struct StatusDivider: View {
+    private let glyph = StatusGlyphWidth()
+    var body: some View {
+        Divider().padding(.leading, StatusCardMetrics.padding + glyph.value + StatusCardMetrics.gap)
+    }
+}
+
+/// A row in a card: a fixed-width glyph column (empty for a row under another), then the content,
+/// so text in sibling rows lines up whatever the symbols' widths.
+struct StatusRow<Glyph: View, Content: View>: View {
+    var alignment: VerticalAlignment = .center
+    @ViewBuilder var glyph: Glyph
+    @ViewBuilder var content: Content
+    private let width = StatusGlyphWidth()
+
+    var body: some View {
+        HStack(alignment: alignment, spacing: StatusCardMetrics.gap) {
+            glyph.frame(width: width.value)
+            content.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, StatusCardMetrics.padding)
+        .padding(.vertical, StatusCardMetrics.rowVertical)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+}
+
+extension StatusRow where Glyph == Color {
+    /// A row under another (a recording on its recorder, a conversation under its Mac): indented to the text.
+    init(alignment: VerticalAlignment = .center, @ViewBuilder content: () -> Content) {
+        self.init(alignment: alignment, glyph: { Color.clear }, content: content)
+    }
+}
+
+/// A device's symbol on a tile: teal while it's connected, secondary otherwise (as `DeviceGlyph`).
+struct StatusTile: View {
+    let systemImage: String
+    var isActive = false
+    private let width = StatusGlyphWidth()
+
+    var body: some View {
+        let size = width.value
+        Image(systemName: systemImage)
+            .font(.system(size: size * 0.5, weight: .medium))
+            .foregroundStyle(isActive ? PhoneStyle.accent : PhoneStyle.Ink.secondary)
+            .frame(width: size, height: size)
+            .background((isActive ? PhoneStyle.accent : Color.gray).opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
+            .accessibilityHidden(true)
+    }
+}
+
+/// An action row's symbol, in the link's ink and the tile's size so its text lines up.
+struct StatusLinkGlyph: View {
+    let systemImage: String
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.body.weight(.medium))
+            .foregroundStyle(PhoneStyle.Ink.link)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A device's name and its status, the top of a row.
+struct StatusRowTitle<Subtitle: View>: View {
+    let title: String
+    @ViewBuilder var subtitle: Subtitle
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title.wrappingAsName)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(PhoneStyle.Ink.title)
+                .fixedSize(horizontal: false, vertical: true)
+            subtitle
+                .font(.footnote)
+                .foregroundStyle(PhoneStyle.Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Where a row leads.
+struct StatusChevron: View {
+    var body: some View {
+        Image(systemName: "chevron.forward")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A whole row as a button: it dims while pressed, as a list row does.
+struct StatusRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.primary.opacity(0.06) : .clear)
+    }
+}
+
+extension String {
+    /// "Connected · 80%" with the dot kept on the end of a line when it wraps, never starting one.
+    var keepingSeparators: String { replacingOccurrences(of: " · ", with: "\u{00A0}· ") }
+
+    /// A device's name, wrapping without leaving a short last word alone on a line: "Vlad’s MacBook /
+    /// Pro (755)", not "Vlad’s MacBook Pro / (755)". Names wrap only at spaces.
+    var wrappingAsName: String {
+        let words = split(separator: " ", omittingEmptySubsequences: false)
+        guard words.count >= 3, let last = words.last, last.count <= 5 else { return self }
+        return words.dropLast().joined(separator: " ") + "\u{00A0}" + last
+    }
+}
+
+/// "Use on Vlad’s MacBook Pro (755)": on one line when it fits, else the name starts the next line,
+/// so it's never split across the phrase; a name too long for a line wraps at a space, never mid-word.
+struct NamePhrase: View {
+    let prefix: String
+    let name: String
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Text("\(prefix) \(name)")
+            VStack(alignment: .leading, spacing: 0) {
+                Text(prefix)
+                Text(name.wrappingAsName).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(prefix) \(name)")
+    }
+}
+
+// MARK: Recorders
+
+/// A card per recorder; Add Recorder… when there's none.
 private struct StatusRecorders: View {
+    let detent: StatusDetent
     let open: (StatusRoute) -> Void
     let addRecorder: () -> Void
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            StatusHeading(text: "Recorders")
+        StatusGroup(title: "Recorders") {
             if model.devices.sessions.isEmpty {
-                Button("Add Recorder…", action: addRecorder)
-                    .font(PhoneStyle.Typeface.statusLead).foregroundStyle(PhoneStyle.Ink.link)
+                StatusCard {
+                    Button(action: addRecorder) {
+                        StatusRow {
+                            StatusLinkGlyph(systemImage: "plus")
+                        } content: {
+                            Text("Add Recorder…").font(.subheadline.weight(.medium)).foregroundStyle(PhoneStyle.Ink.link)
+                        }
+                    }
+                    .buttonStyle(StatusRowButtonStyle())
+                }
             }
-            ForEach(model.devices.sessions) { session in
-                RecorderHandoffCard(session: session, open: { open(.device(session.id)) })
+            VStack(spacing: PhoneStyle.Space.s3) {
+                ForEach(model.devices.sessions) { session in
+                    StatusRecorderCard(session: session, detent: detent, open: open)
+                }
             }
         }
+    }
+}
+
+/// One recorder: its name and status (opening its page), its handoff, and at the large detent its
+/// storage, its actions, and the recordings waiting on it.
+private struct StatusRecorderCard: View {
+    @ObservedObject var session: DeviceSession
+    let detent: StatusDetent
+    let open: (StatusRoute) -> Void
+    @Environment(PhoneAppModel.self) private var model
+    private let glyph = StatusGlyphWidth()
+
+    var body: some View {
+        let recorder = StatusSheetInputs.recorder(session, model: model)
+        let manages = StatusSheetModel.showsManagement(detent)
+        let actions = manages ? StatusSheetModel.actions(for: recorder) : []
+        let waiting = manages && session.managedElsewhere == nil ? Array(session.newRecordings.prefix(4)) : []
+        StatusCard {
+            Button { open(.device(session.id)) } label: {
+                StatusRow {
+                    DeviceGlyph(session: session, size: glyph.value)
+                } content: {
+                    HStack(spacing: PhoneStyle.Space.s2) {
+                        StatusRowTitle(title: session.device.name) {
+                            status(storage: manages ? recorder.storageHours : nil, low: recorder.storageIsLow)
+                        }
+                        Spacer(minLength: 0)
+                        StatusChevron()
+                    }
+                }
+            }
+            .buttonStyle(StatusRowButtonStyle())
+            .accessibilityHint("Shows \(session.device.name)")
+
+            if RecorderHandoffCard.shows(session, devices: model.devices) {
+                RecorderHandoffCard(session: session, style: .row)
+            }
+            if !actions.isEmpty {
+                StatusRecorderActions(session: session, actions: actions)
+            }
+            ForEach(waiting) { recording in
+                StatusRow {
+                    HStack(spacing: PhoneStyle.Space.s2) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(recording.title).font(.subheadline).foregroundStyle(PhoneStyle.Ink.body)
+                            Text(recording.detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                        Spacer(minLength: 0)
+                        if session.isConnected {
+                            Button { session.importRecordings([recording]) } label: {
+                                Text("Import")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(PhoneStyle.Ink.link)
+                                    .padding(.horizontal, PhoneStyle.Space.s3)
+                                    .padding(.vertical, 5)
+                                    .background(PhoneStyle.accent.opacity(0.12), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Import \(recording.title)")
+                        }
+                    }
+                }
+            }
+            if !waiting.isEmpty {
+                Button { open(.device(session.id)) } label: {
+                    StatusRow {
+                        HStack {
+                            Text("All Recordings").font(.subheadline.weight(.medium)).foregroundStyle(PhoneStyle.Ink.link)
+                            Spacer(minLength: 0)
+                            StatusChevron()
+                        }
+                    }
+                }
+                .buttonStyle(StatusRowButtonStyle())
+            }
+        }
+    }
+
+    /// "Connected · 80%", and at the large detent its room: "About 2,170 hours left" (orange when low),
+    /// on the same line when it fits.
+    @ViewBuilder
+    private func status(storage hours: Double?, low: Bool) -> some View {
+        let line = PhoneDeviceCopy.line(for: session).keepingSeparators
+        if let hours {
+            let storage = Text(StatusSheetModel.storageLeft(hours: hours))
+                .foregroundStyle(low ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
+            ViewThatFits(in: .horizontal) {
+                Text("\(line) · \(storage)").lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line)
+                    storage
+                }
+            }
+        } else {
+            Text(line)
+        }
+    }
+}
+
+/// The recorder's actions as one row of equal-width buttons (stacked at the accessibility sizes).
+private struct StatusRecorderActions: View {
+    @ObservedObject var session: DeviceSession
+    let actions: [StatusRecorderAction]
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        let stacked = typeSize.isAccessibilitySize
+        let layout = stacked ? AnyLayout(VStackLayout(spacing: PhoneStyle.Space.s2)) : AnyLayout(HStackLayout(spacing: PhoneStyle.Space.s2))
+        layout {
+            ForEach(actions, id: \.self) { action in
+                button(action, stacked: stacked)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(StatusCardMetrics.padding)
+    }
+
+    @ViewBuilder
+    private func button(_ action: StatusRecorderAction, stacked: Bool) -> some View {
+        let control = session.direct as? any RecordControlConnection
+        let live = session.direct as? any LiveListeningConnection
+        let short = session.kind.shortName
+        switch action {
+        case .connect:
+            ActionTile(title: "Connect", systemImage: "antenna.radiowaves.left.and.right", stacked: stacked) { session.connect() }
+        case .record:
+            ActionTile(title: "Record on \(short)", shortTitle: "Record", systemImage: "record.circle", stacked: stacked,
+                       pending: control?.recordCommandPending == true) { control?.startRecording() }
+        case .pause:
+            ActionTile(title: "Pause on \(short)", shortTitle: "Pause", systemImage: "pause.circle", stacked: stacked,
+                       pending: control?.recordCommandPending == true, spoken: "Pause Recording on \(short)") { control?.pauseRecording() }
+        case .importNew(let count):
+            ActionTile(title: "Import \(count) New", systemImage: "arrow.down.circle", stacked: stacked,
+                       spoken: count == 1 ? "Import 1 New Recording" : "Import \(count) New Recordings") {
+                session.importRecordings(session.newRecordings)
+            }
+        case .listenLive:
+            ActionTile(title: "Listen Live", systemImage: "ear", stacked: stacked) { live?.startListening() }
+        case .stopListening:
+            ActionTile(title: "Stop Listening", systemImage: "stop.circle", stacked: stacked) { live?.stopListening() }
+        }
+    }
+}
+
+/// One of a recorder's actions: its symbol over its name, in an equal share of the row.
+private struct ActionTile: View {
+    let title: String
+    var shortTitle: String?
+    let systemImage: String
+    let stacked: Bool
+    var pending = false
+    /// What VoiceOver says, when it's more than the title.
+    var spoken: String?
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if stacked {
+                    HStack(spacing: PhoneStyle.Space.s3) {
+                        symbol
+                        Text(title).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, PhoneStyle.Space.s3)
+                } else {
+                    VStack(spacing: PhoneStyle.Space.s1) {
+                        symbol
+                        ViewThatFits(in: .horizontal) {
+                            Text(title).lineLimit(1)
+                            if let shortTitle { Text(shortTitle).lineLimit(1) }
+                            Text(shortTitle ?? title).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.horizontal, PhoneStyle.Space.s1)
+                }
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(PhoneStyle.Ink.link)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, PhoneStyle.Space.s2 + 2)
+            .background(PhoneStyle.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(ActionTileStyle())
+        .disabled(pending)
+        .accessibilityLabel(spoken ?? title)
+    }
+
+    @ViewBuilder private var symbol: some View {
+        if pending {
+            ProgressView().controlSize(.small).frame(height: 22)
+        } else {
+            Image(systemName: systemImage).font(.title3.weight(.medium)).frame(height: 22).accessibilityHidden(true)
+        }
+    }
+}
+
+private struct ActionTileStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.6 : 1)
     }
 }
 
@@ -523,239 +954,125 @@ private struct StatusCaptions: View {
     }
 }
 
-/// The Mac and its queue.
-private struct StatusMac: View {
+// MARK: Macs
+
+/// Every paired Mac (and one the library syncs with that isn't paired here), the queue under the
+/// Mac doing it, and Pair with Your Mac….
+private struct StatusMacs: View {
     let inputs: StatusInputs
     let now: Date
     let open: (StatusRoute) -> Void
-    @Environment(PhoneAppModel.self) private var model
+    let pair: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            HStack {
-                StatusHeading(text: inputs.mac.macName ?? "Your Mac")
-                Spacer()
-                if let mac = macToOpen {
-                    Button("Details") { open(.mac(mac)) }
-                        .font(.footnote.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.link)
+        let rows = StatusSheetModel.macRows(inputs, now: now)
+        StatusGroup(title: "Macs") {
+            StatusCard {
+                // Work no Mac here is doing yet (no Mac has synced): at the top, under none.
+                if !rows.contains(where: \.showsQueue) {
+                    ForEach(inputs.queue) { entry in QueueRow(entry: entry, macName: nil) }
                 }
-            }
-            // A connected Mac is named in the heading and the line above; nothing to add.
-            if case .connected = inputs.mac {} else {
-                Text(inputs.mac.summary(now: now))
-                    .font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if inputs.queue.isEmpty {
-                Text("Nothing waiting to be transcribed.").font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.meta)
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(inputs.queue) { entry in
-                        QueueRow(entry: entry)
-                        if entry.id != inputs.queue.last?.id { Divider().padding(.leading, PhoneStyle.Space.s3) }
+                ForEach(rows) { row in
+                    macRow(row)
+                    if row.showsQueue {
+                        ForEach(inputs.queue) { entry in QueueRow(entry: entry, macName: row.name) }
                     }
                 }
-                .background(PhoneStyle.quietFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                Button(action: pair) {
+                    StatusRow {
+                        StatusLinkGlyph(systemImage: "plus")
+                    } content: {
+                        Text("Pair with Your Mac…").font(.subheadline.weight(.medium)).foregroundStyle(PhoneStyle.Ink.link)
+                    }
+                }
+                .buttonStyle(StatusRowButtonStyle())
             }
         }
     }
 
-    private var macToOpen: UUID? {
-        if let connected = model.link.connectedMacs.first { return connected.id }
-        return model.link.macs.first?.id
+    @ViewBuilder
+    private func macRow(_ row: StatusMacRow) -> some View {
+        let label = StatusRow {
+            StatusTile(systemImage: "desktopcomputer", isActive: row.isConnected)
+        } content: {
+            HStack(spacing: PhoneStyle.Space.s2) {
+                StatusRowTitle(title: row.name) { Text(row.text.keepingSeparators) }
+                Spacer(minLength: 0)
+                if case .paired = row.id { StatusChevron() }
+            }
+        }
+        switch row.id {
+        case .paired(let id):
+            Button { open(.mac(id)) } label: { label }
+                .buttonStyle(StatusRowButtonStyle())
+                .accessibilityHint("Shows \(row.name)")
+        case .synced:
+            label.accessibilityElement(children: .combine)
+        }
     }
 }
 
+/// A conversation in the queue, under the Mac doing it (which it then doesn't name again).
 private struct QueueRow: View {
     let entry: StatusQueueEntry
+    let macName: String?
     @State private var showingDetails = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        StatusRow {
             VStack(alignment: .leading, spacing: 3) {
-                Text(entry.title).font(.subheadline).foregroundStyle(PhoneStyle.Ink.body).lineLimit(1)
-                Text("\(Text(entry.line).foregroundStyle(entry.failed ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary))\(Text(entry.requestedHere ? " · Requested from this iPhone" : "").foregroundStyle(PhoneStyle.Ink.meta))")
-                    .font(.footnote)
-                    .lineLimit(2)
-                if let detail = entry.detail {
-                    Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.title).font(.subheadline).foregroundStyle(PhoneStyle.Ink.body).lineLimit(2)
+                    Text("\(Text(entry.line(under: macName).keepingSeparators).foregroundStyle(entry.failed ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary))\(Text(entry.requestedHere ? " · Requested from this iPhone" : "").foregroundStyle(PhoneStyle.Ink.meta))")
+                        .font(.footnote)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let detail = entry.detail {
+                        Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if entry.isRunning, let progress = entry.progress {
+                        StatusProgressLine(fraction: progress).padding(.top, 2)
+                    }
                 }
-                if entry.isRunning, let progress = entry.progress {
-                    StatusProgressLine(fraction: progress)
+                .accessibilityElement(children: .combine)
+                if entry.details != nil {
+                    Button("Details") { showingDetails = true }
+                        .buttonStyle(.daybookLink)
+                        .font(.footnote.weight(.semibold))
                 }
-            }
-            .accessibilityElement(children: .combine)
-            if entry.details != nil {
-                Button("Details") { showingDetails = true }
-                    .buttonStyle(.daybookLink)
-                    .font(.footnote.weight(.semibold))
             }
         }
-        .padding(.horizontal, PhoneStyle.Space.s3)
-        .padding(.vertical, PhoneStyle.Space.s2)
         .sheet(isPresented: $showingDetails) { DetailsSheet(text: entry.details ?? "") }
     }
 }
 
-// MARK: Large
+// MARK: This iPhone
 
-/// Import now, record on the recorder, Listen Live.
-private struct StatusControls: View {
-    @Environment(PhoneAppModel.self) private var model
-
-    var body: some View {
-        ForEach(model.devices.sessions.filter { $0.direct != nil && $0.managedElsewhere == nil }) { session in
-            RecorderControlsCard(session: session)
-        }
-    }
-}
-
-private struct RecorderControlsCard: View {
-    @ObservedObject var session: DeviceSession
-
-    var body: some View {
-        let new = session.newRecordings
-        let control = session.direct as? any RecordControlConnection
-        let live = session.direct as? any LiveListeningConnection
-        let recording = session.status?.isRecording == true
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            StatusHeading(text: "\(session.device.name) controls")
-            if !session.isLinked {
-                Button {
-                    session.connect()
-                } label: { Label(session.state.isBusy ? "Connecting…" : "Connect", systemImage: "antenna.radiowaves.left.and.right") }
-                .disabled(session.state.isBusy || session.direct?.isSetUp != true)
-            }
-            Button {
-                session.importRecordings(new)
-            } label: {
-                Label(new.isEmpty ? "Nothing New to Import" : new.count == 1 ? "Import 1 New Recording" : "Import \(new.count) New Recordings",
-                      systemImage: "arrow.down.circle")
-            }
-            .disabled(new.isEmpty || session.queue.isActive)
-            if let control {
-                Button {
-                    if recording { control.pauseRecording() } else { control.startRecording() }
-                } label: {
-                    Label(recording ? "Pause Recording on \(session.kind.shortName)" : "Record on \(session.kind.shortName)",
-                          systemImage: recording ? "pause.circle" : "record.circle")
-                }
-                .disabled(!session.isLinked || control.recordCommandPending || session.queue.current != nil)
-            }
-            if let live {
-                Button {
-                    if live.live.isListening { live.stopListening() } else { live.startListening() }
-                } label: {
-                    Label(live.live.isListening ? "Stop Listening" : "Listen Live", systemImage: "ear")
-                }
-                .disabled(!live.live.isListening && (!recording || !session.isLinked || session.queue.current != nil))
-            }
-            if !recording, session.isLinked, live != nil {
-                Text("Listen Live works while \(session.kind.shortName) is recording.")
-                    .font(PhoneStyle.Typeface.colophon).foregroundStyle(PhoneStyle.Ink.meta)
-            }
-        }
-        .buttonStyle(.bordered)
-        .tint(PhoneStyle.accent)
-        .font(.subheadline.weight(.medium))
-    }
-}
-
-/// Recordings waiting on a recorder, with the full list a tap away.
-private struct StatusWaiting: View {
+/// The audio downloaded to this iPhone, opening Storage.
+private struct StatusThisIPhone: View {
     let open: (StatusRoute) -> Void
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
-        ForEach(model.devices.sessions.filter { $0.managedElsewhere == nil && !$0.newRecordings.isEmpty }) { session in
-            VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-                HStack {
-                    StatusHeading(text: "Waiting on \(session.kind.shortName)")
-                    Spacer()
-                    Button("All Recordings") { open(.device(session.id)) }
-                        .font(.footnote.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.link)
-                }
-                VStack(alignment: .leading, spacing: 0) {
-                    let new = session.newRecordings
-                    ForEach(new.prefix(4)) { recording in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(recording.title).font(.subheadline)
-                                Text(recording.detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                            }
-                            Spacer()
-                            Button("Import") { session.importRecordings([recording]) }
-                                .buttonStyle(.bordered).tint(PhoneStyle.accent).controlSize(.small)
-                                .disabled(!session.isConnected)
+        StatusGroup(title: "This iPhone") {
+            StatusCard {
+                Button { open(.storage) } label: {
+                    StatusRow {
+                        StatusTile(systemImage: "iphone")
+                    } content: {
+                        HStack(spacing: PhoneStyle.Space.s2) {
+                            Text(StatusSheetModel.downloadedAudio(bytes: model.audio.usage.bytes))
+                                .font(.subheadline)
+                                .foregroundStyle(PhoneStyle.Ink.title)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            StatusChevron()
                         }
-                        .padding(.horizontal, PhoneStyle.Space.s3)
-                        .padding(.vertical, PhoneStyle.Space.s2)
-                        if recording.id != new.prefix(4).last?.id { Divider().padding(.leading, PhoneStyle.Space.s3) }
                     }
                 }
-                .background(PhoneStyle.quietFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .buttonStyle(StatusRowButtonStyle())
+                .accessibilityHint("Shows storage")
             }
-        }
-    }
-}
-
-/// The recorder's space and this iPhone's downloaded audio.
-private struct StatusStorage: View {
-    let open: (StatusRoute) -> Void
-    @Environment(PhoneAppModel.self) private var model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            HStack {
-                StatusHeading(text: "Storage")
-                Spacer()
-                Button("Manage") { open(.storage) }.font(.footnote.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.link)
-            }
-            ForEach(model.devices.sessions.filter { $0.status?.storage != nil }) { session in
-                if let storage = session.status?.storage {
-                    Label("\(session.device.name): \(StorageFormat.hoursLeft(storage))", systemImage: "internaldrive")
-                        .foregroundStyle(StorageFormat.isLow(storage) ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
-                }
-            }
-            let used = model.audio.usage.bytes
-            Label(used == 0 ? "No audio downloaded on this iPhone" : "\(ByteCountFormatter.string(fromByteCount: Int64(used), countStyle: .file)) of audio downloaded on this iPhone",
-                  systemImage: "iphone")
-                .foregroundStyle(PhoneStyle.Ink.secondary)
-        }
-        .font(PhoneStyle.Typeface.status)
-    }
-}
-
-/// Macs paired over Wi‑Fi, and pairing another.
-private struct StatusPairing: View {
-    let open: (StatusRoute) -> Void
-    let pair: () -> Void
-    @Environment(PhoneAppModel.self) private var model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            StatusHeading(text: "Macs")
-            if !model.link.macs.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.link.macs) { mac in
-                        Button { open(.mac(mac.id)) } label: {
-                            HStack {
-                                MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac))
-                                Image(systemName: "chevron.forward").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, PhoneStyle.Space.s3)
-                            .padding(.vertical, PhoneStyle.Space.s2)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if mac.id != model.link.macs.last?.id { Divider().padding(.leading, PhoneStyle.Space.s3) }
-                    }
-                }
-                .background(PhoneStyle.quietFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-            Button("Pair with Your Mac…", action: pair)
-                .font(PhoneStyle.Typeface.statusLead).foregroundStyle(PhoneStyle.Ink.link)
         }
     }
 }
