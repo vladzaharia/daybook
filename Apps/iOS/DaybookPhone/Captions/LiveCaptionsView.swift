@@ -68,14 +68,21 @@ struct LiveCaptionsView: View {
         VStack(alignment: .leading, spacing: style == .stage ? 8 : 4) {
             ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
                 let newest = index == segments.count - 1
-                Text(segment.text)
-                    .font(lineFont(newest: newest))
-                    .foregroundStyle(segment.isTentative ? PhoneStyle.Ink.meta : (newest ? PhoneStyle.Ink.body : PhoneStyle.Ink.secondary))
-                    // The newest line keeps its latest words; earlier ones read from the start.
-                    .lineLimit(newest ? (style == .stage ? 3 : 2) : (style == .page ? 2 : 1))
-                    .truncationMode(newest ? .head : .tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // The person live speakers recognized, never cut off by the words.
+                    if let name = segment.speaker?.name {
+                        Text(name).font(lineFont(newest: false).weight(.semibold)).foregroundStyle(PhoneStyle.Ink.meta)
+                            .lineLimit(1).fixedSize()
+                    }
+                    Text(segment.text)
+                        .font(lineFont(newest: newest))
+                        .foregroundStyle(segment.isTentative ? PhoneStyle.Ink.meta : (newest ? PhoneStyle.Ink.body : PhoneStyle.Ink.secondary))
+                        // The newest line keeps its latest words; earlier ones read from the start.
+                        .lineLimit(newest ? (style == .stage ? 3 : 2) : (style == .page ? 2 : 1))
+                        .truncationMode(newest ? .head : .tail)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.2), value: segments.map(\.id))

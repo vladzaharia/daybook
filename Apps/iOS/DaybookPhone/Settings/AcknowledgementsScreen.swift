@@ -11,7 +11,9 @@ struct AcknowledgementsScreen: View {
     @MainActor
     static func entries(for model: PhoneAppModel) -> [ModelAcknowledgement] {
         let catalog = ModelCatalog.builtIn
-        return ModelAcknowledgements.list(from: catalog, only: catalog.resultModelKeys(in: model.library.controller.meetings))
+        // The models behind the library's results, and those downloaded for live captions.
+        let keys = catalog.resultModelKeys(in: model.library.controller.meetings).union(model.models.inventory.usableVariantKeys)
+        return ModelAcknowledgements.list(from: catalog, only: keys)
     }
 
     var body: some View {

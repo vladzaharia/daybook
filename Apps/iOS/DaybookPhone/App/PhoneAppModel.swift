@@ -34,6 +34,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     let levels = LevelHistory()
     /// Tentative on-device captions while recording (never the transcript).
     let captions: LiveCaptionsController
+    /// The models live captions run on this iPhone, when downloaded (Settings › Models).
+    let models: PhoneModels
     /// One line for the person, when something needs saying: what happened, in plain words.
     private(set) var notice: String? {
         didSet { noticeDetails = nil; noticeFix = nil }
@@ -101,8 +103,16 @@ final class PhoneAppModel: RecordingCommandHandling {
         self.owedStops = owedStops
         owedSince = Dictionary(owed.map { ($0.macID, $0.owedAt) }, uniquingKeysWith: { _, later in later })
         pendingStops = Dictionary(owed.map { ($0.macID, $0.conversationID) }, uniquingKeysWith: { _, later in later })
+        let models = PhoneModels(root: LaunchOptions.isTestHost ? FileManager.default.temporaryDirectory
+                                    .appendingPathComponent("DaybookPhoneModels-\(UUID().uuidString)", isDirectory: true) : PhoneModels.defaultRoot,
+                                 defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard)
+        self.models = models
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
-                                          makeCaptioner: Self.captioner(settings: settings, options: options))
+                                          makeCaptioner: Self.captioner(settings: settings, options: options, models: models))
+        models.voices.meetings = { [weak library] in library?.controller.meetings ?? [] }
+        // A recorder's Listen Live is captioned like recordings: the live models when downloaded.
+        self.devices.hub.environment.liveCaptions.makeCaptioner = Self.listenLiveCaptioner(settings: settings, options: options, models: models)
+        self.devices.hub.environment.liveCaptions.locale = { [weak settings] in settings?.captionLocale ?? .current }
         recorder.onChange = { [weak self] in self?.recorderChanged() }
         recorder.onLevel = { [weak self] level in self?.levelChanged(level) }
         recorder.onUnexpectedStop = { [weak self] recording in
@@ -142,17 +152,31 @@ final class PhoneAppModel: RecordingCommandHandling {
             .store(in: &subscriptions)
     }
 
-    /// Which captioner a recording gets: the Speech framework (downloading its language only
-    /// for a real recording, never in simulator demos), a script for `--demo-captions`, none in tests
-    /// (they inject one) or when the setting is off.
-    static func captioner(settings: PhoneSettings, options: LaunchOptions) -> () -> (any LiveCaptioning)? {
-        { [weak settings] in
+    /// Which captioner a recording gets: the live models when they're downloaded (`PhoneModels`:
+    /// local transcription, speakers, and names), else the Speech framework (downloading its
+    /// language only for a real recording, never in simulator demos); a script for
+    /// `--demo-captions`; none in tests (they inject one) or when the setting is off.
+    static func captioner(settings: PhoneSettings, options: LaunchOptions, models: PhoneModels? = nil) -> () -> (any LiveCaptioning)? {
+        { [weak settings, weak models] in
             guard let settings, settings.liveCaptions else { return nil }
             if options.demoCaptions { return ScriptedCaptioner.demo() }
             if LaunchOptions.isTestHost { return nil }
             // A real recording may download the language and, if the analyzer needs it, ask once for
             // speech-recognition permission; simulator demos with synthetic audio never do either.
-            return SpeechCaptioner(allowsDownload: !options.syntheticAudio, asksForAuthorization: !options.syntheticAudio)
+            let speech = { SpeechCaptioner(allowsDownload: !options.syntheticAudio, asksForAuthorization: !options.syntheticAudio) as any LiveCaptioning }
+            guard let models, !options.syntheticAudio else { return speech() }
+            return models.captioner(locale: settings.captionLocale, fallback: speech)
+        }
+    }
+
+    /// Listen Live's captioner: the same choice as recordings, with the recorder's longer backlog.
+    static func listenLiveCaptioner(settings: PhoneSettings, options: LaunchOptions, models: PhoneModels) -> () -> (any LiveCaptioning)? {
+        { [weak settings, weak models] in
+            // Tests inject their own; the device simulator's demos never load models or download a language.
+            guard !LaunchOptions.isTestHost, let settings, settings.liveCaptions else { return nil }
+            let speech = { LiveCaptionHooks.speechCaptioner(allowsDownload: false) }
+            guard let models, !options.syntheticAudio, !options.deviceSimulator else { return speech() }
+            return models.captioner(locale: settings.captionLocale, backlog: LiveCaptionHooks.backlog, fallback: speech)
         }
     }
 
