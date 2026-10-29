@@ -757,7 +757,8 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(Set(rig.inference.transcribed), Set([try AudioDigest.sha256(fileURL: macAudio), try AudioDigest.sha256(fileURL: phoneAudio)]),
                        "Each recording transcribed in the Mac's conversation")
         XCTAssertEqual(rig.inference.transcribed.count, 2, "Once each: the phone's own conversation isn't transcribed")
-        XCTAssertEqual(state.sourceRole(track, in: meeting), "\(PhoneLinkRig.phoneName) · microphone")
+        XCTAssertEqual(state.recordingName(track, in: meeting), PhoneLinkRig.phoneName)
+        XCTAssertNil(state.sourceRole(track, in: meeting), "Its name says where it was made")
 
         // On the phone: its own conversation goes, and the Mac's holds its recording.
         await state.synchronizeLibrary()

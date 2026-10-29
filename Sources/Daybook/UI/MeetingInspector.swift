@@ -202,13 +202,7 @@ private struct AudioRow: View {
     let meeting: Meeting
     let track: RecordingTrack
 
-    private var name: String {
-        if track.source == .imported { return track.fileName }
-        if track.isLivePortion { return "\(track.source.recordingName), live" }
-        if track.derivedFrom != nil { return "\(track.source.recordingName), \(RecordingTrack.processingName(track.processing))" }
-        if meeting.tracks.contains(where: { $0.derivedFrom == track.id }) { return "\(track.source.recordingName), original" }
-        return track.source.recordingName
-    }
+    private var name: String { state.recordingName(track, in: meeting) }
     private var alignment: TrackAlignment? { meeting.alignmentReports.first { $0.trackID == track.id } }
 
     var body: some View {
@@ -238,26 +232,27 @@ private struct AudioRow: View {
                     .help("More")
                     .accessibilityLabel("More for \(name)")
             }
-            HStack(spacing: 4) {
-                if meeting.supersededLivePortions[track.id] != nil {
-                    // Kept for playback; the recorder's own file is what's transcribed.
-                    Text("Replaced by the full recording")
-                } else if alignment?.method == .unaligned {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
-                    Text("Couldn’t line up")
-                    Button("Adjust Timing…") { state.activeSheet = .adjustTiming(track.id) }
-                        .buttonStyle(.daybookLink)
-                } else {
-                    Text(timingLine)
+            let line = state.sourceLine(track, in: meeting)
+            if meeting.supersededLivePortions[track.id] != nil || alignment?.method == .unaligned || line != nil {
+                HStack(spacing: 4) {
+                    if meeting.supersededLivePortions[track.id] != nil {
+                        // Kept for playback; the recorder's own file is what's transcribed.
+                        Text("Replaced by the full recording")
+                    } else if alignment?.method == .unaligned {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
+                        Text("Couldn’t line up")
+                        Button("Adjust Timing…") { state.activeSheet = .adjustTiming(track.id) }
+                            .buttonStyle(.daybookLink)
+                    } else if let line {
+                        Text(line)
+                    }
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 22)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.leading, 22)
         }
     }
-
-    private var timingLine: String { "\(state.sourceRole(track, in: meeting)) · \(state.sourceTimingLine(track, in: meeting))" }
 
     private func playThis() {
         guard !state.isRecording else { return }

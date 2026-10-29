@@ -51,7 +51,7 @@ The owner's note: "We don't need unnecessary subtitles like 'Its recordings arri
 - **Destructive confirmations** keep their consequence, tightened. For example: "Its audio, notes, and summary go with it.", "Its recordings stay in your library.", "What's there now stays in Version History.", and "*Recorder* may not answer this Mac until *owner* lets go. Nothing on *recorder* is lost."
 - **Pre-permission notes**: "macOS asks to allow Bluetooth." and "iOS asks to allow Bluetooth when you search."
 - **Conditions for an action**: "Listen Live works while Soundcore is recording.", "Looking for Macs… Both need to be on the same Wi‑Fi.", and "The audio isn't on this iPhone yet. It downloads when you're online."
-- **The inspector's source timing lines** ("Lined up by shared phrases · starts 0:12 · 92% sure"). The inspector is the place for that detail.
+- **The inspector's source timing lines** ("Lined up by shared phrases · starts 0:12"). The inspector is the place for that detail. (Since 2026-10-29 they're shown only when a conversation has several recordings, without a 0:00 start, confidence, or drift.)
 - **Empty states that name what to do**: "Record a conversation, or drop audio files here.", "Drag conversations here, or choose Move to Folder.", "Add names, acronyms, and terms so Daybook spells them correctly.", and "Press its button once to start recording, and again to stop."
 - **Model prompts and Markdown export text** (`MeetingEvidence`, `MeetingExport`). They aren't interface.
 

@@ -216,7 +216,7 @@ struct AdjustTimingSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Adjust Timing for “\(track.map(name) ?? "Recording")”").font(.headline)
+            Text("Adjust Timing for “\(track.map { state.recordingName($0, in: meeting) } ?? "Recording")”").font(.headline)
             Picker("", selection: $automatic) {
                 Text("Automatically").tag(true)
                 HStack(spacing: 8) {
@@ -251,7 +251,6 @@ struct AdjustTimingSheet: View {
         }
     }
 
-    private func name(_ track: RecordingTrack) -> String { track.source == .imported ? track.fileName : track.source.recordingName }
 }
 
 enum TimeField {
