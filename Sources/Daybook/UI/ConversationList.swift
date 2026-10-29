@@ -195,7 +195,7 @@ struct RowStatus {
         case .requested(.queued): kind = .waiting; text = state.requestOrigin(for: meeting) ?? "Waiting"
         case .requested(.models): kind = .waitingForModels; text = "Waiting for models"
         case .requested(.paused): kind = .paused; text = "Paused"
-        case .requested(.device(let request)): kind = .waiting; text = "Requested on \(request.requestedBy.name)"
+        case .requested(.device(let request)): kind = .waiting; text = "Requested from \(request.requestedBy.name)"
         case .failed: kind = .failed; text = "Couldn’t finish"
         case .recorded: kind = .notTranscribed; text = "Not transcribed yet"
         case .done: kind = nil; text = nil

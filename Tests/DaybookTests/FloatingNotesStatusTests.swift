@@ -154,6 +154,8 @@ final class FloatingNotesStatusTests: XCTestCase {
                        "Transcribing on Studio Mac · 40%", "Another device is named: which one works is the status")
         XCTAssertEqual(FloatingStatus.workChip(.summarizing)?.label, "Summarizing…")
         XCTAssertEqual(FloatingStatus.workChip(.models)?.label, "Waiting for models")
+        XCTAssertEqual(FloatingStatus.workChip(.requested(device: "Alex’s iPhone"))?.label, "Requested from Alex’s iPhone",
+                       "the iPhone asked; it isn't what the conversation waits for")
         XCTAssertEqual(FloatingStatus.workChip(.ready(summary: true))?.label, "Summary ready")
         XCTAssertEqual(FloatingStatus.workChip(.failed("It ran out of memory."))?.tone, .attention)
     }
