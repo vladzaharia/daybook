@@ -231,10 +231,14 @@ enum DeviceDemo {
             if scenario == .live {
                 direct.live.isListening = true
                 direct.live.receivedSeconds = 236
+                // As live speakers label them: a voice recognized from its profile, then one that wasn't.
                 direct.live.captions = [
-                    LiveCaptionSegment(start: 221.4, end: 225.8, text: "So the launch moves to the 14th, and Priya owns the checklist.", isTentative: false),
-                    LiveCaptionSegment(start: 226.3, end: 230.9, text: "We still need legal to sign off on the pricing page before Friday.", isTentative: false),
-                    LiveCaptionSegment(start: 231.6, end: 233.2, text: "I’ll send the deck around", isTentative: true)
+                    LiveCaptionSegment(start: 221.4, end: 225.8, text: "So the launch moves to the 14th, and Priya owns the checklist.", isTentative: false,
+                                       speaker: LiveCaptionSpeaker(slot: "S1", name: "Sam")),
+                    LiveCaptionSegment(start: 226.3, end: 230.9, text: "We still need legal to sign off on the pricing page before Friday.", isTentative: false,
+                                       speaker: LiveCaptionSpeaker(slot: "S2")),
+                    LiveCaptionSegment(start: 231.6, end: 233.2, text: "I’ll send the deck around", isTentative: true,
+                                       speaker: LiveCaptionSpeaker(slot: "S1", name: "Sam"))
                 ]
                 direct.live.captionState = .listening
             }

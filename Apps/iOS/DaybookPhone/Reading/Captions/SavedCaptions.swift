@@ -55,7 +55,9 @@ enum SavedCaptions {
 }
 
 /// The transcript's page while only live captions exist: a quiet header saying what they are, then
-/// the captions in a lighter ink, with times that play the recording. No speakers, no editing.
+/// the captions in a lighter ink, with times that play the recording. The people live speakers
+/// recognized are named before their words, as the recording screen and Floating Notes name them.
+/// No editing.
 struct CaptionRows: View {
     let meeting: Meeting
     let captions: LiveCaptions
@@ -94,13 +96,23 @@ private struct CaptionRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             TimeButton(time: segment.start, play: play)
                 .frame(minWidth: 36, alignment: .leading)
-            Text(segment.text)
-                .font(PhoneStyle.Typeface.body)
-                .italic(segment.isTentative)
-                .foregroundStyle(segment.isTentative ? PhoneStyle.Ink.meta : PhoneStyle.Ink.secondary)
-                .lineSpacing(PhoneStyle.Typeface.bodyLineSpacing)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // The person live speakers recognized, never cut off by the words.
+                if let name = segment.speaker?.name {
+                    Text(name)
+                        .font(PhoneStyle.Typeface.body.weight(.semibold))
+                        .foregroundStyle(PhoneStyle.Ink.meta)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                Text(segment.text)
+                    .font(PhoneStyle.Typeface.body)
+                    .italic(segment.isTentative)
+                    .foregroundStyle(segment.isTentative ? PhoneStyle.Ink.meta : PhoneStyle.Ink.secondary)
+                    .lineSpacing(PhoneStyle.Typeface.bodyLineSpacing)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 5)
         .overlay(alignment: .leading) {
@@ -109,7 +121,7 @@ private struct CaptionRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Caption at \(SpokenTime.format(segment.start))\(segment.isTentative ? ", tentative" : ""): \(segment.text)")
+        .accessibilityLabel("\(segment.speaker?.name.map { "\($0), caption" } ?? "Caption") at \(SpokenTime.format(segment.start))\(segment.isTentative ? ", tentative" : ""): \(segment.text)")
         .accessibilityHint("Plays from here")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, play)

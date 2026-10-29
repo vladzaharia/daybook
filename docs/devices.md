@@ -366,7 +366,8 @@ a second local runtime), which are gone, with their plumbing (`LiveTranscriber`,
   line. When listening ends the captions go with it and the captioner finishes on its own.
 - **The Mac's page.** Listening shows "Live captions · tentative" and the newest six lines under the
   saved time (`LiveCaptionFeed`): the latest in Body, earlier in Secondary, words still being
-  revised in Meta. Nothing shows when captions are off or on macOS 15.
+  revised in Meta, and the person live speakers recognized named before their words, as Floating
+  Notes and the iPhone's status sheet name them. Nothing shows when captions are off or can't run.
 - **Tests** (`SoundcoreSimulatorTests`, with a captioner that records what it's fed): bursts of ten
   packets and a quiet spell from the simulator (`Fault.pause`) arrive back to back on the live
   audio's timeline at 16 kHz, captions reach `DeviceSession.liveCaptions` and go when listening

@@ -70,9 +70,13 @@ enum DemoLibrary {
         library.add(review.meeting)
         try? LiveCaptionStore(libraryRoot: rootURL).save(LiveCaptions(
             meetingID: review.meeting.id, trackID: review.trackID, localeIdentifier: "en_US",
-            segments: [LiveCaptionSegment(start: 0.5, end: 6, text: "So the first screen asks for the name of the team.", isTentative: false),
-                       LiveCaptionSegment(start: 6.4, end: 12, text: "Then we skip straight to inviting people, which tested well.", isTentative: false),
-                       LiveCaptionSegment(start: 12.5, end: 16, text: "Maybe the empty state needs another pass", isTentative: true)]))
+            // As live speakers label them: a voice recognized from its profile, then one that wasn't.
+            segments: [LiveCaptionSegment(start: 0.5, end: 6, text: "So the first screen asks for the name of the team.", isTentative: false,
+                                          speaker: LiveCaptionSpeaker(slot: "S1", name: "Maya")),
+                       LiveCaptionSegment(start: 6.4, end: 12, text: "Then we skip straight to inviting people, which tested well.", isTentative: false,
+                                          speaker: LiveCaptionSpeaker(slot: "S1", name: "Maya")),
+                       LiveCaptionSegment(start: 12.5, end: 16, text: "Maybe the empty state needs another pass", isTentative: true,
+                                          speaker: LiveCaptionSpeaker(slot: "S2"))]))
 
         // Waiting for a Mac, with a long title.
         var waiting = recorded("Customer call with Northwind Traders about the renewal terms, pricing for the expansion, and the rollout plan for three new regions next quarter",
