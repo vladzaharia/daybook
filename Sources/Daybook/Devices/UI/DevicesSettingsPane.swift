@@ -249,7 +249,7 @@ private struct PhoneSettingsRows: View {
         let direct = session.direct
         LabeledContent("Over Wi‑Fi") {
             HStack(spacing: Space.s2) {
-                DeviceStatusDot(state: direct?.state ?? .notSetUp, linked: session.isLinked)
+                DeviceStatusDot(state: direct?.state ?? .notSetUp)
                 Text(linkStatus(direct)).foregroundStyle(.secondary)
                 if direct?.isSetUp == false {
                     Button("Pair Again…") { state.requestAddDevice(kind: DaybookPhoneIntegration.id) }

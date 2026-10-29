@@ -4,65 +4,59 @@ import DaybookKit
 import SwiftUI
 
 // Building blocks shared by every device surface. The device page is content, not chrome: the
-// paper surface, page type, the paper inks (`Ink`), quiet fills, and no glass. Colour is reserved:
-// neon mint for a live link to a recorder, neon cyan for live listening, the brand gradient for
-// progress, `Ink.link` for anything clickable, `Ink.warning` for warnings, `Ink.record` for recording.
+// paper surface, page type, the paper inks (`Ink`), quiet fills, and no glass. Colour is reserved,
+// as on the iPhone: teal for a live link to a recorder and for what you can act on (`Ink.link`),
+// neon cyan for live listening, the brand gradient for progress, `Ink.warning` for warnings, and
+// `Ink.record` for recording. Everything else is the label colour or secondary.
 
-/// The device page's column. It uses a conversation page's geometry (a 56 pt margin hanging left of
-/// a 640 pt measure), so titles line up when moving between a device and a conversation. Under
-/// 600 pt the margin folds away.
+/// The device page's column: a conversation page's (`PageScroll`: a 640 pt measure, centred, with a
+/// 56 pt margin hanging to its left), so titles line up when moving between a device and a
+/// conversation. Under 600 pt the margin folds away.
 struct DevicePageScroll<Content: View>: View {
     @ViewBuilder var content: Content
-    @State private var narrow = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) { content }
-                .padding(.leading, narrow ? 0 : DaybookStyle.margin)
-                .frame(maxWidth: narrow ? .infinity : DaybookStyle.margin + DaybookStyle.measure, alignment: .leading)
-                .padding(.leading, narrow ? Space.s5 : Space.s6 - 8)
-                .padding(.trailing, narrow ? Space.s5 : Space.s6)
-                .padding(.top, Space.s6)
-                .padding(.bottom, Space.s8)
-                .frame(maxWidth: .infinity)
-        }
-        .background(DaybookStyle.paper)
-        .environment(\.deviceMarginFolded, narrow)
-        .onGeometryChange(for: Bool.self) { $0.size.width < DaybookStyle.narrowWidth } action: { narrow = $0 }
+        PageScroll { DeviceColumn { content } }
+            .background(DaybookStyle.paper)
     }
 }
 
-private struct DeviceMarginFoldedKey: EnvironmentKey { static let defaultValue = false }
-extension EnvironmentValues {
-    /// The page is too narrow for its margin, so glyphs that hang there are left out.
-    var deviceMarginFolded: Bool {
-        get { self[DeviceMarginFoldedKey.self] }
-        set { self[DeviceMarginFoldedKey.self] = newValue }
+/// The text measure inside the page: past the margin, which a conversation fills with times and the
+/// device page leaves to its title's glyph.
+private struct DeviceColumn<Content: View>: View {
+    @ViewBuilder var content: Content
+    @Environment(\.pageIsNarrow) private var narrow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) { content }
+            .padding(.leading, narrow ? 0 : DaybookStyle.margin)
     }
 }
 
-/// A page title with a glyph hanging in the margin beside it, where a conversation's times hang.
+/// A page title with a glyph hanging in the margin beside it, where a conversation's times hang
+/// (ending 8 pt before the text).
 struct DevicePageTitle<Glyph: View>: View {
     let title: String
     @ViewBuilder var glyph: Glyph
-    @Environment(\.deviceMarginFolded) private var folded
+    @Environment(\.pageIsNarrow) private var folded
 
     var body: some View {
         Text(title).font(TypeStyle.docTitle()).monospacedDigit()
             .foregroundStyle(Ink.title)
             .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
             .overlay(alignment: .topLeading) {
                 if !folded {
                     glyph
-                        .frame(width: DaybookStyle.margin - Space.s3, height: 36, alignment: .trailing)
+                        .frame(width: DaybookStyle.margin - 8, height: 36, alignment: .trailing)
                         .offset(x: -DaybookStyle.margin)
                 }
             }
     }
 }
 
-/// A device kind's symbol. On the page it's drawn in the brand gradient, and a live link adds a glow.
+/// A device kind's symbol: teal while the recorder is linked, secondary otherwise, as on the iPhone.
 struct DeviceGlyph: View {
     let symbol: String
     var size: CGFloat = 28
@@ -71,18 +65,15 @@ struct DeviceGlyph: View {
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: size, weight: .regular))
-            .foregroundStyle(DaybookStyle.brandGradient)
-            .neonGlow(linked ? DaybookStyle.neonMint : .clear, radius: 5)
-            .opacity(linked ? 1 : 0.85)
+            .foregroundStyle(linked ? DaybookStyle.accent : Ink.secondary)
             .accessibilityHidden(true)
     }
 }
 
-/// The 6 pt dot before a status line: mint and glowing for a live link, accent while working,
-/// warning when unavailable, meta otherwise.
+/// The 7 pt dot before a status line: teal when connected (pulsing while connecting), warning
+/// when unavailable, meta otherwise.
 struct DeviceStatusDot: View {
     let state: ConnectionState
-    var linked = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -90,82 +81,65 @@ struct DeviceStatusDot: View {
             .font(.system(size: 7))
             .foregroundStyle(color)
             .symbolEffect(.pulse, isActive: state.isBusy && !reduceMotion)
-            .neonGlow(state == .connected && linked ? DaybookStyle.neonMint : .clear, radius: 3)
             .accessibilityHidden(true)
     }
 
     private var color: Color {
         switch state {
-        case .connected: return linked ? DaybookStyle.neonMint : DaybookStyle.accent
-        case .searching, .connecting, .reconnecting: return DaybookStyle.accent
+        case .connected, .searching, .connecting, .reconnecting: return DaybookStyle.accent
         case .unavailable: return Ink.warning
         default: return Ink.meta
         }
     }
 }
 
-/// A page section heading: "How recordings arrive".
+/// A page section heading: "Import".
 struct DeviceHeading: View {
     let title: String
     init(_ title: String) { self.title = title }
     var body: some View {
         Text(title).font(TypeStyle.heading())
             .foregroundStyle(Ink.body)
-            .padding(.top, 28).padding(.bottom, Space.s3)
+            .padding(.top, Space.s6).padding(.bottom, Space.s3)
             .accessibilityAddTraits(.isHeader)
     }
 }
 
-/// One quiet-filled box whose text lines up with the page text while its edge sits outside it.
+/// One quiet-filled box on the column, its outer edge on the text's edge as a conversation's
+/// status boxes are, with their padding and corners.
 struct DeviceBox<Content: View>: View {
-    var cornerRadius: CGFloat = 8
-    /// The box's fill; the quiet fill unless the box carries a warning.
-    var fill: Color = DaybookStyle.quietFill
     @ViewBuilder var content: Content
     var body: some View {
         content
             .padding(Space.s3)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(fill, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .padding(.horizontal, -Space.s3)
+            .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
-/// The banner at the top of the device page: what happened, what is safe, and at most two actions.
+/// The device page's problem, under its status line: a conversation's problem box (`StatusBox`),
+/// with what happened, what is safe, and at most two actions, the first of them prominent.
 struct DeviceProblemBanner: View {
     let problem: DeviceProblem
     let perform: (DeviceProblemAction) -> Void
-    @Environment(\.colorScheme) private var scheme
 
-    private var actions: [DeviceProblemAction] {
-        let actions = Array(problem.actions.prefix(2))
+    /// The problem's first two actions, with Dismiss when there's room for it.
+    static func actions(_ problem: DeviceProblem, excluding hidden: Set<DeviceProblemAction> = []) -> [DeviceProblemAction] {
+        let actions = Array(problem.actions.filter { !hidden.contains($0) }.prefix(2))
         return actions.count < 2 && !actions.contains(.dismiss) ? actions + [.dismiss] : actions
     }
 
+    /// Actions that don't apply here (Set Up Folder… once the folder is set up).
+    var hidden: Set<DeviceProblemAction> = []
+
     var body: some View {
-        DeviceBox(fill: Ink.warning.opacity(scheme == .dark ? 0.12 : 0.08)) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: Space.s3) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(problem.title).font(TypeStyle.statusLead).foregroundStyle(Ink.warning)
-                        Text(problem.message).font(TypeStyle.status).foregroundStyle(Ink.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    HStack(spacing: Space.s3) {
-                        Spacer(minLength: 0)
-                        ForEach(Array(actions.dropFirst().reversed().enumerated()), id: \.offset) { _, action in
-                            Button(action.title) { perform(action) }
-                                .buttonStyle(.daybookLink)
-                        }
-                        if let primary = actions.first {
-                            Button(primary.title) { perform(primary) }
-                                .controlSize(.small)
-                        }
-                    }
-                    .font(TypeStyle.status)
-                }
+        let actions = Self.actions(problem, excluding: hidden)
+        DeviceAttentionBox(kind: .problem, symbol: "exclamationmark.triangle.fill", title: problem.title, message: problem.message) {
+            ForEach(Array(actions.dropFirst().reversed().enumerated()), id: \.offset) { _, action in
+                Button(action.title) { perform(action) }.buttonStyle(.daybookLink)
+            }
+            if let primary = actions.first {
+                DeviceBoxPrimaryButton(title: primary.title) { perform(primary) }
             }
         }
         .accessibilityElement(children: .contain)
@@ -173,29 +147,95 @@ struct DeviceProblemBanner: View {
     }
 }
 
-/// An informational notice with one optional action.
+/// A state that needs the person, drawn as a conversation's status box (`StatusBox`: its fills,
+/// glyph column, padding, and corners): a problem (warning), or something to know (quiet). It always
+/// spans the column, and its actions move under the message when the column is narrow.
+struct DeviceAttentionBox<Actions: View>: View {
+    var kind: StatusBoxKind = .info
+    let symbol: String
+    let title: String
+    var message: String?
+    @ViewBuilder var actions: Actions
+    @State private var width: CGFloat = DaybookStyle.measure
+    @Environment(\.colorScheme) private var scheme
+
+    private var stacked: Bool { width < 520 }
+    private var tint: Color {
+        switch kind {
+        case .problem: return Ink.warning
+        case .accent: return DaybookStyle.accent
+        case .info: return Ink.secondary
+        }
+    }
+    private var fill: Color {
+        switch kind {
+        case .problem: return Ink.warning.opacity(scheme == .dark ? 0.12 : 0.08)
+        case .accent: return DaybookStyle.accent.opacity(0.08)
+        case .info: return DaybookStyle.quietFill
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: stacked ? .firstTextBaseline : .center, spacing: Space.s3) {
+            Image(systemName: symbol)
+                .font(.system(size: 15))
+                .symbolRenderingMode(kind == .problem ? .monochrome : .hierarchical)
+                .foregroundStyle(tint)
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: Space.s2) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(TypeStyle.statusLead).foregroundStyle(kind == .problem ? Ink.warning : Ink.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let message {
+                        Text(message).font(TypeStyle.status).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if stacked { actionRow }
+            }
+            .layoutPriority(1)
+            if !stacked {
+                Spacer(minLength: Space.s3)
+                actionRow
+            }
+        }
+        .padding(Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .padding(.top, Space.s4)
+        .transition(.opacity)
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: Space.s3) { actions }
+            .controlSize(.small)
+            .fixedSize()
+    }
+}
+
+/// The one prominent action in a box.
+struct DeviceBoxPrimaryButton: View {
+    let title: String
+    let action: () -> Void
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(.borderedProminent)
+            .tint(DaybookStyle.prominentFill)
+    }
+}
+
+/// Something to know, with one optional action and Dismiss.
 struct DeviceNotice: View {
-    var symbol = "info.circle"
+    var symbol = "info.circle.fill"
     let text: String
     var action: (title: String, run: () -> Void)?
     var dismiss: (() -> Void)?
 
     var body: some View {
-        DeviceBox {
-            HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                Image(systemName: symbol).foregroundStyle(Ink.secondary).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: Space.s3) {
-                    Text(text).font(TypeStyle.status).foregroundStyle(Ink.body).fixedSize(horizontal: false, vertical: true)
-                    if action != nil || dismiss != nil {
-                        HStack(spacing: Space.s3) {
-                            Spacer(minLength: 0)
-                            if let dismiss { Button("Dismiss", action: dismiss).buttonStyle(.daybookLink) }
-                            if let action { Button(action.title, action: action.run).controlSize(.small) }
-                        }
-                        .font(TypeStyle.status)
-                    }
-                }
-            }
+        DeviceAttentionBox(symbol: symbol, title: text) {
+            if let dismiss { Button("Dismiss", action: dismiss).buttonStyle(.daybookLink) }
+            if let action { Button(action.title, action: action.run) }
         }
     }
 }
@@ -292,6 +332,13 @@ extension DeviceSession {
         }
     }
 
+    /// Whether this Mac imports from the device: not from a recorder another device manages, which
+    /// imports there (its recordings arrive through sync).
+    var importsHere: Bool { managedElsewhere == nil || primary?.method != .direct }
+
+    /// New recordings this Mac can import, for the sidebar's count and the menus.
+    var importableCount: Int { importsHere ? newRecordings.count : 0 }
+
     /// Stop, confirming first when more than a minute of audio has arrived (§5.19).
     func requestStop(all: Bool) {
         let seconds = Double(receivedBytes) / SoundcoreRecording.bytesPerSecond
@@ -310,6 +357,11 @@ enum DeviceActions {
     static func openSettings(_ openSettings: OpenSettingsAction) {
         LaunchOptions.defaults.set("devices", forKey: "settingsPane")
         openSettings()
+    }
+
+    /// Problem actions that don't apply to this device now: Set Up Folder… once its folder is set up.
+    static func inapplicable(for session: DeviceSession) -> Set<DeviceProblemAction> {
+        session.files?.isSetUp == true ? [.setUpFolder] : []
     }
 
     static func perform(_ action: DeviceProblemAction, session: DeviceSession, state: AppState) {

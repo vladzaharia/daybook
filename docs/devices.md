@@ -250,14 +250,17 @@ fires for a Mac that was already connected.
 The interface is generic and capability-driven:
 
 - **Sidebar › Devices**: every configured device, with at most one accessory (a progress ring
-  while importing, else a count of new recordings). The glyph is neon mint with a soft glow
-  while a recorder is linked, secondary while it isn't, and the sidebar's colour for a watched
-  folder. A `+` on hover adds a device.
+  while importing, else a count of new recordings this Mac can import: none for a recorder another
+  device manages). The glyph is teal while a recorder is linked, as on the iPhone, and the
+  sidebar's own colour otherwise. A `+` on hover adds a device.
 - **List column**: Recording Now, the queue, New on <device>, and Already in Daybook (collapsed).
-- **Device page**: the glyph hangs in the page margin; a status dot and byline; figure tiles
-  for whatever status the method reports; Import N New; Import (each method in
-  preference order, with one action); Recently imported. Problems use one banner with at most
-  two actions.
+- **Device page**: a conversation page's column, so titles line up, with the glyph hanging in its
+  margin; a status dot and byline (with Cancel while connecting); the problem under it, in a
+  conversation's status box with at most two actions; figure tiles for whatever status the method
+  reports; the page's one action (Import N New, Connect, or Use on This Mac), which neither the
+  problem box nor a method row repeats; Import (each method in preference order); Recent imports.
+  Daybook on iPhone's page has the same header and boxes, without imports: its recordings are the
+  list beside it.
 - **Add Device…** (File menu, sidebar, Settings, Welcome): choose a kind, then its methods in
   order of preference. The first is marked Recommended. A direct method's card is the
   pre-permission screen; its one button starts the search.
