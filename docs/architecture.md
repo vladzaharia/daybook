@@ -46,7 +46,7 @@ flowchart LR
 | --- | --- | --- |
 | Library | Owns conversations, folders, templates, vocabulary, every edit and its history, Trash, sync application, ingest, and processing requests | [LibraryController](../Sources/DaybookKit/LibraryController.swift) |
 | App state | Owns selection, capture, the processing queue, model selection, and UI state, holding the library | [AppState](../Sources/Daybook/App/AppState.swift) |
-| Processing status | Derives Recorded, Requested, Processing, Done, or Couldn't finish for both apps | [ProcessingStatus](../Sources/DaybookKit/ProcessingStatus.swift), [ProcessingRequest](../Sources/DaybookCore/ProcessingRequest.swift) |
+| Processing status | Derives Recorded, Requested, Processing, Done, Waiting for another device's recording, or Couldn't finish for both apps | [ProcessingStatus](../Sources/DaybookKit/ProcessingStatus.swift), [ProcessingRequest](../Sources/DaybookCore/ProcessingRequest.swift) |
 | Capture | Saves microphone and computer audio separately, records timing, and preserves interrupted captures | [RecordingController](../Sources/Daybook/Capture/RecordingController.swift), [CaptureRecovery](../Sources/Daybook/Capture/CaptureRecovery.swift) |
 | Detection | Uses meeting-window evidence and per-process audio activity, with start/end debounce | [MeetingDetection](../Sources/Daybook/Capture/MeetingDetection.swift) |
 | Core domain | Represents meetings, sources, transcript provenance, corrections, speakers, summaries, and highlights | [Models](../Sources/DaybookCore/Models.swift) |

@@ -91,6 +91,8 @@ struct FloatingStatusInputs: Equatable {
         case paused
         case failed(String)
         case ready(summary: Bool)
+        /// Done with this Mac's audio; a recording made alongside it hasn't arrived ("Waiting for iPhone audio").
+        case awaiting(String)
     }
 
     /// This Mac's queue, for the home.
@@ -317,6 +319,7 @@ enum FloatingStatus {
         case .paused: return chip("pause.circle", "Transcription paused", short: "Paused", .calm)
         case .failed(let reason): return chip("exclamationmark.triangle.fill", "Couldn’t finish", .attention, detail: reason.isEmpty ? "Couldn’t finish" : reason)
         case .ready(let summary): return chip("checkmark.circle.fill", summary ? "Summary ready" : "Transcript ready", short: "Ready", .linked)
+        case .awaiting(let line): return chip("clock", line, short: "Waiting", .calm)
         }
     }
 

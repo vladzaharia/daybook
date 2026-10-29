@@ -11,6 +11,7 @@ import Foundation
 /// | Requested | "Waiting for your Mac" (+ "Last seen 2 h ago") | "Waiting for your Mac" + clock |
 /// | Processing | "Transcribing on Studio · 40%" + gradient bar | same words + a 2 pt gradient line |
 /// | Couldn't finish | a box with the Mac's reason, Try Again, Details | "Couldn't finish" + warning |
+/// | Waiting for a recording | "Waiting for audio from Alex's iPhone" | "Waiting for iPhone audio" + clock |
 /// | Done | nothing | the preview |
 struct StatusPresentation: Equatable {
     enum Kind: Equatable {
@@ -66,6 +67,8 @@ struct StatusPresentation: Equatable {
                 title: silent ? "No speech in this recording" : "Couldn’t finish \(failure.hadTranscripts ? "summarizing" : "transcribing")",
                 detail: silent ? "The audio is saved." : FriendlyError.message(for: failure.reason, device: failure.device?.name),
                 actions: actions)
+        case .awaitingRecordings(let recordings):
+            return StatusPresentation(kind: .line, symbol: "clock", title: ProcessingStatus.awaitingDetail(recordings))
         case .done:
             guard let message = meeting.errorMessage, !message.isEmpty else { return nil }
             return StatusPresentation(kind: .info, symbol: "info.circle.fill", title: message, actions: [.dismiss])
@@ -82,6 +85,7 @@ struct StatusPresentation: Equatable {
         case .processing(let progress):
             return RowStatus(kind: .processing, text: workingTitle(progress), fraction: progress.fraction)
         case .failed: return RowStatus(kind: .failed, text: "Couldn’t finish")
+        case .awaitingRecordings(let recordings): return RowStatus(kind: .waiting, text: ProcessingStatus.awaitingLine(recordings))
         case .done: return nil
         }
     }

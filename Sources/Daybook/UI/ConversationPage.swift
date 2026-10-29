@@ -282,6 +282,7 @@ struct ConversationStatus: View {
                         Text(stageText(progress.stage))
                     }
                     if let origin = state.requestOrigin(for: meeting) { Text("· \(origin)").foregroundStyle(Ink.meta) }
+                    if !progress.awaiting.isEmpty { Text("· \(ProcessingStatus.awaitingLine(progress.awaiting))").foregroundStyle(Ink.meta) }
                     Spacer(minLength: Space.s2)
                     Button(meeting.status == .summarizing ? "Stop" : "Pause") { state.pauseProcessing(meeting.id) }
                         .buttonStyle(.daybookLink)
@@ -320,6 +321,9 @@ struct ConversationStatus: View {
                 if meeting.hasUntranscribedAudio { transcribe(title: "Requested from \(request.requestedBy.name)") } else { info }
             case .recorded, .failed:
                 if meeting.hasUntranscribedAudio { transcribe() } else { info }
+            case .awaitingRecordings(let recordings):
+                line(symbol: "clock") { Text(ProcessingStatus.awaitingDetail(recordings)) }
+                info
             case .done:
                 info
             }
