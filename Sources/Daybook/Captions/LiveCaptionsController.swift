@@ -323,6 +323,9 @@ final class LiveCaptionSettings: ObservableObject {
     @Published var isEnabled: Bool { didSet { defaults.set(isEnabled, forKey: Keys.enabled) } }
     /// Nil follows the Mac's language.
     @Published var localeIdentifier: String? { didSet { defaults.set(localeIdentifier, forKey: Keys.locale) } }
+    /// A downloaded live transcription model captions in this language (`MacLiveModels`), so captions
+    /// run even where the Speech framework can't (macOS 15). Not stored: read from what's installed.
+    @Published var hasLiveModels = false
     var locale: Locale { localeIdentifier.map(Locale.init(identifier:)) ?? .current }
 
     private let defaults: UserDefaults
@@ -420,9 +423,12 @@ enum DemoCaptions {
             ], wordInterval: 0.12)
         }
         if source == .call {
+            // As live speakers label them: a voice recognized from its profile, then one that wasn't.
             return ScriptedCaptioner(lines: [
-                .init(at: 1.6, text: "Yes. So the launch moves to the fourteenth, and Priya owns the checklist."),
-                .init(at: 3.8, text: "We still need legal to sign off on the pricing page before Friday."),
+                .init(at: 1.6, text: "Yes. So the launch moves to the fourteenth, and Priya owns the checklist.",
+                      speaker: LiveCaptionSpeaker(slot: "S1", name: "Sam")),
+                .init(at: 3.8, text: "We still need legal to sign off on the pricing page before Friday.",
+                      speaker: LiveCaptionSpeaker(slot: "S2")),
             ], wordInterval: 0.12, leavesLastTentative: false)
         }
         return ScriptedCaptioner(lines: [

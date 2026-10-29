@@ -35,14 +35,15 @@ final class MacLiveModels {
     /// Re-reads which live models are chosen and installed. Call after downloads and removals, and
     /// when the choices or the captions' language change.
     func refresh(selections: ModelSelections, catalog: ModelCatalog, engines: [ModelEngineDescriptor], locale: Locale,
-                 store: ModelStore) {
+                 store: ModelStore, resolved: @escaping (LiveModelSet) -> Void = { _ in }) {
         refreshing?.cancel()
         let choices = Self.choices(selections: selections, catalog: catalog, engines: engines)
         let alternatives = LiveModelChoices.defaults(for: .liveTranscription, platform: .macOS, catalog: catalog, engines: engines)
         refreshing = Task { [weak self] in
             let inventory = await store.inventory()
-            guard !Task.isCancelled else { return }
-            self?.models = LiveModelSet.resolve(choices, inventory: inventory, locale: locale, alternatives: alternatives)
+            guard !Task.isCancelled, let self else { return }
+            self.models = LiveModelSet.resolve(choices, inventory: inventory, locale: locale, alternatives: alternatives)
+            resolved(self.models)
         }
         Task { await captioners.host.releaseIdle() }
     }
