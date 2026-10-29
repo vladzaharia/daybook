@@ -55,9 +55,11 @@ The owner's note: "We don't need unnecessary subtitles like 'Its recordings arri
 - **Empty states that name what to do**: "Record a conversation, or drop audio files here.", "Drag conversations here, or choose Move to Folder.", "Add names, acronyms, and terms so Daybook spells them correctly.", and "Press its button once to start recording, and again to stop."
 - **Model prompts and Markdown export text** (`MeetingEvidence`, `MeetingExport`). They aren't interface.
 
-## Not changed here: Floating Notes
+## Floating Notes, carried over with its redesign
 
-`Sources/Daybook/UI/NotesPanel.swift` is being redesigned separately and was left untouched. These are the changes to carry over:
+`Sources/Daybook/UI/NotesPanel.swift` was being redesigned separately and was left untouched by this pass. The redesign
+(`Sources/Daybook/UI/FloatingNotes/`) carries these over; checked 2026-10-29: the note placeholder in `FloatingSurfaces`,
+the chips and lines in `FloatingStatus` (tested in `FloatingNotesStatusTests`), and `FloatingStatus.microphoneSilentHelp`.
 
 | Line | Before | After |
 |---|---|---|
@@ -67,7 +69,7 @@ The owner's note: "We don't need unnecessary subtitles like 'Its recordings arri
 | 630 | Transcribes once the models are on this Mac | Waiting for models |
 | 772 (help) | Your microphone isn't picking anything up. Check that it isn't muted or unplugged. | Check that your microphone isn't muted or unplugged. |
 
-The Floating Notes footer in interface.md still quotes "Transcribing on this Mac · 40%" until that change lands.
+interface.md's Floating Notes section quotes the new words ("Transcribing · 40%").
 
 ## Tests and docs updated
 
