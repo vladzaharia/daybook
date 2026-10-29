@@ -109,7 +109,7 @@ struct ModelSettings: View {
     /// Speaks only when the chosen models aren't all on this Mac: what's left to download, or, once all of it is on its
     /// way, the download's progress. A model fetched on its own doesn't stand for the rest, which can still be started.
     @ViewBuilder private func downloadRow(_ snapshot: ModelManagerSnapshot) -> some View {
-        let keys = snapshot.choiceRoles.filter { $0 != .diarization || state.detectSpeakers }.compactMap { state.modelSelections[$0] }
+        let keys = snapshot.choiceRoles.filter { ($0 != .diarization || state.detectSpeakers) && !$0.isLiveOnly }.compactMap { state.modelSelections[$0] }
         let downloadable = keys.filter { state.modelCatalog.model($0)?.isSystemModel == false }
         let missing = manager.missingSelected
         if !missing.isEmpty {

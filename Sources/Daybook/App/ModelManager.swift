@@ -329,7 +329,7 @@ struct ModelManagerSnapshot {
         }
         if !summaries.contains(where: \.isCurrent) {
             // Live captions' models are optional downloads, not part of what processing needs.
-            let keys = choiceRoles.filter { $0 != .liveTranscription && $0 != .liveDiarization }.compactMap { selections[$0] }
+            let keys = choiceRoles.filter { !$0.isLiveOnly }.compactMap { selections[$0] }
             summaries.append(summary(nil, keys: keys, recommended: recommended, current: true))
         }
         return summaries
@@ -548,7 +548,8 @@ final class ModelManager: ObservableObject {
     var missingSelected: [String] {
         let snapshot = snapshot
         var keys: [String] = []
-        for role in snapshot.choiceRoles where role != .diarization || state.detectSpeakers {
+        // Live captions' models are optional downloads, offered in their own rows.
+        for role in snapshot.choiceRoles where (role != .diarization || state.detectSpeakers) && !role.isLiveOnly {
             guard let key = state.modelSelections[role], let model = state.modelCatalog.model(key), !keys.contains(model.key) else { continue }
             if [.notDownloaded, .damaged].contains(snapshot.status(of: model)) { keys.append(model.key) }
         }

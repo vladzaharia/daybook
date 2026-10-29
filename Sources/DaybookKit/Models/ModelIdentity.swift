@@ -46,6 +46,8 @@ public struct ModelRole: RawRepresentable, Codable, Hashable, Sendable, Expressi
     public static let liveDiarization: ModelRole = "liveDiarization"
     /// The live roles a catalog's `liveSelection` names, in the order settings list them.
     public static let live: [ModelRole] = [.liveTranscription, .liveDiarization, .speakerEmbedding]
+    /// A role only live captions use: an optional download, never something processing waits for.
+    public var isLiveOnly: Bool { self == .liveTranscription || self == .liveDiarization }
 }
 
 /// An engine's stable identifier: "whisperKit", "community1", "mlxLanguage".

@@ -328,7 +328,11 @@ public final class ScriptedCaptioner: LiveCaptioning, @unchecked Sendable {
     public struct Line: Sendable {
         public var at: TimeInterval
         public var text: String
-        public init(at: TimeInterval, text: String) { self.at = at; self.text = text }
+        /// Who says it, as live speakers would label it (demos of named captions).
+        public var speaker: LiveCaptionSpeaker?
+        public init(at: TimeInterval, text: String, speaker: LiveCaptionSpeaker? = nil) {
+            self.at = at; self.text = text; self.speaker = speaker
+        }
     }
 
     public let updates: AsyncStream<[LiveCaptionSegment]>
@@ -342,6 +346,7 @@ public final class ScriptedCaptioner: LiveCaptioning, @unchecked Sendable {
     private let lock = NSLock()
     private var task: Task<Void, Never>?
     private var assembler = LiveCaptionAssembler()
+    private var speakers: [UUID: LiveCaptionSpeaker] = [:]
     private var buffers = 0
 
     public init(lines: [Line], wordInterval: TimeInterval = 0.3, leavesLastTentative: Bool = true) {
@@ -381,28 +386,40 @@ public final class ScriptedCaptioner: LiveCaptioning, @unchecked Sendable {
                 for count in 1...words.count {
                     guard !Task.isCancelled else { return }
                     self?.apply(text: words.prefix(count).joined(separator: " "), start: line.at,
-                                end: line.at + Double(count) * interval, isFinal: false)
+                                end: line.at + Double(count) * interval, isFinal: false, speaker: line.speaker)
                     try? await Task.sleep(for: .seconds(interval))
                 }
                 if !(leaves && index == lines.count - 1) {
-                    self?.apply(text: line.text, start: line.at, end: line.at + Double(words.count) * interval, isFinal: true)
+                    self?.apply(text: line.text, start: line.at, end: line.at + Double(words.count) * interval, isFinal: true,
+                                speaker: line.speaker)
                 }
             }
         }
     }
 
     /// Posts one result directly (tests).
-    public func apply(text: String, start: TimeInterval, end: TimeInterval, isFinal: Bool) {
+    public func apply(text: String, start: TimeInterval, end: TimeInterval, isFinal: Bool, speaker: LiveCaptionSpeaker? = nil) {
         let snapshot = lock.withLock { () -> [LiveCaptionSegment]? in
-            return assembler.apply(text: text, start: start, end: end, isFinal: isFinal) ? assembler.segments : nil
+            guard assembler.apply(text: text, start: start, end: end, isFinal: isFinal) else { return nil }
+            if let speaker, let last = assembler.segments.last { speakers[last.id] = speaker }
+            return labelled(assembler.segments)
         }
         if let snapshot { updatesContinuation.yield(snapshot) }
+    }
+
+    /// Segments with the speakers their lines named. Call with the lock held.
+    private func labelled(_ segments: [LiveCaptionSegment]) -> [LiveCaptionSegment] {
+        segments.map { segment in
+            var segment = segment
+            if let speaker = speakers[segment.id] { segment.speaker = speaker }
+            return segment
+        }
     }
 
     public func finish() async {
         task?.cancel()
         await task?.value
-        let snapshot = lock.withLock { () -> [LiveCaptionSegment] in assembler.finalizeAll(); return assembler.segments }
+        let snapshot = lock.withLock { () -> [LiveCaptionSegment] in assembler.finalizeAll(); return labelled(assembler.segments) }
         updatesContinuation.yield(snapshot)
         statesContinuation.yield(.finished)
         updatesContinuation.finish()

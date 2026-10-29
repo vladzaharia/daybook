@@ -30,8 +30,12 @@ extension AppState {
 
     /// Re-reads the live models captions use (`MacLiveModels`).
     func refreshLiveModels() {
+        let settings = captionSettings
         liveModels.refresh(selections: modelSelections, catalog: modelCatalog, engines: runtime.engines,
-                           locale: captionSettings.locale, store: runtime.store)
+                           locale: settings.locale, store: runtime.store) { [weak settings] models in
+            let ready = models.transcribes(settings?.locale ?? .current)
+            if settings?.hasLiveModels != ready { settings?.hasLiveModels = ready }
+        }
     }
 
     /// Before the recorder starts: the tap that hands each source's audio to its captioner.

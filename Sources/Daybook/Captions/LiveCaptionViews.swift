@@ -203,7 +203,8 @@ struct LiveCaptionSettingsSection: View {
     @State private var availability: LiveCaptionAvailability?
     @State private var locales: [Locale] = []
 
-    private var supported: Bool { MacCaptioners.systemSupportsCaptions }
+    /// The Speech framework (macOS 26), or downloaded live models (any macOS).
+    private var supported: Bool { MacCaptioners.systemSupportsCaptions || settings.hasLiveModels }
 
     var body: some View {
         Section {
@@ -225,7 +226,7 @@ struct LiveCaptionSettingsSection: View {
             if let footer { SettingsFooter(footer) }
         }
         .task(id: settings.localeIdentifier) {
-            guard supported else { return }
+            guard MacCaptioners.systemSupportsCaptions else { return }
             if locales.isEmpty { locales = await LiveCaptionAvailability.supportedLocales() }
             availability = await LiveCaptionAvailability.check(locale: settings.locale)
         }
@@ -233,7 +234,7 @@ struct LiveCaptionSettingsSection: View {
 
     private var footer: String? {
         guard supported else { return "Live captions need macOS 26 or later." }
-        guard settings.isEnabled else { return nil }
+        guard settings.isEnabled, !settings.hasLiveModels else { return nil }
         switch availability {
         case .needsDownload(let locale)?:
             return "Captions for \(LiveCaptionAvailability.name(locale)) download the first time you record with them on."
