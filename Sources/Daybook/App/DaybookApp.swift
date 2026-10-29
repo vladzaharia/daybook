@@ -28,6 +28,8 @@ enum DaybookEntry {
         }
         if let name = LaunchOptions.deviceName { ProcessingRequest.Device.currentName = name }
         #endif
+        // Before anything opens the library, syncs, or listens: one copy at a time.
+        SingleInstance.ensureOnlyCopy()
         DaybookApp.main()
     }
 }

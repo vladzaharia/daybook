@@ -1146,3 +1146,25 @@ tokenizers installed on the owner's Mac (copies of their tokenizer and config fi
   quit mid-shard) starts again; files that finished are kept, as before. 1.1.6 resumed the file itself.
 - The app links the new packages' licenses and NOTICE files (swift-crypto and swift-asn1 carry NOTICE.txt) in
   `Contents/Resources/Licenses`, and `THIRD_PARTY_NOTICES.md` lists them.
+
+## One copy at a time on the Mac (2026-10-28)
+
+Two copies of Daybook could run at once: the owner had 0.4.1 open from `/Applications` and from the mounted disk
+image (`/Volumes/Daybook 0.4.1/Daybook.app`), and an ad hoc build (`local.daybook.app.adhoc`) or `swift run` could
+join them. Each opened the library, synced, listened for the iPhone, held the recorder, and could record calls.
+
+Now a copy that finds an earlier one (`local.daybook.app`, `local.daybook.app.…`, or the unbundled `Daybook`
+binary), before it starts anything, brings that one forward and quits, with no alert. The earlier copy is the one
+whose process started first by the kernel's clock (`SingleInstance.startTime`), then the lower process ID, so copies
+started together agree. Debug builds launched with `--library` (screenshots, demos) are exempt unless they pass
+`--single-instance`.
+
+- `SingleInstanceTests`: which processes count (every Daybook build, not the iPhone app, the sandbox probe, or
+  others), the earliest wins, simultaneous starts, and the kernel's start time.
+- With the debug binary and `--single-instance`: three launches beside a running copy each showed the check at once
+  (when it asked, before it switched silently), and a launch beside a running copy then exited within a second
+  without creating its library, leaving the first copy running.
+- AppKit lists other apps, and the current one, only after `NSApplication.shared` exists: the check creates it first.
+  Without that it saw none of the running copies.
+
+Not verified here: that the earlier copy comes to the front (a system dialog held the screen during the check).
