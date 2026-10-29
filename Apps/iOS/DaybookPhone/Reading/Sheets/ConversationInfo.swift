@@ -15,14 +15,25 @@ struct ConversationInfo: View {
                 if let meeting = library.meeting(meetingID) {
                     Form {
                         Section("Details") { details(meeting) }
-                        Section("People") { people(meeting) }
-                        Section {
-                            ForEach(meeting.tracks) { track in AudioSourceRow(meeting: meeting, track: track) }
-                            if meeting.tracks.isEmpty { Text("No recordings yet.").foregroundStyle(.secondary) }
-                        } header: {
-                            Text("Audio")
+                        // Without a recording there are no people or processing to show; Audio says so once.
+                        if !meeting.tracks.isEmpty {
+                            Section("People") { people(meeting) }
                         }
-                        Section("Processing") { processing(meeting) }
+                        Section("Audio") {
+                            ForEach(meeting.tracks) { track in AudioSourceRow(meeting: meeting, track: track) }
+                            if meeting.tracks.isEmpty { Text("No recording yet").foregroundStyle(PhoneStyle.Ink.secondary) }
+                        }
+                        if !meeting.tracks.isEmpty {
+                            Section("Processing") { processing(meeting) }
+                        }
+                        if !meeting.revisions.isEmpty {
+                            Section {
+                                Button {
+                                    dismiss()
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.sheet = .history(meeting.id) }
+                                } label: { Label("Version History", systemImage: "clock.arrow.circlepath") }
+                            }
+                        }
                     }
                     .scrollContentBackground(.hidden)
                     .background(Color(uiColor: .systemGroupedBackground))
@@ -44,17 +55,23 @@ struct ConversationInfo: View {
         Picker(selection: Binding(get: { meeting.folderID }, set: { library.moveToFolder([meeting.id], $0) })) {
             Text("None").tag(UUID?.none)
             ForEach(library.folders) { folder in Text(folder.name).tag(UUID?.some(folder.id)) }
-        } label: { Label("Folder", systemImage: "folder") }
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Tags", systemImage: "tag")
-            TagEditor(tags: meeting.tags ?? []) { library.setTags(meeting.id, text: $0.joined(separator: ",")) }
+        } label: { InfoLabel("Folder", systemImage: "folder") }
+        // The chips start where the row titles do, under "Tags", not under its symbol.
+        Label {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Tags")
+                TagEditor(tags: meeting.tags ?? []) { library.setTags(meeting.id, text: $0.joined(separator: ",")) }
+            }
+        } icon: {
+            // Beside "Tags", not halfway down the chips.
+            InfoSymbol("tag").frame(maxHeight: .infinity, alignment: .top).padding(.top, 2)
         }
         .padding(.vertical, 2)
         Picker(selection: Binding(get: { PlacementChoice(meeting.placement) }, set: { library.setPlacement([meeting.id], $0.placement) })) {
             Text(automaticPlacementTitle(meeting)).tag(PlacementChoice.automatic)
             Text("Work").tag(PlacementChoice.work)
             Text("Personal").tag(PlacementChoice.personal)
-        } label: { Label("Shows In", systemImage: "rectangle.stack") }
+        } label: { InfoLabel("Shows In", systemImage: "rectangle.stack") }
         Picker(selection: Binding(get: { library.templateSelection(for: meeting.id) }, set: { id in
             if library.chooseTemplate(id, for: meeting.id), !meeting.unifiedTranscript.isEmpty {
                 library.requestProcessing(meeting.id, mode: .summaryOnly, templateID: id == "auto" ? nil : id)
@@ -62,9 +79,16 @@ struct ConversationInfo: View {
         })) {
             Text(automaticTemplateTitle(meeting)).tag("auto")
             ForEach(library.templates) { Text($0.name).tag($0.id) }
-        } label: { Label("Template", systemImage: "doc.text") }
-        LabeledContent("Created", value: meeting.date.formatted(.dateTime.day().month(.abbreviated).year().hour().minute()))
-        LabeledContent("Edited", value: meeting.updatedAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
+        } label: { InfoLabel("Template", systemImage: "doc.text") }
+        LabeledContent("Created", value: stamp(meeting.date))
+        LabeledContent("Edited", value: stamp(meeting.updatedAt))
+    }
+
+    /// Created and Edited read alike: the year only when it isn't this one.
+    private func stamp(_ date: Date) -> String {
+        let thisYear = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year)
+        return thisYear ? date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+                        : date.formatted(.dateTime.day().month(.abbreviated).year().hour().minute())
     }
 
     private func automaticTemplateTitle(_ meeting: Meeting) -> String {
@@ -86,8 +110,7 @@ struct ConversationInfo: View {
 
     @ViewBuilder private func people(_ meeting: Meeting) -> some View {
         if meeting.speakers.isEmpty {
-            Text(meeting.tracks.isEmpty ? "No recording yet." : "No speakers yet")
-                .foregroundStyle(.secondary)
+            Text("No speakers yet").foregroundStyle(PhoneStyle.Ink.secondary)
         } else {
             let total = max(1, meeting.speakers.map { talkTime($0.id, in: meeting) }.reduce(0, +))
             ForEach(Array(meeting.speakers.enumerated()), id: \.element.id) { index, speaker in
@@ -114,7 +137,7 @@ struct ConversationInfo: View {
                 }
             }
         } else {
-            LabeledContent("Transcribed", value: meeting.tracks.isEmpty ? "No recording" : "Not yet")
+            LabeledContent("Transcribed", value: "Not yet")
         }
         LabeledContent("Speakers", value: meeting.speakers.compactMap(\.analysisSettings).first.map { ModelCatalog.builtIn.name(for: $0.modelID, provenance: $0.model) }
             ?? (meeting.speakers.isEmpty ? "Not identified" : "From the recordings"))
@@ -130,12 +153,24 @@ struct ConversationInfo: View {
             LabeledContent("Now", value: status.text)
         }
         ReprocessMenu(library: library, meeting: meeting)
-        Button {
-            dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { session.sheet = .history(meeting.id) }
-        } label: { Label("Version History", systemImage: "clock.arrow.circlepath") }
-            .disabled(meeting.revisions.isEmpty)
     }
+}
+
+/// A row's name with its symbol in the secondary ink: symbols in Info describe, they aren't actions.
+private struct InfoLabel: View {
+    let title: String
+    let systemImage: String
+    init(_ title: String, systemImage: String) { self.title = title; self.systemImage = systemImage }
+
+    var body: some View {
+        Label { Text(title) } icon: { InfoSymbol(systemImage) }
+    }
+}
+
+private struct InfoSymbol: View {
+    let name: String
+    init(_ name: String) { self.name = name }
+    var body: some View { Image(systemName: name).foregroundStyle(PhoneStyle.Ink.secondary) }
 }
 
 private enum PlacementChoice: Hashable {
