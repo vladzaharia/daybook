@@ -173,7 +173,7 @@ struct LiveCaptionFeed: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Live captions, tentative")
-            .accessibilityValue(segments.last?.text ?? "")
+            .accessibilityValue(segments.last.map { [$0.speaker?.name, $0.text].compactMap { $0 }.joined(separator: ": ") } ?? "")
         }
     }
 
@@ -188,12 +188,18 @@ struct LiveCaptionFeed: View {
         return VStack(alignment: .leading, spacing: Space.s1) {
             ForEach(Array(recent.enumerated()), id: \.element.id) { index, segment in
                 let newest = index == recent.count - 1
-                Text(segment.text)
-                    .font(TypeStyle.body())
-                    .lineSpacing(TypeStyle.bodyLineSpacing())
-                    .foregroundStyle(segment.isTentative ? Ink.meta : newest ? Ink.body : Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .transition(.opacity)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // The person live speakers recognized, before the words, as Floating Notes shows them.
+                    if let name = segment.speaker?.name {
+                        Text(name).font(TypeStyle.speaker()).foregroundStyle(Ink.meta).lineLimit(1).fixedSize()
+                    }
+                    Text(segment.text)
+                        .font(TypeStyle.body())
+                        .lineSpacing(TypeStyle.bodyLineSpacing())
+                        .foregroundStyle(segment.isTentative ? Ink.meta : newest ? Ink.body : Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .transition(.opacity)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: recent.map(\.id))

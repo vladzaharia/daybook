@@ -982,10 +982,16 @@ private struct StatusCaptions: View {
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(segments) { segment in
-                            Text(segment.text)
-                                .font(.callout)
-                                .foregroundStyle(segment.isTentative ? PhoneStyle.Ink.secondary : PhoneStyle.Ink.body)
-                                .fixedSize(horizontal: false, vertical: true)
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                // The person live speakers recognized, as the recording screen names them.
+                                if let name = segment.speaker?.name {
+                                    Text(name).font(.callout.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.meta).lineLimit(1).fixedSize()
+                                }
+                                Text(segment.text)
+                                    .font(.callout)
+                                    .foregroundStyle(segment.isTentative ? PhoneStyle.Ink.secondary : PhoneStyle.Ink.body)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
                     .accessibilityElement(children: .combine)
