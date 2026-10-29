@@ -178,14 +178,16 @@ public final class LibraryController: ObservableObject {
     }
 
     /// Changes a conversation and saves it when something changed. Version History entries are
-    /// the change's own: `Meeting`'s editing methods record them.
+    /// the change's own: `Meeting`'s editing methods record them. Observers hear of it once, and not
+    /// at all when nothing changed: each change redraws every window that shows the library.
     public func update(_ id: UUID, _ change: (inout Meeting) -> Void) {
         guard let index = meetings.firstIndex(where: { $0.id == id }) else { return }
-        let before = meetings[index]
-        change(&meetings[index])
-        guard meetings[index] != before else { return }
-        meetings[index].updatedAt = Date()
-        persist(meetings[index])
+        var meeting = meetings[index]
+        change(&meeting)
+        guard meeting != meetings[index] else { return }
+        meeting.updatedAt = Date()
+        meetings[index] = meeting
+        persist(meeting)
     }
 
     /// Saves a conversation in the background. Saves are coalesced: the latest snapshot of each

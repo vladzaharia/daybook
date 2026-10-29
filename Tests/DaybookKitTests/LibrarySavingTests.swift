@@ -44,6 +44,24 @@ final class LibrarySavingTests: XCTestCase {
         }
     }
 
+    func testAnUpdateChangesTheLibraryOnceAndAnUpdateThatChangesNothingNotAtAll() async throws {
+        let library = try await open()
+        let id = library.newMeeting(title: "Standup")
+        await library.flush()
+        let saves = library.savesCompleted
+        var changes = 0
+        let counting = library.objectWillChange.sink { changes += 1 }
+        defer { counting.cancel() }
+        library.update(id) { $0.status = .transcribing }
+        XCTAssertEqual(changes, 1, "One change for observers, its time stamp included: every window redraws per change")
+        library.update(id) { $0.status = .transcribing; $0.errorMessage = nil }
+        XCTAssertEqual(changes, 1, "Nothing changed: no redraw, and no save")
+        let stamped = try XCTUnwrap(library.meeting(id)?.updatedAt)
+        await library.flush()
+        XCTAssertEqual(library.savesCompleted - saves, 1)
+        XCTAssertEqual(library.meeting(id)?.updatedAt, stamped)
+    }
+
     func testABurstOfNoteEditsWritesOnceAndChangesTheLibraryOncePerKeystroke() async throws {
         let library = try await open()
         let id = library.newMeeting(title: "Standup")
