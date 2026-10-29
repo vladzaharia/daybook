@@ -227,6 +227,25 @@ struct StatusSheetView: View {
             // Collapsing goes back to the overview.
             if detent != .large, !path.isEmpty { path = [] }
         }
+        .task { await openRequestedScreen() }
+    }
+
+    /// `--status-open device|mac|storage|add-recorder` (debug): that screen inside the sheet (or Add
+    /// Recorder over it), for screenshots.
+    private func openRequestedScreen() async {
+        guard let screen = model.options.statusOpen else { return }
+        // A recorder the device autopilot is still adding: wait for it to connect and import.
+        for _ in 0..<150 where screen == "device" && model.devices.sessions.first?.links.recent.isEmpty != false {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .milliseconds(800))
+        switch screen {
+        case "device": if let session = model.devices.sessions.first { open(.device(session.id)) }
+        case "mac": if let mac = model.link.macs.first { open(.mac(mac.id)) }
+        case "storage": open(.storage)
+        case "add-recorder": showingAddDevice = true
+        default: break
+        }
     }
 
     /// A full screen opens with the sheet at full height.
@@ -749,7 +768,7 @@ private struct StatusRecorderCard: View {
             .accessibilityHint("Shows \(session.device.name)")
 
             if RecorderHandoffCard.shows(session, devices: model.devices) {
-                RecorderHandoffCard(session: session, style: .row)
+                RecorderHandoffCard(session: session)
             }
             if !actions.isEmpty {
                 StatusRecorderActions(session: session, actions: actions)
@@ -815,7 +834,7 @@ private struct StatusRecorderCard: View {
 }
 
 /// The recorder's actions as one row of equal-width buttons (stacked at the accessibility sizes).
-private struct StatusRecorderActions: View {
+struct StatusRecorderActions: View {
     @ObservedObject var session: DeviceSession
     let actions: [StatusRecorderAction]
     @Environment(\.dynamicTypeSize) private var typeSize

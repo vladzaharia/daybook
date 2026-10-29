@@ -13,40 +13,25 @@ struct RecordersSection: View {
             ForEach(model.devices.sessions) { session in
                 NavigationLink(value: SettingsRoute.device(session.id)) { DeviceRow(session: session) }
             }
-            Button { showingAddDevice = true } label: { Label("Add Recorder…", systemImage: "plus.circle") }
+            Button { showingAddDevice = true } label: { SettingsActionLabel(title: "Add Recorder…", systemImage: "plus") }
         } header: {
             Text("Recorders")
-        } footer: {
-            if model.devices.sessions.isEmpty {
-                Text("Add Soundcore Work, or any recorder that saves audio files.")
-            }
         }
     }
 }
 
+/// A recorder in Settings: its tile (teal while it's connected), its name, and the status sheet's line
+/// for it ("Connected · 80% · 2 new", "Importing 1 of 3", "Managed by Studio Mac").
 struct DeviceRow: View {
     @ObservedObject var session: DeviceSession
+    @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
-        HStack(spacing: 12) {
-            DeviceGlyph(session: session, size: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.device.name)
-                Text(PhoneDeviceCopy.line(for: session)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
-            }
-            Spacer(minLength: 0)
-            if let progress = session.importProgress {
-                ProgressView(value: progress).progressViewStyle(.circular).controlSize(.small).tint(PhoneStyle.accent)
-            } else if !session.newRecordings.isEmpty, session.managedElsewhere == nil {
-                Text("\(session.newRecordings.count)")
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(PhoneStyle.accent.opacity(0.14), in: Capsule())
-                    .foregroundStyle(PhoneStyle.Ink.link)
-                    .accessibilityLabel("\(session.newRecordings.count) new recordings")
-            }
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let line = StatusSheetModel.recorderLine(StatusSheetInputs.recorder(session, model: model), now: context.date)
+            SettingsRow(title: session.device.name, detail: line.text, systemImage: session.kind.systemImage,
+                        tone: session.isLinked ? .active : .neutral, detailNeedsAttention: line.tone == .attention)
         }
-        .padding(.vertical, 2)
     }
 }
 
@@ -58,7 +43,7 @@ struct DeviceGlyph: View {
     var body: some View {
         Image(systemName: session.kind.systemImage)
             .font(.system(size: size * 0.5, weight: .medium))
-            .foregroundStyle(session.isLinked ? PhoneStyle.accent : .secondary)
+            .foregroundStyle(session.isLinked ? PhoneStyle.accent : PhoneStyle.Ink.secondary)
             .frame(width: size, height: size)
             .background((session.isLinked ? PhoneStyle.accent : Color.gray).opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
             .accessibilityHidden(true)
@@ -67,7 +52,8 @@ struct DeviceGlyph: View {
 
 // MARK: Device page
 
-/// One recorder: its status, what's new on it, what's been imported, and how recordings arrive.
+/// One recorder: its status, what can be done with it now, what's new on it, what's been imported,
+/// and how recordings arrive.
 struct DevicePage: View {
     @Environment(PhoneAppModel.self) private var model
     let sessionID: String
@@ -88,87 +74,75 @@ private struct DevicePageContent: View {
     @State private var confirmingRemove = false
     @State private var renaming = false
     @State private var name = ""
+    @State private var showingDetails = false
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let soundcore = session.direct as? SoundcoreConnection
+        let problem = session.managedElsewhere == nil ? session.problem : nil
+        let actions = pageActions(problem: problem)
         List {
             Section {
-                header
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                DevicePageHeader(systemImage: session.kind.systemImage, isActive: session.isLinked, title: session.device.name,
+                                 status: PhoneDeviceCopy.line(for: session),
+                                 statusNeedsAttention: !session.isLinked && session.state == .unavailable)
+                    .devicePageHeaderRow()
             }
-            // Who manages it, and moving it between this iPhone and a Mac (docs/devices.md, "Handing a recorder over").
-            if session.direct is any ManagedConnection,
-               session.managedElsewhere != nil || model.devices.handoffState(session) != .idle || !model.devices.handoffTargets(session).isEmpty {
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if let owner = session.managedElsewhere {
-                            Label("Managed by \(owner.ownerName)", systemImage: owner.ownerClass == .mac ? "desktopcomputer" : "iphone")
-                                .font(.headline)
-                                .foregroundStyle(PhoneStyle.Ink.title)
-                        }
-                        RecorderHandoffCard(session: session)
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-            if session.managedElsewhere == nil, let problem = session.problem {
+            if let problem {
                 Section { ProblemBox(session: session, problem: problem) }
+            }
+            // Who manages it, and moving it between this iPhone and a Mac (docs/devices.md, "Handing a recorder over"):
+            // the status sheet's rows, which say "Managed by" only in the header above.
+            if RecorderHandoffCard.shows(session, devices: model.devices) {
+                Section { RecorderHandoffCard(session: session) }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+            }
+            // What can be done now, as the status sheet offers it: never a disabled button.
+            if !actions.isEmpty {
+                Section { StatusRecorderActions(session: session, actions: actions) }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
             }
             if let status = session.status, session.managedElsewhere == nil {
                 Section { StatusTiles(status: status, live: session.isLinked) }
-                    .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
             }
-            importSection
+            importSection(offersImportAll: !actions.contains { if case .importNew = $0 { return true }; return false })
             if !session.links.recent.isEmpty {
                 Section("Recently Imported") {
                     ForEach(session.links.recent.prefix(6)) { entry in
                         let meeting = model.library.controller.meeting(entry.meetingID)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(meeting?.title ?? entry.fileName)
-                            Text(DeviceDateFormat.relative(entry.importedAt)).font(.footnote).foregroundStyle(.secondary)
+                            Text(meeting?.title ?? entry.fileName).foregroundStyle(PhoneStyle.Ink.title)
+                            Text(PhoneDeviceCopy.sentenceCase(DeviceDateFormat.relative(entry.importedAt)))
+                                .font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            optionsSection(soundcore: soundcore)
+            Section {
+                if session.direct is any DetailedConnection {
+                    Button { showingDetails = true } label: {
+                        HStack {
+                            Text("Details").foregroundStyle(PhoneStyle.Ink.title)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.forward")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                                .accessibilityHidden(true)
                         }
                     }
                 }
-            }
-            Section {
-                ForEach(session.connections.filter(\.isSetUp), id: \.method) { connection in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(PhoneDeviceCopy.methodTitle(session.kind, connection.method)).font(.subheadline.weight(.semibold))
-                        Text(PhoneDeviceCopy.summary(connection.summary)).font(.footnote).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 2)
-                }
-                if soundcore != nil {
-                    Toggle("Import New Recordings Automatically", isOn: Binding(
-                        get: { session.device.importsAutomatically },
-                        set: { value in session.update { $0.importsAutomatically = value } }))
-                    Toggle("Hand Back to My Mac When It’s Nearby", isOn: Binding(
-                        get: { model.settings.handsRecorderBackToMac },
-                        set: { value in
-                            model.settings.handsRecorderBackToMac = value
-                            model.devices.handoff.handsBackAutomatically = value
-                        }))
-                }
-                if let soundcore, session.managedElsewhere == nil {
-                    if session.isLinked {
-                        Button("Disconnect") { session.disconnect(.direct) }
-                    } else if soundcore.isSetUp {
-                        Button("Connect") { session.connect() }
-                            .disabled(session.state.isBusy)
-                    }
-                }
-            } header: {
-                Text("Import")
-            }
-            if session.direct is any DetailedConnection {
-                Section {
-                    NavigationLink("Details") { DeviceDetailsScreen(session: session) }
+                if soundcore != nil, session.managedElsewhere == nil, session.isLinked {
+                    Button("Disconnect") { session.disconnect(.direct) }
                 }
             }
+            SettingsScrollEndMarker()
         }
+        .settingsScrollEnd()
         .navigationTitle(session.device.name)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showingDetails) { DeviceDetailsScreen(session: session) }
         .toolbar {
             // The page's own header names the recorder; the bar stays quiet.
             ToolbarItem(placement: .principal) { Text("") }
@@ -178,10 +152,18 @@ private struct DevicePageContent: View {
                     if session.isLinked { Button("Refresh") { session.direct?.refresh() } }
                     Button("Remove from This iPhone…", role: .destructive) { confirmingRemove = true }
                 } label: { Image(systemName: "ellipsis.circle") }
+                .accessibilityLabel("More")
             }
         }
         .refreshable { session.direct?.refresh() }
         .onAppear { session.direct?.refreshIfStale() }
+        .task {
+            // `--open-settings device-details` (debug), for screenshots.
+            if model.options.openSettings == "device-details", session.direct is any DetailedConnection {
+                try? await Task.sleep(for: .milliseconds(500))
+                showingDetails = true
+            }
+        }
         .alert("Rename Recorder", isPresented: $renaming) {
             TextField("Name", text: $name)
             Button("Cancel", role: .cancel) {}
@@ -197,78 +179,116 @@ private struct DevicePageContent: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 14) {
-            DeviceGlyph(session: session, size: 56)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(session.device.name).font(PhoneStyle.Typeface.title(.title)).foregroundStyle(PhoneStyle.Ink.title)
-                HStack(spacing: 6) {
-                    Circle().fill(session.isLinked ? PhoneStyle.accent : Color(uiColor: .tertiaryLabel)).frame(width: 7, height: 7)
-                    Text(PhoneDeviceCopy.line(for: session)).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
-                }
-            }
-        }
-        .padding(.horizontal, 4)
+    /// The status sheet's actions for this recorder, less Connect when the problem above already offers it.
+    private func pageActions(problem: DeviceProblem?) -> [StatusRecorderAction] {
+        let actions = StatusSheetModel.actions(for: StatusSheetInputs.recorder(session, model: model))
+        guard let problem, ProblemBox.actions(problem).contains(where: { $0 == .connect || $0 == .reconnect }) else { return actions }
+        return actions.filter { $0 != .connect }
     }
 
+    /// What's coming off the recorder now, and what's new on it. A recorder another device manages has
+    /// none here: that device imports them.
     @ViewBuilder
-    private var importSection: some View {
+    private func importSection(offersImportAll: Bool) -> some View {
         let split = session.split
         let new = session.newRecordings
-        if session.queue.isActive || !new.isEmpty || split.inProgress != nil {
+        let canImport = session.isConnected && session.managedElsewhere == nil
+        if session.managedElsewhere == nil, session.queue.isActive || !new.isEmpty || split.inProgress != nil {
             Section {
                 if let current = session.queue.current {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Importing \(current.recording.title)").font(.subheadline.weight(.semibold))
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Importing \(current.recording.title)")
+                                .font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.title)
                             Spacer()
-                            Text(session.phase?.label ?? "Waiting…").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                            Text(session.phase?.label ?? "Waiting…")
+                                .font(.subheadline.monospacedDigit()).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
-                        ProgressView(value: session.phase?.fraction ?? 0).tint(PhoneStyle.accent)
+                        // Work in progress: the brand gradient.
+                        ProgressView(value: session.phase?.fraction ?? 0).progressViewStyle(.brand(width: nil))
                         if session.queue.total > 1 || session.secondsLeft != nil {
-                            Text(queueLine).font(.footnote).foregroundStyle(.secondary)
+                            Text(queueLine).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
                         if session.kind.method(.direct)?.transport == .bluetoothLE {
-                            Text("Keep it near this iPhone until it finishes.").font(.footnote).foregroundStyle(.secondary)
+                            Text("Keep it near this iPhone until it finishes.").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
                     }
                     .padding(.vertical, 4)
                     Button("Stop Importing", role: .destructive) { session.stopAll() }
                 } else if session.queue.isSuspended {
-                    Text("Importing continues when \(session.kind.shortName) reconnects.").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Importing continues when \(session.kind.shortName) reconnects.")
+                        .font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
                 }
                 if let now = split.inProgress {
-                    HStack {
-                        Circle().fill(PhoneStyle.Ink.record).frame(width: 8, height: 8)
+                    HStack(spacing: PhoneStyle.Space.s2) {
+                        Circle().fill(PhoneStyle.Ink.record).frame(width: 8, height: 8).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Recording now · started \(now.title)").font(.subheadline)
+                            Text("Recording now · started \(now.title)").font(.subheadline).foregroundStyle(PhoneStyle.Ink.title)
                             // Handed over mid-recording: the conversation it goes into once it's finished.
                             if let waiting = session.conversationWaiting(for: now.id),
                                let title = model.library.controller.meeting(waiting)?.title {
-                                Text("For \(title)").font(.footnote).foregroundStyle(.secondary)
+                                Text("For \(title)").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                             }
                         }
                     }
+                    .accessibilityElement(children: .combine)
                 }
                 ForEach(new) { recording in
-                    HStack {
+                    // At the accessibility sizes, Import goes under the recording rather than squeezing it.
+                    let layout = typeSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: PhoneStyle.Space.s2))
+                        : AnyLayout(HStackLayout())
+                    layout {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(recording.title)
-                            Text(recording.detail).font(.footnote).foregroundStyle(.secondary)
+                            Text(recording.title).foregroundStyle(PhoneStyle.Ink.title)
+                            Text(recording.detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
-                        Spacer()
-                        Button("Import") { session.importRecordings([recording]) }
-                            .buttonStyle(.bordered)
-                            .tint(PhoneStyle.accent)
-                            .disabled(!session.isConnected || session.managedElsewhere != nil)
+                        .accessibilityElement(children: .combine)
+                        if !typeSize.isAccessibilitySize { Spacer() }
+                        if canImport {
+                            Button("Import") { session.importRecordings([recording]) }
+                                .buttonStyle(.bordered)
+                                .tint(PhoneStyle.accent)
+                                .accessibilityLabel("Import \(recording.title)")
+                        }
                     }
                 }
-                if new.count > 1, !session.queue.isActive {
+                if offersImportAll, canImport, new.count > 1, !session.queue.isActive {
                     Button("Import \(new.count) New") { session.importRecordings(new) }
-                        .disabled(!session.isConnected || session.managedElsewhere != nil)
                 }
             } header: {
                 Text("New on \(session.kind.shortName)")
+            }
+        }
+    }
+
+    /// How recordings arrive: a folder's place and state, and Soundcore's two choices. Bluetooth's own
+    /// state is the header's line, so it isn't repeated here.
+    @ViewBuilder
+    private func optionsSection(soundcore: SoundcoreConnection?) -> some View {
+        let methods = session.connections.filter { $0.isSetUp && !($0 is SoundcoreConnection) }
+        if !methods.isEmpty || soundcore != nil {
+            Section {
+                ForEach(methods, id: \.method) { connection in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(PhoneDeviceCopy.methodTitle(session.kind, connection.method))
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.title)
+                        Text(PhoneDeviceCopy.summary(connection.summary)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                    }
+                    .padding(.vertical, 2)
+                    .accessibilityElement(children: .combine)
+                }
+                if soundcore != nil {
+                    Toggle("Import New Recordings Automatically", isOn: Binding(
+                        get: { session.device.importsAutomatically },
+                        set: { value in session.update { $0.importsAutomatically = value } }))
+                    Toggle("Hand Back to My Mac When It’s Nearby", isOn: Binding(
+                        get: { model.settings.handsRecorderBackToMac },
+                        set: { value in
+                            model.settings.handsRecorderBackToMac = value
+                            model.devices.handoff.handsBackAutomatically = value
+                        }))
+                }
             }
         }
     }
@@ -301,21 +321,26 @@ struct DeviceDetailsScreen: View {
             Section("On \(session.kind.shortName)") {
                 let standings = session.standings
                 if standings.isEmpty {
-                    Text("None listed").foregroundStyle(.secondary)
+                    Text("None listed").foregroundStyle(PhoneStyle.Ink.secondary)
                 }
                 ForEach(standings) { standing in
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(standing.recording.title)
-                            Text(standing.recording.detail).font(.footnote).foregroundStyle(.secondary)
+                            Text(standing.recording.title).foregroundStyle(PhoneStyle.Ink.title)
+                            Text(standing.recording.detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
                         Spacer()
-                        Text(standing.reason.label).font(.footnote).foregroundStyle(standing.reason == .new ? PhoneStyle.Ink.link : .secondary)
+                        // A fact, not an action: new stands out by weight, not the accent.
+                        Text(standing.reason.label)
+                            .font(.footnote.weight(standing.reason == .new ? .semibold : .regular))
+                            .foregroundStyle(standing.reason == .new ? PhoneStyle.Ink.title : PhoneStyle.Ink.secondary)
                     }
                     .accessibilityElement(children: .combine)
                 }
             }
+            SettingsScrollEndMarker()
         }
+        .settingsScrollEnd()
         .navigationTitle("Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -342,47 +367,56 @@ struct DeviceDetailsScreen: View {
     }
 }
 
-/// Battery, case, and storage as figure tiles. Cached values say when they're from.
+/// Battery, case, and storage as figures in one card, as the Mac's page shows them. Cached values
+/// say when they're from.
 private struct StatusTiles: View {
     let status: DeviceStatus
     let live: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
+            HStack(alignment: .top, spacing: PhoneStyle.Space.s3) {
                 if let battery = status.battery, battery.level != nil {
-                    tile("Recorder", BatteryFormat.value(battery), symbol: BatteryFormat.symbol(battery), warn: BatteryFormat.isLow(battery))
+                    figure("Recorder", BatteryFormat.value(battery), symbol: BatteryFormat.symbol(battery), warn: BatteryFormat.isLow(battery))
                 }
                 if let battery = status.caseBattery, battery.level != nil {
-                    tile("Case", BatteryFormat.value(battery), symbol: BatteryFormat.symbol(battery), warn: BatteryFormat.isLow(battery))
+                    figure("Case", BatteryFormat.value(battery), symbol: BatteryFormat.symbol(battery), warn: BatteryFormat.isLow(battery))
                 }
                 if let storage = status.storage {
-                    tile("Hours of space", "\(StorageFormat.roundedHours(storage.hoursLeft))", symbol: "internaldrive", warn: StorageFormat.isLow(storage))
-                        .accessibilityLabel(StorageFormat.hoursLeft(storage))
+                    let low = StorageFormat.isLow(storage)
+                    figure("Storage", PhoneDeviceCopy.storageFigure(hours: storage.hoursLeft),
+                           symbol: low ? "externaldrive.trianglebadge.exclamationmark" : "externaldrive", warn: low)
+                        .accessibilityLabel("Storage, \(StorageFormat.hoursLeft(storage))")
                 }
             }
             if !live {
-                Text(DeviceDateFormat.asOf(status.updatedAt)).font(.footnote).foregroundStyle(.secondary)
+                Text(PhoneDeviceCopy.asOf(status.updatedAt)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
             }
         }
+        .padding(.vertical, 4)
     }
 
-    private func tile(_ label: String, _ value: String, symbol: String, warn: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: symbol).foregroundStyle(warn ? PhoneStyle.Ink.warning : .secondary)
-            Text(value).font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(warn ? PhoneStyle.Ink.warning : PhoneStyle.Ink.title)
+    private func figure(_ label: String, _ value: String, symbol: String, warn: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: symbol)
+                .font(.body)
+                .foregroundStyle(warn ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
+                .frame(height: 22, alignment: .leading)
+                .accessibilityHidden(true)
+            Text(value)
+                .font(.title3.weight(.semibold).monospacedDigit())
+                .foregroundStyle(warn ? PhoneStyle.Ink.warning : PhoneStyle.Ink.title)
                 .lineLimit(1).minimumScaleFactor(0.6)
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                .lineLimit(1).minimumScaleFactor(0.8)
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
 
 /// One problem at a time: what happened, what's safe, at most two actions.
-private struct ProblemBox: View {
+struct ProblemBox: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject var session: DeviceSession
     let problem: DeviceProblem
@@ -393,9 +427,11 @@ private struct ProblemBox: View {
             Label(copy.title, systemImage: "exclamationmark.triangle.fill")
                 .font(.headline)
                 .foregroundStyle(PhoneStyle.Ink.warning)
+                .fixedSize(horizontal: false, vertical: true)
             Text(copy.message).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 16) {
-                ForEach(Array(problem.actions.filter(PhoneDeviceCopy.isAvailable).prefix(2).enumerated()), id: \.offset) { _, action in
+                ForEach(Array(Self.actions(problem).enumerated()), id: \.offset) { _, action in
                     Button(PhoneDeviceCopy.title(action)) { perform(action) }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(PhoneStyle.Ink.link)
@@ -404,6 +440,11 @@ private struct ProblemBox: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// The problem's actions this iPhone can take, at most two.
+    static func actions(_ problem: DeviceProblem) -> [DeviceProblemAction] {
+        Array(problem.actions.filter(PhoneDeviceCopy.isAvailable).prefix(2))
     }
 
     private func perform(_ action: DeviceProblemAction) {
@@ -434,49 +475,10 @@ struct AddDeviceSheet: View {
                 if let session {
                     SetupScreen(session: session, done: finish)
                 } else {
-                    List {
-                        Section {
-                            // Daybook on iPhone is this app: a recorder the Mac adds, not one the iPhone adds.
-                            ForEach(DeviceCatalog.kinds.filter { $0.id != DaybookPhoneIntegration.id }) { kind in
-                                Button {
-                                    session = model.devices.beginSetup(kind)
-                                } label: {
-                                    // Explicit inks: in a list, a button tints its label, and `.primary` and
-                                    // `.secondary` would follow that tint, turning the whole row teal.
-                                    HStack(spacing: 14) {
-                                        Image(systemName: kind.systemImage)
-                                            .font(.system(size: 20, weight: .medium))
-                                            .foregroundStyle(PhoneStyle.Ink.secondary)
-                                            .frame(width: 44, height: 44)
-                                            .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                                            .accessibilityHidden(true)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(kind.name).foregroundStyle(PhoneStyle.Ink.title)
-                                            Text(PhoneDeviceCopy.kindSummary(kind)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                                        }
-                                        Spacer(minLength: 0)
-                                        Image(systemName: "chevron.forward")
-                                            .font(.footnote.weight(.semibold))
-                                            .foregroundStyle(Color(uiColor: .tertiaryLabel))
-                                            .accessibilityHidden(true)
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                            }
-                        }
-                    }
+                    RecorderKinds { session = model.devices.beginSetup($0) }
                 }
             }
-            .navigationTitle(session?.kind.name ?? "Add Recorder")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        model.devices.cancelSetup()
-                        done(nil)
-                    }
-                }
-            }
+            .modifier(AddRecorderBar(title: session?.kind.name ?? "Add Recorder", cancel: cancel))
         }
         .task {
             // `--open-settings add-device`: straight to Soundcore setup.
@@ -486,9 +488,64 @@ struct AddDeviceSheet: View {
         }
     }
 
+    private func cancel() {
+        model.devices.cancelSetup()
+        done(nil)
+    }
+
     private func finish(_ id: String?) {
         if id != nil { model.devices.commitSetup() } else { model.devices.cancelSetup() }
         done(id)
+    }
+}
+
+/// The kinds of recorder this iPhone can add.
+private struct RecorderKinds: View {
+    let choose: (DeviceKind) -> Void
+
+    var body: some View {
+        List {
+            Section {
+                // Daybook on iPhone is this app: a recorder the Mac adds, not one the iPhone adds.
+                ForEach(DeviceCatalog.kinds.filter { $0.id != DaybookPhoneIntegration.id }) { kind in
+                    Button { choose(kind) } label: {
+                        // Explicit inks: in a list, a button tints its label, and `.primary` and
+                        // `.secondary` would follow that tint, turning the whole row teal.
+                        HStack(spacing: 14) {
+                            Image(systemName: kind.systemImage)
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(PhoneStyle.Ink.secondary)
+                                .frame(width: 44, height: 44)
+                                .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(kind.name).foregroundStyle(PhoneStyle.Ink.title)
+                                Text(PhoneDeviceCopy.kindSummary(kind)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.forward")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                                .accessibilityHidden(true)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Add Recorder's bar: its title, and Cancel.
+private struct AddRecorderBar: ViewModifier {
+    let title: String
+    let cancel: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: cancel) } }
     }
 }
 
@@ -497,43 +554,35 @@ private struct SetupScreen: View {
     var done: (String?) -> Void
     @State private var choosingFolder = false
     @State private var folderError: String?
+    private let tileColumn = SettingsTileWidth()
 
     var body: some View {
         let soundcore = session.direct as? SoundcoreConnection
         List {
             if let soundcore {
                 Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Directly over Bluetooth").font(.headline)
-                        Text("Straight from the recorder. New recordings import on their own when it’s near this iPhone.")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                        Text("iOS asks to allow Bluetooth when you search.").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
                     if soundcore.state == .searching || !soundcore.discovered.isEmpty || soundcore.connectingTo != nil {
                         ForEach(soundcore.discovered) { recorder in
                             Button { soundcore.connect(to: recorder) } label: {
                                 HStack {
-                                    Image(systemName: "waveform.badge.microphone").foregroundStyle(PhoneStyle.Ink.secondary)
-                                        .accessibilityHidden(true)
-                                    VStack(alignment: .leading) {
-                                        Text(recorder.name).foregroundStyle(PhoneStyle.Ink.title)
-                                        Text(recorder.signal.word).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                                    }
-                                    Spacer()
+                                    SettingsRow(title: recorder.name, detail: recorder.signal.word, systemImage: "waveform.badge.microphone")
+                                    Spacer(minLength: 0)
                                     if soundcore.connectingTo == recorder.id { ProgressView() }
                                 }
                             }
                             .disabled(soundcore.connectingTo != nil)
                         }
                         if soundcore.discovered.isEmpty {
-                            HStack(spacing: 10) { ProgressView(); Text("Looking for Soundcore Work…").foregroundStyle(.secondary) }
+                            HStack(spacing: SettingsMetrics.gap) {
+                                ProgressView().frame(width: tileColumn.value)
+                                Text("Looking for Soundcore Work…").foregroundStyle(PhoneStyle.Ink.secondary)
+                            }
                         }
                     } else {
                         Button {
                             soundcore.search()
                         } label: {
-                            Label("Search for Soundcore Work", systemImage: "antenna.radiowaves.left.and.right")
+                            SettingsActionLabel(title: "Search for Soundcore Work", systemImage: "antenna.radiowaves.left.and.right")
                         }
                     }
                 } footer: {
@@ -541,32 +590,34 @@ private struct SetupScreen: View {
                         Text("Nothing found yet.")
                     }
                 }
-                Section("If It Doesn’t Appear") {
-                    ForEach(PhoneDeviceCopy.tips(session.kind), id: \.text) { tip in
-                        // Tips aren't actions: secondary symbols, so the accent stays on Search.
-                        Label {
-                            Text(tip.text)
-                        } icon: {
-                            Image(systemName: tip.symbol).foregroundStyle(PhoneStyle.Ink.secondary)
-                        }
-                        .font(.subheadline)
-                    }
-                }
-                if let problem = session.problem {
+                // The not-found problem says what the tips say.
+                if let problem = session.problem, problem.id != SoundcoreIssue.notFound.rawValue {
                     Section {
                         Text(PhoneDeviceCopy.problem(problem).message).font(.subheadline).foregroundStyle(PhoneStyle.Ink.warning)
                     }
                 }
+                // Until it's found: what to try.
+                if soundcore.discovered.isEmpty {
+                    Section("If It Doesn’t Appear") {
+                        ForEach(PhoneDeviceCopy.tips(session.kind), id: \.text) { tip in
+                            // Tips aren't actions: secondary symbols, so the accent stays on Search.
+                            HStack(spacing: SettingsMetrics.gap) {
+                                Image(systemName: tip.symbol)
+                                    .foregroundStyle(PhoneStyle.Ink.secondary)
+                                    .frame(width: tileColumn.value)
+                                    .accessibilityHidden(true)
+                                Text(tip.text).foregroundStyle(PhoneStyle.Ink.title)
+                            }
+                            .font(.subheadline)
+                        }
+                    }
+                }
             } else if let files = session.files {
                 Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("From a Folder").font(.headline)
-                        Text("Save or export recordings to a folder in Files, such as one in iCloud Drive.")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                    Button { choosingFolder = true } label: { Label("Choose Folder…", systemImage: "folder") }
+                    Button { choosingFolder = true } label: { SettingsActionLabel(title: "Choose Folder…", systemImage: "folder") }
                     if let folderError { Text(folderError).font(.footnote).foregroundStyle(PhoneStyle.Ink.warning) }
+                } footer: {
+                    Text("Save or export recordings to a folder in Files, such as one in iCloud Drive.")
                 }
                 .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
                     guard case .success(let url) = result else { return }
@@ -607,10 +658,30 @@ enum PhoneDeviceCopy {
         case .notSetUp: return "Not set up"
         case .notConnected:
             if let status = session.status, status.isRecording == true { return DeviceDateFormat.recordingAsOf(status.updatedAt) }
-            if let last = session.direct?.lastConnectedAt { return DeviceDateFormat.lastSeen(last) }
+            if let last = session.direct?.lastConnectedAt { return lastSeen(last) }
             return session.files != nil ? "Watching a folder" : "Not connected"
         }
     }
+
+    /// "Last seen today, 2:14 PM", as the status sheet's line says it.
+    static func lastSeen(_ date: Date, now: Date = Date()) -> String {
+        "Last seen \(DeviceDateFormat.lastSeen(date, now: now))"
+    }
+
+    /// Under figures that are from earlier: "As of 2:14 PM" today, "As of 20 Oct" before.
+    static func asOf(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let when = DeviceDateFormat.asOf(date, now: now, calendar: calendar)
+        for word in ["at ", "on "] where when.hasPrefix(word) { return "As of " + when.dropFirst(word.count) }
+        return "As of " + when
+    }
+
+    /// A recorder's room as a figure: "210 hr", "6 hr", "< 1 hr".
+    static func storageFigure(hours: Double) -> String {
+        hours < 1 ? "< 1 hr" : "\(StorageFormat.roundedHours(hours)) hr"
+    }
+
+    /// "Just now", "2 hours ago": a relative time starting a line.
+    static func sentenceCase(_ text: String) -> String { text.prefix(1).uppercased() + text.dropFirst() }
 
     static func summary(_ text: String) -> String {
         text.replacingOccurrences(of: "this Mac", with: "this iPhone")

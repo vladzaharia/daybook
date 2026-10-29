@@ -29,6 +29,39 @@ final class SettingsWordsTests: XCTestCase {
                        "Studio Mac isn’t set up to transcribe. Finish in Daybook › Settings on Studio Mac.")
     }
 
+    // MARK: Recorders
+
+    func testARecorderAwaySaysWhenItWasLastSeen() {
+        let calendar = Calendar.current
+        let earlier = calendar.date(byAdding: .hour, value: -1, to: now)!
+        let line = PhoneDeviceCopy.lastSeen(earlier, now: now)
+        XCTAssertTrue(line.hasPrefix("Last seen "), "never a bare time: \(line)")
+        XCTAssertTrue(line.contains(earlier.formatted(date: .omitted, time: .shortened)))
+    }
+
+    func testFiguresFromEarlierSayAsOfOnce() {
+        let calendar = Calendar.current
+        let today = calendar.date(byAdding: .minute, value: -30, to: now)!
+        XCTAssertEqual(PhoneDeviceCopy.asOf(today, now: now, calendar: calendar),
+                       "As of \(today.formatted(date: .omitted, time: .shortened))")
+        let before = calendar.date(byAdding: .day, value: -3, to: now)!
+        let asOf = PhoneDeviceCopy.asOf(before, now: now, calendar: calendar)
+        XCTAssertTrue(asOf.hasPrefix("As of "), asOf)
+        XCTAssertFalse(asOf.contains(" on "), "not \"As of on 20 Oct\": \(asOf)")
+        XCTAssertFalse(asOf.contains(" at "), asOf)
+    }
+
+    func testARecordersRoomIsAFigureInHours() {
+        XCTAssertEqual(PhoneDeviceCopy.storageFigure(hours: 213), "210 hr")
+        XCTAssertEqual(PhoneDeviceCopy.storageFigure(hours: 6.2), "6 hr")
+        XCTAssertEqual(PhoneDeviceCopy.storageFigure(hours: 0.4), "< 1 hr")
+    }
+
+    func testARelativeTimeStartingALineIsCapitalized() {
+        XCTAssertEqual(PhoneDeviceCopy.sentenceCase("just now"), "Just now")
+        XCTAssertEqual(PhoneDeviceCopy.sentenceCase("2 hours ago"), "2 hours ago")
+    }
+
     // MARK: Storage
 
     func testStorageSaysWhatTheAudioIsWithoutRepeatingTheTotal() {
