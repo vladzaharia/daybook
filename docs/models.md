@@ -296,7 +296,7 @@ The `imageDescription` role uses Apple Vision by default (`apple-vision/system`,
 | --- | --- | --- |
 | Parakeet Ultra, Nemotron 3 | **Done** (above). Language routing was the one pipeline addition: `TranscriptionRouter` inside `InferenceProcessingEngine.transcribe`, with its decisions in DaybookKit | Language routing |
 | ~~Nemotron 3 for live speakers~~ | Done: `nemotron-3-diarization/live` (`fast32-split-w8a8`) for `liveDiarization` on the Mac and the iPhone ("Live models") | Live captions (DaybookLive) |
-| Glossary for live captions | `StreamingNemotronMultilingualAsrManager.setCustomVocabulary` biases the streaming decoder toward rare terms; pass the approved glossary when a capture starts | None |
+| ~~Glossary for live captions~~ | Done: the approved vocabulary biases the streaming decoder (`LiveVocabulary`, `setCustomVocabulary`), applied when a capture starts and whenever it changes (docs/model-runtime.md, "Live") | None |
 | ~~Forcing Whisper's language~~ | Done: `WhisperKitTranscriber` takes the hint (`DecodingOptions.language`) and otherwise turns on `detectLanguage`. Before this, WhisperKit's defaults (prefill on, detection off) prefilled English, so Whisper never detected a language | None |
 | ~~mlx-swift-lm 3.32.3, argmax-oss-swift 1.1.1~~ | Done: engines `mlxLanguage` 2 and `whisperKit` 2 (above) | None |
 | ~~Gemma 4, Qwen 3.x~~ | Done: `gemma-4`, `qwen3.5`, `qwen3.6` families with `minimumEngineVersion: 2`; presets updated | None |

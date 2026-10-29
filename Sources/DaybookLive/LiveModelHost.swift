@@ -73,8 +73,9 @@ public actor LiveModelHost {
         for (key, entry) in loaded where entry.users <= 0 { await drop(key, ifUnused: true) }
     }
 
-    private func use<Value: Sendable>(_ kind: Kind, _ installation: ModelInstallation,
-                                      load: @escaping @Sendable () async throws -> Value) async throws -> Value {
+    /// A model of `kind` from `installation`, loaded by `load` the first time and shared after that.
+    func use<Value: Sendable>(_ kind: Kind, _ installation: ModelInstallation,
+                              load: @escaping @Sendable () async throws -> Value) async throws -> Value {
         let key = Key(kind: kind.rawValue, install: installation.key)
         let entry: Loaded
         if let existing = loaded[key] {

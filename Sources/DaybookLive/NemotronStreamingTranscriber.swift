@@ -30,6 +30,13 @@ final class NemotronStreamingTranscriber: LiveTranscribing, @unchecked Sendable 
         return tokens
     }
 
+    /// FluidAudio's decode-time biasing (`NemotronVocabularyBias`): tokens that continue a term get a
+    /// flat log-probability bonus at its default weight, from the next emission on. It skips terms
+    /// shorter than three letters itself.
+    func setVocabulary(_ terms: [String]) async {
+        await manager.setCustomVocabulary(terms.map { CustomVocabularyTerm(text: $0) })
+    }
+
     private func newTokens(_ timings: [TokenTiming]) -> [LiveToken] {
         guard timings.count > consumed else { return [] }
         let fresh = timings[consumed...].map {

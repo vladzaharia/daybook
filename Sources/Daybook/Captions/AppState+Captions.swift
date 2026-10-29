@@ -16,6 +16,13 @@ extension AppState {
         devices.environment.liveCaptions.makeCaptioner = MacCaptioners.recorderFactory(settings: settings, live: liveModels)
         devices.environment.liveCaptions.locale = { [weak settings] in settings?.locale ?? .current }
         captions.follow(recorder)
+        // Live recognizers are biased toward the library's approved vocabulary, including a term
+        // approved while a recording runs.
+        library.$glossary
+            .map(MacLiveModels.terms)
+            .removeDuplicates()
+            .sink { [weak self] terms in self?.liveModels.vocabulary.update(terms) }
+            .store(in: &subscriptions)
         // Which live models captions use follows what's downloaded, chosen, and the captions' language.
         Publishers.CombineLatest3($installedModels, $modelSelections, settings.$localeIdentifier)
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)

@@ -129,6 +129,12 @@ final class PhoneAppModel: RecordingCommandHandling {
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models))
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
+        // Live recognizers are biased toward the library's approved vocabulary, as it changes.
+        library.controller.$glossary
+            .map { $0.filter(\.approved).map(\.term) }
+            .removeDuplicates()
+            .sink { [weak models] terms in models?.vocabulary.update(terms) }
+            .store(in: &subscriptions)
         // A recorder's Listen Live is captioned like recordings: the live models when downloaded.
         self.devices.hub.environment.liveCaptions.makeCaptioner = Self.listenLiveCaptioner(settings: settings, options: options, models: models)
         self.devices.hub.environment.liveCaptions.locale = { [weak settings] in settings?.captionLocale ?? .current }
