@@ -193,28 +193,14 @@ struct LibraryPage: View {
         .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: session.searchText) } }
     }
 
+    /// A place with nothing in it: its symbol and one line, no instructions.
     @ViewBuilder private var emptyPlace: some View {
         switch place {
-        case .section(.all):
-            VStack(spacing: PhoneStyle.Space.s3) {
-                Image(systemName: "waveform").font(.largeTitle).foregroundStyle(PhoneStyle.brandGradient)
-                Text("No Conversations Yet").font(PhoneStyle.Typeface.title(.title2)).foregroundStyle(PhoneStyle.Ink.title)
-                Text("Conversations you record or import appear here.")
-                    .font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary).multilineTextAlignment(.center)
-            }
-            .padding(PhoneStyle.Space.s6)
-            .accessibilityElement(children: .combine)
-        case .section(.work):
-            ContentUnavailableView("No Work Conversations", systemImage: "briefcase",
-                                   description: Text("Conversations about work appear here automatically."))
-        case .section(.personal):
-            ContentUnavailableView("No Personal Conversations", systemImage: "house",
-                                   description: Text("Personal conversations appear here automatically."))
-        case .folder(let id):
-            ContentUnavailableView("Nothing in \(library.folders.first { $0.id == id }?.name ?? "This Folder")", systemImage: "folder",
-                                   description: Text("Swipe a conversation and choose Move."))
-        case .device:
-            Color.clear
+        case .section(.all): EmptyPlace(title: "No Conversations Yet", systemImage: "waveform", brand: true)
+        case .section(.work): EmptyPlace(title: "No Work Conversations", systemImage: "briefcase")
+        case .section(.personal): EmptyPlace(title: "No Personal Conversations", systemImage: "house")
+        case .folder(let id): EmptyPlace(title: "Nothing in \(library.folders.first { $0.id == id }?.name ?? "This Folder")", systemImage: "folder")
+        case .device: Color.clear
         }
     }
 
@@ -257,15 +243,18 @@ struct LibraryPage: View {
                     .fontWeight(.semibold)
             }
         } else {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: newNote) { Label("New Note", systemImage: "square.and.pencil") }
-                    .disabled(session.place == .trash)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { withAnimation { session.isSelecting = true; session.selection = [] } } label: {
-                    Label("Select", systemImage: "checkmark.circle")
+            // Only what works here: no New Note in the Trash, no Select with nothing to select.
+            if session.place != .trash {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: newNote) { Label("New Note", systemImage: "square.and.pencil") }
                 }
-                .disabled(session.place == .trash || meetings.isEmpty)
+                if !meetings.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { withAnimation { session.isSelecting = true; session.selection = [] } } label: {
+                            Label("Select", systemImage: "checkmark.circle")
+                        }
+                    }
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingSettings = true } label: { Label("Settings", systemImage: "gearshape") }
@@ -285,20 +274,24 @@ struct LibraryPage: View {
                 if let statusSheetInset {
                     Color.clear.frame(height: statusSheetInset).accessibilityHidden(true)
                 } else if session.place != .trash {
-                    // One row at the thumb: Record, and Search beside it.
+                    // One row at the thumb: Record, Import, and Search, the same size and spacing as on
+                    // the status sheet's row.
                     HStack(alignment: .bottom, spacing: PhoneStyle.Space.s2) {
                         RecordStartButton()
                         Button { session.isSearchPresented = true } label: {
                             Image(systemName: "magnifyingglass")
                                 .font(.title3.weight(.medium))
-                                .frame(width: 44, height: 44)
+                                .frame(width: 60, height: 60)
+                                .contentShape(Circle())
                         }
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .foregroundStyle(PhoneStyle.Ink.title)
                         .accessibilityLabel("Search")
                         .accessibilityHint("Searches titles, notes, transcripts, and summaries")
+                        .accessibilityShowsLargeContentViewer()
                     }
+                    .dynamicTypeSize(...StatusCompactDetent.recordLargestSize)
                 }
             }
             .padding(.horizontal, PhoneStyle.Space.s4)
@@ -439,3 +432,25 @@ private struct SelectionBar: View {
     }
 }
 
+/// An empty place in the library: a symbol over one line, centred.
+struct EmptyPlace: View {
+    let title: String
+    let systemImage: String
+    /// The brand gradient, for the library itself.
+    var brand = false
+
+    var body: some View {
+        VStack(spacing: PhoneStyle.Space.s3) {
+            Image(systemName: systemImage)
+                .font(.largeTitle)
+                .foregroundStyle(brand ? AnyShapeStyle(PhoneStyle.brandGradient) : AnyShapeStyle(PhoneStyle.Ink.meta))
+                .accessibilityHidden(true)
+            Text(title)
+                .font(PhoneStyle.Typeface.title(.title2))
+                .foregroundStyle(PhoneStyle.Ink.title)
+                .multilineTextAlignment(.center)
+        }
+        .padding(PhoneStyle.Space.s6)
+        .accessibilityElement(children: .combine)
+    }
+}
