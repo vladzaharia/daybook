@@ -8,8 +8,8 @@ This page is the architecture as built. Where it differs from the plan agreed ea
 
 | Term | Meaning | Example |
 | --- | --- | --- |
-| **Role** | What the pipeline needs done | `transcription`, `diarization`, `speakerEmbedding`, `summarization`, `smallTasks` |
-| **Engine** | Code that runs models for one or more roles | `whisperKit`, `parakeet`, `community1`, `nemotronDiarizer`, `sortformer`, `mlxLanguage`, `appleFoundationModels`; next: `mlxAudio` |
+| **Role** | What the pipeline needs done | `transcription`, `diarization`, `speakerEmbedding`, `summarization`, `smallTasks`; for live captions, `liveTranscription` and `liveDiarization` |
+| **Engine** | Code that runs models for one or more roles | `whisperKit`, `parakeet`, `community1`, `nemotronDiarizer`, `nemotronStreaming`, `sortformer`, `mlxLanguage`, `appleFoundationModels`; next: `mlxAudio` |
 | **Family** | One model as people know it | `whisper` "Whisper", `gemma-4` "Gemma 4", `qwen2.5` "Qwen 2.5" |
 | **Variant** | A distinct build people choose between: size, quantization, or format | `whisper/large-v3-turbo`, `gemma-4/12b-4bit` |
 | **Revision** | One exact, immutable set of files for a variant | `mlx-community/Qwen2.5-7B-Instruct-4bit` at `c26a38f…`, with a digest per file |
@@ -25,9 +25,11 @@ A variant is named everywhere by its **key**, `family/variant`. Selections, queu
 | --- | --- |
 | `DaybookCore` | `ModelProvenance`, stored with results in `ProcessingSettings.model`; the evaluation harness's scoring (`Evaluation/`: WER, CER, cpWER, DER/JER, word-timing error) |
 | `DaybookKit` (Mac and iPhone) | The manifest format (`ModelManifest`, `ModelManifestReader`), the built-in `Resources/ModelCatalog` folder, the merged `ModelCatalog` and `CatalogModel`, availability, `ModelSelections`, `ModelRecommendations` (presets, device tiers), `ModelRouting` (with speaker routing), `TranscriptionRouting` and `LanguageCheck` (language routing), `ModelAcknowledgements`, and the shared vocabulary (`ModelRole`, `ModelEngineID`, `ModelEngineDescriptor`, `ModelReference`, `ModelVersion`) |
-| `DaybookIntelligence` (Mac today) | The `ModelEngine` protocol, role protocols, `ModelEngineRegistry`, the seven engines, `TranscriptionRouter`, `MeetingSynthesis` and `SmallTasks`, `ModelStore` and legacy migration, `ModelArtifactFetcher`, `ModelHubClient`, `ModelUpdateChecker`, model addition, and `LocalIntelligenceRuntime`, which coordinates them |
+| `DaybookModelStore` (Mac and iPhone) | `ModelStore` and legacy migration, `ModelInstallation` and receipts, `ModelFileDigest`, `ModelArtifactFetcher` and `HubSnapshotFetcher`: downloads, verification, installs. Split out of DaybookIntelligence so the iPhone can download its live models without the Mac's engines; DaybookIntelligence re-exports it |
+| `DaybookLive` (Mac and iPhone) | Live captions from local models ("Live models", below): the live engines' descriptors and install checks (`LiveEngines`), `LiveModelHost`, the captioners, `LiveLoadPolicy`, and `WeSpeakerEmbedder`, the voice-profile recipe the Mac's final pipeline shares. FluidAudio only: no MLX, no WhisperKit |
+| `DaybookIntelligence` (Mac today) | The `ModelEngine` protocol, role protocols, `ModelEngineRegistry`, the eight engines, `TranscriptionRouter`, `MeetingSynthesis` and `SmallTasks`, `ModelHubClient`, `ModelUpdateChecker`, model addition, and `LocalIntelligenceRuntime`, which coordinates them |
 
-The iPhone links DaybookKit, so it names the model behind any result (Conversation Info) and can list acknowledgements. It registers no engines yet.
+The iPhone links DaybookKit, so it names the model behind any result (Conversation Info) and can list acknowledgements, and DaybookLive and DaybookModelStore, so it downloads and runs live captions' models. It registers no processing engines: final transcription, speakers, and summaries run on a Mac.
 
 ## Engines
 
@@ -49,7 +51,8 @@ Engines register in `ModelEngineRegistry.standard`. Adding an engine means one t
 | `whisperKit` | 2 | transcription | argmax-oss-swift 1.1.1 | shared | Artifacts `model` (the WhisperKit folder) and `tokenizer`; offline tokenizer loading through argmax's vendored tokenizer code; takes a language hint, and detects the language without one (WhisperKit itself would prefill English) |
 | `parakeet` | 1 | transcription | FluidAudio 0.17.7 | shared | Parakeet TDT v3 family (`engineOptions.version`: `ultra`, `redux`, `v3`, `phonon2`); one `model` artifact with the four Core ML bundles and the vocabulary; loaded with `AsrModels.loadLocal`, never FluidAudio's downloader; takes a language hint |
 | `community1` | 1 | diarization, speakerEmbedding | FluidAudio 0.17.7 | shared | Returns voice embeddings in the space its variant declares; as `EmbeddingVoices`, embeds another diarizer's turns in that same space |
-| `nemotronDiarizer` | 1 | diarization | FluidAudio 0.17.7 | shared | Nemotron 3 Diarization (`engineOptions.preset`: `offline`, or a split W8A8 build such as `c128-split-w8a8`); eight speakers, no embeddings |
+| `nemotronDiarizer` | 1 | diarization, liveDiarization | FluidAudio 0.17.7 | shared | Nemotron 3 Diarization (`engineOptions.preset`: `offline`, or a split W8A8 build such as `c128-split-w8a8`); eight speakers, no embeddings. Its streaming preset `fast32-split-w8a8` serves live speakers, loaded by DaybookLive |
+| `nemotronStreaming` | 1 | liveTranscription | FluidAudio 0.17.7 | shared | Nemotron 3.5 ASR Streaming bundles (`StreamingNemotronMultilingualAsrManager`): encoder, fused decoder and joint, `metadata.json`, `tokenizer.json`. Registered on the Mac so the manager downloads and checks it; loaded only by DaybookLive (`LiveEngines.streamingTranscription` on the iPhone) |
 | `sortformer` | 1 | diarization | FluidAudio 0.17.7 | shared | `engineOptions.precision` (`palettized` or `fp16`); four speakers, no embeddings |
 | `mlxLanguage` | 2 | summarization | mlx-swift-lm 3.32.3 (mlx-swift 0.32.3) | exclusive | Any `model_type` the pinned mlx-swift-lm registers (`LLMTypeRegistry`); `engineOptions.thinking`; constrained JSON when the variant declares `structuredOutput` |
 | `appleFoundationModels` | 1 | smallTasks | Foundation Models (the OS version) | system | `systemProvided` variants; available on macOS 26 / iOS 26 and later with Apple Intelligence on |
@@ -62,7 +65,7 @@ Version 1 of `whisperKit` was WhisperKit 0.18.0 and version 1 of `mlxLanguage` w
 
 ## Manifests
 
-- **Built-in catalog:** `Sources/DaybookKit/Resources/ModelCatalog/`, a package resource of DaybookKit, shipped with each release. `Catalog.json` holds the presets, the recommended preset per tier, and the initial selection. `Families/<family>.json` holds one family each, as a complete manifest. Adding a model family is adding a file. Each file declares its own `minimumReaderVersion`, so a family that needs a newer reader is skipped with a warning while the rest load. Families load in file-name order; the interface sorts as it needs (acknowledgements are alphabetical).
+- **Built-in catalog:** `Sources/DaybookKit/Resources/ModelCatalog/`, a package resource of DaybookKit, shipped with each release. `Catalog.json` holds the presets, the recommended preset per tier, the initial selection, and the live roles' defaults per platform and tier (`liveSelection`). `Families/<family>.json` holds one family each, as a complete manifest. Adding a model family is adding a file. Each file declares its own `minimumReaderVersion`, so a family that needs a newer reader is skipped with a warning while the rest load. Families load in file-name order; the interface sorts as it needs (acknowledgements are alphabetical).
 - **The person's manifest:** `Models/UserModels.json`, beside the store, in the same format. It holds models added from Hugging Face ("Added by you") and revisions installed through update checks. `ModelCatalog` merges it into the built-in catalog: a family or variant with a built-in ID only gains variants or revisions; built-in metadata is never overridden. Presets come from the built-in manifest only.
 - **Revision checks (opt-in):** `LocalIntelligenceRuntime.checkForUpdates(client:)` asks Hugging Face, through an injectable `ModelHubClient`, whether each installed variant's tracked branch (`artifact.track`, default `main`) moved, and whether the files its `include` patterns select actually changed. It returns `ModelUpdate`s with the changed files, the size, and the publication date. Daybook never installs one by itself; `installUpdate(_:)` records the revision in the person's manifest and downloads it.
 
@@ -70,7 +73,8 @@ Version 1 of `whisperKit` was WhisperKit 0.18.0 and version 1 of `mlxLanguage` w
 
 ```text
 ModelManifest       schemaVersion, minimumReaderVersion, catalogVersion,
-                    families[], presets[], recommendedPreset, initialSelection
+                    families[], presets[], recommendedPreset, initialSelection, liveSelection
+ModelChoiceTable    roles{role: keys[]}, tiers{tier: {role: keys[]}}, platforms{"macOS"|"iOS": {role: keys[]}}
 ModelFamilyEntry    id, name, maker, engine, roles[], summary, homepage, license, variants[]
 ModelVariantEntry   id, name, detail, engine?, roles?, license?, homepage, releaseDate,
                     recommendedMemoryGB, capabilities, engineOptions{},
@@ -89,7 +93,7 @@ Every entry carries its license, release dates (the variant's upstream publicati
 
 **Deviation: digests.** Hugging Face publishes SHA-256 only for LFS files. For small files (configs, tokenizers, `model.mil`) it publishes the git blob ID, SHA-1 over `"blob <size>\0"` and the content. The store verifies whichever the manifest has, and refuses a file that has neither: size alone would let a swapped file of the same length through, so the install stops with “can’t be checked” instead. Listing a repository fails the same way for a file without a checksum. Both come from metadata alone; generate entries with `scripts/model-revision.py`.
 
-**Licenses.** Daybook's code is MIT. Each model keeps its own license and declares it in its manifest entry; `allowsCommercialUse: false` is labelled "Non-commercial" wherever a model is chosen. The built-in entries: Whisper, MIT (OpenAI's release; Argmax's Core ML conversion is MIT too; the Hugging Face cards for base and small say Apache-2.0, for the Transformers port); Gemma 4, Apache-2.0 (Google's card links https://ai.google.dev/gemma/docs/gemma_4_license; mlx-community's E2B/E4B cards still carry stale "gemma" metadata, so the entry cites the upstream card); Qwen 3.5 and 3.6, Apache-2.0; Qwen 2.5 1.5B and 7B, Apache-2.0; Qwen 2.5 3B, the Qwen Research License (non-commercial); Apple Foundation Models, Apple's acceptable use requirements (a system model, nothing redistributed); Community-1, CC BY 4.0 as scoped by FluidInference's NOTICE.md; Sortformer 2.1, the NVIDIA Open Model License with NVIDIA's required notice, and CC BY 4.0 for the conversion; Parakeet Ultra and Redux, CC BY 4.0 (Moondream's post-trains of NVIDIA's parakeet-tdt-0.6b-v3), with the Core ML conversion named as the change; Nemotron 3 Diarization, the OpenMDW License 1.1, whose full text ships in `THIRD_PARTY_NOTICES.md` because the Hugging Face repository has no LICENSE file. `ModelAcknowledgements.list(from:only:)` builds the acknowledgements from the manifests (the Mac's About Daybook panel and Settings › Models › Acknowledgements; the iPhone's Settings › About › Acknowledgements): one entry per family and license, with the license name, link, required attribution, and the non-commercial label.
+**Licenses.** Daybook's code is MIT. Each model keeps its own license and declares it in its manifest entry; `allowsCommercialUse: false` is labelled "Non-commercial" wherever a model is chosen. The built-in entries: Whisper, MIT (OpenAI's release; Argmax's Core ML conversion is MIT too; the Hugging Face cards for base and small say Apache-2.0, for the Transformers port); Gemma 4, Apache-2.0 (Google's card links https://ai.google.dev/gemma/docs/gemma_4_license; mlx-community's E2B/E4B cards still carry stale "gemma" metadata, so the entry cites the upstream card); Qwen 3.5 and 3.6, Apache-2.0; Qwen 2.5 1.5B and 7B, Apache-2.0; Qwen 2.5 3B, the Qwen Research License (non-commercial); Apple Foundation Models, Apple's acceptable use requirements (a system model, nothing redistributed); Community-1, CC BY 4.0 as scoped by FluidInference's NOTICE.md; Sortformer 2.1, the NVIDIA Open Model License with NVIDIA's required notice, and CC BY 4.0 for the conversion; Parakeet Ultra and Redux, CC BY 4.0 (Moondream's post-trains of NVIDIA's parakeet-tdt-0.6b-v3), with the Core ML conversion named as the change; Nemotron 3 Diarization and Nemotron 3.5 ASR Streaming, the OpenMDW License 1.1, whose full text ships in `THIRD_PARTY_NOTICES.md` because the Hugging Face repositories have no LICENSE file. `ModelAcknowledgements.list(from:only:)` builds the acknowledgements from the manifests (the Mac's About Daybook panel and Settings › Models › Acknowledgements; the iPhone's Settings › About › Acknowledgements): one entry per family and license, with the license name, link, required attribution, and the non-commercial label.
 
 ## Selection, updates, and provenance
 
@@ -153,8 +157,8 @@ Nothing selected, Apple Intelligence off, a guardrail refusal, or any other fail
 
 ## Platforms
 
-- **Shared code:** the manifest, catalog, selection, and provenance types are in DaybookKit and DaybookCore, so the iPhone shows what produced a result and can later run engines itself.
-- **Engines** are in DaybookIntelligence: the Mac today, iOS-capable later. Each declares its platforms; availability is `unsupportedPlatform` ("Not available on iPhone") where an engine doesn't run.
+- **Shared code:** the manifest, catalog, selection, and provenance types are in DaybookKit and DaybookCore, so the iPhone shows what produced a result; the store is in DaybookModelStore and the live engines in DaybookLive, which the iPhone links to run live captions' models.
+- **Engines** for processing are in DaybookIntelligence: the Mac only. Each declares its platforms; availability is `unsupportedPlatform` ("Not available on iPhone") where an engine doesn't run. The iPhone reads its live models' availability from `LiveEngines.descriptors`.
 - **System models:** a variant with `systemProvided: true` has no revisions; nothing is downloaded or removed, and its engine decides whether this device has it: its descriptor's `unavailableReason` becomes `ModelAvailability.unavailableOnDevice` ("Turn on Apple Intelligence", "Needs macOS 26 or later", "Not available on this Mac", "Apple Intelligence isn’t ready yet"), and `validate` refuses it. `installedModels()` includes a system model only while it's available.
 
 ## The model manager
@@ -259,6 +263,29 @@ FluidAudio 0.17.7 already contained Parakeet Ultra (`AsrModelVersion.ultra`), so
 
 **Nemotron 3 Diarization** is the same shape: `NemotronDiarizerEngine` (`.nemotronDiarizer`, `Diarizing`) and `Families/nemotron-3-diarization.json` with variants `offline` (the 30.4 s batch preset in `monolithic/v2/`, 199 MB) and `compact` (the split-graph W8A8 build `c128-split-w8a8`, 102 MB including the host-side projection, which FluidInference reports runs entirely on the Neural Engine; not in a preset), both `maxSpeakers: 8` without `voiceEmbeddings`, from `FluidInference/nemotron-3-diarization-coreml` at `25a90f9…` (the general-access weights). Each run reads the recording in 30 s blocks through one converter into FluidAudio's streaming path (`appendAudio` / `processBufferedAudio` / `finishStream`, frame-exact with `processComplete` but without holding the whole recording), and `SpeakerActivity` turns the 10 ms probabilities into turns as they arrive: active above 0.5, same-speaker gaps under 0.25 s bridged, turns under 0.2 s dropped. Voice profiles come from Community-1 (see "Routing").
 
+## Live models
+
+Live captions can run on local models on both devices (docs/model-runtime.md, "Live"). Three roles, read from `Catalog.json`'s `liveSelection` per platform and tier (`LiveModelChoices`), kept out of the processing presets so choosing Quick or Detailed never downloads them:
+
+| Role | iPhone and Mac default | Download | License | Why |
+| --- | --- | --- | --- | --- |
+| `liveTranscription` | Nemotron 3.5 ASR Streaming · Latin (`nemotron-3.5-asr-streaming/latin-1120ms`), then the multilingual build | 588 MB (Latin, 1.12 s chunks) · 615 MB (multilingual, 2.24 s) | OpenMDW-1.1 | The only multilingual cache-aware streaming recognizer FluidAudio 0.17.7 runs with punctuation and capitals; words appear about 1.25 s behind and are never revised. FluidInference reports FLEURS WER 8.96% English, 4.80% Spanish, 9.52% French, 5.41% Italian, 6.14% Portuguese, 9.83% German at the 2.24 s tier (8.89–9.78% at 1.12 s), 3.67% on LibriSpeech test-clean, and 103–109× real time on an M5 Pro at 1.12 s. Encoder 6-bit palettized with 8-bit edge layers, iOS 17+, Neural Engine |
+| `liveDiarization` | Nemotron 3 · Live (`nemotron-3-diarization/live`, preset `fast32-split-w8a8`) | 102 MB | OpenMDW-1.1 | Streaming with a speaker cache, so a voice keeps its slot; eight speakers; 2.88 s latency; the split W8A8 graph runs entirely on the Neural Engine (FluidInference), "matches the card-standard low profile's quality at a fraction of its per-call cost". NVIDIA's card reports AMI DER 9.75 for its streaming profile against Sortformer v2.1's 15.81 |
+| `speakerEmbedding` | Community-1 (`community-1/offline`) | 22 MB | CC BY 4.0 (scoped) | The Mac's voice-profile model, so live embeddings land in `fluid-community1-embedding-df2625ac79a7ac6b` and profiles made on the Mac name speakers on the iPhone. Live captions load only its FBank and WeSpeaker bundles |
+
+Everything an iPhone needs is about 712 MB (live transcription 588, speakers 102, voice profiles 22), downloaded over Wi‑Fi unless the person allows cellular. The recognizer suggests 6 GB of memory (`recommendedMemoryGB`; about 0.8 GB resident); an iPhone with less (a 4 GB iPhone 12 or 13) isn't offered it and keeps the system's captions, with live speakers still available. The speaker model suggests 4 GB.
+
+**Considered and not chosen** (sizes from Hugging Face metadata; no weights downloaded):
+
+- *Parakeet EOU 120M* (`FluidInference/parakeet-realtime-eou-120m-coreml`, 225 MB per chunk size, NVIDIA Open Model License): the smallest streaming recognizer, but English only, without punctuation or capitals (NVIDIA's card).
+- *Nemotron Speech Streaming 0.6B, English* (626 MB, NVIDIA Open Model License): English only, at the size of the multilingual model.
+- *Parakeet Unified 0.6B streaming* (590 MB int8, 1.18 GB fp16, CC BY 4.0): English only, and FluidAudio reports its int8 encoder fails to load on A16 iPhones, leaving the 1.18 GB fp16 build.
+- *Parakeet TDT v3 (Ultra, Redux) through the sliding-window manager*: already on Macs, 25 languages, but an offline encoder re-run over 15 s windows: about 13 s behind the speech at FluidAudio's defaults, and several times the compute of a streaming model at a shorter window.
+- *Sortformer v2.1 streaming* (242 MB FP16 or 92 MB palettized): four speakers, and Nemotron 3 supersedes it.
+- *The system's SpeechTranscriber*: remains the fallback (no download, every language Apple supports), but it gives no speakers and Daybook can't choose or pin its model.
+
+The live models are catalog entries like any other: `minimumEngineVersion`, revisions pinned to commits with a digest per file, `supersededBy`, Acknowledgements (the iPhone lists the live models it has downloaded beside the models behind its results). A better streaming model is a new variant and a `liveSelection` edit. On the Mac, Settings › Models shows Live transcription and Live speakers as roles of their own (the engines serve them), with the same Download and Remove; their defaults are filled in once (`modelSelections.liveAdded`).
+
 ## Photos
 
 The `imageDescription` role uses Apple Vision by default (`apple-vision/system`, engine `appleVision`): OCR, labels, sharpness, and near-duplicate detection, with no download. Gemma 4 E2B and E4B also serve this role through MLXVLM and the existing installation. Their optional captions retain exact provenance; Vision remains the fallback. See [Photos](photos.md#local-understanding).
@@ -268,7 +295,8 @@ The `imageDescription` role uses Apple Vision by default (`apple-vision/system`,
 | Change | What to do | Pipeline edits |
 | --- | --- | --- |
 | Parakeet Ultra, Nemotron 3 | **Done** (above). Language routing was the one pipeline addition: `TranscriptionRouter` inside `InferenceProcessingEngine.transcribe`, with its decisions in DaybookKit | Language routing |
-| Nemotron 3 for live speakers | Use Nemotron's streaming presets (`low`, 1.04 s; `fast32`, 2.88 s, the card's recommended default) in place of Sortformer v2.1 when live diarization is wired: eight speakers instead of four, AMI DER 9.75 vs Sortformer's 15.81 (NVIDIA card), and the same streaming API this engine already drives. Sortformer stays in the catalog until that ships | Live diarization |
+| ~~Nemotron 3 for live speakers~~ | Done: `nemotron-3-diarization/live` (`fast32-split-w8a8`) for `liveDiarization` on the Mac and the iPhone ("Live models") | Live captions (DaybookLive) |
+| Glossary for live captions | `StreamingNemotronMultilingualAsrManager.setCustomVocabulary` biases the streaming decoder toward rare terms; pass the approved glossary when a capture starts | None |
 | ~~Forcing Whisper's language~~ | Done: `WhisperKitTranscriber` takes the hint (`DecodingOptions.language`) and otherwise turns on `detectLanguage`. Before this, WhisperKit's defaults (prefill on, detection off) prefilled English, so Whisper never detected a language | None |
 | ~~mlx-swift-lm 3.32.3, argmax-oss-swift 1.1.1~~ | Done: engines `mlxLanguage` 2 and `whisperKit` 2 (above) | None |
 | ~~Gemma 4, Qwen 3.x~~ | Done: `gemma-4`, `qwen3.5`, `qwen3.6` families with `minimumEngineVersion: 2`; presets updated | None |

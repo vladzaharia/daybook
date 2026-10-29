@@ -1197,6 +1197,33 @@ Still to check on a Mac running macOS 26 or later, in a real call:
 - Soundcore Listen Live on hardware: how large the opening burst is, that captions catch up to the
   present, and caption latency (see Devices above).
 
+### Live transcription from local models
+
+Run on 2026-10-29 on an M5 Pro with 64 GB, macOS 27.0 (docs/model-runtime.md, "Live"; docs/models.md, "Live models").
+
+**Automated, no model running.** `DaybookLiveTests` (30): passages from streaming pieces (sentence ends, pauses judged up to what was decoded, the length limit, control tokens, stable IDs); speaker runs, solo stretches, the dominant voice, and runs that never stretch across a gap in the audio; naming (thresholds, margin, one person per voice, spaces that never mix); the library's named speakers as known voices; the audio ring; the local captioner on the capture's timeline across a 10 s gap, a recognizer that can't load (only the captions end), and Critical heat (audio let go); speakers and names added to another captioner's words, words going on unlabelled without a speaker model, and speakers shed in Low Power Mode; the iPhone's and the Mac's load policies and the backlog's hysteresis; the catalog's iPhone defaults (streaming, phone-sized, commercial-use licenses with attribution, the Mac's embedding space), live models kept out of presets and processing, stored choices and defaults, per-platform choices and their round trip, the memory guard, install checks per role, and the language choosing between installed recognizers. `LiveTranscriptionTests` (4, Mac): a new Mac's live choices, an existing Mac gaining them once, the Settings roles, and caption turns by voice with names. `PhoneModelsTests` (4, iPhone simulator): the iPhone's defaults (711.9 MB for all three), a 4 GB phone not offered the recognizer, downloads waiting for Wi‑Fi and starting on cellular only when allowed, and captions staying the system's without downloads. Updated: the catalog and registry inventories, and acknowledgements.
+
+**Real models, once, in scratch.** The three iPhone defaults were downloaded through `ModelStore` with `HubSnapshotFetcher` into a scratch folder, every file checked against the catalog's digests (Nemotron 3.5 Streaming Latin 19.4 s, Nemotron 3 Live 6.6 s, Community-1 13.6 s), run by a scratch command-line harness through `LiveCaptioners` exactly as the apps compose them, and deleted afterwards. The input was a 25-second two-voice conversation from macOS voices (Samantha and Daniel, four turns), fed in 100 ms buffers at real time, and a separate 12-second Samantha utterance embedded as her known voice.
+
+- Words: all four turns transcribed, punctuated and capitalized; one error ("after launch" for "after lunch").
+- Speakers: every passage labelled with the right voice (S1 Samantha, S2 Daniel), and Samantha named from her separate utterance; Daniel, with no profile, stayed unnamed.
+- Latency: a passage's last words appeared a median 0.19 s (at most 0.99 s) after they were spoken, measured against the audio clock; speaker labels follow the model's 2.88 s latency by design.
+- Load: 43.9 s the first time (the Neural Engine compiling the models for this Mac), 0.1–0.2 s afterwards.
+- Cost: 0.4–0.5 s of CPU for 25 s of audio (2% of one core; the Neural Engine does the work); peak process footprint 63–72 MB over two runs. The weights are memory-mapped from their files and the Neural Engine's own memory isn't counted in the footprint.
+- A second real-time run on the final code gave the same words, speakers, and name.
+- Fed all at once instead (a 25 s burst into a 256-buffer queue), the backlog governor shed speakers until it drained, as designed: the words were the same and early passages went unlabelled.
+
+These are synthetic voices on a fast Mac: they show the pipeline works with the real models and what it costs here, not accuracy on meetings or an iPhone's speed. Floating Notes and the conversation page were snapshotted with `--simulate-recording … --demo-captions`, whose Call lines now carry a named and an unnamed voice; the iPhone's Settings › Models was screenshotted on a simulator. The iPhone app built for a device (unsigned Release): 44.8 MB against main's 27.1 MB, most of it FluidAudio.
+
+Still to check on hardware:
+
+- An iPhone (A17 Pro or later, and an 8 GB phone without Pro): first and later load times, real-time factor, battery drain over an hour's recording with the screen on and in a pocket, heat, and memory headroom (jetsam) with the camera and Live Activity running. The Neural Engine compile on first load may take minutes on a phone; captions show "Getting captions ready…" meanwhile.
+- A 6 GB iPhone (the recognizer's suggested minimum) and a 4 GB one (offered speakers only).
+- Downloads on a phone: Wi‑Fi to cellular mid-download (it stops and waits), the app sent to the background mid-download (it may be suspended; the 566 MB encoder restarts if cut off partway), and Low Data Mode.
+- A Mac recording a real call with live models: You and Call each captioned, the shared models loaded once, echo removal with live models' timing, and an hour without the recording dropping buffers. macOS 15 with live models (no Speech framework): captions, and Settings › General › Live Captions enabled.
+- Real voices: whether live names match the Mac's profiles at the 0.82 threshold across microphones (a laptop's microphone against a phone's or a recorder's), how often two people's voices share a slot or one voice splits, and the multilingual model on Japanese and German.
+- Soundcore Listen Live through live models on both devices.
+
 ## CloudKit courier
 
 Run on 2026-10-24 on Apple silicon, macOS 27.0, Xcode 27.1 (27A9275), with fakes only: no CloudKit, iCloud account, network, or real library was touched (`docs/icloud-sync.md`, "Courier (CloudKit)").
