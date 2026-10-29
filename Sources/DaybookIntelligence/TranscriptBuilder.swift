@@ -4,10 +4,13 @@ import Foundation
 public enum TranscriptBuilder {
     public static func segments(result: RecognitionResult, speakers: SpeakerAnalysis?, track: RecordingTrack, runID: UUID? = nil) -> [TranscriptSegment] {
         func speaker(_ start: Double, _ end: Double) -> String? {
-            guard let turns = speakers?.turns else { return nil }
+            guard let turns = speakers?.turns, !turns.isEmpty else { return nil }
             let scored = turns.map { ($0, max(0, min(end, $0.end) - max(start, $0.start))) }
-            guard let match = scored.max(by: { $0.1 < $1.1 }), match.1 > 0 else { return nil }
-            return "\(runID?.uuidString ?? track.id.uuidString):\(match.0.speakerID)"
+            if let match = scored.max(by: { $0.1 < $1.1 }), match.1 > 0 { return "\(runID?.uuidString ?? track.id.uuidString):\(match.0.speakerID)" }
+            // A word in a gap between turns belongs to the nearest one, when it's close (`StrandedWords`).
+            let distances = turns.map { ($0, max($0.start - end, start - $0.end)) }
+            guard let nearest = distances.min(by: { $0.1 < $1.1 }), nearest.1 <= StrandedWords.maximumGap else { return nil }
+            return "\(runID?.uuidString ?? track.id.uuidString):\(nearest.0.speakerID)"
         }
         var output: [TranscriptSegment] = []
         for segment in result.segments {

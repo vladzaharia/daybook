@@ -520,6 +520,7 @@ final class AppState: ObservableObject {
             closeRecoveredLinks()
             // Requests this Mac held when it last quit or crashed run again (or are given back).
             pickUpRequests()
+            Task { await library.relabelStrandedWords() }
         } catch { report("Couldn’t Open Your Library", "Quit Daybook and open it again.", error) }
     }
 

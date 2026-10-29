@@ -295,7 +295,9 @@ final class MultiSourceFusion {
     private func makeSource(_ transcript: TrackTranscript, placements: [UUID: TrackAlignment]) -> Source {
         let alignment = placements[transcript.trackID]!
         let track = trackByID[transcript.trackID]
-        let segments = TranscriptFusion.valid(transcript.segments).enumerated()
+        // Words speaker analysis left between turns join the turn they sit against, so they don't
+        // become one-word passages of no one (transcripts made before `TranscriptBuilder` did it).
+        let segments = TranscriptFusion.valid(transcript.segments).labellingStrandedWords().enumerated()
             .sorted { $0.element.start == $1.element.start ? $0.offset < $1.offset : $0.element.start < $1.element.start }.map(\.element)
         let tolerance: Double, rank: Int
         switch alignment.method {

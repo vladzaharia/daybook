@@ -453,6 +453,16 @@ public final class LibraryController: ObservableObject {
         update(id) { $0.applyFusion(prepared); $0.applyPlacements(settled) }
     }
 
+    /// Fuses again the conversations whose transcript still has words split off as no one's
+    /// (`StrandedWords`), one at a time. Earlier transcripts kept them; fusion now joins them to
+    /// the speaker beside them, keeping corrections as `realign` does.
+    public func relabelStrandedWords() async {
+        for id in meetings.filter({ $0.unifiedTranscript.hasStrandedWords }).map(\.id) {
+            guard !Task.isCancelled else { return }
+            await realign(id)
+        }
+    }
+
     // MARK: Folders and templates
 
     public func saveFolder(_ folder: LibraryFolder) {

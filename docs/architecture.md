@@ -145,6 +145,8 @@ Beyond speaker profiles ([below](#speakers-and-profiles)), learning means preser
 
 ## Speakers and profiles
 
+Speaker analysis leaves short gaps between turns (at a change of speaker, around a breath). A word in one belongs to the nearest turn when it's within a second (`TranscriptBuilder`); transcripts made before that are fixed when fused (`StrandedWords`: a passage of up to three words with no speaker takes the speaker of the passage of the same recording it sits against), and the Mac fuses such conversations again once at launch (`LibraryController.relabelStrandedWords`). Longer passages nobody was found for stay unknown.
+
 Named speakers are editable labels on anonymous clusters. Within a conversation, voice embeddings match sources and reruns with a cosine threshold and runner-up margin (Settings › Models › Voice matching); distinct embedding spaces are never compared, and ambiguous matches remain separate. Community-1 makes embeddings itself; Nemotron 3 and Sortformer runs get them from the voice-profile model, Community-1, in the same space ([models](models.md), "Routing").
 
 Across conversations, **speaker profiles** carry names ([SpeakerProfiles](../Sources/DaybookCore/SpeakerProfiles.swift), [SpeakerProfileReconciler](../Sources/DaybookCore/SpeakerProfileReconciler.swift), [SpeakerProfileBook](../Sources/DaybookCore/SpeakerProfileBook.swift)). Before them, a name given to a speaker stayed in its conversation: matching compared voices within one conversation only, and only when a recording was processed.

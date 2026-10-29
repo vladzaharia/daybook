@@ -40,10 +40,20 @@ final class TranscriptBuilderTests: XCTestCase {
         }
     }
 
-    func testWordsOutsideDiarizationTurnsRemainUnknown() {
+    /// Regression: a word in the short gap speaker analysis leaves between turns came out as
+    /// "Unknown speaker: I", splitting one person's sentence. It joins the nearest turn when close.
+    func testAWordInAGapBetweenTurnsJoinsTheNearestTurn() {
         let source = track()
-        let words = [word(" Known", 0, 0.5), word(" uncertain", 1, 1.5), word(" again", 2, 2.5)]
-        let segments = TranscriptBuilder.segments(result: result(words), speakers: analysis([("A", 0, 0.6), ("A", 2, 3)]), track: source)
+        let words = [word(" Known", 0, 0.5), word(" I", 0.9, 1.1), word(" again", 2, 2.5)]
+        let segments = TranscriptBuilder.segments(result: result(words), speakers: analysis([("A", 0, 0.6), ("B", 1.9, 3)]), track: source)
+        XCTAssertEqual(segments.map(\.text), ["Known I", "again"])
+        XCTAssertEqual(segments.map(\.speakerID), ["\(source.id):A", "\(source.id):B"])
+    }
+
+    func testWordsFarFromAnyTurnRemainUnknown() {
+        let source = track()
+        let words = [word(" Known", 0, 0.5), word(" uncertain", 3, 3.5), word(" again", 6, 6.5)]
+        let segments = TranscriptBuilder.segments(result: result(words), speakers: analysis([("A", 0, 0.6), ("A", 6, 7)]), track: source)
         XCTAssertEqual(segments.map(\.text), ["Known", "uncertain", "again"])
         XCTAssertEqual(segments.map(\.speakerID), ["\(source.id):A", nil, "\(source.id):A"])
     }
