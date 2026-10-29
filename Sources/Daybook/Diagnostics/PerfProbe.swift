@@ -48,6 +48,19 @@ enum PerfProbe {
 
     @MainActor private static var frameWindow: NSWindow?
 
+    /// `--perf-touch`: every two seconds, changes the selected conversation the way a processing step does
+    /// (a new value, saved), so `maxWaitMs` shows what one change of the library costs the window.
+    @MainActor static func driveTouches(_ state: AppState) {
+        guard isEnabled, CommandLine.arguments.contains("--perf-touch") else { return }
+        Task { @MainActor [weak state] in
+            try? await Task.sleep(for: .seconds(4))
+            while let state {
+                if let id = state.selectedID { state.update(id) { $0.updatedAt = Date() } }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
     /// `--perf-progress`: reports progress into `activity` from another thread, 50 times a second, as an
     /// engine does: 20 seconds each of transcribing, finding speakers, and listening for music, over and over.
     /// With `--library-demo`, the demo's transcribing conversation shows it without any model running.
