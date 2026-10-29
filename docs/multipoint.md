@@ -170,6 +170,36 @@ keep their times (a recorder's bookmarks follow its placement and drift).
 While this happens, the conversation's status line reads "Adding Soundcore Work recording…"
 (`sourceActivity`).
 
+## Mac first
+
+A recording made alongside this Mac's (Daybook on iPhone, a recorder) reaches this Mac later than
+this Mac's own: the phone's through iCloud, a recorder's when it's imported. This Mac never waits for
+it. When its recording stops it's queued at once (`finishCapture` → `enqueue`), so this Mac's audio is
+transcribed, its speakers found, and its summary written straight away; when the other recording
+arrives, the enhancement above adds it and writes the summary again, keeping corrections, renamed
+speakers, notes, and bookmarks, with the earlier summary in Version History.
+
+Meanwhile the conversation says what it's waiting for, from data that syncs, so every place that
+shows processing shows it, on the Mac and the iPhone:
+
+- `ProcessingStatus.awaitingRecordings([AwaitedRecording])` once this Mac's audio is done (in place of
+  `.done`), and `ProcessingStatus.Progress.awaiting` while it's being processed. A recording is awaited
+  when a multipoint link says the device recorded, or may have (`recording`, `alreadyRecording`,
+  `stopping`, `stopped`, `stopFailed`), it isn't `attached`, the conversation holds no recording from
+  that device (by the link's recording ID, a Listen Live portion included, or else one that started
+  after this Mac did), and this Mac's recording ended less than two days ago (`AwaitedRecording.lifetime`,
+  as the inspector's line). Untranscribed audio comes first (`.recorded`): it needs the queue or the person.
+- The words come from DaybookKit, so both apps say the same: "Waiting for iPhone audio" (or the
+  recorder's name; several are joined, "Waiting for iPhone and Soundcore Work audio") in the list row
+  and Floating Notes; "Waiting for audio from Alex's iPhone" on the page; and while this Mac's audio is
+  being processed, the page's line ends "· Waiting for iPhone audio". The iPhone's list row and page say
+  the same for a recorder's audio. Its own recording is already in its copy of the conversation, so it
+  never waits for itself; it shows "Waiting for your Mac" for its request until a Mac adds it.
+- When the recording arrives the wait ends: the conversation reads "Not transcribed yet" or "Waiting"
+  until it's queued, "Adding iPhone recording…" while it's added, then nothing.
+
+This status isn't pending: Refresh Summary and the other actions stay available while it shows.
+
 ## The other direction
 
 **Record on This Mac** (Inspector › Audio › Add Recording) records into an existing conversation,
@@ -296,6 +326,11 @@ so only the Mac that carries out the request does this (any Mac, for a recording
 - Files exported through the Soundcore app or another recorder's folder carry only a file date, which
   copying can change, so they are never placed by clock and need the sound or transcript to match.
 - One status line is shared by all recorders; with two recorders the last message wins.
+- With **Transcribe synced recordings on this Mac** off, a phone's recording that arrives through sync
+  isn't added automatically: its request waits for a Mac that transcribes synced recordings, and the
+  conversation reads "Requested on Alex's iPhone" instead of "Waiting for iPhone audio".
+- A recording that never arrives stops being awaited two days after this Mac's recording ended; the
+  conversation then reads as done.
 - Pause and Cancel take effect between steps: a sound comparison already running (synchronous in
   `AudioAligner`) finishes first.
 - A renamed title isn't counted as the person's work when deciding whether a moved recording's own

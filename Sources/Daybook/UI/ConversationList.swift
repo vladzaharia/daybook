@@ -194,6 +194,7 @@ struct RowStatus {
         case .requested(.device(let request)): kind = .waiting; text = "Requested from \(request.requestedBy.name)"
         case .failed: kind = .failed; text = "Couldn’t finish"
         case .recorded: kind = .notTranscribed; text = "Not transcribed yet"
+        case .awaitingRecordings(let recordings): kind = .waiting; text = ProcessingStatus.awaitingLine(recordings)
         case .done: kind = nil; text = nil
         }
     }

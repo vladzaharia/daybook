@@ -17,6 +17,10 @@ public enum ProcessingStatus: Equatable, Sendable {
     case processing(Progress)
     /// Nothing waits: transcripts and summary are in, or there's no audio to process.
     case done
+    /// This Mac's audio is transcribed and summarized, and a recording made alongside it on another
+    /// device (Daybook on iPhone, a recorder) hasn't arrived yet. When it does, it's added and the
+    /// transcript and summary are enhanced (docs/multipoint.md, "Mac first").
+    case awaitingRecordings([AwaitedRecording])
     /// The last attempt couldn't finish.
     case failed(Failure)
 
@@ -37,9 +41,12 @@ public enum ProcessingStatus: Equatable, Sendable {
         public var fraction: Double?
         /// The device doing the work; nil for this one.
         public var device: ProcessingRequest.Device?
+        /// Recordings made alongside this one that haven't arrived: the work now is on the audio that has.
+        public var awaiting: [AwaitedRecording]
 
-        public init(stage: ProcessingRequest.Stage, fraction: Double?, device: ProcessingRequest.Device? = nil) {
-            self.stage = stage; self.fraction = fraction; self.device = device
+        public init(stage: ProcessingRequest.Stage, fraction: Double?, device: ProcessingRequest.Device? = nil,
+                    awaiting: [AwaitedRecording] = []) {
+            self.stage = stage; self.fraction = fraction; self.device = device; self.awaiting = awaiting
         }
     }
 
@@ -89,7 +96,7 @@ public enum ProcessingStatus: Equatable, Sendable {
             if queue.running == meeting.id {
                 let stage: ProcessingRequest.Stage = meeting.status == .summarizing ? .summarizing
                     : queue.identifyingSpeakers ? .identifyingSpeakers : .transcribing
-                self = .processing(Progress(stage: stage, fraction: queue.fraction))
+                self = .processing(Progress(stage: stage, fraction: queue.fraction, awaiting: meeting.awaitedRecordings(now: now)))
                 return
             }
             if let position = queue.queued.firstIndex(of: meeting.id) {
@@ -107,7 +114,8 @@ public enum ProcessingStatus: Equatable, Sendable {
         }
         let open = meeting.openProcessingRequests.filter { !$0.isSatisfied(by: meeting) }
         if let claimed = open.compactMap({ request in request.activeClaim(at: now) }).max(by: { $0.heartbeat < $1.heartbeat }) {
-            self = .processing(Progress(stage: claimed.stage ?? .transcribing, fraction: claimed.fraction, device: claimed.device))
+            self = .processing(Progress(stage: claimed.stage ?? .transcribing, fraction: claimed.fraction, device: claimed.device,
+                                        awaiting: meeting.awaitedRecordings(now: now)))
             return
         }
         if let waiting = open.first {
@@ -127,7 +135,9 @@ public enum ProcessingStatus: Equatable, Sendable {
                                    device: outcome.device, request: lastFailure))
             return
         }
-        self = meeting.hasUntranscribedTranscribableAudio ? .recorded : .done
+        if meeting.hasUntranscribedTranscribableAudio { self = .recorded; return }
+        let awaited = meeting.awaitedRecordings(now: now)
+        self = awaited.isEmpty ? .done : .awaitingRecordings(awaited)
     }
 
     /// Recorded audio that isn't transcribed yet.
@@ -137,6 +147,72 @@ public enum ProcessingStatus: Equatable, Sendable {
         switch self {
         case .requested, .processing: return true
         default: return false
+        }
+    }
+}
+
+/// A recording another device made alongside this conversation's (multipoint: Daybook on iPhone, a
+/// recorder) that hasn't arrived yet. Derived from the conversation's synced links, so the Mac and the
+/// iPhone say the same thing.
+public struct AwaitedRecording: Equatable, Sendable {
+    /// The device's own name: "Alex's iPhone", "Soundcore Work".
+    public var deviceName: String
+    /// Its kind (`daybook.iphone`, `soundcore.work`).
+    public var deviceKind: String
+    /// When the recording it goes with ended (or began, when that's all that's known).
+    public var since: Date
+
+    public init(deviceName: String, deviceKind: String, since: Date) {
+        self.deviceName = deviceName; self.deviceKind = deviceKind; self.since = since
+    }
+
+    /// A recording that hasn't come in this long is let go: it may never arrive.
+    public static let lifetime: TimeInterval = 2 * 86_400
+
+    /// For a short line: "iPhone" for any Daybook on iPhone, otherwise the device's name ("Soundcore Work").
+    public var shortName: String { deviceKind == DaybookPhoneIntegration.id ? "iPhone" : deviceName }
+}
+
+extension ProcessingStatus {
+    /// For a list row or a chip: "Waiting for iPhone audio", "Waiting for iPhone and Soundcore Work audio".
+    public static func awaitingLine(_ recordings: [AwaitedRecording]) -> String {
+        var names: [String] = []
+        for name in recordings.map(\.shortName) where !names.contains(name) { names.append(name) }
+        return "Waiting for \(names.formatted(.list(type: .and))) audio"
+    }
+
+    /// For a page: "Waiting for audio from Alex's iPhone".
+    public static func awaitingDetail(_ recordings: [AwaitedRecording]) -> String {
+        var names: [String] = []
+        for name in recordings.map(\.deviceName) where !names.contains(name) { names.append(name) }
+        return "Waiting for audio from \(names.formatted(.list(type: .and)))"
+    }
+}
+
+extension Meeting {
+    /// Recordings made alongside this conversation's on other devices that haven't arrived: a
+    /// multipoint link that recorded (or may have) after this Mac's recording ended, with no recording
+    /// of that device's in the conversation yet, for at most `AwaitedRecording.lifetime`.
+    public func awaitedRecordings(now: Date = Date()) -> [AwaitedRecording] {
+        (companions ?? []).compactMap { link in
+            guard link.expectsRecording, link.trackID == nil else { return nil }
+            let since = link.macEndedAt ?? link.macStartedAt
+            guard now.timeIntervalSince(since) <= AwaitedRecording.lifetime, !hasRecording(fulfilling: link) else { return nil }
+            return AwaitedRecording(deviceName: link.deviceName, deviceKind: link.deviceKind, since: since)
+        }
+    }
+
+    /// The conversation holds a recording from the link's device that it was waiting for: by its
+    /// recording ID when the device reported one, otherwise one from that device that started after
+    /// this Mac did.
+    private func hasRecording(fulfilling link: CompanionRecording) -> Bool {
+        tracks.contains { track in
+            guard track.deviceKind == link.deviceKind else { return false }
+            if let a = link.deviceSerial, let b = track.deviceSerial, !a.isEmpty, !b.isEmpty, a != b { return false }
+            if let id = link.recordingID, let recording = track.deviceRecordingID {
+                return recording == id || recording.hasPrefix(id)
+            }
+            return (track.startedAt ?? track.createdAt) >= link.macStartedAt.addingTimeInterval(-120)
         }
     }
 }
