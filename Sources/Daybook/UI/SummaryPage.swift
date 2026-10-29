@@ -28,11 +28,12 @@ struct SummaryPage: View {
                     .opacity(meeting.status == .summarizing ? 0.5 : 1)
                     .transition(.opacity)
             } else if meeting.tracks.isEmpty && state.recordingID != meeting.id {
+                // The byline already says "Notes only"; this line offers the ways to add audio.
                 MarginRow {
                     HStack(spacing: Space.s4) {
-                        Text("No audio yet.").foregroundStyle(Ink.secondary)
-                        Button("Start Recording") { Task { await state.startRecording(into: meeting.id) } }
+                        Button("Record") { Task { await state.startRecording(into: meeting.id) } }
                             .disabled(state.isRecording || state.isStartingRecording)
+                            .help("Record into this conversation")
                         Button("Add Recording…") { state.chooseImport(attachTo: meeting.id) }
                     }
                     .buttonStyle(.daybookLink)
@@ -214,7 +215,8 @@ struct YourNotes: View {
                 times: times,
                 placeholder: "Add a note…",
                 fontSize: 14 * scale, lineSpacing: 5 * scale,
-                margin: narrow ? 0 : DaybookStyle.margin,
+                // Narrow, the times keep a lane as Floating Notes does, rather than disappearing.
+                margin: narrow ? (times.contains { $0 != nil } ? FloatingLayout.textLeading : 0) : DaybookStyle.margin,
                 focusOnAppear: isRecording && meeting.notes.isEmpty,
                 playTime: state.isRecording ? nil : { play(.timeline($0)) })
             if !bookmarks.isEmpty {
