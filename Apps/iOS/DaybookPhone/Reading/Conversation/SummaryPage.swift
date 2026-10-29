@@ -13,6 +13,9 @@ struct SummaryPage: View {
     let meeting: Meeting
     /// The page shows its own title and byline (one column, and the notebook's left page).
     var showsHeader = true
+    /// The scroll edge effect under what sits at the page's foot: hard under the notebook's status
+    /// panel, so the page doesn't read through its glass; nil is the system's.
+    var bottomEdgeEffect: ScrollEdgeEffectStyle? = nil
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
     @Environment(\.macSighting) private var sightingOverride
@@ -72,6 +75,7 @@ struct SummaryPage: View {
             .scrollPosition(id: $session.summaryAnchor, anchor: .top)
             .scrollDismissesKeyboard(.interactively)
             .scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectStyle(bottomEdgeEffect, for: .bottom)
             .onScrollPhaseChange { _, phase in
                 if phase == .interacting { session.pageMode = .summary }
             }

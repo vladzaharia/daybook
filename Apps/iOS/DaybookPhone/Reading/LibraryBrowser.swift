@@ -196,37 +196,50 @@ private struct ReadingLayout: View {
                 .environment(\.isTwoPage, true)
                 .transition(pageTurn(from: .trailing))
             } else {
-                withStatusPanel(NavigationStack {
-                    SummaryPage(library: library, meeting: meeting)
-                        .safeAreaInset(edge: .bottom, spacing: 0) { PlayerBar(player: session.player, library: library, meeting: meeting) }
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button { session.open(id) } label: {
-                                    Label(meeting.unifiedTranscript.isEmpty ? "Open" : "Open with Transcript", systemImage: "book.pages")
-                                }
-                                .labelStyle(.titleAndIcon)
+                withStatusPanel { footprint in
+                    NavigationStack {
+                        // A bar the panel's height, not an inset: the preview's edge effect runs under the
+                        // panel, hard, so the page doesn't read through its glass (as the list's under Record).
+                        // The effect runs only under something drawn, so the bar's room is drawn, unseen.
+                        SummaryPage(library: library, meeting: meeting, bottomEdgeEffect: .hard)
+                            .safeAreaInset(edge: .bottom, spacing: 0) { PlayerBar(player: session.player, library: library, meeting: meeting) }
+                            .safeAreaBar(edge: .bottom, spacing: 0) {
+                                Rectangle().fill(Color.primary.opacity(0.001)).frame(height: footprint).accessibilityHidden(true)
                             }
-                            ConversationToolbar(library: library, meeting: meeting)
-                        }
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button { session.open(id) } label: {
+                                        Label(meeting.unifiedTranscript.isEmpty ? "Open" : "Open with Transcript", systemImage: "book.pages")
+                                    }
+                                    .labelStyle(.titleAndIcon)
+                                }
+                                ConversationToolbar(library: library, meeting: meeting)
+                            }
+                    }
+                    .id(id)
                 }
-                .id(id))
                 .transition(.opacity)
             }
         } else {
-            withStatusPanel(NotebookPlaceholder(isEmpty: library.isLoaded && library.meetings.isEmpty))
+            withStatusPanel { footprint in
+                NotebookPlaceholder(isEmpty: library.isLoaded && library.meetings.isEmpty)
+                    .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: footprint) }
+            }
         }
     }
 
-    /// The right page while browsing: the status panel at its foot, the preview scrolling clear of
-    /// it. Expanded to the full page, the panel stands in for the preview until it's collapsed.
-    private func withStatusPanel(_ page: some View) -> some View {
-        ZStack(alignment: .bottom) {
-            page
-                .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: StatusPanel.compactFootprint) }
-                .opacity(panelDetent == .large ? 0 : 1)
-                .accessibilityHidden(panelDetent == .large)
-            StatusPanel(detent: $panelDetent)
+    /// The right page while browsing: the status panel at its foot, the page keeping clear of the
+    /// room it takes (`footprint`, compact or medium). Expanded to the full page, the panel stands in
+    /// for the preview until it's collapsed.
+    private func withStatusPanel(@ViewBuilder _ page: @escaping (_ footprint: CGFloat) -> some View) -> some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .bottom) {
+                page(StatusPanel.footprint(panelDetent == .medium ? .medium : .compact, in: proxy.size.height))
+                    .opacity(panelDetent == .large ? 0 : 1)
+                    .accessibilityHidden(panelDetent == .large)
+                StatusPanel(detent: $panelDetent)
+            }
         }
         .task {
             if let statusDetent { try? await Task.sleep(for: .milliseconds(500)); panelDetent = statusDetent }

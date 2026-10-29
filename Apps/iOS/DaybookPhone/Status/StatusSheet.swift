@@ -146,7 +146,7 @@ struct StatusPanel: View {
                 VStack(spacing: 0) {
                     handle
                     StatusSheetView(detent: $detent, hostsRecordButton: false)
-                        .frame(height: contentHeight(in: proxy.size.height))
+                        .frame(height: Self.contentHeight(detent, in: proxy.size.height))
                 }
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
                 .padding(.leading, creaseEdge == .leading ? PhoneStyle.Page.creaseClearance : PhoneStyle.Space.s3)
@@ -164,14 +164,18 @@ struct StatusPanel: View {
         }
     }
 
-    /// The room the compact panel takes at the foot of the page (the preview scrolls clear of it).
-    static let compactFootprint: CGFloat = compactContent + 28 + PhoneStyle.Space.s2
+    /// The room the panel takes at the foot of a page this tall: its content, the handle, and the
+    /// room under it. The preview keeps clear of it (`LibraryBrowser`).
+    static func footprint(_ detent: StatusDetent, in height: CGFloat) -> CGFloat {
+        contentHeight(detent, in: height) + handleHeight + PhoneStyle.Space.s2
+    }
     /// Three lines, at the default text size (they scroll at larger ones).
     private static let compactContent: CGFloat = 112
+    private static let handleHeight: CGFloat = 28
 
-    private func contentHeight(in height: CGFloat) -> CGFloat {
+    private static func contentHeight(_ detent: StatusDetent, in height: CGFloat) -> CGFloat {
         switch detent {
-        case .compact: return Self.compactContent
+        case .compact: return compactContent
         case .medium: return max(220, height * 0.5)
         case .large: return max(220, height - 44 - PhoneStyle.Space.s2 - PhoneStyle.Space.s3)
         }
@@ -181,7 +185,7 @@ struct StatusPanel: View {
     private var handle: some View {
         Button { step(up: detent != .large) } label: {
             Capsule().fill(.secondary.opacity(0.5)).frame(width: 36, height: 5)
-                .frame(maxWidth: .infinity, minHeight: 28)
+                .frame(maxWidth: .infinity, minHeight: Self.handleHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
