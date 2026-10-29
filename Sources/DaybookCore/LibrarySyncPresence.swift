@@ -29,6 +29,12 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// In an encrypted library, the name and activity (anything about conversations), sealed (`SealedPresence`, a
     /// DBSEAL presence object, base64); `displayName` is then empty and `activity` absent.
     var sealed: String?
+    /// The compaction proposal this device has acknowledged (LibrarySyncCompaction.swift), by ID. Additive.
+    var compaction: String?
+    /// When this device ID first wrote its presence (kept from its earlier record). A reinstalled device takes a new ID,
+    /// so an earlier ID of the same name and class last seen before this one began is the same device
+    /// (`KnownSyncDevice.supersededBy`). Additive: earlier versions write none.
+    var firstSeen: Date?
 
     init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
          installation: String? = nil, activity: SyncDeviceActivity? = nil) {
@@ -38,7 +44,7 @@ struct SyncDeviceRecord: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
-        case features, key, sealed
+        case features, key, sealed, compaction, firstSeen
     }
 
     init(from decoder: Decoder) throws {
@@ -57,6 +63,8 @@ struct SyncDeviceRecord: Codable, Equatable {
         features = (try? values.decodeIfPresent([String].self, forKey: .features)) ?? nil
         key = (try? values.decodeIfPresent(SyncDeviceKeyState.self, forKey: .key)) ?? nil
         sealed = (try? values.decodeIfPresent(String.self, forKey: .sealed)) ?? nil
+        compaction = (try? values.decodeIfPresent(String.self, forKey: .compaction)) ?? nil
+        firstSeen = (try? values.decodeIfPresent(Date.self, forKey: .firstSeen)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -126,7 +134,8 @@ extension LibrarySyncEngine {
         var record = SyncDeviceRecord(deviceID: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                       canProcess: device.canProcess, audioPolicy: audioPolicy.rawValue, lastSeen: now, installation: installation,
                                       activity: stamped)
-        record.features = [Self.sealingFeature]
+        record.features = [Self.sealingFeature, Self.compactionFeature]
+        record.compaction = state.compactionAck
         // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
@@ -134,10 +143,15 @@ extension LibrarySyncEngine {
         else if !known { record.displayName = ""; record.activity = nil }
         let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
         let url = directory.appendingPathComponent(SyncPresenceFiles.fileName(for: deviceID))
+        let existing = SyncFiles.itemState(url) == .local ? (try? SyncFiles.read(url, below: remoteRoot, cloud: cloud)).flatMap(SyncPresenceFiles.decode) : nil
+        // When this device ID began: kept from its record, or now for a record that never said.
+        if presenceFirstSeen == nil, existing != nil || SyncFiles.itemState(url) == .absent {
+            presenceFirstSeen = existing.flatMap { $0.deviceID == deviceID ? $0.firstSeen : nil } ?? now
+        }
+        record.firstSeen = presenceFirstSeen
         // Another installation wrote this device's record recently: two devices share this device ID. The one with
         // the greater installation ID yields (and stops writing the record); the other keeps the ID.
-        if let installation, SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
-           let existing = SyncPresenceFiles.decode(bytes), let other = existing.installation, other != installation,
+        if let installation, let existing, let other = existing.installation, other != installation,
            abs(now.timeIntervalSince(existing.lastSeen)) < Self.sharedIdentityWindow {
             if installation > other { sharesIdentity = true; return }
             // The other device yields; rewrite the record now, so it reads as this one again.
@@ -189,20 +203,23 @@ extension LibrarySyncEngine {
                                         lastSeen: min(record.lastSeen, now), isCurrentDevice: record.deviceID == deviceID, activity: activity)
             known.features = record.features ?? []
             known.keyState = record.key
+            known.firstSeen = record.firstSeen.map { min($0, now) }
             return known
         }
         if records[deviceID] == nil, let device {
             var known = KnownSyncDevice(id: deviceID, deviceClass: device.deviceClass, displayName: device.displayName,
                                         canProcess: device.canProcess, audioPolicy: audioPolicy,
                                         lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true, activity: activity)
-            known.features = [Self.sealingFeature]
+            known.features = [Self.sealingFeature, Self.compactionFeature]
             known.keyState = sealing.map { SyncDeviceKeyState(state: .ready, id: $0.current.idHex) }
                 ?? waitingForKey.map { SyncDeviceKeyState(state: .waiting, id: $0) }
+            known.firstSeen = presenceFirstSeen.map { min($0, now) }
             devices.append(known)
         }
         for id in journalDeviceIDs.subtracting(records.keys).subtracting([deviceID]).sorted() {
             devices.append(KnownSyncDevice(id: id))
         }
+        KnownSyncDevice.noteSuperseded(&devices)
         return devices.sorted { a, b in
             let (x, y) = (a.lastSeen ?? .distantPast, b.lastSeen ?? .distantPast)
             return x == y ? a.id < b.id : x > y

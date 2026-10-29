@@ -124,11 +124,11 @@ extension LibrarySyncEngine {
     private func deleteReplacedFiles(_ replaced: Set<UUID>, starting: Bool) {
         guard !replaced.isEmpty else { return }
         if starting {
-            for name in ["Events", "Metadata"] {
+            for name in ["Events", "Metadata", Self.compactionDirectory] {
                 for url in (try? journalFiles(in: name)) ?? [] { deleteRemote(url) }
             }
         }
-        let kinds: [SealedKind] = starting ? [.event, .metadata, .blob] : [.blob]
+        let kinds: [SealedKind] = starting ? [.event, .metadata, .blob, .compaction] : [.blob, .compaction]
         for kind in kinds {
             guard let directory = kind.directory else { continue }
             let folder = remoteRoot.appendingPathComponent(directory, isDirectory: true)

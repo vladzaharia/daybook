@@ -217,6 +217,7 @@ final class LibrarySyncCompatibilityTests: XCTestCase {
         XCTAssertEqual(Set(onA.meetings.map(\.title)).union(onB.meetings.map(\.title)), ["From A", "From B"])
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: remote.appendingPathComponent("daybook-sync.json"))) as? [String: Any])
         XCTAssertEqual((manifest["supersedes"] as? [String])?.count, 1)
+        XCTAssertFalse(fm.fileExists(atPath: remote.appendingPathComponent("daybook-sync 2.json").path), "one marker is left")
     }
 
     func testAJournalFileStillSettlingIsReadAgainOnTheNextPass() async throws {
