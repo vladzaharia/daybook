@@ -423,11 +423,17 @@ private struct DebugLaunchActions: ViewModifier {
             PhotoDemo.apply(to: state)
             LibraryDemo.apply(to: state)
             if let query = LaunchOptions.value(after: "--search") { state.search = query }
-            switch LaunchOptions.value(after: "--sheet") {
-            case "history": state.activeSheet = .versionHistory
-            case "timing": state.activeSheet = .adjustTiming(nil)
-            case "corrections": state.activeSheet = .reviewCorrections
-            default: break
+            // A sheet is for the selected conversation, which the library demo selects once it's seeded.
+            if let sheet = LaunchOptions.value(after: "--sheet") {
+                Task {
+                    await LibraryDemo.seeding?.value
+                    switch sheet {
+                    case "history": state.activeSheet = .versionHistory
+                    case "timing": state.activeSheet = .adjustTiming(nil)
+                    case "corrections": state.activeSheet = .reviewCorrections
+                    default: break
+                    }
+                }
             }
             // Fakes the recording state without touching the microphone, for screenshots. A title the
             // library doesn't have yet becomes a new conversation; `--demo-captions` scripts captions.

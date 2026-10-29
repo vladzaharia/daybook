@@ -61,7 +61,7 @@ public enum RevisionText {
         case "notes": return "Notes edited"
         case "segment": return "Passage corrected"
         case "speaker": return "Speaker renamed"
-        case "summary": return "Summary replaced"
+        case "summary": return hasBefore(revision) ? "Summary replaced" : "Summary written"
         case "correction-transfer": return "Correction reviewed"
         case "sync": return "Edited on two Macs"
         case "source": return revision.newValue
@@ -74,6 +74,12 @@ public enum RevisionText {
         case "photo-caption": return "Photo caption edited"
         default: return "Edited"
         }
+    }
+
+    /// Whether there was text before the change to show. A conversation's first summary was
+    /// written, not replaced: it shows on its own, with no empty Before (and nothing to restore).
+    public static func hasBefore(_ revision: MeetingRevision) -> Bool {
+        !(kind(revision) == "summary" && revision.oldValue.isEmpty)
     }
 
     public static func subject(_ revision: MeetingRevision, in meeting: Meeting) -> String {

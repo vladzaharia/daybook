@@ -30,6 +30,21 @@ final class VersionHistoryRestoreTests: XCTestCase {
         XCTAssertEqual(meeting.revisions.last?.oldValue, "Beta date\nExport\nKenji joining?")
     }
 
+    func testAFirstSummaryReadsAsWrittenWithNothingBefore() {
+        var meeting = Meeting(title: "Sync")
+        meeting.setSummary(MeetingSummary(overview: "First", modelID: "m"))
+        let first = meeting.revisions[0]
+        XCTAssertEqual(RevisionText.title(first, in: meeting), "Summary written")
+        XCTAssertFalse(RevisionText.hasBefore(first))
+        XCTAssertFalse(RevisionRestore.canRestore(first, in: meeting))
+
+        meeting.setSummary(MeetingSummary(overview: "Second", modelID: "m"))
+        let second = meeting.revisions[1]
+        XCTAssertEqual(RevisionText.title(second, in: meeting), "Summary replaced")
+        XCTAssertTrue(RevisionText.hasBefore(second))
+        XCTAssertTrue(RevisionText.hasBefore(MeetingRevision(field: "notes", oldValue: "", newValue: "Agenda")), "Only a summary is written from nothing")
+    }
+
     func testRestoringASpeakerNameAndASummary() throws {
         var meeting = Meeting(title: "Sync", speakers: [Speaker(id: "s1", name: "Speaker 1")])
         meeting.renameSpeaker(id: "s1", name: "Priya")
