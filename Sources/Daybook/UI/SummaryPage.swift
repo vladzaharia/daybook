@@ -39,7 +39,7 @@ struct SummaryPage: View {
                     .buttonStyle(.daybookLink)
                     .font(TypeStyle.status)
                 }
-                .padding(.top, Space.s4)
+                .padding(.top, Space.s5)
             }
             YourNotes(state: state, meeting: meeting, play: play)
                 .padding(.top, meeting.summary == nil ? Space.s5 : Space.s2)
