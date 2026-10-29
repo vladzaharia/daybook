@@ -281,8 +281,8 @@ struct ModelSettings: View {
                     Text(ModelSize.format(storage.oldDownloadBytes)).monospacedDigit()
                 }
             }
-            // Nothing downloaded has nothing to update.
-            if !state.installedModels.isEmpty {
+            // Nothing downloaded has nothing to update: models included with macOS update with it.
+            if state.installedModels.contains(where: { state.modelCatalog.model($0)?.isSystemModel == false }) {
                 LabeledContent {
                     HStack(spacing: Space.s2) {
                         if manager.updateCheck == .checking { ProgressView().controlSize(.small) }
