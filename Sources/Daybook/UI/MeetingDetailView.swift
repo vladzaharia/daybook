@@ -69,6 +69,12 @@ struct MeetingDetailView: View {
     }
 }
 
+/// The page observes the library itself. The window redrawing it for the same conversation adds nothing,
+/// so it isn't drawn again: each change of the library draws the page once.
+extension MeetingDetailView: Equatable {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.meetingID == rhs.meetingID && lhs.state === rhs.state }
+}
+
 // MARK: - Toolbar
 
 /// The detail toolbar, declared once on the window's stable detail column: Record, then

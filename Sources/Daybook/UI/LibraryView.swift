@@ -45,7 +45,7 @@ struct LibraryView: View {
                 .toolbar { DetailToolbar(state: state, meeting: toolbarMeeting, inspectorPresented: $inspectorPresented) }
                 .inspector(isPresented: Binding(get: { inspectorPresented && showsConversation }, set: { inspectorPresented = $0 })) {
                     ZStack {
-                        if let id = state.selectedID { MeetingInspector(state: state, meetingID: id) }
+                        if let id = state.selectedID { MeetingInspector(state: state, meetingID: id).equatable() }
                     }
                     .inspectorColumnWidth(min: 260, ideal: 280, max: 340)
                 }
@@ -98,6 +98,7 @@ struct LibraryView: View {
             BatchSelectionView(state: state, ids: Array(state.multiSelection))
         } else if let meeting = state.selectedMeeting {
             MeetingDetailView(state: state, meetingID: meeting.id)
+                .equatable()
                 .id(meeting.id)
                 .modifier(AddRecordingDrop(state: state, meeting: meeting))
         } else if state.isReady && state.meetings.isEmpty {
