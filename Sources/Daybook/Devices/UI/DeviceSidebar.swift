@@ -64,10 +64,7 @@ private struct DeviceSidebarRow: View {
             }
             Spacer(minLength: 0)
             if let progress {
-                ProgressView(value: progress)
-                    .progressViewStyle(.circular)
-                    .controlSize(.mini)
-                    .tint(DaybookStyle.accent)
+                ImportRing(progress: progress)
                     .transition(.opacity)
                     .accessibilityLabel("Importing")
                     .accessibilityValue("\(Int(progress * 100)) percent")
@@ -209,5 +206,25 @@ private struct DeviceMenuBarLine: View {
                 RecorderHandoffMenuItems(state: state, session: session, namesRecorder: true)
             }
         }
+    }
+}
+
+/// The sidebar's import progress: a teal arc on a quiet track. AppKit's mini determinate indicator
+/// draws a pie on a white disc, which reads as a blank badge, and greys out in an inactive window.
+private struct ImportRing: View {
+    let progress: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.primary.opacity(0.14), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: max(0.04, min(1, progress)))
+                .stroke(DaybookStyle.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 12, height: 12)
+        .padding(1)
+        .animation(reduceMotion ? nil : .linear(duration: 0.2), value: progress)
     }
 }

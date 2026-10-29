@@ -3,8 +3,8 @@ import DaybookKit
 import SwiftUI
 
 /// The device page for Daybook on iPhone: whether it's paired and connected, what it's recording,
-/// and how its recordings arrive. Nothing imports from it: its recordings are conversations already,
-/// arrive through sync, and are the list beside the page.
+/// and what needs the person (pairing, or sync that's off). Nothing imports from it: its recordings
+/// are conversations already, arrive through sync, and are the list beside the page.
 struct PhoneOverview: View {
     @ObservedObject var state: AppState
     @ObservedObject var session: DeviceSession
@@ -71,10 +71,8 @@ struct PhoneOverview: View {
                     .padding(.top, Space.s4)
                     .transition(.deviceNotice(reduceMotion: reduceMotion))
             }
-
-            DeviceHeading("Import")
-            DeviceMethodRows(state: state, session: session)
-            // Its recordings are listed beside the page already, every one of them in the library.
+            // Nothing imports from it, and how its recordings arrive is in the line above (the link)
+            // and the box (sync), so there are no method rows. Its recordings are the list beside the page.
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: session.isLinked)
     }

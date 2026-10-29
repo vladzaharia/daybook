@@ -182,6 +182,8 @@ struct LivePage: View {
                 .foregroundStyle(DaybookStyle.neonCyan)
                 .symbolEffect(.variableColor.iterative.dimInactiveLayers, isActive: !reduceMotion)
                 .neonGlow(DaybookStyle.neonCyan, radius: 4)
+                // The captions' label below keeps its glyph in the same column, so the words line up.
+                .frame(width: LiveCaptionFeed.glyphColumn)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Listening").font(TypeStyle.statusLead).foregroundStyle(Ink.body)

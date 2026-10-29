@@ -31,6 +31,31 @@ final class DevicePageTests: XCTestCase {
         XCTAssertEqual(session.importableCount, 0, "the iPhone imports it; it arrives here through sync")
     }
 
+    func testTheMoreMenuOffersOnlyWhatApplies() {
+        let recorder = FakeRecorder()
+        let session = session(recorder)
+        let away = DeviceMenuOffer(session)
+        XCTAssertFalse(away.recordControl, "Not offered while it isn't linked, rather than dimmed")
+        XCTAssertFalse(away.disconnect)
+        XCTAssertTrue(away.connect)
+
+        recorder.state = .connected
+        let linked = DeviceMenuOffer(session)
+        XCTAssertTrue(linked.recordControl)
+        XCTAssertTrue(linked.disconnect)
+        XCTAssertFalse(linked.connect)
+        XCTAssertFalse(linked.listenLive, "A recorder without live audio never offers it")
+
+        recorder.state = .unavailable
+        XCTAssertFalse(DeviceMenuOffer(session).connect, "Bluetooth is off: Connect would do nothing")
+    }
+
+    func testAMethodRowLeavesOutWhatTheBylineSays() {
+        XCTAssertTrue(DeviceMethodRows.bylineSays(.connected, managedElsewhere: false))
+        XCTAssertTrue(DeviceMethodRows.bylineSays(.notConnected, managedElsewhere: true), "\"Managed by …\" is the byline")
+        XCTAssertFalse(DeviceMethodRows.bylineSays(.notConnected, managedElsewhere: false), "\"Connects when it's nearby.\" says more")
+    }
+
     func testAProblemOffersAtMostTwoActionsWithDismissWhenThereIsRoom() {
         func problem(_ actions: [DeviceProblemAction]) -> DeviceProblem {
             DeviceProblem(id: "test", title: "Something happened", message: "What to do.", actions: actions)

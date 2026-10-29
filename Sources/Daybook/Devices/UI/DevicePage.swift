@@ -409,11 +409,13 @@ struct DeviceMethodRows: View {
                         RecommendedBadge()
                     }
                 }
-                Text(summary(connection, enabled: enabled))
-                    .font(TypeStyle.status).foregroundStyle(Ink.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let summary = summary(connection, enabled: enabled) {
+                    Text(summary)
+                        .font(TypeStyle.status).foregroundStyle(Ink.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: Space.s2)
             action(method, connection, enabled: enabled, covered: covered)
@@ -422,15 +424,28 @@ struct DeviceMethodRows: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// The method's own state. A watched folder that is the device's only way in says just where it
-    /// is: the line under the title says it's watching.
-    private func summary(_ connection: any DeviceConnection, enabled: Bool) -> String {
+    /// The method's own state, unless the line under the title says it already: the way in the
+    /// device uses now says only what that line doesn't. A watched folder says just where it is
+    /// (the line says it's watching); a recorder's link says nothing while it's connected,
+    /// connecting, or managed by another device.
+    private func summary(_ connection: any DeviceConnection, enabled: Bool) -> String? {
         if connection.isSetUp && !enabled { return "Off" }
-        if let files = connection as? ImportFolderWatcher, connection.method == session.primary?.method,
-           files.problem == nil, files.isWatching, files.waitingForICloud == 0, let name = files.folderDisplayName {
+        guard connection.method == session.primary?.method else { return connection.summary }
+        if let files = connection as? ImportFolderWatcher, files.problem == nil, files.isWatching, files.waitingForICloud == 0,
+           let name = files.folderDisplayName {
             return name
         }
+        if connection.method == .direct, Self.bylineSays(connection.state, managedElsewhere: session.managedElsewhere != nil) { return nil }
         return connection.summary
+    }
+
+    /// The direct link's states the device page's byline already names.
+    static func bylineSays(_ state: ConnectionState, managedElsewhere: Bool) -> Bool {
+        switch state {
+        case .connected, .searching, .connecting, .reconnecting, .notSetUp: return true
+        case .notConnected: return managedElsewhere
+        case .unavailable: return false
+        }
     }
 
     private func symbol(_ method: ConnectionMethod, _ connection: any DeviceConnection) -> String {
@@ -593,39 +608,36 @@ struct DeviceMoreMenu: View {
     var body: some View {
         Menu {
             let primary = session.primary
-            let connected = primary?.state.isConnected == true
-            let busy = session.queue.current != nil
+            let offer = DeviceMenuOffer(session)
+            // Refresh Status and Device Settings… are every device's, so they stay and dim; the
+            // rest is offered only when it applies.
             Button("Refresh Status") { primary?.refresh() }
-                .disabled(!connected || busy || primary?.isRefreshing == true)
-            if let control = session.direct as? any RecordControlConnection {
-                Divider()
+                .disabled(primary?.state.isConnected != true || session.queue.current != nil || primary?.isRefreshing == true)
+            if offer.recordControl || offer.listenLive { Divider() }
+            if offer.recordControl, let control = session.direct as? any RecordControlConnection {
                 if session.status?.isRecording == true {
                     Button("Pause Recording on \(session.kind.shortName)") { control.pauseRecording() }
-                        .disabled(!session.isLinked || control.recordCommandPending || busy)
+                        .disabled(control.recordCommandPending)
                 } else {
                     Button("Start Recording on \(session.kind.shortName)") { control.startRecording() }
-                        .disabled(!session.isLinked || control.recordCommandPending || busy)
+                        .disabled(control.recordCommandPending)
                 }
             }
-            if let live = session.direct as? any LiveListeningConnection {
+            if offer.listenLive, let live = session.direct as? any LiveListeningConnection {
                 Button(live.live.isListening ? "Stop Listening" : "Listen Live") {
                     if live.live.isListening { live.stopListening() } else { browser.selection = [.recordingNow]; live.startListening() }
                 }
-                .disabled(session.status?.isRecording != true || !session.isLinked || busy)
             }
             Divider()
-            if session.direct is any DetailedConnection {
+            if offer.details {
                 Button("Device Details…") { browser.showingDetails = true }
-                    .disabled(session.status == nil && !session.isLinked)
             }
-            if let direct = session.direct, direct.isSetUp, session.kind.id != DaybookPhoneIntegration.id {
-                if direct.state.isConnected || direct.state.isBusy {
-                    Button("Disconnect") { session.disconnect(.direct) }
-                } else if session.managedElsewhere == nil {
-                    // Connect does nothing while another device manages it: Use on This Mac, below, does.
-                    Button("Connect") { session.connect() }
-                        .disabled(direct.state == .unavailable || !session.device.isEnabled(.direct))
-                }
+            if offer.disconnect {
+                Button("Disconnect") { session.disconnect(.direct) }
+            } else if offer.connect {
+                Button("Connect") { session.connect() }
+            }
+            if offer.handoff {
                 RecorderHandoffMenuItems(state: state, session: session)
             }
             Divider()
@@ -638,5 +650,31 @@ struct DeviceMoreMenu: View {
         .popover(isPresented: $browser.showingDetails, arrowEdge: .bottom) {
             DeviceDetailsView(session: session, browser: browser)
         }
+    }
+}
+
+/// What the device's More menu offers besides its own two items: only what applies to the device
+/// now, as a Mac's menus do.
+struct DeviceMenuOffer: Equatable {
+    /// Start or Pause Recording on the recorder.
+    var recordControl = false
+    var listenLive = false
+    var details = false
+    var connect = false
+    var disconnect = false
+    /// Use on This Mac, or hand it to another device.
+    var handoff = false
+
+    @MainActor init(_ session: DeviceSession) {
+        let usable = session.isLinked && session.queue.current == nil
+        recordControl = usable && session.direct is any RecordControlConnection
+        listenLive = usable && session.status?.isRecording == true && session.direct is any LiveListeningConnection
+        details = session.direct is any DetailedConnection && (session.status != nil || session.isLinked)
+        // The iPhone connects to this Mac itself.
+        guard let direct = session.direct, direct.isSetUp, session.kind.id != DaybookPhoneIntegration.id else { return }
+        disconnect = direct.state.isConnected || direct.state.isBusy
+        // Connect does nothing while another device manages it: Use on This Mac does.
+        connect = !disconnect && session.managedElsewhere == nil && direct.state != .unavailable && session.device.isEnabled(.direct)
+        handoff = true
     }
 }
