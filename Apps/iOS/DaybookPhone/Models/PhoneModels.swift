@@ -323,14 +323,13 @@ final class PhoneLiveConditions: @unchecked Sendable {
     }
 }
 
-/// The library's named speakers with voice profiles, which live captions recognize until voice
-/// profiles sync on their own (`KnownVoiceSource`).
+/// The library's voice profiles, synced from the Mac: the people live captions recognize.
 @MainActor
 final class PhoneLibraryVoices: KnownVoiceSource {
-    var meetings: () -> [Meeting] = { [] }
+    var metadata: () -> LibraryMetadata = { LibraryMetadata() }
 
     nonisolated func knownVoices(in space: String) async -> [KnownVoice] {
-        let current = await MainActor.run { self.meetings() }
-        return KnownVoices.fromLibrary(current, space: space)
+        let current = await MainActor.run { self.metadata() }
+        return KnownVoices.fromProfiles(current, space: space)
     }
 }

@@ -66,14 +66,13 @@ final class MacLiveModels {
 
 }
 
-/// The library's named speakers with voice profiles, read when a capture starts: what live captions
-/// recognize until voice profiles sync on their own (the `KnownVoiceSource` seam).
+/// The library's voice profiles, read when a capture starts: the people live captions recognize.
 @MainActor
 final class LibraryVoices: KnownVoiceSource {
-    var meetings: () -> [Meeting] = { [] }
+    var metadata: () -> LibraryMetadata = { LibraryMetadata() }
 
     nonisolated func knownVoices(in space: String) async -> [KnownVoice] {
-        let current = await MainActor.run { self.meetings() }
-        return KnownVoices.fromLibrary(current, space: space)
+        let current = await MainActor.run { self.metadata() }
+        return KnownVoices.fromProfiles(current, space: space)
     }
 }

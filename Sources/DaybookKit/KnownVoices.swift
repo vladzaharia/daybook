@@ -18,8 +18,8 @@ public struct KnownVoice: Equatable, Sendable {
     }
 }
 
-/// Where live identification gets known voices. The seam synced voice profiles plug into
-/// (feat/speaker-profiles): until they land, `KnownVoices.fromLibrary` stands in.
+/// Where live identification gets known voices: the library's voice profiles
+/// (`KnownVoices.fromProfiles`), or a closure in tests.
 public protocol KnownVoiceSource: Sendable {
     /// Every known voice with embeddings in `space`.
     func knownVoices(in space: String) async -> [KnownVoice]
@@ -33,33 +33,16 @@ public struct KnownVoiceProvider: KnownVoiceSource {
 }
 
 public enum KnownVoices {
-    /// The library's named speakers who have a voice embedding in `space`, grouped by name (case and
-    /// surrounding spaces ignored), each with their newest `limit` embeddings. Speakers still called
-    /// "Speaker 2" (never named), and embeddings from another space or of the wrong size, are left out.
-    /// This is what live captions recognize until voice profiles sync on their own.
-    public static func fromLibrary(_ meetings: [Meeting], space: String, dimensions: Int? = nil, limit: Int = 12) -> [KnownVoice] {
-        var found: [String: (name: String, items: [(date: Date, vector: [Float])])] = [:]
-        for meeting in meetings {
-            for speaker in meeting.speakers {
-                let name = speaker.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty, !isPlaceholder(name), speaker.embeddingModelID == space,
-                      let vector = speaker.embedding, !vector.isEmpty, vector.allSatisfy(\.isFinite), vector.contains(where: { $0 != 0 }),
-                      dimensions.map({ vector.count == $0 }) ?? true else { continue }
-                let key = name.lowercased()
-                found[key, default: (name, [])].items.append((meeting.date, vector))
-            }
+    /// Each voice profile (`SpeakerProfiles.swift`) with voiceprints in `space`: the person's names
+    /// and what Daybook learned since, synced with the library, newest `limit` first. Voiceprints
+    /// from another space, unusable ones, and ones of another size are left out.
+    public static func fromProfiles(_ metadata: LibraryMetadata, space: String, dimensions: Int? = nil, limit: Int = 16) -> [KnownVoice] {
+        metadata.activeSpeakerProfiles.compactMap { profile in
+            let prints = metadata.voiceprints(of: profile.id).map(\.vector)
+                .filter { vector in vector.space == space && vector.isUsable && dimensions.map { vector.values.count == $0 } ?? true }
+            guard let size = prints.first?.values.count else { return nil }
+            let vectors = prints.filter { $0.values.count == size }.prefix(limit).map(\.values)
+            return KnownVoice(id: "profile:\(profile.id.uuidString)", name: profile.name, embeddingSpace: space, embeddings: Array(vectors))
         }
-        return found.keys.sorted().compactMap { key in
-            guard let entry = found[key] else { return nil }
-            let size = entry.items.first?.vector.count ?? 0
-            let vectors = entry.items.filter { $0.vector.count == size }.sorted { $0.date > $1.date }.prefix(limit).map(\.vector)
-            return KnownVoice(id: "name:\(key)", name: entry.name, embeddingSpace: space, embeddings: Array(vectors))
-        }
-    }
-
-    /// "Speaker 3": the label speaker analysis gives a voice nobody has named.
-    public static func isPlaceholder(_ name: String) -> Bool {
-        let parts = name.split(separator: " ")
-        return parts.count == 2 && parts[0] == "Speaker" && Int(parts[1]) != nil
     }
 }

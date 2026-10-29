@@ -11,7 +11,7 @@ import Foundation
 extension AppState {
     func wireCaptions() {
         let settings = captionSettings
-        liveModels.voices.meetings = { [weak self] in self?.library.meetings ?? [] }
+        liveModels.voices.metadata = { [weak self] in self?.library.metadata ?? LibraryMetadata() }
         captions.makeCaptioner = MacCaptioners.recordingFactory(settings: settings, live: liveModels)
         devices.environment.liveCaptions.makeCaptioner = MacCaptioners.recorderFactory(settings: settings, live: liveModels)
         devices.environment.liveCaptions.locale = { [weak settings] in settings?.locale ?? .current }
