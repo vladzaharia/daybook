@@ -7,7 +7,7 @@ import UIKit
 /// Debug only: `--demo-library` fills an empty library (use it with `--library <scratch folder>`)
 /// with conversations in every state the reading screens show, for screenshots: transcribed with a
 /// summary, photos, notes, and bookmarks; recorded but not transcribed (with saved live captions);
-/// waiting for a Mac; transcribing; couldn't finish; no speech; audio not on this iPhone; notes only;
+/// waiting for a Mac; transcribing; waiting for a recorder's audio; couldn't finish; no speech; audio not on this iPhone; notes only;
 /// a long title; Personal; a folder with one conversation and an empty one; and one in the Trash.
 /// The audio is generated tone, never a recording. Nothing is written when the library already has
 /// conversations.
@@ -90,6 +90,24 @@ enum DemoLibrary {
             hiring.upsertProcessingRequest(claimed)
         }
         library.add(hiring)
+
+        // Summarized from a Mac's audio, waiting for a recorder's that recorded along (Mac first).
+        var walkthrough = recorded("Design review", at: now.addingTimeInterval(-3 * 3600), seconds: 20, rootURL: rootURL)
+        let heard = TranscriptSegment(trackID: walkthrough.trackID, start: 0.5, end: 6, text: "Let's walk through the new onboarding flow.",
+                                      speakerID: "S0")
+        walkthrough.meeting.speakers = [Speaker(id: "S0", name: "Maya", sourceTrackID: walkthrough.trackID)]
+        walkthrough.meeting.transcripts = [TrackTranscript(trackID: walkthrough.trackID, segments: [heard],
+                                                           createdAt: now.addingTimeInterval(-2.8 * 3600))]
+        walkthrough.meeting.unifiedTranscript = [heard]
+        walkthrough.meeting.summary = MeetingSummary(overview: "The team walked through the new onboarding flow.",
+                                                     createdAt: now.addingTimeInterval(-2.8 * 3600))
+        walkthrough.meeting.status = .ready
+        var along = CompanionRecording(deviceID: "demo-soundcore", deviceKind: "soundcore.work", deviceName: "Soundcore Work",
+                                       macStartedAt: now.addingTimeInterval(-3 * 3600), state: .stopped, startedByDaybook: true)
+        along.macEndedAt = now.addingTimeInterval(-3 * 3600 + 20)
+        along.recordingID = "\(Int(now.addingTimeInterval(-3 * 3600).timeIntervalSince1970))"
+        walkthrough.meeting.companions = [along]
+        library.add(walkthrough.meeting)
 
         // Couldn't finish, and no speech.
         for (title, hours, reason) in [("Interview with Sam", 74.0, "The speech model isn’t downloaded."),
