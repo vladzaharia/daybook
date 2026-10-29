@@ -156,7 +156,16 @@ final class MultiSourceFusion {
         let reports = buildReports(summary: summary, latest: latest, supersededBy: supersededBy, placements: placements)
         var finalSummary = summary
         finalSummary.sources = reports
-        return FusionResult(segments: outputs, alignments: alignments, summary: finalSummary, addedSpeakers: added)
+        // Background audio (a TV, radio, music) is left out only where every recording that heard the
+        // passage judged it so: one source hearing it as conversation keeps it.
+        var kept: [TranscriptSegment] = [], background: [TranscriptSegment] = []
+        for segment in outputs {
+            let sources = segment.provenance.isEmpty ? [segment.id] : segment.provenance.map(\.segmentID)
+            if !inputs.background.isEmpty, sources.allSatisfy({ inputs.background[$0] != nil }) { background.append(segment) }
+            else { kept.append(segment) }
+        }
+        return FusionResult(segments: kept, alignments: alignments, summary: finalSummary, addedSpeakers: added,
+                            backgroundSegments: background)
     }
 
     // MARK: Timeline

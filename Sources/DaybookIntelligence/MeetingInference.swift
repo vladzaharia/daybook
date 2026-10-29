@@ -32,6 +32,10 @@ public protocol MeetingInference: Sendable {
     func summarize(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,
                    templateInstructions: String?, highlightEvidence: String?, photos: [PhotoEvidence],
                    progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes
+    /// What the operating system's sound classifier hears in a recording (`SoundClassifier`): speech,
+    /// music, an audience, and the level, for leaving background audio out. Nil when it can't run;
+    /// the default (inference that predates it, and tests' fakes) hears nothing, so nothing is left out.
+    func classifySound(url: URL, progress: @escaping IntelligenceProgressHandler) async throws -> BackgroundAudioAnalysis?
 }
 
 extension MeetingInference {
@@ -63,6 +67,10 @@ extension MeetingInference {
         try await summarize(transcript: transcript, notes: notes, template: template, glossary: glossary, model: model,
                             templateInstructions: templateInstructions, highlightEvidence: highlightEvidence, progress: progress)
     }
+}
+
+extension MeetingInference {
+    public func classifySound(url: URL, progress: @escaping IntelligenceProgressHandler) async throws -> BackgroundAudioAnalysis? { nil }
 }
 
 extension LocalIntelligenceRuntime: MeetingInference {}

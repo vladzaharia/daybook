@@ -70,6 +70,10 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
     /// How Daybook captured this track (capture path, measured clock rate, echo removal). Nil for
     /// imports, except a recorder's with its measured clock (`TrackCaptureDetails.recorderClock`).
     public var capture: TrackCaptureDetails?
+    /// What the sound classifier heard in this recording (speech, music, an audience, and the level),
+    /// for leaving TV, radio, and music out of the transcript (`BackgroundAudio`). Nil until it's
+    /// processed, and for recordings processed before Daybook measured it.
+    public var backgroundAudio: BackgroundAudioAnalysis?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), source: AudioSource = .imported, relativePath: String,
@@ -95,7 +99,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, source, relativePath, fileName, createdAt, duration, offset, sha256, deviceKind, deviceSerial,
-            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture
+            deviceRecordingID, derivedFrom, processing, startedAt, alignment, capture, backgroundAudio
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -117,6 +121,8 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         startedAt = try values.decodeIfPresent(Date.self, forKey: .startedAt)
         alignment = try values.decodeIfPresent(SourceAlignment.self, forKey: .alignment)
         capture = try values.decodeIfPresent(TrackCaptureDetails.self, forKey: .capture)
+        // A newer analysis this version can't read is measured again, never a reason to reject the meeting.
+        backgroundAudio = (try? values.decodeIfPresent(BackgroundAudioAnalysis.self, forKey: .backgroundAudio)) ?? nil
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -138,6 +144,7 @@ public struct RecordingTrack: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(startedAt, forKey: .startedAt)
         try values.encodeIfPresent(alignment, forKey: .alignment)
         try values.encodeIfPresent(capture, forKey: .capture)
+        try values.encodeIfPresent(backgroundAudio, forKey: .backgroundAudio)
         try unknownFields.encode(to: encoder)
     }
 }
@@ -473,6 +480,12 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     /// Photos taken or added for the conversation (`Photos.swift`), deleted ones included. Nil until
     /// the first photo.
     public var photos: [MeetingPhoto]?
+    /// Passages left out of `unifiedTranscript` as background audio (a TV, radio, or music;
+    /// `BackgroundAudio`), on the timeline as fusion placed them. Derived with the unified transcript;
+    /// nil when there are none. The transcript runs still hold every word.
+    public var backgroundPassages: [TranscriptSegment]?
+    /// The person chose to keep background audio in this conversation's transcript. Nil leaves it out.
+    public var includesBackgroundAudio: Bool?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
@@ -531,6 +544,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         correctionTransferIssues = transferred.issues.isEmpty ? nil : transferred.issues
         alignmentReports = result.alignments; updatedAt = Date()
         fusionSummary = result.summary
+        backgroundPassages = result.backgroundSegments.isEmpty ? nil : result.backgroundSegments
         speakers += result.addedSpeakers.filter { added in !speakers.contains { $0.id == added.id } }
         return transferred.issues
     }
@@ -559,7 +573,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         case schemaVersion, id, title, date, updatedAt, kind, notes, timedNotes, folderID, tags, templateID,
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
-            audioAlignments, fusionSummary, processingRequests, photos
+            audioAlignments, fusionSummary, processingRequests, photos, backgroundPassages, includesBackgroundAudio
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -595,6 +609,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         fusionSummary = try values.decodeIfPresent(FusionSummary.self, forKey: .fusionSummary)
         processingRequests = try values.decodeIfPresent([ProcessingRequest].self, forKey: .processingRequests)
         photos = try values.decodeIfPresent([MeetingPhoto].self, forKey: .photos)
+        backgroundPassages = try values.decodeIfPresent([TranscriptSegment].self, forKey: .backgroundPassages)
+        includesBackgroundAudio = try values.decodeIfPresent(Bool.self, forKey: .includesBackgroundAudio)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -630,6 +646,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(fusionSummary, forKey: .fusionSummary)
         try values.encodeIfPresent(processingRequests, forKey: .processingRequests)
         try values.encodeIfPresent(photos, forKey: .photos)
+        try values.encodeIfPresent(backgroundPassages, forKey: .backgroundPassages)
+        try values.encodeIfPresent(includesBackgroundAudio, forKey: .includesBackgroundAudio)
         try unknownFields.encode(to: encoder)
     }
 }

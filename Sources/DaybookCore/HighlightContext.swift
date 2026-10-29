@@ -20,6 +20,8 @@ extension Meeting {
     public func highlightContexts(before: TimeInterval = 30, after: TimeInterval = 60) -> [HighlightContext] {
         let before = before.isFinite ? max(0, before) : 30
         let after = after.isFinite ? max(0, after) : 60
+        // Background audio (a TV, music) stays out of a bookmark's context, as it does the transcript.
+        let background = highlights.contains { alignedTime(for: $0) == nil } ? backgroundSegmentKinds() : [:]
         return highlights.compactMap { highlight in
             guard highlight.time.isFinite, highlight.time >= 0 else { return nil }
             let duration = highlight.duration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0
@@ -36,7 +38,7 @@ extension Meeting {
             let transcript = transcripts.filter { $0.trackID == highlight.trackID }.max { $0.createdAt < $1.createdAt }
             return HighlightContext(highlight: highlight, sourceName: name, timeBasis: .sourceRecording,
                 markerTime: highlight.time, rangeStart: start, rangeEnd: end,
-                speechContext: transcript?.segments.filter { $0.end >= start && $0.start <= end } ?? [])
+                speechContext: transcript?.segments.filter { $0.end >= start && $0.start <= end && background[$0.id] == nil } ?? [])
         }
     }
 }

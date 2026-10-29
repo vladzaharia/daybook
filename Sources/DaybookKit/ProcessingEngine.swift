@@ -44,11 +44,14 @@ public struct TrackProcessingOutput: Sendable {
     public var duration: Double
     /// What the person should know (speaker detection failed, an older transcript lacked word timings).
     public var notices: [String]
+    /// What the sound classifier heard in the recording, for leaving background audio (a TV, radio,
+    /// music) out of the transcript. Nil when it couldn't run; `Meeting.apply` keeps it on the track.
+    public var backgroundAudio: BackgroundAudioAnalysis?
 
     public init(transcript: TrackTranscript, speakers: [Speaker], speakerEmbeddingModelID: String? = nil,
-                duration: Double, notices: [String] = []) {
+                duration: Double, notices: [String] = [], backgroundAudio: BackgroundAudioAnalysis? = nil) {
         self.transcript = transcript; self.speakers = speakers; self.speakerEmbeddingModelID = speakerEmbeddingModelID
-        self.duration = duration; self.notices = notices
+        self.duration = duration; self.notices = notices; self.backgroundAudio = backgroundAudio
     }
 }
 
@@ -193,6 +196,9 @@ extension Meeting {
         var transcript = output.transcript
         transcript.segments = segments
         transcripts.append(transcript)
-        if let index = tracks.firstIndex(where: { $0.id == transcript.trackID }) { tracks[index].duration = output.duration }
+        if let index = tracks.firstIndex(where: { $0.id == transcript.trackID }) {
+            tracks[index].duration = output.duration
+            if let analysis = output.backgroundAudio { tracks[index].backgroundAudio = analysis }
+        }
     }
 }

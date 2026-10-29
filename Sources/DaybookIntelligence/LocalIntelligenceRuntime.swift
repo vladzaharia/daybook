@@ -336,6 +336,12 @@ public actor LocalIntelligenceRuntime {
         return notes
     }
 
+    /// What Apple's built-in sound classifier hears in a recording, off the actor: it loads no model
+    /// Daybook manages, so it neither waits for nor holds one.
+    public nonisolated func classifySound(url: URL, progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> BackgroundAudioAnalysis? {
+        try await detachedWork(priority: .userInitiated) { try SoundClassifier.analyze(url: url, progress: progress) }
+    }
+
     /// Titles, the meeting kind, and vocabulary suggestions from a small-tasks model (Apple
     /// Foundation Models). Throws when the model can't run here; callers keep the summarizer's.
     public func performSmallTasks(transcript: String, notes: String, template: MeetingKind = .auto, glossary: [String] = [],

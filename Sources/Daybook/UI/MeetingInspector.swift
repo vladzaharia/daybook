@@ -110,6 +110,7 @@ struct MeetingInspector: View {
         }
         if meeting.tracks.isEmpty { Text("No recordings yet").foregroundStyle(.secondary) }
         SourceHooks(state: state, meeting: meeting)
+        BackgroundAudioHook(state: state, meeting: meeting)
         Menu("Add Recording") {
             Button("From a File…") { state.chooseImport(attachTo: meeting.id) }
             AddRecordingFromDeviceItems(state: state)

@@ -149,19 +149,25 @@ public struct FusionInputs: Sendable {
     /// Speakers the person renamed: their labels are never remapped to someone else.
     public var namedSpeakerIDs: Set<String>
     public var options: FusionOptions
+    /// Source passages (transcript segment IDs) judged background audio (`BackgroundAudio`). A fused
+    /// passage all of whose sources are here is left out of the transcript, into `FusionResult.backgroundSegments`.
+    public var background: [UUID: BackgroundAudio.Kind]
     public init(placements: [UUID: TrackPlacement] = [:], audioAlignments: [TrackAudioAlignment] = [],
                 signalQuality: [UUID: SignalQualityProfile] = [:], recordingStartDates: [UUID: Date] = [:],
-                speakers: [Speaker] = [], namedSpeakerIDs: Set<String> = [], options: FusionOptions = .init()) {
+                speakers: [Speaker] = [], namedSpeakerIDs: Set<String> = [], options: FusionOptions = .init(),
+                background: [UUID: BackgroundAudio.Kind] = [:]) {
         self.placements = placements; self.audioAlignments = audioAlignments; self.signalQuality = signalQuality
         self.recordingStartDates = recordingStartDates; self.speakers = speakers; self.namedSpeakerIDs = namedSpeakerIDs
-        self.options = options
+        self.options = options; self.background = background
     }
 
-    /// Everything a meeting already stores: audio alignments, speakers, and renamed speakers.
+    /// Everything a meeting already stores: audio alignments, speakers, renamed speakers, and the
+    /// passages that are background audio (unless the person included it).
     public init(meeting: Meeting, placements: [UUID: TrackPlacement] = [:], signalQuality: [UUID: SignalQualityProfile] = [:],
                 recordingStartDates: [UUID: Date] = [:], options: FusionOptions = .init()) {
         let renamed = Set(meeting.revisions.filter { $0.field.hasPrefix("speaker:") }.map { String($0.field.dropFirst(8)) })
         self.init(placements: placements, audioAlignments: meeting.audioAlignments ?? [], signalQuality: signalQuality,
-                  recordingStartDates: recordingStartDates, speakers: meeting.speakers, namedSpeakerIDs: renamed, options: options)
+                  recordingStartDates: recordingStartDates, speakers: meeting.speakers, namedSpeakerIDs: renamed, options: options,
+                  background: meeting.backgroundSegmentKinds())
     }
 }
