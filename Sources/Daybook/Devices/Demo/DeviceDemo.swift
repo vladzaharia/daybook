@@ -17,7 +17,8 @@ import SwiftUI
 /// scanning, not-found, connecting-setup, details (Device Details open), settings, none.
 ///
 /// `--place device` opens the first device (the scenario does this itself); `--device other`
-/// opens the Other Recorder instead. `--snapshot-appearance light|dark` sets the appearance.
+/// opens the Other Recorder instead. `--snapshot-appearance light|dark` sets the appearance, and
+/// `--device-window <W>x<H>` the library window's size, and `--recorder-name <name>` the recorders' names.
 /// `--device-simulator` instead runs the real Soundcore connection against a simulated recorder
 /// (in a throwaway preferences suite); `--autopilot` then sets it up, connects, and imports on its own.
 enum DeviceDemoScenario: String, CaseIterable {
@@ -127,13 +128,15 @@ enum DeviceDemo {
         guard let scenario else { return }
         var devices: [ConfiguredDevice] = []
         let added = Date().addingTimeInterval(-40 * 86_400)
+        // `--recorder-name <name>` names the demo's recorders, to check how a long name fits.
+        let name = LaunchOptions.value(after: "--recorder-name")
         if includesSoundcore {
-            var device = ConfiguredDevice(id: soundcoreID, kind: SoundcoreWorkIntegration().kind, addedAt: added)
+            var device = ConfiguredDevice(id: soundcoreID, kind: SoundcoreWorkIntegration().kind, name: name, addedAt: added)
             device.automaticImportsSince = .distantFuture
             devices.append(device)
         }
         if includesOther {
-            devices.append(ConfiguredDevice(id: otherID, kind: OtherRecorderIntegration().kind, name: "Zoom H1n", addedAt: added))
+            devices.append(ConfiguredDevice(id: otherID, kind: OtherRecorderIntegration().kind, name: name ?? "Zoom H1n", addedAt: added))
         }
         for session in hub.loadDemo(devices) {
             session.demoFrozen = true
@@ -153,7 +156,10 @@ enum DeviceDemo {
         let standard = info
         func connected(_ status: SoundcoreDeviceInfo? = nil, recordings: [SoundcoreRecording]? = nil, active: UInt32? = nil) {
             let recordings = recordings ?? all
-            direct.applyDemo(phase: .connected(peripheral), remembered: snapshot(lastSeen: now, recordings: recordings),
+            var remembered = snapshot(lastSeen: now, recordings: recordings)
+            // The recording under way, as the recorder names it, so the list shows Recording Now.
+            remembered.activeRecordingID = active
+            direct.applyDemo(phase: .connected(peripheral), remembered: remembered,
                              info: status ?? standard, listing: recordings, activeRecordingID: active)
         }
         func disconnected(problem: DeviceProblem? = nil, phase: SoundcoreConnection.Phase = .idle, attempt: Int = 0) {
@@ -356,6 +362,8 @@ enum DeviceDemo {
         }
         if usesSimulator, CommandLine.arguments.contains("--autopilot") { autopilot(state) }
         guard let scenario else { return }
+        resizeLibraryWindow()
+        addConversations(to: state)
         HandoffDemo.apply(to: state)
         let wantsOther = LaunchOptions.value(after: "--device") == "other"
         if let session = wantsOther ? state.devices.session(otherID) : (state.devices.session(soundcoreID) ?? state.devices.sessions.first) {
@@ -367,6 +375,32 @@ enum DeviceDemo {
         case .scanning, .notFound, .connectingSetup:
             state.addDeviceRequest = AddDeviceRequest(kindID: SoundcoreWorkIntegration.id, method: .direct)
         default: break
+        }
+    }
+
+    /// The conversations the demo's imported recordings belong to, in a scratch library (`--library`) that
+    /// doesn't have them yet: one at each imported Soundcore recording's start, which the folder and
+    /// Other Recorder demos find by title.
+    private static func addConversations(to state: AppState) {
+        guard LaunchOptions.libraryURL != nil else { return }
+        let titles = ["Weekly product sync", "Design review", "Backend engineer interview", "Distributed systems, week 6",
+                      "Customer call with Northwind", "Planning offsite"]
+        for (recording, title) in zip(importedRecordings, titles) where !state.meetings.contains(where: { $0.title == title }) {
+            state.library.add(Meeting(title: title, date: Date(timeIntervalSince1970: TimeInterval(recording.id)), tracks: [], status: .ready))
+        }
+    }
+
+    /// `--device-window <W>x<H>`: the library window's size, such as 900x700 for a narrow device page.
+    private static func resizeLibraryWindow() {
+        guard let value = LaunchOptions.value(after: "--device-window") else { return }
+        let parts = value.split(separator: "x").compactMap { Double($0) }
+        guard parts.count == 2 else { return }
+        // Now, before any demo state animates in, so the capture never catches one mid-way.
+        for window in NSApp.windows where window.identifier?.rawValue.hasPrefix(WindowID.library) == true {
+            var frame = window.frame
+            frame.origin.y += frame.height - parts[1]
+            frame.size = CGSize(width: parts[0], height: parts[1])
+            window.setFrame(frame, display: true)
         }
     }
 }

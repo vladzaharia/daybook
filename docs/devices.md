@@ -346,7 +346,10 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
   recorder that speaks the protocol from generated fixtures. Its devices live in a throwaway
   preferences suite. Add `--autopilot` to walk through Add Device, connect, and import on its own.
 - `--device other` opens the Other Recorder in a demo; `--snapshot-appearance light|dark` sets
-  the appearance; `--place device` opens the first device.
+  the appearance; `--place device` opens the first device; `--device-window 860x700` sets the
+  library window's size (a narrow page); `--recorder-name "<name>"` names the demo's recorders (a
+  long name). With `--library <folder>`, a demo adds the conversations its imported recordings
+  belong to.
 
 ## Adding a device kind
 
