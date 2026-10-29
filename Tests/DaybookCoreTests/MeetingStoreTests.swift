@@ -85,6 +85,21 @@ final class MeetingStoreTests: XCTestCase {
             XCTFail("Accepted symlink escape")
         } catch LibraryError.unsafePath { }
     }
+    func testANewConversationWithRecordingsStillToArriveSavesInALibraryUnderPrivate() async throws {
+        // A library named by its /private path, as /private/tmp is, whose conversation folder doesn't exist yet.
+        let privateRoot = URL(fileURLWithPath: "/private/tmp/DaybookTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: privateRoot) }
+        let store = try MeetingStore(rootURL: privateRoot)
+        let recording = UUID().uuidString
+        let meeting = Meeting(title: "Walk with Priya", tracks: [RecordingTrack(relativePath: "Originals/\(recording).m4a", fileName: "\(recording).m4a")])
+        try await store.save(meeting)
+        let loaded = try await store.load(meeting.id)
+        XCTAssertEqual(loaded.tracks.map(\.relativePath), ["Originals/\(recording).m4a"])
+        do {
+            _ = try await store.audioURL(for: RecordingTrack(relativePath: "../outside.wav", fileName: "bad"), in: UUID())
+            XCTFail("Accepted an unsafe path")
+        } catch LibraryError.unsafePath { }
+    }
     func testFutureSchemaIsNotSilentlyRolledBack() async throws {
         let store = try MeetingStore(rootURL: root)
         let meeting = Meeting()

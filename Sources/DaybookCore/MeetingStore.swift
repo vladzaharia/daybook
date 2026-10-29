@@ -453,21 +453,26 @@ enum LocalFiles {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
     static func requireContained(_ url: URL, in directory: URL) throws {
-        let resolvedDirectory = directory.standardizedFileURL.resolvingSymlinksInPath().path
-        // Foundation may leave symlink ancestors unresolved when the final file does not exist yet.
+        // Both sides resolve the same way: Foundation drops a leading /private only from a path that
+        // exists, so a conversation's folder that isn't made yet would otherwise never contain its files.
+        let resolvedDirectory = try canonicalPath(directory, reporting: url)
+        guard try canonicalPath(url, reporting: url).hasPrefix(resolvedDirectory + "/") else { throw LibraryError.unsafePath(url.path) }
+    }
+    /// The path with its existing part's symlinks resolved. Foundation may leave symlink ancestors
+    /// unresolved when the final file does not exist yet; a dangling symlink on the way is refused.
+    private static func canonicalPath(_ url: URL, reporting reported: URL) throws -> String {
         var ancestor = url.standardizedFileURL
         var tail: [String] = []
         while !FileManager.default.fileExists(atPath: ancestor.path), ancestor.path != "/" {
             if (try? FileManager.default.destinationOfSymbolicLink(atPath: ancestor.path)) != nil {
-                throw LibraryError.unsafePath(url.path)
+                throw LibraryError.unsafePath(reported.path)
             }
             tail.insert(ancestor.lastPathComponent, at: 0)
             ancestor.deleteLastPathComponent()
         }
         var canonical = ancestor.resolvingSymlinksInPath()
         for component in tail { canonical.appendPathComponent(component) }
-        let resolved = canonical.standardizedFileURL.path
-        guard resolved.hasPrefix(resolvedDirectory + "/") else { throw LibraryError.unsafePath(url.path) }
+        return canonical.standardizedFileURL.path
     }
     static func relativeURL(_ path: String, in directory: URL) throws -> URL {
         let components = path.split(separator: "/", omittingEmptySubsequences: false)
