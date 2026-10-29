@@ -70,6 +70,26 @@ final class LibrarySyncApplyTests: XCTestCase {
         await sync(phone)
     }
 
+    /// A damaged entry in the journal: the library's notice is one plain sentence, with no file name; Settings › Library
+    /// has the warning with what's wrong behind Details.
+    func testADamagedEntrysNoticeIsAPlainSentence() async throws {
+        let mac = try await library("Mac")
+        _ = mac.newMeeting(title: "Fine")
+        await mac.flush()
+        await sync(mac)
+        let other = Meeting(title: "Elsewhere")
+        let record: [String: Any] = ["schemaVersion": 1, "meetingID": UUID().uuidString, "deviceID": "X", "sequence": 1, "parents": [String](),
+                                     "snapshot": try JSONSerialization.jsonObject(with: JSONEncoder().encode(other)), "deleted": false, "assets": [Any]()]
+        let bytes = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
+        let name = AudioDigest.sha256(data: bytes)
+        try bytes.write(to: container.appendingPathComponent("Events/\(name).json"))
+        await sync(mac)
+        let notice = try XCTUnwrap(mac.notice)
+        XCTAssertEqual(notice, SyncWarningWords.damagedHistory + ".")
+        let warning = try XCTUnwrap(mac.sync?.warnings.first { $0.hasPrefix(SyncWarningWords.damagedHistory) })
+        XCTAssertTrue(SyncWarningWords.split(warning).details?.contains(name) == true)
+    }
+
     func testARecordingIntoAConversationDeletedOnTheMacIsKeptOnThePhone() async throws {
         let mac = try await library("Mac"), phone = try await library("Phone", phone: true)
         let id = phone.newMeeting(title: "Walk and talk")
