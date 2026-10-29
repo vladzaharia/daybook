@@ -287,17 +287,17 @@ private struct DevicePageContent: View {
                     .accessibilityElement(children: .combine)
                 }
                 if soundcore != nil {
-                    Toggle("Import New Recordings Automatically", isOn: Binding(
+                    Toggle("Import Automatically", isOn: Binding(
                         get: { session.device.importsAutomatically },
                         set: { value in session.update { $0.importsAutomatically = value } }))
                     if session.direct?.capabilities.contains(.recordControl) == true {
                         // Off: this iPhone doesn't start it, its button doesn't start this iPhone, and its
                         // link isn't held in the background for that.
-                        Toggle("Record Along with This iPhone", isOn: Binding(
+                        Toggle("Record Along", isOn: Binding(
                             get: { session.device.recordsAlongsideMac },
                             set: { value in session.update { $0.alsoRecordsWithMac = value } }))
                     }
-                    Toggle("Hand Back to My Mac When It’s Nearby", isOn: Binding(
+                    Toggle("Hand Back to My Mac", isOn: Binding(
                         get: { model.settings.handsRecorderBackToMac },
                         set: { value in
                             model.settings.handsRecorderBackToMac = value
