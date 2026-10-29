@@ -54,7 +54,7 @@ struct LibraryPage: View {
             // A bar, not an inset: the list's edge effect then runs under Record and the status sheet.
             .safeAreaBar(edge: .bottom, spacing: 0) { bottomBar }
             .environment(\.editMode, .constant(session.isSelecting ? .active : .inactive))
-            .sheet(isPresented: $showingSettings) { SettingsScreen() }
+            .settingsSheet(isPresented: $showingSettings)
             .alert(naming.map { if case .rename = $0 { return "Rename Folder" } else { return "New Folder" } } ?? "",
                    isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
                 TextField("Name", text: $folderName)

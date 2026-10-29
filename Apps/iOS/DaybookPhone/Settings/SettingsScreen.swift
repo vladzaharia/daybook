@@ -5,6 +5,8 @@ import SwiftUI
 /// Where a Settings row leads.
 enum SettingsRoute: Hashable {
     case icloud
+    /// Add Recorder on the open Duo's right page (in the hand it's a sheet).
+    case addRecorder
     case libraryDevices
     case mac(UUID)
     case device(String)
@@ -18,22 +20,34 @@ enum SettingsRoute: Hashable {
 }
 
 /// Settings: iCloud, your Macs, recorders, recording, storage, templates and vocabulary, and About.
-/// `LibraryBrowser` presents it.
+/// `LibraryBrowser` presents it (`settingsSheet`). In the hand it's one column of pushed screens; on
+/// the open iPhone Duo, two pages: the list on the left, the chosen screen on the right.
 struct SettingsScreen: View {
+    /// Shown over the whole open display (`settingsSheet`), rather than as a sheet.
+    var asPages = false
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.surfaceStyle) private var surface
     @State private var path: [SettingsRoute] = []
     @State private var showingPairing = false
     @State private var showingAddDevice = false
 
     var body: some View {
-        column
-        .pairingSheet(isPresented: $showingPairing)
-        .sheet(isPresented: $showingAddDevice) {
-            AddDeviceSheet { id in
-                showingAddDevice = false
-                if let id { path = [.device(id)] }
+        Group {
+            if surface == .pocket {
+                // In the hand, or folded shut while shown.
+                column
+            } else if asPages {
+                DisplayPages { leftPage } trailing: { rightPage }
+            } else {
+                // Shown as a sheet in the hand, then opened: two pages inside the sheet, split at the crease.
+                SheetCreaseSplit { leftPage } trailing: { rightPage } single: { column }
             }
+        }
+        .presentationSizing(SheetPagesSizing(asPages: surface != .pocket))
+        .pairingSheet(isPresented: $showingPairing)
+        .addRecorderSheet(isPresented: $showingAddDevice) { id in
+            if let id { path = [.device(id)] }
         }
         .task { await openRequestedScreen() }
     }
@@ -46,33 +60,57 @@ struct SettingsScreen: View {
         }
     }
 
+    /// The screen on the right page, iCloud until another is chosen.
+    private var selected: SettingsRoute { path.first ?? .icloud }
+
+    private var pages: SettingsPages {
+        SettingsPages(selection: selected, open: { path = [$0] }, leave: { path = [] })
+    }
+
+    /// Open: the list, its rows showing their screens on the right page.
+    private var leftPage: some View {
+        NavigationStack { list }
+            .environment(\.settingsPages, pages)
+    }
+
+    /// Open: the chosen screen, where the screens it opens push in turn.
+    private var rightPage: some View {
+        let selected = selected
+        return NavigationStack(path: Binding(get: { Array(path.dropFirst()) }, set: { path = [selected] + $0 })) {
+            SettingsDestination(route: selected)
+                .navigationDestination(for: SettingsRoute.self) { SettingsDestination(route: $0) }
+        }
+        .environment(\.settingsPages, pages)
+        .id(selected)
+    }
+
     private var list: some View {
         Form {
             Section {
-                NavigationLink(value: SettingsRoute.icloud) { ICloudRow() }
+                SettingsLink(route: .icloud) { ICloudRow() }
             }
             MacsSection(showingPairing: $showingPairing)
             RecordersSection(showingAddDevice: $showingAddDevice)
             Section {
-                NavigationLink(value: SettingsRoute.recording) {
+                SettingsLink(route: .recording) {
                     SettingsRow(title: "Recording", detail: recordingSummary, systemImage: "waveform")
                 }
-                NavigationLink(value: SettingsRoute.storage) {
+                SettingsLink(route: .storage) {
                     SettingsRow(title: "Storage", detail: storageSummary, systemImage: "internaldrive")
                 }
             }
             Section {
-                NavigationLink(value: SettingsRoute.templates) {
+                SettingsLink(route: .templates) {
                     SettingsRow(title: "Summary Templates", detail: templatesSummary, systemImage: "doc.text")
                 }
-                NavigationLink(value: SettingsRoute.vocabulary) {
+                SettingsLink(route: .vocabulary) {
                     SettingsRow(title: "Vocabulary", detail: vocabularySummary, systemImage: "character.book.closed")
                 }
             } header: {
                 Text("Library")
             }
             Section {
-                NavigationLink(value: SettingsRoute.about) {
+                SettingsLink(route: .about) {
                     SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle")
                 }
             }
@@ -121,7 +159,7 @@ struct SettingsScreen: View {
         case "macs": if let mac = model.link.macs.first { path = [.mac(mac.id)] }
         case "pairing": showingPairing = true
         case "devices", "device", "device-details": if let session = model.devices.sessions.first { path = [.device(session.id)] }
-        case "add-device", "add-recorder": showingAddDevice = true
+        case "add-device", "add-recorder": if surface == .pocket { showingAddDevice = true } else { path = [.addRecorder] }
         case "storage": path = [.storage]
         case "templates": path = [.templates]
         case "template": path = [.templates, .template("general")]
@@ -135,6 +173,16 @@ struct SettingsScreen: View {
     }
 }
 
+extension View {
+    /// Settings: a sheet in the hand. Open, a sheet would be a card across the crease (as the status
+    /// panel and pairing avoid, docs/iphone.md), so Settings takes the display as two pages instead.
+    /// Folded shut while shown, the pages become one column; opened while it's a sheet, the sheet
+    /// becomes two pages.
+    func settingsSheet(isPresented: Binding<Bool>) -> some View {
+        pagesPresentation(isPresented: isPresented) { SettingsScreen(asPages: $0) }
+    }
+}
+
 /// The screen a route opens.
 struct SettingsDestination: View {
     let route: SettingsRoute
@@ -142,6 +190,7 @@ struct SettingsDestination: View {
     var body: some View {
         switch route {
         case .icloud: ICloudScreen()
+        case .addRecorder: AddRecorderPage()
         case .libraryDevices: LibraryDevicesScreen()
         case .mac(let id): MacDetailScreen(macID: id)
         case .device(let id): DevicePage(sessionID: id)
@@ -156,6 +205,41 @@ struct SettingsDestination: View {
     }
 }
 
+/// Settings as two pages on the open iPhone Duo: the screen on the right page, and how to change it.
+struct SettingsPages {
+    var selection: SettingsRoute
+    /// Shows a screen on the right page.
+    var open: (SettingsRoute) -> Void
+    /// The right page's screen went away (a recorder removed, a Mac unpaired): back to the first.
+    var leave: () -> Void
+}
+
+extension EnvironmentValues {
+    /// Set while Settings is two pages; nil in the hand, and wherever else its screens appear.
+    @Entry var settingsPages: SettingsPages? = nil
+}
+
+/// A row that opens a Settings screen: pushed in the hand; open, shown on the right page, with the
+/// row marked as chosen.
+struct SettingsLink<Label: View>: View {
+    let route: SettingsRoute
+    @ViewBuilder var label: Label
+    @Environment(\.settingsPages) private var pages
+
+    var body: some View {
+        if let pages {
+            let chosen = pages.selection == route
+            Button { pages.open(route) } label: {
+                label.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }
+            .listRowBackground(chosen ? PhoneStyle.accent.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
+            .accessibilityAddTraits(chosen ? .isSelected : [])
+        } else {
+            NavigationLink(value: route) { label }
+        }
+    }
+}
+
 // MARK: Rows
 
 /// The measurements every Settings row shares, so titles line up whatever the symbol.
@@ -165,6 +249,9 @@ enum SettingsMetrics {
     static let tileLimit: CGFloat = 42
     /// Between the tile column and the text.
     static let gap: CGFloat = 12
+    /// Between a page and the open Duo's crease. Lists inset their cards a further 16–20 pt, so
+    /// cards end about `PhoneStyle.Page.creaseClearance` from the fold.
+    static let creaseGap: CGFloat = 8
 }
 
 /// The tile column's width at the person's text size.
