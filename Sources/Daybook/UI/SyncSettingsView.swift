@@ -277,9 +277,11 @@ struct SyncShown {
         }
     }
 
+    /// The spinner, for work without a bar of its own: a move that has counted its files shows its progress instead.
     var isBusy: Bool {
         switch iCloud {
-        case .checking, .migrating: return true
+        case .checking: return true
+        case .migrating(let progress): return progress.total == 0
         case .connected: return isSyncing
         default: return false
         }

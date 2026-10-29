@@ -66,6 +66,9 @@ final class SyncSettingsWordsTests: XCTestCase {
     func testTheBusyIndicatorFollowsWorkInProgress() {
         XCTAssertTrue(SyncShown(iCloud: .checking).isBusy)
         XCTAssertTrue(SyncShown(iCloud: .migrating(SyncMigrationProgress())).isBusy)
+        var counted = SyncMigrationProgress()
+        counted.total = 10
+        XCTAssertFalse(SyncShown(iCloud: .migrating(counted)).isBusy, "The move's own bar shows its progress")
         XCTAssertFalse(connected().isBusy)
         XCTAssertTrue(connected { $0.isSyncing = true }.isBusy)
         XCTAssertFalse(SyncShown(iCloud: .turnedOff).isBusy)
