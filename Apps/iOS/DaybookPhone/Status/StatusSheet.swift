@@ -21,6 +21,8 @@ extension EnvironmentValues {
 extension PresentationDetent {
     /// The compact detent: three lines and the Record row.
     static let statusCompact = Self.custom(StatusCompactDetent.self)
+    /// The compact detent with a notice or an import's progress over Record.
+    static let statusCompactNotice = Self.custom(StatusCompactNoticeDetent.self)
 }
 
 /// Tall enough for the Record row and three lines at the person's text size, measured from the
@@ -39,7 +41,7 @@ struct StatusCompactDetent: CustomPresentationDetent {
         height(for: context.dynamicTypeSize, maximum: context.maxDetentValue)
     }
 
-    static func height(for size: DynamicTypeSize, maximum: CGFloat) -> CGFloat {
+    static func height(for size: DynamicTypeSize, maximum: CGFloat, notice: Bool = false) -> CGFloat {
         func lineHeight(_ style: UIFont.TextStyle, at size: DynamicTypeSize) -> CGFloat {
             let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size))
             return ceil(UIFont.preferredFont(forTextStyle: style, compatibleWith: traits).lineHeight)
@@ -48,8 +50,17 @@ struct StatusCompactDetent: CustomPresentationDetent {
         let record = max(60, lineHeight(.title3, at: min(size, recordLargestSize)) + 8) + 8
         // Three lines, the room between them, and the Mac's progress line under its line.
         let lines = 3 * lineHeight(.subheadline, at: size) + 2 * PhoneStyle.Space.s2 + 6
-        let content = recordTop + record + recordGap + lines + PhoneStyle.Space.s4
+        // A notice over Record (`RecordingNotice`, or "Importing 2 recordings…"): two lines and the gap under them.
+        let notice = notice ? 2 * lineHeight(.footnote, at: size) + PhoneStyle.Space.s2 : 0
+        let content = recordTop + notice + record + recordGap + lines + PhoneStyle.Space.s4
         return min(maximum * (size.isAccessibilitySize ? 0.7 : 0.55), content)
+    }
+}
+
+/// `StatusCompactDetent` with room for a notice over Record, so the lines under it aren't cut off.
+struct StatusCompactNoticeDetent: CustomPresentationDetent {
+    static func height(in context: Context) -> CGFloat? {
+        StatusCompactDetent.height(for: context.dynamicTypeSize, maximum: context.maxDetentValue, notice: true)
     }
 }
 
@@ -66,16 +77,23 @@ struct StatusSheetHost: ViewModifier {
     @State private var detent: PresentationDetent = .statusCompact
     @State private var appliedLaunchDetent = false
 
+    /// Something shows over Record (`RecordStartButton`), so the compact detent makes room for it.
+    private var hasNotice: Bool {
+        model.notice != nil || model.importing > 0
+            || (model.recorder.isCapturing && PhoneAppModel.recorderWarning(model.recorder.lastError) != nil)
+    }
+
     func body(content: Content) -> some View {
         let shows = enabled && !session.reading && !session.isSearchPresented && !session.isSelecting && session.place != .trash
+        let notice = hasNotice
         content
-            .environment(\.statusSheetInset, shows ? StatusCompactDetent.height(for: typeSize, maximum: 900) - 34 : nil)
+            .environment(\.statusSheetInset, shows ? StatusCompactDetent.height(for: typeSize, maximum: 900, notice: notice) - 34 : nil)
             .sheet(isPresented: Binding(get: { shows }, set: { _ in })) {
-                StatusSheetView(detent: Binding(get: { Self.status(detent) }, set: { detent = Self.presentation($0) }),
+                StatusSheetView(detent: Binding(get: { Self.status(detent) }, set: { detent = Self.presentation($0, notice: notice) }),
                                 hostsRecordButton: true)
                     .environment(model)
                     .environment(session)
-                    .presentationDetents([.statusCompact, .medium, .large], selection: $detent)
+                    .presentationDetents([notice ? .statusCompactNotice : .statusCompact, .medium, .large], selection: $detent)
                     .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                     .presentationContentInteraction(.resizes)
                     .presentationDragIndicator(.visible)
@@ -84,13 +102,16 @@ struct StatusSheetHost: ViewModifier {
             }
             .onChange(of: shows) { _, shows in
                 // Back from a conversation or search: compact again, not wherever it was left.
-                if !shows, detent == .large { detent = .statusCompact }
+                if !shows, detent == .large { detent = Self.presentation(.compact, notice: hasNotice) }
+            }
+            .onChange(of: notice) { _, notice in
+                if Self.status(detent) == .compact { detent = Self.presentation(.compact, notice: notice) }
             }
             .task {
                 guard !appliedLaunchDetent, let launch = model.options.statusDetent else { return }
                 appliedLaunchDetent = true
                 try? await Task.sleep(for: .milliseconds(700))
-                detent = Self.presentation(launch)
+                detent = Self.presentation(launch, notice: hasNotice)
             }
     }
 
@@ -98,9 +119,9 @@ struct StatusSheetHost: ViewModifier {
         detent == .large ? .large : detent == .medium ? .medium : .compact
     }
 
-    static func presentation(_ detent: StatusDetent) -> PresentationDetent {
+    static func presentation(_ detent: StatusDetent, notice: Bool) -> PresentationDetent {
         switch detent {
-        case .compact: return .statusCompact
+        case .compact: return notice ? .statusCompactNotice : .statusCompact
         case .medium: return .medium
         case .large: return .large
         }
