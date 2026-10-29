@@ -346,7 +346,8 @@ enum StatusSheetInputs {
             hasRecordControl: control != nil,
             hasLiveListening: session.direct is any LiveListeningConnection,
             canConnect: !session.isLinked && !session.state.isBusy && session.direct?.isSetUp == true,
-            importRunning: session.queue.current != nil)
+            importRunning: session.queue.current != nil,
+            notListed: session.managedElsewhere == nil && session.listingState == .notListed)
     }
 
     /// A recorder that isn't live here: what the Mac managing it last said, or its last state here.
@@ -849,6 +850,10 @@ private struct StatusRecorderActions: View {
             ActionTile(title: "Import \(count) New", systemImage: "arrow.down.circle", stacked: stacked,
                        spoken: count == 1 ? "Import 1 New Recording" : "Import \(count) New Recordings") {
                 session.importRecordings(session.newRecordings)
+            }
+        case .checkForNew:
+            ActionTile(title: "Check for New Recordings", shortTitle: "Check for New", systemImage: "arrow.clockwise", stacked: stacked) {
+                session.direct?.refresh()
             }
         case .listenLive:
             ActionTile(title: "Listen Live", systemImage: "ear", stacked: stacked) { live?.startListening() }

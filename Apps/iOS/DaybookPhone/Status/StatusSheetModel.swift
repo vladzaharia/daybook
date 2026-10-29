@@ -92,6 +92,8 @@ enum StatusRecorderAction: Hashable, Sendable {
     case record
     case pause
     case importNew(Int)
+    /// Connected, but the recorder didn't list its recordings: what's new isn't known (Check for New).
+    case checkForNew
     case listenLive
     case stopListening
 }
@@ -156,6 +158,9 @@ struct StatusInputs: Equatable {
         var canConnect = false
         /// A recording is coming off it right now (not just queued).
         var importRunning = false
+        /// Connected, but it didn't list its recordings (it didn't answer, or refused): the new ones shown
+        /// are from its remembered list.
+        var notListed = false
     }
 
     /// A Mac paired over Wi‑Fi.
@@ -212,6 +217,7 @@ enum StatusSheetModel {
             actions.append(recorder.isRecording ? .pause : .record)
         }
         if recorder.newCount > 0, recorder.importing == nil { actions.append(.importNew(recorder.newCount)) }
+        if recorder.notListed, recorder.isLinked, recorder.importing == nil { actions.append(.checkForNew) }
         if recorder.hasLiveListening {
             if recorder.isListeningLive {
                 actions.append(.stopListening)

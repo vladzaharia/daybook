@@ -436,7 +436,8 @@ struct AddDeviceSheet: View {
                 } else {
                     List {
                         Section {
-                            ForEach(DeviceCatalog.kinds) { kind in
+                            // Daybook on iPhone is this app: a recorder the Mac adds, not one the iPhone adds.
+                            ForEach(DeviceCatalog.kinds.filter { $0.id != DaybookPhoneIntegration.id }) { kind in
                                 Button {
                                     session = model.devices.beginSetup(kind)
                                 } label: {
@@ -596,8 +597,9 @@ enum PhoneDeviceCopy {
         if let current = session.queue.current { return "Importing \(current.recording.title) · \(session.phase?.label ?? "…")" }
         switch session.state {
         case .connected:
-            if let battery = session.status?.battery, battery.level != nil { return "Connected · \(BatteryFormat.label(battery))" }
-            return "Connected"
+            let state = session.status?.isRecording == true ? "Recording" : "Connected"
+            if let battery = session.status?.battery, battery.level != nil { return "\(state) · \(BatteryFormat.label(battery))" }
+            return state
         case .searching: return "Looking for it…"
         case .connecting: return "Connecting…"
         case .reconnecting: return "Reconnecting…"
