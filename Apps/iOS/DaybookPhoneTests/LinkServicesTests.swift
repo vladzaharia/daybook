@@ -702,7 +702,6 @@ final class LinkServicesTests: XCTestCase {
         let model = try makeModel(link: link, rig: RecorderRig())
         try await pair(link, with: mac)
         let paired = try XCTUnwrap(link.macs.first)
-        XCTAssertTrue(model.settings.hasMacRecordDecision(paired.id, pairedAt: paired.pairedAt), "the pairing sheet doesn't ask")
         XCTAssertTrue(model.settings.macMayStartRecording(paired.id, pairedAt: paired.pairedAt), "on when paired")
 
         let first = UUID()
@@ -739,7 +738,6 @@ final class LinkServicesTests: XCTestCase {
         let model = try makeModel(link: link, rig: RecorderRig(), settings: settings)
         try await pair(link, with: mac)
         let paired = try XCTUnwrap(link.macs.first)
-        XCTAssertTrue(settings.hasMacRecordDecision(paired.id, pairedAt: paired.pairedAt), "never asked")
         let conversation = UUID()
         let reply = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation), from: link.deviceID)
         guard case .accepted = reply.outcome else { return XCTFail("an existing pairing keeps its behavior, got \(reply.outcome)") }
@@ -759,7 +757,6 @@ final class LinkServicesTests: XCTestCase {
         // Paired again later: on again.
         let again = pairedAt.addingTimeInterval(60)
         XCTAssertTrue(relaunched.macMayStartRecording(macID, pairedAt: again))
-        XCTAssertTrue(relaunched.hasMacRecordDecision(macID, pairedAt: again), "nothing to ask")
         relaunched.forgetMacRecordDecision(macID)
         XCTAssertTrue(relaunched.macMayStartRecording(macID, pairedAt: pairedAt))
     }

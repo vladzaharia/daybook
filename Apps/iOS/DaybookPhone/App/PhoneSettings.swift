@@ -59,10 +59,6 @@ final class PhoneSettings {
         return true
     }
 
-    /// Whether the pairing sheet should ask: never now, since a paired Mac may start recording until the
-    /// person turns it off. A choice made when earlier builds asked still stands.
-    func hasMacRecordDecision(_ macID: UUID, pairedAt: Date) -> Bool { true }
-
     func setMacMayStartRecording(_ allowed: Bool, for macID: UUID, pairedAt: Date) {
         macRecordDecisions[macID.uuidString] = MacRecordDecision(allowed: allowed, pairedAt: pairedAt)
     }
