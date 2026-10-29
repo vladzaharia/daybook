@@ -286,7 +286,7 @@ In order, by the owner or their delegate:
       - Mac: `codesign -d --entitlements - --xml /Applications/Daybook.app | plutil -p -` lists `CloudKit` under `com.apple.developer.icloud-services`, `com.apple.developer.aps-environment` as `production`, and `com.apple.developer.icloud-container-environment` as `Production`.
       - Both: record on the iPhone with the Mac open. In CloudKit Console › **Production** › **Records** (Private Database, signed in with **Act as iCloud Account** as the test account), zone `Courier`, a `CourierFile` record appears when the recording is filed and is gone once the Mac has stored it.
 
-8. **The pipeline's development certificate** (pending). With the Admin key's variables set ([Development certificates](#development-certificates)), run `scripts/asc-development-certificate.sh`, then `scripts/asc-certificates.sh --older-than 0` and, after reading the list, `--revoke` for the certificates earlier runs made. Release runs then sign their archives with this one. Again each year, before it expires.
+8. **The pipeline's development certificate** (done 2026-10-28: `JG37U8P26Q`, expires 2027-10-29; renew before then). With the Admin key's variables set ([Development certificates](#development-certificates)), run `scripts/asc-development-certificate.sh`, then `scripts/asc-certificates.sh --older-than 0` and, after reading the list, `--revoke` for the certificates earlier runs made. Release runs then sign their archives with this one. Again each year, before it expires.
 
 ## Dependency updates
 
