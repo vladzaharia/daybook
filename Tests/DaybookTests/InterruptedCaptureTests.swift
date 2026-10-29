@@ -95,14 +95,15 @@ final class InterruptedCaptureTests: XCTestCase {
         XCTAssertEqual(call.sampleRate, 48_000)
         XCTAssertEqual(call.channelCount, 2)
         XCTAssertNil(call.clockAnchors)
-        XCTAssertTrue(recovered.warnings.contains("The systemAudio timing metadata was unavailable; its start time is approximate."),
-                      "\(recovered.warnings)")
+        XCTAssertTrue(recovered.warnings.contains("The call audio recording’s start time is approximate."), "\(recovered.warnings)")
+        XCTAssertTrue(recovered.tracks[0].notes?.contains { $0.contains("timing details were missing") } == true,
+                      "What went wrong is in the capture notes, not the conversation's notice")
 
         // A damaged sidecar is the same as a missing one.
         try Data("{\"role\":".utf8).write(to: directory.appendingPathComponent("microphone.json"))
         let again = try XCTUnwrap(CaptureRecovery.recover(in: directory))
         XCTAssertEqual(again.tracks.first?.offsetSeconds, 0)
-        XCTAssertTrue(again.warnings.contains("The microphone timing metadata was unavailable; its start time is approximate."))
+        XCTAssertTrue(again.warnings.contains("The microphone recording’s start time is approximate."))
     }
 
     func testAnAudioFileThatWasNeverClosedIsReadAsFarAsItReachedTheDisk() async throws {
