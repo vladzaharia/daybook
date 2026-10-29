@@ -52,6 +52,9 @@ struct StatusQueueEntry: Equatable, Identifiable, Sendable {
     var progress: Double?
     var isRunning: Bool
     var failed = false
+    /// Its Mac's work is done, and a recording made alongside hasn't arrived ("Waiting for Soundcore
+    /// Work audio"): it waits for that recording, not for the Mac.
+    var awaitsRecording = false
     /// For a failure: what it means, in plain words ("Something went wrong on Studio Mac. The recording is saved.").
     var detail: String?
     /// For a failure: the Mac's own words, shown only behind Details.
@@ -366,7 +369,7 @@ enum StatusSheetModel {
     }
 
     static func macLine(_ inputs: StatusInputs, now: Date = Date()) -> StatusLine {
-        let waiting = inputs.queue.filter { !$0.isRunning && !$0.failed }.count
+        let waiting = inputs.queue.filter { !$0.isRunning && !$0.failed && !$0.awaitsRecording }.count
         let waitingText = waiting == 0 ? nil : "\(waiting) waiting"
         if let live = inputs.liveProgress.first(where: { !$0.isFinished }) ?? inputs.liveProgress.first(where: { $0.phase == .failed }) {
             if live.phase == .failed {
@@ -427,10 +430,12 @@ enum StatusSheetModel {
     // MARK: The Mac's queue
 
     /// Conversations a Mac is working on or will, as this iPhone knows: live progress first, then the
-    /// synced claims, then requests waiting (oldest first), then failures. At most `limit`.
+    /// synced claims, then requests waiting (oldest first), then conversations waiting for a recording
+    /// made alongside (oldest first), then failures. At most `limit`.
     static func queue(meetings: [Meeting], liveProgress: [UUID: LiveProgress], thisDevice: String,
                       now: Date = Date(), limit: Int = 6) -> [StatusQueueEntry] {
         var running: [StatusQueueEntry] = [], waiting: [(Date, StatusQueueEntry)] = [], failed: [StatusQueueEntry] = []
+        var awaiting: [(Date, StatusQueueEntry)] = []
         for meeting in meetings {
             let requestedHere = meeting.openProcessingRequests.contains { $0.requestedBy.id == thisDevice }
             if let live = liveProgress[meeting.id], !live.isFinished {
@@ -455,6 +460,10 @@ enum StatusSheetModel {
                 waiting.append((request.createdAt, StatusQueueEntry(id: meeting.id, title: meeting.title, line: "Waiting",
                                                                     requestedHere: request.requestedBy.id == thisDevice,
                                                                     progress: nil, isRunning: false)))
+            case .awaitingRecordings(let recordings):
+                awaiting.append((recordings.map(\.since).min() ?? now,
+                                 StatusQueueEntry(id: meeting.id, title: meeting.title, line: ProcessingStatus.awaitingLine(recordings),
+                                                  requestedHere: false, progress: nil, isRunning: false, awaitsRecording: true)))
             case .failed(let failure):
                 // As the page says it: plain words here, the Mac's own behind Details.
                 let silent = FriendlyError.isNoSpeech(failure.reason)
@@ -468,7 +477,7 @@ enum StatusSheetModel {
                 break
             }
         }
-        let ordered = running + waiting.sorted { $0.0 < $1.0 }.map(\.1) + failed
+        let ordered = running + waiting.sorted { $0.0 < $1.0 }.map(\.1) + awaiting.sorted { $0.0 < $1.0 }.map(\.1) + failed
         return Array(ordered.prefix(limit))
     }
 }

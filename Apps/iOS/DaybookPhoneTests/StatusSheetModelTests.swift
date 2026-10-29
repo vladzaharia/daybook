@@ -261,6 +261,40 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(StatusSheetModel.macRows(inputs, now: now), [])
     }
 
+    func testQueueListsConversationsWaitingForARecording() {
+        let studio = ProcessingRequest.Device(id: "studio", name: "Studio Mac")
+        func awaiting(_ title: String, ended: TimeInterval) -> Meeting {
+            let mac = UUID()
+            var meeting = Meeting(title: title, tracks: [RecordingTrack(id: mac, source: .microphone, relativePath: "m.caf", fileName: "m.caf",
+                                                                        offset: 0, sha256: title)],
+                                  transcripts: [TrackTranscript(trackID: mac, segments: [])], summary: MeetingSummary(overview: "Hi"))
+            var link = CompanionRecording(deviceID: "sc", deviceKind: "soundcore.work", deviceName: "Soundcore Work",
+                                          macStartedAt: now.addingTimeInterval(ended - 600), state: .stopped, startedByDaybook: true)
+            link.macEndedAt = now.addingTimeInterval(ended)
+            link.recordingID = "1800000000"
+            meeting.companions = [link]
+            return meeting
+        }
+        var waiting = Meeting(title: "Asked")
+        waiting.processingRequests = [ProcessingRequest(meetingID: waiting.id, mode: .newAudio, requestedBy: studio, createdAt: now)]
+        let failedRequest = ProcessingRequest(meetingID: UUID(), mode: .newAudio, requestedBy: studio, createdAt: now.addingTimeInterval(-3_000))
+            .failed(by: studio, at: now.addingTimeInterval(-2_000), reason: "Out of memory")
+        var failed = Meeting(title: "Failed")
+        failed.processingRequests = [failedRequest].compactMap { $0 }
+        let queue = StatusSheetModel.queue(meetings: [failed, awaiting("Newer", ended: -60), waiting, awaiting("Older", ended: -600)],
+                                           liveProgress: [:], thisDevice: "this-phone", now: now)
+        XCTAssertEqual(queue.map(\.title), ["Asked", "Older", "Newer", "Failed"], "after the requests waiting, oldest first")
+        XCTAssertEqual(queue[1].line, "Waiting for Soundcore Work audio")
+        XCTAssertEqual(queue[1].line(under: "Studio Mac"), "Waiting for Soundcore Work audio")
+        XCTAssertTrue(queue[1].awaitsRecording)
+        XCTAssertFalse(queue[1].requestedHere)
+        // They wait for the recorder, not the Mac: its line counts only what it has to do.
+        var inputs = StatusInputs()
+        inputs.mac = .connected(name: "Studio Mac")
+        inputs.queue = queue
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Connected · 1 waiting")
+    }
+
     func testAConversationUnderItsMacDoesntNameItAgain() {
         let entry = StatusQueueEntry(id: UUID(), title: "A", line: "Transcribing on Studio Mac · 40%", requestedHere: false,
                                      progress: 0.4, isRunning: true, mac: "Studio Mac", brief: "Transcribing · 40%")
