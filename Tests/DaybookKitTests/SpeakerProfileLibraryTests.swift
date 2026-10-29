@@ -212,6 +212,84 @@ final class SpeakerProfileLibraryTests: XCTestCase {
         XCTAssertEqual(name(library, one, "one:me"), "Vlad")
     }
 
+    /// The same person named two ways on one Mac, merged there: the other Mac ends with one profile,
+    /// the person's names, and the merged profile's speakers.
+    func testMergingTwoProfilesOnOneMacReachesTheOther() async throws {
+        let studio = try await library("Studio"), laptop = try await library("Laptop")
+        let one = conversation("one", in: studio, daysAgo: 20, [("me", mine(71), 200)])
+        let two = conversation("two", in: studio, daysAgo: 10, [("me", mine(72), 200)])
+        studio.renameSpeaker("one:me", to: "Vlad", in: one)
+        studio.renameSpeaker("two:me", to: "Vladimir", in: two)
+        await settle(studio)
+        XCTAssertEqual(studio.speakerProfiles.map(\.name), ["Vlad", "Vladimir"])
+        let vlad = try XCTUnwrap(studio.speakerProfiles.first), vladimir = try XCTUnwrap(studio.speakerProfiles.last)
+        XCTAssertFalse(studio.renameSpeakerProfile(vladimir.id, to: "vlad"), "Another profile has the name")
+        XCTAssertEqual(studio.speakerProfile(named: " VLAD ", besides: vladimir.id)?.id, vlad.id, "So the window can offer a merge")
+        await sync(studio); await sync(laptop)
+
+        XCTAssertTrue(studio.mergeSpeakerProfile(vladimir.id, into: vlad.id))
+        XCTAssertFalse(studio.mergeSpeakerProfile(vladimir.id, into: vlad.id))
+        await settle(studio)
+        await sync(studio); await sync(laptop)
+        await settle(laptop)
+        for library in [studio, laptop] {
+            XCTAssertEqual(library.speakerProfiles.map(\.id), [vlad.id])
+            XCTAssertEqual(library.meeting(two)?.speakerIdentity("two:me")?.profileID, vlad.id)
+            XCTAssertEqual(name(library, two, "two:me"), "Vladimir", "The person's name stays")
+            XCTAssertEqual(library.speakers(of: vlad.id).map(\.meeting.id), [two, one])
+            XCTAssertEqual(Set(library.metadata.voiceprints(of: vlad.id).map(\.meetingID)), [one, two])
+        }
+        await sync(studio); await sync(laptop)
+        XCTAssertEqual(studio.metadata.speakerProfiles, laptop.metadata.speakerProfiles)
+
+        // Deleting the kept profile takes what the merged one taught too.
+        studio.deleteSpeakerProfile(vlad.id)
+        XCTAssertTrue(studio.speakerProfiles.isEmpty)
+        XCTAssertTrue(activeVoiceprints(studio).isEmpty)
+    }
+
+    /// Not on a label that a summary already used: the summary gets the earlier name back too.
+    func testNotThemPutsTheEarlierNameBackInTheSummary() async throws {
+        let library = try await library("Mac", synced: false)
+        let one = conversation("one", in: library, daysAgo: 20, [("me", mine(81), 200)])
+        let two = conversation("two", in: library, daysAgo: 2, [("me", mine(82), 300)])
+        library.update(two) { $0.summary = MeetingSummary(overview: "Speaker 1 will send the deck.") }
+        library.renameSpeaker("one:me", to: "Vlad", in: one)
+        await settle(library)
+        XCTAssertEqual(library.meeting(two)?.summary?.overview, "Vlad will send the deck.")
+
+        library.rejectSpeakerProfile("two:me", in: two)
+        XCTAssertEqual(name(library, two, "two:me"), "Speaker 1")
+        XCTAssertEqual(library.meeting(two)?.summary?.overview, "Speaker 1 will send the deck.")
+        XCTAssertEqual(library.meeting(two)?.revisions.filter { $0.field == "summary" }.count, 2, "Both changes are in Version History")
+    }
+
+    /// Not on the microphone's own speaker, when the person named the owner it stands for: the profile
+    /// keeps the voice the person named.
+    func testNotThemKeepsAVoiceTheOwnerWasNamedWith() async throws {
+        let library = try await library("Mac", synced: false)
+        let earlier = conversation("earlier", in: library, daysAgo: 20, [("me", mine(90), 200)])
+        library.renameSpeaker("earlier:me", to: "Vlad", in: earlier)
+        let id = conversation("call", in: library, daysAgo: 1, [("mic", mine(91), 300)])
+        library.update(id) { meeting in
+            let track = meeting.speakers[0].sourceTrackID
+            meeting.speakers.append(Speaker(id: "owner", name: "Me", sourceTrackID: track))
+            meeting.fusionSummary = FusionSummary(sources: [], words: 100, corroboratedWords: 0, disputedWords: 0, ownerSpeakerID: "owner",
+                                                  speakerMappings: [FusionSpeakerMapping(sourceSpeakerID: "call:mic", trackID: track ?? UUID(),
+                                                                                         speakerID: "owner", reason: .owner, share: 0.9)])
+        }
+        library.renameSpeaker("owner", to: "Vlad", in: id)
+        await settle(library)
+        XCTAssertEqual(library.meeting(id)?.speakerIdentity("call:mic")?.source, .recognized)
+        XCTAssertTrue(activeVoiceprints(library).contains { $0.meetingID == id && $0.origin == .named })
+
+        library.rejectSpeakerProfile("call:mic", in: id)
+        XCTAssertTrue(activeVoiceprints(library).contains { $0.meetingID == id && $0.origin == .named }, "The voice the person named stays")
+        await settle(library)
+        XCTAssertTrue(activeVoiceprints(library).contains { $0.meetingID == id && $0.origin == .named })
+        XCTAssertEqual(name(library, id, "owner"), "Vlad")
+    }
+
     func testTheCoordinatorKeepsProfilesInStepAsTheLibraryChanges() async throws {
         let library = try await library("Mac", synced: false)
         let one = conversation("one", in: library, daysAgo: 20, [("me", mine(61), 200)])
