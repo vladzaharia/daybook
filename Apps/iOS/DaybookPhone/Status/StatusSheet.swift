@@ -79,7 +79,7 @@ struct StatusSheetHost: ViewModifier {
 
     /// Something shows over Record (`RecordStartButton`), so the compact detent makes room for it.
     private var hasNotice: Bool {
-        model.notice != nil || model.importing > 0
+        model.notice != nil || model.importing > 0 || (model.recorderOnly != nil && !model.recorder.isActive)
             || (model.recorder.isCapturing && PhoneAppModel.recorderWarning(model.recorder.lastError) != nil)
     }
 

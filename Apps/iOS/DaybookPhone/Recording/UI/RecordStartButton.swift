@@ -12,6 +12,11 @@ struct RecordStartButton: View {
         VStack(spacing: PhoneStyle.Space.s2) {
             RecordingNotice()
                 .padding(.horizontal, PhoneStyle.Space.s1)
+            if let only = model.recorderOnly, !model.recorder.isActive {
+                RecorderOnlyLine(recorder: only.recorderName)
+                    .padding(.horizontal, PhoneStyle.Space.s1)
+                    .transition(.opacity)
+            }
             if model.importing > 0 {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -23,7 +28,9 @@ struct RecordStartButton: View {
             }
             HStack(spacing: PhoneStyle.Space.s3) {
                 Button {
-                    Task { try? await model.startRecording() }
+                    // While only a recorder records the shared recording, this iPhone joins it.
+                    if model.recorderOnly != nil { Task { await model.recordAlongWithRecorder() } }
+                    else { Task { try? await model.startRecording() } }
                 } label: {
                     HStack(spacing: 10) {
                         Circle().fill(PhoneStyle.Ink.record).frame(width: 16, height: 16)
@@ -36,7 +43,7 @@ struct RecordStartButton: View {
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
                 .disabled(model.recorder.state != .idle || model.isFiling)
-                .accessibilityHint("Starts recording with the microphone")
+                .accessibilityHint(model.recorderOnly != nil ? "Records on this iPhone too" : "Starts recording with the microphone")
 
                 Button { importing = true } label: {
                     Image(systemName: "square.and.arrow.down")
@@ -52,6 +59,7 @@ struct RecordStartButton: View {
             }
         }
         .animation(.snappy, value: model.importing)
+        .animation(.snappy, value: model.recorderOnly)
         .fileImporter(isPresented: $importing, allowedContentTypes: Self.audioTypes, allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             Task { await model.importFiles(urls) }
@@ -72,4 +80,25 @@ struct RecordStartButton: View {
 
     /// What Import Audio offers: anything iOS can play as audio.
     static let audioTypes: [UTType] = [.audio, .mpeg4Audio, .mp3, .wav, .aiff]
+}
+
+/// Only a recorder records the shared recording: its button started it while Daybook was in the
+/// background, where iOS doesn't let this iPhone start its microphone (docs/multipoint.md, "Starting
+/// anywhere"). Record, under it, records on this iPhone too.
+struct RecorderOnlyLine: View {
+    let recorder: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle().fill(PhoneStyle.Ink.record).frame(width: 8, height: 8)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                .accessibilityHidden(true)
+            Text(Self.text(recorder)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    static func text(_ recorder: String) -> String { "\(recorder) is recording. This iPhone isn’t." }
 }
