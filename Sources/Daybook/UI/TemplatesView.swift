@@ -275,7 +275,8 @@ enum TemplatesDemo {
         state.saveTemplate(SummaryTemplate(name: "Quarterly customer advisory council debrief and follow-ups", kind: .interview,
                                            instructions: "Group feedback by theme. Quote customers where they're specific."))
         state.saveTemplate(SummaryTemplate(name: "", kind: .general, instructions: ""))
-        if var edited = state.templates.first(where: \.isBuiltIn) {
+        // Not the first, which the window opens on and would save back as it was.
+        if var edited = state.templates.filter(\.isBuiltIn).dropFirst().first {
             edited.instructions += " Keep it under a page."
             state.saveTemplate(edited)
         }
