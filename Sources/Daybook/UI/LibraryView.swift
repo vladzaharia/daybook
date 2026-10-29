@@ -282,7 +282,8 @@ private struct BatchSelectionView: View {
     var body: some View {
         VStack(spacing: Space.s3) {
             Text("\(meetings.count) Conversations").font(TypeStyle.docTitleSmall).foregroundStyle(Ink.title)
-            Text(meetings.count > 3 ? meetings.prefix(3).map(\.title).joined(separator: ", ") + ", and \(meetings.count - 3) more"
+            // Up to four names; "and 1 more" would take the place of the one name it hides.
+            Text(meetings.count > 4 ? meetings.prefix(3).map(\.title).joined(separator: ", ") + ", and \(meetings.count - 3) more"
                  : meetings.map(\.title).formatted(.list(type: .and)))
                 .foregroundStyle(Ink.secondary)
                 .multilineTextAlignment(.center)
