@@ -264,6 +264,17 @@ final class PhoneModels {
         LiveModelSet.resolve(resolvedChoices, inventory: inventory, locale: locale, alternatives: alternatives)
     }
 
+    /// Saved captions the live speaker model missed some of, labelled from their recording with the
+    /// downloaded models (`LiveSpeakerPass`), off the main actor at utility priority. Nil when
+    /// there's nothing to label or no speaker model, or the recording couldn't be read.
+    func labelSpeakers(_ captions: LiveCaptions, recording: URL) async throws -> LiveCaptions? {
+        let set = installedSet(for: Locale(identifier: captions.localeIdentifier))
+        guard set.diarization != nil else { return nil }
+        let captioners = self.captioners
+        let work = Task.detached(priority: .utility) { try await captioners.labelSpeakers(captions, recording: recording, models: set) }
+        return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+    }
+
     /// A recording's captioner: the live models' when they're downloaded, with `fallback` (the
     /// system's recognizer) for words when the transcription model isn't, or doesn't cover `locale`.
     func captioner(locale: Locale, backlog: Int = 64, fallback: () -> (any LiveCaptioning)?) -> (any LiveCaptioning)? {

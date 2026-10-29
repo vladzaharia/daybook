@@ -61,6 +61,32 @@ public struct LiveCaptioners: Sendable {
                                         }, onEnd: { await use.release() })
     }
 
+    /// Saved captions labelled with speakers from the recording they were made from, where the live
+    /// speaker model missed some of it (`LiveSpeakerPass`), using the installed speaker and
+    /// voice-profile models. Nil when there's nothing to label, no speaker model, or the recording
+    /// can't be read; throws `CancellationError` when cancelled. Run it off the main actor: it reads
+    /// and analyzes the whole recording.
+    public func labelSpeakers(_ captions: LiveCaptions, recording: URL, models: LiveModelSet) async throws -> LiveCaptions? {
+        guard LiveSpeakerPass.isNeeded(captions), let diarization = models.diarization else { return nil }
+        let use = LiveModelUse(host: host)
+        do {
+            let session = try await Self.speakers(parts: parts, use: use, diarization: diarization,
+                                                  voiceModel: models.voiceProfiles, voices: voices)
+            let segments = try await LiveSpeakerPass.label(captions.segments, audio: LiveRecordingAudio(url: recording), session: session)
+            await use.release()
+            var labelled = captions
+            labelled.segments = segments
+            labelled.updatedAt = Date()
+            return labelled
+        } catch is CancellationError {
+            await use.release()
+            throw CancellationError()
+        } catch {
+            await use.release()
+            return nil
+        }
+    }
+
     /// One capture's speaker model and, when there are voices to recognize, the voice-profile model.
     static func speakers(parts: LiveParts, use: LiveModelUse, diarization: ModelInstallation, voiceModel: ModelInstallation?,
                          voices: (any KnownVoiceSource)?) async throws -> LiveSpeakerSession {

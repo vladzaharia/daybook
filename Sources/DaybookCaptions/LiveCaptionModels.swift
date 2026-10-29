@@ -20,11 +20,14 @@ public struct LiveCaptionSegment: Codable, Equatable, Identifiable, Sendable {
     /// Who said it, when a live speaker model told the voices apart; nil otherwise. Optional, so
     /// captions saved without it (and by earlier versions) still decode.
     public var speaker: LiveCaptionSpeaker?
+    /// The live speaker model didn't hear it (speakers were shed under load, or the model failed), so
+    /// it has no speaker yet; labelling the recording afterwards can give it one. Nil otherwise.
+    public var needsSpeaker: Bool?
 
     public init(id: UUID = UUID(), start: TimeInterval, end: TimeInterval, text: String, isTentative: Bool,
-                source: LiveCaptionSource? = nil, speaker: LiveCaptionSpeaker? = nil) {
+                source: LiveCaptionSource? = nil, speaker: LiveCaptionSpeaker? = nil, needsSpeaker: Bool? = nil) {
         self.id = id; self.start = start; self.end = end; self.text = text; self.isTentative = isTentative
-        self.source = source; self.speaker = speaker
+        self.source = source; self.speaker = speaker; self.needsSpeaker = needsSpeaker
     }
 }
 
@@ -151,6 +154,12 @@ public final class CaptionTimeMap: @unchecked Sendable {
             fed += duration
             nextSource = time + duration
         }
+    }
+
+    /// Where a buffer stamped `time` (the source's own units) sits on the captions' timeline, once the
+    /// origin is known.
+    public func captureTime(ofSource time: TimeInterval) -> TimeInterval? {
+        lock.withLock { origin.map { max(0, time - $0) } }
     }
 
     /// Seconds from the first buffer, on the source's timeline.

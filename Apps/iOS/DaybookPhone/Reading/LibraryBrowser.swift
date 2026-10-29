@@ -22,6 +22,7 @@ struct LibraryBrowser: View {
     var body: some View {
         ReadingLayout(style: style, library: model.library.controller, rootURL: model.library.rootURL,
                       openLatest: model.options.openLatest, statusDetent: model.options.statusDetent)
+            .environment(\.liveCaptionsSaved, model.captions.lastSave)
     }
 }
 

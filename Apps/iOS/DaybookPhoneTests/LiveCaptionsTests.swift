@@ -79,6 +79,36 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertNil(model.notice)
     }
 
+    func testCaptionsTheSpeakerModelMissedWaitForTheirRecordingThenKeepTheirLabels() throws {
+        let captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: try temporaryDirectory("captions")), makeCaptioner: { nil })
+        func saved(track: UUID?, missed: Bool?, at date: Date) throws -> LiveCaptions {
+            let value = LiveCaptions(meetingID: UUID(), trackID: track, localeIdentifier: "en_US", segments: [
+                LiveCaptionSegment(start: 0, end: 2, text: "In a pocket", isTentative: false, needsSpeaker: missed)], createdAt: date)
+            try captions.store.save(value)
+            return value
+        }
+        let waiting = try saved(track: UUID(), missed: true, at: Date(timeIntervalSince1970: 100))
+        let newer = try saved(track: UUID(), missed: true, at: Date(timeIntervalSince1970: 200))
+        _ = try saved(track: nil, missed: true, at: Date())  // not filed yet: no recording to read
+        _ = try saved(track: UUID(), missed: nil, at: Date())  // the live model heard it all
+        XCTAssertEqual(captions.waitingForSpeakers().map(\.meetingID), [newer.meetingID, waiting.meetingID], "newest first")
+
+        var labelled = waiting
+        labelled.segments[0].speaker = LiveCaptionSpeaker(slot: "S1", name: "Priya")
+        labelled.segments[0].needsSpeaker = nil
+        labelled.updatedAt = Date()
+        captions.saveLabelled(labelled)
+        XCTAssertEqual(captions.store.captions(for: waiting.meetingID)?.segments.first?.speaker?.name, "Priya")
+        XCTAssertEqual(captions.lastSave, labelled.updatedAt, "an open page reads them again")
+        XCTAssertEqual(captions.waitingForSpeakers().map(\.meetingID), [newer.meetingID])
+
+        // Captions that changed while the pass ran are left as they are.
+        var stale = newer
+        stale.segments = [LiveCaptionSegment(start: 0, end: 1, text: "Something else", isTentative: false)]
+        captions.saveLabelled(stale)
+        XCTAssertEqual(captions.store.captions(for: newer.meetingID)?.segments.map(\.text), ["In a pocket"])
+    }
+
     func testCaptionsOffMeansNoCaptioner() async throws {
         let rig = RecorderRig()
         let model = try makeModel(rig: rig, captioner: ScriptedCaptioner(lines: []))

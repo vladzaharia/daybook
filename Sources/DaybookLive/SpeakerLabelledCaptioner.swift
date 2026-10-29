@@ -23,7 +23,10 @@ public struct LiveSpeakerSession: Sendable {
 /// Speakers trail the words by the speaker model's latency (about three seconds), so the newest
 /// caption gets its label a moment after its words. The speaker model runs on its own task at
 /// utility priority with its own bounded backlog, and is the first work shed under load: the words
-/// keep coming without labels. Nothing here can fail the capture or the words.
+/// keep coming without labels, marked `needsSpeaker` where the model didn't hear them, so the
+/// recording can label them afterwards (`LiveSpeakerPass`). Out of sight (`LiveWorkLevel.reduced`)
+/// it hears the audio in batches and embeds only voices it hasn't named yet. Nothing here can fail
+/// the capture or the words.
 public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable {
     public let updates: AsyncStream<[LiveCaptionSegment]>
     public let states: AsyncStream<LiveCaptionState>
@@ -42,14 +45,18 @@ public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable
     /// The voice of each final caption the timeline has long moved past, kept so it isn't looked up
     /// again on every update and outlives the timeline's horizon.
     private var settled: [UUID: Int?] = [:]
+    /// Stretches of the capture (its timeline) the speaker model didn't hear: shed, or it failed.
+    private var missed = LiveSpans()
     private var forwarding: [Task<Void, Never>] = []
     private var worker: Task<Void, Never>?
     private var started = false
     private var ended = false
 
     /// Seconds of 16 kHz audio kept for embedding solo stretches: the longest stretch plus the
-    /// speaker model's latency, with room to spare.
+    /// speaker model's latency and a reduced-cadence batch, with room to spare.
     static let ringSeconds: Double = 24
+    /// Out of sight, the speaker model hears the audio this many seconds at a time.
+    static let reducedBatchSeconds: Double = 4
 
     public init(inner: any LiveCaptioning, backlog: Int = 64, timelineOrigin: TimeInterval? = nil,
                 governor: LiveLoadGovernor? = nil,
@@ -92,17 +99,32 @@ public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable
             self?.began(session)
             let resampler = LiveResampler()
             var ring = LiveAudioRing(seconds: Self.ringSeconds)
+            var batch: [Float] = []
+            var level = LiveWorkLevel.full
             for await item in input.stream {
                 input.took()
-                if let governor, governor.level(backlog: input.fill) < .full { continue }
+                let duration = Double(item.buffer.frameLength) / item.buffer.format.sampleRate
+                level = governor?.level(backlog: input.fill) ?? .full
+                if level < .reduced {
+                    self?.missed(item.time, duration: duration)
+                    continue
+                }
                 let samples = resampler.samples(item.buffer)
                 guard !samples.isEmpty else { continue }
-                times.feed(sourceTime: item.time, duration: Double(item.buffer.frameLength) / item.buffer.format.sampleRate)
+                times.feed(sourceTime: item.time, duration: duration)
                 ring.append(samples)
-                guard let frames = try? session.diarizer.diarize(samples) else { continue }
-                self?.heard(frames, ring: ring, session: session)
+                batch += samples
+                // Out of sight, a few seconds at a time; otherwise as it comes.
+                if level == .reduced, Double(batch.count) < Self.reducedBatchSeconds * LiveAudio.sampleRate { continue }
+                defer { batch.removeAll(keepingCapacity: true) }
+                guard let frames = try? session.diarizer.diarize(batch) else {
+                    self?.missed(item.time.map { $0 + duration - Double(batch.count) / LiveAudio.sampleRate }, duration: Double(batch.count) / LiveAudio.sampleRate)
+                    continue
+                }
+                self?.heard(frames, ring: ring, session: session, reduced: level == .reduced)
             }
-            let tail = (try? session.diarizer.finish()) ?? []
+            var tail = batch.isEmpty ? [] : ((try? session.diarizer.diarize(batch)) ?? [])
+            tail += (try? session.diarizer.finish()) ?? []
             self?.heard(tail, ring: ring, session: session, final: true)
         }
         await inner.start(locale: locale, sourceFormat: sourceFormat)
@@ -128,6 +150,8 @@ public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable
 
     /// The speaker of each caption as it would be shown now (tests and diagnostics).
     var lastLabels: [LiveCaptionSpeaker?] { lock.withLock { labelled(latest).map(\.speaker) } }
+    /// Buffers the speaker pipeline has taken, heard or shed (tests).
+    var consumed: Int { input.taken }
 
     // MARK: Labelling
 
@@ -149,9 +173,17 @@ public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable
         updatesContinuation.yield(labelled)
     }
 
+    /// Audio the speaker model didn't hear, at `time` on the source's timeline: its captions may be
+    /// labelled from the recording afterwards.
+    private func missed(_ time: TimeInterval?, duration: TimeInterval) {
+        guard let time, let start = times.captureTime(ofSource: time) else { return }
+        lock.withLock { missed.add(start, start + duration) }
+    }
+
     /// New frames from the speaker model: the timeline grows, solo stretches become voice embeddings,
-    /// and captions are labelled again.
-    private func heard(_ frames: [LiveSpeakerFrames], ring: LiveAudioRing, session: LiveSpeakerSession, final: Bool = false) {
+    /// and captions are labelled again. `reduced`: only voices not named yet are embedded.
+    private func heard(_ frames: [LiveSpeakerFrames], ring: LiveAudioRing, session: LiveSpeakerSession, final: Bool = false,
+                       reduced: Bool = false) {
         guard !frames.isEmpty || final else { return }
         let times = self.times
         let (solos, frameSeconds) = lock.withLock { () -> ([LiveSpeakerTimeline.SoloSpan], Double) in
@@ -160,7 +192,8 @@ public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable
             for chunk in frames { solos += timeline.append(chunk, time: times.sourceTime) }
             if final { solos += timeline.finish(time: times.sourceTime) }
             self.timeline = timeline
-            return (identifier == nil ? [] : solos, timeline.frameSeconds)
+            guard let identifier else { return ([], timeline.frameSeconds) }
+            return (reduced ? solos.filter { identifier.matches[$0.slot] == nil } : solos, timeline.frameSeconds)
         }
         // Embedding runs outside the lock: a few milliseconds of Core ML per stretch.
         var embeddings: [(slot: Int, vector: [Float], seconds: Double)] = []
@@ -198,6 +231,9 @@ public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable
             if let slot {
                 let match = identifier?.matches[slot]
                 segment.speaker = LiveCaptionSpeaker(slot: "S\(slot + 1)", name: match?.name, profileID: match?.voiceID)
+                segment.needsSpeaker = nil
+            } else {
+                segment.needsSpeaker = missed.covers(segment.start, max(segment.end, segment.start + 0.2)) ? true : nil
             }
             return segment
         }

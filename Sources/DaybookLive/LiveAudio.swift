@@ -35,6 +35,7 @@ final class LiveInput: @unchecked Sendable {
     let capacity: Int
     private let lock = NSLock()
     private var remaining: Int
+    private var takenCount = 0
 
     init(capacity: Int) {
         self.capacity = max(1, capacity)
@@ -48,7 +49,10 @@ final class LiveInput: @unchecked Sendable {
     }
 
     /// The worker took one: room for one more.
-    func took() { lock.withLock { remaining = min(capacity, remaining + 1) } }
+    func took() { lock.withLock { remaining = min(capacity, remaining + 1); takenCount += 1 } }
+
+    /// Buffers the worker has taken so far (tests).
+    var taken: Int { lock.withLock { takenCount } }
 
     /// How full the wait is, 0…1.
     var fill: Double { lock.withLock { 1 - Double(remaining) / Double(capacity) } }
@@ -100,4 +104,31 @@ final class LiveTimeline: @unchecked Sendable {
 
     /// A time on the model's timeline, on the capture's.
     func sourceTime(_ modelTime: TimeInterval) -> TimeInterval { current.sourceTime(modelTime) }
+
+    /// Where a buffer stamped `time` (source seconds) sits on the capture's timeline.
+    func captureTime(ofSource time: TimeInterval) -> TimeInterval? { current.captureTime(ofSource: time) }
+}
+
+/// Stretches of a capture's timeline, merged as they're added (gaps under `join` bridged).
+struct LiveSpans: Sendable {
+    private(set) var spans: [(start: TimeInterval, end: TimeInterval)] = []
+    var join: TimeInterval = 0.5
+
+    mutating func add(_ start: TimeInterval, _ end: TimeInterval) {
+        guard end > start else { return }
+        if let last = spans.last, start <= last.end + join, start >= last.start {
+            spans[spans.count - 1].end = max(last.end, end)
+        } else {
+            spans.append((start, end))
+            if spans.count > 1, spans[spans.count - 2].start > start { spans.sort { $0.start < $1.start } }
+        }
+    }
+
+    /// Whether at least half of `start…end` is in these stretches.
+    func covers(_ start: TimeInterval, _ end: TimeInterval) -> Bool {
+        guard end > start, !spans.isEmpty else { return false }
+        var inside: TimeInterval = 0
+        for span in spans where span.end > start && span.start < end { inside += min(end, span.end) - max(start, span.start) }
+        return inside >= (end - start) / 2
+    }
 }
