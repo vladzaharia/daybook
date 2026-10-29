@@ -180,6 +180,8 @@ final class AppState: ObservableObject {
     let storageURL: URL
     private let preferences: UserDefaults
     let runtime: LocalIntelligenceRuntime
+    /// Keeps speaker profiles and conversations in step (AppState+SpeakerProfiles.swift).
+    lazy var speakerProfileCoordinator = makeSpeakerProfileCoordinator()
     var processingTask: Task<Void, Never>?
     private(set) var currentRequest: Task<Void, Error>?
     /// How requests from other devices are claimed and kept (tests shorten these).
@@ -488,6 +490,7 @@ final class AppState: ObservableObject {
             await refreshInstalledModels()
             selectedID = meetings.first?.id
             isReady = true
+            speakerProfileCoordinator.start()
             await recoverRecordings()
             devices.start()
             sync.restore()
@@ -822,6 +825,7 @@ final class AppState: ObservableObject {
         await realign(id)
         if await sourcesAfterTranscription(id) { return }
         _ = try await readPhotos(id, engine: engine, progress: progress)
+        await labelSpeakers(before: id)
         guard let current = meetings.first(where: { $0.id == id }) else { return }
         let transcript = MeetingEvidence.transcript(current)
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }

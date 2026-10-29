@@ -153,8 +153,8 @@ struct ModelSettings: View {
     }
 
     private var speakerModel: String { state.processingPreferences.speakerModelID }
-    /// From the speaker model's capabilities in the catalog, not its name.
-    private var supportsVoiceMatching: Bool { ModelRouting.supportsVoiceMatching(speakerModel, catalog: state.modelCatalog) }
+    /// From capabilities in the catalog, not names: the speaker model's own voice profiles, or the voice-profile model's.
+    private var supportsVoiceMatching: Bool { state.makesVoiceProfiles }
     private var supportsSpeakerCount: Bool { ModelRouting.supportsExpectedSpeakerCount(speakerModel, catalog: state.modelCatalog) }
 
     @ViewBuilder private func speakersSection(_ choices: [ModelRole: ModelRoleChoice]) -> some View {
@@ -201,6 +201,7 @@ struct ModelSettings: View {
             }
             .padding(.leading, Space.s5)
             .disabled(!state.detectSpeakers)
+            SpeakerProfilesSettingsRow(state: state)
         }
     }
 
