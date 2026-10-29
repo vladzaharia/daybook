@@ -95,15 +95,20 @@ public struct LinkRecordingState: Codable, Sendable, Equatable {
     /// The recorders the sender manages (Soundcore Work), as it last knew them. Optional: older builds
     /// don't send it, and one this build can't read is dropped rather than the whole state.
     public var recorders: [LinkRecorderState]?
+    /// A shared recording the sender takes part in only through its recorders, its own microphone not
+    /// recording (an iPhone that couldn't start its microphone in the background while its Soundcore
+    /// Work records). Optional: older builds neither send nor read it.
+    public var sharedConversationID: UUID?
 
     public init(phase: Phase, conversationID: UUID? = nil, startedAt: Date? = nil, elapsed: TimeInterval = 0,
-                sentAt: Date = Date(), recorders: [LinkRecorderState]? = nil) {
+                sentAt: Date = Date(), recorders: [LinkRecorderState]? = nil, sharedConversationID: UUID? = nil) {
         self.phase = phase
         self.conversationID = conversationID
         self.startedAt = startedAt
         self.elapsed = elapsed
         self.sentAt = sentAt
         self.recorders = recorders
+        self.sharedConversationID = sharedConversationID
     }
 
     public init(from decoder: Decoder) throws {
@@ -114,6 +119,13 @@ public struct LinkRecordingState: Codable, Sendable, Equatable {
         elapsed = try c.decodeIfPresent(TimeInterval.self, forKey: .elapsed) ?? 0
         sentAt = try c.decode(Date.self, forKey: .sentAt)
         recorders = try? c.decodeIfPresent([LinkRecorderState].self, forKey: .recorders)
+        sharedConversationID = try? c.decodeIfPresent(UUID.self, forKey: .sharedConversationID)
+    }
+
+    /// Whether the sender takes part in recording this conversation: with its own microphone (recording,
+    /// paused, or starting), or only through its recorders.
+    public func takesPart(in conversation: UUID) -> Bool {
+        (conversationID == conversation && phase != .idle && phase != .stopping) || sharedConversationID == conversation
     }
 }
 
@@ -214,9 +226,14 @@ public struct LinkRecordRequest: Codable, Sendable, Equatable, Identifiable {
     /// microphone. Sent only to a receiver whose capabilities list `recorderControlFeature`: an older
     /// one would record its own microphone instead.
     public var recorder: LinkRecorderTarget?
+    /// The requester started recording and asks every device connected to it to join on its own
+    /// (cascading start), rather than the person choosing this device. Optional: older builds treat
+    /// the request as before.
+    public var cascade: LinkCascade?
 
     public init(id: UUID = UUID(), action: Action, conversationID: UUID, timing: LinkTiming? = nil, sentAt: Date = Date(),
-                title: String? = nil, date: Date? = nil, standalone: Bool? = nil, recorder: LinkRecorderTarget? = nil) {
+                title: String? = nil, date: Date? = nil, standalone: Bool? = nil, recorder: LinkRecorderTarget? = nil,
+                cascade: LinkCascade? = nil) {
         self.id = id
         self.action = action
         self.conversationID = conversationID
@@ -226,10 +243,50 @@ public struct LinkRecordRequest: Codable, Sendable, Equatable, Identifiable {
         self.date = date
         self.standalone = standalone
         self.recorder = recorder
+        self.cascade = cascade
     }
 
     /// The receiver records a conversation of its own rather than alongside the requester.
-    public var isStandalone: Bool { standalone == true || (action == .start && timing?.startedAt == nil && recorder == nil) }
+    public var isStandalone: Bool {
+        standalone == true || (action == .start && timing?.startedAt == nil && recorder == nil && cascade == nil)
+    }
+}
+
+/// How a cascading start came about, so the receiver can join the same conversation and say why.
+public struct LinkCascade: Codable, Sendable, Equatable {
+    public struct Trigger: LinkOpenValue {
+        public let rawValue: String
+        public init(rawValue: String) { self.rawValue = rawValue }
+        /// The person started recording on the requester (or a Shortcut, the control, the Action button).
+        public static let person: Self = "person"
+        /// A recorder's own button started it (Soundcore Work, managed by the requester).
+        public static let recorder: Self = "recorder"
+        /// The requester detected a meeting and started on its own.
+        public static let automatic: Self = "automatic"
+        /// Another device asked the requester, which passes it on.
+        public static let device: Self = "device"
+    }
+
+    public var trigger: Trigger
+    /// The requester records the conversation with its own microphone. False when only its recorders
+    /// do (an iPhone that couldn't start its microphone in the background): the receiver then doesn't
+    /// expect a recording from the requester itself. Sent only to receivers that list `cascadeFeature`.
+    public var requesterRecords: Bool
+    /// The recorders recording along on the requester's side, as it knows them.
+    public var recorders: [LinkRecorderState]?
+
+    public init(trigger: Trigger, requesterRecords: Bool = true, recorders: [LinkRecorderState]? = nil) {
+        self.trigger = trigger
+        self.requesterRecords = requesterRecords
+        self.recorders = recorders
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        trigger = try c.decodeIfPresent(Trigger.self, forKey: .trigger) ?? .person
+        requesterRecords = try c.decodeIfPresent(Bool.self, forKey: .requesterRecords) ?? true
+        recorders = try? c.decodeIfPresent([LinkRecorderState].self, forKey: .recorders)
+    }
 }
 
 /// A recorder a record request is about: one the receiver manages over Bluetooth.
@@ -250,8 +307,17 @@ public struct LinkRecorderTarget: Codable, Sendable, Equatable {
 extension LinkCapabilities {
     /// Starts and stops the recorders it manages when another device asks (`LinkRecordRequest.recorder`).
     public static let recorderControlFeature = "recorderControl"
+    /// Understands cascading starts and stops (`LinkRecordRequest.cascade`, a requester that records
+    /// only through its recorders, `LinkRecordingState.sharedConversationID`), and accepts a stop from
+    /// a device it records a conversation with.
+    public static let cascadeFeature = "cascade"
+    /// Takes notes and bookmark changes made on the other device during a shared recording (`note`,
+    /// `bookmark.change`, and `bookmark` in both directions).
+    public static let sharedNotesFeature = "sharedNotes"
 
     public var controlsRecorders: Bool { features.contains(Self.recorderControlFeature) }
+    public var cascades: Bool { features.contains(Self.cascadeFeature) }
+    public var sharesNotes: Bool { features.contains(Self.sharedNotesFeature) }
 }
 
 /// The receiver did what was asked.
@@ -384,6 +450,77 @@ public struct LinkBookmark: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+/// A bookmark changed on the sender during a shared recording: its label, or it was deleted. The
+/// bookmark is the same item (`id`) on both devices and in the library, so the change also arrives
+/// through sync later, with nothing doubled.
+public struct LinkBookmarkChange: Codable, Sendable, Equatable, Identifiable {
+    public var id: UUID
+    public var conversationID: UUID
+    /// The label as it is now (nil when only deleted).
+    public var label: String?
+    public var deleted: Bool
+    /// When it was changed, on the sender's clock: a receiver keeps the latest change of each bookmark.
+    public var changedAt: Date
+
+    public init(id: UUID, conversationID: UUID, label: String? = nil, deleted: Bool = false, changedAt: Date = Date()) {
+        self.id = id
+        self.conversationID = conversationID
+        self.label = label
+        self.deleted = deleted
+        self.changedAt = changedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        conversationID = try c.decode(UUID.self, forKey: .conversationID)
+        label = try c.decodeIfPresent(String.self, forKey: .label)
+        deleted = try c.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
+        changedAt = try c.decodeIfPresent(Date.self, forKey: .changedAt) ?? Date()
+    }
+}
+
+/// One paragraph of the notes, written, edited, or deleted on the sender during a shared recording
+/// (Floating Notes on a Mac, Write Notes on an iPhone). The paragraph is the same item on both devices
+/// and in the library: its `id` is the note's anchor ID (`TimedNote.id`), so the copy the link brings
+/// and the one sync brings later are one paragraph.
+public struct LinkNote: Codable, Sendable, Equatable, Identifiable {
+    public var id: UUID
+    public var conversationID: UUID
+    public var text: String
+    /// Its time in the conversation, as the sender files it (seconds; nil for a note made outside the
+    /// recording). The receiver keeps exactly this, so both copies agree when they meet.
+    public var time: TimeInterval?
+    /// When it was first written, on the sender's clock: where the receiver shows it on its own
+    /// recording while both record.
+    public var madeAt: Date
+    public var deleted: Bool
+    /// When it was last changed, on the sender's clock: a receiver keeps the latest change of each note.
+    public var changedAt: Date
+
+    public init(id: UUID, conversationID: UUID, text: String, time: TimeInterval?, madeAt: Date = Date(), deleted: Bool = false,
+                changedAt: Date = Date()) {
+        self.id = id
+        self.conversationID = conversationID
+        self.text = text
+        self.time = time
+        self.madeAt = madeAt
+        self.deleted = deleted
+        self.changedAt = changedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        conversationID = try c.decode(UUID.self, forKey: .conversationID)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        time = try c.decodeIfPresent(TimeInterval.self, forKey: .time)
+        madeAt = try c.decodeIfPresent(Date.self, forKey: .madeAt) ?? Date()
+        deleted = try c.decodeIfPresent(Bool.self, forKey: .deleted) ?? false
+        changedAt = try c.decodeIfPresent(Date.self, forKey: .changedAt) ?? madeAt
+    }
+}
+
 /// Live progress of processing on a Mac. Coarse progress also travels through sync.
 public struct LinkProcessingProgress: Codable, Sendable, Equatable {
     public struct Phase: LinkOpenValue {
@@ -461,4 +598,9 @@ public enum LinkMessage: Sendable, Equatable {
     /// holds it.
     case libraryKeyRequest(LinkLibraryKeyRequest)
     case libraryKeyGrant(LinkLibraryKeyGrant)
+    /// Notes and bookmarks during a shared recording: a paragraph written, edited, or deleted, and a
+    /// bookmark's label changed or the bookmark deleted (a new bookmark is `bookmark`). Additive within
+    /// version 1: an older build ignores them.
+    case note(LinkNote)
+    case bookmarkChange(LinkBookmarkChange)
 }
