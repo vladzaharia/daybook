@@ -58,6 +58,8 @@ public enum SoundcoreIssue: String, CaseIterable {
     case notConnected, disconnectedDuringImport, stalled, integrity, didNotConfirm, notRecording
     /// Connected, but the recorder didn't answer the request for its recordings, or refused it.
     case listFailed
+    /// Wi‑Fi Fast Transfer ended without Bluetooth coming back to close the recorder's access point.
+    case fastTransferInterrupted
 
     public var title: String {
         switch self {
@@ -74,6 +76,7 @@ public enum SoundcoreIssue: String, CaseIterable {
         case .didNotConfirm: return "Soundcore didn’t confirm"
         case .notRecording: return "Soundcore isn’t recording"
         case .listFailed: return "Soundcore didn’t list its recordings"
+        case .fastTransferInterrupted: return "Fast Transfer didn’t finish"
         }
     }
 
@@ -94,6 +97,7 @@ public enum SoundcoreIssue: String, CaseIterable {
         case .didNotConfirm: return "Check its light: solid orange means it’s recording."
         case .notRecording: return "Start recording on your Soundcore, then listen live."
         case .listFailed: return "Close the Soundcore app on your phone, then refresh."
+        case .fastTransferInterrupted: return "The recording is still on your Soundcore. Connect to turn off its Wi‑Fi."
         }
     }
 
@@ -104,7 +108,7 @@ public enum SoundcoreIssue: String, CaseIterable {
         case .bluetoothUnsupported: return [.setUpFolder]
         case .notFound, .connectTimeout, .stalled: return [.tryAgain]
         case .rejected: return [.setUpFolder, .technicalDetails]
-        case .notConnected: return [.connect]
+        case .notConnected, .fastTransferInterrupted: return [.connect]
         case .disconnectedDuringImport: return [.reconnect, .dismiss]
         case .integrity: return [.tryAgain, .technicalDetails]
         case .didNotConfirm: return [.refreshStatus]
@@ -163,6 +167,10 @@ public struct SoundcoreSnapshot: Codable, Equatable {
     public var activeRecordingID: UInt32?
     /// The recorder's clock, as last measured. Optional, so earlier snapshots decode.
     public var clock: SoundcoreClock?
+    /// Wi‑Fi Fast Transfer asked the recorder to open its access point, with this name, and it hasn't
+    /// been closed since: the next confirmed Bluetooth link closes it. Optional, so earlier snapshots decode.
+    public var accessPointSSID: String?
+    public var accessPointSince: Date?
 
     /// The name shown in Settings: "soundcore Work ··7F3A".
     public var displayName: String { serial.isEmpty ? name : "\(name) \(maskedSerial(serial))" }

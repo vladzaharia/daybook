@@ -196,6 +196,11 @@ public final class SimulatedSoundcore {
             let p = [UInt8](payload)
             guard p.count >= 9, let id = try? p.le32(at: 4) else { reply(0x1a, 0x07, Data(), status: 0); return }
             startTransfer(id: id, live: p[8] == 1)
+        case (0x1a, 0x05):
+            openAccessPoint(payload)
+        case (0x1a, 0x02):
+            closeAccessPoint()
+            reply(0x1a, 0x02, Data())
         case (0x1a, 0x11):
             streaming?.cancel()
             streaming = nil
@@ -342,14 +347,82 @@ public final class SimulatedSoundcore {
     }
 
     public func connectionEnded() {
-        streaming?.cancel()
-        streaming = nil
+        // A transfer over its Wi‑Fi carries on without Bluetooth.
+        if accessPoint == nil {
+            streaming?.cancel()
+            streaming = nil
+        }
         anotherApp?.cancel()
         anotherApp = nil
         isServingAnotherApp = false
-        // The recording carries on without anyone connected.
+        // The recording carries on without anyone connected. With its access point open, it keeps the
+        // audio key the Wi‑Fi transfer uses.
+        guard accessPoint == nil else { return }
         sessionKey = nil
         privateKey = P256.KeyAgreement.PrivateKey()
+    }
+
+    // MARK: Wi‑Fi Fast Transfer
+
+    /// What the recorder does with `1A 05`.
+    public enum AccessPointBehaviour { case opens, refuses, ignores }
+    public var accessPointBehaviour = AccessPointBehaviour.opens
+    /// Its access point, while it's open (`1A 05` until `1A 02`).
+    public private(set) var accessPoint: SimulatedSoundcoreAccessPoint?
+    /// The last one opened, kept after it closes (tests read its handshakes and keep-alives).
+    public private(set) var lastAccessPoint: SimulatedSoundcoreAccessPoint?
+    public private(set) var accessPointsOpened = 0
+    public private(set) var accessPointsClosed = 0
+    /// File requests over Wi‑Fi: the recording and the offset asked for.
+    public private(set) var wifiRequests: [(recordingID: UInt32, offset: UInt32)] = []
+    /// Other texts over Wi‑Fi (FINISH).
+    public private(set) var wifiTexts: [String] = []
+
+    private enum Route { case bluetooth, wifi }
+
+    private func openAccessPoint(_ payload: Data) {
+        switch accessPointBehaviour {
+        case .refuses: reply(0x1a, 0x05, Data(), status: 0); return
+        case .ignores: return
+        case .opens: break
+        }
+        guard let credentials = SoundcoreWiFi.credentials(inRequest: payload) else { reply(0x1a, 0x05, Data(), status: 0); return }
+        accessPoint?.close()
+        let accessPoint = SimulatedSoundcoreAccessPoint(ssid: credentials.ssid, password: credentials.password)
+        accessPoint.onText = { [weak self] text in self?.receiveOverWiFi(text) }
+        self.accessPoint = accessPoint
+        lastAccessPoint = accessPoint
+        accessPointsOpened += 1
+        Task { [weak self] in
+            do { try await accessPoint.start() } catch { return }
+            guard let self, self.accessPoint === accessPoint else { return }
+            self.reply(0x1a, 0x05, SoundcoreWiFi.endpointPayload(address: [127, 0, 0, 1], port: accessPoint.port))
+        }
+    }
+
+    private func closeAccessPoint() {
+        guard let accessPoint else { return }
+        accessPoint.close()
+        self.accessPoint = nil
+        accessPointsClosed += 1
+        if link?.connected != true { streaming?.cancel(); streaming = nil }
+    }
+
+    private func receiveOverWiFi(_ text: String) {
+        if let request = SoundcoreWiFi.parseFileRequest(text) {
+            wifiRequests.append(request)
+            startTransfer(id: request.recordingID, live: false, route: .wifi)
+        } else {
+            wifiTexts.append(text)
+            if text == SoundcoreWiFi.finish { accessPoint?.send(text: "OK") }
+        }
+    }
+
+    private func emit(_ frame: Data, over route: Route) {
+        switch route {
+        case .bluetooth: send(frame)
+        case .wifi: accessPoint?.send(binary: frame)
+        }
     }
 
     fileprivate func register(_ transport: SimulatedSoundcoreTransport) {
@@ -417,9 +490,12 @@ public final class SimulatedSoundcore {
         reply(0x2e, 0x01, privateKey.publicKey.x963Representation + secret.withUnsafeBytes { Data($0) })
     }
 
-    private func startTransfer(id: UInt32, live: Bool) {
+    private func startTransfer(id: UInt32, live: Bool, route: Route = .bluetooth) {
         let source = live ? (activeRecording?.id == id ? activeRecording : nil) : recordings.first { $0.id == id }
-        guard let recording = source, let sessionKey else { reply(0x1a, 0x07, Data(), status: 0); return }
+        guard let recording = source, let sessionKey else {
+            emit(SoundcorePacket.frame(type: 0x1a, command: 0x07, status: 0), over: route)
+            return
+        }
         // A transfer takes the fault armed when it starts; a one-shot fault is disarmed as it's taken.
         var fault = self.fault
         while case .once(let inner)? = fault {
@@ -438,7 +514,7 @@ public final class SimulatedSoundcore {
         header.append(wrapped)
         header.append(iv)
         header.append(0)
-        reply(0x1a, 0x07, header)
+        emit(SoundcorePacket.frame(type: 0x1a, command: 0x07, payload: header), over: route)
 
         let perPacket = max(1, slicesPerPacket)
         let pace = self.pace
@@ -464,8 +540,11 @@ public final class SimulatedSoundcore {
                     sequence += 1; sent += 1; index += 1
                 }
                 guard let self else { return }
-                self.send(SoundcorePacket.frame(type: 0x1a, command: live ? 0x12 : 0x08, payload: payload))
-                if case .disconnect(let after)? = fault, sent >= after { self.link?.dropLink(); return }
+                self.emit(SoundcorePacket.frame(type: 0x1a, command: live ? 0x12 : 0x08, payload: payload), over: route)
+                if case .disconnect(let after)? = fault, sent >= after {
+                    if route == .wifi { self.accessPoint?.dropClient() } else { self.link?.dropLink() }
+                    return
+                }
                 if case .stall(let after)? = fault, sent >= after { return }
                 if case .pause(let after, let quiet)? = fault, sent >= after, !paused {
                     paused = true
@@ -475,7 +554,7 @@ public final class SimulatedSoundcore {
                 if let pace { try? await Task.sleep(for: pace) } else { await Task.yield() }
             }
             guard !Task.isCancelled, !live, let self else { return }
-            self.send(SoundcorePacket.frame(type: 0x1a, command: 0x0a))
+            self.emit(SoundcorePacket.frame(type: 0x1a, command: 0x0a), over: route)
             self.streaming = nil
         }
     }
