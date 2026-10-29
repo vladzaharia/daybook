@@ -82,11 +82,13 @@ struct PageHeading: View {
 }
 
 /// The processing status on the page: one bare line while something works or waits, a quiet
-/// filled box with at most two actions when something needs the person.
+/// filled box with at most two actions when something needs the person. The symbol sits in a
+/// fixed column, so the words, the progress line, and the actions start at the same edge.
 struct StatusView: View {
     let presentation: StatusPresentation
     let perform: (StatusPresentation.Action) -> Void
     @Environment(\.colorScheme) private var scheme
+    @ScaledMetric(relativeTo: .subheadline) private var glyphWidth: CGFloat = 20
 
     var body: some View {
         switch presentation.kind {
@@ -95,46 +97,58 @@ struct StatusView: View {
         }
     }
 
+    private var column: CGFloat { min(glyphWidth, 32) }
+    private var gap: CGFloat { 8 }
+
     private var line: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: gap) {
+            Group {
                 if presentation.isWorking {
                     ProgressView().controlSize(.small)
                 } else if let symbol = presentation.symbol {
-                    Image(systemName: symbol)
-                        .foregroundStyle(presentation.symbol == "waveform" ? PhoneStyle.accent : PhoneStyle.Ink.secondary)
-                        .accessibilityHidden(true)
+                    Image(systemName: symbol).foregroundStyle(PhoneStyle.Ink.secondary)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(presentation.title)
-                        .foregroundStyle(PhoneStyle.Ink.secondary)
-                        .contentTransition(.numericText())
-                    if let detail = presentation.detail {
-                        Text(detail).foregroundStyle(PhoneStyle.Ink.meta).font(.footnote)
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
             }
-            if let progress = presentation.progress {
-                ProgressView(value: progress).progressViewStyle(.brand(width: nil, height: 3))
-                    .frame(maxWidth: 220)
-                    .padding(.leading, 26)
+            .frame(width: column)
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: PhoneStyle.Space.s3) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(presentation.title)
+                            .foregroundStyle(PhoneStyle.Ink.secondary)
+                            .contentTransition(.numericText())
+                        if let detail = presentation.detail {
+                            Text(detail).foregroundStyle(PhoneStyle.Ink.meta).font(.footnote)
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .combine)
+                    Spacer(minLength: 0)
+                    // The line's action at its end, as Record sits beside "No recording yet".
+                    if !presentation.actions.isEmpty { actions }
+                }
+                if let progress = presentation.progress {
+                    ProgressView(value: progress).progressViewStyle(.brand(width: nil, height: 3))
+                        .frame(maxWidth: 220)
+                }
             }
         }
         .font(PhoneStyle.Typeface.status)
-        .accessibilityElement(children: .combine)
     }
 
     private var box: some View {
         let problem = presentation.kind == .problem
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+        return HStack(alignment: .firstTextBaseline, spacing: gap) {
+            Group {
                 if let symbol = presentation.symbol {
                     Image(systemName: symbol)
                         .symbolRenderingMode(problem ? .monochrome : .hierarchical)
                         .foregroundStyle(problem ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
-                        .accessibilityHidden(true)
                 }
+            }
+            .frame(width: column)
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(presentation.title)
                         .font(PhoneStyle.Typeface.statusLead)
@@ -144,15 +158,12 @@ struct StatusView: View {
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
-            }
-            if !presentation.actions.isEmpty {
-                HStack(spacing: 16) {
-                    ForEach(Array(presentation.actions.enumerated()), id: \.offset) { _, action in
-                        actionButton(action)
-                    }
+                .accessibilityElement(children: .combine)
+                if !presentation.actions.isEmpty {
+                    actions
                 }
-                .padding(.leading, presentation.symbol == nil ? 0 : 26)
             }
+            Spacer(minLength: 0)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -160,14 +171,28 @@ struct StatusView: View {
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
+    private var actions: some View {
+        HStack(spacing: 16) {
+            ForEach(Array(presentation.actions.enumerated()), id: \.offset) { _, action in
+                actionButton(action)
+            }
+        }
+    }
+
     @ViewBuilder private func actionButton(_ action: StatusPresentation.Action) -> some View {
         switch action {
-        case .request:
-            Button("Try Again") { perform(action) }
-                .buttonStyle(.borderedProminent)
-                .tint(PhoneStyle.prominentFill)
-                .controlSize(.small)
-                .font(.subheadline.weight(.semibold))
+        case .request(let mode):
+            if presentation.kind == .line {
+                // On a calm line, the action is a link, as quiet as the line.
+                Button(mode == .newAudio ? "Transcribe" : "Try Again") { perform(action) }
+                    .buttonStyle(.daybookLink).font(.subheadline.weight(.semibold))
+            } else {
+                Button("Try Again") { perform(action) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PhoneStyle.prominentFill)
+                    .controlSize(.small)
+                    .font(.subheadline.weight(.semibold))
+            }
         case .details:
             Button("Details") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
         case .dismiss:

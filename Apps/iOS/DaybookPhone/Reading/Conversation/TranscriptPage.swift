@@ -114,8 +114,6 @@ struct TranscriptPage: View {
                 if let speaker = renaming, !name.isEmpty, name != speaker.name { library.renameSpeaker(speaker.id, to: name, in: meeting.id) }
                 renaming = nil
             }
-        } message: {
-            Text("Changes every passage by \(renaming?.name ?? "this speaker") in this conversation.")
         }
     }
 
@@ -404,12 +402,13 @@ private struct EmptyTranscript: View {
     @ObservedObject var library: LibraryController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
+    @Environment(\.isTwoPage) private var twoPage
 
     var body: some View {
         VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
             Image(systemName: meeting.tracks.isEmpty ? "note.text" : "waveform")
                 .font(.system(size: 34, weight: .light))
-                .foregroundStyle(PhoneStyle.accent)
+                .foregroundStyle(PhoneStyle.Ink.meta)
                 .accessibilityHidden(true)
             Text(title).font(PhoneStyle.Typeface.rowTitle).foregroundStyle(PhoneStyle.Ink.title)
             if let message {
@@ -419,12 +418,23 @@ private struct EmptyTranscript: View {
             if meeting.tracks.isEmpty {
                 RecordIntoButton(meeting: meeting).padding(.top, PhoneStyle.Space.s1)
             } else {
-                Button { play(.timeline(0)) } label: {
-                    Label("Play Recording", systemImage: "play.fill").font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 6).padding(.vertical, 2)
+                HStack(spacing: PhoneStyle.Space.s2) {
+                    Button { play(.timeline(0)) } label: {
+                        Label("Play Recording", systemImage: "play.fill").font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                    }
+                    .buttonStyle(.glass)
+                    .tint(PhoneStyle.accent)
+                    // On two pages the summary's page leaves "Not transcribed yet" to this one, with its fix.
+                    if twoPage, case .recorded = ProcessingStatus(meeting) {
+                        Button { library.requestProcessing(meeting.id, mode: .newAudio) } label: {
+                            Label("Transcribe", systemImage: "waveform").font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                        }
+                        .buttonStyle(.glass)
+                        .tint(PhoneStyle.accent)
+                    }
                 }
-                .buttonStyle(.glass)
-                .tint(PhoneStyle.accent)
                 .padding(.top, PhoneStyle.Space.s1)
             }
         }

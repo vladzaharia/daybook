@@ -96,7 +96,7 @@ final class ReadingTests: XCTestCase {
         let page = StatusPresentation.page(.recorded, meeting: meeting, sighting: nil, now: now)
         XCTAssertEqual(page?.kind, .line)
         XCTAssertEqual(page?.title, "Not transcribed yet")
-        XCTAssertEqual(page?.actions, [])
+        XCTAssertEqual(page?.actions, [.request(.newAudio)], "the line offers Transcribe")
         XCTAssertEqual(StatusPresentation.row(.recorded), RowStatus(kind: .notTranscribed, text: "Not transcribed yet"))
     }
 

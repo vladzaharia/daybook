@@ -31,14 +31,15 @@ struct ConversationScreen: View {
             .motion(.snappy(duration: 0.25), value: session.player.isActive(for: meeting.id))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Picker("Page", selection: hasTranscript ? $session.pageMode : .constant(.summary)) {
-                        ForEach(PageMode.allCases) { Text($0.title).tag($0) }
+                // The switch only when there's a second page to turn to; the page itself says why not.
+                if hasTranscript {
+                    ToolbarItem(placement: .principal) {
+                        Picker("Page", selection: $session.pageMode) {
+                            ForEach(PageMode.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .fixedSize()
                     }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .disabled(!hasTranscript)
-                    .accessibilityHint(hasTranscript ? "" : "Not transcribed yet")
                 }
                 ConversationToolbar(library: library, meeting: meeting)
             }
@@ -91,8 +92,9 @@ struct ConversationMoreMenu: View {
         }
         Divider()
         ReprocessMenu(library: library, meeting: meeting)
-        Button { session.sheet = .history(meeting.id) } label: { Label("Version History", systemImage: "clock.arrow.circlepath") }
-            .disabled(meeting.revisions.isEmpty)
+        if !meeting.revisions.isEmpty {
+            Button { session.sheet = .history(meeting.id) } label: { Label("Version History", systemImage: "clock.arrow.circlepath") }
+        }
         Divider()
         Button { session.sheet = .move([meeting.id]) } label: { Label("Move to Folder…", systemImage: "folder") }
         Button { session.sheet = .tags([meeting.id]) } label: { Label("Tags…", systemImage: "tag") }
@@ -106,24 +108,32 @@ struct ConversationMoreMenu: View {
 }
 
 /// Processing your Mac carries out. Each item writes a request; the page then says it's waiting.
+/// Only what can be asked for now: nothing without a recording or while a request is pending.
 struct ReprocessMenu: View {
     @ObservedObject var library: LibraryController
     let meeting: Meeting
 
+    static func isAvailable(for meeting: Meeting) -> Bool {
+        !meeting.tracks.isEmpty && !ProcessingStatus(meeting).isPending
+    }
+
     var body: some View {
-        Menu {
-            if meeting.hasUntranscribedAudio {
-                Button { request(.newAudio) } label: { Label("Transcribe", systemImage: "waveform") }
+        if Self.isAvailable(for: meeting) {
+            Menu {
+                if meeting.hasUntranscribedAudio {
+                    Button { request(.newAudio) } label: { Label("Transcribe", systemImage: "waveform") }
+                }
+                if !meeting.unifiedTranscript.isEmpty {
+                    Button { request(.summaryOnly) } label: { Label("Summarize Again", systemImage: "text.alignleft") }
+                }
+                if !meeting.transcripts.isEmpty {
+                    Button { request(.speakerRefresh) } label: { Label("Identify Speakers Again", systemImage: "person.2") }
+                }
+                Button { request(.fullRetranscription) } label: { Label("Transcribe Everything Again", systemImage: "arrow.clockwise") }
+            } label: {
+                Label("Reprocess", systemImage: "laptopcomputer")
             }
-            Button { request(.summaryOnly) } label: { Label("Summarize Again", systemImage: "text.alignleft") }
-                .disabled(meeting.unifiedTranscript.isEmpty)
-            Button { request(.speakerRefresh) } label: { Label("Identify Speakers Again", systemImage: "person.2") }
-                .disabled(meeting.transcripts.isEmpty)
-            Button { request(.fullRetranscription) } label: { Label("Transcribe Everything Again", systemImage: "arrow.clockwise") }
-        } label: {
-            Label("Reprocess", systemImage: "laptopcomputer")
         }
-        .disabled(meeting.tracks.isEmpty || ProcessingStatus(meeting).isPending)
     }
 
     private func request(_ mode: ProcessingRequest.Mode) {
@@ -140,8 +150,9 @@ struct ExportMenu: View {
     var body: some View {
         Menu {
             Button { shareMarkdown() } label: { Label("Markdown", systemImage: "doc.richtext") }
-            Button { shareAudio() } label: { Label("Audio", systemImage: "waveform") }
-                .disabled(meeting.tracks.isEmpty)
+            if !meeting.tracks.isEmpty {
+                Button { shareAudio() } label: { Label("Audio", systemImage: "waveform") }
+            }
         } label: {
             Label("Share", systemImage: "square.and.arrow.up")
         }
