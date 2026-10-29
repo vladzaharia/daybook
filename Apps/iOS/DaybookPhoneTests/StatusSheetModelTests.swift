@@ -218,6 +218,11 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(actions { $0.managedBy = "Studio Mac"; $0.isLinked = false }, [])
         XCTAssertEqual(actions { $0.isDirect = false; $0.newCount = 3 }, [])
         XCTAssertEqual(StatusSheetModel.actions(for: recorder { $0.newCount = 1 }), [.importNew(1)], "no record control, no Record")
+
+        // Connected, but it didn't list its recordings (another app was using it): Check for New, not "nothing new".
+        XCTAssertEqual(actions { $0.notListed = true }, [.record, .checkForNew])
+        XCTAssertEqual(actions { $0.notListed = true; $0.newCount = 1 }, [.record, .importNew(1), .checkForNew], "remembered ones still import")
+        XCTAssertEqual(actions { $0.notListed = true; $0.importing = .init(position: 1, total: 1, fraction: 0.1); $0.importRunning = true }, [])
     }
 
     func testARecordersStorageReadsTheWayPeopleSayIt() {
