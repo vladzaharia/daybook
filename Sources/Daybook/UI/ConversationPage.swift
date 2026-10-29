@@ -475,6 +475,8 @@ struct StatusBox<Actions: View>: View {
             }
         }
         .padding(Space.s3)
+        // Stacked or not, the box spans the measure, so boxes and lines share both edges.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
