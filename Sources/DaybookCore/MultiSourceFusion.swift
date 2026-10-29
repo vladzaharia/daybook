@@ -124,6 +124,8 @@ final class MultiSourceFusion {
         let transcribed = Set(latest.map(\.trackID))
         var supersededBy: [UUID: UUID] = [:]
         for track in tracks { if let original = track.derivedFrom, transcribed.contains(track.id) { supersededBy[original] = track.id } }
+        // A recorder's live portion is replaced by the recorder's own file once that is transcribed.
+        for (portion, whole) in tracks.supersededLivePortions where transcribed.contains(whole) { supersededBy[portion] = whole }
         let candidates = latest.filter { supersededBy[$0.trackID] == nil }
         let ordered = candidates.filter { !TranscriptFusion.valid($0.segments).isEmpty } + candidates.filter { TranscriptFusion.valid($0.segments).isEmpty }
         guard let reference = ordered.first else { return FusionResult(segments: [], alignments: []) }
@@ -919,7 +921,9 @@ final class MultiSourceFusion {
             let included = sources.contains { $0.trackID == id }
             let stats = statistics[id]
             var note: String?
-            if supersededBy[id] != nil { note = "Transcribed through its processed copy." }
+            if supersededBy[id] != nil {
+                note = trackByID[id]?.isLivePortion == true ? "Replaced by the recorder’s own file." : "Transcribed through its processed copy."
+            }
             else if alignment?.method == .unaligned { note = "Couldn’t be placed on the meeting timeline; kept separately." }
             else if !included { note = "No usable speech." }
             return FusionSourceReport(trackID: id, role: role, transcriptID: transcript.id, included: included,

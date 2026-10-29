@@ -74,7 +74,14 @@ public enum MeetingMerge {
                               base?.$kind ?? unset(local.$kind, remote.$kind, isDefault: { $0.isKnown && $0.wrappedValue == .auto }, otherwise: Extensible(wrappedValue: .auto)))
         let notes: MergedNotes
         if let base {
-            notes = choose("notes", MergedNotes(local), MergedNotes(remote), MergedNotes(base))
+            let (a, b, ancestor) = (MergedNotes(local), MergedNotes(remote), MergedNotes(base))
+            if a != b, a != ancestor, b != ancestor, a.holdsSameParagraphs(as: b) {
+                // Two devices that shared their notes live during a recording hold the same paragraphs,
+                // perhaps in another order: nothing to keep in History. Either order, the same pick.
+                notes = SyncEncoding.string(a) <= SyncEncoding.string(b) ? a : b
+            } else {
+                notes = choose("notes", a, b, ancestor)
+            }
         } else {
             notes = MergedNotes.union(MergedNotes(local), MergedNotes(remote), meetingID: local.id) { id, smaller, larger in
                 record("notes:\(id)", smaller, larger)
@@ -262,6 +269,16 @@ private struct MergedNotes: Codable, Equatable {
             paragraph.effectiveTime = last
             return paragraph
         }
+    }
+
+    /// Both are anchored and hold the same paragraphs, by anchor ID and text, whatever their order,
+    /// times, or blank lines between them.
+    func holdsSameParagraphs(as other: MergedNotes) -> Bool {
+        guard anchors != nil, other.anchors != nil else { return false }
+        func keys(_ notes: MergedNotes) -> [String] {
+            notes.paragraphs.map { "\($0.id?.uuidString ?? "-")|\($0.text)" }.sorted()
+        }
+        return keys(self) == keys(other)
     }
 
     /// Two versions of the notes with no common ancestor, paragraph by paragraph: every paragraph

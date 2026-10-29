@@ -308,9 +308,15 @@ public actor MeetingStore {
         // A recording that claimed these bytes while the copy was hashed is checked here (rarely).
         if let duplicate = result.tracks.first(where: { $0.sha256 == hash && (verified.contains($0.id) || (!checked.contains($0.id) && isVerifiedNow($0, digest: hash, in: meeting.id))) }) {
             track = duplicate
-            // The same bytes arriving from a recorder teach the library where they came from.
-            if let device, duplicate.device == nil, let index = result.tracks.firstIndex(where: { $0.id == duplicate.id }) {
-                result.tracks[index].device = device
+            // The same bytes arriving from a recorder teach the library where they came from. The recorder's
+            // own file matching a live portion of it byte for byte confirms that portion is the whole
+            // recording: one track, named for the whole recording.
+            if let device, let index = result.tracks.firstIndex(where: { $0.id == duplicate.id }) {
+                let whole = duplicate.wholeRecordingIdentity
+                let completes = whole.map { $0.kind == device.kind && $0.recordingID == device.recordingID } ?? false
+                if duplicate.device == nil || (completes && !device.recordingID.hasSuffix(RecordingTrack.livePortionSuffix)) {
+                    result.tracks[index].device = device
+                }
             }
         } else {
             let id = UUID()
