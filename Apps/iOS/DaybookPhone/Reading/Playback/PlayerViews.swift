@@ -2,8 +2,8 @@ import DaybookKit
 import SwiftUI
 
 /// The player: one glass card at the bottom of the page, shown once something plays. Back 15,
-/// play (mint while playing), forward 15, the time, speed, Bookmark, and close; the scrubber under
-/// them. While the audio downloads it shows how far it has got; when the audio isn't on this
+/// play (mint while playing), forward 15, speed, Bookmark, and close; the scrubber under them, with
+/// the time at its ends. While the audio downloads it shows how far it has got; when the audio isn't on this
 /// iPhone and can't be fetched, it says so plainly.
 struct PlayerBar: View {
     @ObservedObject var player: PlaybackController
@@ -12,7 +12,6 @@ struct PlayerBar: View {
     private static let rates: [Float] = [0.75, 1, 1.25, 1.5, 2]
     @State private var bookmarks = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var dynamicType
 
     var body: some View {
         if player.isActive(for: meeting.id) {
@@ -37,8 +36,10 @@ struct PlayerBar: View {
         return SourceDescription.name(track, in: meeting)
     }
 
+    /// The buttons in one row, then the scrubber with the time at its ends, as Podcasts does: the
+    /// row keeps its room on the narrowest iPhone, and the time never truncates.
     private var controls: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 2) {
             HStack(spacing: 4) {
                 Button { player.skip(-15) } label: {
                     Image(systemName: "gobackward.15").font(.title3).frame(width: 44, height: 44).contentShape(Rectangle())
@@ -58,16 +59,6 @@ struct PlayerBar: View {
                     Image(systemName: "goforward.15").font(.title3).frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                     .accessibilityLabel("Forward 15 seconds")
-                if !dynamicType.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if let caption {
-                            Text(caption).font(.caption2).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(1)
-                        }
-                        timeText
-                    }
-                    .padding(.leading, 4)
-                    .accessibilityElement(children: .combine)
-                }
                 Spacer(minLength: 0)
                 Menu {
                     Picker("Speed", selection: $player.rate) {
@@ -102,24 +93,18 @@ struct PlayerBar: View {
             .buttonStyle(.plain)
             .foregroundStyle(PhoneStyle.Ink.body)
             Scrubber(position: player.position, duration: player.duration) { player.seek(to: $0) }
-            if dynamicType.isAccessibilitySize {
-                // At the largest text sizes the time gets its own line under the playhead.
-                HStack {
-                    timeText
-                    Spacer(minLength: 0)
-                    if let caption { Text(caption).font(.caption2).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(1) }
-                }
+            HStack(alignment: .firstTextBaseline, spacing: PhoneStyle.Space.s2) {
+                Text(TimeLabel.short(player.position))
+                    .contentTransition(.numericText(value: player.position))
+                Spacer(minLength: 0)
+                if let caption { Text(caption).lineLimit(1) }
+                Spacer(minLength: 0)
+                Text(TimeLabel.short(player.duration))
             }
-        }
-    }
-
-    private var timeText: some View {
-        Text("\(TimeLabel.short(player.position)) / \(TimeLabel.short(player.duration))")
-            .font(.footnote.monospacedDigit())
+            .font(.caption.monospacedDigit())
             .foregroundStyle(PhoneStyle.Ink.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .contentTransition(.numericText(value: player.position))
+            .accessibilityElement(children: .combine)
+        }
     }
 
     private func loading(_ fraction: Double?) -> some View {
@@ -173,15 +158,15 @@ struct MiniPlayer: View {
                         .symbolEffect(.variableColor.iterative, options: .repeating, isActive: player.isPlaying && !reduceMotion)
                         .neonGlow(PhoneStyle.neonMint, radius: 3)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(meeting.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text(TimeLabel.short(player.position) + " of " + TimeLabel.short(player.duration))
+                        Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(TimeLabel.short(player.position) + " / " + TimeLabel.short(player.duration))
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
             }
-            .accessibilityLabel("Now playing: \(meeting.title)")
+            .accessibilityLabel("Now playing: \(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title)")
             .accessibilityHint("Opens the conversation")
             Button { player.toggle() } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill").contentTransition(.symbolEffect(.replace))
