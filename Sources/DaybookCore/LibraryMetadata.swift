@@ -351,20 +351,40 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         return recorders?.first { $0.id == id }?.value
     }
 
-    /// Speaker profiles (deletion markers and ones a newer Daybook wrote left out), by name.
+    /// Speaker profiles (deletion markers, ones merged into another, and ones a newer Daybook wrote
+    /// left out), by name.
     public var activeSpeakerProfiles: [SpeakerProfile] {
-        (speakerProfiles ?? []).compactMap(\.value).sorted {
+        let merges = speakerProfileMerges
+        return (speakerProfiles ?? []).compactMap(\.value).filter { merges.isActive($0.id) }.sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedSame ? $0.id.uuidString < $1.id.uuidString
                 : $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
     }
 
-    public func speakerProfile(_ id: UUID) -> SpeakerProfile? { speakerProfiles?.first { $0.id == id.uuidString }?.value }
+    /// Which profile each profile ID stands for, after merges.
+    public var speakerProfileMerges: SpeakerProfileMerges { SpeakerProfileMerges(speakerProfiles ?? []) }
 
-    /// A profile's voiceprints, newest first.
+    /// The profile `id` stands for: itself, or the profile it was merged into.
+    public func speakerProfile(_ id: UUID) -> SpeakerProfile? {
+        guard let target = speakerProfileMerges.resolve(id) else { return nil }
+        return speakerProfiles?.first { $0.id == target.uuidString }?.value
+    }
+
+    /// A profile's voiceprints (those of profiles merged into it too), newest first.
     public func voiceprints(of profileID: UUID) -> [Voiceprint] {
-        (voiceprints ?? []).compactMap(\.value).filter { $0.profileID == profileID }
+        let members = speakerProfileMerges.members(of: profileID)
+        return (voiceprints ?? []).compactMap(\.value).filter { members.contains($0.profileID) }
             .sorted { $0.recordedAt == $1.recordedAt ? $0.id < $1.id : $0.recordedAt > $1.recordedAt }
+    }
+
+    /// Every voiceprint, each under the profile it stands for now (merges followed).
+    public var resolvedVoiceprints: [Voiceprint] {
+        let merges = speakerProfileMerges
+        return (voiceprints ?? []).compactMap(\.value).map { print in
+            var print = print
+            if let target = merges.resolve(print.profileID) { print.profileID = target }
+            return print
+        }
     }
 
     static func merge<T>(_ lhs: [LibraryValue<T>], _ rhs: [LibraryValue<T>]) -> [LibraryValue<T>] {

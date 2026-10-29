@@ -519,10 +519,15 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         revisions.append(MeetingRevision(field: "segment:\(id.uuidString)", oldValue: unifiedTranscript[index].text, newValue: text))
         unifiedTranscript[index].text = text; updatedAt = Date()
     }
+    /// Recorded in Version History. A name Daybook gave that the summary still uses follows into it
+    /// (`summaryFollowsRename`).
     public mutating func renameSpeaker(id: String, name: String) {
         guard let index = speakers.firstIndex(where: { $0.id == id }), speakers[index].name != name else { return }
-        revisions.append(MeetingRevision(field: "speaker:\(id)", oldValue: speakers[index].name, newValue: name))
+        let old = speakers[index].name
+        let daybooks = isDaybooksName(old, for: id, identity: speakerIdentity(id))
+        revisions.append(MeetingRevision(field: "speaker:\(id)", oldValue: old, newValue: name))
         speakers[index].name = name; updatedAt = Date()
+        if daybooks { summaryFollowsRename(of: id, from: old, to: name) }
     }
     public mutating func setSummary(_ value: MeetingSummary) {
         var value = value

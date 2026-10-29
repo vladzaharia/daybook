@@ -65,6 +65,16 @@ final class SpeakerProfileTests: XCTestCase {
         try XCTUnwrap(metadata.activeSpeakerProfiles.first { $0.name == name }, "No profile named \(name)")
     }
 
+    /// A recording whose microphone speaker ("<title>:mic") fusion made the owner ("owner", "Me").
+    func fused(_ title: String, daysAgo: Double, seed: UInt64) -> Meeting {
+        var value = meeting(title, daysAgo: daysAgo, [voice("mic", mine(seed), 300)])
+        value.speakers.append(Speaker(id: "owner", name: "Me", sourceTrackID: value.tracks[0].id))
+        value.fusionSummary = FusionSummary(sources: [], words: 100, corroboratedWords: 0, disputedWords: 0, ownerSpeakerID: "owner",
+                                            speakerMappings: [FusionSpeakerMapping(sourceSpeakerID: "\(title):mic", trackID: value.tracks[0].id,
+                                                                                   speakerID: "owner", reason: .owner, share: 0.9)])
+        return value
+    }
+
     let me = SyntheticVoice.person(1), guest = SyntheticVoice.person(2), other = SyntheticVoice.person(3)
     func mine(_ seed: UInt64, _ similarity: Double = 0.95) -> [Float] { SyntheticVoice.near(me, similarity: similarity, seed: seed) }
 
@@ -133,14 +143,6 @@ final class SpeakerProfileTests: XCTestCase {
     /// The microphone's owner in a fused conversation ("Me") has no embedding of its own; it's
     /// recognized and named through the microphone's speaker it stands for.
     func testTheFusedOwnerIsLabelledAndTaughtThroughItsMicrophoneSpeaker() throws {
-        func fused(_ title: String, daysAgo: Double, seed: UInt64) -> Meeting {
-            var value = meeting(title, daysAgo: daysAgo, [voice("mic", mine(seed), 300)])
-            value.speakers.append(Speaker(id: "owner", name: "Me", sourceTrackID: value.tracks[0].id))
-            value.fusionSummary = FusionSummary(sources: [], words: 100, corroboratedWords: 0, disputedWords: 0, ownerSpeakerID: "owner",
-                                                speakerMappings: [FusionSpeakerMapping(sourceSpeakerID: "\(title):mic", trackID: value.tracks[0].id,
-                                                                                       speakerID: "owner", reason: .owner, share: 0.9)])
-            return value
-        }
         var first = fused("first", daysAgo: 5, seed: 21)
         first.renameSpeaker(id: "owner", name: "Vlad")
         var meetings = [first, fused("second", daysAgo: 1, seed: 22)], metadata = LibraryMetadata()
@@ -267,6 +269,32 @@ final class SpeakerProfileTests: XCTestCase {
         XCTAssertNil(meetings[1].speakerIdentity("two:me"))
         XCTAssertEqual(name(meetings[0], "one:me"), "Vlad", "The person's name stays")
         XCTAssertTrue(metadata.activeSpeakerProfiles.isEmpty, "A deleted profile isn't made again from the name that started it")
+    }
+
+    /// Regression: one recording's voice can stand for two speakers (the microphone's owner and the
+    /// microphone's own speaker). With both named, renaming one took the voiceprint away from the
+    /// other too, and it was never learned again.
+    func testRenamingOneOfTwoSpeakersWithOneVoiceKeepsTheOthersVoiceprint() throws {
+        var first = fused("first", daysAgo: 5, seed: 241)
+        first.renameSpeaker(id: "owner", name: "Vlad")
+        first.renameSpeaker(id: "first:mic", name: "Vlad")
+        var meetings = [first], metadata = LibraryMetadata()
+        settle(&meetings, &metadata)
+        let vlad = try profile("Vlad", metadata)
+        func taught() -> Bool { activePrints(metadata).contains { $0.profileID == vlad.id && $0.meetingID == first.id && $0.speakerID == "first:mic" } }
+        XCTAssertTrue(taught())
+        XCTAssertEqual(activePrints(metadata).filter { $0.profileID == vlad.id }.count, 1, "One voice, one voiceprint")
+
+        meetings[0].renameSpeaker(id: "owner", name: "Bob")
+        settle(&meetings, &metadata)
+        XCTAssertEqual(name(meetings[0], "first:mic"), "Vlad")
+        XCTAssertEqual(meetings[0].speakerIdentity("first:mic")?.profileID, vlad.id)
+        XCTAssertTrue(taught(), "The microphone's speaker is still Vlad, so Vlad keeps its voice")
+
+        // Renaming the other one too: now nobody here is Vlad, and the voiceprint goes.
+        meetings[0].renameSpeaker(id: "first:mic", name: "Bob")
+        settle(&meetings, &metadata)
+        XCTAssertFalse(taught())
     }
 
     // MARK: Learning
@@ -441,6 +469,173 @@ final class SpeakerProfileTests: XCTestCase {
         meetings[1].renameSpeaker(id: "two:me", name: "Sam")
         XCTAssertFalse(meetings[1].apply(result.speakers))
         XCTAssertEqual(name(meetings[1], "two:me"), "Sam")
+    }
+
+    // MARK: Merging
+
+    /// "Vladimir" named in a room recorder's conversation and "Vlad" through the microphone (one
+    /// person, two names, and two profiles), and a third conversation labelled with Vladimir.
+    func twoProfilesOfOnePerson() throws -> (meetings: [Meeting], metadata: LibraryMetadata, vlad: SpeakerProfile, vladimir: SpeakerProfile) {
+        var one = meeting("one", daysAgo: 30, [voice("me", mine(251, 0.85), 200)], source: .soundcore,
+                          device: DeviceRecordingIdentity(kind: "soundcore.work", serial: "S1", recordingID: "r1"))
+        one.renameSpeaker(id: "one:me", name: "Vlad")
+        var two = meeting("two", daysAgo: 20, [voice("me", mine(252), 200)])
+        two.renameSpeaker(id: "two:me", name: "Vladimir")
+        var meetings = [one, two, meeting("three", daysAgo: 1, [voice("me", mine(253), 300)])], metadata = LibraryMetadata()
+        settle(&meetings, &metadata)
+        return (meetings, metadata, try profile("Vlad", metadata), try profile("Vladimir", metadata))
+    }
+
+    func testMergingTwoProfilesOfOnePersonMovesTheirVoiceprintsAndSpeakers() throws {
+        var (meetings, metadata, vlad, vladimir) = try twoProfilesOfOnePerson()
+        XCTAssertEqual(name(meetings[2], "three:me"), "Vladimir")
+        XCTAssertEqual(meetings[2].speakerIdentity("three:me")?.source, .recognized)
+
+        XCTAssertFalse(metadata.mergeSpeakerProfile(vlad.id, into: vlad.id))
+        XCTAssertTrue(metadata.mergeSpeakerProfile(vladimir.id, into: vlad.id, at: now.addingTimeInterval(60)))
+        XCTAssertEqual(metadata.activeSpeakerProfiles.map(\.id), [vlad.id])
+        XCTAssertEqual(metadata.speakerProfile(vladimir.id)?.id, vlad.id, "The merged profile stands for the kept one")
+        XCTAssertEqual(Set(metadata.voiceprints(of: vlad.id).map(\.meetingID)), [meetings[0].id, meetings[1].id])
+        XCTAssertFalse(metadata.mergeSpeakerProfile(vladimir.id, into: vlad.id), "Already merged")
+
+        settle(&meetings, &metadata)
+        XCTAssertEqual(name(meetings[1], "two:me"), "Vladimir", "The person's name stays")
+        XCTAssertEqual(meetings[1].speakerIdentity("two:me")?.source, .named)
+        XCTAssertEqual(meetings[1].speakerIdentity("two:me")?.profileID, vlad.id, "Its speaker moves to the kept profile")
+        XCTAssertEqual(name(meetings[2], "three:me"), "Vlad", "A label takes the kept profile's name")
+        XCTAssertEqual(meetings[2].speakerIdentity("three:me")?.profileID, vlad.id)
+        XCTAssertEqual(meetings[2].speakerIdentity("three:me")?.previousName, "Speaker 1")
+        XCTAssertEqual(activePrints(metadata).filter { $0.origin == .named }.count, 2, "Nothing taught twice")
+        XCTAssertTrue(activePrints(metadata).allSatisfy { metadata.speakerProfileMerges.resolve($0.profileID) == vlad.id })
+
+        // The merged name still finds the person.
+        var four = meeting("four", daysAgo: 0.5, [voice("me", mine(254), 100)])
+        four.renameSpeaker(id: "four:me", name: "vladimir")
+        meetings.append(four)
+        settle(&meetings, &metadata)
+        XCTAssertEqual(meetings[3].speakerIdentity("four:me")?.profileID, vlad.id)
+        XCTAssertEqual(metadata.activeSpeakerProfiles.map(\.id), [vlad.id])
+        XCTAssertTrue(metadata.voiceprints(of: vlad.id).contains { $0.meetingID == four.id })
+    }
+
+    /// A merge is one record: what another device did with the merged profile meanwhile (a name it
+    /// taught) follows it when the two meet, in either order.
+    func testAMergeMeetsWhatAnotherDeviceTaughtTheMergedProfileMeanwhile() throws {
+        let (meetings, metadata, vlad, vladimir) = try twoProfilesOfOnePerson()
+        var studio = metadata, laptop = metadata
+        var onStudio = meetings, onLaptop = meetings
+        XCTAssertTrue(studio.mergeSpeakerProfile(vladimir.id, into: vlad.id, at: now.addingTimeInterval(60)))
+        settle(&onStudio, &studio)
+        var five = meeting("five", daysAgo: 0.2, [voice("me", mine(255), 150)])
+        five.renameSpeaker(id: "five:me", name: "Vladimir")
+        onLaptop.append(five)
+        settle(&onLaptop, &laptop)
+        XCTAssertEqual(onLaptop.last?.speakerIdentity("five:me")?.profileID, vladimir.id)
+
+        var merged = studio.merging(laptop)
+        XCTAssertEqual(merged, laptop.merging(studio))
+        var library = onStudio + [onLaptop.last!]
+        settle(&library, &merged)
+        XCTAssertEqual(merged.activeSpeakerProfiles.map(\.id), [vlad.id])
+        XCTAssertEqual(library.last?.speakerIdentity("five:me")?.profileID, vlad.id)
+        XCTAssertEqual(name(library.last!, "five:me"), "Vladimir")
+        XCTAssertTrue(merged.voiceprints(of: vlad.id).contains { $0.meetingID == five.id }, "What the laptop taught counts for Vlad")
+    }
+
+    /// Two devices merging each profile into the other: the merge made first is set aside, so the
+    /// later choice stands, the same whichever device's settings are merged into which.
+    func testTwoDevicesMergingEachProfileIntoTheOtherKeepTheLaterChoice() throws {
+        let (_, metadata, vlad, vladimir) = try twoProfilesOfOnePerson()
+        var studio = metadata, laptop = metadata
+        XCTAssertTrue(studio.mergeSpeakerProfile(vladimir.id, into: vlad.id, at: now.addingTimeInterval(60)))
+        XCTAssertTrue(laptop.mergeSpeakerProfile(vlad.id, into: vladimir.id, at: now.addingTimeInterval(120)))
+        let merged = studio.merging(laptop)
+        XCTAssertEqual(merged, laptop.merging(studio))
+        XCTAssertEqual(merged.activeSpeakerProfiles.map(\.id), [vladimir.id])
+        XCTAssertEqual(merged.speakerProfile(vlad.id)?.id, vladimir.id)
+        XCTAssertEqual(merged.voiceprints(of: vladimir.id).count, 2)
+
+        // Merged into a profile that's then deleted: both are gone.
+        var deleted = studio
+        deleted.speakerProfiles = deleted.speakerProfiles?.map { $0.id == vlad.id.uuidString ? LibraryValue(id: $0.id, value: nil, modifiedAt: now.addingTimeInterval(90)) : $0 }
+        XCTAssertTrue(deleted.activeSpeakerProfiles.isEmpty)
+        XCTAssertNil(deleted.speakerProfile(vladimir.id))
+    }
+
+    func testAMergedProfileKeepsItsTargetForAnEarlierDaybook() throws {
+        let profile = SpeakerProfile(id: UUID(), name: "Vladimir", createdAt: now, mergedInto: UUID())
+        let decoded = try JSONDecoder().decode(SpeakerProfile.self, from: JSONEncoder().encode(profile))
+        XCTAssertEqual(decoded, profile)
+        // Written without the key when it isn't merged, exactly as before.
+        let plain = try XCTUnwrap(String(data: JSONEncoder().encode(SpeakerProfile(id: profile.id, name: "Vlad", createdAt: now)), encoding: .utf8))
+        XCTAssertFalse(plain.contains("mergedInto"))
+    }
+
+    // MARK: Names in summaries
+
+    /// Regression: a summary written before a speaker was named or labelled kept saying "Speaker 2".
+    func testANameDaybookGaveFollowsIntoTheSummary() throws {
+        var one = meeting("one", daysAgo: 9, [voice("me", mine(261))])
+        one.renameSpeaker(id: "one:me", name: "Vlad")
+        var two = meeting("two", daysAgo: 1, [voice("me", mine(262), 300), voice("x", SyntheticVoice.near(other, similarity: 0.95, seed: 263), 60)])
+        let item = ActionItem(text: "Send Speaker 2 the deck", owner: "Speaker 1", completed: true)
+        let original = MeetingSummary(title: "Speaker 1 and Speaker 2", overview: "Speaker 1 walked Speaker 2 through the plan. Speaker 10 wasn't there.",
+                                      sections: [SummarySection(heading: "Speaker 1's plan", body: "- **Speaker 1** owns the launch.")],
+                                      actionItems: [item])
+        two.summary = original
+        var meetings = [one, two], metadata = LibraryMetadata()
+        let base = meetings[1]
+        settle(&meetings, &metadata)
+        XCTAssertEqual(name(meetings[1], "two:me"), "Vlad")
+        var summary = try XCTUnwrap(meetings[1].summary)
+        XCTAssertEqual(summary.title, "Vlad and Speaker 2")
+        XCTAssertEqual(summary.overview, "Vlad walked Speaker 2 through the plan. Speaker 10 wasn't there.")
+        XCTAssertEqual(summary.sections.first?.heading, "Vlad's plan")
+        XCTAssertEqual(summary.sections.first?.body, "- **Vlad** owns the launch.")
+        XCTAssertEqual(summary.actionItems, [ActionItem(id: item.id, text: "Send Speaker 2 the deck", owner: "Vlad", completed: true)],
+                       "The person's tick stays")
+        let revision = try XCTUnwrap(meetings[1].revisions.last { $0.field == "summary" })
+        XCTAssertEqual(try JSONDecoder().decode(MeetingSummary.self, from: Data(revision.oldValue.utf8)), original, "The earlier summary is in Version History")
+
+        // A placeholder the person replaces follows too; a name the person gave is theirs.
+        meetings[1].renameSpeaker(id: "two:x", name: "Priya")
+        summary = try XCTUnwrap(meetings[1].summary)
+        XCTAssertEqual(summary.actionItems.first?.text, "Send Priya the deck")
+        meetings[1].renameSpeaker(id: "two:x", name: "Priyanka")
+        XCTAssertEqual(meetings[1].summary, summary)
+
+        // Daybook's label replaced by hand: the summary follows the person's name.
+        meetings[1].renameSpeaker(id: "two:me", name: "Sam")
+        XCTAssertEqual(meetings[1].summary?.overview, "Sam walked Priya through the plan. Speaker 10 wasn't there.")
+
+        // Two Macs giving the same label make one Version History entry.
+        let result = SpeakerProfileReconciler.reconcile(meetings: [meetings[0], base], state: SpeakerProfileState(metadata), now: now)
+        var studio = base, laptop = base
+        XCTAssertTrue(studio.apply(result.speakers)); XCTAssertTrue(laptop.apply(result.speakers))
+        let merged = MeetingMerge.merge(base: base, local: studio, remote: laptop).meeting
+        XCTAssertEqual(merged.revisions.filter { $0.field == "summary" }.count, 1)
+        XCTAssertEqual(merged.summary?.overview, "Vlad walked Speaker 2 through the plan. Speaker 10 wasn't there.")
+    }
+
+    func testTheOwnersMeFollowsIntoTheSummaryOnlyWhileNoOneElseHasTheName() throws {
+        var first = fused("first", daysAgo: 5, seed: 271)
+        first.summary = MeetingSummary(overview: "Me agreed to send the notes. Let me know, said Speaker 1.")
+        first.renameSpeaker(id: "owner", name: "Vlad")
+        XCTAssertEqual(first.summary?.overview, "Vlad agreed to send the notes. Let me know, said Speaker 1.")
+
+        var twice = meeting("twice", daysAgo: 1, [voice("a", mine(272)), voice("b", mine(273))])
+        twice.speakers[1].name = "Speaker 1"
+        twice.summary = MeetingSummary(overview: "Speaker 1 and Speaker 1 talked.")
+        twice.renameSpeaker(id: "twice:a", name: "Vlad")
+        XCTAssertEqual(twice.summary?.overview, "Speaker 1 and Speaker 1 talked.", "Another speaker still has the name")
+    }
+
+    func testSummaryNamesReplaceWholeNamesOnly() {
+        XCTAssertEqual(SummaryNames.replacing("Speaker 2", with: "Ana", in: "Speaker 2, Speaker 20, Speaker 2's, (Speaker 2) and speaker 2"),
+                       "Ana, Speaker 20, Ana's, (Ana) and speaker 2")
+        XCTAssertEqual(SummaryNames.replacing("Vlad", with: "Vladimir", in: "Vlad and Vladislav"), "Vladimir and Vladislav")
+        XCTAssertEqual(SummaryNames.replacing("Me", with: "$1 \\ Zoë", in: "Me. Meet me."), "$1 \\ Zoë. Meet me.")
+        XCTAssertEqual(SummaryNames.replacing("Zoë", with: "Zoe", in: "Zoë’s idea"), "Zoe’s idea")
     }
 
     // MARK: Matching for live identification (the iPhone)
