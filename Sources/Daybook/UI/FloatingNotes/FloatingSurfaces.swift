@@ -201,7 +201,8 @@ struct AfterStopSurface: View {
                     ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, 9)
                 }
                 PanelTitleField(state: state, meeting: meeting)
-                PanelMetaLine(meeting: meeting, goHome: context.goHome)
+                // The band says "Saved · 28:00", so the line under the title leaves the length out.
+                PanelMetaLine(meeting: meeting, showsDuration: inputs.phase != .saved, goHome: context.goHome)
             }
             .padding(.horizontal, FloatingLayout.inset)
             .padding(.top, context.band + 4)
@@ -287,6 +288,7 @@ struct HomeSurface: View {
                 }
                 Spacer(minLength: 0)
             } else {
+                let hasLines = !FloatingStatus.lines(inputs).isEmpty
                 TimelineView(.periodic(from: .now, by: 30)) { timeline in
                     let lines = FloatingStatus.lines(inputs, now: timeline.date)
                     if !lines.isEmpty {
@@ -298,19 +300,18 @@ struct HomeSurface: View {
                     }
                 }
                 .padding(.top, context.band + 6)
-                if !context.chips.isEmpty {
-                    ChipRow(chips: context.chips, menus: context.menus)
-                        .padding(.horizontal, FloatingLayout.inset)
-                        .padding(.bottom, 10)
-                }
                 if let focused {
-                    PanelRule()
+                    // The conversation, under the device lines: its status chip sits over its title, as after Stop.
+                    if hasLines { PanelRule() }
                     VStack(alignment: .leading, spacing: 3) {
+                        if !context.chips.isEmpty {
+                            ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, 9)
+                        }
                         PanelTitleField(state: state, meeting: focused)
                         PanelMetaLine(meeting: focused, goHome: context.goHome)
                     }
                     .padding(.horizontal, FloatingLayout.inset)
-                    .padding(.top, 12)
+                    .padding(.top, hasLines ? 12 : 4)
                     .padding(.bottom, 8)
                     PanelNotes(state: state, meeting: focused, isRecording: false, showsLane: false)
                 } else {
@@ -421,8 +422,9 @@ private struct RecentRow: View {
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(timeLabel).foregroundStyle(DaybookPalette.Ink.body).monospacedDigit()
+                    // As in the library list and on the iPhone: the glyph carries the warning, the words stay quiet.
                     Text(status.text ?? RowPreview.text(for: meeting))
-                        .foregroundStyle(status.kind == .failed ? DaybookPalette.Ink.warning : DaybookPalette.Ink.secondary)
+                        .foregroundStyle(DaybookPalette.Ink.secondary)
                         .lineLimit(1)
                 }
                 .font(.system(size: 12))
@@ -502,12 +504,13 @@ struct PanelTitleField: View {
 /// When it was, how long, and the way back to recent conversations.
 private struct PanelMetaLine: View {
     let meeting: Meeting
+    var showsDuration = true
     let goHome: () -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(([meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute())]
-                  + [meeting.duration.map(DurationLabel.format)].compactMap { $0 }).joined(separator: " · "))
+                  + [showsDuration ? meeting.duration.map(DurationLabel.format) : nil].compactMap { $0 }).joined(separator: " · "))
                 .foregroundStyle(DaybookPalette.Ink.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
