@@ -42,7 +42,8 @@ enum CaptureRecovery {
                     track = saved
                     track.url = audioURL
                 } else {
-                    warnings.append("The \(role.rawValue) timing metadata was unavailable; its start time is approximate.")
+                    warnings.append("The \(role.spokenName) recording’s start time is approximate.")
+                    recoveryNotes.append("The \(role.spokenName) recording’s timing details were missing or damaged, so it starts with the recording.")
                     track = CapturedAudioTrack(role: role, url: audioURL, startedAt: manifest.startedAt,
                         firstSampleHostTimeSeconds: manifest.hostTimeSeconds, offsetSeconds: 0,
                         sampleRate: audio.processingFormat.sampleRate, channelCount: audio.processingFormat.channelCount, frameCount: audio.length)

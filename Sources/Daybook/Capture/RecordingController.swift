@@ -208,15 +208,20 @@ final class RecordingController: ObservableObject {
 
     // MARK: Source and writer events
 
+    /// A source's own note on a device change ("now 24000 Hz, 1 ch") goes in its track's capture
+    /// notes; the conversation says it in one plain sentence.
     private func microphoneEvent(_ event: CaptureSourceEvent) {
         switch event {
         case .deviceChanged(let note):
             microphoneWriter?.markDiscontinuity(note)
-            warnings.append(note)
+            warnings.append(Self.microphoneChanged)
         case .failed(let error):
             captureFailed(error)
         }
     }
+
+    static let microphoneChanged = "The microphone changed partway through the recording."
+    static let callAudioRestarted = "Call audio restarted partway through, leaving a short gap."
 
     /// Call audio problems never end the recording: a failed tap falls back to ScreenCaptureKit,
     /// and anything else stops only the call track.
@@ -225,7 +230,7 @@ final class RecordingController: ObservableObject {
         switch event {
         case .deviceChanged(let note):
             systemWriter?.markDiscontinuity(note)
-            warnings.append(note)
+            warnings.append(Self.callAudioRestarted)
         case .failed(let error):
             Task { await systemFailed(error) }
         }
@@ -357,7 +362,7 @@ final class RecordingController: ObservableObject {
         activeCaptionTap = nil
         var result: CaptureResult?
         if let manifest, let directory {
-            if tracks.isEmpty { warnings.append("No audio samples were received.") }
+            if tracks.isEmpty { warnings.append("No audio was recorded.") }
             if manifest.includeSystemAudio && !tracks.contains(where: { $0.role == .systemAudio }) {
                 warnings.append("No system audio was received. Check the call’s output and recording permission.")
             }
