@@ -850,6 +850,10 @@ expect_ok "and the files are still removed" test ! -e "$work/runner-temp/daybook
 expect_fail "a key that isn't a .p8 fails" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(printf 'nope' | base64)" "$ci/secrets.sh" run -- true
 expect_ok "leaving nothing behind" test ! -e "$work/runner-temp/daybook-secrets"
 expect_ok "raw PEM is accepted too" env "${secrets_env[@]}" ASC_KEY_P8_BASE64="$(cat "$key")" "$ci/secrets.sh" run -- true
+notes="$(env "${secrets_env[@]}" "$ci/secrets.sh" run -- true 2>&1 >/dev/null | grep -c 'no DEVELOP' || true)"
+expect_eq "no signing-certificate notes for a command that doesn't archive" "0" "$notes"
+notes="$(env "${secrets_env[@]}" "$ci/secrets.sh" run -- true --archive-only 2>&1 >/dev/null | grep -c 'no DEVELOP' || true)"
+expect_eq "both for one that does" "2" "$notes"
 expect_ok "setup (for later steps) writes GITHUB_ENV" env "${secrets_env[@]}" "$ci/secrets.sh" setup
 expect_eq "with the key's path" "DAYBOOK_ASC_KEY_PATH=$work/runner-temp/daybook-secrets/AuthKey_ABC123DEFG.p8" "$(grep '^DAYBOOK_ASC_KEY_PATH=' "$work/github-env")"
 expect_ok "cleanup removes it" env RUNNER_TEMP="$work/runner-temp" PATH="$stubs:$PATH" STUB_LOG="$work/stub.log" "$ci/secrets.sh" cleanup

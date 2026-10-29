@@ -52,6 +52,8 @@ warn() {
 }
 
 in_process=0
+# Which certificate an archive signs with is worth a note only to a command that archives.
+archives=1
 export_env() {
     if (( in_process )); then
         export "$1=$2"
@@ -113,10 +115,10 @@ setup() {
     export_env DAYBOOK_ASC_ISSUER_ID "$ASC_ISSUER_ID"
     note "App Store Connect API key $ASC_KEY_ID written to $key"
 
-    if [[ -z "${DEVELOPER_ID_P12_BASE64:-}" ]]; then
+    if (( archives )) && [[ -z "${DEVELOPER_ID_P12_BASE64:-}" ]]; then
         note "no DEVELOPER_ID_P12_BASE64: Developer ID signing uses Xcode's cloud-managed certificate"
     fi
-    if [[ -z "${DEVELOPMENT_P12_BASE64:-}" ]]; then
+    if (( archives )) && [[ -z "${DEVELOPMENT_P12_BASE64:-}" ]]; then
         note "no DEVELOPMENT_P12_BASE64: an archive creates a development certificate (scripts/asc-certificates.sh)"
     fi
     if [[ -n "${DEVELOPER_ID_P12_BASE64:-}" ]]; then
@@ -231,6 +233,8 @@ run() {
     [[ "${1-}" == -- ]] && shift
     (( $# )) || { echo "usage: $0 run -- COMMAND [ARGUMENTS...]" >&2; exit 2; }
     in_process=1
+    archives=0
+    for arg in "$@"; do [[ "$arg" == --archive || "$arg" == --archive-only ]] && archives=1; done
     # Leftovers of a step that was killed before it could clean up.
     cleanup 2>/dev/null
     trap 'cleanup' EXIT
