@@ -1,6 +1,6 @@
 # Daybook for iPhone
 
-A full Daybook app for iPhone. Everything the Mac app does, except running the models. Recording, notes, bookmarks, the library, reading, playback, editing, organizing, devices, templates, vocabulary, sync, and settings all work on the phone. Transcription, speaker identification, and summaries run on a Mac and sync back.
+A full Daybook app for iPhone. Everything the Mac app does, except running the processing models. Recording, notes, bookmarks, the library, reading, playback, editing, organizing, devices, templates, vocabulary, sync, and settings all work on the phone. Transcription, speaker identification, and summaries run on a Mac and sync back; the phone runs models only for live captions ("Live transcription", below).
 
 **Recorded but not processed is a normal, complete state.** A conversation recorded on the phone is immediately useful: you can play it, take timed notes, bookmark it, title it, file it, and search its notes. It says where it stands ("Not transcribed yet"), never that something is broken. The architecture keeps on-device processing possible later without restructuring.
 
@@ -15,7 +15,7 @@ Everything below is in v1:
   - Notes with recording times and bookmarks, exactly as on the Mac (`TimedNotes`, highlights), in every posture.
   - Photos from the camera at their moment in the recording ([photos](photos.md)).
   - Start, stop, and bookmark from the Lock Screen, Dynamic Island / Live Activity, Control Center, the Action button, and Siri (App Intents).
-  - **Live captions while recording.** Tentative, on-device captions from the Speech framework's `SpeechTranscriber` (volatile results), shown like closed captions. They prove the audio pipeline is working and give something to read until the Mac's transcript arrives, and they are never the transcript: phone-local (`<library>/LiveCaptions/<id>.json`, never synced), never fused, summarized, or used as evidence, and hidden once the official transcript exists. If the language isn't available, the app says so and recording is unaffected.
+  - **Live captions while recording.** Tentative, on-device captions, shown like closed captions: from the live models when they're downloaded (local transcription, speakers, and names; "Live transcription", below), else from the Speech framework's `SpeechTranscriber` (volatile results). They prove the audio pipeline is working and give something to read until the Mac's transcript arrives, and they are never the transcript: phone-local (`<library>/LiveCaptions/<id>.json`, never synced), never fused, summarized, or used as evidence, and hidden once the official transcript exists. If the language isn't available, the app says so and recording is unaffected.
 - **Library.** Places (All, Work, Personal), folders, tags, search (titles, notes, transcripts, summaries), Trash, and multi-select. New Note starts a conversation that's only your notes (and any photos), titled "Note at 10:15 AM", as on the Mac. Its page says "No recording yet" with Record, which records into it; the recording joins after the notes.
 - **Reading.**
   - The summary page: lede, next steps, sections, your notes, bookmarks, colophon.
@@ -87,11 +87,14 @@ DaybookKit          (macOS + iOS)  LibraryController: library state, edits + rev
                                    ProcessingRequest queue, ProcessingEngine seam
 DaybookDevices      (macOS + iOS)  device framework, Soundcore (BLE, protocol, crypto, Opus)
 DaybookLink         (macOS + iOS)  Mac <-> iPhone local-network channel: pairing, control, status
-DaybookCaptions     (macOS + iOS)  the one live-caption engine (Speech framework's SpeechTranscriber):
+DaybookCaptions     (macOS + iOS)  the one live-caption protocol and the Speech framework's captioner:
                                    iPhone recordings, the Mac's You/Call capture, and hardware live
                                    audio (Soundcore live listening). Depends on Apple frameworks only.
-DaybookIntelligence (macOS now)    WhisperKit, FluidAudio, MLX: the Mac's ProcessingEngine.
-                                   Kept free of AppKit so an iOS build can link it later.
+DaybookModelStore   (macOS + iOS)  the model store: verified downloads and installs
+DaybookLive         (macOS + iOS)  live captions from local models (FluidAudio): streaming
+                                   transcription, speakers, and names, behind DaybookCaptions' protocol
+DaybookIntelligence (macOS)        WhisperKit, FluidAudio, MLX: the Mac's ProcessingEngine.
+                                   Not linked on the iPhone.
 Daybook             (macOS app)    AppKit/SwiftUI app, capture, Mac UI
 Apps/iOS            (Xcode, via XcodeGen)
   DaybookPhone          iPhone app (SwiftUI)
@@ -130,13 +133,26 @@ Apps/iOS            (Xcode, via XcodeGen)
   | Recording control, live state, bookmarks during multipoint | No | No | Yes |
   | Courier bookkeeping (`Sync/Courier/`, `Sync/Inbox/`) | Never (local only) | No | No |
 
-- **One live-caption engine.** Every live caption, whatever the source, goes through `DaybookCaptions`:
+- **One live-caption engine.** Every live caption, whatever the source, goes through `DaybookCaptions`' captioner protocol, from the live models (DaybookLive) when they're downloaded and the Speech framework otherwise:
   - the phone's microphone;
   - the Mac's microphone and call audio, captioned separately as You and Call, with lines the microphone only heard from the speakers suppressed;
   - any recorder that streams live audio: Soundcore live listening, which replaced chunked WhisperKit previews (docs/devices.md, "Listen Live captions").
   Captions are always tentative feedback, never the transcript. Final transcription stays with the Mac's models.
 - **The phone is a device to the Mac.** "Daybook on iPhone" is a `DeviceKind` with two methods: *direct* (DaybookLink, with record control) and *files* (sync). The existing multipoint coordinator, matcher, aligner, and fusion treat its recordings like any other source.
 - **One Bluetooth owner per recorder.** A Soundcore is managed by the phone or by a Mac, never both at once. Ownership is a synced device setting; the other side shows "Managed by iPhone" and gets the recordings through sync. **Use on This iPhone** / **Use on This Mac** move it in one tap, in seconds over the local link and through sync otherwise ([devices.md](devices.md), "Handing a recorder over").
+
+## Live transcription
+
+When the live models are downloaded, the iPhone captions recordings, and a recorder's Listen Live, with them instead of the Speech framework: local streaming transcription, speakers told apart as they talk, and names for voices that match someone's voice profile (docs/model-runtime.md, "Live"). They're still live captions: tentative, phone-local, never synced or used for anything else. Final transcription, speaker analysis, and summaries stay on the Mac; the phone never runs them.
+
+- **The models** (docs/models.md, "Live models"): Nemotron 3.5 ASR Streaming · Latin (588 MB; English, Spanish, French, Italian, Portuguese, German, about 1.25 s behind) or the multilingual build (615 MB, 35 languages, about 2.5 s); Nemotron 3 · Live for speakers (102 MB, up to eight, about 3 s behind); Community-1 for voice profiles (22 MB, the Mac's model, so its profiles name speakers here). About 712 MB in all.
+- **Settings › Models** (`ModelsSettingsScreen`, from `PhoneModels`): per role, the model (a menu where there's a choice), its size and state ("Not downloaded · 588 MB", "Waiting for Wi‑Fi", "Downloading · 40%", "Downloaded"), and Download, Cancel, or Remove (confirmed with what it frees); Download All with the total while anything chosen is missing; and Download over Cellular, off by default. The Settings row reads "Live transcription on this iPhone" or the size left to download.
+- **Downloads** go through the Mac's store and checks (`ModelStore`, `HubSnapshotFetcher`): pinned commits, every file's size and digest, an atomic install. They start on Wi‑Fi (`NetworkConditionMonitor`: not expensive, not Low Data Mode), wait for it otherwise, stop when the phone leaves it, and resume with the files they hadn't finished. A download asks for background time when the app leaves the screen, but iOS may suspend it; it continues next time (the encoder is one 566 MB file, which starts again if cut off partway).
+- **Storage:** `Application Support/Models`, the Mac's layout, excluded from iPhone backups (it can be downloaded again). Settings › About › Acknowledgements lists the downloaded live models beside the models behind the library's results.
+- **What runs:** `PhoneModels.captioner` asks `LiveCaptioners` for each recording and Listen Live: the local recognizer when it's downloaded and covers the captions' language (Settings › Recording › Live Captions), another downloaded recognizer that covers it, else the Speech framework; speakers on top when the speaker model is downloaded; names when the voice-profile model is too and the library has named speakers with voice profiles. Simulator demos (`--synthetic-audio`, `--device-simulator`, `--demo-captions`) never load models.
+- **Memory:** the models load when a recording starts, on the Neural Engine and CPU (never the GPU, which a locked phone can't use), and go when it ends. A phone with less memory than the recognizer suggests (6 GB; a 4 GB iPhone 12 or 13) isn't offered it and keeps the system's captions; speakers and names still work there.
+- **Battery and heat** (`PhoneLiveConditions`, `LiveLoadPolicy.iPhone`): speakers stop while the app is in the background (nobody sees them; the Mac names speakers in the transcript), in Low Power Mode, at Serious heat, or under 20% unplugged; captions stop altogether at Critical heat or under 10% unplugged, and resume, with a gap, when that passes. A recognizer that falls behind sheds speakers first, then drops the oldest audio; the recording never waits.
+- **App size:** the iPhone links DaybookLive and DaybookModelStore (FluidAudio and swift-transformers' Hub), not DaybookIntelligence (MLX, WhisperKit). An unsigned Release build for a device grew from 27.1 MB to 44.8 MB (October 29, 2026), most of it FluidAudio.
 
 ## iPhone Duo
 

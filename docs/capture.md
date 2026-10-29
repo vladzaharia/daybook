@@ -352,7 +352,10 @@ second.
 While the Mac records, tentative captions show that both sources are being heard and give
 something to read until the transcript exists. They come from the same engine as every other live
 caption in Daybook, `DaybookCaptions` (`SpeechAnalyzer` with `SpeechTranscriber`, volatile and fast
-results; docs/iphone.md, "One live-caption engine"). They are never the transcript: they stay on this
+results; docs/iphone.md, "One live-caption engine"), or, when the live models are downloaded
+(Settings › Models › Live transcription and Live speakers), from local models: streaming
+transcription on any macOS, speakers, and names for voices that match the library's voice profiles
+(`MacLiveModels`; docs/model-runtime.md, "Live"). They are never the transcript: they stay on this
 Mac, aren't synced, fused, summarized, or used as evidence, and the transcript replaces them.
 
 Code: `Sources/Daybook/Captions/` (controller, echo rule, store, views, settings) and
@@ -410,8 +413,9 @@ Code: `Sources/Daybook/Captions/` (controller, echo rule, store, views, settings
   the system's speech assets, which Daybook doesn't download or manage, and they never feed the
   transcript that the Models pane is about. The same setting and language apply to a recorder's
   Listen Live.
-- **Availability.** Captions need macOS 26. On macOS 15 no captioner is made, no tap is installed,
-  nothing is shown, and Settings says why. A real recording may download the language from Apple
+- **Availability.** The Speech framework's captions need macOS 26. On macOS 15 captions run only
+  from downloaded live models; without them no captioner is made, no tap is installed, nothing is
+  shown, and Settings says why. A real recording may download the language from Apple
   (system-managed `AssetInventory`) and, if the analyzer fails before any result while
   speech-recognition authorization is undetermined, ask once (`NSSpeechRecognitionUsageDescription`).
   Tests, demos, and the device simulator never do either.
