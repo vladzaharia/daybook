@@ -27,28 +27,37 @@ struct GlossaryView: View {
     }
 
     var body: some View {
-        content
+        searchField(content)
             .toolbar {
+                // Icon-only, as Summary Templates' New Template.
                 ToolbarItem(placement: .primaryAction) {
                     Button("Add Term", systemImage: "plus", action: addTerm)
-                        .labelStyle(.titleAndIcon)
                         .help("Add Term")
                 }
             }
-            .searchable(text: $search, placement: .toolbar, prompt: "Search Terms")
             .frame(minWidth: 520, minHeight: 320)
+            #if DEBUG
+            .task { VocabularyDemo.apply(to: state) }
+            #endif
+    }
+
+    /// An empty vocabulary has nothing to search, so the field arrives with the first term. Adding one shows the table
+    /// and the field together, so nothing is rebuilt while a term is being typed.
+    @ViewBuilder private func searchField(_ content: some View) -> some View {
+        if state.glossary.isEmpty && draft == nil {
+            content
+        } else {
+            content.searchable(text: $search, placement: .toolbar, prompt: "Search Terms")
+        }
     }
 
     @ViewBuilder private var content: some View {
         if state.glossary.isEmpty && draft == nil {
+            // Add Term is in the toolbar; it isn't repeated here.
             ContentUnavailableView {
                 Label("No Vocabulary Yet", systemImage: "character.book.closed")
             } description: {
                 Text("Add names, acronyms, and terms so Daybook spells them correctly.")
-            } actions: {
-                Button("Add Term", action: addTerm)
-                    .buttonStyle(.borderedProminent)
-                    .tint(DaybookStyle.prominentFill)
             }
         } else {
             table
@@ -286,3 +295,21 @@ private struct UsedInCell: View {
         }
     }
 }
+
+#if DEBUG
+/// Debug-only: `--vocabulary-demo` fills an empty vocabulary with a few terms, one of them suggested from a conversation
+/// and one from a conversation that's gone, for screenshots. Only with `--library`, whose library it writes to.
+@MainActor
+enum VocabularyDemo {
+    static func apply(to state: AppState) {
+        guard LaunchOptions.libraryURL != nil, CommandLine.arguments.contains("--vocabulary-demo"), state.glossary.isEmpty else { return }
+        let meeting = state.meetings.first?.id ?? state.newMeeting(title: "Weekly product sync with the design and research teams", selecting: false)
+        [GlossaryTerm(term: "Daybook", definition: "The app", approved: true),
+         GlossaryTerm(term: "Soundcore Work", definition: "The recorder clipped to a lapel", approved: true),
+         GlossaryTerm(term: "Parakeet", aliases: ["Parakeet Ultra"], definition: "", approved: true),
+         GlossaryTerm(term: "Kubernetes", definition: "Container orchestration; also k8s", approved: false, sourceMeetingIDs: [meeting]),
+         GlossaryTerm(term: "Ximena Oyelaran-Castellanos", definition: "", approved: false, sourceMeetingIDs: [UUID()])]
+            .forEach(state.saveGlossaryTerm)
+    }
+}
+#endif
