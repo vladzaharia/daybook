@@ -405,11 +405,16 @@ private struct ChipMenuItems: View {
                     }
                 }
                 Button("Open in Daybook", action: openMeeting)
-            } else if let id = state.processingID {
+            }
+            if let meeting, state.awaitingModels.contains(meeting.id) {
+                Button("Open Settings…") { openSettingsPane(.models) }
+            }
+        case .queue:
+            if let id = state.processingID {
                 Button("Pause Transcription") { state.pauseProcessing(id) }
                 Button("Open in Daybook") { PanelContext.openInDaybook(state: state, id: id) }
             }
-            if meeting.map({ state.awaitingModels.contains($0.id) }) ?? !state.awaitingModels.isEmpty {
+            if !state.awaitingModels.isEmpty {
                 Button("Open Settings…") { openSettingsPane(.models) }
             }
         case .sync:
