@@ -37,13 +37,17 @@ struct LibraryView: View {
             }
             .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
         } detail: {
-            detail
+            // The inspector puts the page and itself in a split view of their own, and gives each a
+            // new split item when its view's identity changes. Swapping the page's item takes the
+            // inspector's out and back in, and an inspector animation still running then finishes
+            // on the detached item and throws. So both sides are one view whatever they show.
+            ZStack { detail }
                 .toolbar { DetailToolbar(state: state, meeting: toolbarMeeting, inspectorPresented: $inspectorPresented) }
                 .inspector(isPresented: Binding(get: { inspectorPresented && showsConversation }, set: { inspectorPresented = $0 })) {
-                    if let id = state.selectedID {
-                        MeetingInspector(state: state, meetingID: id)
-                            .inspectorColumnWidth(min: 260, ideal: 280, max: 340)
+                    ZStack {
+                        if let id = state.selectedID { MeetingInspector(state: state, meetingID: id) }
                     }
+                    .inspectorColumnWidth(min: 260, ideal: 280, max: 340)
                 }
         }
         .searchable(text: $state.search, tokens: $state.searchTokens, placement: .toolbar, prompt: "Titles, Notes, Transcripts") { token in
