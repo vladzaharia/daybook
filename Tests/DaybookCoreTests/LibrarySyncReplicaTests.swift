@@ -12,6 +12,8 @@ final class SimulatedICloud: @unchecked Sendable {
     private var requests: [String] = []
     private var dropped: [String] = []
     private var notUploaded: Set<String> = []
+    /// Everything under this folder reads as not uploaded yet.
+    private var uploadsHeldUnder: String?
     private var holding = false
     private var fraction: Double?
     private var onRequest: (@Sendable (URL) -> Void)?
@@ -38,6 +40,8 @@ final class SimulatedICloud: @unchecked Sendable {
     func reportFraction(_ value: Double?) { lock.withLock { fraction = value } }
     func whenDownloadRequested(_ hook: (@Sendable (URL) -> Void)?) { lock.withLock { onRequest = hook } }
     func setUploaded(_ url: URL, _ uploaded: Bool) { lock.withLock { if uploaded { notUploaded.remove(url.path) } else { notUploaded.insert(url.path) } } }
+    /// Files under `folder` (nil: none) read as not uploaded yet, however they got there.
+    func holdUploads(under folder: URL?) { lock.withLock { uploadsHeldUnder = folder.map { $0.standardizedFileURL.path + "/" } } }
     var downloadRequests: [String] { lock.withLock { requests } }
     var droppedLocalCopies: [String] { lock.withLock { dropped } }
 
@@ -54,7 +58,9 @@ final class SimulatedICloud: @unchecked Sendable {
             downloadFraction: { [self] _ in lock.withLock { fraction } },
             isUploaded: { [self] url in
                 let present = FileManager.default.fileExists(atPath: url.path) || FileManager.default.fileExists(atPath: Self.placeholder(url).path)
-                return present && lock.withLock { !notUploaded.contains(url.path) }
+                return present && lock.withLock {
+                    !notUploaded.contains(url.path) && !(uploadsHeldUnder.map { url.standardizedFileURL.path.hasPrefix($0) } ?? false)
+                }
             },
             evictLocalCopy: { [self] url in lock.withLock { dropped.append(url.path) } })
     }
@@ -457,6 +463,46 @@ final class LibrarySyncReplicaTests: XCTestCase {
         let watch = try XCTUnwrap(devices.first { $0.id == "Watch" })
         XCTAssertEqual(watch.deviceClass, .other); XCTAssertLessThanOrEqual(watch.lastSeen!, Date(), "Clock skew is clamped to now")
         XCTAssertEqual(devices.first { $0.id == "Mac" }?.canProcess, false)
+    }
+
+    /// A phone reinstalled with the same sync folder takes a new device ID. Its earlier ID, last seen before the new one
+    /// began, is the same device: listed once. Two devices with the same name in use at the same time both are. An ID not
+    /// seen for six months is retired from the list; lookups by device ID still find every one.
+    func testAReinstalledDeviceIsListedOnceAndOldIdentitiesRetire() async throws {
+        let mac = try mac()
+        try await pass(mac, "Mac")
+        let before = try phone("Phone before reinstall")
+        try await before.publishPresence()
+        // Last seen an hour before the reinstall.
+        let earlier = remote.appendingPathComponent("Devices/\(AudioDigest.sha256(data: Data("Phone before reinstall".utf8))).json")
+        var record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: earlier)) as? [String: Any])
+        let hourAgo = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600))
+        record["lastSeen"] = hourAgo; record["firstSeen"] = hourAgo
+        try JSONSerialization.data(withJSONObject: record).write(to: earlier)
+        let after = try phone("Phone after reinstall")
+        try await after.publishPresence()
+        var devices = try await mac.knownDevices()
+        let old = try XCTUnwrap(devices.first { $0.id == "Phone before reinstall" })
+        XCTAssertEqual(old.supersededBy, "Phone after reinstall")
+        XCTAssertNotNil(old.firstSeen)
+        XCTAssertEqual(devices.inUse().map(\.id).sorted(), ["Mac", "Phone after reinstall"])
+        XCTAssertEqual(devices.count, 3, "every identity is still known by its ID")
+        // The new one has its own record, and its first write is kept as it's rewritten.
+        let firstSeen = try XCTUnwrap(devices.first { $0.id == "Phone after reinstall" }?.firstSeen)
+        try await after.publishPresence()
+        let again = try await mac.knownDevices()
+        XCTAssertEqual(again.first { $0.id == "Phone after reinstall" }?.firstSeen, firstSeen)
+
+        // The earlier one syncs again: it's another iPhone with the same name, in use alongside. Both are listed.
+        try await before.publishPresence()
+        devices = try await mac.knownDevices()
+        XCTAssertNil(devices.first { $0.id == "Phone before reinstall" }?.supersededBy)
+        XCTAssertEqual(devices.inUse().count, 3)
+        // Six months on, the ones not seen since are retired from the list; this device never is.
+        let later = Date().addingTimeInterval(KnownSyncDevice.retiredAfter + 60)
+        devices = try await mac.knownDevices(now: later)
+        XCTAssertEqual(devices.inUse(at: later).map(\.id), ["Mac"])
+        XCTAssertEqual(devices.count, 3)
     }
 
     func testARecordingMacsActivityShowsInItsPresenceWithoutAPassAndExpires() async throws {

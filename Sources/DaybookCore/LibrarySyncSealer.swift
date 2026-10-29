@@ -102,7 +102,8 @@ extension LibrarySyncEngine {
         let updated = try updateManifest { manifest in
             let mine = SyncManifest.Sealing(current: key.idHex, sealedSince: now, migrator: self.deviceID, keys: [entry])
             manifest.sealing = manifest.sealing.map { $0.merged(with: mine) } ?? mine
-            manifest.schemaVersion = SyncManifest.sealedSchemaVersion
+            // A compacted library (version 3) stays compacted.
+            manifest.schemaVersion = max(manifest.schemaVersion, SyncManifest.sealedSchemaVersion)
         }
         try prepareRemoteFolders()
         try loadSealing(updated)
@@ -420,14 +421,55 @@ extension LibrarySyncEngine {
                                         progress: &progress) else { return }
         for url in plan { deleteRemote(url) }
         let retiredIDs = Set(listedOld.map(\.id))
-        if !retiredIDs.isEmpty, let updated = try? updateManifest({ manifest in manifest.sealing?.keys.removeAll { retiredIDs.contains($0.id) } }),
-           let description = updated.sealing {
+        if !retiredIDs.isEmpty, let updated = try? updateManifest({ manifest in
+            guard var description = manifest.sealing else { return }
+            description.keys.removeAll { retiredIDs.contains($0.id) }
+            let already = Set((description.retired ?? []).map(\.id))
+            let added = retiredIDs.subtracting(already).sorted().map { SyncManifest.Sealing.RetiredKey(id: $0, at: now) }
+            if !added.isEmpty { description.retired = (description.retired ?? []) + added }
+            manifest.sealing = description
+        }), let description = updated.sealing {
             self.sealing?.manifest = description
         }
-        // The old key itself stays in iCloud Keychain: a file sealed with it later (a device that was away) or restored
-        // from iCloud.com stays readable, and is sealed again or deleted like this. Its files are what held the
-        // history, and they're gone.
+        // The old key itself stays in iCloud Keychain for `retiredKeyRemoval`: a file sealed with it later (a device that
+        // was away) or restored from iCloud.com stays readable meanwhile, and is sealed again or deleted like this. Its
+        // files are what held the history, and they're gone. Then it goes too (`removeRetiredKeys`).
         progress.oldKeysRetired = true
+    }
+
+    // MARK: Retired keys
+
+    /// How long a retired key stays in iCloud Keychain: iCloud.com's Data Recovery keeps deleted files 30 days, and a
+    /// device away that long may still bring a file sealed with it. Every device seen in the last 30 days must have moved
+    /// on to the current key as well.
+    static let retiredKeyRemoval: TimeInterval = 30 * 24 * 60 * 60
+
+    /// Removes the keys of libraries this one replaced (Start Over, or two new libraries started at once): their files go
+    /// wherever they're found, so nothing can need them. On iCloud Keychain this removes them from every device.
+    func removeReplacedLibraryKeys() {
+        guard let keyStore, let replaced = sealing?.manifest.replaces else { return }
+        for library in replaced where library != sealing?.libraryID {
+            for key in (try? keyStore.keys(for: library)) ?? [] { try? keyStore.remove(keyID: key.id, libraryID: library) }
+        }
+    }
+
+    /// Removes a key this library retired once it's no longer needed: retired `retiredKeyRemoval` ago, every device seen
+    /// in the last 30 days holds the current key, and nothing in the sync folder this pass read (`entries`, compaction
+    /// records included) is still sealed with it. A file found sealed with it after that is a leftover nobody can open,
+    /// and is deleted where it's found (`readSealed`).
+    func removeRetiredKeys(entries: [JournalEntry], now: Date) {
+        guard let keyStore, let sealing, let retired = sealing.manifest.retired else { return }
+        let due = Set(retired.filter { now.timeIntervalSince($0.at) >= Self.retiredKeyRemoval && sealing.manifest.isRetired($0.id) }.map(\.id))
+        let held = sealing.keys.values.filter { due.contains($0.idHex) && $0.id != sealing.current.id }
+        guard !held.isEmpty else { return }
+        // Every presence record must be read: one still downloading might be a device that hasn't moved on.
+        guard let recent = recentPresence(now: now)?.filter({ ($0.features ?? []).contains(Self.sealingFeature) }),
+              recent.allSatisfy({ $0.key == SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }) else { return }
+        let inUse = Set((entries + compactionRecords.values.map(\.entry)).filter(\.isSealed).compactMap { sealedKeys[$0.path] })
+        for key in held where !inUse.contains(key.id) {
+            guard (try? keyStore.remove(keyID: key.id, libraryID: sealing.libraryID)) != nil else { continue }
+            self.sealing?.keys[key.id] = nil
+        }
     }
 
     /// The files to delete when retiring `entries` and objects `blobs` (by plaintext SHA-256, under the key whose ID is
@@ -508,7 +550,7 @@ extension LibrarySyncEngine {
             switch kind {
             case .blob:
                 whole = (try? objectHolds(.sealed(url, name: url.lastPathComponent, key: sealing.current), digest: id)) == true
-            case .event, .metadata, .presence:
+            case .event, .metadata, .presence, .compaction:
                 let entry = JournalEntry(url: url, path: path, directory: kind.directory ?? "", name: url.lastPathComponent, isSealed: true)
                 whole = (try? readSealed(entry, kind: kind, sealing: sealing)).map { SyncDigest.sha256(data: $0.0) == id } == true
             }

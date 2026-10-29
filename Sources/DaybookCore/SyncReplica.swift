@@ -52,15 +52,18 @@ public struct SyncReplicaConfiguration: Sendable {
     /// A library this device starts is encrypted from the start, with a `keyStore` (`LibrarySyncEngine.sealsNewLibraries`).
     /// Tests that turn encryption on later start plaintext ones.
     public var sealsNewLibrary: Bool
+    /// When this device compacts the journal, if it's the Mac that does (docs/icloud-sync.md, "Compaction"). Nil: it
+    /// never does; it still reads what another device compacted and acknowledges its proposals.
+    public var compaction: SyncCompactionPolicy?
 
     public init(audioPolicy: SyncAudioPolicy = .eager, device: SyncDeviceIdentity? = nil,
                 audioCache: AudioCachePolicy? = nil, presenceRefreshInterval: TimeInterval = 600,
                 cloud: SyncCloudFiles = .system, keyStore: (any LibraryKeyStore)? = nil,
                 network: @escaping @Sendable () -> SyncNetworkCondition = { .unrestricted },
-                sealsNewLibrary: Bool = LibrarySyncEngine.sealsNewLibraries) {
+                sealsNewLibrary: Bool = LibrarySyncEngine.sealsNewLibraries, compaction: SyncCompactionPolicy? = .standard) {
         self.audioPolicy = audioPolicy; self.device = device; self.audioCache = audioCache
         self.presenceRefreshInterval = presenceRefreshInterval; self.cloud = cloud; self.keyStore = keyStore
-        self.network = network; self.sealsNewLibrary = sealsNewLibrary
+        self.network = network; self.sealsNewLibrary = sealsNewLibrary; self.compaction = compaction
     }
 
     public static func mac(displayName: String, canProcess: Bool) -> Self {
@@ -202,6 +205,11 @@ public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
     public var features: [String] = []
     /// In an encrypted library, whether it holds the current key.
     public var keyState: SyncDeviceKeyState?
+    /// When this device ID first wrote its presence. Nil for an earlier Daybook's record.
+    public var firstSeen: Date?
+    /// A later identity of the same device: the same name and class, first seen after this one was last seen. A device
+    /// reinstalled with the same sync folder takes a new device ID, and its earlier one is superseded by it.
+    public var supersededBy: String?
     public var reportsPresence: Bool { lastSeen != nil }
     /// Its Daybook reads and writes encrypted libraries. A device without presence (an older Daybook) doesn't.
     public var readsEncryptedLibraries: Bool { features.contains(LibrarySyncEngine.sealingFeature) }
@@ -215,9 +223,38 @@ public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
         guard let activity, activity.expiresAt > now else { return false }
         return activity.isRecording
     }
+
+    /// An identity not seen for this long is retired: it's no longer listed (it comes back if the device syncs again).
+    public static let retiredAfter: TimeInterval = 180 * 24 * 60 * 60
+
+    /// Retired: not seen for `retiredAfter`. This device, and devices known only from the journal (an earlier Daybook,
+    /// with no presence), never are.
+    public func isRetired(at now: Date = Date()) -> Bool {
+        guard !isCurrentDevice, let lastSeen else { return false }
+        return now.timeIntervalSince(lastSeen) >= Self.retiredAfter
+    }
+
+    /// Marks each identity a later identity of the same device supersedes (`supersededBy`): the same name and class, first
+    /// seen after this one was last seen. Two devices with the same name in use at once overlap, so neither is. This
+    /// device never is.
+    static func noteSuperseded(_ devices: inout [KnownSyncDevice]) {
+        for index in devices.indices where !devices[index].isCurrentDevice {
+            let device = devices[index]
+            guard let name = device.displayName, let deviceClass = device.deviceClass, let lastSeen = device.lastSeen else { continue }
+            devices[index].supersededBy = devices.filter { other in
+                other.id != device.id && other.displayName == name && other.deviceClass == deviceClass
+                    && other.firstSeen.map { $0 > lastSeen } == true
+            }.max { ($0.lastSeen ?? .distantPast, $0.id) < ($1.lastSeen ?? .distantPast, $1.id) }?.id
+        }
+    }
 }
 
 extension Array where Element == KnownSyncDevice {
+    /// The devices to list ("Devices in This Library"): each physical device once, without retired identities. Lookups
+    /// by device ID (presence, keys, handoffs) use the whole list.
+    public func inUse(at now: Date = Date()) -> [KnownSyncDevice] {
+        filter { $0.isCurrentDevice || ($0.supersededBy == nil && !$0.isRetired(at: now)) }
+    }
     /// The most recently seen other device that can process, for "Waiting for your Mac · last seen 2 h ago".
     /// Nil means no such device has synced this library (or none has written presence yet).
     public var latestProcessor: KnownSyncDevice? {

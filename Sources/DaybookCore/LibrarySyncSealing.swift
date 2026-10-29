@@ -11,6 +11,9 @@ import Foundation
 extension SyncManifest {
     /// The schema version of an encrypted library.
     static let sealedSchemaVersion = 2
+    /// The schema version of a compacted library, encrypted or not (LibrarySyncCompaction.swift): its journal has entries
+    /// whose parents were deleted, which an earlier version would wait for forever, so it stops at this one instead.
+    static let compactedSchemaVersion = 3
 
     /// How an encrypted library is sealed. Mutable, unlike the rest of the journal: keys are added (a device enabled
     /// encryption, a recovery key was saved, the key rotated) and retired. Two devices writing it at once leave iCloud
@@ -31,6 +34,10 @@ extension SyncManifest {
         /// files are deleted where they're found, and no device carries a checkpoint over from them. Nil for a library
         /// that didn't start over.
         var replaces: [UUID]?
+        /// Keys retired after a rotation (`retire`), and when: their files are gone, and once every device has moved
+        /// on they're removed from iCloud Keychain (`removeRetiredKeys`). A file found sealed with one this device no
+        /// longer holds is a leftover, deleted rather than waited for. Additive: earlier versions ignore it.
+        var retired: [RetiredKey]?
 
         struct Key: Codable, Equatable {
             var id: String
@@ -38,6 +45,14 @@ extension SyncManifest {
             /// The key wrapped with a recovery key (`RecoveryKey.wrap`), when one was saved.
             var recovery: String?
         }
+
+        struct RetiredKey: Codable, Equatable {
+            var id: String
+            var at: Date
+        }
+
+        /// Whether `id` (hex) is a key this library retired.
+        func isRetired(_ id: String) -> Bool { retired?.contains { $0.id == id } == true && !keys.contains { $0.id == id } }
 
         /// The key current among `keys`: the newest, by creation and then ID, so every device picks the same one.
         static func newest(_ keys: [Key]) -> Key? { keys.max { ($0.created, $0.id) < ($1.created, $1.id) } }
@@ -62,6 +77,11 @@ extension SyncManifest {
             result.migrator = [self, other].filter { $0.current == result.current }.map(\.migrator).min() ?? min(migrator, other.migrator)
             result.legacyRetired = [legacyRetired, other.legacyRetired].compactMap { $0 }.max()
             result.replaces = Self.union(replaces, other.replaces)
+            // A key one version retired stays retired, from the earlier date; one the other still lists is listed again
+            // until a later retirement takes it out once more.
+            var retiredByID: [String: Date] = [:]
+            for key in (retired ?? []) + (other.retired ?? []) { retiredByID[key.id] = min(retiredByID[key.id] ?? key.at, key.at) }
+            result.retired = retiredByID.isEmpty ? nil : retiredByID.map { RetiredKey(id: $0.key, at: $0.value) }.sorted { $0.id < $1.id }
             return result
         }
 
@@ -72,17 +92,25 @@ extension SyncManifest {
         }
     }
 
-    var isSealed: Bool { schemaVersion == Self.sealedSchemaVersion }
+    /// Encrypted: version 2, or a compacted library (3) that's encrypted.
+    var isSealed: Bool { schemaVersion >= Self.sealedSchemaVersion && sealing != nil }
+    /// Compacted (LibrarySyncCompaction.swift): version 3, encrypted or not.
+    var isCompacted: Bool { schemaVersion == Self.compactedSchemaVersion }
 
     /// The version gate, strict however tolerant decoding is: 1 is plaintext, 2 encrypted with a scheme this version
-    /// reads; anything else (or 2 with an unknown scheme) is a newer Daybook's.
+    /// reads, 3 compacted (plaintext, or encrypted with that scheme); anything else (or an unknown scheme) is a newer
+    /// Daybook's.
     static func checked(_ manifest: SyncManifest) throws -> SyncManifest {
         guard manifest.format == "DaybookSync" else { throw LibrarySyncError.invalidManifest }
         switch manifest.schemaVersion {
         case 1:
             return manifest
-        case sealedSchemaVersion:
-            guard let sealing = manifest.sealing, sealing.scheme == Sealing.currentScheme else { throw LibrarySyncError.unsupportedVersion(manifest.schemaVersion) }
+        case sealedSchemaVersion, compactedSchemaVersion:
+            guard let sealing = manifest.sealing else {
+                if manifest.schemaVersion == compactedSchemaVersion { return manifest }
+                throw LibrarySyncError.unsupportedVersion(manifest.schemaVersion)
+            }
+            guard sealing.scheme == Sealing.currentScheme else { throw LibrarySyncError.unsupportedVersion(manifest.schemaVersion) }
             guard sealing.keys.contains(where: { $0.id == sealing.current }),
                   sealing.keys.allSatisfy({ $0.id.count == 32 && SealedFormat.data(hex: $0.id) != nil }) else { throw LibrarySyncError.invalidManifest }
             return manifest
@@ -100,11 +128,13 @@ extension SyncManifest {
         decoder.dateDecodingStrategy = .iso8601
         let header = try decoder.decode(Header.self, from: data)
         guard header.format == "DaybookSync" else { throw LibrarySyncError.invalidManifest }
-        guard header.schemaVersion == 1 || header.schemaVersion == sealedSchemaVersion else { throw LibrarySyncError.unsupportedVersion(header.schemaVersion) }
-        // An encryption scheme this version doesn't know is a newer Daybook's, whatever shape the rest has.
-        if header.schemaVersion == sealedSchemaVersion,
-           (try? decoder.decode(SealingHeader.self, from: data))?.sealing?.scheme != Sealing.currentScheme {
-            throw LibrarySyncError.unsupportedVersion(header.schemaVersion)
+        guard [1, sealedSchemaVersion, compactedSchemaVersion].contains(header.schemaVersion) else { throw LibrarySyncError.unsupportedVersion(header.schemaVersion) }
+        // An encryption scheme this version doesn't know is a newer Daybook's, whatever shape the rest has. A compacted
+        // library may be plaintext (no scheme at all).
+        if header.schemaVersion >= sealedSchemaVersion {
+            let sealing = (try? decoder.decode(SealingHeader.self, from: data))?.sealing
+            let plaintextCompacted = header.schemaVersion == compactedSchemaVersion && sealing == nil
+            if !plaintextCompacted, sealing?.scheme != Sealing.currentScheme { throw LibrarySyncError.unsupportedVersion(header.schemaVersion) }
         }
         return try decoder.decode(SyncManifest.self, from: data)
     }
@@ -310,9 +340,9 @@ extension LibrarySyncEngine {
         return names.sorted().map { folder.appendingPathComponent($0) }
     }
 
-    /// The listing `hasRemoteChanges` compares: every journal file's path.
+    /// The listing `hasRemoteChanges` compares: every journal file's path, compaction records included.
     func listingPaths() throws -> Set<String> {
-        Set(try journalEntries(.event).map(\.path) + journalEntries(.metadata).map(\.path))
+        Set(try journalEntries(.event).map(\.path) + journalEntries(.metadata).map(\.path) + compactionEntries().map(\.path))
     }
 
     // MARK: Reading
@@ -345,6 +375,8 @@ extension LibrarySyncEngine {
             } catch let error as SealedObjectError {
                 // A library this one started over from: its files go (LibrarySyncStartOver.swift).
                 if error == .wrongLibrary, let header = SealedObject.header(of: bytes), sealing.replaces(header.libraryID) { throw SyncReplacedFile() }
+                // Sealed with a key this library retired and this device no longer holds: a leftover nobody can open.
+                if case .unknownKey(let id) = error, sealing.manifest.isRetired(id) { throw SyncReplacedFile() }
                 throw Self.syncError(error, name: entry.path)
             }
         }
