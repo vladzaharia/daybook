@@ -53,6 +53,7 @@ enum LibraryDemo {
         }
         Task {
             if !state.meetings.contains(where: { $0.title == ready }) { await seed(state) }
+            if SpeakerProfileDemo.isRequested { await SpeakerProfileDemo.seed(state.library) }
             settle(state)
             // Seeding is asynchronous: the launch's own `--select` and `--place` ran before it.
             if let title = LaunchOptions.value(after: "--select"), let id = state.meetings.first(where: { $0.title == title })?.id {
