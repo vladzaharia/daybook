@@ -356,7 +356,7 @@ enum SyncProblemWords {
 #if DEBUG
 /// Debug-only: `--sync-demo <state>` shows Settings › Library's iCloud Sync section in that state, without iCloud, for
 /// screenshots. Its buttons still act on the real (unconnected) controller. States: checking, off, signed-out,
-/// drive-off, unavailable, moving, on, syncing, downloading, paused, warning, account, folder-lost, folder-missing,
+/// drive-off, unavailable, moving, on, syncing, downloading, paused, warning, damaged, account, folder-lost, folder-missing,
 /// waiting, waiting-many (two iPhones with long names), encrypted, no-recovery-key, encrypting, dev-folder.
 @MainActor
 enum SyncSettingsDemo {
@@ -388,6 +388,14 @@ enum SyncSettingsDemo {
         case "downloading": return connected { $0.pendingDownloads = 3 }
         case "paused": return connected { $0.status = "Sync paused: The operation couldn’t be completed. No space left on device." }
         case "warning": return connected { $0.warnings = [SyncWarningWords.unsavedChange + ": The file “events-0042.json” couldn’t be saved."] }
+        case "damaged":
+            return connected {
+                $0.warnings = [
+                    SyncWarningWords.compose(SyncWarningWords.damagedHistory, details: "A synced change couldn’t be read: 3fa2c09e4b71d85e.json."),
+                    SyncWarningWords.compose(SyncWarningWords.keptBothRecordings,
+                                             details: "The one that was here is kept at ~/Library/Application Support/Daybook/Meetings/…/SyncConflicts/9c1d…-microphone.m4a."),
+                ]
+            }
         case "account": return SyncShown(iCloud: .accountChanged)
         case "folder-lost": return SyncShown(iCloud: .previousFolderAccessLost(nil))
         case "folder-missing": return SyncShown(iCloud: .previousFolderMissing)

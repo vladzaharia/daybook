@@ -203,6 +203,81 @@ listed in the branch's report. Still to check on hardware: the owner's layout re
 setup (`--window-actions` is there for it), the sidebar ring in an active window on a real import, and
 a real recorder's device change during a recording.
 
+## Sync follow-ups: compaction, new containers, reinstalls, encryption leftovers, warnings (2026-10-29)
+
+The open follow-ups in the sync engine and library encryption (docs/icloud-sync.md, "Compaction", "The iCloud
+container", "Devices and presence", "Encryption"). Temporary libraries and sync folders, synthetic audio and settings;
+no iCloud account, CloudKit, network, or model downloads.
+
+- **Compaction.** One Mac prunes settings versions that aren't heads and deleted conversations' history at once, and a
+  live conversation's history once every device seen in the last 30 days has acknowledged a proposal. The manifest
+  becomes version 3 first. `LibrarySyncCompactionTests` (14): settings pruned while a lagging phone publishes against a
+  version that's gone and waits for nothing; a conversation's history kept until the phone acknowledges, then pruned up to
+  each proposal's root, with later edits merging cleanly; a phone's concurrent edit, slow to reach iCloud, keeping its
+  merge base (the phone never acknowledges, nothing of that conversation goes, both changes kept with no conflict); a
+  phone away a month merging its offline edit against its stored base and publishing it next pass, with a newer
+  Daybook's unreadable entry elsewhere in the journal; deleted conversations keeping only their deletions once the phone
+  has applied them, after it kept a paragraph it added meanwhile as a new conversation; an event that alone names a
+  highlight sidecar staying, so a new Mac installs it; a recent device without `compact-1` holding compaction back until it's a month
+  old; only the Mac with the smallest ID compacting; the standard policy waiting for enough to gain; the frozen version 1
+  engine refusing version 3 and changing nothing; pruned files left out while their commit isn't uploaded, and a reader
+  that finds a parent gone before its commit waiting for it; an encrypted library's records sealed (kind 5, no
+  plaintext, no names), plaintext records from before encryption replaced, and records sealed again under a rotated key
+  by the sealer, with no Mac compacting, before the old key retires;
+  a newer Daybook's record a warning rather than a download, with no compacting over it.
+- **Measured** (`DAYBOOK_COMPACTION_MEASURE=1 swift test --filter LibrarySyncCompactionTests/testCompactionShrinks`, a
+  debug build on this Mac, other builds running): 200 settings versions with 20 profiles of 24 voiceprints each (0.4 MB a
+  version) and 100 conversations relabelled three times. Plaintext: 601 journal files and 109.2 MB before, 103 files and
+  0.7 MB after; a new device's first pass 3.56 s before, 1.04 s after. Encrypted: 601 files and 109.3 MB before, 103 files
+  and 0.7 MB after; first pass 6.46 s before, 2.09 s after. The ordinary test runs the same at 8 versions and 6
+  conversations.
+- **Two devices on a new container.** `LibrarySyncNewContainerTests` (3): a Mac and an iPhone each start an encrypted
+  library, iCloud brings both markers together, and both settle on the first one started with one marker left, the loser's
+  sealed files and key gone, both conversations on both, and nothing more published; the same winner whichever marker
+  is the copy (the first started, though its ID is the larger); libraries started a month apart still pausing. `LibrarySyncCompatibilityTests` and
+  `LibrarySyncStartOverTests` now also check the copy is deleted.
+- **One device, listed once.** The cause, reproduced on an iPhone 17 Pro simulator clone (iOS 27.1): every `simctl install`
+  over the app moved its data container, and each launch took a new device ID (4, then 5, then 6 presence records in the
+  sync folder). With the identity's keychain item named by the library's path within the container
+  (`SyncDeviceIdentityTests.testTheIdentitysKeychainAccountSurvivesTheContainerMoving`), three more installs moved the
+  container three times and the count stayed at 6. Settings › iCloud said "4 others" before the list was collapsed and
+  "1 other" after (the Studio Mac), from a sync folder with two earlier installs of the same iPhone as well.
+  `LibrarySyncReplicaTests.testAReinstalledDeviceIsListedOnceAndOldIdentitiesRetire`
+  (`firstSeen` kept, an earlier ID superseded, two in use at once both listed, retirement after 180 days, every ID still
+  known); `LibrarySyncEncryptionTests.testAnEarlierIdentityOfAReinstalledIPhoneIsListedOnce` (DaybookKit: not listed
+  among the devices that would stop syncing, while automatic encryption still waits for it to be a month old).
+- **Review.** An independent read of the change found that deleted conversations' history was pruned before every device
+  had applied the deletion (a concurrent edit's additions could be lost), that an event alone naming a highlight sidecar
+  could be pruned, that a key could retire while a compaction record was still sealed with it, that a newer-format entry
+  anywhere kept a returning device from merging, and that the smallest ID let a library an offline device started later
+  replace an established one. Each is fixed above, with a test.
+- **On an iPhone simulator** (a clone of the iPhone 17 Pro, iOS 27.1, a sync folder in the app's container): a plaintext
+  library whose Mac was last seen 40 days ago, with a recording only in iCloud (a placeholder). The iPhone encrypted it on
+  its own and, as the migrator waiting for that recording, showed "Encrypting · 1 left" with Use Cellular Data below it
+  (before this change, no switch).
+- **Encryption leftovers.** Retired keys: `LibrarySyncSealingTests.testARetiredKeyLeavesTheKeychainOnceEveryDeviceHasMovedOn`
+  (recorded in the manifest, kept 30 days, held back by a recent device still waiting for the current key, then removed;
+  a file sealed with it afterwards deleted, not waited for). Cellular: `testAPhoneAllowedCellularSealsHistoryOffWiFi`,
+  `LibraryWordsTests`. Reset encryption: not built; Start Over is the disaster path, and a reset while a key may exist
+  would delete what's only in iCloud (docs/icloud-sync.md, "No separate reset encryption"). iPhone backups: already
+  automatic for an encrypted library (`BackupExclusion`, since the 0.3.0 review); kept as it is, with the reasons in
+  docs/iphone.md, "Backups".
+- **Warnings.** `SyncWarningWordsTests` (a pass with a damaged entry warns in plain sentences, its name behind Details;
+  waiting for a download or the key is the whole warning), `LibrarySyncApplyTests.testADamagedEntrysNoticeIsAPlainSentence`,
+  `LibrarySyncTests` (a recording kept beside its copy). Settings › Library captured before and after with
+  `--sync-demo damaged` (a new demo state).
+
+Still needs the owner's devices:
+
+- Two devices launched at once on a new iCloud container (a new Apple Account, or the container's data deleted in
+  Settings): whether iCloud keeps a conflict version or a renamed copy, and that both settle on one library.
+- Compaction on real iCloud: commits uploading before the pruned files go, a phone that was offline for weeks coming back,
+  and the sync folder's size before and after (Settings › Apple Account › iCloud › Manage Storage › Daybook).
+- A rotated key leaving iCloud Keychain on every device 30 days on (Passwords app, or Keychain Access on the Mac:
+  `local.daybook.library-key`).
+- An iPhone reinstalled (delete the app, install again): "Devices in This Library" lists it once.
+- An iPhone that turned encryption on sealing history on cellular with Use Cellular Data on.
+
 ## The four streams together (2026-10-29)
 
 Processing quality, speaker profiles, live transcription, and recording across devices were built
