@@ -31,6 +31,9 @@ final class PhoneDevices {
     let hub: DeviceHub
     /// Moving a recorder between this iPhone and a Mac. The app model plugs in the link.
     let handoff: RecorderHandoff
+    /// The recorders recording along with this iPhone's shared recording (docs/multipoint.md): started
+    /// with it, their audio saved into it as they record, stopped with it.
+    let cascade: RecorderCascade
     let mode: Mode
     /// Bumps when the hub or a session publishes, for Observation-based views.
     private(set) var revision = 0
@@ -57,6 +60,7 @@ final class PhoneDevices {
     struct Timing {
         var soundcore = SoundcoreTiming()
         var handoff = RecorderHandoff.Timing()
+        var cascade = RecorderCascade.Timing()
     }
 
     /// `transport`, when given, replaces the mode's link to the recorder (tests: a simulated one).
@@ -88,6 +92,9 @@ final class PhoneDevices {
         if let transport { environment.soundcoreTransport = transport }
         hub = DeviceHub(environment: environment)
         handoff = RecorderHandoff(library: library.controller, devices: hub, deviceClass: .phone, defaults: defaults, timing: timing.handoff)
+        let hub = self.hub
+        cascade = RecorderCascade(sessions: { hub.sessions })
+        cascade.timing = timing.cascade
         weakSelf = self
         hub.importer = { [weak self] url, identity, attachTo, source in
             guard let self else { throw DaybookError.libraryUnavailable }
@@ -96,6 +103,16 @@ final class PhoneDevices {
             let linked = attachTo ?? self.library.controller.meetings.first { meeting in
                 meeting.companions?.contains { $0.deviceKind == identity.kind && $0.recordingID == identity.recordingID } == true
             }?.id
+            // A shared recording's conversation that isn't in this library yet (a Mac's, not synced here):
+            // made as the device leading it has it, so the copies agree when they meet.
+            if let linked, self.library.controller.meeting(linked) == nil, let pending = self.cascade.pendingConversation(linked) {
+                try await self.library.reload()
+                if self.library.controller.meeting(linked) == nil {
+                    self.library.controller.add(Meeting(id: linked, title: pending.title ?? PhoneLibrary.deviceTitle(identity, fallback: url),
+                                                        date: pending.date ?? PhoneLibrary.deviceStart(identity) ?? Date(),
+                                                        status: pending.ledHere ? .imported : .draft))
+                }
+            }
             let filed = try await self.library.importDeviceRecording(url, identity: identity, attachTo: linked, source: source,
                                                                      requestTranscription: self.settings.requestsTranscription)
             self.lastImported = filed
@@ -142,8 +159,24 @@ final class PhoneDevices {
     /// The library's ownership records changed, or a recorder's serial became known.
     func applyOwnership() {
         hub.recorderOwnersChanged(library.controller.recorderOwners, thisDevice: library.controller.thisDevice.id)
+        holdRecorders()
         revision &+= 1
     }
+
+    /// A recorder this iPhone manages that records along with it keeps its link while in range, so its
+    /// button is heard, even with Daybook in the background (`SoundcoreConnection.staysConnected`).
+    /// Never in tests' inert mode, which has no recorder to reach.
+    func holdRecorders() {
+        guard mode != .inert || holdsInTests else { return }
+        for session in hub.sessions {
+            guard let soundcore = session.direct as? SoundcoreConnection else { continue }
+            let hold = session.managedElsewhere == nil && session.device.recordsAlongsideMac && session.device.isEnabled(.direct)
+            if soundcore.staysConnected != hold { soundcore.staysConnected = hold }
+        }
+    }
+
+    /// Tests with a simulated recorder hold it like the app does.
+    @ObservationIgnored var holdsInTests = false
 
     /// Manage this recorder on this iPhone: other devices stop connecting to it (setting a recorder
     /// up here claims it outright; the device that had it lets go and hands over what was waiting).
@@ -195,6 +228,9 @@ final class PhoneDevices {
     /// becomes its manager.
     func commitSetup() {
         guard let session = hub.pendingSetup else { return }
+        // Its button can start a recording while Daybook is in the background, which a notification
+        // tells the person about: asked now, while they're setting it up.
+        if !LaunchOptions.isTestHost { DeviceNotifications.requestAuthorizationIfNeeded() }
         hub.commitSetup()
         followSessions()
         claim(session)
@@ -219,6 +255,7 @@ final class PhoneDevices {
     private func followSessions() {
         let ids = Set(hub.sessions.map(\.id))
         sessionSubscriptions = sessionSubscriptions.filter { ids.contains($0.key) }
+        holdRecorders()
         for session in hub.sessions where sessionSubscriptions[session.id] == nil {
             // Listen Live is observed apart from the session (its text changes often): follow both.
             var changes = session.objectWillChange.eraseToAnyPublisher()

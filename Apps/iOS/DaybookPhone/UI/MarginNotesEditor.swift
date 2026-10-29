@@ -59,8 +59,10 @@ struct MarginNotesEditor: UIViewRepresentable {
             view.contentInset.bottom = bottomInset
             view.verticalScrollIndicatorInsets.bottom = bottomInset
         }
-        if view.text != text && !context.coordinator.isEditing {
+        // While typing, only a change from elsewhere (a Mac's paragraph during a shared recording) is taken.
+        if view.text != text && (!context.coordinator.isEditing || text != context.coordinator.lastWritten) {
             view.setText(text)
+            context.coordinator.lastWritten = text
             view.invalidateIntrinsicContentSize()
         }
     }
@@ -83,6 +85,8 @@ struct MarginNotesEditor: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: MarginNotesEditor
         var isEditing = false
+        /// The text this editor last wrote back, so a change from elsewhere is told from its own.
+        var lastWritten: String?
         init(_ parent: MarginNotesEditor) { self.parent = parent }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -97,6 +101,7 @@ struct MarginNotesEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard let view = textView as? MarginTextView else { return }
+            lastWritten = view.text
             parent.text = view.text
             view.textDidChange()
         }

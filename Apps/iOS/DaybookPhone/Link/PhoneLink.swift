@@ -29,6 +29,10 @@ final class PhoneLink {
         /// Its sync replica ID (a Mac's equals its link ID) and whether it hands recorders over.
         var syncDeviceID: String?
         var handsOffRecorders = false
+        /// It joins and stops shared recordings on its own (`LinkCapabilities.cascadeFeature`) and takes
+        /// notes and bookmarks over the link (`sharedNotesFeature`), from its capabilities.
+        var cascades = false
+        var sharesNotes = false
         /// The synced library it has open, from its capabilities.
         var libraryID: UUID?
         /// The recorders it manages, as it last said, on this iPhone's clock; kept after it disconnects,
@@ -102,6 +106,8 @@ final class PhoneLink {
     @ObservationIgnored var onMacConnected: ((UUID) -> Void)?
     /// A Mac said what it's recording, or that it's idle.
     @ObservationIgnored var onMacRecordingState: ((UUID, LinkRecordingState) -> Void)?
+    /// A Mac wrote a note or made or changed a bookmark while it records a conversation with this iPhone.
+    @ObservationIgnored var onSharedNotes: ((LinkMessage, UUID) -> Void)?
 
     /// A Mac's word on its recorder lasts this long; it repeats it every 15 s while recording.
     static let recordingStateLifetime: TimeInterval = 45
@@ -125,7 +131,8 @@ final class PhoneLink {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
         return LinkIdentity(deviceID: UUID(uuidString: installation) ?? UUID(), name: name, deviceClass: .iPhone,
                             appVersion: version, libraryID: libraryID, canProcess: false,
-                            features: ["recordControl", "bookmarks", LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature],
+                            features: ["recordControl", "bookmarks", LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature,
+                                       LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature],
                             syncDeviceID: syncDeviceID)
     }
 
@@ -230,10 +237,10 @@ final class PhoneLink {
     /// Asks a Mac to start or stop recording this conversation too. The answer, or why there isn't one.
     /// `id` names the request: sent again with the same ID (after a lost answer), the Mac answers once.
     func request(_ action: LinkRecordRequest.Action, id: UUID = UUID(), conversationID: UUID, timing: LinkTiming?, title: String? = nil,
-                 date: Date? = nil, from macID: UUID) async -> Result<LinkRecordAck, RecordRequestFailure> {
+                 date: Date? = nil, cascade: LinkCascade? = nil, from macID: UUID) async -> Result<LinkRecordAck, RecordRequestFailure> {
         do {
             let reply = try await client.request(LinkRecordRequest(id: id, action: action, conversationID: conversationID, timing: timing,
-                                                                   title: title, date: date), from: macID)
+                                                                   title: title, date: date, cascade: cascade), from: macID)
             switch reply.outcome {
             case .accepted(let ack): return .success(ack)
             case .refused(let refusal): return .failure(.refused(refusal))
@@ -295,6 +302,20 @@ final class PhoneLink {
         Task { try? await client.send(.bookmark(bookmark)) }
     }
 
+    /// Notes and bookmark changes for the Macs recording a conversation with this iPhone, in order.
+    func sendShared(_ messages: [LinkMessage], to macIDs: [UUID]) {
+        guard !messages.isEmpty, !macIDs.isEmpty else { return }
+        let previous = sharedSend
+        sharedSend = Task { [client] in
+            await previous?.value
+            for mac in macIDs {
+                for message in messages { try? await client.send(message, to: mac) }
+            }
+        }
+    }
+
+    @ObservationIgnored private var sharedSend: Task<Void, Never>?
+
     /// What the Mac managing a recorder last said about it, and that Mac's name; nil once too old to say.
     func recorderReport(kind: String, serial: String?, now: Date = Date()) -> (mac: String, state: LinkRecorderState)? {
         macs.flatMap { mac in mac.recorders.filter { $0.describes(kind: kind, serial: serial) }.map { (mac.name, $0) } }
@@ -354,6 +375,8 @@ final class PhoneLink {
                 mac.syncDeviceID = peer.capabilities.syncDeviceID ?? peer.deviceID.uuidString
                 mac.handsOffRecorders = peer.capabilities.handsOffRecorders
                 mac.libraryID = peer.capabilities.libraryID
+                mac.cascades = peer.capabilities.cascades
+                mac.sharesNotes = peer.capabilities.sharesNotes
             }
             onMacsChanged?()
             if case .connected = event { onMacConnected?(peer.deviceID) }
@@ -390,8 +413,10 @@ final class PhoneLink {
                 if let recorders = state.recorders { mac.recorders = recorders.map { $0.moved { clock?.localDate(fromPeer: $0) ?? $0 } } }
             }
             onMacRecordingState?(macID, heard)
-        case .bookmark, .processingNudge:
-            // A Mac's bookmarks are on its own recording and arrive with it through sync.
+        case .bookmark, .note, .bookmarkChange:
+            // While a Mac records a conversation with this iPhone, its notes and bookmarks show here too.
+            onSharedNotes?(message, macID)
+        case .processingNudge:
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             onHandoffMessage?(message, macID)

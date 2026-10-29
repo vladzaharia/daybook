@@ -35,14 +35,14 @@ final class PhoneSettings {
 
     var captionLocale: Locale { captionLocaleIdentifier.map(Locale.init(identifier:)) ?? .current }
 
-    /// Whether each paired Mac may start recording here, asked once right after pairing and changeable
-    /// in that Mac's row in Settings › Macs. An answer belongs to one pairing (by its date), so pairing
-    /// again asks again.
+    /// Whether each paired Mac may start recording here: on when a Mac is paired (recording on one
+    /// device starts every device connected to it, docs/multipoint.md), and switchable in that Mac's row
+    /// in Settings › Macs (Can Start Recording). A choice belongs to one pairing (by its date), so pairing
+    /// again turns it on again.
     private var macRecordDecisions: [String: MacRecordDecision] {
         didSet { defaults.set(try? JSONEncoder().encode(macRecordDecisions), forKey: Keys.macRecordDecisions) }
     }
-    /// When this iPhone started asking. A Mac paired before then was never asked and keeps the
-    /// behavior it had: it may start recording.
+    /// When this iPhone first kept these choices (earlier builds asked after pairing).
     @ObservationIgnored let macRecordDecisionsSince: Date
 
     struct MacRecordDecision: Codable, Equatable {
@@ -50,20 +50,18 @@ final class PhoneSettings {
         var pairedAt: Date
     }
 
-    /// May this Mac (paired at `pairedAt`) start recording on this iPhone?
+    /// May this Mac (paired at `pairedAt`) start recording on this iPhone? Yes unless the person turned
+    /// it off for this pairing.
     func macMayStartRecording(_ macID: UUID, pairedAt: Date) -> Bool {
         if let decision = macRecordDecisions[macID.uuidString], abs(decision.pairedAt.timeIntervalSince(pairedAt)) < 0.001 {
             return decision.allowed
         }
-        return pairedAt < macRecordDecisionsSince
+        return true
     }
 
-    /// Whether this pairing was answered (or predates asking): the pairing sheet asks only when not.
-    func hasMacRecordDecision(_ macID: UUID, pairedAt: Date) -> Bool {
-        if pairedAt < macRecordDecisionsSince { return true }
-        guard let decision = macRecordDecisions[macID.uuidString] else { return false }
-        return abs(decision.pairedAt.timeIntervalSince(pairedAt)) < 0.001
-    }
+    /// Whether the pairing sheet should ask: never now, since a paired Mac may start recording until the
+    /// person turns it off. A choice made when earlier builds asked still stands.
+    func hasMacRecordDecision(_ macID: UUID, pairedAt: Date) -> Bool { true }
 
     func setMacMayStartRecording(_ allowed: Bool, for macID: UUID, pairedAt: Date) {
         macRecordDecisions[macID.uuidString] = MacRecordDecision(allowed: allowed, pairedAt: pairedAt)
