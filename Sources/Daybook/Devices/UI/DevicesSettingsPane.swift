@@ -21,12 +21,12 @@ struct DevicesSettingsPane: View {
                     HStack(spacing: Space.s3) {
                         Image(systemName: "waveform.badge.microphone")
                             .font(.system(size: 22))
-                            .foregroundStyle(DaybookStyle.brandGradient)
+                            .foregroundStyle(.secondary)
                             .frame(width: 32)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("No recorders yet")
-                            Text("Add a Soundcore Work, Daybook on your iPhone, or any recorder that saves audio files.")
+                            Text("Soundcore Work, Daybook on iPhone, or any recorder that saves audio files.")
                                 .font(TypeStyle.status).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -104,8 +104,9 @@ private struct DeviceSettingsSection: View {
             HStack(spacing: Space.s2) {
                 // One glyph column, so every recorder's name starts at the same x.
                 Image(systemName: kind.systemImage)
-                    .foregroundStyle(session.isLinked ? AnyShapeStyle(DaybookStyle.neonMint) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(session.isLinked ? AnyShapeStyle(DaybookStyle.accent) : AnyShapeStyle(.secondary))
                     .frame(width: 20)
+                    .accessibilityHidden(true)
                 Text(session.device.name)
             }
         }
@@ -149,8 +150,8 @@ private struct DeviceSettingsSection: View {
         if direct.capabilities.contains(.recordControl) {
             Toggle("Also record on \(session.device.name) when this Mac records",
                    isOn: Binding(get: { session.device.recordsAlongsideMac }, set: { on in session.update { $0.alsoRecordsWithMac = on } }))
-                .controlSize(.mini)
-                .padding(.leading, Space.s4)
+                .controlSize(.regular)
+                .padding(.leading, Space.s5)
                 .disabled(!direct.isSetUp || !session.device.isEnabled(.direct))
         }
         RecorderOwnershipRow(state: state, session: session)
@@ -226,7 +227,7 @@ private struct FolderRows: View {
         if files.waitingForICloud > 0 { return files.summary }
         guard files.isWatching else { return "Not watching" }
         guard let last = files.lastImportDate else { return "Watching for new audio" }
-        return "Watching · last import \(DeviceDateFormat.relative(last))"
+        return "Watching · Last import \(DeviceDateFormat.relative(last))"
     }
 }
 
@@ -258,8 +259,8 @@ private struct PhoneSettingsRows: View {
         }
         Toggle("Also record on \(session.device.name) when this Mac records",
                isOn: Binding(get: { session.device.recordsAlongsideMac }, set: { on in session.update { $0.alsoRecordsWithMac = on } }))
-            .controlSize(.mini)
-            .padding(.leading, Space.s4)
+            .controlSize(.regular)
+            .padding(.leading, Space.s5)
             .disabled(direct?.isSetUp != true)
         if sync.folder == nil {
             LabeledContent("Recordings") {
