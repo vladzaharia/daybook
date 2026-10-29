@@ -85,9 +85,10 @@ public extension RecordingTrack {
 public extension Meeting {
     /// Tracks that need their own transcript. A track another track was derived from (such as the
     /// microphone before echo removal) is transcribed through its derivative; the original stays in
-    /// the library for playback, provenance, and reprocessing.
+    /// the library for playback, provenance, and reprocessing. A recorder's live portion whose own file
+    /// is here too is replaced by that file (LivePortions.swift).
     var transcribableTracks: [RecordingTrack] {
-        let superseded = Set(tracks.compactMap(\.derivedFrom))
+        let superseded = Set(tracks.compactMap(\.derivedFrom)).union(supersededLivePortions.keys)
         return tracks.filter { !superseded.contains($0.id) }
     }
 
