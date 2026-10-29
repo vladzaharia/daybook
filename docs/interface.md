@@ -208,6 +208,9 @@ Debug builds accept launch arguments that open a specific surface against a sepa
                                       state; see LibraryDemo.swift. With it: --inspector-all (every inspector
                                       section open), --multi-select "<title>|<title>", --notice "<text>"
   --window-size <W>x<H>               the main window's size, such as 900x700
+  --window-actions <step,…>           what the main window goes through before a snapshot, 1.5 s apart:
+                                      activate, fullscreen, toolbar, zoom, top, sidebar (full screen
+                                      needs activate, so run it as an app with `open`)
   --model-demo <step,…>               Settings › Models states without the network; see models.md
   --sync-demo <state>                 Settings › Library › iCloud Sync in a state, without iCloud; see SyncSettingsDemo
   --sync-sheet encrypt|recovery-key|enter-key   with --sync-demo, one of its sheets
