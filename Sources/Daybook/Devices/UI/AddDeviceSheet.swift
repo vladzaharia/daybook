@@ -120,11 +120,8 @@ private struct KindChooser: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Image(systemName: "plus.circle")
-                .font(.system(size: 30, weight: .light))
-                .foregroundStyle(DaybookStyle.brandGradient)
-                .accessibilityHidden(true)
-            Text("Add a Recorder").font(.title3.weight(.semibold)).padding(.top, Space.s3)
+            Text("Add Recorder").font(.title3.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             VStack(spacing: Space.s2) {
                 ForEach(DeviceCatalog.kinds) { kind in
                     KindCard(kind: kind, existing: kind.allowsMultiple ? nil : state.devices.session(kind: kind.id)) { choose(kind) }
@@ -150,11 +147,13 @@ private struct KindCard: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.s4) {
+                // A tile in the secondary ink, as on the iPhone's Add Recorder: the accent stays on actions.
                 Image(systemName: kind.systemImage)
-                    .font(.system(size: 22))
-                    .foregroundStyle(DaybookStyle.brandGradient)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.secondary)
                     .frame(width: 44, height: 44)
-                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: Space.s2) {
                         Text(kind.name).font(.system(size: 13, weight: .semibold))
@@ -233,7 +232,7 @@ private struct MethodChooser: View {
     }
 }
 
-/// One way to bring recordings in. The recommended one carries a hairline in the accent.
+/// One way to bring recordings in. The recommended one is marked, and its button is the prominent one.
 private struct MethodCard: View {
     let method: ConnectionMethod
     let recommended: Bool
@@ -244,7 +243,7 @@ private struct MethodCard: View {
         HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
             Image(systemName: method.systemImage)
                 .font(.system(size: 17))
-                .foregroundStyle(recommended ? AnyShapeStyle(DaybookStyle.accent) : AnyShapeStyle(.secondary))
+                .foregroundStyle(.secondary)
                 .frame(width: 24)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: Space.s1) {
@@ -275,12 +274,6 @@ private struct MethodCard: View {
         }
         .padding(Space.s4)
         .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            if recommended && !isSetUp {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(DaybookStyle.accent.opacity(0.35), lineWidth: 1)
-            }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(recommended ? "\(method.title), recommended" : method.title)
     }
@@ -307,7 +300,7 @@ private struct DiscoveryStep: View {
             HStack(alignment: .center, spacing: Space.s3) {
                 Image(systemName: searching || connecting ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
                     .font(.system(size: 20))
-                    .foregroundStyle(DaybookStyle.accent)
+                    .foregroundStyle(.secondary)
                     .symbolEffect(.variableColor.iterative, isActive: (searching || connecting) && !reduceMotion)
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 28)
@@ -331,8 +324,22 @@ private struct DiscoveryStep: View {
                     default: connection.search()
                     }
                 }
-                .padding(.top, Space.s4)
                 .transition(.deviceNotice(reduceMotion: reduceMotion))
+            }
+
+            // What it found comes first, straight under the title; the tips are for when it doesn't.
+            if !connection.discovered.isEmpty {
+                VStack(spacing: 0) {
+                    let nearest = connection.discovered.max { $0.signal.bars < $1.signal.bars }?.id
+                    ForEach(Array(connection.discovered.enumerated()), id: \.element.id) { index, recorder in
+                        if index > 0 { Divider().padding(.leading, 44) }
+                        FoundRow(recorder: recorder, symbol: session.kind.systemImage, prominent: recorder.id == nearest,
+                                 connection: connection)
+                            .transition(.opacity)
+                    }
+                }
+                .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.top, Space.s4)
             }
 
             VStack(alignment: .leading, spacing: Space.s2) {
@@ -353,21 +360,6 @@ private struct DiscoveryStep: View {
                 }
                 .padding(.top, Space.s4)
                 .transition(.opacity)
-            }
-
-            if !connection.discovered.isEmpty {
-                Text("Found Nearby").font(.system(size: 13, weight: .semibold)).padding(.top, Space.s5)
-                VStack(spacing: 0) {
-                    let nearest = connection.discovered.max { $0.signal.bars < $1.signal.bars }?.id
-                    ForEach(Array(connection.discovered.enumerated()), id: \.element.id) { index, recorder in
-                        if index > 0 { Divider().padding(.leading, 44) }
-                        FoundRow(recorder: recorder, symbol: session.kind.systemImage, prominent: recorder.id == nearest,
-                                 connection: connection)
-                            .transition(.opacity)
-                    }
-                }
-                .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(.top, Space.s2)
             }
 
             HStack {
@@ -412,7 +404,7 @@ private struct FoundRow: View {
 
     var body: some View {
         HStack(spacing: Space.s3) {
-            Image(systemName: symbol).foregroundStyle(DaybookStyle.brandGradient).frame(width: 20)
+            Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 20)
                 .accessibilityHidden(true)
             Text(recorder.name).lineLimit(1)
             Spacer()
@@ -447,24 +439,17 @@ private struct FoundRow: View {
     }
 }
 
-/// A problem inside the sheet: the same copy as the device page banner, with its first action.
+/// A problem inside the sheet: the device page's problem box and copy, with its first action.
 private struct SetupProblem: View {
     let problem: DeviceProblem
     let perform: (DeviceProblemAction) -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(problem.title).font(TypeStyle.statusLead)
-                Text(problem.message).font(TypeStyle.status).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
+        DeviceAttentionBox(kind: .problem, symbol: "exclamationmark.triangle.fill", title: problem.title, message: problem.message) {
             if let action = problem.actions.first(where: { ![.technicalDetails, .dismiss, .setUpFolder].contains($0) }) {
-                Button(action.title) { perform(action) }.controlSize(.small)
+                DeviceBoxPrimaryButton(title: action.title) { perform(action) }
             }
         }
-        .padding(Space.s3)
-        .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .contain)
     }
 }
