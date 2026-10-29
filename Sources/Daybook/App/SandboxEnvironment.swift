@@ -24,7 +24,7 @@ enum SandboxEnvironment {
 /// app stops at launch and says where it may write.
 enum LaunchPaths {
     /// Flags whose value is a path, and whether it's a folder.
-    static let flags = ["--library", "--snapshot", "--models", "--output", "--audio", "--evaluate"]
+    static let flags = ["--library", "--snapshot", "--models", "--output", "--audio", "--evaluate", "--speaker-report"]
 
     /// One message per flag whose path this run can't reach; empty outside the sandbox.
     static func problems(arguments: [String], sandboxed: Bool = SandboxEnvironment.isSandboxed,
