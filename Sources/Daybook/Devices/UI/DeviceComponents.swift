@@ -147,70 +147,19 @@ struct DeviceProblemBanner: View {
     }
 }
 
-/// A state that needs the person, drawn as a conversation's status box (`StatusBox`: its fills,
-/// glyph column, padding, and corners): a problem (warning), or something to know (quiet). It always
-/// spans the column, and its actions move under the message when the column is narrow.
+/// A state that needs the person, as a conversation's status box (`StatusBox`): a problem (warning),
+/// or something to know (quiet), spanning the column, its actions under the message when it's narrow.
 struct DeviceAttentionBox<Actions: View>: View {
     var kind: StatusBoxKind = .info
     let symbol: String
     let title: String
     var message: String?
     @ViewBuilder var actions: Actions
-    @State private var width: CGFloat = DaybookStyle.measure
-    @Environment(\.colorScheme) private var scheme
-
-    private var stacked: Bool { width < 520 }
-    private var tint: Color {
-        switch kind {
-        case .problem: return Ink.warning
-        case .accent: return DaybookStyle.accent
-        case .info: return Ink.secondary
-        }
-    }
-    private var fill: Color {
-        switch kind {
-        case .problem: return Ink.warning.opacity(scheme == .dark ? 0.12 : 0.08)
-        case .accent: return DaybookStyle.accent.opacity(0.08)
-        case .info: return DaybookStyle.quietFill
-        }
-    }
 
     var body: some View {
-        HStack(alignment: stacked ? .firstTextBaseline : .center, spacing: Space.s3) {
-            Image(systemName: symbol)
-                .font(.system(size: 15))
-                .symbolRenderingMode(kind == .problem ? .monochrome : .hierarchical)
-                .foregroundStyle(tint)
-                .frame(width: 18)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: Space.s2) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(TypeStyle.statusLead).foregroundStyle(kind == .problem ? Ink.warning : Ink.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let message {
-                        Text(message).font(TypeStyle.status).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if stacked { actionRow }
-            }
-            .layoutPriority(1)
-            if !stacked {
-                Spacer(minLength: Space.s3)
-                actionRow
-            }
-        }
-        .padding(Space.s3)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-        .padding(.top, Space.s4)
-        .transition(.opacity)
-    }
-
-    private var actionRow: some View {
-        HStack(spacing: Space.s3) { actions }
-            .controlSize(.small)
-            .fixedSize()
+        StatusBox(kind: kind, symbol: symbol, title: title, message: message, actions: actions)
+            .padding(.top, Space.s4)
+            .transition(.opacity)
     }
 }
 

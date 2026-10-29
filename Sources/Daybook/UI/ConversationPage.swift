@@ -463,9 +463,11 @@ struct StatusBox<Actions: View>: View {
                 .symbolRenderingMode(kind == .problem ? .monochrome : .hierarchical)
                 .foregroundStyle(tint)
                 .frame(width: 18)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: Space.s2) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(TypeStyle.statusLead).foregroundStyle(kind == .problem ? Ink.warning : Ink.body)
+                        .fixedSize(horizontal: false, vertical: true)
                     if let message {
                         Text(message).font(TypeStyle.status).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true)
                     }
