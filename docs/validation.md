@@ -1,5 +1,73 @@
 # Validation record
 
+## Processing quality: background audio, notes in summaries, Mac-first multipoint (2026-10-29)
+
+Three of the owner's requests: keep TV, radio, and music out ([architecture](architecture.md#background-audio)),
+weight and fold notes and bookmarks into summaries ([templates](templates.md#notes-and-bookmarks)), and
+process this Mac's audio while saying it's waiting for the iPhone's ([multipoint](multipoint.md#mac-first)).
+Synthetic audio, temporary libraries and sync folders, loopback, deterministic models; no model
+downloads, no recording, no Bluetooth.
+
+**Background audio, measured.** Apple's built-in classifier (SoundAnalysis `.version1`, two-second
+windows every second) on recordings made from `say` voices (Samantha, Daniel, Fred, Karen, Moira,
+Rishi, Tessa) and a synthetic band (chord pad, plucked arpeggio, bass, kick, snare, and hi-hat at
+120 bpm), mixed at known levels, in a debug build:
+
+- Speech alone reads speech 0.94, music 0.09; the band alone, music 0.90, speech 0.00. 24 s classifies
+  in 0.34 s.
+- The classifier has no TV or radio label, and gives a person talking over music and a presenter over a
+  music bed at the same relative level the same scores (speech about 0.8, music about 0.7). So a
+  broadcast voice is judged only when it's also quieter than the conversation (rule 3).
+- Sweep, a person alone and then a second voice over the band: a second person (5 voices; 0, −3, and
+  −6 dB against the first; music 20, 15, 12, 9, and 6 dB under their voice) was kept in all 75 cases.
+  A presenter (Daniel; −3, −6, −10, and −14 dB; music 10, 6, 3, and 0 dB under) was judged a broadcast
+  in the 4 cases at least 10 dB quieter with music within 3 dB, and kept in the other 12 (missed, the
+  conservative side). The first thresholds tried (3 dB quieter, margin 0.2) judged a person 6 dB
+  quieter over music 12 to 15 dB down a broadcast (Fred, Tessa); the shipped ones (7 dB, 0.15) don't.
+- The living-room fixture (64 s), as the recognizer and diarizer would report it:
+
+  | Passage | Speech | Music | Result |
+  | --- | --- | --- | --- |
+  | The person alone, 0–6 s | 0.95 | 0.09 | kept |
+  | A presenter 10 dB down over a bed 3 dB under it, 12–19 s | 0.77 | 0.72 | broadcast |
+  | "Thank you for watching" over the TV's music alone, 24–32 s | 0.00 | 0.86 | music |
+  | The person over music 20 dB down, 32–39 s | 0.94 | 0.49 | kept |
+  | A second person over music 12 dB down, 44–50 s | 0.82 | 0.76 | kept |
+  | The person alone again, 56–60 s | 0.95 | 0.13 | kept |
+
+Tests: `BackgroundAudioTests` (8, core: sound tags, music without speech, a broadcast voice only beside
+the conversation and only when quieter, named speakers never judged, compact frames, fusion leaving
+passages out and Include bringing them back, a passage another recording heard as conversation kept,
+bookmark context, merging the choice); `SoundClassifierTests` (4: the classifier on synthetic audio, the
+living room, a broadcast voice's turns kept out of voice profiles and its speaker given no embedding,
+a recording classified once and a classifier that can't run leaving everything in).
+
+**Notes in summaries.** `SummaryNotesTests` (7) with a model that records every prompt: note windows
+(a minute before, 15 s after) and bookmark windows (30 s before, a minute after), notes and bookmarks
+placed in the transcript at their times, untimed notes listed, a bookmark on a recording that isn't
+lined up carrying its own passages, trimming that gives every note its nearest passage first, the short
+prompt (notes in place, folded in, never listed or copied), the long one (each part sees its notes and
+every note, the marked passages reach the final pass word for word and unmarked filler only
+compressed), templates with notes, a note's words never accepted as a commitment's quote, and inference
+that only takes strings getting what it always did. Not measured: how well a real model (Gemma 4) folds
+notes in, which needs real conversations and the models, not downloaded here.
+
+**Mac first.** `AwaitedRecordingTests` (4, DaybookKit: which links are awaited, arrival by recording ID
+and Listen Live portion, two days, several devices, untranscribed audio first), `MacFirstMultipointTests`
+(1, application: this Mac records with a phone over loopback, summarizes its own audio while the
+phone's is blocked from arriving, says "Waiting for iPhone audio" in the row and Floating Notes and
+"Waiting for audio from …" on the page, keeps a correction, a renamed speaker, and notes when the
+phone's recording arrives through sync and is added, with the first summary in Version History), and
+`AwaitingRecordingStatusTests` (1, iPhone: its row and page). The list row, page line, and inspector
+hooks were captured with `--library <scratch> --device-demo none --snapshot`.
+
+`swift test` passed 1,078 XCTest cases across the seven bundles (one skipped, as before); `scripts/build-ios.sh --test` on a dedicated iPhone 17 Pro simulator
+(iOS 27.0, deleted afterwards) passed 158.
+
+**Still to check:** real rooms with a TV, a radio, and background music at several distances, real
+voices, and a news anchor without music (expected to stay in); summaries from real models with notes
+and bookmarks; the waiting line through real iCloud latency with a real iPhone.
+
 ## Soundcore: a list that doesn't come, and Details (2026-10-28)
 
 From the owner's iPhone (0.4.1): Soundcore Work "Connected · 100%" with "Nothing New to Import" while
