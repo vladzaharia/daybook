@@ -448,6 +448,30 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(files("Sealed/Blobs").count, 6)
     }
 
+    /// With cellular allowed (Settings › iCloud › Use Cellular Data, as for model downloads), a phone sealing the history
+    /// downloads recordings off Wi‑Fi too, still a batch at a time.
+    func testAPhoneAllowedCellularSealsHistoryOffWiFi() async throws {
+        XCTAssertEqual(SyncNetworkCondition.restricted.allowing(cellular: true), .unrestricted)
+        XCTAssertEqual(SyncNetworkCondition.restricted.allowing(cellular: false), .restricted)
+        let mac = try mac()
+        var recorded: [Meeting] = []
+        for index in 0..<6 { recorded.append(try await record(audioBytes(3000 + index, seed: UInt8(60 + index)), on: "Mac", into: Meeting(title: "Talk \(index)"))) }
+        try await pass(mac, "Mac", recorded)
+        let network = NetworkSwitch(.restricted)
+        let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: remote, deviceID: "Phone", replica: SyncReplicaConfiguration(
+            audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
+            cloud: cloud.files, keyStore: keychain, network: { network.condition.allowing(cellular: true) }, sealsNewLibrary: false))
+        try await pass(phone, "Phone")
+        for name in files("Blobs") { try cloud.evict(remote.appendingPathComponent("Blobs/\(name)")) }
+        cloud.holdDownloads(true)
+        try await phone.enableSealing()
+        try await pass(phone, "Phone")
+        let requested = cloud.downloadRequests.filter { $0.contains("/Blobs/") && !$0.contains("/Sealed/") }
+        XCTAssertEqual(Set(requested).count, LibrarySyncEngine.sealerDownloadBatch)
+        let progress = await phone.sealerProgress
+        XCTAssertEqual(progress?.waitsForWiFi, false)
+    }
+
     func testOriginalsRecordedHereStayUntilAnotherDeviceHoldsTheKey() async throws {
         let phone = try phone(budget: 1)
         try await pass(phone, "Phone")

@@ -32,6 +32,9 @@ final class PhoneSettings {
     var includesEncryptedLibraryInBackups: Bool {
         didSet { defaults.set(includesEncryptedLibraryInBackups, forKey: Keys.includesEncryptedLibraryInBackups) }
     }
+    /// Encrypting the library's history here may download recordings over cellular too (Settings › iCloud, while this
+    /// iPhone encrypts it). Off: it waits for Wi‑Fi, as model downloads do unless allowed.
+    var encryptsOverCellular: Bool { didSet { defaults.set(encryptsOverCellular, forKey: Keys.encryptsOverCellular) } }
 
     var captionLocale: Locale { captionLocaleIdentifier.map(Locale.init(identifier:)) ?? .current }
 
@@ -82,6 +85,7 @@ final class PhoneSettings {
         handsRecorderBackToMac = defaults.object(forKey: Keys.handsRecorderBackToMac) as? Bool ?? false
         includesLibraryInBackups = defaults.object(forKey: Keys.includesLibraryInBackups) as? Bool ?? true
         includesEncryptedLibraryInBackups = defaults.object(forKey: Keys.includesEncryptedLibraryInBackups) as? Bool ?? false
+        encryptsOverCellular = defaults.bool(forKey: Keys.encryptsOverCellular)
         macRecordDecisions = defaults.data(forKey: Keys.macRecordDecisions)
             .flatMap { try? JSONDecoder().decode([String: MacRecordDecision].self, from: $0) } ?? [:]
         if let since = defaults.object(forKey: Keys.macRecordDecisionsSince) as? Date {
@@ -103,6 +107,7 @@ final class PhoneSettings {
         static let handsRecorderBackToMac = "phone.handsRecorderBackToMac"
         static let includesLibraryInBackups = "phone.includesLibraryInBackups"
         static let includesEncryptedLibraryInBackups = "phone.includesEncryptedLibraryInBackups"
+        static let encryptsOverCellular = "phone.encryptsOverCellular"
         static let macRecordDecisions = "phone.macRecordDecisions"
         static let macRecordDecisionsSince = "phone.macRecordDecisionsSince"
     }

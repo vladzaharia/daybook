@@ -31,6 +31,10 @@ struct EncryptionRows: View {
                 }
             case .on(let summary):
                 LabeledContent("Encryption", value: LibraryWords.encryptionStatus(summary))
+                // While this iPhone encrypts the history, it downloads recordings on Wi‑Fi unless cellular is allowed.
+                if LibraryWords.encryptsHere(summary) {
+                    Toggle("Use Cellular Data", isOn: Bindable(model.settings).encryptsOverCellular)
+                }
                 if summary.hasRecoveryKey {
                     LabeledContent("Recovery Key", value: "Saved")
                 } else {
@@ -45,6 +49,10 @@ struct EncryptionRows: View {
             EncryptLibraryScreen { recovery in shownKey = recovery.map(ShownRecoveryKey.init(key:)) }
         }
         .pageSheet(item: $shownKey) { shown in RecoveryKeyScreen(key: shown.key) }
+        .onChange(of: model.settings.encryptsOverCellular) { _, allowed in
+            // Allowed now: the recordings waiting for Wi‑Fi start downloading.
+            if allowed { Task { await model.sync.synchronize(.manual) } }
+        }
         .pageSheet(isPresented: $enteringKey) { EnterRecoveryKeyScreen() }
         .confirmationDialog("Erase deleted conversations from iCloud?", isPresented: $confirmingErase, titleVisibility: .visible) {
             Button("Erase", role: .destructive) { erase() }
