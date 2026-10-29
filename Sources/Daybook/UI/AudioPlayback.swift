@@ -5,7 +5,12 @@ import Foundation
 /// Lightweight local-file playback for source audio and transcript timestamps.
 @MainActor
 final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    @Published private(set) var isPlaying = false
+    @Published private(set) var isPlaying = false {
+        didSet { if activity.isPlaying != isPlaying { activity.isPlaying = isPlaying } }
+    }
+    /// Whether it's playing, apart from the position: what only needs that (the Controls menu's
+    /// Play or Pause) follows this and isn't redrawn ten times a second.
+    let activity = PlaybackActivity()
     @Published private(set) var position: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var currentURL: URL?
@@ -155,4 +160,10 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
     }
 
     deinit { timer?.invalidate() }
+}
+
+/// Whether playback is playing, published only when that changes.
+@MainActor
+final class PlaybackActivity: ObservableObject {
+    @Published fileprivate(set) var isPlaying = false
 }
