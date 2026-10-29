@@ -193,7 +193,7 @@ final class DeviceHubTests: XCTestCase {
         try await waitUntil("Try Again") { meetings.count == 2 }
         XCTAssertTrue(session.failures.isEmpty)
         XCTAssertNotNil(files.lastImportDate)
-        XCTAssertTrue(files.summary.hasPrefix("Watching") && files.summary.contains("Exports"), files.summary)
+        XCTAssertTrue(files.summary.hasPrefix("Watching") && files.summary.contains("Exports · Last import "), files.summary)
         for url in [good, bad] { XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "Originals stay where they are") }
 
         // Deleting a conversation doesn't bring its file back on its own.
