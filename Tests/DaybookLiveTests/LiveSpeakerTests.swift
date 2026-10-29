@@ -91,24 +91,25 @@ final class LiveSpeakerTests: XCTestCase {
 
     // MARK: Known voices
 
-    func testTheLibrarysNamedSpeakersAreKnownVoices() {
-        func meeting(_ date: TimeInterval, _ speakers: [Speaker]) -> Meeting {
-            var meeting = Meeting(title: "Call")
-            meeting.date = Date(timeIntervalSince1970: date)
-            meeting.speakers = speakers
-            return meeting
-        }
+    func testTheLibrarysVoiceProfilesAreKnownVoices() {
         let space = "fluid-community1-embedding-df2625ac79a7ac6b"
-        let meetings = [
-            meeting(100, [Speaker(id: "S1", name: "Priya", embedding: [1, 0], embeddingModelID: space),
-                          Speaker(id: "S2", name: "Speaker 2", embedding: [0, 1], embeddingModelID: space)]),
-            meeting(200, [Speaker(id: "S1", name: "priya ", embedding: [0.9, 0.1], embeddingModelID: space),
-                          Speaker(id: "S3", name: "Alex", embedding: [0, 1], embeddingModelID: "another-space"),
-                          Speaker(id: "S4", name: "Sam", embedding: [0, 0], embeddingModelID: space)]),
-        ]
-        let voices = KnownVoices.fromLibrary(meetings, space: space)
-        XCTAssertEqual(voices.map(\.name), ["Priya"], "never-named, other-space, and empty voices are left out")
-        XCTAssertEqual(voices[0].embeddings, [[0.9, 0.1], [1, 0]], "newest first")
+        let priya = SpeakerProfile(id: UUID(), name: "Priya"), alex = SpeakerProfile(id: UUID(), name: "Alex")
+        let sam = SpeakerProfile(id: UUID(), name: "Sam"), gone = SpeakerProfile(id: UUID(), name: "Gone")
+        func print(_ profile: SpeakerProfile, _ values: [Float], space: String = space, at time: TimeInterval) -> LibraryValue<Voiceprint> {
+            let id = "vp-\(profile.name)-\(time)"
+            return LibraryValue(id: id, value: Voiceprint(id: id, profileID: profile.id, origin: .named, vector: VoiceVector(space: space, values: values),
+                                                          meetingID: UUID(), speakerID: "S1", speechSeconds: 60, recordedAt: Date(timeIntervalSince1970: time)))
+        }
+        var metadata = LibraryMetadata()
+        metadata.speakerProfiles = [priya, alex, sam].map { LibraryValue(id: $0.id.uuidString, value: $0) }
+            + [LibraryValue(id: gone.id.uuidString, value: nil)]
+        metadata.voiceprints = [print(priya, [1, 0], at: 100), print(priya, [0.75, 0.25], at: 200),
+                                print(alex, [0, 1], space: "another-space", at: 100), print(sam, [0, 0], at: 100),
+                                print(gone, [0.5, 0.5], at: 100)]
+        let voices = KnownVoices.fromProfiles(metadata, space: space)
+        XCTAssertEqual(voices.map(\.name), ["Priya"], "other-space, unusable, and deleted profiles' voices are left out")
+        XCTAssertEqual(voices[0].id, "profile:\(priya.id.uuidString)")
+        XCTAssertEqual(voices[0].embeddings, [[0.75, 0.25], [1, 0]], "newest first")
     }
 
     // MARK: Audio kept for profiles
