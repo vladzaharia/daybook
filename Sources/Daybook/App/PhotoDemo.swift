@@ -49,10 +49,13 @@ enum PhotoDemo {
         ]
         state.update(id) { meeting in
             meeting.speakers = [Speaker(id: "0", name: "Alex"), Speaker(id: "1", name: "Priya")]
-            meeting.unifiedTranscript = lines.enumerated().map { index, line in
+            let segments = lines.enumerated().map { index, line in
                 let end = index + 1 < lines.count ? lines[index + 1].0 - 1 : line.0 + 14
                 return TranscriptSegment(trackID: track.id, start: line.0, end: end, text: line.2, speakerID: line.1)
             }
+            // The recording's own transcript too, so it reads as transcribed rather than waiting.
+            meeting.transcripts = [TrackTranscript(trackID: track.id, segments: segments, modelID: "parakeet-tdt-0.6b-v3")]
+            meeting.unifiedTranscript = segments
             meeting.notes = "Move budget from events to marketing\nPackaging sample by Friday"
             meeting.timedNotes = [TimedNote(time: 100, text: "Move budget from events to marketing"),
                                   TimedNote(time: 440, text: "Packaging sample by Friday")]
