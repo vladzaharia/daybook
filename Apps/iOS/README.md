@@ -141,6 +141,8 @@ xcrun simctl launch <udid> local.daybook.phone --caption-probe /path/to/audio.m4
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet (or panel) at a size
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --handoff-demo waiting --open-settings device   # a handoff state
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --demo-live-captions --status-detent medium   # captions while the recorder streams
+xcrun simctl launch <udid> local.daybook.phone --library <dir> --demo-library --speaker-demo --select "Vendor call" --sheet info --info-detent large --info-scroll people   # Recognized and Maybe
+xcrun simctl launch <udid> local.daybook.phone --library <dir> --open-settings speaker-profile:Vladimir --profile-name Vlad   # a profile; also --merge-into Vlad [--confirm-merge]
 Apps/iOS/Tools/duo-fold/duo-fold.sh <udid> open                      # or closed, book, 0.0–1.0
 ```
 

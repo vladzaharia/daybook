@@ -1,5 +1,80 @@
 # Validation record
 
+## Speaker profiles: the iPhone, merging, summaries, voices, and a dry run (2026-10-29)
+
+The open follow-ups for speaker profiles ([architecture](architecture.md#speakers-and-profiles),
+[sync](icloud-sync.md#speaker-profiles)). Synthetic embeddings, temporary libraries and sync folders, a fake
+inference engine; no models downloaded, no recording, no Bluetooth.
+
+- **iPhone.** Info › People shows Recognized with Not <name> and Maybe <name> with Yes and No under a speaker,
+  through the Mac's DaybookKit actions; Settings › Speaker Profiles lists, renames, merges, forgets learned
+  voiceprints, removes one, and deletes. Captured on an iPhone 17 Pro simulator clone (iOS 27, deleted
+  afterwards) with `--demo-library --speaker-demo`, before and after.
+- **Merging** two profiles of one person (`SpeakerProfileMerges`, one record with `mergedInto`): Mac Speaker
+  Profiles' Merge Into (confirmed), and a rename to another profile's name offering it. Tests:
+  `SpeakerProfileTests` (merging moves voiceprints, identities, and labels and keeps the person's names; the
+  merged name finds the kept profile; what another device taught the merged profile meanwhile follows it, in
+  either order; two devices merging each into the other keep the later merge, deleting the kept profile takes
+  both; the key round-trips and isn't written when unmerged) and `SpeakerProfileLibraryTests` (a merge on one
+  Mac reaching another through a synced folder; renames refused with the merge target found).
+- **Names in summaries.** Manual renames didn't touch summaries either, so the behaviour is new for both: a
+  name Daybook gave (a placeholder, "Me", a label) follows into the summary, in place and in Version History.
+  Tests: `SpeakerProfileTests.testANameDaybookGaveFollowsIntoTheSummary` (a label, a placeholder renamed, a name
+  the person gave left alone, ticks kept, two Macs making one entry),
+  `…testTheOwnersMeFollowsIntoTheSummaryOnlyWhileNoOneElseHasTheName`, `…testSummaryNamesReplaceWholeNamesOnly`,
+  and `SpeakerProfileLibraryTests.testNotThemPutsTheEarlierNameBackInTheSummary`.
+- **Speakers without voices** get them when the Mac is idle and the library has profiles, from the saved run
+  (Identify Speakers Again's voice step), keeping names, transcript, and summary. Tests:
+  `SpeakerProfileProcessingTests.testSpeakersWithoutVoicesGetThemWhenIdleAndKeepTheirNames` (an old Sortformer
+  run recognized as Vlad, a voiceless speaker the person had named Dana starting its profile, nothing
+  transcribed again, each run once) and `…testGivingVoicesGivesWayToQueuedWork` (a job queued meanwhile stops
+  it, runs, and the voices are made afterwards); `SpeakerProfileTests.testSpeakersGivenVoicesLaterAreRecognizedAndTeachTheNamesTheyHad`.
+- **One voice, two speakers.** Reproduced: with the microphone's owner and its own speaker both named Vlad,
+  renaming one took the voiceprint from the other for good (two copies were taught, both retired, and the
+  retirement blocked teaching it again). Now a voice another person-chosen speaker still stands for stays, and
+  one sample is taught once (`SpeakerProfileTests.testRenamingOneOfTwoSpeakersWithOneVoiceKeepsTheOthersVoiceprint`,
+  `SpeakerProfileLibraryTests.testNotThemKeepsAVoiceTheOwnerWasNamedWith`; both fail on the code before).
+
+`swift test` passed 1,201 XCTest cases across the eight bundles (one skipped, as before): Captions 8, Core 383,
+Devices 101, Intelligence 131, Kit 187, Link 73, Live 30, Mac app 288. `scripts/build-ios.sh --test` on an
+iPhone 17 Pro simulator clone passed all 177. The Mac's Speaker Profiles window (`--library-demo --speaker-demo
+--open-window speaker-profiles`, with `--speaker-profile`, `--profile-name`, `--merge-into`) was captured with
+`--snapshot` before and after.
+
+Still to do on real data and hardware: the thresholds on the owner's library (below); giving voices to old
+Sortformer runs with Community-1 on a real library (time per conversation, and how many old speakers it then
+recognizes); the iPhone screens on a device.
+
+### Speaker profiles on real recordings
+
+`Daybook --speaker-report <library> [--threshold 0.82] [--margin 0.06] [--recognition off]` (debug builds,
+`.build/debug/Daybook`) runs the reconciler over a library as a dry run and prints aggregate numbers
+(`SpeakerProfileReport`). Point it at a copy:
+
+```sh
+# Only the settings and conversations' metadata: no audio, no models. The library is
+# ~/Library/Application Support/Daybook (a sandboxed build's is under ~/Library/Containers/local.daybook.app/Data),
+# unless it was moved elsewhere.
+rsync -a --include='*/' --include='library.json' --include='meeting.json' --exclude='*' \
+    ~/Library/Application\ Support/Daybook/ /tmp/daybook-copy/
+.build/debug/Daybook --speaker-report /tmp/daybook-copy
+```
+
+It reads `library.json` and each `Meetings/<id>/meeting.json` (a recovery copy when one doesn't decode)
+directly: no store is opened, nothing syncs, no recovery copy is written, and nothing is written at all
+(`SpeakerReportTests` compares every file's size and date before and after). The output has no names, titles,
+or words:
+
+- the library: conversations, profiles (and how many were merged), voiceprints by origin;
+- the thresholds used, and what a reconciliation would change (speakers, conversations, voiceprints added and
+  retired), after up to three rounds as the Mac runs them;
+- speakers in the transcripts by kind of recording (microphone, systemAudio, soundcore.work, …) and outcome:
+  no voice, named, confirmed, labelled, suggested, dismissed, unknown;
+- the closest profile's similarity, binned by 0.05 with p10/p50/p90, for labelled, suggested, and unknown
+  speakers; and for speakers the person named or confirmed, their own profile with that conversation's
+  voiceprints left out (the same person) against the closest other profile (someone else), which is what the
+  label threshold has to separate; then the same percentiles by kind of recording, with the label margin.
+
 ## The four streams together (2026-10-29)
 
 Processing quality, speaker profiles, live transcription, and recording across devices were built
