@@ -11,17 +11,22 @@ struct MenuBarView: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
+        // Items show the shortcuts they have in the app's menus, as Settings… and Quit do.
         if state.isRecording, let start = state.recordingStartedAt {
             Text("Recording · \(TimeLabel.short(Date().timeIntervalSince(start)))")
             Button("Stop Recording") { Task { await state.stopRecording() } }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(state.isStoppingRecording)
             Button("Add Bookmark") { if let id = state.recordingID { state.addHighlight(id) } }
+                .keyboardShortcut("d")
         } else {
             Button("Start Recording") { Task { await state.startRecording() } }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(!state.isReady || state.isStartingRecording)
         }
         // While recording, the recording; otherwise the panel's home (status, Record, recent conversations).
         Button("Show Floating Notes") { state.showFloatingNotes(focus: state.recordingID) }
+            .keyboardShortcut("n", modifiers: [.command, .option])
         Divider()
         Toggle("Record Calls Automatically", isOn: $state.automaticRecording)
         if state.automaticRecording { DetectionStatusText(monitor: state.monitor) }
