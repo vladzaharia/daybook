@@ -64,6 +64,10 @@ no iCloud account, CloudKit, network, or model downloads.
   `LibrarySyncTests` (a recording kept beside its copy). Settings › Library captured before and after with
   `--sync-demo damaged` (a new demo state).
 
+On this tree, `swift test` passed 1,210 XCTest cases across the eight bundles (one skipped, as before): Captions 8, Core
+395, Devices 101, Intelligence 131, Kit 187, Link 73, Live 30, Mac app 285. `scripts/build-ios.sh --test` on a dedicated
+iPhone 17 Pro simulator clone (iOS 27.1, deleted afterwards) passed all 177. `swift build --build-tests` adds no warnings.
+
 Still needs the owner's devices:
 
 - Two devices launched at once on a new iCloud container (a new Apple Account, or the container's data deleted in
