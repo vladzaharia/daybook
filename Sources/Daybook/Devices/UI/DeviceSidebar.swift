@@ -3,8 +3,8 @@ import DaybookKit
 import SwiftUI
 
 /// The sidebar's Devices section: every configured device, each with at most one accessory (a
-/// progress ring while importing, else a count of new recordings), and its glyph lit while the
-/// recorder is linked. It appears once a device is set up.
+/// progress ring while importing, else a count of new recordings it can import), and its glyph
+/// teal while the recorder is linked. It appears once a device is set up.
 struct DevicesSidebarSection: View {
     @ObservedObject var state: AppState
     @ObservedObject var hub: DeviceHub
@@ -53,14 +53,13 @@ private struct DeviceSidebarRow: View {
 
     var body: some View {
         let progress = session.importProgress
-        let newCount = progress == nil ? session.newRecordings.count : 0
+        let newCount = progress == nil ? session.importableCount : 0
         HStack(spacing: Space.s2) {
             Label {
                 Text(session.device.name).lineLimit(1)
             } icon: {
                 Image(systemName: session.kind.systemImage)
                     .foregroundStyle(iconStyle)
-                    .neonGlow(session.isLinked ? DaybookStyle.neonMint : .clear, radius: 4)
                     .contentTransition(.symbolEffect(.replace))
             }
             Spacer(minLength: 0)
@@ -81,14 +80,10 @@ private struct DeviceSidebarRow: View {
         .accessibilityLabel(accessibilityLabel(newCount: newCount))
     }
 
-    /// Mint while a recorder is linked; secondary while a recorder isn't; the sidebar's own colour
-    /// for a watched folder.
+    /// Teal while a recorder is linked, as on the iPhone; otherwise the sidebar's own icon colour,
+    /// like every other place in it.
     private var iconStyle: AnyShapeStyle {
-        if session.isLinked { return AnyShapeStyle(DaybookStyle.neonMint) }
-        if session.direct?.isSetUp == true || session.state == .unavailable || session.state == .notSetUp {
-            return AnyShapeStyle(Color.secondary)
-        }
-        return AnyShapeStyle(.tint)
+        session.isLinked ? AnyShapeStyle(DaybookStyle.accent) : AnyShapeStyle(HierarchicalShapeStyle.primary)
     }
 
     private func accessibilityLabel(newCount: Int) -> String {
@@ -100,19 +95,23 @@ private struct DeviceSidebarRow: View {
     }
 }
 
-/// The device row's context menu: Import All New · Connect or Disconnect · Device Settings….
+/// The device row's context menu: Import All New · Connect or Disconnect (Use on This Mac for a
+/// recorder another device manages) · Device Settings….
 struct DeviceContextMenu: View {
     @ObservedObject var state: AppState
     @ObservedObject var session: DeviceSession
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        let new = session.newRecordings
+        let new = session.importableCount > 0 ? session.newRecordings : []
         Button(new.count > 1 ? "Import \(new.count) New Recordings" : "Import New Recording") { session.importRecordings(new) }
             .disabled(new.isEmpty)
         if session.direct?.isSetUp == true {
             if session.isLinked || session.direct?.state.isBusy == true {
                 Button("Disconnect") { session.disconnect(.direct) }
+            } else if session.managedElsewhere != nil {
+                // Connect does nothing while another device manages it; moving it here does.
+                RecorderHandoffMenuItems(state: state, session: session)
             } else {
                 Button("Connect") { session.connect() }
                     .disabled(session.direct?.state == .unavailable)
@@ -198,7 +197,7 @@ private struct DeviceMenuBarLine: View {
         } else if queue.isActive, !queue.isSuspended {
             Text("Importing from \(session.device.name) · \(queue.position) of \(queue.total)")
         } else {
-            let count = session.newRecordings.count
+            let count = session.importableCount
             if count > 0 {
                 Button(count == 1 ? "\(session.device.name) · 1 New Recording…" : "\(session.device.name) · \(count) New Recordings…") {
                     state.showDevice(session.id)
