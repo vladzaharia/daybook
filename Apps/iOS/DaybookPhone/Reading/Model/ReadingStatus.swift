@@ -7,7 +7,7 @@ import Foundation
 ///
 /// | Status | Page | Row |
 /// |---|---|---|
-/// | Recorded | "Not transcribed yet" | "Not transcribed yet" + teal dot |
+/// | Recorded | "Not transcribed yet" + Transcribe | "Not transcribed yet" + teal dot |
 /// | Requested | "Waiting for your Mac" (+ "Last seen 2 h ago") | "Waiting for your Mac" + clock |
 /// | Processing | "Transcribing on Studio · 40%" + gradient bar | same words + a 2 pt gradient line |
 /// | Couldn't finish | a box with the Mac's reason, Try Again, Details | "Couldn't finish" + warning |
@@ -45,14 +45,16 @@ struct StatusPresentation: Equatable {
     static func page(_ status: ProcessingStatus, meeting: Meeting, sighting: MacSighting?, now: Date = Date()) -> StatusPresentation? {
         switch status {
         case .recorded:
-            return StatusPresentation(kind: .line, symbol: "waveform", title: "Not transcribed yet")
+            // The fix is one tap away: ask your Mac (the request waits for one if none is around).
+            return StatusPresentation(kind: .line, symbol: "waveform", title: "Not transcribed yet",
+                                      actions: meeting.tracks.isEmpty ? [] : [.request(.newAudio)])
         case .requested(let waiting):
             let mode: ProcessingRequest.Mode
             if case .device(let request) = waiting { mode = request.mode } else { mode = .newAudio }
             return StatusPresentation(kind: .line, symbol: "clock", title: waitingTitle(mode),
                                       detail: MacSighting.line(sighting, now: now))
         case .processing(let progress):
-            return StatusPresentation(kind: .line, symbol: nil, title: workingTitle(progress),
+            return StatusPresentation(kind: .line, symbol: "desktopcomputer", title: workingTitle(progress),
                                       progress: progress.fraction, isWorking: progress.fraction == nil)
         case .failed(let failure):
             let silent = FriendlyError.isNoSpeech(failure.reason)

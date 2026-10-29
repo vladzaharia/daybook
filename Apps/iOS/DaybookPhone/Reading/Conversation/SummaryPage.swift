@@ -1,3 +1,4 @@
+import DaybookCaptions
 import DaybookKit
 import SwiftUI
 
@@ -17,6 +18,11 @@ struct SummaryPage: View {
     @Environment(\.macSighting) private var sightingOverride
     @Environment(\.isTwoPage) private var twoPage
     @State private var consumedToken = 0
+    /// The status line's symbol column (`StatusView`).
+    @ScaledMetric(relativeTo: .subheadline) private var statusGlyph: CGFloat = 20
+    @Environment(\.liveCaptionStore) private var captionStore
+    /// Saved live captions take the transcript's page, which then doesn't say "Not transcribed yet".
+    @State private var hasCaptions = false
 
     var body: some View {
         @Bindable var session = session
@@ -26,11 +32,14 @@ struct SummaryPage: View {
                     if showsHeader {
                         PageHeader(library: library, meeting: meeting, play: play).id(SummaryBlockID.header)
                     }
-                    if let status {
+                    if let status, !(twoPage && isRecordedOnly && !hasCaptions) {
                         StatusView(presentation: status, perform: perform).padding(.top, PhoneStyle.Space.s4).id("status")
                     } else if meeting.tracks.isEmpty && !twoPage {
                         // Only notes so far. Two pages show this on the transcript's page.
-                        HStack(alignment: .center, spacing: PhoneStyle.Space.s3) {
+                        HStack(alignment: .center, spacing: PhoneStyle.Space.s2) {
+                            // The status line's symbol column, so this reads as one of them.
+                            Image(systemName: "note.text").foregroundStyle(PhoneStyle.Ink.secondary)
+                                .frame(width: min(statusGlyph, 32)).accessibilityHidden(true)
                             Text("No recording yet").font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.secondary)
                             Spacer(minLength: 0)
                             RecordIntoButton(meeting: meeting)
@@ -65,6 +74,9 @@ struct SummaryPage: View {
             .onChange(of: session.summaryRequest) { _, _ in handleRequest(proxy) }
         }
         .paperBackground()
+        .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)") {
+            hasCaptions = SavedCaptions.shown(captionStore?.captions(for: meeting.id), for: meeting) != nil
+        }
         .motion(PhoneStyle.Motion.page, value: meeting.summary?.createdAt)
         .motion(PhoneStyle.Motion.state, value: status)
     }
@@ -80,6 +92,12 @@ struct SummaryPage: View {
     private var status: StatusPresentation? {
         let sighting = sightingOverride ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id)
         return StatusPresentation.page(ProcessingStatus(meeting), meeting: meeting, sighting: sighting)
+    }
+
+    /// Recorded and nothing asked yet: two pages say so on the transcript's page, with Transcribe.
+    private var isRecordedOnly: Bool {
+        if case .recorded = ProcessingStatus(meeting) { return true }
+        return false
     }
 
     /// Summarize Again: the old summary steps back while the new one is written.
@@ -117,7 +135,8 @@ struct PageHeader: View {
             TextField("Untitled Conversation", text: titleBinding, axis: .vertical)
                 .font(PhoneStyle.Typeface.docTitle)
                 .foregroundStyle(PhoneStyle.Ink.title)
-                .lineLimit(1...4)
+                // A long title shows whole; it never stops mid-phrase inside the field.
+                .lineLimit(1...12)
                 .focused($editingTitle)
                 .submitLabel(.done)
                 .accessibilityLabel("Title")
@@ -146,14 +165,13 @@ struct PageHeader: View {
         if title != meeting.title { library.rename(meeting.id, to: title) }
     }
 
-    /// The length (a play pill) and the date, then the people on their own line.
+    /// The length (a play pill) and the date, then the people on their own line. A conversation
+    /// without a recording says so once, in its status line, not here too.
     private var byline: some View {
         VStack(alignment: .leading, spacing: 4) {
             FlowLayout(spacing: 8, lineSpacing: 4) {
                 if let duration = meeting.duration {
                     PlayPill(player: session.player, meeting: meeting, duration: duration) { play(.timeline(0)) }
-                } else if meeting.tracks.isEmpty {
-                    Text("Notes only").foregroundStyle(PhoneStyle.Ink.secondary)
                 }
                 Text(meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(.wide).hour().minute()))
                     .foregroundStyle(PhoneStyle.Ink.secondary)
@@ -399,12 +417,12 @@ private struct Colophon: View {
                     }
                     .foregroundStyle(PhoneStyle.Ink.link)
                 }
-                if !meeting.unifiedTranscript.isEmpty {
+                // Only while it can be asked for: a pending request already shows on the page.
+                if !meeting.unifiedTranscript.isEmpty && !isPending {
                     Text("·").accessibilityHidden(true)
                     Button("Summarize Again") { library.requestProcessing(meeting.id, mode: .summaryOnly) }
                         .buttonStyle(.daybookLink)
                         .fontWeight(.medium)
-                        .disabled(isPending)
                 }
             }
         }
@@ -440,9 +458,6 @@ struct TemplateMenu<Label: View>: View {
                     Divider()
                     ForEach(custom) { Text($0.name).tag($0.id) }
                 }
-            }
-            if !meeting.unifiedTranscript.isEmpty {
-                Section { Text("Choosing another template summarizes again.") }
             }
         } label: { label }
         .accessibilityLabel("Template")
