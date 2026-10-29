@@ -20,6 +20,16 @@ extension ModelRouting {
         return (candidates.first { $0.capabilities.expectedSpeakerCount == true } ?? candidates.first)?.key ?? selected
     }
 
+    /// Whether speakers found with `diarizer` get voice profiles, from the speaker model itself
+    /// (Community-1) or from the voice-profile model it's routed to (Nemotron 3 with Community-1), so
+    /// they can be matched across recordings and conversations.
+    public static func makesVoiceProfiles(diarizer: String, selections: ModelSelections, catalog: ModelCatalog,
+                                          engines: [ModelEngineDescriptor], appVersion: ModelVersion? = ModelVersion.app) -> Bool {
+        if supportsVoiceMatching(diarizer, catalog: catalog) { return true }
+        let routed = withDefaultVoiceEmbedder(selections, catalog: catalog, engines: engines)
+        return voiceEmbedder(diarizer: diarizer, selections: routed, catalog: catalog, engines: engines, appVersion: appVersion) != nil
+    }
+
     /// `selections` with the catalog's first-launch voice-profile model standing in when none is
     /// stored, as for selections saved before the role had a built-in model.
     public static func withDefaultVoiceEmbedder(_ selections: ModelSelections, catalog: ModelCatalog,

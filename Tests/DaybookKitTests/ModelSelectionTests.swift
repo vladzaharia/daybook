@@ -155,6 +155,12 @@ final class ModelSelectionTests: XCTestCase {
         XCTAssertNil(ModelRouting.voiceEmbedder(diarizer: "nemotron-3/offline", selections: ModelSelections([.diarization: "nemotron-3/offline"]),
                                                 catalog: catalog, engines: nemotron, appVersion: nil))
         XCTAssertFalse(ModelRouting.supportsVoiceMatching("nemotron-3/offline", catalog: catalog))
+        // Regression: Settings greyed out "Match voices across recordings" for Nemotron, though its
+        // speakers get voice profiles from the embedding model.
+        XCTAssertTrue(ModelRouting.makesVoiceProfiles(diarizer: "nemotron-3/offline", selections: selections, catalog: catalog,
+                                                      engines: nemotron, appVersion: nil))
+        XCTAssertTrue(ModelRouting.makesVoiceProfiles(diarizer: "community-1/offline", selections: ModelSelections(), catalog: catalog,
+                                                      engines: nemotron, appVersion: nil))
     }
 
     func testLegacyProvenanceStillNamesOldResults() throws {
