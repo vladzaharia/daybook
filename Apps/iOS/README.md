@@ -141,6 +141,8 @@ xcrun simctl launch <udid> local.daybook.phone --caption-probe /path/to/audio.m4
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet (or panel) at a size
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --handoff-demo waiting --open-settings device   # a handoff state
 xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --demo-live-captions --status-detent medium   # captions while the recorder streams
+xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --demo-recorder-only "Soundcore Work"   # only the recorder records; this iPhone's microphone didn't start
+xcrun simctl launch <udid> local.daybook.phone --demo-link --open-settings add-term   # Vocabulary with Add Term showing (a card on the right page when open)
 Apps/iOS/Tools/duo-fold/duo-fold.sh <udid> open                      # or closed, book, 0.0–1.0
 ```
 

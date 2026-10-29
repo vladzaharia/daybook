@@ -35,6 +35,70 @@ private struct PagesPresentation<Sheet: View>: ViewModifier {
     }
 }
 
+extension View {
+    /// A sheet a Settings screen shows (Add Term, a new template, a recovery key, Details): a sheet in
+    /// the hand; open, where a sheet would be a card across the crease, a card on the right page,
+    /// clear of the fold, with the display stepping back behind it (`PageCard`). How it was shown is
+    /// kept until it's dismissed, as `pagesPresentation` does.
+    func pageSheet<Item: Identifiable, Sheet: View>(item: Binding<Item?>, @ViewBuilder content: @escaping (Item) -> Sheet) -> some View {
+        modifier(PageSheetPresentation(item: item, sheet: content))
+    }
+
+    func pageSheet<Sheet: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> Sheet) -> some View {
+        pageSheet(item: Binding(get: { isPresented.wrappedValue ? ShownSheet() : nil },
+                                set: { if $0 == nil { isPresented.wrappedValue = false } })) { _ in content() }
+    }
+}
+
+private struct ShownSheet: Identifiable {
+    var id: Int { 0 }
+}
+
+private struct PageSheetPresentation<Item: Identifiable, Sheet: View>: ViewModifier {
+    @Binding var item: Item?
+    let sheet: (Item) -> Sheet
+    @Environment(\.surfaceStyle) private var surface
+    @State private var shownOnPage: Bool?
+
+    func body(content: Content) -> some View {
+        let onPage = shownOnPage ?? (surface != .pocket)
+        content
+            .sheet(item: Binding(get: { onPage ? nil : item }, set: { item = $0 })) { sheet($0) }
+            .fullScreenCover(item: Binding(get: { onPage ? item : nil }, set: { item = $0 })) { value in
+                PageCard { sheet(value) }
+                    .presentationBackground(.clear)
+            }
+            .onChange(of: item?.id) { _, id in shownOnPage = id == nil ? nil : onPage }
+    }
+}
+
+/// A sheet's content as a card on the open display's right page, as the reading sheets are
+/// (`LibraryBrowser`'s `PageSheet`). Folded shut while shown, it takes the cover display whole.
+private struct PageCard<Content: View>: View {
+    @ViewBuilder var content: Content
+    @Environment(\.surfaceStyle) private var surface
+
+    var body: some View {
+        if surface == .pocket {
+            content.background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        } else {
+            CreaseSplit {
+                Color.clear.accessibilityHidden(true)
+            } trailing: {
+                content
+                    .background(Color(uiColor: .systemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
+                    .padding(.leading, PhoneStyle.Page.creaseClearance)
+                    .padding(.trailing, PhoneStyle.Space.s3)
+                    .padding(.vertical, PhoneStyle.Space.s2)
+            }
+            // The display under it steps back, as under a sheet.
+            .background(Color.black.opacity(0.2).ignoresSafeArea().accessibilityHidden(true))
+        }
+    }
+}
+
 /// Two pages over the whole open display (`pagesPresentation`), each kept clear of the fold, over the
 /// pages' own ground.
 struct DisplayPages<Leading: View, Trailing: View>: View {

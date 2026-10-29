@@ -55,7 +55,7 @@ struct TemplatesScreen: View {
                 .accessibilityLabel("New Template")
             }
         }
-        .sheet(item: $newTemplate) { template in
+        .pageSheet(item: $newTemplate) { template in
             NavigationStack { TemplateForm(template: template, isNew: true) }
         }
     }
@@ -231,8 +231,14 @@ struct VocabularyScreen: View {
                     .accessibilityLabel("Add Term")
             }
         }
-        .sheet(item: $editing) { term in
+        .pageSheet(item: $editing) { term in
             NavigationStack { TermForm(term: term) }
+        }
+        .task {
+            // `--open-settings add-term` (debug), for screenshots: Add Term showing.
+            guard model.options.openSettings == "add-term", editing == nil else { return }
+            try? await Task.sleep(for: .milliseconds(800))
+            editing = GlossaryTerm(term: "", approved: true)
         }
     }
 }
