@@ -1,5 +1,23 @@
 # Validation record
 
+## Words split off as "Unknown speaker" (2026-10-29)
+
+From the owner (0.2.2, a microphone and call-audio conversation): the transcript read "Me: … / Unknown
+speaker: I / Me: just came back …" again and again. Not the second recording: in that conversation the
+iPhone never joined, and the call track held 13 passages. The microphone's own transcript had 124
+passages of one or two words with no speaker, every one within 0.6 s of a labelled passage: words in
+the gaps speaker analysis leaves between turns, which `TranscriptBuilder` gave no speaker.
+
+Now a word in such a gap joins the nearest turn within a second, stored transcripts are fixed when fused
+(`StrandedWords`), and the Mac fuses affected conversations again once at launch, keeping corrections.
+Fused again with the fix, a copy of that conversation (read-only, in scratch) has 13 passages without
+a speaker instead of 137: the call's, which had no speaker analysis. A relabelled word keeps its own
+line within the speaker's passage until the recording is transcribed again.
+
+Tests: `StrandedWordsTests` (5: between one person's passages, between two people and at the edges,
+speech and far-off words left alone, other recordings ignored, fusion of stored transcripts) and
+`TranscriptBuilderTests` (a word in a gap joins the nearest turn; one far from any stays unknown).
+
 ## The four streams together (2026-10-29)
 
 Processing quality, speaker profiles, live transcription, and recording across devices were built
