@@ -112,11 +112,15 @@ struct SettingsScreen: View {
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
+        if screen == "add-device" || screen == "add-recorder" || screen == "pairing" {
+            // A sheet over Settings: only once Settings has finished coming up, or it never shows.
+            try? await Task.sleep(for: .milliseconds(800))
+        }
         switch screen {
         case "macs": if let mac = model.link.macs.first { path = [.mac(mac.id)] }
         case "pairing": showingPairing = true
         case "devices", "device": if let session = model.devices.sessions.first { path = [.device(session.id)] }
-        case "add-device": showingAddDevice = true
+        case "add-device", "add-recorder": showingAddDevice = true
         case "storage": path = [.storage]
         case "templates": path = [.templates]
         case "template": path = [.templates, .template("general")]

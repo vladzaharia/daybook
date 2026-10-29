@@ -19,7 +19,8 @@ import Foundation
 ///     --interface-orientation portrait|landscape   turn the interface in table mode (the simulator can't turn the device)
 ///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
 ///     --caption-probe [file]     log what live captions can do here (and, if ready, caption the file); never downloads
-///     --open-settings [macs|devices|device|pairing|storage|templates|vocabulary|recording|add-device]
+///     --open-settings [macs|devices|device|pairing|storage|templates|vocabulary|recording|add-device|add-recorder]
+///                                (add-device goes straight to Soundcore's setup; add-recorder stays on the list of kinds)
 ///     --posture closed|open|partial[:degrees]   force the fold posture (see DevicePosture)
 ///     --show-posture             show the posture in a small badge
 ///     --log-geometry             log window size, safe area, screen, and posture on every change
