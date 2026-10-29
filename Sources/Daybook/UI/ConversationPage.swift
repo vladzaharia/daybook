@@ -506,7 +506,8 @@ enum FriendlyError {
 
 // MARK: - Colophon
 
-/// How the page was made, at its foot: a fact that doubles as the privacy line.
+/// How the page was made, at its foot: a fact that doubles as the privacy line. A transcript that
+/// has no summary yet keeps the template and Summarize here.
 struct Colophon: View {
     @ObservedObject var state: AppState
     let meeting: Meeting
@@ -538,10 +539,10 @@ struct Colophon: View {
                     .buttonStyle(.plain)
                     .menuIndicator(.hidden)
                     .fixedSize()
-                    if meeting.summary != nil && !meeting.unifiedTranscript.isEmpty {
+                    if !meeting.unifiedTranscript.isEmpty {
                         Text("·")
                         Button { state.enqueue(meeting.id, mode: .summaryOnly) } label: {
-                            HoverLink { Text("Summarize Again").fontWeight(.medium) }
+                            HoverLink { Text(meeting.summary == nil ? "Summarize" : "Summarize Again").fontWeight(.medium) }
                         }
                         .buttonStyle(.plain)
                         .disabled(state.processingID == meeting.id || state.queuedIDs.contains(meeting.id) || state.recordingID == meeting.id)
@@ -556,7 +557,8 @@ struct Colophon: View {
 
     private var templateTitle: String {
         if let template = state.resolvedTemplate(for: meeting) { return template.name }
-        if let kind = meeting.summary?.kind, kind != .auto { return "Automatic (looks like \(kind.looksLike))" }
+        // The inspector's words for the same choice.
+        if let kind = meeting.summary?.kind, kind != .auto { return "Automatic (\(kind.title))" }
         return "Automatic"
     }
 }
