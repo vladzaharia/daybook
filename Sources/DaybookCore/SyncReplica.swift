@@ -87,6 +87,9 @@ public enum SyncNetworkCondition: Sendable, Equatable {
     public init(satisfied: Bool, expensive: Bool, constrained: Bool) {
         self = satisfied && !expensive && !constrained ? .unrestricted : .restricted
     }
+
+    /// The condition to go by when the person allows cellular (as for model downloads): any network will do.
+    public func allowing(cellular: Bool) -> SyncNetworkCondition { cellular ? .unrestricted : self }
 }
 
 /// The file-provider calls the engine makes. `.system` uses Foundation's iCloud APIs; any folder that is

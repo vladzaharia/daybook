@@ -131,8 +131,14 @@ public enum LibraryWords {
     /// An encrypted library's status in Settings: "On", or, on the device sealing its history, how much is left
     /// ("Encrypting · 12 left"), and on an iPhone off Wi‑Fi that it's waiting for it.
     public static func encryptionStatus(_ summary: SealingSummary) -> String {
-        guard let progress = summary.progress, summary.isMigrator, progress.remaining > 0 else { return "On" }
+        guard encryptsHere(summary), let progress = summary.progress else { return "On" }
         return "Encrypting · \(progress.remaining) left" + (progress.waitsForWiFi ? " · Waiting for Wi‑Fi" : "")
+    }
+
+    /// This device is still encrypting the library's history (it's the migrator, with some left).
+    public static func encryptsHere(_ summary: SealingSummary) -> Bool {
+        guard let progress = summary.progress, summary.isMigrator else { return false }
+        return progress.remaining > 0
     }
 
     /// Under "Start over with a new key?" (an encrypted library whose key is lost): what's lost and what isn't.
