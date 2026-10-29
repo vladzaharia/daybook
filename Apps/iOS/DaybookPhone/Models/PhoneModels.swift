@@ -46,6 +46,9 @@ final class PhoneModels {
     let conditions: PhoneLiveConditions
     /// The voices live captions recognize: the library's named speakers until profiles sync.
     let voices: PhoneLibraryVoices
+    /// The terms the local recognizer is biased toward: the library's approved vocabulary, kept
+    /// current by the app model.
+    let vocabulary = LiveVocabulary()
 
     private(set) var inventory = ModelInventory(revisions: [])
     /// The person's choice per live role (`ModelRole.live`); defaults fill the rest.
@@ -102,7 +105,7 @@ final class PhoneModels {
         self.voices = voices
         // Models go as soon as a recording ends: an iPhone keeps nothing it isn't using.
         captioners = LiveCaptioners(host: LiveModelHost(idleRelease: .zero, store: store), policy: .iPhone, voices: voices,
-                                    conditions: { conditions.current })
+                                    vocabulary: vocabulary, conditions: { conditions.current })
         network.onChange { [weak self] in Task { @MainActor in self?.networkChanged() } }
         Task { await refresh() }
     }

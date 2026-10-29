@@ -43,6 +43,14 @@ final class LiveTranscriptionTests: XCTestCase {
         XCTAssertEqual(choices[.liveDiarization], "nemotron-3-diarization/live")
     }
 
+    func testLiveCaptionsAreBiasedTowardTheApprovedVocabularyOnly() {
+        let glossary = [GlossaryTerm(term: "Daybook", approved: true), GlossaryTerm(term: "Maybe a term"),
+                        GlossaryTerm(term: "Nemotron", approved: true)]
+        XCTAssertEqual(MacLiveModels.terms(glossary), ["Daybook", "Nemotron"], "proposed terms stay out until approved")
+        let live = MacLiveModels(store: ModelStore(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
+        XCTAssertTrue(live.captioners.vocabulary === live.vocabulary, "every capture's recognizer follows the same list")
+    }
+
     func testCaptionTurnsFollowVoicesAndUseNamesWhenKnown() {
         func line(_ text: String, _ source: LiveCaptionSource, _ slot: String?, _ name: String? = nil) -> LiveCaptionSegment {
             LiveCaptionSegment(start: 0, end: 1, text: text, isTentative: false, source: source,

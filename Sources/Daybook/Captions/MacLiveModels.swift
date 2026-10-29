@@ -26,11 +26,17 @@ final class MacLiveModels {
 
     /// The voices live captions recognize: the library's named speakers (`LibraryVoices`).
     let voices = LibraryVoices()
+    /// The terms the local recognizer is biased toward: the library's approved vocabulary, kept
+    /// current by `AppState.wireCaptions`.
+    let vocabulary = LiveVocabulary()
 
     init(store: ModelStore) {
         captioners = LiveCaptioners(host: LiveModelHost(idleRelease: Self.idleRelease, store: store), policy: .mac,
-                                    voices: voices, conditions: { .system() })
+                                    voices: voices, vocabulary: vocabulary, conditions: { .system() })
     }
+
+    /// The approved terms of the library's vocabulary, as live captions use them.
+    static func terms(_ glossary: [GlossaryTerm]) -> [String] { glossary.filter(\.approved).map(\.term) }
 
     /// Re-reads which live models are chosen and installed. Call after downloads and removals, and
     /// when the choices or the captions' language change.

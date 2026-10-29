@@ -134,6 +134,57 @@ final class LiveCaptionerTests: XCTestCase {
         XCTAssertTrue(ended.isFulfilled, "its models are let go")
     }
 
+    /// Records each vocabulary it's given, and the audio it had heard by then.
+    final class VocabularyRecorder: LiveTranscribing, @unchecked Sendable {
+        private let lock = NSLock()
+        private var fed = 0
+        private var given: [(terms: [String], afterSamples: Int)] = []
+        var vocabularies: [(terms: [String], afterSamples: Int)] { lock.withLock { given } }
+        var samplesFed: Int { lock.withLock { fed } }
+
+        func transcribe(_ samples: [Float]) async throws -> [LiveToken] { lock.withLock { fed += samples.count }; return [] }
+        func finish() async throws -> [LiveToken] { [] }
+        func setVocabulary(_ terms: [String]) async { lock.withLock { given.append((terms, fed)) } }
+    }
+
+    func testTheRecognizerIsBiasedTowardTheVocabularyAndFollowsItsChanges() async throws {
+        let recognizer = VocabularyRecorder()
+        let vocabulary = LiveVocabulary(terms: ["Daybook", " Priya ", "daybook", ""])
+        let captioner = LocalStreamingCaptioner(timelineOrigin: 0, vocabulary: vocabulary, makeTranscriber: { _ in recognizer })
+        await captioner.start(locale: Locale(identifier: "en_US"), sourceFormat: nil)
+        XCTAssertEqual(recognizer.vocabularies.map(\.terms), [["Daybook", "Priya"]], "given before any audio, each term once")
+        XCTAssertEqual(recognizer.vocabularies.first?.afterSamples, 0)
+        for index in 0..<10 { captioner.append(Self.buffer(), at: Self.time(Double(index) * 0.1)) }
+        try await waitUntil("a second fed") { recognizer.samplesFed >= 16_000 }
+        // A term approved during the recording reaches it before its next audio.
+        vocabulary.update(["Daybook", "Priya", "Nemotron"])
+        for index in 10..<20 { captioner.append(Self.buffer(), at: Self.time(Double(index) * 0.1)) }
+        try await waitUntil("two seconds fed") { recognizer.samplesFed >= 32_000 }
+        await captioner.finish()
+        let given = recognizer.vocabularies
+        XCTAssertEqual(given.map(\.terms), [["Daybook", "Priya"], ["Daybook", "Priya", "Nemotron"]])
+        XCTAssertGreaterThanOrEqual(given[1].afterSamples, 16_000)
+        XCTAssertLessThan(given[1].afterSamples, 32_000, "applied between batches, not at the end")
+        // The same terms again change nothing.
+        vocabulary.update(["Daybook", "Priya", "Nemotron"])
+        XCTAssertEqual(vocabulary.current.version, 1)
+    }
+
+    func testWithoutVocabularyTheRecognizerIsNeverBiased() async throws {
+        let recognizer = VocabularyRecorder()
+        let captioner = LocalStreamingCaptioner(timelineOrigin: 0, vocabulary: LiveVocabulary(), makeTranscriber: { _ in recognizer })
+        await captioner.start(locale: .current, sourceFormat: nil)
+        for index in 0..<10 { captioner.append(Self.buffer(), at: Self.time(Double(index) * 0.1)) }
+        try await waitUntil("fed") { recognizer.samplesFed >= 16_000 }
+        await captioner.finish()
+        XCTAssertTrue(recognizer.vocabularies.isEmpty)
+    }
+
+    func testTheVocabularyIsCapped() {
+        let many = (0..<(LiveVocabulary.limit + 20)).map { "Term \($0)" }
+        XCTAssertEqual(LiveVocabulary(terms: many).current.terms.count, LiveVocabulary.limit)
+    }
+
     func testCriticalConditionsPauseTheRecognizer() async throws {
         let transcriber = ScriptedTranscriber([])
         let governor = LiveLoadGovernor(policy: .iPhone, conditions: { LiveConditions(thermal: .critical) })

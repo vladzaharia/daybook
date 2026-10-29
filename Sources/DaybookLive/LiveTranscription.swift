@@ -23,6 +23,13 @@ public protocol LiveTranscribing: AnyObject, Sendable {
     func transcribe(_ samples: [Float]) async throws -> [LiveToken]
     /// The audio ended: decodes what's left and returns the last tokens.
     func finish() async throws -> [LiveToken]
+    /// Biases decoding toward these terms from the next audio on; empty turns it off.
+    func setVocabulary(_ terms: [String]) async
+}
+
+extension LiveTranscribing {
+    /// Recognizers that can't be biased ignore vocabulary.
+    public func setVocabulary(_ terms: [String]) async {}
 }
 
 /// Turns a recognizer's tokens into caption segments: words from SentencePiece pieces, passages that

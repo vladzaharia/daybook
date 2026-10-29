@@ -19,6 +19,7 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
     private let times: LiveTimeline
     private let makeTranscriber: @Sendable (Locale) async throws -> any LiveTranscribing
     private let governor: LiveLoadGovernor?
+    private let vocabulary: LiveVocabulary?
     private let onEnd: (@Sendable () async -> Void)?
     private let lock = NSLock()
     private var builder = LiveTranscriptBuilder()
@@ -35,14 +36,17 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
     static let decodeLag: TimeInterval = 2.5
 
     /// `makeTranscriber` loads the recognizer for a locale (`start` calls it). `timelineOrigin`: the
-    /// buffers' time captions count from (`CaptionTimeMap`). `onEnd` runs once captioning has ended,
-    /// to release the models.
+    /// buffers' time captions count from (`CaptionTimeMap`). `vocabulary`: terms to bias the
+    /// recognizer toward, followed as they change. `onEnd` runs once captioning has ended, to release
+    /// the models.
     public init(backlog: Int = 64, timelineOrigin: TimeInterval? = nil, governor: LiveLoadGovernor? = nil,
+                vocabulary: LiveVocabulary? = nil,
                 makeTranscriber: @escaping @Sendable (Locale) async throws -> any LiveTranscribing,
                 onEnd: (@Sendable () async -> Void)? = nil) {
         input = LiveInput(capacity: backlog)
         times = LiveTimeline(origin: timelineOrigin)
         self.governor = governor
+        self.vocabulary = vocabulary
         self.makeTranscriber = makeTranscriber
         self.onEnd = onEnd
         (updates, updatesContinuation) = AsyncStream<[LiveCaptionSegment]>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -65,8 +69,13 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
             return
         }
         lock.withLock { self.transcriber = transcriber }
-        let input = self.input, times = self.times, governor = self.governor
+        // The vocabulary as the capture starts; changes are applied between batches, on the worker,
+        // which is the only caller of the recognizer.
+        let initial = vocabulary?.current
+        if let initial, !initial.terms.isEmpty { await transcriber.setVocabulary(initial.terms) }
+        let input = self.input, times = self.times, governor = self.governor, vocabulary = self.vocabulary
         worker = Task.detached(priority: .utility) { [weak self] in
+            var applied = initial?.version
             let resampler = LiveResampler()
             var pending: [Float] = []
             var fed: TimeInterval = 0
@@ -78,6 +87,11 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
                 times.feed(sourceTime: item.time, duration: Double(item.buffer.frameLength) / item.buffer.format.sampleRate)
                 pending += samples
                 guard pending.count >= Self.feedSamples else { continue }
+                if let vocabulary, vocabulary.current.version != applied {
+                    let latest = vocabulary.current
+                    await transcriber.setVocabulary(latest.terms)
+                    applied = latest.version
+                }
                 fed += Double(pending.count) / LiveAudio.sampleRate
                 do {
                     let tokens = try await transcriber.transcribe(pending)
