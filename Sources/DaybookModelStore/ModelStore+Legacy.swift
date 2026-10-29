@@ -13,6 +13,11 @@ public struct ModelMigrationReport: Equatable, Sendable {
     public var incomplete: [String] = []
 
     public var isEmpty: Bool { migrated.isEmpty && alreadyInstalled.isEmpty && failed.isEmpty && incomplete.isEmpty }
+
+    public init(migrated: [String: ModelInstallKey] = [:], alreadyInstalled: [String] = [], failed: [String: String] = [:],
+                incomplete: [String] = []) {
+        self.migrated = migrated; self.alreadyInstalled = alreadyInstalled; self.failed = failed; self.incomplete = incomplete
+    }
 }
 
 /// Migration of `Models/<legacy ID>/` folders (the layout before docs/models.md) into

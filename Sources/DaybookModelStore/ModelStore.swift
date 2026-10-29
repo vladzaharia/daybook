@@ -298,7 +298,7 @@ public actor ModelStore {
 extension JSONEncoder {
     /// Receipts and store state: readable, stable, with millisecond timestamps so installs made in
     /// the same second still order.
-    static var receipts: JSONEncoder {
+    package static var receipts: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .custom { date, encoder in
@@ -310,7 +310,7 @@ extension JSONEncoder {
 }
 
 extension JSONDecoder {
-    static var receipts: JSONDecoder {
+    package static var receipts: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let text = try decoder.singleValueContainer().decode(String.self)

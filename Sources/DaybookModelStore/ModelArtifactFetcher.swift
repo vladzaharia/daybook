@@ -33,7 +33,7 @@ public struct HubSnapshotFetcher: ModelArtifactFetcher {
     }
 
     /// HubApi matches with fnmatch; escape a path so it matches only itself.
-    static func literalGlob(_ path: String) -> String {
+    package static func literalGlob(_ path: String) -> String {
         var result = ""
         for character in path {
             if "*?[]\\".contains(character) { result.append("\\") }
