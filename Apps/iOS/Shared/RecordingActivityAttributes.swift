@@ -27,6 +27,10 @@ struct RecordingActivityAttributes: ActivityAttributes {
         /// Multipoint: "Also on Studio Mac" or "With Studio Mac" while a Mac records this conversation
         /// too. Optional, so activities started by an earlier build still decode.
         var multipoint: String? = nil
+        /// The newest live caption, short (`captionLine`), while captions are on and one is showing;
+        /// nil otherwise. What was said is private: hidden while the iPhone is locked. Optional, so
+        /// activities started by an earlier build still decode.
+        var caption: String? = nil
     }
 
     var conversationID: UUID
@@ -60,6 +64,29 @@ extension RecordingActivityAttributes.ContentState {
         case .recording: return "Recording"
         case .paused: return "Paused"
         }
+    }
+
+    /// A new caption alone updates the activity at most this often: the system budgets Live Activity
+    /// updates, and a line that changes faster can't be read at a glance anyway.
+    static let captionInterval: TimeInterval = 5
+    /// The longest caption line, in characters.
+    static let captionLength = 80
+
+    /// The caption line for the newest caption's text: spaces collapsed and, when it's long, its newest
+    /// words after an ellipsis, so the line ends with what was just said. Nil when there's nothing to say.
+    static func captionLine(_ text: String?) -> String? {
+        let words = (text ?? "").split(whereSeparator: \.isWhitespace)
+        guard let last = words.last else { return nil }
+        var kept: [Substring] = []
+        var length = 0
+        for word in words.reversed() {
+            let added = kept.isEmpty ? word.count : length + 1 + word.count
+            if added > captionLength - 1, !kept.isEmpty { return "…" + kept.reversed().joined(separator: " ") }
+            kept.append(word)
+            length = added
+        }
+        let line = kept.reversed().joined(separator: " ")
+        return line.count > captionLength ? "…" + String(last.suffix(captionLength - 1)) : line
     }
 
     /// Steps the input level into four buckets (silent, quiet, speech, loud).

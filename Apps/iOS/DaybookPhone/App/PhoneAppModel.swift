@@ -1022,7 +1022,17 @@ final class PhoneAppModel: RecordingCommandHandling {
             frozenElapsed: recorder.isPaused ? recorder.pausedAt : nil,
             level: recorder.isPaused ? 0 : RecordingActivityAttributes.ContentState.levelBucket(recorder.level.meterValue),
             bookmarkCount: recorder.bookmarkCount,
-            multipoint: multipoint?.shortLine)
+            multipoint: multipoint?.shortLine,
+            caption: Self.activityCaption(captionsOn: settings.liveCaptions, showing: captions.isShowing,
+                                          forThisRecording: recorder.captureID != nil && captions.activeMeetingID == recorder.captureID,
+                                          paused: recorder.isPaused, newest: captions.segments.last?.text))
+    }
+
+    /// The newest live caption for the Live Activity: only while captions are on and showing for this
+    /// recording, and it isn't paused.
+    static func activityCaption(captionsOn: Bool, showing: Bool, forThisRecording: Bool, paused: Bool, newest: String?) -> String? {
+        guard captionsOn, showing, forThisRecording, !paused else { return nil }
+        return RecordingActivityAttributes.ContentState.captionLine(newest)
     }
 
     func updateActivity() {
