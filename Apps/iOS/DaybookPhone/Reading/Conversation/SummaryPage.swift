@@ -35,14 +35,19 @@ struct SummaryPage: View {
                     if let status, !(twoPage && isRecordedOnly && !hasCaptions) {
                         StatusView(presentation: status, perform: perform).padding(.top, PhoneStyle.Space.s4).id("status")
                     } else if meeting.tracks.isEmpty && !twoPage {
-                        // Only notes so far. Two pages show this on the transcript's page.
-                        HStack(alignment: .center, spacing: PhoneStyle.Space.s2) {
-                            // The status line's symbol column, so this reads as one of them.
-                            Image(systemName: "note.text").foregroundStyle(PhoneStyle.Ink.secondary)
-                                .frame(width: min(statusGlyph, 32)).accessibilityHidden(true)
-                            Text("No recording yet").font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.secondary)
-                            Spacer(minLength: 0)
-                            RecordIntoButton(meeting: meeting)
+                        // Only notes so far. Two pages show this on the transcript's page. Record sits at
+                        // the line's end, or under it when the words need the room.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .center, spacing: PhoneStyle.Space.s2) {
+                                noRecordingLine.fixedSize()
+                                Spacer(minLength: PhoneStyle.Space.s3)
+                                RecordIntoButton(meeting: meeting).fixedSize()
+                            }
+                            VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
+                                noRecordingLine
+                                RecordIntoButton(meeting: meeting)
+                                    .padding(.leading, min(statusGlyph, 32) + PhoneStyle.Space.s2)
+                            }
                         }
                         .padding(.top, PhoneStyle.Space.s4)
                         .id("status")
@@ -79,6 +84,16 @@ struct SummaryPage: View {
         }
         .motion(PhoneStyle.Motion.page, value: meeting.summary?.createdAt)
         .motion(PhoneStyle.Motion.state, value: status)
+    }
+
+    /// "No recording yet" in the status line's symbol column, so it reads as one of them.
+    private var noRecordingLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: PhoneStyle.Space.s2) {
+            Image(systemName: "note.text").foregroundStyle(PhoneStyle.Ink.secondary)
+                .frame(width: min(statusGlyph, 32)).accessibilityHidden(true)
+            Text("No recording yet").font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func handleRequest(_ proxy: ScrollViewProxy) {

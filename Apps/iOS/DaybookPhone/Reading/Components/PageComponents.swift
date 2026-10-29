@@ -112,20 +112,22 @@ struct StatusView: View {
             .frame(width: column)
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: PhoneStyle.Space.s3) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(presentation.title)
-                            .foregroundStyle(PhoneStyle.Ink.secondary)
-                            .contentTransition(.numericText())
-                        if let detail = presentation.detail {
-                            Text(detail).foregroundStyle(PhoneStyle.Ink.meta).font(.footnote)
+                if presentation.actions.isEmpty {
+                    lineWords
+                } else {
+                    // The line's action at its end, as Record sits beside "No recording yet"; under
+                    // the words when they need the room, so neither breaks mid-word.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: PhoneStyle.Space.s3) {
+                            lineWords.fixedSize()
+                            Spacer(minLength: 0)
+                            actions.fixedSize()
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            lineWords
+                            actions
                         }
                     }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .combine)
-                    Spacer(minLength: 0)
-                    // The line's action at its end, as Record sits beside "No recording yet".
-                    if !presentation.actions.isEmpty { actions }
                 }
                 if let progress = presentation.progress {
                     ProgressView(value: progress).progressViewStyle(.brand(width: nil, height: 3))
@@ -134,6 +136,19 @@ struct StatusView: View {
             }
         }
         .font(PhoneStyle.Typeface.status)
+    }
+
+    private var lineWords: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(presentation.title)
+                .foregroundStyle(PhoneStyle.Ink.secondary)
+                .contentTransition(.numericText())
+            if let detail = presentation.detail {
+                Text(detail).foregroundStyle(PhoneStyle.Ink.meta).font(.footnote)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .combine)
     }
 
     private var box: some View {
