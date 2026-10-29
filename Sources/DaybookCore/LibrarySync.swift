@@ -169,6 +169,8 @@ public actor LibrarySyncEngine {
     var compactionPolicy: SyncCompactionPolicy?
     /// The compaction records the last pass read, by path.
     var compactionRecords: [String: CompactionEntry] = [:]
+    /// Every compaction record the last pass listed, read or not (`hasRemoteChanges`).
+    var compactionPaths: Set<String> = []
     /// Journal entries a commit pruned: gone for good. Never waited for, and set aside where they're still found.
     var prunedIDs: Set<String> = []
     /// The latest proposal that no commit has carried out, which devices acknowledge in their presence.
@@ -177,6 +179,9 @@ public actor LibrarySyncEngine {
     var compactionReadComplete = false
     /// Pruned entries a pass found still in the sync folder, by path (the compacting Mac deletes them).
     var prunedEntryPaths: Set<String> = []
+    /// Conversations deleted elsewhere that the last pass kept here (recorded into, or waiting to tell what it added): their
+    /// deletion isn't applied yet, so this device doesn't acknowledge a proposal to prune their history.
+    var heldDeletions: Set<UUID> = []
     /// When this device last compacted.
     var lastCompaction: Date?
     /// What compaction did on the last pass that ran it.
@@ -340,8 +345,8 @@ public actor LibrarySyncEngine {
                 // left behind with a retired key): an edit published against it would name parents nobody can read.
                 let gone = (state.heads[key] ?? []).filter { events[$0] == nil && unreadableJournal[$0] == nil }
                 if !gone.isEmpty, !deletedInJournal.contains(supplied.id) {
-                    // Only a whole read can tell gone from still downloading.
-                    if journalIncomplete { pendingUploads += 1; failedPublications.insert(supplied.id); continue }
+                    // Only a whole read can tell gone from still downloading, unless a commit says they were pruned.
+                    if journalIncomplete, !gone.allSatisfy(prunedIDs.contains) { pendingUploads += 1; failedPublications.insert(supplied.id); continue }
                     if inJournal.contains(supplied.id) {
                         // Merged against what this device applied (when that's history others built on), and published next pass.
                         rebases[supplied.id] = Rebase(base: gone.allSatisfy(prunedIDs.contains) ? state.bases[key] : nil)
@@ -460,7 +465,9 @@ public actor LibrarySyncEngine {
             guard !headIDs.isEmpty else { continue }
             // With part of the journal unread (downloading, or deferred by limits), a conversation whose applied
             // heads weren't read this pass would roll back to an older snapshot. It waits for a fuller read.
-            if journalIncomplete, let applied = state.heads[meetingID.uuidString], !applied.allSatisfy({ events[$0] != nil }) { continue }
+            // Applied heads a commit pruned aren't on their way: what's here is after them.
+            if journalIncomplete, let applied = state.heads[meetingID.uuidString],
+               !applied.allSatisfy({ events[$0] != nil || prunedIDs.contains($0) }) { continue }
             memo.warnings = []
             do {
                 guard var merged = try mergedSnapshot(of: headIDs, events: events, memo: &memo) else { continue }
@@ -501,6 +508,7 @@ public actor LibrarySyncEngine {
         for id in deletes where output[id] != nil && !deletedHere.contains(id) && !examinedDeletions.contains(id)
             && (grouped[id] != nil || journalIncomplete) { held.insert(id) }
         deletes.subtract(held)
+        heldDeletions = held
         for id in deletes { output.removeValue(forKey: id); changed.remove(id); notLocalAudio.removeValue(forKey: id) }
         var sourceMeetings: [String: Set<UUID>] = [:]
         for meeting in output.values {
@@ -531,6 +539,7 @@ public actor LibrarySyncEngine {
             sealerProgress = runSealer(SealerInput(events: events, metadata: metadata,
                                                    eventEntries: eventEntries.filter { !replacedEntries.contains($0.path) && !prunedEntryPaths.contains($0.path) },
                                                    metadataEntries: metadataEntries.filter { !replacedEntries.contains($0.path) && !prunedEntryPaths.contains($0.path) },
+                                                   compactionEntries: compactionRecords.values.map(\.entry).filter { !replacedEntries.contains($0.path) },
                                                    deleted: deletes, liveAssets: liveAssets, complete: complete), budget: &budget, now: sealerClock())
             // A library that started over: what's left here of the one it replaced goes.
             deleteReplacedObjects()
@@ -547,7 +556,7 @@ public actor LibrarySyncEngine {
         try saveAudioIndexIfNeeded()
         // Courier deliveries the sync folder now holds, downloaded and identical, aren't needed any more.
         pruneCourierInbox()
-        let listing = Set((eventEntries + metadataEntries).map(\.path)).union(compactionRecords.keys).subtracting(replacedEntries).union(ownJournalWrites)
+        let listing = Set((eventEntries + metadataEntries).map(\.path)).union(compactionPaths).subtracting(replacedEntries).union(ownJournalWrites)
         settledJournalListing = pendingDownloads == 0 && budget.deferred == 0 ? listing : nil
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
@@ -668,7 +677,10 @@ public actor LibrarySyncEngine {
         let parents = allParents.filter { events[$0]?.deleted == false }
         // A parent this version can't read: what the deletion saw is unknown, so the deletion simply applies.
         if !retiredParents, parents.count < allParents.filter({ events[$0]?.deleted != true }).count { return nil }
-        let seen = parents.isEmpty ? nil : try mergedSnapshot(of: Array(parents), events: events, memo: &memo)
+        // With what the deletion saw gone, what this device last synced stands for it: only what it added since is kept,
+        // never derived work, and never the whole conversation again.
+        let seen = retiredParents ? state.bases[local.id.uuidString]
+            : parents.isEmpty ? nil : try mergedSnapshot(of: Array(parents), events: events, memo: &memo)
         guard local.hasContent(notIn: seen) else { return nil }
         let forkID = SyncEncoding.uuid("\(local.id.uuidString):kept-after-deletion:\(deletions.sorted().joined(separator: ","))")
         if let existing = supplied[forkID] { return existing }
@@ -804,7 +816,7 @@ public actor LibrarySyncEngine {
     /// or a renamed copy). Every device resolves it the same way: the smallest library ID wins, and the manifest
     /// names the others it supersedes, so each device continues from its checkpoint for whichever it had (see
     /// `loadCheckpoint`). The journal is shared either way; only its identity changes. Two new encrypted libraries
-    /// can't share a journal (each is sealed with its own key): the smallest ID wins and replaces the others, whose
+    /// can't share a journal (each is sealed with its own key): the first one started wins and replaces the others, whose
     /// devices publish their libraries again into it. Once the resolved manifest is written, the copies iCloud made
     /// are deleted, so one marker is left.
     private func resolveManifest(at url: URL, conflicts: [NSFileVersion], copies: [URL]) throws -> SyncManifest {
@@ -855,17 +867,24 @@ public actor LibrarySyncEngine {
         let startedOver = Set(sealed.flatMap { $0.sealing?.replaces ?? [] })
         let sealedIDs = Set(sealed.map(\.libraryID)).subtracting(startedOver)
         var rivals = Set<UUID>()
+        // Of new libraries started together, the first one started wins (the other is usually a device's that was offline
+        // when it first launched, with less in it); of those started the same moment, or started over together, the
+        // smallest ID.
+        var order: (UUID, UUID) -> Bool = { $0.uuidString < $1.uuidString }
         if sealedIDs.count > 1 {
             let starts = sealedIDs.map { id in Set(sealed.filter { $0.libraryID == id }.flatMap { $0.sealing?.replaces ?? [] }) }
             let startedOverTogether = starts.allSatisfy({ !$0.isEmpty }) && !starts.dropFirst().reduce(starts[0], { $0.intersection($1) }).isEmpty
-            let created = sealedIDs.map { id in sealed.filter { $0.libraryID == id }.compactMap(\.created).min() }
-            let startedTogether = created.allSatisfy { $0 != nil }
-                && created.compactMap { $0 }.max()!.timeIntervalSince(created.compactMap { $0 }.min()!) <= Self.creationRace
+            var created: [UUID: Date] = [:]
+            for id in sealedIDs { created[id] = sealed.filter { $0.libraryID == id }.compactMap(\.created).min() }
+            let dates = created.values
+            let startedTogether = dates.count == sealedIDs.count
+                && dates.max()!.timeIntervalSince(dates.min()!) <= Self.creationRace
             guard startedOverTogether || startedTogether else { throw LibrarySyncError.manifestConflict }
+            if !startedOverTogether { order = { (created[$0]!, $0.uuidString) < (created[$1]!, $1.uuidString) } }
             rivals = sealedIDs
         }
         guard sealedIDs.isEmpty == sealed.isEmpty,
-              let winner = sealedIDs.min(by: { $0.uuidString < $1.uuidString }) ?? candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else {
+              let winner = sealedIDs.min(by: order) ?? candidates.map(\.libraryID).min(by: { $0.uuidString < $1.uuidString }) else {
             throw LibrarySyncError.manifestConflict
         }
         rivals.remove(winner)

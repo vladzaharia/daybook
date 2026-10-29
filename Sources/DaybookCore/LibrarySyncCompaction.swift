@@ -10,14 +10,18 @@ import Foundation
 //   for good, even while its file is still there, and never waits for one: a parent a commit lists isn't a download.
 // - Library settings merge item by item, the latest change winning, with no common ancestor: every settings version
 //   that isn't a head can go at once. A device that publishes against one that's gone merges just the same.
-// - A deleted conversation keeps only its deletions (as an encrypted library's sealer already does).
-// - A live conversation's merges need its history back to the common ancestor, so it goes in two steps. A proposal names
-//   each conversation's one head as its root. Every device seen in the last 30 days acknowledges it in its presence once
-//   everything it has applied of those conversations is the root or after it, so it never publishes against what's
-//   pruned. Then a commit prunes each root's ancestors, for the conversations whose every head still descends from it.
+// - A live conversation's merges need its history back to the common ancestor, and a device still holding a deleted one
+//   needs what the deletion saw to tell what it added since, so both go in two steps. A proposal names each live
+//   conversation's one head as its root, and the deleted conversations. Every device seen in the last 30 days
+//   acknowledges it in its presence once everything it has applied of those conversations is the root or after it, and
+//   it has applied those deletions, so it never publishes against what's pruned. Then a commit prunes each root's
+//   ancestors, for the conversations whose every head still descends from it, and the deleted conversations' history
+//   (their deletions stay). An ancestor that alone names a highlight sidecar stays too: a conversation's sidecars are
+//   those any of its events names.
 // - One Mac compacts: the one with the smallest device ID among Macs seen in the last 30 days (that hold the key, when
-//   the library is encrypted), only when every device seen in that time can read a compacted library, after a pass that
-//   read the whole journal. Before it deletes anything, the manifest becomes version 3, which earlier Daybooks refuse
+//   the library is encrypted, and aren't an earlier identity of a reinstalled Mac), only when every device seen in that
+//   time can read a compacted library, after a pass that read the whole journal. In an encrypted library the sealer
+//   seals compaction records again under a new key like the rest of the history. Before it deletes anything, the manifest becomes version 3, which earlier Daybooks refuse
 //   ("Update Daybook to sync"): they'd otherwise wait forever for parents that are gone.
 // - A device that comes back after what it last applied was pruned (away longer than 30 days, or restored from a backup)
 //   merges its own changes against the base it stored when it applied them, and publishes the result as an ordinary edit
@@ -69,6 +73,8 @@ struct SyncCompactionRecord: Codable, Equatable {
     var createdAt: Date
     /// A proposal: each conversation's root (its one head when proposed), by conversation ID.
     var roots: [String: String]?
+    /// A proposal: conversations deleted when proposed, whose history (all but their deletions) goes.
+    var deletions: [String]?
     /// A commit: the entries pruned, by ID.
     var pruned: [String]?
     /// The proposal a commit carried out.
@@ -86,6 +92,7 @@ struct SyncCompactionRecord: Codable, Equatable {
         let record = try JSONDecoder().decode(SyncCompactionRecord.self, from: bytes)
         guard (record.pruned ?? []).allSatisfy(SyncFiles.isHash), record.proposal.map(SyncFiles.isHash) ?? true,
               (record.roots ?? [:]).allSatisfy({ UUID(uuidString: $0.key) != nil && SyncFiles.isHash($0.value) }),
+              (record.deletions ?? []).allSatisfy({ UUID(uuidString: $0) != nil }),
               record.isProposal != record.isCommit else { throw LibrarySyncError.invalidEvent("compaction record") }
         return record
     }
@@ -144,21 +151,25 @@ extension LibrarySyncEngine {
     }
 
     /// Reads the compaction records (each once per process): what's pruned, and the proposal waiting to be carried out.
-    /// Returns how many couldn't be read yet; until they are, a missing parent they might list is waited for.
+    /// Returns how many couldn't be read yet (still downloading, or a key on its way); until they are, a missing parent
+    /// they might list is waited for. One that can't be read at all (a newer format) is a warning, not a download: it
+    /// leaves compaction off here, and what it lists is waited for, as before.
     func readCompaction(warnings: inout [String]) throws -> Int {
         var read: [String: CompactionEntry] = [:]
-        var pending = 0
-        for entry in try compactionEntries() {
+        var pending = 0, unreadable = 0
+        let entries = try compactionEntries()
+        compactionPaths = Set(entries.map(\.path))
+        for entry in entries {
             try Task.checkCancellation()
             if let known = compactionRecords[entry.path] { read[entry.path] = known; continue }
             let unreadableKey = entry.isSealed ? entry.path : entry.name
-            if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); pending += 1; continue }
+            if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); unreadable += 1; continue }
             do {
                 let (id, bytes) = try readEntry(entry, kind: .compaction)
                 read[entry.path] = CompactionEntry(entry: entry, id: id, record: try SyncCompactionRecord.decode(bytes))
             } catch is SyncReplacedFile { setAside(entry) }
             catch let error as CancellationError { throw error }
-            catch where Self.isPermanent(error) { warnings.append(markUnreadable(unreadableKey, error)); pending += 1 }
+            catch where Self.isPermanent(error) { warnings.append(markUnreadable(unreadableKey, error)); unreadable += 1 }
             catch { pending += 1 }
         }
         compactionRecords = read
@@ -169,7 +180,7 @@ extension LibrarySyncEngine {
         let executed = Set(read.values.compactMap(\.record.proposal))
         let latest = read.values.filter(\.record.isProposal).max { ($0.record.createdAt, $0.id) < ($1.record.createdAt, $1.id) }
         pendingProposal = latest.flatMap { executed.contains($0.id) ? nil : $0 }
-        compactionReadComplete = pending == 0
+        compactionReadComplete = pending == 0 && unreadable == 0
         return pending
     }
 
@@ -191,10 +202,14 @@ extension LibrarySyncEngine {
     // MARK: Acknowledging
 
     /// After a pass is acknowledged: whether what this device has applied of the pending proposal's conversations is each
-    /// root or after it, so it never publishes against what the proposal prunes. Once true it stays true (applied heads
-    /// only move on), and its presence says so.
+    /// root or after it, and it has applied the proposal's deletions (so it no longer holds a deleted conversation, or kept
+    /// what it added as a new one), so it never publishes against what the proposal prunes. Once true it stays true
+    /// (applied heads only move on), and its presence says so.
     func noteCompactionAck() {
         guard let proposal = pendingProposal, let roots = proposal.record.roots, state.compactionAck != proposal.id else { return }
+        for meeting in proposal.record.deletions ?? [] {
+            guard let id = UUID(uuidString: meeting), state.deletedIDs.contains(id), !heldDeletions.contains(id) else { return }
+        }
         for (meeting, root) in roots {
             guard let applied = state.heads[meeting], !applied.isEmpty else { continue }
             // A deleted conversation keeps only its deletions, whatever was applied of it.
@@ -219,17 +234,19 @@ extension LibrarySyncEngine {
         let candidates = others.filter { record in
             record.deviceClass == .mac && sealing.map { record.key == SyncDeviceKeyState(state: .ready, id: $0.current.idHex) } ?? true
         }
-        guard (candidates.map(\.deviceID) + [deviceID]).min() == deviceID else { return }
+        // An earlier identity of a reinstalled device never syncs again: it isn't the one to compact. (It still has to
+        // acknowledge: a device with the same name that's merely away may come back.)
+        let superseded = Set(((try? knownDevices(now: now)) ?? []).filter { $0.supersededBy != nil }.map(\.id))
+        guard (candidates.map(\.deviceID).filter { !superseded.contains($0) } + [deviceID]).min() == deviceID else { return }
         lastCompaction = now
         var report = CompactionReport()
         // What earlier commits pruned that's still here.
         deletePrunedFiles(input.entries, report: &report)
         let sizes = entrySizes(input.entries)
 
-        // What can go now: settings versions that aren't heads, and deleted conversations' history.
+        // What can go now: settings versions that aren't heads.
         var prunable = Set(input.metadata.keys).subtracting(input.metadataHeads)
-        for (id, header) in input.events where input.deleted.contains(header.meetingID) && !header.deleted { prunable.insert(id) }
-        // Live conversations' history, once every device seen lately has acknowledged the proposal.
+        // Conversations' history, once every device seen lately has acknowledged the proposal.
         var executed: String?
         if let proposal = pendingProposal, let roots = proposal.record.roots, state.compactionAck == proposal.id,
            others.allSatisfy({ $0.compaction == proposal.id }) {
@@ -239,7 +256,12 @@ extension LibrarySyncEngine {
                 guard let id = UUID(uuidString: meeting), !input.deleted.contains(id), input.events[root] != nil, let ids = grouped[id] else { continue }
                 let heads = heads(ids: ids, parents: { input.events[$0]?.parents ?? [] })
                 guard heads.allSatisfy({ $0 == root || ancestorIDs($0, events: input.events).contains(root) }) else { continue }
-                prunable.formUnion(ancestorIDs(root, events: input.events).subtracting([root]).filter { input.events[$0] != nil })
+                prunable.formUnion(prunableHistory(before: root, events: input.events))
+            }
+            // A deleted conversation keeps only its deletions.
+            let deletions = Set((proposal.record.deletions ?? []).compactMap(UUID.init(uuidString:)))
+            for (id, header) in input.events where deletions.contains(header.meetingID) && input.deleted.contains(header.meetingID) && !header.deleted {
+                prunable.insert(id)
             }
         }
         let fresh = prunable.subtracting(prunedIDs)
@@ -403,27 +425,53 @@ extension LibrarySyncEngine {
         return false
     }
 
-    /// Proposes compacting each live conversation with one head and history before it, when there's enough to gain.
+    /// Proposes compacting each live conversation with one head and history before it, and each deleted conversation with
+    /// history beside its deletions, when there's enough to gain.
     private func propose(_ input: CompactionInput, sizes: [String: Int64], policy: SyncCompactionPolicy, now: Date, report: inout CompactionReport) {
-        var roots: [String: String] = [:]
-        var count = 0, bytes: Int64 = 0
+        var roots: [String: String] = [:], deletions: [String] = []
+        var older = Set<String>()
         let grouped = Dictionary(grouping: input.events.keys, by: { input.events[$0]!.meetingID })
-        for (meeting, ids) in grouped where !input.deleted.contains(meeting) {
+        for (meeting, ids) in grouped {
+            if input.deleted.contains(meeting) {
+                let history = ids.filter { input.events[$0]?.deleted == false }
+                if !history.isEmpty { deletions.append(meeting.uuidString); older.formUnion(history) }
+                continue
+            }
             let heads = heads(ids: ids, parents: { input.events[$0]?.parents ?? [] })
             guard heads.count == 1, let head = heads.first else { continue }
-            let older = ancestorIDs(head, events: input.events).subtracting([head]).filter { input.events[$0] != nil && !prunedIDs.contains($0) }
-            guard !older.isEmpty else { continue }
+            let history = prunableHistory(before: head, events: input.events)
+            guard !history.isEmpty else { continue }
             roots[meeting.uuidString] = head
-            count += older.count
-            bytes += older.reduce(Int64(0)) { $0 + (sizes[$1] ?? 0) }
+            older.formUnion(history)
         }
-        guard !roots.isEmpty, count >= policy.minimumEntries || bytes >= policy.minimumBytes else { return }
-        if (try? writeCompactionRecord(SyncCompactionRecord(deviceID: deviceID, createdAt: now, roots: roots))) != nil { report.proposed = true }
+        older.subtract(prunedIDs)
+        let bytes = older.reduce(Int64(0)) { $0 + (sizes[$1] ?? 0) }
+        guard !older.isEmpty, older.count >= policy.minimumEntries || bytes >= policy.minimumBytes else { return }
+        let proposal = SyncCompactionRecord(deviceID: deviceID, createdAt: now, roots: roots, deletions: deletions.isEmpty ? nil : deletions.sorted())
+        if (try? writeCompactionRecord(proposal)) != nil { report.proposed = true }
+    }
+
+    /// What of a conversation's history before `root` can go: its ancestors still here, but for any that alone names a
+    /// highlight sidecar (`mergedAssets` takes a conversation's sidecars from all its events), nearest the root first.
+    func prunableHistory(before root: String, events: [String: SyncEventHeader]) -> Set<String> {
+        func sidecars(_ id: String) -> Set<String> {
+            Set((events[id]?.assets ?? []).filter { $0.relativePath.contains(".highlights-") }.map(\.sha256))
+        }
+        var named = sidecars(root), prunable = Set<String>(), seen: Set<String> = [root]
+        var queue = (events[root]?.parents ?? []).sorted(), next = 0
+        while next < queue.count {
+            let id = queue[next]; next += 1
+            guard seen.insert(id).inserted, events[id] != nil else { continue }
+            let own = sidecars(id)
+            if own.isSubset(of: named) { prunable.insert(id) } else { named.formUnion(own) }
+            queue += (events[id]?.parents ?? []).sorted()
+        }
+        return prunable
     }
 
     /// Everything compaction remembers, for another library.
     func forgetCompaction() {
-        compactionRecords = [:]; prunedIDs = []; pendingProposal = nil; compactionReadComplete = false; lastCompaction = nil
+        compactionRecords = [:]; compactionPaths = []; prunedIDs = []; pendingProposal = nil; compactionReadComplete = false; lastCompaction = nil
         prunedEntryPaths = []
     }
 }
