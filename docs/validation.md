@@ -1,5 +1,23 @@
 # Validation record
 
+## The four streams together (2026-10-29)
+
+Processing quality, speaker profiles, live transcription, and recording across devices were built
+apart and land together. Where they meet:
+
+- A voice heard only in passages left out as background audio (`Meeting.backgroundOnlySpeakerIDs`) is
+  never labelled or learned into a speaker profile; background audio included, labelled, and left out
+  again takes the label and what it taught off (`SpeakerProfileTests.testAVoiceOnlyInBackgroundAudioIsNeverLabelledOrLearned`).
+- Live captions on both devices name people from the synced speaker profiles
+  (`KnownVoices.fromProfiles`: each profile's voiceprints in the live voice model's space, newest
+  sixteen) instead of named speakers grouped by name (`LiveSpeakerTests.testTheLibrarysVoiceProfilesAreKnownVoices`).
+- The iPhone's Settings › Models row sits in the redesigned Settings, after Storage.
+
+On the combined tree (with the polish of #21 to #23), `swift test` passed 1,185 XCTest cases across
+the eight bundles (one skipped, as before): Captions 8, Core 373, Devices 101, Intelligence 131, Kit
+184, Link 73, Live 30, Mac app 285. `scripts/build-ios.sh --test` on a dedicated iPhone 17 Pro
+simulator clone (iOS 27.0, deleted afterwards) passed all 177, the encoder timing tests included.
+
 ## Processing quality: background audio, notes in summaries, Mac-first multipoint (2026-10-29)
 
 Three of the owner's requests: keep TV, radio, and music out ([architecture](architecture.md#background-audio)),
@@ -1311,7 +1329,7 @@ Still to check on a Mac running macOS 26 or later, in a real call:
 
 Run on 2026-10-29 on an M5 Pro with 64 GB, macOS 27.0 (docs/model-runtime.md, "Live"; docs/models.md, "Live models").
 
-**Automated, no model running.** `DaybookLiveTests` (30): passages from streaming pieces (sentence ends, pauses judged up to what was decoded, the length limit, control tokens, stable IDs); speaker runs, solo stretches, the dominant voice, and runs that never stretch across a gap in the audio; naming (thresholds, margin, one person per voice, spaces that never mix); the library's named speakers as known voices; the audio ring; the local captioner on the capture's timeline across a 10 s gap, a recognizer that can't load (only the captions end), and Critical heat (audio let go); speakers and names added to another captioner's words, words going on unlabelled without a speaker model, and speakers shed in Low Power Mode; the iPhone's and the Mac's load policies and the backlog's hysteresis; the catalog's iPhone defaults (streaming, phone-sized, commercial-use licenses with attribution, the Mac's embedding space), live models kept out of presets and processing, stored choices and defaults, per-platform choices and their round trip, the memory guard, install checks per role, and the language choosing between installed recognizers. `LiveTranscriptionTests` (4, Mac): a new Mac's live choices, an existing Mac gaining them once, the Settings roles, and caption turns by voice with names. `PhoneModelsTests` (4, iPhone simulator): the iPhone's defaults (711.9 MB for all three), a 4 GB phone not offered the recognizer, downloads waiting for Wi‑Fi and starting on cellular only when allowed, and captions staying the system's without downloads. Updated: the catalog and registry inventories, and acknowledgements.
+**Automated, no model running.** `DaybookLiveTests` (30): passages from streaming pieces (sentence ends, pauses judged up to what was decoded, the length limit, control tokens, stable IDs); speaker runs, solo stretches, the dominant voice, and runs that never stretch across a gap in the audio; naming (thresholds, margin, one person per voice, spaces that never mix); the library's voice profiles as known voices (deleted profiles, other spaces, and unusable voiceprints left out); the audio ring; the local captioner on the capture's timeline across a 10 s gap, a recognizer that can't load (only the captions end), and Critical heat (audio let go); speakers and names added to another captioner's words, words going on unlabelled without a speaker model, and speakers shed in Low Power Mode; the iPhone's and the Mac's load policies and the backlog's hysteresis; the catalog's iPhone defaults (streaming, phone-sized, commercial-use licenses with attribution, the Mac's embedding space), live models kept out of presets and processing, stored choices and defaults, per-platform choices and their round trip, the memory guard, install checks per role, and the language choosing between installed recognizers. `LiveTranscriptionTests` (4, Mac): a new Mac's live choices, an existing Mac gaining them once, the Settings roles, and caption turns by voice with names. `PhoneModelsTests` (4, iPhone simulator): the iPhone's defaults (711.9 MB for all three), a 4 GB phone not offered the recognizer, downloads waiting for Wi‑Fi and starting on cellular only when allowed, and captions staying the system's without downloads. Updated: the catalog and registry inventories, and acknowledgements.
 
 **Real models, once, in scratch.** The three iPhone defaults were downloaded through `ModelStore` with `HubSnapshotFetcher` into a scratch folder, every file checked against the catalog's digests (Nemotron 3.5 Streaming Latin 19.4 s, Nemotron 3 Live 6.6 s, Community-1 13.6 s), run by a scratch command-line harness through `LiveCaptioners` exactly as the apps compose them, and deleted afterwards. The input was a 25-second two-voice conversation from macOS voices (Samantha and Daniel, four turns), fed in 100 ms buffers at real time, and a separate 12-second Samantha utterance embedded as her known voice.
 
