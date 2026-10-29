@@ -126,6 +126,116 @@ Community-1 profiles of one person across sessions from Nemotron and Community-1
 time on the owner's library, and its sync cost: one new event per relabelled conversation, and settings versions
 about 1 KB larger per voiceprint.
 
+## Recording across devices (2026-10-29)
+
+The owner asked that starting a recording on any device start every device connected to it (a Mac its
+iPhone, an iPhone its Mac and its recorder, a recorder's button its iPhone and so the Mac), that the
+recorder's audio arrive while it records so multipoint processing can start at once, that notes and
+bookmarks appear on the other device live, and that the iPhone keep its recorder's link in the
+background so the button works there too. What was built is in docs/multipoint.md ("Starting
+anywhere", "A recorder's audio while it records", "Notes and bookmarks during a shared recording"),
+docs/link.md ("Shared recordings"), docs/devices.md ("Holding the recorder's link (iPhone)"), and
+docs/direct-soundcore.md ("Live audio for a shared recording").
+
+**What iOS allows, and how Daybook handles what it doesn't.**
+
+- *Starting the microphone in the background*: not allowed. Since iOS 12.4 an app in the background
+  can't activate a recording session (`AVAudioSession.ErrorCode.cannotStartRecording`, '!rec'); Apple's
+  Developer Technical Support confirms only CallKit, LiveCommunicationKit, and PushToTalk are exempt,
+  for calls only (Developer Forums thread 816408, answering this very case: a Bluetooth accessory's
+  button). The `audio` background mode only keeps a recording going that started in front.
+- *`AudioRecordingIntent`*: lets Daybook start recording without coming forward only when the system
+  performs it (the Action button, a Control Center control, the Lock Screen, Siri, Shortcuts), and the
+  intent must start a Live Activity. An app can't perform it in response to an accessory's event.
+  Daybook's Start Recording intent already conforms; nothing more applies.
+- *Live Activities*: can't be started from the background ("Target is not foreground") except by such
+  an intent or a push-to-start push from a server, which a local-only app doesn't have.
+- *An audio session already active*: recording that's running carries on in the background, so a
+  recorder's button pressed while Daybook records (in front or not) joins that recording. Keeping a
+  session active (silence) to start later is the silent-microphone trick App Review rejects and the
+  owner ruled out.
+- *Bluetooth in the background*: allowed with the `bluetooth-central` mode Daybook already has. iOS
+  delivers the recorder's notifications to a backgrounded or suspended app, relaunches it after the
+  system ended it (state restoration, `willRestoreState`), and keeps a pending connection with no
+  deadline. Scanning in the background is restricted, so a held link never scans.
+
+So a recorder's button pressed with Daybook in the background records the recorder only: its audio is
+saved into a new conversation as it records, a notification says "Soundcore Work is recording. Daybook
+is saving its audio. Open Daybook to record on this iPhone too.", the link comes up and the Macs that
+understand it are asked to record (told the phone doesn't), and opening Daybook records on the phone too.
+A Mac can't start an iPhone whose Daybook is in the background and not recording (its link is closed
+then), and says the iPhone isn't connected. No entitlement or capability on the owner's account is
+needed: `audio` and `bluetooth-central` are already in the iPhone's background modes, and the
+notification is an ordinary local one (Time Sensitive delivery would need the Time Sensitive
+Notifications capability, which wasn't added).
+
+**Automated** (no Bluetooth, recording, or downloads; the link on loopback, `SimulatedSoundcore` for the
+recorder, newly able to record in real time and stream as it records):
+
+- `CascadingRecordingTests` (Mac, 8): the Mac's start asks the phone with its cascade; a phone's start
+  joins the Mac, never comes back, answers once however it's asked, and is declined with "Record along"
+  off while a start the person chose still records; stopping the Mac stops the phone that led but not
+  the one whose stop it was; a phone recording along can stop the Mac and isn't asked back; a phone
+  recording only through its recorder is followed (`sharedConversationID`), stopped, and owed the stop
+  until it reconnects; notes and bookmarks both ways (edits, a deleted bookmark), never echoed, and once
+  each after the libraries sync; a recorder this Mac starts saves its audio into the conversation and
+  its file replaces it; the recorder's button starts and stops the Mac. `PhoneLinkTests` changed for the
+  new stop authority (a phone recording along may stop the Mac).
+- `SharedRecordingTests` (DaybookKit, 6): recorders start once with the shared recording however
+  they're asked (the phone's own start and a Mac's request at the same moment send one Start), save
+  their audio into it, stop with it, and their files follow; one already recording records along and is
+  left running; the one whose button led stops with it, one with "Record along" off isn't started; the
+  button stopping one keeps its audio and imports its file; a late ask never restarts an ended
+  conversation, one shared recording runs at a time, and a stop for another ends nothing; the notes
+  tracker shares each change once, never echoes, and keeps a paragraph that arrived a moment before an
+  editor wrote its text back.
+- `SoundcoreSharedRecordingTests` (8): the button heard, Daybook's own commands not, and a press missed
+  while the held link came back still heard (one long running isn't); holding the link (no idle release,
+  back without the cooldown, the person's Disconnect stands, never a scan, the system's record tried
+  again); live audio saved into the shared recording with the recorder's file becoming the same track
+  (identical bytes) or replacing it (different); live audio that goes quiet kept; and what live audio
+  costs (docs/direct-soundcore.md: about 8,000 bytes a second on the link, the whole recording in the
+  library about 80 ms after it stops).
+- `SharedNotesTests` (DaybookCore, 7): paragraphs by ID (written at the end, edited in place, deleted,
+  the rest of the text as it was); bookmarks once by ID; the link's copy and the synced copy one
+  paragraph each with or without a common ancestor (and different paragraphs still a conflict for
+  History); edits and deletes through sync; a recorder's file replacing its live audio for transcription
+  and fusion; the same bytes becoming one track named for the whole recording.
+- `LinkSharedRecordingTests` (3): the new messages and fields round trip; what an older build sends
+  reads the same; the new types read as unknown by a build that doesn't know them, and travel a session
+  both ways.
+- iPhone, `CascadingRecordingTests` (6): starting asks the connected Mac on its own (and not twice) and
+  stopping stops it; a Mac-led recording stopped here stops the Mac, not when the Mac stopped it; the
+  recorder's button starts the iPhone and its Mac with the recorder leading and its audio saved, and its
+  button's stop stops both; in the background (`cannotStartRecording`) only the recorder records, the
+  person is told, the Mac is asked with `requesterRecords` false over a link brought back up, the
+  state says so, and coming forward records here too; a recorder-only recording ending stops the Mac;
+  a Mac's notes and bookmarks show at once, are filed as the Mac files them (not held), and this
+  iPhone's go to the Mac with the time it files them. `LinkServicesTests` changed for the permission on
+  by default (a paired Mac starts recording until turned off; a choice per pairing survives a relaunch).
+
+On Apple silicon with Xcode 27.1, `swift test` passed 1,086 XCTest cases across the seven bundles (one
+skipped, as before), and `scripts/build-ios.sh --test` on a dedicated clone of the Daybook Shell Duo
+simulator passed 163.
+
+**Still to check on real hardware** (an iPhone, a Mac, a Soundcore Work, one network):
+
+- The recorder's button with Daybook in front, in the background, suspended, and ended by the system:
+  that the `18 82` push reaches Daybook each time (and its relaunch), and how long iOS keeps it running
+  for the recorder's stream; that the notification appears, and opening Daybook from it records into
+  the same conversation.
+- That the link comes back from the background (Bonjour lookup and TLS while woken for Bluetooth) fast
+  enough to ask the Mac, and stays up while only the recorder records.
+- Holding the recorder's link for days: the iPhone's and the recorder's battery, whether the recorder
+  stays connectable (or sleeps and drops it), how quickly the pending connection completes when it's
+  back, and that the Soundcore app on the same iPhone still works alongside.
+- Live audio over a long recording: sustained throughput, the recorder's real live pacing and packet
+  size, whether its stream ends when its button stops it (or only the 2 s tail ends it), how often the
+  recorder's file and the live audio are byte for byte the same, and whether firmware accepts Pause
+  during a live stream (Daybook ends the stream first).
+- Notes typed on both devices at once in a long meeting: that nothing moves under the cursor in Write
+  Notes and Floating Notes when a paragraph arrives (both editors take the new text from their model).
+
 ## Soundcore: a list that doesn't come, and Details (2026-10-28)
 
 From the owner's iPhone (0.4.1): Soundcore Work "Connected · 100%" with "Nothing New to Import" while

@@ -17,6 +17,9 @@ belongs to, and enhancing a conversation when a source is added. The sound align
 | Record control | Starts and stops recorders with this Mac; one status line. Devices that answer each command (Daybook on iPhone, `AnsweringRecordControl`) report the answer directly | `CompanionRecorders` in [MultiSourceCoordinator.swift](../Sources/Daybook/App/MultiSourceCoordinator.swift) |
 | Daybook on iPhone | Record control both ways over the local link, recording state and following the leader, the clock prior, and the phone's synced recordings joining conversations | [AppState+Phone.swift](../Sources/Daybook/App/AppState+Phone.swift), [PhoneLinkConnection.swift](../Sources/Daybook/App/PhoneLinkConnection.swift); on the phone, [PhoneAppModel.swift](../Apps/iOS/DaybookPhone/App/PhoneAppModel.swift) and [PhoneLibrary.swift](../Apps/iOS/DaybookPhone/Library/PhoneLibrary.swift) |
 | Another device's work | A joining recording's notes and bookmarks, added once and held by its track (`Meeting.addRecordingWork`); recorders on the link and through their owner (`RecorderRemoteControl`) | [MultiSource.swift](../Sources/DaybookCore/MultiSource.swift), [LinkRecorders.swift](../Sources/DaybookKit/LinkRecorders.swift) |
+| Starting anywhere | The recorders a device manages recording along with its shared recording, their live audio, and stopping them with it (`RecorderCascade`); the Mac's cascading start and stop (`CompanionRecorders`, `AppState.recorderButton`); the iPhone's (`PhoneAppModel+Cascade`) | [RecorderCascade.swift](../Sources/DaybookKit/RecorderCascade.swift), [MultiSourceCoordinator.swift](../Sources/Daybook/App/MultiSourceCoordinator.swift), [PhoneAppModel+Cascade.swift](../Apps/iOS/DaybookPhone/App/PhoneAppModel+Cascade.swift) |
+| Notes and bookmarks shared live | Paragraphs and bookmarks by ID (`SharedNote`, `Meeting.applySharedNote`), what was shared so nothing echoes (`SharedNotesTracker`) | [SharedNotes.swift](../Sources/DaybookCore/SharedNotes.swift), [SharedNotesTracker.swift](../Sources/DaybookKit/SharedNotesTracker.swift), [AppState+SharedNotes.swift](../Sources/Daybook/App/AppState+SharedNotes.swift) |
+| A recorder's live audio | A live portion replaced by the recorder's own file (`Meeting.supersededLivePortions`) | [LivePortions.swift](../Sources/DaybookCore/LivePortions.swift) |
 | Orchestration | Arrival planning, attach and enhancement, the processing steps, suggestions, interface words | [AppState+Sources.swift](../Sources/Daybook/App/AppState+Sources.swift) |
 | Interface hooks | Inspector › Audio rows, suggestion buttons, status lines (unstyled) | [SourceHooks.swift](../Sources/Daybook/UI/SourceHooks.swift) |
 
@@ -257,7 +260,7 @@ the phone manages that doesn't name the recording (the phone's answer to the sta
 only until Daybook quits, since it would pause whatever the recorder records by then.
 
 The device page's **Start Recording on iPhone** asks for a conversation of the phone's own
-(`standalone`), which that Mac may stop.
+(`standalone`), which that Mac may stop. The phone's recorders record along with it; no Mac is asked.
 
 **The phone records, and asks this Mac.** This Mac records into the phone's conversation ID,
 creating the conversation here if it hasn't synced yet, with the title and date the phone sent (and
@@ -265,8 +268,10 @@ keeping that date while it records), and links the phone as already recording, w
 start and the clock estimate, rather than asking it back. It refuses with a reason when it's
 recording another conversation (`recordingSomethingElse`, naming it), starting or stopping
 (`busy`), or isn't allowed the microphone (`permissionDenied`; an undecided permission is refused
-too, since nobody may be at the Mac to answer the prompt). The phone may stop a recording it asked
-for, not one started on the Mac (`declined`); it stops each Mac it started when it stops, including
+too, since nobody may be at the Mac to answer the prompt). A phone that asks on its own (a cascading
+start, below) is declined when this Mac's **Also record on <iPhone>** for it is off: "Recording along
+with Alex's iPhone is turned off on this Mac." The phone may stop a recording it asked for, or one it
+records along with (below), not one started on the Mac without it (`declined`); it stops each Mac it started when it stops, including
 one still being asked and one whose answer never came, and owes a stop that didn't arrive until that
 Mac reconnects, kept for a day in `owed-stops.json` in its library's folder (never synced), so a
 relaunch still sends it. A start that comes back after the phone stopped is stopped too.
@@ -275,7 +280,9 @@ relaunch still sends it. A start that comes back after the phone stopped is stop
 asked says it isn't recording that conversation any more (as it does on every reconnection), or
 hasn't been reachable for 30 minutes, the follower stops too and says so ("Studio Mac stopped
 recording, so this iPhone stopped too."). The phone accepts a stop only from the Mac its recording is
-with: the one that started it, or one it asked to record along; the person can always stop it.
+with: the one that started it, or one it asked to record along; the person can always stop it. This
+Mac accepts a stop from the phone that asked it to record, and from a phone recording its
+conversation along with it. Stopping anywhere stops the rest (below).
 
 **The clock prior.** The link measures the phone's clock against this Mac's (NTP-style, good to a
 few milliseconds on a quiet network); the phone also stores what it measured while recording on its
@@ -309,11 +316,146 @@ so only the Mac that carries out the request does this (any Mac, for a recording
 - **In a conversation that has this Mac's recordings**, it waits to be lined up, `pending` with the
   clock prior (keeping the notes it holds), and the link is marked `attached`.
 
+## Starting anywhere
+
+Starting a recording on any device starts every device connected to it, and stopping on any device
+stops the rest: a cascading start and stop. Each device records a conversation once, under the one
+conversation ID, however many ways it's asked.
+
+| Started on | What else starts |
+| --- | --- |
+| This Mac (by hand or a detected meeting) | Each connected iPhone (as above); the recorders this Mac manages; a recorder a phone manages, through that phone |
+| An iPhone (by hand, a Shortcut, the control, the Action button) | Each connected Mac, on its own (`LinkRecordRequest.cascade`); the recorders the phone manages |
+| An iPhone, because a Mac asked | Its recorders; no Mac is asked back |
+| A recorder's own button | The device that manages it records (a new conversation), and so everything that device reaches |
+
+**Asked on its own.** The request a starting device sends carries `cascade` (what started it: the
+person, a recorder's button, a detected meeting, or another device), so the receiver joins the same
+conversation, says why, and never takes it for a conversation of its own. The Mac's **Also record on
+<iPhone> when this Mac records** decides both ways (on by default): off, a phone's cascading start is
+declined, while a start the person chose for that Mac still records. The phone asks every Mac
+connected when it starts, and one that connects within the next minute (the link can take a moment
+to come back as the app comes forward); "Record on Studio Mac too" still asks one that connects later.
+A Mac that asked the phone isn't asked back, and the phone doesn't ask other Macs then.
+
+**No loops, no echoes.** A device asked to record a conversation it records already answers "already
+recording" (`wasAlreadyRecording`), and one asked again with the same request answers once, so a
+start reaching a device two ways (the Mac asking for the phone's recorder while the phone starts it on
+its own) is one start: the phone's `RecorderCascade` runs one start per recorder and gives every ask
+its answer. A recorder's own start or pause isn't news: only a state it reports while no command of
+Daybook's is waiting (`SoundcoreConnection.onButton`) counts as its button. A conversation that ended
+on a device isn't begun there again by a late ask.
+
+**Stopping.** A stop goes to every device the stopping device started or was started by, except the
+one whose word the stop is: this Mac stops the phones it started (as before) and now the phone that
+asked it to record (`CompanionRecorders.leads`), unless that phone's stop is what stopped it
+(`stopCause`); a phone stops the Macs it started (as before) and now the Mac that asked it, unless
+that Mac's stop is what stopped it, owed until it reconnects; a recorder stops with the recording it
+was started for, the one whose button began it, and one whose button joined it (only that
+recording, read from its list first); its button stopping it stops the recording it's part of
+everywhere. A recorder that was already recording when the conversation began records along and is
+left running, as before.
+
+**Permission.** A Mac may start an iPhone's microphone from the moment it's paired: the per-Mac
+choice from the security review (Settings › Macs › <Mac> › Can Start Recording) stays, visible and
+switchable, but starts on, and the pairing sheet no longer asks. Turned off, a Mac's start is declined
+with the reason as before. A choice belongs to one pairing; pairing again turns it on again.
+
+**A recorder's button and the iPhone.** The recorder tells the device managing it when its button
+starts or stops a recording (`18 82`, `SoundcoreSession.Push.recording`). To hear it, an iPhone holds
+the link to a recorder it manages that records along with it, while the recorder is in range,
+including with Daybook in the background (docs/devices.md, "Holding the recorder's link"). Pressed:
+
+- Daybook is recording: the recorder joins that conversation (its audio saved into it as it records,
+  below) and stops with it.
+- Daybook is in front, or iOS lets it start the microphone: this iPhone records a new conversation
+  with the recorder as its lead, and asks its Macs.
+- In the background, iOS doesn't let an app start the microphone (since iOS 12.4,
+  `AVAudioSession.ErrorCode.cannotStartRecording`; Apple's Developer Technical Support says only CallKit,
+  LiveCommunicationKit, and PushToTalk may, and only for calls; `AudioRecordingIntent` runs only when
+  the system performs it from the Action button, a control, Siri, or Shortcuts, never from an
+  accessory's event; and a Live Activity can't be started from the background without a push server).
+  So only the recorder records (`PhoneAppModel.recorderOnly`): its audio is saved into the new
+  conversation as it records, a notification says "Soundcore Work is recording. Daybook is saving its
+  audio. Open Daybook to record on this iPhone too.", the link is brought up (`backgroundRecording`)
+  and each Mac that understands it is asked to record, told the phone itself doesn't
+  (`LinkCascade.requesterRecords` false: the Mac expects no recording of the phone's own). The phone's
+  `recording.state` names the conversation in `sharedConversationID`, so a Mac following it keeps
+  recording. Opening Daybook (from the notification or otherwise) records on this iPhone too, into the
+  same conversation; the recorder's button stopping it, or a Mac's stop, ends it and stops the rest.
+  Never a microphone kept open, never a claim this iPhone records when it doesn't.
+
+On a Mac that manages the recorder, its button starts and stops this Mac the same way while the Mac
+is connected to it (a Mac lets the recorder go when idle, so the iPhone is where this matters), and
+never asks for the microphone for it.
+
+## A recorder's audio while it records
+
+The device that manages a recorder recording along with a shared recording saves the recorder's audio
+into the conversation as it records, from the stream Listen Live uses (`DeviceSession.captureLive`,
+without captions: the device's own recording captions the room). When the recording stops, the
+recorder's audio is already in the conversation (in the library within a fraction of a second of the
+stop, against minutes to transfer the file afterwards), so multipoint processing has every source at
+once. It's a live portion: its recording ID ends with `~live`, it joins the conversation as a source
+to place like the recorder's file would (the link's clock prior, then sound), and it doesn't satisfy
+the recorder's multipoint link.
+
+The recorder's own file is imported into the conversation as before (when this Mac stops, the phone
+when asked, or whenever the recorder is next in range: `DeviceSession.importWhenFinished`), and it's
+authoritative:
+
+- Byte for byte the live portion (the stream had every frame, as when the recorder's button ended it
+  and the stream ran to its end), the import finds that track and names it for the whole recording
+  (`MeetingStore.importAudio`): one track.
+- Otherwise (the live audio was cut when a device stopped the recorder, the link dropped, or packets
+  differ), both stay, and the live portion is replaced for transcription and fusion
+  (`Meeting.supersededLivePortions`; `transcribableTracks` leaves it out, and fusion reports it as
+  "Replaced by the recorder's own file"). Its original stays for provenance and playback.
+
+The link dropping keeps what arrived (as Listen Live does), and the file is imported after the
+recording; so does the stream going quiet (no longer discarded after the stall timeout), and the
+recorder saying it stopped ends the stream after a moment (`SoundcoreTiming.liveTail`) if it doesn't
+end on its own. While it streams, the recorder's list can't be read nor Pause sent, so a device
+stopping it saves the live audio first. What it costs the link is in docs/direct-soundcore.md,
+"Live audio for a shared recording".
+
+## Notes and bookmarks during a shared recording
+
+While a Mac and an iPhone record one conversation, a paragraph written in Floating Notes (or the
+conversation page) on the Mac appears in the iPhone's Write Notes at once, and one written on the
+iPhone appears on the Mac; so do bookmarks, a bookmark's label, and a deleted paragraph or bookmark.
+Over the local link (`note`, `bookmark`, `bookmark.change`; docs/link.md), only between devices that
+both record the conversation and list `sharedNotes`.
+
+- **Identity.** A paragraph is its anchor ID (`TimedNote.id`), a bookmark its `Highlight.id`, minted
+  on the device where it was written and kept on the other. The copy the link brings and the one sync
+  brings later are therefore one item, and the library's merge keeps each once (by ID with no common
+  ancestor; with one, two copies holding the same paragraphs in another order aren't a conflict for
+  History, `MergedNotes.holdsSameParagraphs`).
+- **Time.** Each paragraph travels with the time the device that wrote it files it at, and the other
+  device keeps exactly that, so the copies agree: a Mac's note at its time on the timeline; an iPhone's
+  at its recording's time plus where the link's clocks put its recording (the same shift its filing
+  uses). The iPhone shows a Mac's paragraph at its moment in its own recording (from when it was
+  written, on the Mac's clock moved onto the iPhone's), and files it as the Mac does: not held by its
+  recording (`PhoneCaptureJournal.sharedNotes` and `sharedBookmarks`).
+- **Edits and deletes** go by ID: an edited paragraph keeps its place, a new one from the other device
+  goes at the end (so nothing moves under a cursor), a deleted one goes. The latest change of each
+  item wins (`changedAt`, moved onto the receiver's clock); an older one arriving late is dropped.
+- **Never echoed.** Each device keeps what it last shared or was sent (`SharedNotesTracker`) and sends
+  only what changed against it; what arrived is recorded before it's applied. The Mac diffs its notes
+  and bookmarks after each change to the conversation (every editing surface: Floating Notes, the page,
+  the menus), a quarter-second after typing pauses; the iPhone after each change to its notes.
+- **While typing.** Floating Notes and Write Notes take a paragraph from the other device while the
+  person types (it goes at the end, so the cursor stays put), and one that arrived a moment before an
+  editor wrote its text back is kept rather than taken as deleted (`SharedNotesTracker.keepingArrivals`).
+- What was there before the shared recording began, and work after it, travel through sync as before.
+
 ## Preferences
 
 | Preference | Default | Where |
 | --- | --- | --- |
-| Also record on <device> when this Mac records | On, for recorders with record control, Daybook on iPhone included | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); Settings › Devices |
+| Also record on <device> when this Mac records | On, for recorders with record control, Daybook on iPhone included. For an iPhone it decides both ways: off, the phone's cascading starts are declined too. On an iPhone, the same setting of a recorder it manages says whether it records along with the phone (and so whether the phone holds its link) | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); Settings › Devices |
+| Can Start Recording (per Mac, on the iPhone) | On when the Mac is paired | `PhoneSettings.macMayStartRecording`; Settings › Macs › <Mac> |
 | Add imported files to conversations they overlap | Off | `matchesImportedFilesToConversations`; Settings › General |
 
 ## Limits and what needs a recorder
@@ -353,3 +495,18 @@ so only the Mac that carries out the request does this (any Mac, for a recording
   placed by the recorder's own start, then sound and transcript.
 - Record control with the phone, the clock prior on real Wi‑Fi, and a phone that loses the link
   mid-recording need a real iPhone on a real network; tests use loopback.
+- A Mac can't start an iPhone whose Daybook is in the background and not recording: the link is
+  closed then (docs/link.md, "Lifecycle"), and iOS wouldn't let the phone start its microphone anyway.
+  The Mac says "Alex's iPhone isn't connected. Recording on this Mac only."
+- Starting from a recorder's button in the background records only the recorder (above), and asking
+  the Macs depends on the link coming back while iOS keeps Daybook running for the recorder's
+  Bluetooth traffic; both need a real iPhone and recorder to confirm.
+- A phone asked by one Mac doesn't ask its other Macs; a recorder only-recording phone asks Macs from
+  this build on (those listing `cascade`).
+- The phone keeps the recorders of its shared recording in memory: if Daybook is killed mid-recording,
+  a recorder it started keeps recording until the person stops it, and its file imports as usual.
+- A shared paragraph is one line: line breaks typed inside one paragraph arrive as spaces. A paragraph
+  edited on both devices at once keeps the later edit.
+- A Mac and an iPhone started by hand at the same moment (two cascades crossing) each refuse the
+  other's start as recording something else, so they record two conversations; the later recording
+  finds the other by time and sound as any recording that arrives later does.

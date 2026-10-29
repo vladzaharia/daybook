@@ -121,7 +121,8 @@ Apps/iOS            (Xcode, via XcodeGen)
 - **Local link.**
   - When both are on the same network, DaybookLink (Network.framework, Bonjour, TLS with a pre-shared key from pairing) carries what iCloud is too slow for: start and stop for multipoint, live recording state, bookmarks, and live processing progress.
   - Without it, everything still works through sync, just later.
-  - A Mac paired from now on can't start this iPhone's microphone until the person allows it. Right after pairing, the phone asks once: "Let <Mac> start recording on this iPhone?" (Allow / Not Now). The answer belongs to that pairing (pairing again asks again), and the Mac's row in Settings › Macs changes it later (Can Start Recording). Macs paired before the phone started asking keep the behavior they had. A start request from a Mac without permission is refused as `declined` with a sentence the Mac shows. Stop requests are unaffected.
+  - A paired Mac may start this iPhone's microphone from the moment it's paired: recording on one device starts every device connected to it (docs/multipoint.md, "Starting anywhere"). The choice stays per Mac, visible and switchable in that Mac's row in Settings › Macs (Can Start Recording); it belongs to that pairing (pairing again turns it on again), and the pairing sheet no longer asks. A start request from a Mac it's turned off for is refused as `declined` with a sentence the Mac shows. Stop requests are unaffected.
+  - Starting here asks every connected Mac to record too, and starts the recorder this iPhone manages; a recorder's own button starts this iPhone (or, in the background, where iOS won't start the microphone, saves the recorder's audio and says so). Notes and bookmarks made on either device during a shared recording appear on the other at once.
 - **What goes where.**
 
   | What | iCloud Drive (`<container>/Documents/Daybook`) | CloudKit courier (private database, zone `Courier`) | Local link |

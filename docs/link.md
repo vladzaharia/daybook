@@ -2,7 +2,8 @@
 
 DaybookLink is the local-network channel between Daybook on a Mac and Daybook on an iPhone
 (docs/iphone.md, "Local link"). It carries what iCloud is too slow for: multipoint start and
-stop, live recording state, bookmarks, live processing progress, nudges about processing
+stop (cascading, docs/multipoint.md, "Starting anywhere"), live recording state, notes and
+bookmarks during a shared recording, live processing progress, nudges about processing
 requests, presence, and clock samples. Everything else still travels through sync, so without the
 link the apps keep working, only later.
 
@@ -172,9 +173,11 @@ can copy the tags, but it can't complete TLS without the key.
 | --- | --- | --- | --- |
 | `hello` / `welcome` / `refused` | handshake | phone → Mac / Mac → phone | always written at version 1 |
 | `capabilities` | `LinkCapabilities` | both | device class, name, app version, library ID, `canProcess`, features, `syncDeviceID` (optional) |
-| `recording.state` | `LinkRecordingState` | both | phase, conversation, start, elapsed, sent-at; the recorders the sender manages (optional) |
-| `record.request` / `record.reply` | `LinkRecordRequest` / `LinkRecordReply` | both | start or stop, conversation, prior timing (with where the timeline began), the conversation's title and date, standalone, a recorder the receiver manages (all optional but the first two); reply is an ack or a refusal with a reason |
-| `bookmark` | `LinkBookmark` | both | conversation, recording time, created-at, label |
+| `recording.state` | `LinkRecordingState` | both | phase, conversation, start, elapsed, sent-at; the recorders the sender manages (optional); the shared recording it takes part in only through its recorders (`sharedConversationID`, optional) |
+| `record.request` / `record.reply` | `LinkRecordRequest` / `LinkRecordReply` | both | start or stop, conversation, prior timing (with where the timeline began), the conversation's title and date, standalone, a recorder the receiver manages, a cascading start (`cascade`: what started it, whether the requester records itself, its recorders) (all optional but the first two); reply is an ack or a refusal with a reason |
+| `bookmark` | `LinkBookmark` | both | conversation, recording time, created-at, label: a bookmark made during a shared recording, by its ID |
+| `bookmark.change` | `LinkBookmarkChange` | both | a shared bookmark's label changed, or it was deleted; changed-at |
+| `note` | `LinkNote` | both | a paragraph written, edited, or deleted during a shared recording: its anchor ID, text, the time its writer files it at, made-at, changed-at |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail |
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
@@ -249,6 +252,29 @@ Additions within version 1, all optional, which older builds ignore:
   `recorderUnavailable`, to ask again.
 - `LinkTiming.timelineStart`: from an older build, `elapsed` counted from the requester's own start.
 
+## Shared recordings
+
+Additions within version 1 for recording across devices (docs/multipoint.md, "Starting anywhere" and
+"Notes and bookmarks during a shared recording"). An older build ignores the new types and fields:
+`note` and `bookmark.change` reach it as types it doesn't know (ignored and counted), a `cascade` on a
+start reads as a start the person chose, and `sharedConversationID` isn't read.
+
+- **Features.** `cascade` (`LinkCapabilities.cascadeFeature`): the device joins and stops shared
+  recordings on its own, reads `cascade` and `sharedConversationID`, and accepts a stop from a device
+  recording a conversation with it. `sharedNotes`: it takes `note`, `bookmark.change`, and `bookmark` in
+  both directions. Both apps list both.
+- **Cascading start.** `LinkRecordRequest.cascade` says what started the requester's recording
+  (`person`, `recorder`, `automatic`, or another `device`; an open value), whether the requester records
+  the conversation itself (`requesterRecords`; false for an iPhone whose recorder records while it
+  can't, sent only to devices listing `cascade`), and its recorders. A start with `cascade` always
+  joins the requester's conversation, never one of the receiver's own (`isStandalone`).
+- **Recording state.** `sharedConversationID` names a shared recording the sender takes part in only
+  through its recorders; `LinkRecordingState.takesPart(in:)` is what a follower checks.
+- **Notes and bookmarks** carry their IDs (a paragraph's anchor ID, a bookmark's ID), so the copy over
+  the link and the one through sync are one item. A note carries the time its writer files it at,
+  which the receiver keeps exactly, and when it was written and changed on the sender's clock; the
+  receiver moves those onto its own and keeps the latest change of each item.
+
 ## Recording state
 
 `recording.state` says what the sender is recording: when that changes, every 15 s while
@@ -296,7 +322,9 @@ clock before any sound is compared.
   sessions and retries the rest at once. Connections never use cellular.
 - **iOS battery and background.** The app reports its state with `setActivity(_:)`:
   - `.foreground`: browse, connect, normal heartbeats.
-  - `.backgroundRecording`, while a recording with a Live Activity runs: keep the connection,
+  - `.backgroundRecording`, while a recording with a Live Activity runs, or while only a recorder
+    this iPhone manages records a shared recording (its button started it with Daybook in the
+    background; docs/multipoint.md): keep the connection (bringing it back from a background launch),
     with slow heartbeats and slow retries.
   - `.background`: say goodbye, close everything, stop browsing and path monitoring. iOS would
     suspend the app anyway; calling `.foreground` again reconnects.
@@ -401,7 +429,8 @@ Both apps' Info.plist:
     and `swift test` builds get `errSecMissingEntitlement`, as do ad hoc builds) keep the login
     keychain. `LinkKeyStoreTests` cover the move and the fallback against a keychain in memory.
 - Background: the link adds no background mode. It rides on the recorder's `audio` mode while
-  recording and is closed otherwise.
+  recording, and on `bluetooth-central` while only a recorder records a shared recording (iOS keeps
+  Daybook running for the recorder's stream), and is closed otherwise.
 
 ## Library keys
 
@@ -417,7 +446,7 @@ iCloud Keychain. There's no Mac-to-Mac path; two Macs rely on iCloud Keychain or
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 69 tests, about 8 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 73 tests, about 9 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
@@ -447,6 +476,11 @@ the test process, and nothing is advertised.
     once and gets that answer;
   - unpairing from either side, and a phone the Mac forgot while it was away;
   - pairing identities containing zero bytes.
+- **Shared recordings** (`LinkSharedRecordingTests`): round trips of a cascading start, a recording
+  state with `sharedConversationID`, notes (written and deleted), bookmarks and their changes, and the
+  features; what an older build sends still reads the same (no `cascade`: chosen by the person, and
+  standalone without timing; missing and unknown fields); the new types read as unknown types by a
+  build that doesn't know them, and over a session both ways.
 - **Library keys:** a request and its grant over a loopback session, only the keys asked for; nothing for a device of
   another library, or without one (`LinkLibraryKeyTests`).
 - **Recorder handoff:** round trips of the request (take and give), both replies and the release;
@@ -477,6 +511,9 @@ freeze (hold connections open, pass nothing) or drop every connection.
 - **iOS background limits:**
   - that `.backgroundRecording` keeps the connection alive with the audio background mode and a
     Live Activity, including on the Lock Screen and across calls and interruptions;
+  - that a phone woken in the background by its recorder's Bluetooth traffic (its button) can bring
+    the link back (Bonjour lookup, TLS) and ask its Macs to record before iOS suspends it, and keeps it
+    while the recorder streams;
   - that `.background` closes cleanly before suspension;
   - the battery cost of 20 s heartbeats.
 - **Keychain.** `KeychainLinkKeyStore` in the signed apps: access after first unlock on iPhone;

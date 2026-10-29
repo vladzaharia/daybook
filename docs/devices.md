@@ -143,6 +143,7 @@ that recording joins the same conversation.
   with sync's, in `DaybookPhoneApp`) calls `DeviceHub.resumeAutomaticImportsIfDue()`, which starts
   the quiet connection once `automaticDueAt` has passed; iOS keeps it pending and wakes the app when
   the recorder answers.
+- A recorder an iPhone holds for its button (below) has no wait: it's connected whenever in range.
 - Audio a killed run left staged is removed when the hub starts (only `Soundcore-*.wav` older than
   the hub, so no transfer under way loses its file). The recorder still has all of it.
 
@@ -158,6 +159,54 @@ device's status says recording, pages read "Recording · as of 10:07 AM", the re
 Recording now, and then it's unknown again, because nobody can see it stop. The snapshot keeps
 `activeRecordingID`, `info.isRecording`, and `statusUpdatedAt` (the as-of), so a relaunch knows too.
 On iPhone, a recording it started and Listen Live get a Live Activity (docs/iphone.md).
+
+**Its button.** A recording state the recorder reports unasked (`18 82`) that changes what this device
+knew, while no Start or Pause of Daybook's is waiting for an answer, is its button:
+`SoundcoreConnection.onButton`, `DeviceSession.onRecorderButton`, `DeviceHub.onRecorderButton`. The
+apps start or stop a shared recording from it (docs/multipoint.md, "Starting anywhere"). Daybook's own
+commands, and a state it already knew, never count. A held link (below) that comes back to find a
+recording started in the last minute that it didn't know of counts it as a press
+(`SoundcoreTiming.buttonCatchUp`): iOS relaunching Daybook for the recorder can deliver the push before
+the link is ready. One that started earlier was the person's some time ago, and isn't.
+
+## Holding the recorder's link (iPhone)
+
+A recorder's button is only heard over a connection, so an iPhone holds the link to a recorder it
+manages that records along with it ("Record along", `ConfiguredDevice.recordsAlongsideMac`, on by
+default) whenever the recorder is in range, Daybook in front or not (`SoundcoreConnection.staysConnected`,
+set by `PhoneDevices.holdRecorders`):
+
+- **Never let go when idle**, and after a drop, a pending connection at once rather than the 15-minute
+  wait automatic import keeps (iOS keeps a pending connection with no deadline and completes it when
+  the recorder is back). iOS shares the one link to the recorder between apps, so holding it doesn't
+  keep the Soundcore app on the same iPhone away (docs/direct-soundcore.md); a Mac doesn't reach for a
+  recorder the iPhone manages.
+- **No scanning, ever, while holding**: only the system's record of the recorder
+  (`retrievePeripherals`, then `connect`). If the system doesn't know it, it's tried again after 30 s
+  (`SoundcoreTiming.holdRetry`), never in a busy loop.
+- **The person's Disconnect stands**: holding waits like automatic import does, until they connect
+  again or a connection completes on its own.
+- **Background and relaunch.** The `bluetooth-central` background mode lets iOS deliver the recorder's
+  notifications (its button, its stream) to Daybook in the background, and relaunch Daybook if the
+  system ended it: the central manager is made in `App.init` with a restore identifier,
+  `willRestoreState` hands back the recorder (its delegate set again at once), and the connection's own
+  state machine adopts a link that's still up (`connect` on a peripheral iOS kept connected carries on
+  from service discovery rather than connecting again). A background relaunch skips the scene's
+  `launch`: the library loads when something is imported, and the link starts when a shared recording
+  needs it.
+- **Battery.** An idle Bluetooth LE link costs the iPhone little; what it costs the recorder's battery,
+  and whether the recorder keeps advertising or holds the link through its own sleep, needs the real
+  recorder (docs/validation.md).
+
+## A recorder's audio in a shared recording
+
+The device managing a recorder that records along with a shared recording saves its audio into the
+conversation as it records (`DeviceSession.captureLive(into:)`, Listen Live's stream without
+captions), ends it when the shared recording stops (`endLiveCapture`, which waits until it's in the
+library), and imports the recorder's own file into the same conversation once it's finished and
+listed (`importWhenFinished`, the same waiting list as a handoff's imports). A live portion is a track
+whose recording ID ends with `~live`; the full recording replaces it (docs/multipoint.md, "A recorder's
+audio while it records"). The device page shows it as Listen Live (Stop Listening keeps what arrived).
 
 ## One owner per recorder
 
@@ -334,8 +383,9 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
 - **Device page.** Paired and connected or when last seen, what it's recording now (with Stop on
   iPhone), how recordings arrive, and its recent recordings. The list column shows all of them, as
   they're all in Daybook.
-- **Settings › Devices.** Over Wi‑Fi status, Also record on <iPhone> when this Mac records, how
-  recordings arrive (with a link to sync settings when it's off), and Unpair….
+- **Settings › Devices.** Over Wi‑Fi status, Also record on <iPhone> when this Mac records (both ways:
+  off, the phone's cascading starts are declined too), how recordings arrive (with a link to sync
+  settings when it's off), and Unpair….
 - **Bluetooth ownership** of a Soundcore shared with the phone is a synced device setting, moved
   between them by the handoff above.
 

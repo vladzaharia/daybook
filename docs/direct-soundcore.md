@@ -53,6 +53,11 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
   problem with one action. If the recorder was connected, it reconnects when Bluetooth returns.
 - **Timeouts.** Commands 10 s, setup connect 20 s, remembered connect 10 s, scan 15 s, record
   confirmation 10 s, stalled transfer 45 s. All live in `SoundcoreTiming`.
+- **Holding the link** (iPhone, for its button; docs/devices.md, "Holding the recorder's link"):
+  `staysConnected` never lets the recorder go when idle, reconnects with a pending connection at once
+  after a drop, never scans (only the system's record of it, tried again after 30 s), and stands
+  aside for the person's Disconnect. A peripheral iOS restored with its link still up is adopted from
+  service discovery.
 - **Letting go.** A connection made for automatic import is released 30 seconds after its
   imports finish, and the next automatic attempt waits 15 minutes. A connection the person made
   is released after 5 idle minutes (or when they disconnect). The recorder talks to one host at
@@ -139,7 +144,38 @@ recordings; neither simulator success nor successful decoding establishes audio 
   recorder reports it; after 10 seconds without confirmation the page says so.
 - The recorder's own button reports the new state unasked (`18 82`, per the protocol notes); either
   way, Daybook lists it again, so a new recording appears in progress and a finished one with its
-  final size.
+  final size. A pushed state that changes what Daybook knew while no command of its own is waiting is
+  the button (`onButton`); live audio being received then is kept after a moment if the stream doesn't
+  end on its own (`SoundcoreTiming.liveTail`, 2 s).
+- Live audio that goes quiet for the stall timeout (45 s) keeps what arrived, as a disconnect does,
+  rather than being discarded.
+
+### Live audio for a shared recording
+
+The device managing the recorder saves its audio into a shared recording as it records, from Listen
+Live's stream (docs/multipoint.md, "A recorder's audio while it records"). Measured against
+`SimulatedSoundcore` recording in real time (`recordsInRealTime`: a recording grows by three 20 ms Opus
+frames every 60 ms, live audio streams it from its first frame and ends with it;
+`SoundcoreSharedRecordingTests.testWhatLiveAudioCostsTheLinkAndHowSoonItsThere`):
+
+| | Measured |
+| --- | --- |
+| On the link | about 8,000 bytes a second (64 kbit/s): 166-byte slices (160 of Opus) and 10 bytes of framing a notification of three, 16.7 notifications a second, before Bluetooth's own overhead |
+| Keeping up | the stream ran with the recording throughout (the shown seconds trail by up to a second, as progress is published once a second) |
+| In the library after the recording stops | about 80 ms (the decoder finishing and the copy), the whole recording |
+| The same recording's file afterwards | byte for byte the live audio when the stream ran to the recording's end, so one track |
+
+An hour of audio is 28.8 MB of Opus; transferred afterwards at a sustained 20 to 40 KB/s over
+Bluetooth LE (what the iPhone and the recorder actually sustain is unmeasured), that's 12 to 24 minutes
+before multipoint processing could start, against moments with live audio. Live audio needs about
+64 kbit/s sustained for the whole recording, well inside what a Bluetooth LE link carries, but the
+recorder's real packet size, how it paces live audio, what the radio sustains next to the phone's
+other Bluetooth traffic, and what it costs the recorder's battery need a real recorder.
+
+While live audio streams, the protocol session runs one exchange at a time, so the recorder's list
+can't be read nor Pause sent: a device stopping the recorder ends the live audio first (its tail,
+until the Pause, is then only in the recorder's file, which replaces the live portion). Whether
+firmware accepts commands during a live stream is unverified; Daybook doesn't try.
 
 ## The recorder's clock
 
@@ -167,6 +203,12 @@ battery and storage decoding, both list layouts, slice bounds, malformed lists, 
 fuzz of every parser, the NIST AES-256-CTR vector, P-256/HKDF/file-key agreement with tampering,
 and the native Opus path.
 
+`SoundcoreSharedRecordingTests` cover the button heard and Daybook's own commands not, holding the
+link (no idle release, back without the cooldown, the person's Disconnect, never a scan, the system's
+record tried again), live audio saved into a shared recording and the recorder's file becoming the
+same track (identical bytes) or replacing it (different), live audio that goes quiet kept, and what
+live audio costs the link (above).
+
 `SoundcoreSimulatorTests` run the real connection, session, queue, and importer against the
 simulated recorder: setup and remembered reconnection (direct and after a scan), paged listing
 with the 8-byte fallback, imports with identity, one-at-a-time queues, integrity failures (gaps,
@@ -183,7 +225,10 @@ the last-known recording as of its time and its expiry, the clock measured on St
 start dates, a recording arriving through sync during its transfer, and a background wake after
 the cooldown. No microphone, real Bluetooth, or downloads are used.
 
-**Not yet verified on hardware:** discovery and permissions on current firmware, actual battery
+**Not yet verified on hardware:** a shared recording's live audio over hours (sustained throughput,
+the recorder's real live pacing and packet size, whether its stream ends when its button stops it),
+holding the link in the background for days (the recorder's battery, whether it stays connectable),
+the button's push reaching a backgrounded or relaunched iPhone, discovery and permissions on current firmware, actual battery
 and storage values, the active recording's place in the list (among the entries or only after
 them) and whether Pause keeps it open, whether the button reports `18 82`, how far real recorder
 clocks drift, transfer throughput and packet loss, reconnect timing, live reception, and automatic
