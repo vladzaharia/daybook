@@ -348,6 +348,9 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertTrue(micTrack.clockAnchors?.contains { $0.resync == true } == true, "the device change starts a new clock segment")
         XCTAssertTrue(callTrack.clockAnchors?.contains { $0.resync == true } == true, "the switch to ScreenCaptureKit starts a new clock segment")
         XCTAssertEqual(try AVAudioFile(forReading: micTrack.url).length, micTrack.frameCount)
+        XCTAssertTrue(result.warnings.contains(RecordingController.microphoneChanged), "One plain sentence for the conversation")
+        XCTAssertFalse(result.warnings.contains { $0.contains("Hz") }, "\(result.warnings)")
+        XCTAssertTrue(micTrack.notes?.contains { $0.contains("24000 Hz") } == true, "The source's own note stays in the capture notes")
         // The saved metadata round-trips, including the new capture details.
         let recovered = try XCTUnwrap(CaptureRecovery.recover(in: directory))
         XCTAssertEqual(recovered.systemAudio, result.systemAudio)

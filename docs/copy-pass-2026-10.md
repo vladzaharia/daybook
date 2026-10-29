@@ -153,6 +153,11 @@ Finished afterwards:
   `PCMTrackWriter`) are one plain sentence each; the system's words go in the affected track's capture notes
   (the call audio's `fallbackDetail`, the echo removal report), which the conversation's capture details show.
   Daybook's own recording errors (`RecordingError`, `PCMTrackWriterError`) already read plainly and stay as written.
+  Checked again 2026-10-29: three still put a source's own words in the notice, and now don't. A device change says
+  "The microphone changed partway through the recording." or "Call audio restarted partway through, leaving a short
+  gap." (the source's note, such as "now 24000 Hz, 1 ch", stays in the track's capture notes); a recovered recording
+  whose timing file is missing says "The call audio recording’s start time is approximate." (not "The systemAudio
+  timing metadata was unavailable"); and an empty capture says "No audio was recorded."
 - The sync engine's per-pass warnings use `SyncWarningWords`: a plain sentence, with the error's own text behind
   Details in Settings › Library. Only warnings it composed are split, so a title with a colon is never cut.
 
