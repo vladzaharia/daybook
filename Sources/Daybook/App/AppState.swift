@@ -184,6 +184,11 @@ final class AppState: ObservableObject {
     let runtime: LocalIntelligenceRuntime
     /// Keeps speaker profiles and conversations in step (AppState+SpeakerProfiles.swift).
     lazy var speakerProfileCoordinator = makeSpeakerProfileCoordinator()
+    /// Gives voices to speakers found without them, when this Mac is idle (AppState+SpeakerProfiles.swift).
+    var voicingID: UUID?
+    var voicingTask: Task<Void, Never>?
+    /// Runs given voices (or tried) this session.
+    var voicedRuns = Set<UUID>()
     var processingTask: Task<Void, Never>?
     private(set) var currentRequest: Task<Void, Error>?
     /// How requests from other devices are claimed and kept (tests shorten these).
@@ -703,6 +708,8 @@ final class AppState: ObservableObject {
     }
 
     func runQueue() {
+        // Giving speakers voices gives way to real work: it stops, and starts the queue when it has.
+        if voicingID != nil, !processingQueue.isEmpty { voicingTask?.cancel(); return }
         guard processingTask == nil, readingPhotoID == nil, downloadingID == nil, !library.isApplyingSync, !processingQueue.isEmpty else { return }
         processingTask = Task { [weak self] in
             guard let self else { return }
@@ -748,6 +755,7 @@ final class AppState: ObservableObject {
             self.collectOldModelRevisions()
             self.startPendingDownload()
             self.readNextPhotosWhenIdle()
+            self.giveVoicesWhenIdle()
         }
     }
 

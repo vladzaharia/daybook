@@ -208,6 +208,24 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
         return RecognitionResult(segments: segments, language: "en", duration: (segments.last?.end ?? 0) + 1)
     }
 
+    private var _embedded: [String] = []
+    /// Recordings whose speakers were given voices (`embedVoices`), by digest.
+    var embedded: [String] { lock.withLock { _embedded } }
+
+    /// Every speaker in the turns gets the recording's voice; a blocked recording waits, as `transcribe` does.
+    func embedVoices(url: URL, analysis: SpeakerAnalysis, model: ModelReference, progress: @escaping IntelligenceProgressHandler) async throws -> SpeakerAnalysis {
+        let digest = try AudioDigest.sha256(fileURL: url)
+        lock.withLock { _ = _waiting.insert(digest) }
+        defer { lock.withLock { _ = _waiting.remove(digest) } }
+        while lock.withLock({ _blocked.contains(digest) }) { try await Task.sleep(for: .milliseconds(10)) }
+        try Task.checkCancellation()
+        let voice = lock.withLock { () -> [Float]? in _embedded.append(digest); return voices[digest] }
+        guard let voice else { return SpeakerAnalysis(turns: analysis.turns, embeddings: [:]) }
+        let speakers = Set(analysis.turns.map(\.speakerID))
+        return SpeakerAnalysis(turns: analysis.turns, embeddings: Dictionary(uniqueKeysWithValues: speakers.map { ($0, voice) }),
+                               embeddingModelID: Self.voiceSpace)
+    }
+
     func diarize(url: URL, model: ModelReference, options: SpeakerAnalysisOptions, progress: @escaping IntelligenceProgressHandler) async throws -> SpeakerAnalysis {
         let digest = try AudioDigest.sha256(fileURL: url)
         let turns = [SpeakerTurn(speakerID: "A", start: 0, end: 100_000, confidence: 1)]
