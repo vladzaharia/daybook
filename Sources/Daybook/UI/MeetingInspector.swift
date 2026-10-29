@@ -91,7 +91,9 @@ struct MeetingInspector: View {
             Text("No speakers yet").foregroundStyle(.secondary)
         } else {
             let total = max(1, meeting.speakers.map { talkTime($0.id, in: meeting) }.reduce(0, +))
-            ForEach(Array(meeting.speakers.enumerated()), id: \.element.id) { index, speaker in
+            // A TV's presenter, left out as background audio, isn't one of the people (colours keep their places).
+            let background = meeting.backgroundOnlySpeakerIDs
+            ForEach(Array(meeting.speakers.enumerated()).filter { !background.contains($0.element.id) }, id: \.element.id) { index, speaker in
                 let time = talkTime(speaker.id, in: meeting)
                 SpeakerRow(name: speaker.name, ink: DaybookStyle.speakerInk(index), talkTime: time, share: time / total) { name in
                     state.update(meeting.id) { $0.renameSpeaker(id: speaker.id, name: name) }

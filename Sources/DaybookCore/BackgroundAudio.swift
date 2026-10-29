@@ -243,6 +243,14 @@ extension Meeting {
         return result
     }
 
+    /// Speakers heard only in passages left out as background audio (a TV's presenter): no one in
+    /// the conversation, so lists of the people in it leave them out.
+    public var backgroundOnlySpeakerIDs: Set<String> {
+        let background = Set((backgroundPassages ?? []).compactMap(\.speakerID))
+        guard !background.isEmpty else { return [] }
+        return background.subtracting(unifiedTranscript.compactMap(\.speakerID))
+    }
+
     /// How long the passages left out as background audio run, in seconds.
     public var backgroundDuration: TimeInterval {
         (backgroundPassages ?? []).reduce(0) { $0 + max(0, $1.end - $1.start) }
