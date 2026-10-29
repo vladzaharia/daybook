@@ -357,7 +357,7 @@ enum SyncProblemWords {
 /// Debug-only: `--sync-demo <state>` shows Settings › Library's iCloud Sync section in that state, without iCloud, for
 /// screenshots. Its buttons still act on the real (unconnected) controller. States: checking, off, signed-out,
 /// drive-off, unavailable, moving, on, syncing, downloading, paused, warning, account, folder-lost, folder-missing,
-/// waiting, encrypted, no-recovery-key, encrypting, dev-folder.
+/// waiting, waiting-many (two iPhones with long names), encrypted, no-recovery-key, encrypting, dev-folder.
 @MainActor
 enum SyncSettingsDemo {
     static let scenario = LaunchOptions.value(after: "--sync-demo")
@@ -397,6 +397,13 @@ enum SyncSettingsDemo {
             shown.encryption = .waitingForKey
             shown.mayStartOverEncryption = true
             shown.keyPeers = [.init(id: UUID(), name: "Alex’s iPhone")]
+            return shown
+        case "waiting-many":
+            var shown = SyncShown(iCloud: .waitingForKey)
+            shown.folder = folder
+            shown.encryption = .waitingForKey
+            shown.mayStartOverEncryption = true
+            shown.keyPeers = [.init(id: UUID(), name: "Alex’s iPhone 15 Pro Max"), .init(id: UUID(), name: "Jordan’s Work iPhone")]
             return shown
         case "encrypted": return connected { $0.encryption = .on(status: "On", hasRecoveryKey: true) }
         case "no-recovery-key":
