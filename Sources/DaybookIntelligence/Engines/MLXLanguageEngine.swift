@@ -132,11 +132,10 @@ final class MLXSummarizer: Summarizing, @unchecked Sendable {
     func summarize(_ request: SummaryRequest, progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes {
         guard let model = lock.withLock({ model }) else { throw LocalIntelligenceError.modelNotInstalled(request.modelID) }
         model.resetStatistics()
-        var notes = try await MeetingSynthesis.generate(model: model, modelID: request.modelID, transcript: request.transcript,
-                                                        notes: request.notes, template: request.template, glossary: request.glossary,
-                                                        templateInstructions: request.templateInstructions,
-                                                        highlightEvidence: request.highlightEvidence, photos: request.photos,
-                                                        progress: progress)
+        let source = request.source ?? .legacy(transcript: request.transcript, notes: request.notes, highlights: request.highlightEvidence)
+        var notes = try await MeetingSynthesis.generate(model: model, modelID: request.modelID, source: source, template: request.template,
+                                                        glossary: request.glossary, templateInstructions: request.templateInstructions,
+                                                        photos: request.photos, progress: progress)
         var statistics = model.statistics
         statistics.loadSeconds = loadSeconds
         notes.statistics = statistics

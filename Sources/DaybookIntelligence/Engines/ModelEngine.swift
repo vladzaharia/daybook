@@ -93,12 +93,22 @@ public struct SummaryRequest: Sendable {
     public var modelID: String
     /// Photos the summary may place under its sections (`PhotoPlacement.candidates`).
     public var photos: [PhotoEvidence]
+    /// The transcript with notes and bookmarks in place (`SummarySource`); nil for a request made from
+    /// strings, which reads `transcript`, `notes`, and `highlightEvidence` as before.
+    public var source: SummarySource?
 
     public init(transcript: String, notes: String, template: MeetingKind = .auto, glossary: [String] = [],
                 templateInstructions: String? = nil, highlightEvidence: String? = nil, modelID: String, photos: [PhotoEvidence] = []) {
         self.transcript = transcript; self.notes = notes; self.template = template; self.glossary = glossary
         self.templateInstructions = templateInstructions; self.highlightEvidence = highlightEvidence; self.modelID = modelID
         self.photos = photos
+    }
+
+    public init(source: SummarySource, template: MeetingKind = .auto, glossary: [String] = [], templateInstructions: String? = nil,
+                modelID: String, photos: [PhotoEvidence] = []) {
+        self.init(transcript: source.transcript, notes: source.notesText, template: template, glossary: glossary,
+                  templateInstructions: templateInstructions, highlightEvidence: source.highlightText, modelID: modelID, photos: photos)
+        self.source = source
     }
 }
 
