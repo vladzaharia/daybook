@@ -29,6 +29,9 @@ enum PhoneDemo {
     }
 
     private static func run(_ scenario: Scenario, state: AppState) async {
+        // With `--library-demo`, its conversations and selection land first (it's applied in the
+        // same launch step, before this task runs), then the phone's page opens.
+        await LibraryDemo.seeding?.value
         let macID = state.phoneLink.identity.deviceID
         let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         let psk = Data((0..<16).map { _ in UInt8.random(in: 1...255) })
