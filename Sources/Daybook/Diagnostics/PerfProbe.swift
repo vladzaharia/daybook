@@ -90,7 +90,12 @@ enum PerfProbe {
         frameWindow = window
         let thread = Thread {
             var frame = 0
+            var next = Date()
             while true {
+                // At most 120 frames a second; nothing is presented while the display sleeps.
+                next = max(next.addingTimeInterval(1.0 / 120), Date())
+                Thread.sleep(until: next)
+                if CGDisplayIsAsleep(CGMainDisplayID()) != 0 { Thread.sleep(forTimeInterval: 1); continue }
                 autoreleasepool {
                     guard let drawable = layer.nextDrawable(), let buffer = queue.makeCommandBuffer() else { usleep(8_000); return }
                     let pass = MTLRenderPassDescriptor()
