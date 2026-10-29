@@ -19,8 +19,10 @@ import Foundation
 ///     --interface-orientation portrait|landscape   turn the interface in table mode (the simulator can't turn the device)
 ///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
 ///     --caption-probe [file]     log what live captions can do here (and, if ready, caption the file); never downloads
-///     --open-settings [macs|devices|device|pairing|storage|templates|vocabulary|recording|add-device|add-recorder]
+///     --open-settings [icloud|macs|devices|device|device-details|pairing|storage|templates|template|vocabulary|recording|
+///                      library-devices|about|acknowledgements|add-device|add-recorder]
 ///                                (add-device goes straight to Soundcore's setup; add-recorder stays on the list of kinds)
+///     --scroll-end               a Settings screen opened with --open-settings, scrolled to its foot
 ///     --posture closed|open|partial[:degrees]   force the fold posture (see DevicePosture)
 ///     --show-posture             show the posture in a small badge
 ///     --log-geometry             log window size, safe area, screen, and posture on every change
@@ -52,6 +54,7 @@ struct LaunchOptions {
     var interfaceOrientation: String?
     var captionProbe: String?
     var openSettings: String?
+    var scrollEnd = false
     var showPosture = false
     var logGeometry = false
     var openLatest = false
@@ -94,6 +97,7 @@ struct LaunchOptions {
         libraryPath = Self.value(after: "--library", in: arguments)
         statusDetent = Self.value(after: "--status-detent", in: arguments).flatMap(StatusDetent.init(rawValue:))
         statusScrollEnd = arguments.contains("--status-scroll-end")
+        scrollEnd = arguments.contains("--scroll-end")
         handoffDemo = Self.value(after: "--handoff-demo", in: arguments)
         demoLiveCaptions = arguments.contains("--demo-live-captions")
         if arguments.contains("--open-settings") {

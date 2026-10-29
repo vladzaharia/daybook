@@ -19,19 +19,21 @@ struct TemplatesScreen: View {
                     NavigationLink(value: SettingsRoute.template(template.id)) {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 8) {
-                                Text(template.name)
+                                Text(template.name).foregroundStyle(PhoneStyle.Ink.title)
                                 if template.isBuiltIn, edited.contains(template.id) {
+                                    // A fact about it, not an action: neutral, not the accent.
                                     Text("Edited")
                                         .font(.caption2.weight(.semibold))
                                         .padding(.horizontal, 6).padding(.vertical, 1)
-                                        .background(PhoneStyle.accent.opacity(0.14), in: Capsule())
-                                        .foregroundStyle(PhoneStyle.Ink.link)
+                                        .background(PhoneStyle.quietFill, in: Capsule())
+                                        .foregroundStyle(PhoneStyle.Ink.secondary)
                                         .transition(.scale.combined(with: .opacity))
                                 }
                             }
-                            Text(Self.purpose(template)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                            Text(Self.purpose(template)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(2)
                         }
                         .padding(.vertical, 2)
+                        .accessibilityElement(children: .combine)
                     }
                     .swipeActions {
                         if !template.isBuiltIn {
@@ -40,7 +42,9 @@ struct TemplatesScreen: View {
                     }
                 }
             }
+            SettingsScrollEndMarker()
         }
+        .settingsScrollEnd()
         .navigationTitle("Summary Templates")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -102,13 +106,13 @@ private struct TemplateForm: View {
                 Picker("Used For", selection: $draft.kind) {
                     ForEach(MeetingKind.allCases.filter { $0 != .auto }) { Text($0.title).tag($0) }
                 }
-            } footer: {
-                Text("Chosen automatically for this kind of conversation.")
             }
             Section {
                 TextEditor(text: $draft.instructions)
                     .font(.callout)
                     .frame(minHeight: 260)
+                    // The editor insets its text; line it up with the rows' text.
+                    .padding(.horizontal, -5)
             } header: {
                 Text("Instructions")
             } footer: {
@@ -134,7 +138,9 @@ private struct TemplateForm: View {
                     }
                 }
             }
+            SettingsScrollEndMarker()
         }
+        .settingsScrollEnd()
         .navigationTitle(isNew ? "New Template" : draft.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -172,12 +178,11 @@ struct VocabularyScreen: View {
         let proposed = terms.filter { !$0.approved }.sorted { $0.occurrences > $1.occurrences }
         List {
             if approved.isEmpty && proposed.isEmpty {
+                // Add Term is the bar's +, so it isn't offered twice.
                 ContentUnavailableView {
                     Label("No Terms Yet", systemImage: "character.book.closed")
                 } description: {
                     Text("Add names, products, and words to spell your way.")
-                } actions: {
-                    Button("Add Term…") { editing = GlossaryTerm(term: "", approved: true) }
                 }
                 .listRowBackground(Color.clear)
             }
@@ -212,12 +217,12 @@ struct VocabularyScreen: View {
                     }
                 } header: {
                     Text("Suggested")
-                } footer: {
-                    Text("Found in your summaries.")
                 }
             }
         }
-        .searchable(text: $search, prompt: "Search vocabulary")
+        // Searching needs something to search.
+        .modifier(SearchableWhen(isOn: !controller.glossary.isEmpty, text: $search, prompt: "Search vocabulary"))
+        .settingsScrollEnd()
         .navigationTitle("Vocabulary")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -236,13 +241,15 @@ private struct TermRow: View {
     let term: GlossaryTerm
 
     var body: some View {
+        // Explicit inks: the row is a button's label, and a list tints those (`.primary` would turn teal).
         VStack(alignment: .leading, spacing: 2) {
-            Text(term.term).foregroundStyle(.primary)
+            Text(term.term).foregroundStyle(PhoneStyle.Ink.title)
             let detail = [term.aliases.isEmpty ? nil : "Also heard as " + term.aliases.joined(separator: ", "),
                           term.definition.isEmpty ? nil : term.definition].compactMap { $0 }.joined(separator: " · ")
-            if !detail.isEmpty { Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(2) }
+            if !detail.isEmpty { Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary).lineLimit(2) }
         }
         .padding(.vertical, 1)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -293,6 +300,21 @@ private struct TermForm: View {
                 }
                 .disabled(term.term.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+        }
+    }
+}
+
+/// `.searchable` only while there's something to search.
+private struct SearchableWhen: ViewModifier {
+    let isOn: Bool
+    @Binding var text: String
+    let prompt: String
+
+    func body(content: Content) -> some View {
+        if isOn {
+            content.searchable(text: $text, prompt: prompt)
+        } else {
+            content
         }
     }
 }
