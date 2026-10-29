@@ -5,15 +5,18 @@ import SwiftUI
 /// The progress of this Mac's current processing job or model download. Engines report it from any
 /// thread, as often as they like (a download reports per network chunk); it reaches the main actor
 /// at most ten times a second, the latest value winning, in one hop. Views that draw it observe this
-/// object (`ActivityReader`), so a progress bar moves smoothly and nothing else in the window redraws;
-/// `onChange` tells `AppState`, which renews the request's claim and tells connected iPhones.
+/// object (`ActivityReader`), so nothing else in the window redraws, and they redraw only when what
+/// they show changes: the percent or the message. A report that moves a bar by less than a percent
+/// is kept (`value` is always the latest) without a redraw. `onChange` tells `AppState` of every
+/// delivery, which renews the request's claim and tells connected iPhones.
 @MainActor
 final class ActivityProgress: ObservableObject {
     /// Never reports: what a view observes when the activity it would show isn't its own (a list row
     /// that isn't being processed), so it keeps its identity without redrawing at progress pace.
     static let idle = ActivityProgress(IntelligenceProgress(0, ""))
 
-    @Published private(set) var value: IntelligenceProgress
+    /// The latest report. Setting it publishes only a visible change (`isVisibleChange`).
+    private(set) var value: IntelligenceProgress
     /// After each change on the main actor; `visible` when the percent or message changed.
     var onChange: (_ visible: Bool) -> Void = { _ in }
     nonisolated let throttle: Throttle
@@ -41,9 +44,15 @@ final class ActivityProgress: ObservableObject {
     }
 
     private func apply(_ progress: IntelligenceProgress) {
-        let visible = Int(progress.fraction * 100) != Int(value.fraction * 100) || progress.message != value.message
+        let visible = Self.isVisibleChange(from: value, to: progress)
+        if visible { objectWillChange.send() }
         value = progress
         onChange(visible)
+    }
+
+    /// What progress views show: a whole percent and the message.
+    nonisolated static func isVisibleChange(from old: IntelligenceProgress, to new: IntelligenceProgress) -> Bool {
+        Int(new.fraction * 100) != Int(old.fraction * 100) || new.message != old.message
     }
 
     /// The latest report and whether a delivery is already on its way.

@@ -176,6 +176,8 @@ struct RowStatus {
     let text: String?
     /// How far processing has got, for the row's progress line.
     var fraction: Double = 0
+    /// The text without its percent: the line fades when what it says changes, not at every percent.
+    var phrase: String? { kind == .processing ? text?.components(separatedBy: " · ").first : text }
 
     /// Recording is this Mac's own state; everything else reads from `ProcessingStatus`, which the
     /// conversation page and the iPhone share.
@@ -229,7 +231,7 @@ struct ConversationRow: View {
                     .contentTransition(.opacity)
             }
             .font(TypeStyle.rowDetail)
-            .animation(.easeOut(duration: 0.2), value: status.text)
+            .animation(.easeOut(duration: 0.2), value: status.phrase)
         }
         .padding(.vertical, 7)
         .padding(.horizontal, 4)

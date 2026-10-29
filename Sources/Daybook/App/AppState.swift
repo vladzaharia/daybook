@@ -90,8 +90,8 @@ final class AppState: ObservableObject {
     /// Photos that couldn't be read wait before they're tried again (AppState+Photos.swift).
     var photoBackoff = PhotoReadingBackoff()
     var photoRetry: Task<Void, Never>?
-    /// The running job's progress, throttled (`ActivityProgress`). The window is redrawn when its
-    /// percent or message changes; views that draw it continuously observe `processingActivity`.
+    /// The running job's progress, throttled (`ActivityProgress`). The window isn't redrawn by it: the
+    /// views that draw it observe `processingActivity`, and redraw when its percent or message changes.
     let processingActivity = ActivityProgress(IntelligenceProgress(0, "Ready"))
     var processingProgress: IntelligenceProgress {
         get { processingActivity.value }
