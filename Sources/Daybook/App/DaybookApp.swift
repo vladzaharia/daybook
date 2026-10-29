@@ -276,7 +276,7 @@ struct TemplateMenuItems: View {
     }
     private var automaticTitle: String {
         guard let kind = state.meetings.first(where: { $0.id == meetingID })?.summary?.kind, kind != .auto else { return "Automatic" }
-        return "Automatic (looks like \(kind.looksLike))"
+        return "Automatic (\(kind.title))"
     }
 }
 
