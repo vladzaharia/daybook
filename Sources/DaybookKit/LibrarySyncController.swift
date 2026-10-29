@@ -620,7 +620,8 @@ public final class LibrarySyncController: ObservableObject {
     /// Mac that's around, which seals the history from its own audio rather than downloading it.
     func encryptOnceEveryDeviceCan(now: Date = Date()) async {
         guard encryptsAutomatically, encryption == .off, !isSyncing, engine != nil else { return }
-        let others = await knownDevices().filter {
+        // An earlier identity of a device that took a new one (reinstalled) is that device: it doesn't hold this back.
+        let others = await knownDevices().inUse(at: now).filter {
             !$0.isCurrentDevice && $0.lastSeen.map { now.timeIntervalSince($0) < Self.automaticEncryptionWindow } == true
         }
         guard others.allSatisfy(\.readsEncryptedLibraries) else { return }
@@ -687,7 +688,7 @@ public final class LibrarySyncController: ObservableObject {
     /// Devices that would stop syncing if the library were encrypted now: their Daybook doesn't say it reads encrypted
     /// libraries (an earlier version, or one seen only in the journal).
     public func devicesNotReadyForEncryption() async -> [KnownSyncDevice] {
-        await knownDevices().filter { !$0.isCurrentDevice && !$0.readsEncryptedLibraries }
+        await knownDevices().inUse().filter { !$0.isCurrentDevice && !$0.readsEncryptedLibraries }
     }
 
     /// The library and key this device waits for, to ask a paired device for it over the local link.
