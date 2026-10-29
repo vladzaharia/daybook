@@ -70,7 +70,7 @@ struct SourceHooks: View {
     static func companionLine(_ link: CompanionRecording, recordingNow: Bool, now: Date = Date()) -> String? {
         let live = recordingNow && link.macEndedAt == nil
         if !live, now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) > waitingLineLifetime { return nil }
-        let waiting = "Waiting for the \(link.deviceName) recording."
+        let waiting = "Waiting for audio from \(link.deviceName)."
         switch link.state {
         case .starting: return live ? "Starting \(link.deviceName)…" : nil
         case .recording, .alreadyRecording: return live ? "Also recording on \(link.deviceName)." : waiting
