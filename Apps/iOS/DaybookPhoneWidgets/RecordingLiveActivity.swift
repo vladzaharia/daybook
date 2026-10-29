@@ -33,6 +33,7 @@ struct RecordingLiveActivity: Widget {
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
                         }
+                        ActivityCaption(state: context.state, isStale: context.isStale, lines: 1)
                         ActivityButtons(state: context.state, isStale: context.isStale)
                     }
                     .padding(.top, 4)
@@ -138,6 +139,29 @@ struct ActivityButtons: View {
     }
 }
 
+/// The newest live caption, while it's recording and confirmed: the end of what was said, so a
+/// long line loses its start. What was said is private, hidden while the iPhone is locked, and not
+/// shown at the dim Always-On brightness.
+struct ActivityCaption: View {
+    let state: RecordingActivityAttributes.ContentState
+    var isStale = false
+    var lines = 2
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
+    var body: some View {
+        if let caption = state.caption, state.phase == .recording, !isStale, !isLuminanceReduced {
+            Text(caption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(lines)
+                .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .privacySensitive()
+                .accessibilityLabel("Live caption: \(caption)")
+        }
+    }
+}
+
 struct LockScreenRecording: View {
     let context: ActivityViewContext<RecordingActivityAttributes>
 
@@ -163,6 +187,7 @@ struct LockScreenRecording: View {
                     .foregroundStyle(isLive(context) ? PhoneStyle.Ink.record : .primary)
                     .frame(maxWidth: 120, alignment: .trailing)
             }
+            ActivityCaption(state: state, isStale: context.isStale, lines: 2)
             if state.phase == .saved {
                 Text("Saved to Daybook")
                     .font(.caption).foregroundStyle(.secondary)
@@ -173,3 +198,14 @@ struct LockScreenRecording: View {
         .padding(16)
     }
 }
+
+#if DEBUG
+#Preview("Recording, with a caption", as: .content, using: RecordingActivityAttributes(conversationID: UUID(), title: "Design review")) {
+    RecordingLiveActivity()
+} contentStates: {
+    RecordingActivityAttributes.ContentState(phase: .recording, timerStart: Date().addingTimeInterval(-754), level: 0.66, bookmarkCount: 2,
+                                             caption: RecordingActivityAttributes.ContentState.captionLine(
+                                                "So the first screen asks for the name of the team, then we skip straight to inviting people"))
+    RecordingActivityAttributes.ContentState(phase: .recording, timerStart: Date().addingTimeInterval(-754), level: 0.33, bookmarkCount: 2)
+}
+#endif

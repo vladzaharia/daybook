@@ -15,6 +15,7 @@ final class RecordingActivityController {
     private var current: RecordingActivityAttributes.ContentState?
     private var lastSent = Date.distantPast
     private var lastLevelUpdate = Date.distantPast
+    private var lastCaptionUpdate = Date.distantPast
     /// Level-only changes at most this often, to stay inside the system's update budget.
     static let levelInterval: TimeInterval = 2
 
@@ -41,8 +42,10 @@ final class RecordingActivityController {
     func update(_ state: RecordingActivityAttributes.ContentState) {
         guard let activity else { return }
         let now = Date()
+        let state = Self.paced(state, current: current, captionSentAt: lastCaptionUpdate, now: now)
         guard Self.shouldSend(state, current: current, sentAt: lastSent, levelSentAt: lastLevelUpdate, now: now) else { return }
         if let current, current != state, Self.differsOnlyInLevel(state, current) { lastLevelUpdate = now }
+        if state.caption != current?.caption { lastCaptionUpdate = now }
         current = state
         lastSent = now
         Task { await activity.update(ActivityContent(state: state, staleDate: state.staleDate(from: now))) }
@@ -58,6 +61,17 @@ final class RecordingActivityController {
         if state == current { return false }
         if differsOnlyInLevel(state, current) { return now.timeIntervalSince(levelSentAt) >= levelInterval }
         return true
+    }
+
+    /// A new caption waits until `captionInterval` has passed since the last one went out: until
+    /// then the activity keeps the caption it shows. One going away (captions off, paused) goes at once.
+    static func paced(_ state: RecordingActivityAttributes.ContentState, current: RecordingActivityAttributes.ContentState?,
+                      captionSentAt: Date, now: Date) -> RecordingActivityAttributes.ContentState {
+        guard let current, state.caption != current.caption, state.caption != nil,
+              now.timeIntervalSince(captionSentAt) < RecordingActivityAttributes.ContentState.captionInterval else { return state }
+        var paced = state
+        paced.caption = current.caption
+        return paced
     }
 
     private static func differsOnlyInLevel(_ state: RecordingActivityAttributes.ContentState,
