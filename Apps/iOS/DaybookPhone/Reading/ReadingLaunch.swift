@@ -16,6 +16,7 @@ import Foundation
 ///     --play-muted                       anything played plays silently (for UI tests)
 ///     --simulate-download                audio "downloads" slowly (see `SimulatedAudioProvider`)
 ///     --simulate-offline                 audio isn't on this iPhone and can't be fetched
+///     --demo-library                     fill an empty library with every reading state (see `DemoLibrary`)
 ///
 /// Release builds ignore all of them.
 struct ReadingLaunch {

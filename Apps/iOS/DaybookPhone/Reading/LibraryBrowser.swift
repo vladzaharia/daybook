@@ -72,6 +72,9 @@ private struct ReadingLayout: View {
         }
         .onChange(of: library.isLoaded, initial: true) { _, loaded in
             guard loaded else { return }
+            #if DEBUG
+            DemoLibrary.seed(library, rootURL: rootURL)
+            #endif
             session.launch.apply(to: session, library: library, provider: provider)
             if openLatest, session.openID == nil, let newest = LibraryPlace.section(.all).meetings(in: library.meetings).first {
                 session.open(newest.id)
