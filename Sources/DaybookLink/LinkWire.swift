@@ -121,6 +121,8 @@ enum WireMessage: Equatable {
         case .app(.recorderRelease): return "recorder.release"
         case .app(.libraryKeyRequest): return "libraryKey.request"
         case .app(.libraryKeyGrant): return "libraryKey.grant"
+        case .app(.note): return "note"
+        case .app(.bookmarkChange): return "bookmark.change"
         case .recordRequest: return "record.request"
         case .recordReply: return "record.reply"
         case .ping: return "ping"
@@ -190,6 +192,8 @@ enum LinkWire {
         case .app(.recorderRelease(let body)): return try pack(body)
         case .app(.libraryKeyRequest(let body)): return try pack(body)
         case .app(.libraryKeyGrant(let body)): return try pack(body)
+        case .app(.note(let body)): return try pack(body)
+        case .app(.bookmarkChange(let body)): return try pack(body)
         case .recordRequest(let body): return try pack(body)
         case .recordReply(let body): return try pack(body)
         case .ping(let body), .pong(let body): return try pack(body)
@@ -225,6 +229,8 @@ enum LinkWire {
         case "recorder.release": message = .app(.recorderRelease(try body(LinkRecorderRelease.self)))
         case "libraryKey.request": message = .app(.libraryKeyRequest(try body(LinkLibraryKeyRequest.self)))
         case "libraryKey.grant": message = .app(.libraryKeyGrant(try body(LinkLibraryKeyGrant.self)))
+        case "note": message = .app(.note(try body(LinkNote.self)))
+        case "bookmark.change": message = .app(.bookmarkChange(try body(LinkBookmarkChange.self)))
         case "record.request": message = .recordRequest(try body(LinkRecordRequest.self))
         case "record.reply": message = .recordReply(try body(LinkRecordReply.self))
         case "ping": message = .ping(try body(Heartbeat.self))
