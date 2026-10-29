@@ -37,7 +37,8 @@ struct RecordingSurface: View {
         Group {
             VStack(alignment: .leading, spacing: 10) {
                 if !context.chips.isEmpty {
-                    ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, 2)
+                    // Spacing 10 plus this: the same gap to the title as after Stop.
+                    ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, FloatingLayout.chipsBottom - 10)
                 }
                 PanelTitleField(state: state, meeting: meeting)
                 HStack(alignment: .center, spacing: 14) {
@@ -57,7 +58,7 @@ struct RecordingSurface: View {
                 }
             }
             .padding(.horizontal, FloatingLayout.inset)
-            .padding(.top, context.band + 4)
+            .padding(.top, context.band + (context.chips.isEmpty ? 4 : FloatingLayout.chipsTop))
             .padding(.bottom, 12)
             PanelRule()
             PanelNotes(state: state, meeting: meeting, isRecording: true, showsLane: true)
@@ -198,14 +199,15 @@ struct AfterStopSurface: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 if !context.chips.isEmpty {
-                    ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, 9)
+                    // VStack spacing 3 plus this.
+                    ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, FloatingLayout.chipsBottom - 3)
                 }
                 PanelTitleField(state: state, meeting: meeting)
                 // The band says "Saved · 28:00", so the line under the title leaves the length out.
                 PanelMetaLine(meeting: meeting, showsDuration: inputs.phase != .saved, goHome: context.goHome)
             }
             .padding(.horizontal, FloatingLayout.inset)
-            .padding(.top, context.band + 4)
+            .padding(.top, context.band + (context.chips.isEmpty ? 4 : FloatingLayout.chipsTop))
             .padding(.bottom, context.compact ? 4 : 12)
             if recordingFailed || processingFailed {
                 problem
@@ -288,34 +290,35 @@ struct HomeSurface: View {
                 }
                 Spacer(minLength: 0)
             } else {
+                // The status lines take the chips' room under the band.
                 let hasLines = !FloatingStatus.lines(inputs).isEmpty
-                TimelineView(.periodic(from: .now, by: 30)) { timeline in
-                    let lines = FloatingStatus.lines(inputs, now: timeline.date)
-                    if !lines.isEmpty {
+                if hasLines {
+                    TimelineView(.periodic(from: .now, by: 30)) { timeline in
                         VStack(alignment: .leading, spacing: 7) {
-                            ForEach(lines) { line in StatusLineButton(state: state, line: line) }
+                            ForEach(FloatingStatus.lines(inputs, now: timeline.date)) { line in StatusLineButton(state: state, line: line) }
                         }
                         .padding(.horizontal, FloatingLayout.inset)
                         .padding(.bottom, 14)
                     }
+                    .padding(.top, context.band + FloatingLayout.chipsTop)
                 }
-                .padding(.top, context.band + 6)
                 if let focused {
                     // The conversation, under the device lines: its status chip sits over its title, as after Stop.
                     if hasLines { PanelRule() }
                     VStack(alignment: .leading, spacing: 3) {
                         if !context.chips.isEmpty {
-                            ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, 9)
+                            ChipRow(chips: context.chips, menus: context.menus).padding(.bottom, FloatingLayout.chipsBottom - 3)
                         }
                         PanelTitleField(state: state, meeting: focused)
                         PanelMetaLine(meeting: focused, goHome: context.goHome)
                     }
                     .padding(.horizontal, FloatingLayout.inset)
-                    .padding(.top, hasLines ? 12 : 4)
+                    .padding(.top, hasLines ? 12 : context.band + (context.chips.isEmpty ? 4 : FloatingLayout.chipsTop))
                     .padding(.bottom, 8)
                     PanelNotes(state: state, meeting: focused, isRecording: false, showsLane: false)
                 } else {
                     RecentConversations(state: state)
+                        .padding(.top, hasLines ? 0 : context.band + 6)
                 }
             }
             controls
@@ -543,7 +546,7 @@ private struct PanelNotes: View {
             margin: lane ? FloatingLayout.textLeading : FloatingLayout.inset, trailingInset: FloatingLayout.inset,
             timeFontSize: FloatingLayout.timeSize, bottomInset: 12,
             scrolls: true, isEditable: true, focusOnAppear: isRecording)
-            .padding(.top, 10)
+            .padding(.top, FloatingLayout.notesTop)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Notes scroll softly under the captions and controls.
             .overlay(alignment: .bottom) {

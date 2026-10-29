@@ -141,6 +141,12 @@ enum FloatingLayout {
 
     /// Every left and right edge of content.
     static let inset: CGFloat = 16
+    /// The status chips' row under the title band: room above it (from the band), and between it
+    /// and the title under it.
+    static let chipsTop: CGFloat = 10
+    static let chipsBottom: CGFloat = 12
+    /// Room between the rule over the notes and their first line.
+    static let notesTop: CGFloat = 14
     /// Times, caption sources, and the bookmark glyph are right-aligned here; text starts at `textLeading`.
     static let laneTrailing: CGFloat = 44
     static let laneGap: CGFloat = 8

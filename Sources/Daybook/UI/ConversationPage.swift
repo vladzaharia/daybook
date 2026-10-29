@@ -403,7 +403,7 @@ struct ConversationStatus: View {
             .foregroundStyle(Ink.secondary)
             .controlSize(.small)
         }
-        .padding(.top, Space.s4)
+        .padding(.top, Space.s5)
     }
 
     /// The one primary action in a status box.
@@ -418,7 +418,7 @@ struct ConversationStatus: View {
         MarginRow {
             StatusBox(kind: kind, symbol: symbol, title: title, message: message, actions: actions())
         }
-        .padding(.top, Space.s4)
+        .padding(.top, Space.s5)
     }
 }
 

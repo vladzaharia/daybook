@@ -108,7 +108,7 @@ struct TranscriptPage: View {
             StatusBox(kind: kind, symbol: symbol, title: text, message: nil,
                       actions: Button(action, action: perform).buttonStyle(.daybookLink))
         }
-        .padding(.top, Space.s4)
+        .padding(.top, Space.s5)
     }
 
     private func scrollToTarget(_ proxy: ScrollViewProxy) {
