@@ -6,12 +6,12 @@ import Foundation
 /// has it (Hugging Face LFS files), else the git blob ID (SHA-1 over "blob <size>\0" and the
 /// content, which is what Hugging Face publishes for small files). Files are streamed in chunks.
 /// An entry with neither can't be checked, so its file is never trusted (`noDigest`).
-enum ModelFileDigest {
-    enum Failure: Error, Equatable {
+package enum ModelFileDigest {
+    package enum Failure: Error, Equatable {
         case missing, wrongSize(expected: Int64, actual: Int64), wrongDigest, noDigest
     }
 
-    static func verify(_ url: URL, against file: ModelFile, checkContent: Bool = true) throws {
+    package static func verify(_ url: URL, against file: ModelFile, checkContent: Bool = true) throws {
         let size: Int64
         do {
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])

@@ -7,6 +7,7 @@ import PackageDescription
 //                        a recorder's live audio through DaybookCaptions (macOS + iOS)
 //   DaybookKit           the library both apps share: edits, search, sync, processing status and requests,
 //                        recorder handoff (macOS + iOS)
+//   DaybookModelStore    the model store: verified downloads and installs of catalog models (macOS + iOS)
 //   DaybookIntelligence  local models: the Mac's ProcessingEngine (macOS for now; no AppKit)
 //   DaybookLink          the Mac <-> iPhone local-network channel: pairing, control, status (macOS + iOS)
 //   DaybookCaptions      tentative on-device live captions for any audio source (Speech framework; macOS + iOS)
@@ -21,6 +22,7 @@ let package = Package(
         .library(name: "DaybookCore", targets: ["DaybookCore"]),
         .library(name: "DaybookDevices", targets: ["DaybookDevices"]),
         .library(name: "DaybookKit", targets: ["DaybookKit"]),
+        .library(name: "DaybookModelStore", targets: ["DaybookModelStore"]),
         .library(name: "DaybookIntelligence", targets: ["DaybookIntelligence"]),
         .library(name: "DaybookLink", targets: ["DaybookLink"]),
         .library(name: "DaybookCaptions", targets: ["DaybookCaptions"]),
@@ -51,9 +53,17 @@ let package = Package(
         // a result and list their licenses.
         .target(name: "DaybookKit", dependencies: ["DaybookCore", "DaybookDevices", "DaybookLink"],
                 resources: [.copy("Resources/ModelCatalog")]),
+        // Downloads, verification, and installs (docs/models.md, "Storage"), apart from the Mac's engines so
+        // the iPhone can link it. Hub: swift-transformers' downloader.
+        .target(name: "DaybookModelStore", dependencies: [
+            "DaybookCore",
+            "DaybookKit",
+            .product(name: "Hub", package: "swift-transformers")
+        ]),
         .target(name: "DaybookIntelligence", dependencies: [
             "DaybookCore",
             "DaybookKit",
+            "DaybookModelStore",
             .product(name: "WhisperKit", package: "argmax-oss-swift"),
             .product(name: "MLX", package: "mlx-swift"),
             .product(name: "MLXLLM", package: "mlx-swift-lm"),
@@ -69,6 +79,7 @@ let package = Package(
             "DaybookCore",
             "DaybookDevices",
             "DaybookKit",
+            "DaybookModelStore",
             "DaybookIntelligence",
             "DaybookLink",
             "DaybookCaptions",
@@ -84,6 +95,7 @@ let package = Package(
         .testTarget(name: "DaybookKitTests", dependencies: ["DaybookKit", "DaybookCore", "DaybookDevices", "DaybookLink", "DaybookTestSupport"]),
         .testTarget(name: "DaybookIntelligenceTests", dependencies: [
             "DaybookIntelligence",
+            "DaybookModelStore",
             "DaybookKit",
             "DaybookCore",
             "DaybookTestSupport",
@@ -94,6 +106,7 @@ let package = Package(
             "DaybookCore",
             "DaybookDevices",
             "DaybookKit",
+            "DaybookModelStore",
             "DaybookIntelligence",
             "DaybookLink",
             "DaybookCaptions",

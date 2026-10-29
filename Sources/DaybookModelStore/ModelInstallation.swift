@@ -95,6 +95,8 @@ public struct InstalledModelRevision: Sendable {
     public let installation: ModelInstallation
     public let state: State
     public var key: ModelInstallKey { installation.key }
+
+    public init(installation: ModelInstallation, state: State) { self.installation = installation; self.state = state }
     public var bytes: Int64 { installation.receipt.totalBytes }
     public var isReady: Bool { state == .ready }
 }
@@ -142,6 +144,10 @@ public struct ModelDiskUsage: Sendable, Equatable {
     public var partial: [String: Int64]
     /// Folders from before the model system that couldn't be migrated, by folder name.
     public var legacy: [String: Int64]
+
+    public init(installed: [ModelInstallKey: Int64] = [:], partial: [String: Int64] = [:], legacy: [String: Int64] = [:]) {
+        self.installed = installed; self.partial = partial; self.legacy = legacy
+    }
 
     public var total: Int64 { installed.values.reduce(0, +) + partial.values.reduce(0, +) + legacy.values.reduce(0, +) }
 
