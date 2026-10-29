@@ -117,6 +117,21 @@ public struct LiveModelSet: Sendable {
         return set
     }
 
+    /// The languages (codes such as "en", "ja") the installed, usable recognizers among `keys` cover,
+    /// each once, in order: what live captions can be asked for. A recognizer that lists none (it
+    /// covers every language) adds nothing here.
+    public static func languages(of keys: [String], inventory: ModelInventory) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for key in keys {
+            guard let installed = resolve([.liveTranscription: key], inventory: inventory).transcription else { continue }
+            for code in installed.capabilities.languages ?? [] where code != "*" && seen.insert(code.lowercased()).inserted {
+                result.append(code)
+            }
+        }
+        return result
+    }
+
     /// Whether the transcription model covers `locale`'s language (its `languages` capability; nil
     /// or "*" covers every language).
     public func transcribes(_ locale: Locale) -> Bool {

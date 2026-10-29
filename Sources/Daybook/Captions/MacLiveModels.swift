@@ -40,8 +40,10 @@ final class MacLiveModels {
 
     /// Re-reads which live models are chosen and installed. Call after downloads and removals, and
     /// when the choices or the captions' language change.
+    /// `resolved` gets the models a capture would use and the languages the installed recognizers
+    /// cover (what Settings can offer where the Speech framework can't).
     func refresh(selections: ModelSelections, catalog: ModelCatalog, engines: [ModelEngineDescriptor], locale: Locale,
-                 store: ModelStore, resolved: @escaping (LiveModelSet) -> Void = { _ in }) {
+                 store: ModelStore, resolved: @escaping (LiveModelSet, [String]) -> Void = { _, _ in }) {
         refreshing?.cancel()
         let choices = Self.choices(selections: selections, catalog: catalog, engines: engines)
         let alternatives = LiveModelChoices.defaults(for: .liveTranscription, platform: .macOS, catalog: catalog, engines: engines)
@@ -49,7 +51,8 @@ final class MacLiveModels {
             let inventory = await store.inventory()
             guard !Task.isCancelled, let self else { return }
             self.models = LiveModelSet.resolve(choices, inventory: inventory, locale: locale, alternatives: alternatives)
-            resolved(self.models)
+            let recognizers = [choices[.liveTranscription]].compactMap { $0 } + alternatives
+            resolved(self.models, LiveModelSet.languages(of: recognizers, inventory: inventory))
         }
         Task { await captioners.host.releaseIdle() }
     }
