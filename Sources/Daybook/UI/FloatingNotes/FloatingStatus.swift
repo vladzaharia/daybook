@@ -85,6 +85,7 @@ struct FloatingStatusInputs: Equatable {
         /// On another Mac: its name, the verb, and how far.
         case elsewhere(device: String, verb: String, fraction: Double?)
         case waiting
+        /// Asked for on `device`, waiting for a Mac to take it.
         case requested(device: String)
         case models
         case paused
@@ -307,7 +308,8 @@ enum FloatingStatus {
             return chip("desktopcomputer", "\(verb) on \(device)\(percent)", short: fraction.map { "\(Int(($0 * 100).rounded(.down)))%" }, .working,
                         progress: fraction)
         case .waiting: return chip("clock", "Waiting to transcribe", short: "Waiting", .calm)
-        case .requested(let device): return chip("clock", "Waiting for \(device)", short: "Waiting", .calm)
+        // Asked for on another device (an iPhone), and waiting for a Mac to take it.
+        case .requested(let device): return chip("clock", "Requested from \(device)", short: "Waiting", .calm)
         case .models:
             return chip("arrow.down.circle", "Waiting for models", short: "Models", .attention)
         case .paused: return chip("pause.circle", "Transcription paused", short: "Paused", .calm)

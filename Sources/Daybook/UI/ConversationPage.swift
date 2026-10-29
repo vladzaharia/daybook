@@ -296,8 +296,11 @@ struct ConversationStatus: View {
                     Spacer(minLength: Space.s2)
                     Button("Resume") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) }.buttonStyle(.daybookLink)
                 }
-            case .requested(.device), .recorded, .failed:
-                if meeting.hasUntranscribedAudio { transcribe } else { info }
+            case .requested(.device(let request)):
+                // Asked for on another device and waiting for a Mac: this one can take it.
+                if meeting.hasUntranscribedAudio { transcribe(title: "Requested from \(request.requestedBy.name)") } else { info }
+            case .recorded, .failed:
+                if meeting.hasUntranscribedAudio { transcribe() } else { info }
             case .done:
                 info
             }
@@ -332,15 +335,16 @@ struct ConversationStatus: View {
             }
         } else {
             box(.accent, symbol: "arrow.down.circle.fill", title: "Download models to transcribe this conversation",
-                message: ByteCountFormatter.string(fromByteCount: missingBytes, countStyle: .file)) {
+                message: missingBytes > 0 ? ByteCountFormatter.string(fromByteCount: missingBytes, countStyle: .file) : nil) {
                 Button("Choose Models…") { settingsPane = "models"; openSettings() }.buttonStyle(.daybookLink)
                 primary("Download") { state.enqueue(meeting.id); state.downloadModels(state.missingSelectedModels) }
             }
         }
     }
 
-    private var transcribe: some View {
-        box(.accent, symbol: "waveform.circle.fill", title: meeting.transcripts.isEmpty ? "Not transcribed yet" : "A new recording isn’t transcribed yet",
+    private func transcribe(title: String? = nil) -> some View {
+        box(.accent, symbol: "waveform.circle.fill",
+            title: title ?? (meeting.transcripts.isEmpty ? "Not transcribed yet" : "A new recording isn’t transcribed yet"),
             message: nil) {
             primary(meeting.transcripts.isEmpty ? "Transcribe" : "Transcribe New Audio") { state.enqueue(meeting.id, mode: .newAudio) }
         }
