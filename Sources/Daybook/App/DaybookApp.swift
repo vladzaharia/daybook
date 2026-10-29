@@ -250,7 +250,7 @@ struct DaybookCommands: Commands {
                 .disabled(meeting?.revisions.isEmpty != false)
         }
         CommandMenu("Controls") {
-            Button("Play / Pause") { state.playback.toggle() }
+            PlayPauseMenuItem(activity: state.playback.activity) { state.playback.toggle() }
                 .disabled(meeting?.tracks.isEmpty != false || state.isRecording)
             Button("Jump Back 15 Seconds") { state.playback.skip(-15) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
@@ -261,6 +261,14 @@ struct DaybookCommands: Commands {
             Button("Show Welcome") { openWindow(id: WindowID.welcome) }
         }
     }
+}
+
+/// Controls › Play or Pause, as playback is. It follows only whether playback is playing, so the
+/// menu isn't rebuilt as the position moves.
+private struct PlayPauseMenuItem: View {
+    @ObservedObject var activity: PlaybackActivity
+    let toggle: () -> Void
+    var body: some View { Button(activity.isPlaying ? "Pause" : "Play", action: toggle) }
 }
 
 /// Template choices for a conversation, shared by the colophon, inspector, and Conversation menu.
