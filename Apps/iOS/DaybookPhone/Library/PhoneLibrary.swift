@@ -100,7 +100,8 @@ final class PhoneLibrary {
         let id = recording.id
         // Named by this recording's own ID: a second recording into the same conversation is a new track.
         let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: installation)
-        let joining = join != nil || controller.meeting(id)?.tracks.contains(where: { $0.device != identity }) == true
+        // Its recorder's live audio, saved here while it recorded, doesn't make this recording a guest.
+        let joining = join != nil || controller.meeting(id)?.tracks.contains(where: { $0.device != identity && !$0.isLivePortion }) == true
         if controller.meeting(id) == nil {
             // One a Mac leads that hasn't synced here yet is made as that Mac has it (its title and date
             // came with its request), so the two copies agree when they meet; its status stays the
@@ -126,9 +127,21 @@ final class PhoneLibrary {
         // The staging folder is the only copy until this recording's bytes are in the library.
         guard let track else { throw DaybookError.saveFailed("The recording wasn’t added to its conversation.") }
         let notes = recording.timedNotes.isEmpty ? NoteTimeline.reconcile(previous: [], text: recording.notes, captureTime: nil) : recording.timedNotes
+        // What a Mac recording along wrote over the link is filed as that Mac files it (its time on the
+        // timeline, never held by this recording), so the two copies are one paragraph or bookmark.
+        let sharedNoteIDs = Set(recording.sharedNotes.map(\.id)), sharedMarkIDs = Set(recording.sharedBookmarks.map(\.id))
+        let shared = recording.sharedNotes.compactMap { filed in
+            notes.first { $0.id == filed.id }.map { SharedNote(id: filed.id, text: $0.text, time: filed.time) }
+        }
+        let sharedMarks = recording.sharedBookmarks.compactMap { filed in
+            recording.highlights.first { $0.id == filed.id }.map { Highlight(id: filed.id, time: filed.time, text: $0.text) }
+        }
         controller.update(id) { meeting in
-            meeting.addRecordingWork(trackID: track.id, notes: notes, bookmarks: recording.highlights, joining: joining,
+            meeting.addRecordingWork(trackID: track.id, notes: notes.filter { !sharedNoteIDs.contains($0.id) },
+                                     bookmarks: recording.highlights.filter { !sharedMarkIDs.contains($0.id) }, joining: joining,
                                      shift: join?.estimatedOffset ?? 0)
+            for note in shared { meeting.applySharedNote(note) }
+            for mark in sharedMarks { meeting.addSharedBookmark(mark) }
         }
         try await addCapturedPhotos(recording, track: track.id)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil

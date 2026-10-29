@@ -107,9 +107,12 @@ final class LinkServicesTests: XCTestCase {
     func makeModel(link: PhoneLink, rig: RecorderRig, settings: PhoneSettings? = nil) throws -> PhoneAppModel {
         let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
         let settings = settings ?? PhoneSettings(defaults: UserDefaults(suiteName: "LinkServicesTests-\(UUID().uuidString)")!)
-        return PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
-                             options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
-                             settings: settings, link: link)
+        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
+                                  settings: settings, link: link)
+        // These tests drive "Record on Studio Mac too" by hand; asking on its own is CascadingRecordingTests'.
+        model.cascadesToMacs = false
+        return model
     }
 
     func pair(_ link: PhoneLink, with mac: Mac) async throws {
@@ -690,31 +693,36 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertFalse(model.recorder.isActive)
     }
 
-    /// A Mac paired from now on can't start the microphone here until the person allows it, asked
-    /// once after pairing and changeable in that Mac's settings; the Mac hears why.
-    func testANewlyPairedMacStartsRecordingOnlyOnceAllowed() async throws {
+    /// A paired Mac may start recording here from the moment it's paired (recording on one device starts
+    /// every device connected to it): nothing is asked, and the person can turn it off for that Mac in
+    /// its settings, which the Mac hears as why.
+    func testAPairedMacMayStartRecordingUntilThePersonTurnsItOff() async throws {
         let mac = try await makeMac()
         let link = makeLink()
         let model = try makeModel(link: link, rig: RecorderRig())
         try await pair(link, with: mac)
         let paired = try XCTUnwrap(link.macs.first)
-        XCTAssertFalse(model.settings.hasMacRecordDecision(paired.id, pairedAt: paired.pairedAt), "the pairing sheet asks")
+        XCTAssertTrue(model.settings.hasMacRecordDecision(paired.id, pairedAt: paired.pairedAt), "the pairing sheet doesn't ask")
+        XCTAssertTrue(model.settings.macMayStartRecording(paired.id, pairedAt: paired.pairedAt), "on when paired")
 
+        let first = UUID()
+        let started = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: first), from: link.deviceID)
+        guard case .accepted = started.outcome else { return XCTFail("a paired Mac starts recording, got \(started.outcome)") }
+        XCTAssertEqual(model.recorder.captureID, first)
+        _ = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: first), from: link.deviceID)
+        try await waitUntil("stopped") { !model.recorder.isActive }
+
+        model.settings.setMacMayStartRecording(false, for: paired.id, pairedAt: paired.pairedAt)   // Can Start Recording off
         let refused = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: UUID()), from: link.deviceID)
-        guard case .refused(let refusal) = refused.outcome else { return XCTFail("started without being allowed") }
+        guard case .refused(let refusal) = refused.outcome else { return XCTFail("started after being turned off") }
         XCTAssertEqual(refusal.reason, .declined)
         XCTAssertEqual(refusal.message, "It hasn’t allowed this Mac to start recording. Allow it in Settings › Macs on the iPhone.")
         XCTAssertFalse(model.recorder.isActive)
 
-        model.settings.setMacMayStartRecording(false, for: paired.id, pairedAt: paired.pairedAt)   // Not Now
-        XCTAssertTrue(model.settings.hasMacRecordDecision(paired.id, pairedAt: paired.pairedAt), "asked once")
-        let notNow = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: UUID()), from: link.deviceID)
-        guard case .refused = notNow.outcome else { return XCTFail("Not Now still refuses") }
-
-        model.settings.setMacMayStartRecording(true, for: paired.id, pairedAt: paired.pairedAt)   // the Mac's row, later
+        model.settings.setMacMayStartRecording(true, for: paired.id, pairedAt: paired.pairedAt)   // on again
         let conversation = UUID()
         let allowed = try await mac.service.request(LinkRecordRequest(action: .start, conversationID: conversation), from: link.deviceID)
-        guard case .accepted = allowed.outcome else { return XCTFail("an allowed Mac starts recording, got \(allowed.outcome)") }
+        guard case .accepted = allowed.outcome else { return XCTFail("on again, it starts recording, got \(allowed.outcome)") }
         XCTAssertEqual(model.recorder.captureID, conversation)
         let stop = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: conversation), from: link.deviceID)
         guard case .accepted = stop.outcome else { return XCTFail("the phone stops") }
@@ -739,20 +747,20 @@ final class LinkServicesTests: XCTestCase {
         try await waitUntil("stopped") { !model.recorder.isActive }
     }
 
-    func testAnAnswerBelongsToOnePairingAndSurvivesARelaunch() throws {
+    func testAChoiceBelongsToOnePairingAndSurvivesARelaunch() throws {
         let suite = "LinkServicesTests-\(UUID().uuidString)"
         let settings = PhoneSettings(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
         let macID = UUID(), pairedAt = Date().addingTimeInterval(5)
-        XCTAssertFalse(settings.macMayStartRecording(macID, pairedAt: pairedAt))
-        settings.setMacMayStartRecording(true, for: macID, pairedAt: pairedAt)
+        XCTAssertTrue(settings.macMayStartRecording(macID, pairedAt: pairedAt), "on when paired")
+        settings.setMacMayStartRecording(false, for: macID, pairedAt: pairedAt)
         let relaunched = PhoneSettings(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
         XCTAssertEqual(relaunched.macRecordDecisionsSince, settings.macRecordDecisionsSince)
-        XCTAssertTrue(relaunched.macMayStartRecording(macID, pairedAt: pairedAt))
-        // Paired again later: asked again.
+        XCTAssertFalse(relaunched.macMayStartRecording(macID, pairedAt: pairedAt), "turned off stays off")
+        // Paired again later: on again.
         let again = pairedAt.addingTimeInterval(60)
-        XCTAssertFalse(relaunched.hasMacRecordDecision(macID, pairedAt: again))
-        XCTAssertFalse(relaunched.macMayStartRecording(macID, pairedAt: again))
+        XCTAssertTrue(relaunched.macMayStartRecording(macID, pairedAt: again))
+        XCTAssertTrue(relaunched.hasMacRecordDecision(macID, pairedAt: again), "nothing to ask")
         relaunched.forgetMacRecordDecision(macID)
-        XCTAssertFalse(relaunched.hasMacRecordDecision(macID, pairedAt: pairedAt))
+        XCTAssertTrue(relaunched.macMayStartRecording(macID, pairedAt: pairedAt))
     }
 }

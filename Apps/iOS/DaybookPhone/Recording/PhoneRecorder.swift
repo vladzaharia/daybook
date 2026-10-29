@@ -77,6 +77,9 @@ final class PhoneRecorder {
     private(set) var notes = ""
     private(set) var timedNotes: [TimedNote] = []
     private(set) var highlights: [Highlight] = []
+    /// Paragraphs and bookmarks a Mac recording along wrote, as that Mac files them (by ID).
+    private(set) var sharedNotes: [UUID: TimedNote] = [:]
+    private(set) var sharedBookmarks: [UUID: Highlight] = [:]
     /// Photos taken during this recording, kept in the staging folder.
     private(set) var photos: [CapturePhoto] = []
     private(set) var inputRoute: AudioInputRoute?
@@ -148,7 +151,7 @@ final class PhoneRecorder {
         cancelStart = false
         lastError = nil; canResume = false; pauseMessage = nil
         captureID = id; self.recordingID = recordingID; self.title = title; startedAt = nil
-        notes = ""; timedNotes = []; highlights = []; photos = []
+        notes = ""; timedNotes = []; highlights = []; photos = []; sharedNotes = [:]; sharedBookmarks = [:]
         level = .silent; isMicrophoneSilent = false
         do {
             guard !FileManager.default.fileExists(atPath: PhoneCaptureJournal.url(in: directory).path) else {
@@ -331,6 +334,54 @@ final class PhoneRecorder {
         persistJournal()
         onChange?()
         return entry
+    }
+
+    // MARK: Notes and bookmarks from a Mac recording along
+
+    /// A paragraph a Mac wrote, edited, or deleted (by its ID), shown here at `localTime` on this
+    /// recording and filed as the Mac files it (`filed`: its time on the conversation's timeline).
+    func applySharedNote(_ note: SharedNote, localTime: TimeInterval?, filed: TimeInterval?) {
+        guard isActive else { return }
+        let applied = NoteTimeline.applying(SharedNote(id: note.id, text: note.text, time: localTime.map { max(0, $0) }, deleted: note.deleted),
+                                            to: notes, anchors: timedNotes)
+        if note.deleted { sharedNotes[note.id] = nil }
+        else if let anchor = applied.anchors.first(where: { $0.id == note.id }) {
+            sharedNotes[note.id] = TimedNote(id: note.id, time: filed ?? sharedNotes[note.id]?.time, text: anchor.text)
+        }
+        notes = applied.text
+        timedNotes = applied.anchors
+        journal?.notes = notes
+        journal?.timedNotes = timedNotes
+        journal?.sharedNotes = sharedNotes.isEmpty ? nil : sharedNotes.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        persistJournal()
+        onChange?()
+    }
+
+    /// A bookmark a Mac made, shown here at `localTime` and filed as the Mac files it (`filed`).
+    func addSharedBookmark(_ mark: Highlight, localTime: TimeInterval) {
+        guard isActive, !highlights.contains(where: { $0.id == mark.id }) else { return }
+        highlights.append(Highlight(id: mark.id, time: max(0, localTime), text: mark.text))
+        sharedBookmarks[mark.id] = mark
+        journal?.highlights = highlights
+        journal?.sharedBookmarks = sharedBookmarks.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        persistJournal()
+        onChange?()
+    }
+
+    /// A bookmark's label changed on a Mac, or it was deleted there.
+    func applySharedBookmarkChange(id: UUID, label: String?, deleted: Bool) {
+        guard isActive, let index = highlights.firstIndex(where: { $0.id == id }) else { return }
+        if deleted {
+            highlights.remove(at: index)
+            sharedBookmarks[id] = nil
+        } else if let label {
+            highlights[index].text = label
+            sharedBookmarks[id]?.text = label
+        }
+        journal?.highlights = highlights
+        journal?.sharedBookmarks = sharedBookmarks.isEmpty ? nil : sharedBookmarks.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        persistJournal()
+        onChange?()
     }
 
     /// The Macs this recording is made with, kept in the journal for recovery.

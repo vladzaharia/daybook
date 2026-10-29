@@ -124,6 +124,12 @@ struct PhoneCaptureJournal: Codable, Equatable, Sendable {
     var photos: [CapturePhoto]?
     /// The Macs it's recorded with; nil when none (and in journals written before multipoint was kept).
     var multipoint: CaptureMultipoint?
+    /// Paragraphs and bookmarks a Mac recording this conversation too wrote over the link, as that Mac
+    /// files them (its time on the conversation's timeline, no track): they're filed so, never held by
+    /// this recording. `timedNotes` and `highlights` have them too, on this recording's time, for the
+    /// recording screen. Nil when none (and in journals written before shared notes).
+    var sharedNotes: [TimedNote]?
+    var sharedBookmarks: [Highlight]?
     var finalFile: FinalFile?
 
     init(id: UUID, title: String, createdAt: Date, format: RecordingFormat) {
@@ -193,6 +199,9 @@ struct PhoneRecording: Sendable, Equatable {
     var photos: [CapturePhoto] = []
     /// The Macs it was recorded with, as the journal kept them (for a recovered recording).
     var multipoint: CaptureMultipoint?
+    /// What a Mac recording along wrote over the link, as that Mac files it (`PhoneCaptureJournal.sharedNotes`).
+    var sharedNotes: [TimedNote] = []
+    var sharedBookmarks: [Highlight] = []
 }
 
 enum PhoneRecorderError: LocalizedError, Equatable {
