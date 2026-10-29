@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "minimumReaderVersion": 1,
-  "catalogVersion": "2026.10.24",
+  "catalogVersion": "2026.10.29",
   "presets": [
     {
       "id": "quick",
@@ -274,6 +274,34 @@
           "gemma-4/26b-a4b-qat-4bit",
           "gemma-4/12b-4bit",
           "gemma-4/e4b-4bit"
+        ]
+      }
+    }
+  },
+  "liveSelection": {
+    "roles": {
+      "liveTranscription": [
+        "nemotron-3.5-asr-streaming/latin-1120ms",
+        "nemotron-3.5-asr-streaming/multilingual-2240ms"
+      ],
+      "liveDiarization": [
+        "nemotron-3-diarization/live"
+      ],
+      "speakerEmbedding": [
+        "community-1/offline"
+      ]
+    },
+    "platforms": {
+      "iOS": {
+        "liveTranscription": [
+          "nemotron-3.5-asr-streaming/latin-1120ms",
+          "nemotron-3.5-asr-streaming/multilingual-2240ms"
+        ],
+        "liveDiarization": [
+          "nemotron-3-diarization/live"
+        ],
+        "speakerEmbedding": [
+          "community-1/offline"
         ]
       }
     }

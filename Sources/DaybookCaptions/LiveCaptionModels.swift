@@ -17,11 +17,31 @@ public struct LiveCaptionSegment: Codable, Equatable, Identifiable, Sendable {
     /// The source it was heard from, when one capture is captioned per source (a Mac's You and
     /// Call); nil for a single source. Optional, so captions saved without it still decode.
     public var source: LiveCaptionSource?
+    /// Who said it, when a live speaker model told the voices apart; nil otherwise. Optional, so
+    /// captions saved without it (and by earlier versions) still decode.
+    public var speaker: LiveCaptionSpeaker?
 
     public init(id: UUID = UUID(), start: TimeInterval, end: TimeInterval, text: String, isTentative: Bool,
-                source: LiveCaptionSource? = nil) {
+                source: LiveCaptionSource? = nil, speaker: LiveCaptionSpeaker? = nil) {
         self.id = id; self.start = start; self.end = end; self.text = text; self.isTentative = isTentative
-        self.source = source
+        self.source = source; self.speaker = speaker
+    }
+}
+
+/// Who said a caption, as a live speaker model heard it: the model's own label for one voice in this
+/// capture ("S2", never a person) and, once that voice matched someone's voice profile, their name.
+/// Tentative like the words: the Mac's speaker analysis decides who spoke in the transcript.
+public struct LiveCaptionSpeaker: Codable, Hashable, Sendable {
+    /// One voice within one capture ("S1", "S2"…). The same voice keeps it for the whole capture,
+    /// unless the model loses track of it.
+    public var slot: String
+    /// The person whose voice profile it matched, when it did.
+    public var name: String?
+    /// That profile's identifier.
+    public var profileID: String?
+
+    public init(slot: String, name: String? = nil, profileID: String? = nil) {
+        self.slot = slot; self.name = name; self.profileID = profileID
     }
 }
 

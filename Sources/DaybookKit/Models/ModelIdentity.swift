@@ -35,6 +35,17 @@ public struct ModelRole: RawRepresentable, Codable, Hashable, Sendable, Expressi
 
     /// The roles Daybook knows, in the order the interface lists them.
     public static let known: [ModelRole] = [.transcription, .diarization, .speakerEmbedding, .summarization, .smallTasks, .imageDescription]
+
+    // Live roles (docs/models.md, "Live models"): tentative captions while recording, on the Mac and
+    // the iPhone. They never make a transcript, so presets, removal fallbacks, and processing jobs
+    // (which cover `known`) leave them alone. Voice profiles for live speakers use `speakerEmbedding`,
+    // so live names come from the same embedding space as the Mac's profiles.
+    /// Speech to words as it's heard (a streaming model).
+    public static let liveTranscription: ModelRole = "liveTranscription"
+    /// Who's speaking, as they speak (a streaming speaker model).
+    public static let liveDiarization: ModelRole = "liveDiarization"
+    /// The live roles a catalog's `liveSelection` names, in the order settings list them.
+    public static let live: [ModelRole] = [.liveTranscription, .liveDiarization, .speakerEmbedding]
 }
 
 /// An engine's stable identifier: "whisperKit", "community1", "mlxLanguage".
@@ -58,6 +69,8 @@ public struct ModelEngineID: RawRepresentable, Codable, Hashable, Sendable, Expr
     public static let mlxLanguage: ModelEngineID = "mlxLanguage"
     public static let parakeet: ModelEngineID = "parakeet"
     public static let nemotronDiarizer: ModelEngineID = "nemotronDiarizer"
+    /// NVIDIA's cache-aware streaming recognizers (Nemotron 3.5 ASR Streaming) for live captions.
+    public static let nemotronStreaming: ModelEngineID = "nemotronStreaming"
     // Engines planned next (docs/models.md, "How to add a model"). A manifest may already name them;
     // until an engine registers, its entries read "Needs a newer Daybook".
     public static let appleFoundationModels: ModelEngineID = "appleFoundationModels"

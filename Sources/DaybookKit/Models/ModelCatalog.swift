@@ -111,6 +111,8 @@ public struct ModelCatalog: Sendable {
     public let presets: [ModelPresetEntry]
     public let recommendedPreset: ModelRecommendedPreset?
     public let initialSelection: ModelChoiceTable?
+    /// The live roles' defaults per platform and tier (`ModelManifest.liveSelection`).
+    public let liveSelection: ModelChoiceTable?
     public let catalogVersion: String?
     /// What reading the manifests skipped.
     public let warnings: [String]
@@ -158,6 +160,7 @@ public struct ModelCatalog: Sendable {
         presets = builtIn.presets
         recommendedPreset = builtIn.recommendedPreset
         initialSelection = builtIn.initialSelection
+        liveSelection = builtIn.liveSelection
         catalogVersion = builtIn.catalogVersion
         self.warnings = problems
     }

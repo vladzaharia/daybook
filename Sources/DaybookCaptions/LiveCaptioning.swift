@@ -286,19 +286,22 @@ public final class SpeechCaptioner: LiveCaptioning, @unchecked Sendable {
 }
 
 /// Converts any PCM buffer to the analyzer's format, rebuilding the converter when the input format
-/// changes (an audio route change, a recorder at its own rate).
-final class CaptionConverter: @unchecked Sendable {
+/// changes (an audio route change, a recorder at its own rate). The converter keeps its state between
+/// buffers, so resampling small buffers back to back leaves no seams. Several channels are mixed
+/// down, not dropped. Use from one task at a time.
+public final class CaptionConverter: @unchecked Sendable {
     private let output: AVAudioFormat
     private var converter: AVAudioConverter?
     private var input: AVAudioFormat?
 
-    init(output: AVAudioFormat) { self.output = output }
+    public init(output: AVAudioFormat) { self.output = output }
 
-    func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+    public func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
         guard buffer.frameLength > 0 else { return nil }
         if buffer.format == output { return buffer }
         if input != buffer.format || converter == nil {
             converter = AVAudioConverter(from: buffer.format, to: output)
+            converter?.downmix = buffer.format.channelCount > output.channelCount
             input = buffer.format
         }
         guard let converter else { return nil }

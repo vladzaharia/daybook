@@ -8,13 +8,14 @@ import Foundation
 /// FluidAudio's `Nemotron3Diarizer`. `engineOptions["preset"]` names the converted shape: "offline"
 /// (the 30 s batch configuration in `monolithic/v2/`) or a split-graph W8A8 build such as
 /// "c128-split-w8a8" (`split/`, plus the host-side projection). No voice embeddings: voice
-/// profiles come from the speaker-embedding model (`ModelRouting.voiceEmbedder`).
+/// profiles come from the speaker-embedding model (`ModelRouting.voiceEmbedder`). Its streaming
+/// presets ("fast32-split-w8a8") also serve live captions' speakers, which DaybookLive loads itself.
 public struct NemotronDiarizerEngine: ModelEngine {
     public init() {}
 
     public let descriptor = ModelEngineDescriptor(
         id: .nemotronDiarizer, name: "FluidAudio Nemotron 3 Diarization", version: 1, runtime: "FluidAudio 0.17.7",
-        roles: [.diarization], platforms: [.macOS, .iOS], residency: .shared)
+        roles: [.diarization, .liveDiarization], platforms: [.macOS, .iOS], residency: .shared)
 
     /// The streaming configuration an install's options name, with `modelFileName` as the bundle's
     /// path inside the artifact; nil for a preset FluidAudio 0.17.7 doesn't know.
