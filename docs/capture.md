@@ -406,7 +406,7 @@ Code: `Sources/Daybook/Captions/` (controller, echo rule, store, views, settings
   then everything captioned until the transcript exists, as "Live captions · tentative" turns
   labelled You and Call, in lighter ink than a transcript, with no editing. Both observe the captions
   directly, so a revised word redraws only them.
-- **Settings › General › Live Captions.** "Live captions while recording" (on by default, as on the
+- **Settings › General › Live Captions.** "Show while recording" (on by default, as on the
   iPhone) and the language ("Same as This Mac" or any `SpeechTranscriber` locale), with a footer
   that says whether the language is ready or downloads the first time (never asking triggers a
   download). It's in General, beside the other recording choices, rather than Models: captions use

@@ -208,7 +208,7 @@ struct LiveCaptionSettingsSection: View {
 
     var body: some View {
         Section {
-            Toggle("Live captions while recording", isOn: $settings.isEnabled)
+            Toggle("Show while recording", isOn: $settings.isEnabled)
             .controlSize(.regular)
             .disabled(!supported)
             if supported && settings.isEnabled {
