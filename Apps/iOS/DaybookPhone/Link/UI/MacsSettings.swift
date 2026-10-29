@@ -1,7 +1,7 @@
 import DaybookLink
 import SwiftUI
 
-/// Settings › Macs: paired Macs and how each is doing, and Pair with a Mac.
+/// Settings › Macs: paired Macs and how each is doing, and Pair with Your Mac.
 struct MacsSection: View {
     @Environment(PhoneAppModel.self) private var model
     @Binding var showingPairing: Bool
@@ -15,38 +15,36 @@ struct MacsSection: View {
                 showingPairing = true
             } label: {
                 // The Mac's instructions name this item, so it's always the same words.
-                Label("Pair with Your Mac…", systemImage: "plus.circle")
+                SettingsActionLabel(title: "Pair with Your Mac…", systemImage: "plus")
             }
         } header: {
             Text("Macs")
+        } footer: {
+            if let footer = Self.footer(model.macPresence, pairedNames: model.link.macs.map(\.name)) { Text(footer) }
+        }
+    }
+
+    /// What the library's sync says about its Mac, when the rows above don't already: a Mac that syncs
+    /// but isn't paired here, or one to set up. Nil for a paired Mac (its row says it) and while checking.
+    static func footer(_ presence: MacPresence, pairedNames: [String], now: Date = Date()) -> String? {
+        switch presence {
+        case .checking, .unavailable, .connected: return nil
+        case .seen(let name, _), .recording(let name, _):
+            return pairedNames.contains(name) ? nil : presence.summary(now: now)
+        case .notProcessing, .olderMac, .noMac: return presence.summary(now: now)
         }
     }
 }
 
+/// A paired Mac in a list: its tile (teal while it's connected), its name, and what it's doing.
 struct MacRow: View {
     let mac: PhoneLink.Mac
     /// Its presence in the library says it's recording, while the link has no word from it.
     var recordingBySync = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: "desktopcomputer")
-                    .font(.system(size: 18))
-                    .foregroundStyle(mac.isConnected ? PhoneStyle.accent : .secondary)
-                    .frame(width: 30, height: 30)
-                Circle()
-                    .fill(mac.isConnected ? PhoneStyle.accent : Color(uiColor: .tertiaryLabel))
-                    .frame(width: 8, height: 8)
-                    .overlay(Circle().stroke(Color(uiColor: .secondarySystemGroupedBackground), lineWidth: 2))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(mac.name)
-                Text(mac.rowLine(recordingBySync: recordingBySync)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
-            }
-        }
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
+        SettingsRow(title: mac.name, detail: mac.rowLine(recordingBySync: recordingBySync), systemImage: "desktopcomputer",
+                    tone: mac.isConnected ? .active : .neutral)
     }
 }
 
@@ -61,7 +59,8 @@ extension PhoneLink.Mac {
     }
 }
 
-/// One paired Mac: its connection, clock, and Unpair.
+/// One paired Mac: the same header as a recorder's page, then what it may do here, its facts, and
+/// Unpair.
 struct MacDetailScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -72,13 +71,22 @@ struct MacDetailScreen: View {
         if let mac = model.link.macs.first(where: { $0.id == macID }) {
             Form {
                 Section {
-                    MacRow(mac: mac, recordingBySync: model.isRecordingBySync(mac))
+                    DevicePageHeader(systemImage: "desktopcomputer", isActive: mac.isConnected, title: mac.name,
+                                     status: mac.rowLine(recordingBySync: model.isRecordingBySync(mac)))
+                        .devicePageHeaderRow()
                 }
-                Section("This Mac") {
+                Section {
                     Toggle("Can Start Recording", isOn: Binding(
                         get: { model.settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) },
                         set: { model.settings.setMacMayStartRecording($0, for: mac.id, pairedAt: mac.pairedAt) }))
-                    LabeledContent("Transcribes", value: mac.canProcess ? "Yes" : mac.isConnected ? "Not set up" : "Unknown until connected")
+                }
+                Section {
+                    // Whether it transcribes is known once it has connected.
+                    if mac.canProcess {
+                        LabeledContent("Transcribes", value: "Yes")
+                    } else if mac.isConnected {
+                        LabeledContent("Transcribes", value: "Not set up")
+                    }
                     if let version = mac.appVersion { LabeledContent("Daybook", value: version) }
                     LabeledContent("Paired", value: mac.pairedAt.formatted(date: .abbreviated, time: .omitted))
                     if let clock = mac.clock {
@@ -86,11 +94,16 @@ struct MacDetailScreen: View {
                     }
                 }
                 Section {
-                    Button("Unpair \(mac.name)…", role: .destructive) { confirmingUnpair = true }
+                    Button("Unpair This Mac…", role: .destructive) { confirmingUnpair = true }
                 }
             }
+            .settingsScrollEnd()
             .navigationTitle(mac.name)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // The header names the Mac; the bar stays quiet (the back button still names it).
+                ToolbarItem(placement: .principal) { Text("") }
+            }
             .confirmationDialog("Unpair \(mac.name)?", isPresented: $confirmingUnpair, titleVisibility: .visible) {
                 Button("Unpair", role: .destructive) {
                     Task {
@@ -174,6 +187,7 @@ struct PairingSheet: View {
     @State private var asking: LinkPairedDevice?
     @State private var showingQuestion = false
     @FocusState private var codeFocused: Bool
+    private let tileColumn = SettingsTileWidth()
 
     var body: some View {
         NavigationStack {
@@ -291,7 +305,8 @@ struct PairingSheet: View {
         if let paired {
             Label("Paired with \(paired)", systemImage: "checkmark.circle.fill")
                 .font(.headline)
-                .foregroundStyle(PhoneStyle.accent)
+                .foregroundStyle(PhoneStyle.Ink.link)
+                .fixedSize(horizontal: false, vertical: true)
         } else {
             if let mac = selectedMac {
                 codeEntry(for: mac)
@@ -311,40 +326,38 @@ struct PairingSheet: View {
 
     private var macList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Macs on This Wi‑Fi")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(PhoneStyle.Ink.meta)
-                .textCase(.uppercase)
+            PairingHeading(text: "Macs on This Wi‑Fi")
             VStack(spacing: 0) {
                 let candidates = model.link.candidates
                 if candidates.isEmpty {
-                    HStack(spacing: 12) {
-                        ProgressView()
-                        Text("Looking for Macs… Both need to be on the same Wi‑Fi.")
+                    HStack(spacing: SettingsMetrics.gap) {
+                        ProgressView().frame(width: tileColumn.value)
+                        Text("Looking for Macs…")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(PhoneStyle.Ink.secondary)
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 ForEach(candidates) { mac in
                     Button { selection = mac.id } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "desktopcomputer").foregroundStyle(PhoneStyle.accent).frame(width: 26)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(mac.name).foregroundStyle(.primary)
-                                Text(mac.isPaired ? "Paired" : mac.isPairing ? "Showing a code" : "Not showing a code")
-                                    .font(.footnote).foregroundStyle(.secondary)
+                        HStack(spacing: SettingsMetrics.gap) {
+                            SettingsRow(title: mac.name, detail: mac.isPaired ? "Paired" : mac.isPairing ? "Showing a code" : "Not showing a code",
+                                        systemImage: "desktopcomputer")
+                            Spacer(minLength: 0)
+                            if selection == mac.id {
+                                Image(systemName: "checkmark").foregroundStyle(PhoneStyle.accent).fontWeight(.semibold)
+                                    .accessibilityHidden(true)
                             }
-                            Spacer()
-                            if selection == mac.id { Image(systemName: "checkmark").foregroundStyle(PhoneStyle.accent).fontWeight(.semibold) }
                         }
                         .padding(14)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(selection == mac.id ? .isSelected : [])
-                    if mac.id != candidates.last?.id { Divider().padding(.leading, 52) }
+                    if mac.id != candidates.last?.id {
+                        Divider().padding(.leading, 14 + tileColumn.value + SettingsMetrics.gap)
+                    }
                 }
             }
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -353,10 +366,7 @@ struct PairingSheet: View {
 
     private func codeEntry(for mac: PhoneLink.PairingCandidate) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Code on \(mac.name)")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(PhoneStyle.Ink.meta)
-                .textCase(.uppercase)
+            PairingHeading(text: "Code on \(mac.name)")
             ZStack {
                 // The real field, nearly invisible under the boxes: VoiceOver and the keyboard use it.
                 TextField("", text: $code)
@@ -390,7 +400,7 @@ struct PairingSheet: View {
             .contentShape(Rectangle())
             .onTapGesture { codeFocused = true }
             if pairing {
-                HStack(spacing: 8) { ProgressView(); Text("Pairing…").foregroundStyle(.secondary) }
+                HStack(spacing: 8) { ProgressView(); Text("Pairing…").foregroundStyle(PhoneStyle.Ink.secondary) }
             }
         }
     }
@@ -417,5 +427,18 @@ struct PairingSheet: View {
             self.error = PhoneLink.message(for: error)
             code = ""
         }
+    }
+}
+
+/// A heading over pairing's groups, as the status sheet's: a generic label, never filler.
+private struct PairingHeading: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(PhoneStyle.Ink.secondary)
+            .textCase(.uppercase)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(.isHeader)
     }
 }
