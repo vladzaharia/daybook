@@ -134,10 +134,21 @@ public enum SpeakerProfileReconciler {
         if options.recognizes {
             for meeting in ordered {
                 let voice = voices[meeting.id]!
+                // Heard only in what was left out as background audio (a TV's presenter): no one in the
+                // conversation, so never labelled or learned from.
+                let background = meeting.backgroundOnlySpeakerIDs
                 var decisions: [String: Decision] = [:]
                 for speaker in meeting.speakers.sorted(by: { $0.id < $1.id }) {
                     guard let entry = current[meeting.id]?[speaker.id] else { continue }
                     if let identity = entry.identity, !identity.$source.isKnown || identity.source.isPersonChosen { continue }
+                    if background.contains(speaker.id) {
+                        // Left out after it was labelled (the person changed their mind): what it taught goes too.
+                        if entry.identity?.source == .recognized, let profile = entry.identity?.profileID {
+                            work.removeVoiceprints(meeting: meeting.id, speakers: voice.sources(of: speaker.id, voice.prints(of: speaker.id)), profile: profile)
+                        }
+                        decisions[speaker.id] = Decision(ranked: [], best: nil, print: nil, outcome: .unknown)
+                        continue
+                    }
                     decisions[speaker.id] = decide(speaker.id, entry: entry, voice: voice, book: book, matching: options.matching, meetingID: meeting.id)
                 }
                 resolveConflicts(&decisions, meeting: meeting, voice: voice, current: current[meeting.id] ?? [:], margin: options.matching.margin)

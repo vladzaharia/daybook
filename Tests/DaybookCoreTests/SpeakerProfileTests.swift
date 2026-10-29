@@ -317,6 +317,32 @@ final class SpeakerProfileTests: XCTestCase {
         XCTAssertFalse(activePrints(metadata).contains { $0.origin == .recognized }, "Nothing confident enough to learn from")
     }
 
+    /// A voice heard only in passages left out as background audio (the person's own voice on a
+    /// recording played back, a presenter who sounds like them) is never labelled or learned from.
+    func testAVoiceOnlyInBackgroundAudioIsNeverLabelledOrLearned() throws {
+        var named = meeting("named", daysAgo: 30, [voice("me", mine(97), 300)])
+        named.renameSpeaker(id: "named:me", name: "Vlad")
+        var tv = meeting("tv", daysAgo: 1, [voice("anchor", mine(98), 400)])
+        tv.backgroundPassages = tv.transcripts[0].segments
+        XCTAssertEqual(tv.backgroundOnlySpeakerIDs, ["tv:anchor"])
+        var meetings = [named, tv], metadata = LibraryMetadata()
+        settle(&meetings, &metadata)
+        XCTAssertEqual(name(meetings[1], "tv:anchor"), "Speaker 1")
+        XCTAssertNil(meetings[1].speakerIdentity("tv:anchor"))
+        XCTAssertFalse(activePrints(metadata).contains { $0.origin == .recognized })
+
+        // Kept in, it's labelled and taught; left out again, both come off.
+        meetings[1].backgroundPassages = nil
+        settle(&meetings, &metadata)
+        XCTAssertEqual(meetings[1].speakerIdentity("tv:anchor")?.source, .recognized)
+        XCTAssertTrue(activePrints(metadata).contains { $0.origin == .recognized && $0.meetingID == tv.id })
+        meetings[1].backgroundPassages = tv.backgroundPassages
+        settle(&meetings, &metadata)
+        XCTAssertEqual(name(meetings[1], "tv:anchor"), "Speaker 1")
+        XCTAssertNil(meetings[1].speakerIdentity("tv:anchor"))
+        XCTAssertFalse(activePrints(metadata).contains { $0.origin == .recognized && $0.meetingID == tv.id })
+    }
+
     func testANamedVoiceUnlikeTheProfileKeepsItsNameButIsntLearned() throws {
         var one = meeting("one", daysAgo: 9, [voice("me", mine(101))])
         one.renameSpeaker(id: "one:me", name: "Vlad")
