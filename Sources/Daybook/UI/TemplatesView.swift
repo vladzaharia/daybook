@@ -46,6 +46,9 @@ struct TemplatesView: View {
                 }
         }
         .frame(minWidth: 640, minHeight: 440)
+        #if DEBUG
+        .task { TemplatesDemo.apply(to: state) }
+        #endif
         .onAppear { if selectedID == nil { selectedID = builtIns.first?.id } }
         .onChange(of: selectedID, initial: true) { old, new in
             if let draft, draft.id == old { save(draft) }
@@ -259,3 +262,23 @@ struct TemplatesView: View {
         Task { @MainActor in nameFocused = true }
     }
 }
+
+#if DEBUG
+/// Debug-only: `--templates-demo` adds templates of your own (one with a long name) and edits a built-in, for
+/// screenshots. Only with `--library`, whose library it writes to.
+@MainActor
+enum TemplatesDemo {
+    static func apply(to state: AppState) {
+        guard LaunchOptions.libraryURL != nil, CommandLine.arguments.contains("--templates-demo"),
+              state.templates.allSatisfy(\.isBuiltIn) else { return }
+        state.saveTemplate(SummaryTemplate(name: "Board update", kind: .general, instructions: "Lead with the numbers, then risks and asks."))
+        state.saveTemplate(SummaryTemplate(name: "Quarterly customer advisory council debrief and follow-ups", kind: .interview,
+                                           instructions: "Group feedback by theme. Quote customers where they're specific."))
+        state.saveTemplate(SummaryTemplate(name: "", kind: .general, instructions: ""))
+        if var edited = state.templates.first(where: \.isBuiltIn) {
+            edited.instructions += " Keep it under a page."
+            state.saveTemplate(edited)
+        }
+    }
+}
+#endif
