@@ -174,6 +174,7 @@ public final class SimulatedSoundcore {
         let type = b[5], command = b[6]
         let payload = Data(b[9..<(b.count - 1)])
         received.append((type, command))
+        interruptAnotherApp(type, command)
         switch (type, command) {
         case (0x01, 0x01):
             reply(0x01, 0x01, statusPayload())
@@ -265,6 +266,62 @@ public final class SimulatedSoundcore {
     /// IDs are their start by this clock.
     public var clockOffset: TimeInterval = 0
 
+    /// Another app's transfer over the shared link is under way (`beginAnotherAppsTransfer`).
+    public private(set) var isServingAnotherApp = false
+    /// Its transfers that ran to their end.
+    public private(set) var anotherAppsTransfersFinished = 0
+    /// Daybook's commands that arrived during another app's transfer and would cut it off: a transfer
+    /// request or Stop Transport ends it (the recorder serves one transfer at a time), and Start or Pause
+    /// is recorded too.
+    public private(set) var commandsDuringAnotherAppsTransfer: [(type: UInt8, command: UInt8)] = []
+    private var anotherApp: Task<Void, Never>?
+
+    /// Another app on the same iPhone transfers a recording over the link iOS shares between apps, paced
+    /// like a real transfer: its file head, `slices` slices (`slicesPerPacket` a notification, one every
+    /// `pace`), then its end, all reaching Daybook unasked. A transfer of Daybook's under way is cut off.
+    public func beginAnotherAppsTransfer(recordingID id: UInt32, slices: Int, pace: Duration = .milliseconds(20)) {
+        streaming?.cancel()
+        streaming = nil
+        anotherApp?.cancel()
+        isServingAnotherApp = true
+        send(SoundcorePacket.frame(type: 0x1a, command: 0x07, payload: littleEndian32(id) + littleEndian32(UInt32(slices * 160))))
+        let perPacket = max(1, slicesPerPacket)
+        anotherApp = Task { [weak self] in
+            var sequence = 0
+            while sequence < slices {
+                try? await Task.sleep(for: pace)
+                guard let self, !Task.isCancelled else { return }
+                var payload = Data()
+                for _ in 0..<min(perPacket, slices - sequence) {
+                    payload.append(SoundcoreAudioSlice.encode(sequence: UInt32(sequence), audio: Data(repeating: 1, count: 160)))
+                    sequence += 1
+                }
+                self.send(SoundcorePacket.frame(type: 0x1a, command: 0x08, payload: payload))
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.send(SoundcorePacket.frame(type: 0x1a, command: 0x0a))
+            self.isServingAnotherApp = false
+            self.anotherAppsTransfersFinished += 1
+            self.anotherApp = nil
+        }
+    }
+
+    /// Another app exchanges audio keys: the recorder keeps the new session key, and its reply reaches
+    /// Daybook unasked.
+    public func anotherAppExchangesKeys() {
+        handshake(P256.KeyAgreement.PrivateKey().publicKey.x963Representation)
+    }
+
+    /// A command from Daybook during another app's transfer.
+    private func interruptAnotherApp(_ type: UInt8, _ command: UInt8) {
+        guard isServingAnotherApp, [[0x1a, 0x07], [0x1a, 0x11], [0x18, 0x82]].contains([type, command]) else { return }
+        commandsDuringAnotherAppsTransfer.append((type, command))
+        guard type == 0x1a else { return }
+        anotherApp?.cancel()
+        anotherApp = nil
+        isServingAnotherApp = false
+    }
+
     /// Another app on the same iPhone lists the recorder and pulls a recording. iOS shares one link
     /// between apps, so its replies and audio reach every app listening, unasked.
     public func serveAnotherApp(recordingID id: UInt32, slices: Int = 6) {
@@ -287,6 +344,9 @@ public final class SimulatedSoundcore {
     public func connectionEnded() {
         streaming?.cancel()
         streaming = nil
+        anotherApp?.cancel()
+        anotherApp = nil
+        isServingAnotherApp = false
         // The recording carries on without anyone connected.
         sessionKey = nil
         privateKey = P256.KeyAgreement.PrivateKey()

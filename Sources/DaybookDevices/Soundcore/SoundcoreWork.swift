@@ -128,7 +128,7 @@ public enum SoundcoreIssue: String, CaseIterable {
             return transferring ? .integrity : .rejected
         case .rejected, .unsupported: return .rejected
         case .liveFileUnavailable: return .notRecording
-        case .timedOut, .stalled: return transferring ? .stalled : .connectTimeout
+        case .timedOut, .stalled, .yielded: return transferring ? .stalled : .connectTimeout
         }
     }
 }

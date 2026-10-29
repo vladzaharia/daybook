@@ -88,6 +88,18 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
   request can satisfy Daybook's. Daybook ignores audio it didn't ask for and counts it, and replies
   that matched nothing, in Device Details ("Audio packets not requested here", "Replies not
   requested here"); a large count means the Soundcore app was transferring.
+- **Two apps on one link.** While audio Daybook didn't ask for is arriving, Daybook holds its own
+  transfers, Listen Live, and Start and Pause until that audio has stopped for three seconds
+  (`SoundcoreTiming.otherAppQuiet`), because a request sent over another app's transfer could end it.
+  Listing and status don't wait. Meanwhile the device page's line and the status line say "Waiting for
+  the Soundcore app to finish" (`DeviceSession.otherAppWait`; Device Details: "Another app"). Daybook
+  never asks the recorder to stop sending (`1A 11`) while the other app's audio is arriving. When the
+  other app's request cuts off a transfer of Daybook's (its file head arrives, or its audio arrives
+  before Daybook's head), Daybook's keeps nothing and starts again from the beginning once the other
+  transfer is done; that isn't a failure or a retry attempt. Daybook's own stragglers, within the
+  settle time after it stopped a transfer, aren't taken for another app's. The recorder keeps one audio
+  key, so another app's key exchange (an unrequested `2E 01` reply) makes Daybook exchange keys again
+  before its next transfer.
 - **Details.** Device Details' technical rows include the last list (how many, pages, when, or why
   it failed) and what the recorder names as in progress. On iPhone, the device page's Details lists
   every recording on the recorder with why it is or isn't new (`DeviceSession.standings`: New, In
@@ -218,7 +230,11 @@ automatic import since setup and its release, no automatic import before the lib
 record control with and without confirmation, Listen Live portions, and the read-only command
 set. A list request the recorder leaves unanswered or refuses is reported, tried again on its
 schedule (and automatic import carries on once it lists), and another app's replies and audio on a
-shared link are counted without changing anything. The simulator also has firmware variants that list the active file and keep a paused one
+shared link are counted without changing anything. With the simulator emulating another app's paced
+transfer (`beginAnotherAppsTransfer`), an import and a Start wait for it and say so, a transfer under way
+gives way to it without asking the recorder to stop sending and starts again afterwards, nothing Daybook
+sends cuts the other transfer off, and another app's key exchange is followed by one of Daybook's own.
+The simulator also has firmware variants that list the active file and keep a paused one
 open, a button press, and a skewed clock, for: no import from a remembered list on reconnect, a
 paused-open recording neither imported nor queued, listing again on the button's start and stop,
 the last-known recording as of its time and its expiry, the clock measured on Start and applied to
@@ -233,4 +249,7 @@ and storage values, the active recording's place in the list (among the entries 
 them) and whether Pause keeps it open, whether the button reports `18 82`, how far real recorder
 clocks drift, transfer throughput and packet loss, reconnect timing, live reception, and automatic
 import alongside the phone app: whether the recorder answers a list request while the Soundcore app
-is transferring, and what the list's trailing field names then.
+is transferring, and what the list's trailing field names then. Two apps on one link: whether the
+Soundcore app's transfer reaches Daybook as notifications on iOS, whether three quiet seconds is enough
+between its files, whether a request of Daybook's really cuts its transfer off, and whether the recorder
+keeps one audio key for both apps.

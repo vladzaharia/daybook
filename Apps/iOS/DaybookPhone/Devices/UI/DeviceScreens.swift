@@ -209,7 +209,7 @@ private struct DevicePageContent: View {
                             Text("Importing \(current.recording.title)")
                                 .font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.title)
                             Spacer()
-                            Text(session.phase?.label ?? "Waiting…")
+                            Text(session.isWaitingForOtherApp ? "Waiting…" : session.phase?.label ?? "Waiting…")
                                 .font(.subheadline.monospacedDigit()).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
                         // Work in progress: the brand gradient.
@@ -776,6 +776,7 @@ private struct SetupScreen: View {
 enum PhoneDeviceCopy {
     static func line(for session: DeviceSession) -> String {
         if let owner = session.managedElsewhere { return "Managed by \(owner.ownerName)" }
+        if let wait = session.otherAppWait { return wait }
         if let current = session.queue.current { return "Importing \(current.recording.title) · \(session.phase?.label ?? "…")" }
         switch session.state {
         case .connected:
