@@ -105,11 +105,27 @@ struct ModelSettings: View {
         }
     }
 
-    /// Speaks only when the chosen models aren't all on this Mac.
+    /// Speaks only when the chosen models aren't all on this Mac: what's left to download, or, once all of it is on its
+    /// way, the download's progress. A model fetched on its own doesn't stand for the rest, which can still be started.
     @ViewBuilder private func downloadRow(_ snapshot: ModelManagerSnapshot) -> some View {
         let keys = snapshot.choiceRoles.filter { $0 != .diarization || state.detectSpeakers }.compactMap { state.modelSelections[$0] }
         let downloadable = keys.filter { state.modelCatalog.model($0)?.isSystemModel == false }
-        if ModelSize.isDownloading(downloadable, in: state) {
+        let missing = manager.missingSelected
+        if !missing.isEmpty {
+            // Every chosen model missing: the preset or Custom row above already names them.
+            let partly = missing.count < Set(downloadable).count
+            LabeledContent {
+                Button("Download \(ModelSize.format(ModelSize.bytes(missing, in: state.modelCatalog)))") { manager.downloadSelected() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(DaybookStyle.prominentFill)
+            } label: {
+                Text(partly ? "Partly downloaded" : "Not downloaded yet")
+                if partly {
+                    Text(missing.map { state.modelCatalog.model($0).map { ModelSize.shortName($0, in: state.modelCatalog) } ?? $0 }
+                        .joined(separator: ", "))
+                }
+            }
+        } else if ModelSize.isDownloading(downloadable, in: state) {
             let total = ModelSize.bytes(downloadable, in: state.modelCatalog), done = ModelSize.downloaded(downloadable, in: state)
             HStack(spacing: Space.s3) {
                 ProgressView(value: Double(done), total: Double(max(total, 1)))
@@ -120,17 +136,6 @@ struct ModelSettings: View {
                     .foregroundStyle(.secondary)
                     .fixedSize()
                 Button("Cancel") { manager.cancelDownloads() }
-            }
-        } else if !manager.missingSelected.isEmpty {
-            let missing = manager.missingSelected
-            LabeledContent {
-                Button("Download \(ModelSize.format(ModelSize.bytes(missing, in: state.modelCatalog)))") { manager.downloadSelected() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(DaybookStyle.prominentFill)
-            } label: {
-                Text(missing.count == Set(downloadable).count ? "Not downloaded yet" : "Partly downloaded")
-                Text(missing.map { state.modelCatalog.model($0).map { ModelSize.shortName($0, in: state.modelCatalog) } ?? $0 }
-                    .joined(separator: ", "))
             }
         }
     }
@@ -158,14 +163,23 @@ struct ModelSettings: View {
             Group {
                 if let choice = choices[.diarization] { ModelChoiceRow(manager: manager, choice: choice, label: "Model") }
                 if let choice = choices[.speakerEmbedding] { ModelChoiceRow(manager: manager, choice: choice, label: choice.title) }
-                Toggle(isOn: $state.processingPreferences.matchSpeakersAcrossSources) {
-                    Text("Match voices across recordings")
-                    Text(supportsVoiceMatching
-                         ? "Keeps each person’s name when a conversation has more than one recording."
-                         : "Not available with this model.")
+                // What the speaker model can't do isn't offered, rather than shown dimmed with an apology.
+                if supportsVoiceMatching {
+                    LabeledContent {
+                        HStack(spacing: Space.s3) {
+                            if state.processingPreferences.matchSpeakersAcrossSources {
+                                Button("Adjust…") { showingVoiceMatching = true }
+                            }
+                            Toggle("Match voices across recordings", isOn: $state.processingPreferences.matchSpeakersAcrossSources)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.regular)
+                        }
+                    } label: {
+                        Text("Match voices across recordings")
+                        Text("Keeps each person’s name when a conversation has more than one recording.")
+                    }
                 }
-                .controlSize(.regular)
-                .disabled(!supportsVoiceMatching)
                 LabeledContent("Accuracy") {
                     Picker("Accuracy", selection: $state.processingPreferences.speakerOptions.quality) {
                         Text("Fast").tag(SpeakerQuality.fast)
@@ -176,19 +190,13 @@ struct ModelSettings: View {
                     .labelsHidden()
                     .fixedSize()
                 }
-                Picker(selection: speakerCount) {
-                    Text("Automatic").tag(0)
-                    Divider()
-                    ForEach(speakerCounts, id: \.self) { Text("\($0)").tag($0) }
-                } label: {
-                    Text("Number of speakers")
-                    if !supportsSpeakerCount { Text("Not available with this model.") }
+                if supportsSpeakerCount {
+                    Picker("Number of speakers", selection: speakerCount) {
+                        Text("Automatic").tag(0)
+                        Divider()
+                        ForEach(speakerCounts, id: \.self) { Text("\($0)").tag($0) }
+                    }
                 }
-                .disabled(!supportsSpeakerCount)
-                LabeledContent("Voice matching") {
-                    Button("Adjust…") { showingVoiceMatching = true }
-                }
-                .disabled(!supportsVoiceMatching)
             }
             .padding(.leading, Space.s5)
             .disabled(!state.detectSpeakers)
@@ -272,19 +280,22 @@ struct ModelSettings: View {
                     Text(ModelSize.format(storage.oldDownloadBytes)).monospacedDigit()
                 }
             }
-            LabeledContent {
-                HStack(spacing: Space.s2) {
-                    if manager.updateCheck == .checking { ProgressView().controlSize(.small) }
-                    Button("Check for Updates") { Task { await manager.checkForUpdates() } }
-                        .disabled(manager.updateCheck == .checking || state.installedModels.isEmpty)
+            // Nothing downloaded has nothing to update.
+            if !state.installedModels.isEmpty {
+                LabeledContent {
+                    HStack(spacing: Space.s2) {
+                        if manager.updateCheck == .checking { ProgressView().controlSize(.small) }
+                        Button("Check for Updates") { Task { await manager.checkForUpdates() } }
+                            .disabled(manager.updateCheck == .checking)
+                    }
+                } label: {
+                    Text("Updates")
+                    if let line = updateLine(snapshot) {
+                        Text(line).foregroundStyle(isUpdateProblem ? Ink.warning : .secondary)
+                    }
                 }
-            } label: {
-                Text("Updates")
-                if let line = updateLine(snapshot) {
-                    Text(line).foregroundStyle(isUpdateProblem ? Ink.warning : .secondary)
-                }
+                .id(ModelSettingsAnchor.updates)
             }
-            .id(ModelSettingsAnchor.updates)
             ForEach(snapshot.pendingUpdates, id: \.revision.id) { update in
                 ModelUpdateRow(manager: manager, update: update)
                     .padding(.leading, Space.s5)

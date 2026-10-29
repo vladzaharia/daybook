@@ -17,17 +17,21 @@ struct TranscriptionLanguageSettings: View {
             }
         }
         if showsOtherLanguages, let other = otherLanguagesModel {
+            // Laid out like the model rows above: what to do, then the pop-up; its state under the label.
             LabeledContent {
-                HStack {
+                HStack(spacing: Space.s2) {
+                    action(other)
                     Picker("Other languages", selection: otherLanguages) {
                         ForEach(otherChoices) { model in Text(model.name).tag(model.key) }
                     }
                     .labelsHidden()
                     .fixedSize()
-                    status(other)
                 }
             } label: {
                 Text("Other languages")
+                ActivityReader(download: state.downloadActivity) {
+                    if let line = statusLine(other) { Text(line).monospacedDigit() }
+                }
             }
         }
     }
@@ -79,18 +83,23 @@ struct TranscriptionLanguageSettings: View {
                 set: { state.processingPreferences.otherLanguagesModelID = $0.isEmpty ? nil : $0 })
     }
 
-    @ViewBuilder private func status(_ key: String) -> some View {
+    /// Silent when the model is here, as on the model rows.
+    private func statusLine(_ key: String) -> String? {
         if state.downloadingID == key {
-            ActivityReader(download: state.downloadActivity) {
-                ProgressView(value: state.downloadProgress.fraction)
-                    .frame(width: 80)
-                    .accessibilityLabel("Downloading \(catalog.name(for: key))")
-            }
+            return "Downloading · \(Int((min(max(state.downloadProgress.fraction, 0), 1) * 100).rounded(.down)))%"
+        }
+        if state.pendingDownloads.contains(key) { return "Waiting to download" }
+        guard !state.installedModels.contains(key) else { return nil }
+        return "Not downloaded · \(ModelSize.format(catalog.model(key)?.approximateBytes ?? 0))"
+    }
+
+    @ViewBuilder private func action(_ key: String) -> some View {
+        if state.downloadingID == key {
+            Button("Cancel") { state.cancelDownload() }
         } else if state.pendingDownloads.contains(key) {
-            Text("Waiting to download…").foregroundStyle(.secondary)
+            Button("Cancel") { state.removePendingDownload(key) }
         } else if !state.installedModels.contains(key) {
             Button("Download") { state.downloadModels([key]) }
-                .controlSize(.small)
                 .disabled(state.processingID != nil)
         }
     }
