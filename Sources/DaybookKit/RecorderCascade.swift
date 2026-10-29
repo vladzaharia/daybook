@@ -86,7 +86,8 @@ public final class RecorderCascade: ObservableObject {
     /// A recorder joined, started, or stopped (the app sends its recording state).
     public var onChange: (() -> Void)?
 
-    private var starting: [String: Task<Member?, Never>] = [:]
+    /// Starts under way, by session: for which conversation, and the start every ask for it waits on.
+    private var starting: [String: (conversation: UUID, task: Task<Member?, Never>)] = [:]
     /// Conversations ended recently, kept a little so a late start for one is refused rather than
     /// beginning it again (by ID, with when they ended).
     private var ended: [UUID: Date] = [:]
@@ -118,7 +119,8 @@ public final class RecorderCascade: ObservableObject {
 
     /// Begins a shared recording (or carries on with the same one): its recorders are started with
     /// `startRecorders`, or one by one as they're asked for. A conversation that ended here isn't begun
-    /// again (a late or repeated ask never restarts its recorders): false then.
+    /// again (a late or repeated ask never restarts its recorders), nor one while another is under way
+    /// (it's stopped first): false then.
     @discardableResult
     public func begin(_ id: UUID, title: String? = nil, date: Date? = nil, ledHere: Bool = false, now: Date = Date()) -> Bool {
         if conversation?.id == id {
@@ -128,7 +130,7 @@ public final class RecorderCascade: ObservableObject {
             return true
         }
         ended = ended.filter { now.timeIntervalSince($0.value) < Self.endedMemory }
-        guard ended[id] == nil else { return false }
+        guard ended[id] == nil, conversation == nil else { return false }
         conversation = Conversation(id: id, title: title, date: date, ledHere: ledHere)
         status = nil
         return true
@@ -153,15 +155,15 @@ public final class RecorderCascade: ObservableObject {
     public func start(_ session: DeviceSession, for id: UUID, role forced: Role? = nil) async -> Member? {
         if conversation == nil { begin(id) }
         guard conversation?.id == id else { return nil }
-        if let existing = member(session.id), existing.state != .starting {
-            // Asked again for one already recording along (or one that couldn't): the same answer.
-            if case .unavailable = existing.state {} else { return existing }
+        if let existing = member(session.id), existing.state == .recording || existing.state == .stopping {
+            // Asked again for one already recording along: the same answer.
+            return existing
         }
-        if let running = starting[session.id] { return await running.value }
+        if let running = starting[session.id], running.conversation == id { return await running.task.value }
         let task = Task { await self.run(session, for: id, role: forced) }
-        starting[session.id] = task
+        starting[session.id] = (id, task)
         let member = await task.value
-        starting[session.id] = nil
+        if starting[session.id]?.task == task { starting[session.id] = nil }
         return member
     }
 
@@ -247,7 +249,7 @@ public final class RecorderCascade: ObservableObject {
         let id = current.id
         ended[id] = Date()
         conversation = nil
-        for task in starting.values { _ = await task.value }
+        for running in starting.values where running.conversation == id { _ = await running.task.value }
         let all = sessions()
         for member in current.members {
             guard let session = all.first(where: { $0.id == member.sessionID }) else { continue }

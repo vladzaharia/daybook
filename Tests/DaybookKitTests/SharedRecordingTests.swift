@@ -129,6 +129,20 @@ final class SharedRecordingTests: XCTestCase {
         XCTAssertFalse(rig.device.isRecording)
     }
 
+    func testOneSharedRecordingAtATimeAndAStopForAnotherEndsNothing() async throws {
+        let rig = try await rig()
+        let first = UUID(), second = UUID()
+        XCTAssertTrue(rig.cascade.begin(first))
+        XCTAssertFalse(rig.cascade.begin(second), "another isn't begun over it")
+        let none = await rig.cascade.start(rig.session, for: second)
+        XCTAssertNil(none, "nor are recorders started for it")
+        await rig.cascade.stop(second)
+        XCTAssertEqual(rig.cascade.conversation?.id, first, "a stop for another conversation ends nothing")
+        await rig.cascade.stop(first)
+        XCTAssertTrue(rig.cascade.begin(second))
+        XCTAssertFalse(rig.device.received.contains { $0.type == 0x18 && $0.command == 0x82 })
+    }
+
     func testARecorderAlreadyRecordingRecordsAlongAndIsLeftRunning() async throws {
         let rig = try await rig(recording: true)
         let conversation = UUID()

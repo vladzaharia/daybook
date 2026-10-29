@@ -23,9 +23,16 @@ extension PhoneAppModel {
     func beginCascade(_ id: UUID, title: String, date: Date, session: MultipointSession?, trigger: LinkCascade.Trigger,
                       leadRecorder: String?, asksMacs: Bool) {
         let cascade = devices.cascade
-        cascade.begin(id, title: title, date: date, ledHere: session?.isMacLed != true)
+        let ledHere = session?.isMacLed != true
+        let previous = cascade.conversation.flatMap { $0.id == id ? nil : $0.id }
+        if previous == nil { cascade.begin(id, title: title, date: date, ledHere: ledHere) }
         sharedNotes.begin(id, notes: recorder.timedNotes, bookmarks: recorder.highlights)
         Task {
+            // One the last recording left under way (it ended unexpectedly) stops first.
+            if let previous {
+                await cascade.stop(previous)
+                cascade.begin(id, title: title, date: date, ledHere: ledHere)
+            }
             if let leadRecorder, let session = devices.sessions.first(where: { $0.id == leadRecorder }) {
                 _ = await cascade.start(session, for: id, role: .led)
             }
@@ -120,13 +127,16 @@ extension PhoneAppModel {
     /// doesn't let it start the microphone (Daybook in the background), the recorder's audio is saved
     /// here as it records, the Macs are asked to record, and a notification says so.
     func startFromRecorder(_ session: DeviceSession) async {
-        guard !recorder.isActive, recorderOnly == nil else { return }
+        // Its push and a press caught up as the link came back can both arrive: one start.
+        guard !recorder.isActive, recorderOnly == nil, !startingFromRecorder else { return }
+        startingFromRecorder = true
+        defer { startingFromRecorder = false }
         let id = UUID()
         let title = "Conversation at \(Date().formatted(date: .omitted, time: .shortened))"
         do {
             try await startRecording(into: id, title: title, multipoint: nil, trigger: .recorder, leadRecorder: session.id)
         } catch {
-            guard !recorder.isActive else { return }
+            guard !recorder.isActive, recorderOnly == nil else { return }
             await beginRecorderOnly(session, id: id, title: title)
         }
     }
@@ -139,6 +149,7 @@ extension PhoneAppModel {
         recorderOnly = RecorderOnlyRecording(conversationID: id, title: title, startedAt: start, recorderID: session.id,
                                              recorderName: session.device.name)
         multipoint = MultipointSession(conversationID: id, role: .phoneLed)
+        if let stale = devices.cascade.conversation?.id, stale != id { await devices.cascade.stop(stale) }
         devices.cascade.begin(id, title: title, date: start, ledHere: true)
         _ = await devices.cascade.start(session, for: id, role: .led)
         if isInFront {
