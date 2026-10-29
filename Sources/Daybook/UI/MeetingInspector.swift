@@ -98,6 +98,7 @@ struct MeetingInspector: View {
                 SpeakerRow(name: speaker.name, ink: DaybookStyle.speakerInk(index), talkTime: time, share: time / total) { name in
                     state.update(meeting.id) { $0.renameSpeaker(id: speaker.id, name: name) }
                 }
+                SpeakerIdentityLine(state: state, meeting: meeting, speaker: speaker)
             }
         }
     }

@@ -167,6 +167,14 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
     private var _waiting: Set<String> = []
     private var _photosBlocked = false
     private var _readingPhotos = false
+    private var voices: [String: [Float]] = [:]
+    static let voiceSpace = "test-voice-space"
+
+    /// The recording's one speaker gets this voice embedding (in `voiceSpace`).
+    func voice(_ url: URL, _ vector: [Float]) throws {
+        let digest = try AudioDigest.sha256(fileURL: url)
+        lock.withLock { voices[digest] = vector }
+    }
 
     func blockPhotos(_ blocked: Bool) { lock.withLock { _photosBlocked = blocked } }
     var readingPhotos: Bool { lock.withLock { _readingPhotos } }
@@ -201,7 +209,10 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
     }
 
     func diarize(url: URL, model: ModelReference, options: SpeakerAnalysisOptions, progress: @escaping IntelligenceProgressHandler) async throws -> SpeakerAnalysis {
-        SpeakerAnalysis(turns: [SpeakerTurn(speakerID: "A", start: 0, end: 100_000, confidence: 1)], embeddings: [:])
+        let digest = try AudioDigest.sha256(fileURL: url)
+        let turns = [SpeakerTurn(speakerID: "A", start: 0, end: 100_000, confidence: 1)]
+        guard let voice = lock.withLock({ voices[digest] }) else { return SpeakerAnalysis(turns: turns, embeddings: [:]) }
+        return SpeakerAnalysis(turns: turns, embeddings: ["A": voice], embeddingModelID: Self.voiceSpace)
     }
 
     func summarize(transcript: String, notes: String, template: MeetingKind, glossary: [String], model: ModelReference,

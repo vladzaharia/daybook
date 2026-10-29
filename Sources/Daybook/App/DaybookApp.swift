@@ -54,6 +54,7 @@ enum WindowID {
     static let library = "library"
     static let vocabulary = "vocabulary"
     static let templates = "templates"
+    static let speakerProfiles = "speaker-profiles"
     static let welcome = "welcome"
 }
 
@@ -90,6 +91,9 @@ struct DaybookApp: App {
             .windowResizability(.contentMinSize)
         Window("Summary Templates", id: WindowID.templates) { TemplatesView(state: state).defaultAppStorage(LaunchOptions.defaults) }
             .defaultSize(width: 780, height: 560)
+            .windowResizability(.contentMinSize)
+        Window("Speaker Profiles", id: WindowID.speakerProfiles) { SpeakerProfilesView(state: state).defaultAppStorage(LaunchOptions.defaults) }
+            .defaultSize(width: 720, height: 480)
             .windowResizability(.contentMinSize)
 
         Settings { SettingsView(state: state).defaultAppStorage(LaunchOptions.defaults) }
