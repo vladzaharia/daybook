@@ -252,7 +252,8 @@ jobs:
       - name: Fetch the packages at their pinned versions
         if: steps.earlier.outputs.build == ''
         run: scripts/build-ios.sh --resolve
-      # Automatic signing creates the runner's development certificate and profiles through the API
+      # Automatic signing signs the archive with the team's development certificate (the
+      # DEVELOPMENT_P12 secrets; without them it creates one) and makes the profiles through the API
       # key while the archive builds, so the key has to exist while third-party package code compiles
       # (docs/release.md, "Secrets on the runner"). It exists for this step only.
       - name: Archive DaybookPhone with its widget extension
@@ -261,6 +262,8 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          DEVELOPMENT_P12_BASE64: ${{ secrets.DEVELOPMENT_P12_BASE64 }}
+          DEVELOPMENT_P12_PASSWORD: ${{ secrets.DEVELOPMENT_P12_PASSWORD }}
         run: scripts/ci/secrets.sh run -- scripts/build-ios.sh --archive --marketing-version "$VERSION" --build-number "$BUILD"
       - name: Check the archive (export compliance, icon, versions, entitlements)
         if: steps.earlier.outputs.build == ''
@@ -381,15 +384,18 @@ jobs:
       - name: Fetch the packages at their pinned versions
         if: steps.resume.outputs.submission == ''
         run: scripts/build-app.sh --resolve-only
-      # The archive signs for development through the API key (automatic signing), so the key has to
-      # exist while third-party package code compiles (docs/release.md, "Secrets on the runner"). It
-      # exists for this step only; the Developer ID identity isn't on the runner yet.
+      # The archive signs for development through the API key (automatic signing), with the team's
+      # development certificate when the DEVELOPMENT_P12 secrets are set, so the key has to exist while
+      # third-party package code compiles (docs/release.md, "Secrets on the runner"). It exists for
+      # this step only; the Developer ID identity isn't on the runner yet.
       - name: Archive
         if: steps.resume.outputs.submission == ''
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          DEVELOPMENT_P12_BASE64: ${{ secrets.DEVELOPMENT_P12_BASE64 }}
+          DEVELOPMENT_P12_PASSWORD: ${{ secrets.DEVELOPMENT_P12_PASSWORD }}
         run: scripts/ci/secrets.sh run -- scripts/build-app.sh --archive-only --marketing-version "$VERSION" --build-number "$BUILD"
       # The .p12 is optional: without it, -exportArchive signs with Xcode's cloud-managed Developer ID
       # certificate, which the API key's role may not allow (docs/release.md, Signing). With it, the

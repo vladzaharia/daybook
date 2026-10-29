@@ -11,7 +11,10 @@
 #   asc-jwt.sh            fixed header and payload vectors; the signature verified by openssl and, on
 #                         macOS, by CryptoKit (an independent implementation)
 #   asc-testflight.sh     the full request sequence against a local mock of the App Store Connect API
-#   asc-certificates.sh   the dry run and --revoke against the mock (fixture certificates)
+#   asc-certificates.sh   the dry run and --revoke against the mock (fixture certificates), keeping the
+#                         release pipeline's certificate
+#   asc-development-certificate.sh
+#                         making the pipeline's certificate against the mock, storing it with a fake gh
 #   release-notes.sh      annotated and lightweight tags in a throwaway repository
 #   check-ref.sh          tags on and off main, manual runs, in a throwaway clone
 #   github-release.sh     draft, re-run, publish, and refusal to touch a published release (fake gh)
@@ -20,8 +23,8 @@
 #   check-ios-archive.sh  synthetic archives: export compliance, icon, versions (macOS: needs plutil)
 #   setup-github.sh       the dry run prints the plan and never calls gh
 #   select-xcode.sh       version and exact-build checks, SDKs, and the summary, with stand-in tools
-#   secrets.sh            run/setup/cleanup with the API key; on macOS, the .p12 keychain with a
-#                         stand-in security that checks no password reaches a command line
+#   secrets.sh            run/setup/cleanup with the API key; on macOS, the .p12 keychain (Developer ID and
+#                         development) with a stand-in security that checks no password reaches a command line
 #   build-ios.sh          the upload retry, package pinning, and archive calls, with stand-in Xcode tools
 #                         (macOS)
 #   build-app.sh          the xcodebuild calls and export options, with stand-in Xcode tools in a copy of
@@ -216,9 +219,10 @@ expect_fail "find mode rejects a malformed time" find_build --find-build "2001" 
 
 # --- asc-certificates.sh against the mock ----------------------------------------------------------------
 echo "asc-certificates.sh"
+pipeline_certificate=""
 certificates() {
     : > "$log"
-    ASC_API_BASE="http://127.0.0.1:$port" DAYBOOK_NOW=1793000000 \
+    ASC_API_BASE="http://127.0.0.1:$port" DAYBOOK_NOW=1793000000 DAYBOOK_DEVELOPMENT_CERTIFICATE_ID="$pipeline_certificate" \
         DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
         "$ci/../asc-certificates.sh" "$@" > "$work/certificates.out" 2>&1
 }
@@ -235,6 +239,47 @@ expect_eq "revokes only the old ones" "DELETE /v1/certificates/cert-old|DELETE /
 expect_ok "--older-than 200 --revoke" certificates --older-than 200 --revoke
 expect_eq "keeps everything newer" "DELETE /v1/certificates/cert-old-mac" "$(jq -r 'select(.method == "DELETE") | "\(.method) \(.path)"' "$log")"
 expect_fail "a bad age is refused" certificates --older-than soon
+pipeline_certificate=cert-old
+expect_ok "with the release pipeline's certificate" certificates --revoke
+expect_eq "it's kept, however old" "cert-fresh keep|cert-old pipeline)|cert-old-mac revoked" \
+    "$(awk '$1 ~ /^cert-/ {print $1, $NF}' "$work/certificates.out" | paste -sd '|' -)"
+expect_eq "(only the other old one goes)" "DELETE /v1/certificates/cert-old-mac" "$(jq -r 'select(.method == "DELETE") | "\(.method) \(.path)"' "$log")"
+pipeline_certificate=""
+expect_ok "--keep does the same" certificates --keep cert-old-mac --revoke
+expect_eq "(keeping that one)" "DELETE /v1/certificates/cert-old" "$(jq -r 'select(.method == "DELETE") | "\(.method) \(.path)"' "$log")"
+
+# --- asc-development-certificate.sh against the mock, a fake gh, and a stand-in security -----------------
+echo "asc-development-certificate.sh"
+mkdir -p "$work/devcert-bin" "$work/devcert-gh"
+cp "$here/fake_gh.sh" "$work/devcert-bin/gh"
+cp "$here/stub_tool.sh" "$work/devcert-bin/security"
+chmod +x "$work/devcert-bin/gh" "$work/devcert-bin/security"
+# development_certificate IDENTITY [ARGS...]: IDENTITY 1 means the .p12 imports with an Apple Development identity.
+development_certificate() {
+    local identity="$1"; shift
+    : > "$log"
+    rm -rf "$work/devcert-gh/secrets"
+    PATH="$work/devcert-bin:$PATH" GH_STATE="$work/devcert-gh" STUB_LOG="$work/devcert-stub.log" \
+        STUB_DEVELOPMENT_IDENTITY="$identity" ASC_API_BASE="http://127.0.0.1:$port" \
+        DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
+        "$ci/../asc-development-certificate.sh" "$@" > "$work/devcert.out" 2>&1
+}
+: > "$work/devcert-gh/calls"
+expect_ok "makes it and stores it" development_certificate 1
+expect_eq "one Apple Development certificate, from a CSR" "POST DEVELOPMENT -----BEGIN CERTIFICATE REQUEST-----" \
+    "$(jq -r 'select(.method == "POST") | "\(.method) \(.body.data.attributes.certificateType) \(.body.data.attributes.csrContent | split("\n")[0])"' "$log")"
+secrets="$work/devcert-gh/secrets/release"
+expect_ok "both secrets in the release environment" test -s "$secrets/DEVELOPMENT_P12_BASE64" -a -s "$secrets/DEVELOPMENT_P12_PASSWORD"
+base64 -d < "$secrets/DEVELOPMENT_P12_BASE64" > "$work/development.p12"
+expect_ok "the .p12 holds the certificate" sh -c "openssl pkcs12 -in '$work/development.p12' -nokeys -passin 'file:$secrets/DEVELOPMENT_P12_PASSWORD' 2>/dev/null | grep -q 'Apple Development: Created via API'"
+expect_ok "and its key" sh -c "openssl pkcs12 -in '$work/development.p12' -nocerts -nodes -passin 'file:$secrets/DEVELOPMENT_P12_PASSWORD' 2>/dev/null | grep -q 'PRIVATE KEY'"
+expect_eq "the certificate's ID in the repository variable" "cert-new" "$(cat "$work/devcert-gh/variables/DAYBOOK_DEVELOPMENT_CERTIFICATE_ID")"
+expect_eq "no password on any gh command line" "" "$(grep -F "$(cat "$secrets/DEVELOPMENT_P12_PASSWORD")" "$work/devcert-gh/calls" || true)"
+expect_eq "nor on security's" "" "$(grep '^security ' "$work/devcert-stub.log" | grep -F "$(cat "$secrets/DEVELOPMENT_P12_PASSWORD")" || true)"
+expect_eq "and nothing revoked" "" "$(jq -r 'select(.method == "DELETE") | .path' "$log")"
+expect_fail "a .p12 macOS can't use fails" development_certificate 0
+expect_eq "and revokes the new certificate" "DELETE /v1/certificates/cert-new" "$(jq -r 'select(.method == "DELETE") | "\(.method) \(.path)"' "$log")"
+expect_ok "storing nothing" test ! -e "$work/devcert-gh/secrets"
 
 # --- release-notes.sh -----------------------------------------------------------------------------------
 echo "release-notes.sh"
@@ -833,6 +878,32 @@ if macos; then
     expect_fail "a wrong .p12 password fails" env "${p12_env[@]}" STUB_IMPORT_FAILS=1 "$ci/secrets.sh" run -- true
     expect_ok "(nothing left)" test ! -e "$work/runner-temp/daybook-secrets"
     expect_fail "a password with a line break is refused" env "${p12_env[@]}" DEVELOPER_ID_P12_PASSWORD="$(printf 'a\nb')" "$ci/secrets.sh" run -- true
+
+    # The team's one development certificate: archives sign with it instead of creating one.
+    dev_env=("${secrets_env[@]}" DEVELOPMENT_P12_BASE64="$(printf 'not really a p12 either' | base64)"
+             DEVELOPMENT_P12_PASSWORD='dev "pass" \word' STUB_DEVELOPMENT_IDENTITY=1)
+    : > "$work/stub.log"
+    : > "$work/stub.log.args"
+    # shellcheck disable=SC2016 # expanded by the inner shell, inside `run`
+    expect_ok "run with the development .p12: a keychain with the identity" env "${dev_env[@]}" "$ci/secrets.sh" run -- \
+        bash -c 'test -f "$DAYBOOK_SIGNING_KEYCHAIN" && test ! -e "$(dirname "$DAYBOOK_SIGNING_KEYCHAIN")/development.p12"'
+    expect_eq "its password reaches security on stdin, intact" 'dev "pass" \word' \
+        "$(jq -r 'select(.[0] == "import") | . as $a | ($a | index("-P")) as $i | $a[$i + 1]' "$work/stub.log.args")"
+    expect_eq "without the Developer ID intermediate" "" "$(grep 'DeveloperIDG2CA' "$work/stub.log" || true)"
+    expect_ok "but with the one development certificates chain through" grep -q '^curl .*AppleWWDRCAG3.cer' "$work/stub.log"
+    expect_ok "(nothing left)" test ! -e "$work/runner-temp/daybook-secrets"
+    : > "$work/stub.log.args"
+    expect_ok "both .p12s go into one keychain" env "${p12_env[@]}" "${dev_env[@]}" "$ci/secrets.sh" run -- true
+    expect_eq "(one keychain, two imports)" "1 2" \
+        "$(jq -r '.[0]' "$work/stub.log.args" | grep -c '^create-keychain$') $(jq -r '.[0]' "$work/stub.log.args" | grep -c '^import$')"
+    # A development certificate that's wrong falls back to creating one, as before, with a warning in the summary.
+    expect_ok "an expired or revoked development identity only warns" env "${dev_env[@]}" STUB_DEVELOPMENT_IDENTITY=0 "$ci/secrets.sh" run -- true
+    expect_ok "so does a wrong development password" env "${dev_env[@]}" STUB_IMPORT_FAILS=1 "$ci/secrets.sh" run -- true
+    warned="$(env "${dev_env[@]}" GITHUB_ACTIONS=true STUB_IMPORT_FAILS=1 "$ci/secrets.sh" run -- true 2>/dev/null)"
+    expect_ok "(a ::warning:: in the run)" grep -q '^::warning::couldn.t import the development .p12' <<< "$warned"
+    expect_ok "and a missing development password" env "${dev_env[@]}" DEVELOPMENT_P12_PASSWORD= "$ci/secrets.sh" run -- true
+    expect_ok "(nothing left)" test ! -e "$work/runner-temp/daybook-secrets"
+    expect_fail "but a Developer ID .p12 that's wrong still fails" env "${p12_env[@]}" "${dev_env[@]}" STUB_IDENTITY=0 "$ci/secrets.sh" run -- true
 else
     skip "secrets.sh with a .p12 (macOS only)"
 fi

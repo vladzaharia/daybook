@@ -5,6 +5,9 @@
 #                    `assets` (one name per line), `title`, and `prerelease`
 #   gh api .../actions/caches[?ref=&key=] and -X DELETE .../actions/caches/<id>
 #                    over $GH_STATE/caches, one "id<TAB>key<TAB>ref" per line
+#   gh secret set NAME --env ENV   keeps its standard input as $GH_STATE/secrets/ENV/NAME
+#   gh variable get|set NAME [--body VALUE]   over $GH_STATE/variables/NAME
+#   gh repo view     example/daybook
 set -euo pipefail
 dir="${GH_STATE:?}"
 printf '%s\n' "$*" >> "$dir/calls"
@@ -42,6 +45,28 @@ if [[ "${1-}" == api ]]; then
     esac
     exit 0
 fi
+
+case "${1-} ${2-}" in
+    "secret set")
+        name="$3" env=""
+        shift 3
+        while [[ $# -gt 0 ]]; do [[ "$1" == --env ]] && { env="$2"; shift; }; shift; done
+        mkdir -p "$dir/secrets/$env"
+        cat > "$dir/secrets/$env/$name"
+        exit 0 ;;
+    "variable get")
+        [[ -f "$dir/variables/$3" ]] || { echo "variable $3 was not found" >&2; exit 1; }
+        cat "$dir/variables/$3"
+        exit 0 ;;
+    "variable set")
+        name="$3" body=""
+        shift 3
+        while [[ $# -gt 0 ]]; do [[ "$1" == --body ]] && { body="$2"; shift; }; shift; done
+        mkdir -p "$dir/variables"
+        printf '%s\n' "$body" > "$dir/variables/$name"
+        exit 0 ;;
+    "repo view") echo example/daybook; exit 0 ;;
+esac
 
 state="$(cat "$dir/state")"
 [[ "${1-} ${2-}" == "release "* ]] || { echo "fake gh: unsupported: $*" >&2; exit 2; }

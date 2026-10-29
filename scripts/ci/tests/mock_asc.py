@@ -2,13 +2,16 @@
 
     python3 -I mock_asc.py <request-log.jsonl> <port-file>
 
-Serves the requests asc-testflight.sh and asc-certificates.sh make, records each one (method, path, query, body, and the
+Serves the requests asc-testflight.sh, asc-certificates.sh, and asc-development-certificate.sh make, records each one (method, path, query, body, and the
 JWT's header and payload) as a JSON line, and reports processing as "not listed", then PROCESSING,
 then VALID, so the script's polling is exercised. Never talks to Apple.
 """
 import base64
 import json
+import os
+import subprocess
 import sys
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -41,6 +44,23 @@ CERTIFICATES = [
     [("cert-old-mac", "MAC_APP_DEVELOPMENT", "Mac Development: Created via API", "Created via API", expires_in(100)),
      ("cert-dist", "DISTRIBUTION", "Apple Distribution: Created via API", "Created via API", expires_in(5))],
 ]
+
+
+def issue_certificate(csr_pem):
+    """An "Apple Development" certificate for the CSR's key, signed by a throwaway CA, as DER in base64."""
+    with tempfile.TemporaryDirectory() as tmp:
+        def run(*args):
+            subprocess.run(["openssl", *args], check=True, capture_output=True, cwd=tmp)
+        with open(os.path.join(tmp, "request.csr"), "w") as f:
+            f.write(csr_pem)
+        run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
+            "-subj", "/CN=Mock Apple WWDR")
+        run("x509", "-req", "-in", "request.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-set_serial", "4242",
+            "-days", "365", "-out", "certificate.pem",
+            "-subj", "/UID=ABCDE12345/CN=Apple Development: Created via API (ABCDE12345)/OU=48H7CLBV8Y/O=Example/C=US")
+        run("x509", "-in", "certificate.pem", "-outform", "DER", "-out", "certificate.cer")
+        with open(os.path.join(tmp, "certificate.cer"), "rb") as f:
+            return base64.b64encode(f.read()).decode()
 
 
 def decode_segment(segment):
@@ -129,6 +149,15 @@ class Handler(BaseHTTPRequestHandler):
                                          "title": "Builds cannot be assigned to this internal group."}]})
         elif path == "/v1/betaAppReviewSubmissions":
             self.reply(201, {"data": {"type": "betaAppReviewSubmissions", "id": "review-1"}})
+        elif path == "/v1/certificates":
+            attributes = entry["body"]["data"]["attributes"]
+            if attributes.get("certificateType") != "DEVELOPMENT":
+                self.reply(409, {"errors": [{"status": "409", "code": "ENTITY_ERROR", "title": "wrong type"}]})
+                return
+            self.reply(201, {"data": {"type": "certificates", "id": "cert-new", "attributes": {
+                "certificateType": "DEVELOPMENT", "name": "Apple Development: Created via API",
+                "displayName": "Created via API", "serialNumber": "1092", "expirationDate": expires_in(365),
+                "certificateContent": issue_certificate(attributes["csrContent"])}}})
         else:
             self.reply(404, {"errors": [{"status": "404", "code": "NOT_FOUND", "title": "not mocked"}]})
 

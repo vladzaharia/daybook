@@ -12,6 +12,7 @@
 #   STUB_PLIST_VERSION, STUB_PLIST_BUILD
 #                              CFBundleShortVersionString and CFBundleVersion of the apps it makes
 #   STUB_IDENTITY=1            security find-identity lists a Developer ID Application identity
+#   STUB_DEVELOPMENT_IDENTITY=1  ... and an Apple Development one
 #   STUB_XCODE_VERSION, STUB_XCODE_BUILD
 #                              what `xcodebuild -version` reports (default Xcode 27.1, 27A9275)
 #   STUB_IMPORT_FAILS=1        `security import` fails the way security -i reports it
@@ -167,6 +168,9 @@ case "$tool" in
             find-identity)
                 if [[ "${STUB_IDENTITY:-0}" == 1 ]]; then
                     echo '  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Example (48H7CLBV8Y)"'
+                fi
+                if [[ "${STUB_DEVELOPMENT_IDENTITY:-0}" == 1 ]]; then
+                    echo '  2) 89ABCDEF0123456789ABCDEF0123456789ABCDEF "Apple Development: Created via API (ABCDE12345)"'
                 fi
                 echo "     1 valid identities found"
                 ;;

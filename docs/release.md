@@ -106,18 +106,31 @@ That's the one exception to "nothing but the owner's first-time provisioning pas
 
 ### Development certificates
 
-Each release run's archives add an *Apple Development: Created via API* certificate to the team. `scripts/asc-certificates.sh` lists them and revokes old ones; it's for the owner, with the Admin key:
+Automatic signing signs each archive with an Apple Development identity before the export re-signs it for distribution. A fresh runner has none, so without one Xcode creates an *Apple Development: Created via API* certificate on every archive, two per release run, and the team's limit (10) is reached within a few releases: archives then fail with "Your account has reached the maximum number of certificates" (it happened on v0.4.1's first attempt).
+
+So the pipeline keeps **one** development certificate for every run. `scripts/asc-development-certificate.sh` makes it, for the owner, with the Admin key:
 
 ```sh
 export DAYBOOK_ASC_KEY_PATH=~/keys/AuthKey_ABC123DEFG.p8 DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID=<issuer uuid>
+scripts/asc-development-certificate.sh          # --repo OWNER/NAME --environment release are the defaults
+```
+
+- It makes a key and a signing request in a private temporary directory, asks App Store Connect for the certificate, packs both as a `.p12` with a random password, and checks that macOS imports it with an Apple Development identity. It then stores the `.p12` and its password as the `release` secrets `DEVELOPMENT_P12_BASE64` and `DEVELOPMENT_P12_PASSWORD` (through `gh`'s standard input) and the certificate's ID as the repository variable `DAYBOOK_DEVELOPMENT_CERTIFICATE_ID`. Nothing stays on disk. If a step after making the certificate fails, it revokes it again.
+- The two archive steps pass the secrets to `secrets.sh`, which imports the `.p12` (and Apple's WWDR G3 intermediate, by digest) into the step's temporary keychain. Automatic signing finds a valid development identity and creates no certificate.
+- It's optional and never blocks a release: without the secrets, or with a `.p12` that's wrong, expired, or revoked, the step warns in the run's summary and the archive creates a certificate as before.
+- The certificate lasts a year. Run the script again before it expires; the new one replaces the secrets and the variable, and the old one can then be revoked.
+- A development certificate can't sign anything people install from TestFlight or the GitHub Release: those are re-signed for distribution at export.
+
+`scripts/asc-certificates.sh` lists the *Created via API* development certificates and revokes old ones, never the pipeline's (`DAYBOOK_DEVELOPMENT_CERTIFICATE_ID`, read through `gh`, or `--keep ID`):
+
+```sh
 scripts/asc-certificates.sh                      # dry run: lists them, with their age; changes nothing
 scripts/asc-certificates.sh --revoke             # revokes the ones older than 30 days (--older-than N)
 ```
 
 - It considers only development certificates (Apple, iOS, or Mac Development) named "Created via API". Distribution and Developer ID certificates, and people's own development certificates, are never touched.
 - Age comes from the expiration date (development certificates last a year). The 30-day default keeps the certificate of any release run that might still be going.
-- When: every few months, after a run of releases, or when Certificates, Identifiers & Profiles lists more than a handful, or Xcode reports that the team has reached its certificate limit. Run the dry run first and read the list.
-- Nothing shipped depends on these certificates: TestFlight and Developer ID builds are re-signed for distribution at export.
+- When: after setting up the pipeline's certificate (`--older-than 0 --revoke` clears the ones runs made before it), after renewing it, or when Xcode reports that the team has reached its certificate limit. Run the dry run first and read the list.
 
 ### Capabilities and entitlements
 
@@ -205,6 +218,8 @@ Environment **`release`** secrets:
 | `ASC_KEY_P8_BASE64` | `base64` of `AuthKey_<KeyID>.p8` (downloadable once, when the key is created) |
 | `DEVELOPER_ID_P12_BASE64` | optional: `base64` of the Developer ID Application `.p12` |
 | `DEVELOPER_ID_P12_PASSWORD` | optional: the `.p12` password |
+| `DEVELOPMENT_P12_BASE64` | optional: `base64` of the pipeline's Apple Development `.p12` ([Development certificates](#development-certificates)) |
+| `DEVELOPMENT_P12_PASSWORD` | optional: its password |
 
 Repository **variables**:
 
@@ -214,6 +229,7 @@ Repository **variables**:
 | `DAYBOOK_BUILD_NUMBER_OFFSET` | `1000` (added to the run number; see [Versions](#versions)) |
 | `DAYBOOK_TESTFLIGHT_GROUP` | optional: the beta group each build joins, e.g. `Daybook team` |
 | `DAYBOOK_RELEASE_XCODE_BUILD` | optional: the exact Xcode build releases must use; unset means `27A9275` (see [Runner and Xcode](#runner-and-xcode)) |
+| `DAYBOOK_DEVELOPMENT_CERTIFICATE_ID` | the pipeline's development certificate, which `asc-certificates.sh` never revokes; set by `asc-development-certificate.sh` |
 
 The `release` environment has required reviewers (the owner) and deployment policies for branch `main` and tags `v*`.
 
@@ -269,6 +285,8 @@ In order, by the owner or their delegate:
    d. **Check the first release.**
       - Mac: `codesign -d --entitlements - --xml /Applications/Daybook.app | plutil -p -` lists `CloudKit` under `com.apple.developer.icloud-services`, `com.apple.developer.aps-environment` as `production`, and `com.apple.developer.icloud-container-environment` as `Production`.
       - Both: record on the iPhone with the Mac open. In CloudKit Console › **Production** › **Records** (Private Database, signed in with **Act as iCloud Account** as the test account), zone `Courier`, a `CourierFile` record appears when the recording is filed and is gone once the Mac has stored it.
+
+8. **The pipeline's development certificate** (pending). With the Admin key's variables set ([Development certificates](#development-certificates)), run `scripts/asc-development-certificate.sh`, then `scripts/asc-certificates.sh --older-than 0` and, after reading the list, `--revoke` for the certificates earlier runs made. Release runs then sign their archives with this one. Again each year, before it expires.
 
 ## Dependency updates
 
@@ -413,7 +431,8 @@ The Mac job attests every file in `SHA256SUMS.txt` with `actions/attest-build-pr
 | `no beta group named …` | The message lists the app's groups. Fix `DAYBOOK_TESTFLIGHT_GROUP` or the `testflight_group` input. |
 | Beta App Review submission fails | An external group needs the app's Test Information filled in once in TestFlight. |
 | Build not processed within the timeout | App Store Connect is slow. The build usually finishes later; set What to Test and the group in App Store Connect. |
-| The account fills with "Apple Development: Created via API" certificates | Each fresh runner's archive creates one. Run `scripts/asc-certificates.sh`, then `--revoke` ([Development certificates](#development-certificates)); nothing shipped depends on them. |
+| An archive fails: "Your account has reached the maximum number of certificates" | Archives have been creating development certificates: the pipeline's isn't set up, or has expired. Run `scripts/asc-certificates.sh --older-than 0`, then `--revoke`, and set up the pipeline's certificate with `scripts/asc-development-certificate.sh` ([Development certificates](#development-certificates)). Then re-run the failed jobs. |
+| `secrets.sh` warns: "the development .p12 has no valid Apple Development identity" | The pipeline's certificate expired or was revoked. The release goes on, creating a certificate; run `scripts/asc-development-certificate.sh` for a new one. |
 | `build-app.sh` or `build-ios.sh`: "The App Store Connect API key is for the release pipeline only" | The `DAYBOOK_ASC_*` variables are set outside `release.yml` on GitHub Actions. Unset them; build with your Xcode account and existing profiles. |
 | The tag was pushed and nothing ran | Check Actions › Release: the run is waiting for approval in `release`. A tag that isn't `vX.Y.Z[-suffix]` fails in `prepare`. |
 | `prepare`: "v1.4.0 points at …, which isn't on main" | The tag is on a commit that isn't merged. Delete the tag (an admin, with the ruleset), merge, and tag the merged commit. |

@@ -6,11 +6,14 @@
 #
 #   scripts/asc-certificates.sh [--older-than 30]             dry run: list them, change nothing
 #   scripts/asc-certificates.sh [--older-than 30] --revoke    revoke the ones older than that
+#   [--keep ID]                                               never revoke this one (repeatable)
 #
 # Only development certificates (DEVELOPMENT, IOS_DEVELOPMENT, MAC_APP_DEVELOPMENT) named "Created via
 # API" are considered; distribution and Developer ID certificates never are. A certificate's age is
 # worked out from its expiration date: Apple Development certificates are valid for one year. The
-# default of 30 days keeps any a release run may still be using.
+# default of 30 days keeps any a release run may still be using. The release pipeline's own certificate
+# (scripts/asc-development-certificate.sh) is never revoked: its ID comes from --keep, or
+# DAYBOOK_DEVELOPMENT_CERTIFICATE_ID, or else the repository variable of that name through gh.
 #
 # Environment: DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, DAYBOOK_ASC_ISSUER_ID (an Admin team key), and
 # for tests ASC_API_BASE (default https://api.appstoreconnect.apple.com) and DAYBOOK_NOW (Unix time).
@@ -20,6 +23,7 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 api="${ASC_API_BASE:-https://api.appstoreconnect.apple.com}"
 older_than=30
 revoke=0
+keep=()
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 fail() { echo "asc-certificates.sh: $*" >&2; exit 1; }
@@ -28,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --older-than) older_than="${2-}"; shift ;;
         --revoke) revoke=1 ;;
+        --keep) keep+=("${2-}"); shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; echo "asc-certificates.sh: unknown option: $1" >&2; exit 2 ;;
     esac
@@ -37,6 +42,16 @@ done
 : "${DAYBOOK_ASC_KEY_PATH:?set DAYBOOK_ASC_KEY_PATH}" "${DAYBOOK_ASC_KEY_ID:?set DAYBOOK_ASC_KEY_ID}" "${DAYBOOK_ASC_ISSUER_ID:?set DAYBOOK_ASC_ISSUER_ID}"
 command -v jq >/dev/null || fail "jq is required"
 now="${DAYBOOK_NOW:-$(date +%s)}"
+# The release pipeline's certificate. An empty DAYBOOK_DEVELOPMENT_CERTIFICATE_ID means there's none, and gh isn't asked.
+if [[ -n "${DAYBOOK_DEVELOPMENT_CERTIFICATE_ID+set}" ]]; then
+    [[ -n "$DAYBOOK_DEVELOPMENT_CERTIFICATE_ID" ]] && keep+=("$DAYBOOK_DEVELOPMENT_CERTIFICATE_ID")
+elif command -v gh >/dev/null && pipeline_id="$(gh variable get DAYBOOK_DEVELOPMENT_CERTIFICATE_ID 2>/dev/null)" \
+    && [[ -n "$pipeline_id" ]]; then
+    keep+=("$pipeline_id")
+elif (( revoke )); then
+    echo "asc-certificates.sh: no release pipeline certificate found (DAYBOOK_DEVELOPMENT_CERTIFICATE_ID); pass --keep ID if there is one" >&2
+fi
+kept() { local id; for id in ${keep[@]+"${keep[@]}"}; do [[ "$id" == "$1" ]] && return 0; done; return 1; }
 
 work="$(mktemp -d)"
 trap '/bin/rm -rf "${work:?}"' EXIT
@@ -86,7 +101,9 @@ printf '%-12s %-20s %-18s %-26s %5s  %s\n' ID TYPE SERIAL EXPIRES AGE ACTION
 while IFS=$'\t' read -r id type serial expires age; do
     [[ -n "$id" ]] || continue
     action="keep"
-    if (( age > older_than )); then
+    if kept "$id"; then
+        action="keep (release pipeline)"
+    elif (( age > older_than )); then
         old=$(( old + 1 ))
         action="revoke"
         if (( revoke )); then
