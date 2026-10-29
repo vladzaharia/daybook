@@ -86,7 +86,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
   - **Library** is the library's location, iCloud Sync, and the privacy statement. iCloud Sync is one row saying where sync stands with its one action ("Up to date · 11:42 AM", Sync Now); a problem follows it once, in place (`ProblemLine`); then encryption and this Mac's preference. Turn Off Sync… and Erase Deleted Conversations from iCloud… sit under the group.
   - A problem anywhere in Settings or its sheets is a `ProblemLine`: the warning glyph, one sentence in the label colour, Details…, and its actions, which move under a long sentence.
   - The About Daybook panel's credits carry the same acknowledgements.
-- **Vocabulary**, **Summary Templates**, and **Speaker Profiles** are separate single windows. Speaker Profiles lists each profile with its voiceprints (where each came from: Named, Confirmed, or Learned, with the conversation and date; each removable), Forget Learned Voiceprints, the conversations it labels, rename, and delete.
+- **Vocabulary**, **Summary Templates**, and **Speaker Profiles** are separate single windows. Speaker Profiles lists each profile with its voiceprints (where each came from: Named, Confirmed, or Learned, with the conversation and date; each removable), Forget Learned Voiceprints, the conversations it labels, rename, Merge Into (in the profile's menu and beside Delete Profile, confirmed first: "Merge Vladimir into Vlad?"), and delete. A rename to another profile's name stays typed, with "Another profile is called Vlad." and Merge Into Vlad beside it.
 - **Welcome** is a three-step first-run window.
 
 ## Design tokens
@@ -206,6 +206,11 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --library-demo                      fills the library with conversations in every list, page, and inspector
                                       state; see LibraryDemo.swift. With it: --inspector-all (every inspector
                                       section open), --multi-select "<title>|<title>", --notice "<text>"
+  --speaker-demo                      with --library-demo, speakers named, recognized, and suggested, and a second
+                                      profile of one person; see SpeakerProfileDemo.swift (the iPhone's --demo-library takes it too)
+  --speaker-profile <name> [--profile-name <name>] [--merge-into <name> [--confirm-merge]]
+                                      with --open-window speaker-profiles: a profile selected, a name typed into it,
+                                      a merge asked for (or made)
   --window-size <W>x<H>               the main window's size, such as 900x700
   --model-demo <step,…>               Settings › Models states without the network; see models.md
   --sync-demo <state>                 Settings › Library › iCloud Sync in a state, without iCloud; see SyncSettingsDemo
