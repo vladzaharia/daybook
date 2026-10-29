@@ -438,6 +438,7 @@ private struct DebugLaunchActions: ViewModifier {
                 return "\(status): \(state.processingProgress.message)"
             }
             PerfProbe.driveProgress(state.processingActivity)
+            PerfProbe.driveTouches(state)
             // `DAYBOOK_IMPORT_AUDIO=<file>` imports a recording into a new conversation, which then processes. (A path
             // among the arguments would be opened as a document, and the window wouldn't open.)
             if LaunchOptions.libraryURL != nil, let path = ProcessInfo.processInfo.environment["DAYBOOK_IMPORT_AUDIO"] {
