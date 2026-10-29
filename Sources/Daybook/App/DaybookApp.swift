@@ -67,7 +67,10 @@ enum WindowID {
 
 struct DaybookApp: App {
     @NSApplicationDelegateAdaptor(DaybookDelegate.self) private var delegate
-    @StateObject private var state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults)
+    /// The app's state, held and not observed: every view, the menus, and the menu bar item observe what
+    /// they show. Observed here, each change of the library rebuilt every scene and drew the library window twice.
+    @StateObject private var holder = AppStateHolder()
+    private var state: AppState { holder.state }
     @AppStorage("showsMenuBarExtra", store: LaunchOptions.defaults) private var showsMenuBarExtra = true
     @AppStorage("onboardingCompleted", store: LaunchOptions.defaults) private var onboardingCompleted = false
 
@@ -108,17 +111,38 @@ struct DaybookApp: App {
         Settings { SettingsView(state: state).defaultAppStorage(LaunchOptions.defaults) }
             .windowResizability(.contentSize)
 
-        MenuBarExtra(isInserted: $showsMenuBarExtra) {
+        MenuBarExtra(isInserted: menuBarExtraInserted) {
             MenuBarView(state: state).defaultAppStorage(LaunchOptions.defaults)
         } label: {
-            // A symbol only: a ticking text label makes the status item re-layout every second.
-            // The menu's first line shows the elapsed time.
-            Image(systemName: state.isRecording ? "record.circle.fill" : "waveform")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(state.isRecording ? Color.red : Color.primary)
-                .accessibilityLabel(state.isRecording ? "Daybook, recording" : "Daybook")
+            MenuBarLabel(state: state)
         }
         .menuBarExtraStyle(.menu)
+    }
+
+    /// SwiftUI writes the menu bar item's visibility back whenever the app's state changes. An unchanged
+    /// value isn't stored: storing it announces a change of settings, which redraws every view that keeps one
+    /// (the library window among them).
+    private var menuBarExtraInserted: Binding<Bool> {
+        Binding(get: { showsMenuBarExtra }, set: { if $0 != showsMenuBarExtra { showsMenuBarExtra = $0 } })
+    }
+}
+
+/// Makes the app's state when the app first draws its scenes. It never announces a change itself, so the
+/// state's changes don't rebuild the scenes.
+@MainActor
+private final class AppStateHolder: ObservableObject {
+    let state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults)
+}
+
+/// The menu bar item: a symbol only, since a ticking text label makes the status item re-layout every
+/// second. The menu's first line shows the elapsed time.
+private struct MenuBarLabel: View {
+    @ObservedObject var state: AppState
+    var body: some View {
+        Image(systemName: state.isRecording ? "record.circle.fill" : "waveform")
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(state.isRecording ? Color.red : Color.primary)
+            .accessibilityLabel(state.isRecording ? "Daybook, recording" : "Daybook")
     }
 }
 
