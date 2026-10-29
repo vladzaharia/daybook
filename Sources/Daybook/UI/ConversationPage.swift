@@ -324,7 +324,8 @@ struct ConversationStatus: View {
             case .awaitingRecordings(let recordings):
                 line(symbol: "clock") { Text(ProcessingStatus.awaitingDetail(recordings)) }
                 info
-            case .done:
+            case .transcribed, .done:
+                // A transcript without a summary offers Summarize in the colophon, with its template.
                 info
             }
         }

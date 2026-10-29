@@ -195,7 +195,7 @@ struct RowStatus {
         case .failed: kind = .failed; text = "Couldn’t finish"
         case .recorded: kind = .notTranscribed; text = "Not transcribed yet"
         case .awaitingRecordings(let recordings): kind = .waiting; text = ProcessingStatus.awaitingLine(recordings)
-        case .done: kind = nil; text = nil
+        case .transcribed, .done: kind = nil; text = nil
         }
     }
 }

@@ -15,6 +15,9 @@ public enum ProcessingStatus: Equatable, Sendable {
     case requested(Waiting)
     /// Being processed, on this device or another one.
     case processing(Progress)
+    /// Transcribed, with no summary, and nothing has asked for one (a summary stopped partway, say):
+    /// the transcript reads, and Summarize asks for the rest.
+    case transcribed
     /// Nothing waits: transcripts and summary are in, or there's no audio to process.
     case done
     /// This Mac's audio is transcribed and summarized, and a recording made alongside it on another
@@ -90,7 +93,7 @@ public enum ProcessingStatus: Equatable, Sendable {
 
     /// Derives a conversation's status. Precedence: this device's queue (running, waiting, waiting
     /// for models, paused), then synced requests (claimed, then waiting), then a failure, then
-    /// whether audio still needs transcribing.
+    /// whether audio still needs transcribing, then whether a transcript still needs its summary.
     public init(_ meeting: Meeting, queue: LocalQueue? = nil, now: Date = Date()) {
         if let queue {
             if queue.running == meeting.id {
@@ -136,6 +139,7 @@ public enum ProcessingStatus: Equatable, Sendable {
             return
         }
         if meeting.hasUntranscribedTranscribableAudio { self = .recorded; return }
+        if meeting.summary == nil, !meeting.unifiedTranscript.isEmpty { self = .transcribed; return }
         let awaited = meeting.awaitedRecordings(now: now)
         self = awaited.isEmpty ? .done : .awaitingRecordings(awaited)
     }

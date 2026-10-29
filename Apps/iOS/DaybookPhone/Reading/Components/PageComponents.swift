@@ -199,7 +199,7 @@ struct StatusView: View {
         case .request(let mode):
             if presentation.kind == .line {
                 // On a calm line, the action is a link, as quiet as the line.
-                Button(mode == .newAudio ? "Transcribe" : "Try Again") { perform(action) }
+                Button(mode == .newAudio ? "Transcribe" : mode == .summaryOnly ? "Summarize" : "Try Again") { perform(action) }
                     .buttonStyle(.daybookLink).font(.subheadline.weight(.semibold))
             } else {
                 Button("Try Again") { perform(action) }
