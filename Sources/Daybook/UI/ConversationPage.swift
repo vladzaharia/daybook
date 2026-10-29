@@ -273,10 +273,8 @@ struct ConversationStatus: View {
                     if meeting.status == .transcribing && progress.stage != .identifyingSpeakers {
                         Text(state.sourceActivity(meeting.id) ?? "Transcribing")
                         ProgressView(value: state.processingProgress.fraction).progressViewStyle(.brand(width: 140))
-                        Text("\(Int(state.processingProgress.fraction * 100))%")
-                            .monospacedDigit()
-                            .contentTransition(.numericText(value: state.processingProgress.fraction))
-                            .motion(Motion.state, value: Int(state.processingProgress.fraction * 100))
+                        // Not animated: a new percent every moment would keep the window drawing frames.
+                        Text("\(Int(state.processingProgress.fraction * 100))%").monospacedDigit()
                     } else {
                         ProgressView().controlSize(.small)
                         Text(stageText(progress.stage))

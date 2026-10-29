@@ -272,6 +272,8 @@ struct GradientProgressStyle: ProgressViewStyle {
     }
 }
 
+/// It steps without animating: progress arrives up to ten times a second, and easing every step kept the
+/// window drawing frames for as long as a job ran.
 private struct GradientProgressBar: View {
     let fraction: Double
     let width: CGFloat?
@@ -285,7 +287,6 @@ private struct GradientProgressBar: View {
                         .fill(DaybookStyle.brandGradient)
                         .frame(width: max(height, proxy.size.width * min(1, max(0, fraction))))
                         .neonGlow(DaybookStyle.neonCyan, radius: 3)
-                        .animation(.easeOut(duration: 0.3), value: fraction)
                 }
             }
             .frame(width: width, height: height)
