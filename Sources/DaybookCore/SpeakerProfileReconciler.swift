@@ -75,7 +75,27 @@ public enum SpeakerProfileReconciler {
         var current: [UUID: [String: (name: String, identity: SpeakerIdentity?)]] = [:]
         for meeting in ordered {
             voices[meeting.id] = MeetingVoices(meeting)
-            current[meeting.id] = Dictionary(meeting.speakers.map { ($0.id, ($0.name, meeting.speakerIdentity($0.id))) }, uniquingKeysWith: { a, _ in a })
+            // An identity with a profile merged into another moves to that one.
+            current[meeting.id] = Dictionary(meeting.speakers.map { ($0.id, ($0.name, meeting.speakerIdentity($0.id).map(work.following))) },
+                                             uniquingKeysWith: { a, _ in a })
+        }
+        /// The voices other speakers of a conversation still give `profile` by the person's choice
+        /// (named or confirmed): one recording's voice can stand for two speakers (the microphone's
+        /// owner and its own speaker), and taking it from one mustn't take it from the other.
+        func claimed(_ profile: UUID, in meetingID: UUID, besides speakerID: String) -> Set<String> {
+            guard let voice = voices[meetingID] else { return [] }
+            var result = Set<String>()
+            for (other, entry) in current[meetingID] ?? [:] where other != speakerID {
+                guard let identity = entry.identity, identity.$source.isKnown, identity.source.isPersonChosen,
+                      identity.profileID == profile else { continue }
+                result.formUnion(voice.sources(of: other, voice.prints(of: other)))
+            }
+            return result
+        }
+        func forget(_ speakerID: String, in meeting: Meeting, profile: UUID) {
+            let voice = voices[meeting.id]!
+            let sources = voice.sources(of: speakerID, voice.prints(of: speakerID))
+            work.removeVoiceprints(meeting: meeting.id, speakers: sources.subtracting(claimed(profile, in: meeting.id, besides: speakerID)), profile: profile)
         }
 
         // 1. Names the person gave.
@@ -93,7 +113,7 @@ public enum SpeakerProfileReconciler {
                     let target = SpeakerProfile.isPlaceholder(latest.newValue) ? nil
                         : hasVoice ? work.profileID(named: latest.newValue) : work.existingProfileID(named: latest.newValue)
                     if let old = entry.identity, let profile = old.profileID, profile != target {
-                        work.removeVoiceprints(meeting: meeting.id, speakers: voice.sources(of: speaker.id, prints), profile: profile)
+                        forget(speaker.id, in: meeting, profile: profile)
                         // Daybook's label or suggestion was wrong: never offered for this speaker again.
                         if old.source == .recognized || old.source == .suggested { rejected.append(profile) }
                     }
@@ -111,7 +131,7 @@ public enum SpeakerProfileReconciler {
                 }
                 // A profile the person said this speaker isn't (on any device) forgets what it learned from it.
                 for rejected in entry.identity?.rejectedProfileIDs ?? [] {
-                    work.removeVoiceprints(meeting: meeting.id, speakers: voice.sources(of: speaker.id, prints), profile: rejected)
+                    forget(speaker.id, in: meeting, profile: rejected)
                 }
                 // A name that joined no profile (no voice yet) joins one made since from another conversation.
                 if var identity = entry.identity, identity.source == .named, identity.profileID == nil, !SpeakerProfile.isPlaceholder(entry.name),
@@ -144,7 +164,7 @@ public enum SpeakerProfileReconciler {
                     if background.contains(speaker.id) {
                         // Left out after it was labelled (the person changed their mind): what it taught goes too.
                         if entry.identity?.source == .recognized, let profile = entry.identity?.profileID {
-                            work.removeVoiceprints(meeting: meeting.id, speakers: voice.sources(of: speaker.id, voice.prints(of: speaker.id)), profile: profile)
+                            forget(speaker.id, in: meeting, profile: profile)
                         }
                         decisions[speaker.id] = Decision(ranked: [], best: nil, print: nil, outcome: .unknown)
                         continue
@@ -325,27 +345,57 @@ extension SpeakerProfileReconciler {
         let original: SpeakerProfileState
         let learning: SpeakerProfileLearning
         let now: Date
+        /// Which profile each profile ID stands for (merges followed).
+        private(set) var merges: SpeakerProfileMerges
         private var changedProfileIDs = Set<String>(), changedVoiceprintIDs = Set<String>()
 
         init(state: SpeakerProfileState, learning: SpeakerProfileLearning, now: Date) {
             profiles = Dictionary(state.profiles.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.modifiedAt >= b.modifiedAt ? a : b })
             voiceprints = Dictionary(state.voiceprints.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.modifiedAt >= b.modifiedAt ? a : b })
+            merges = SpeakerProfileMerges(Array(profiles.values))
             original = state; self.learning = learning; self.now = now
         }
 
-        var activeProfiles: [SpeakerProfile] { profiles.values.compactMap(\.value).sorted { $0.id.uuidString < $1.id.uuidString } }
+        /// Profiles of their own: not deleted, not merged into another.
+        var activeProfiles: [SpeakerProfile] {
+            profiles.values.compactMap(\.value).filter { merges.isActive($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString }
+        }
         var activeProfilesByID: [UUID: SpeakerProfile] { Dictionary(activeProfiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) }
-        var activeVoiceprints: [Voiceprint] { voiceprints.values.compactMap(\.value).sorted { $0.id < $1.id } }
+        /// Each under the profile it stands for now (in memory only: records are written by ID).
+        var activeVoiceprints: [Voiceprint] {
+            voiceprints.values.compactMap(\.value).map { print in
+                var print = print
+                if let target = merges.resolve(print.profileID) { print.profileID = target }
+                return print
+            }.sorted { $0.id < $1.id }
+        }
         var changedProfiles: [LibraryValue<SpeakerProfile>] { changedProfileIDs.sorted().compactMap { profiles[$0] } }
         var changedVoiceprints: [LibraryValue<Voiceprint>] { changedVoiceprintIDs.sorted().compactMap { voiceprints[$0] } }
 
-        /// The active profile with this name, else a new one (`SpeakerProfile.id(forName:)`); a profile
+        /// An identity whose profiles were merged into others, moved to those.
+        func following(_ identity: SpeakerIdentity) -> SpeakerIdentity {
+            guard identity.$source.isKnown else { return identity }
+            var result = identity
+            if let profile = identity.profileID, let target = merges.resolve(profile) { result.profileID = target }
+            guard let rejected = identity.rejectedProfileIDs,
+                  result.profileID != identity.profileID || rejected.contains(where: { id in merges.resolve(id).map { $0 != id } ?? false }) else { return result }
+            var moved = Set(rejected.map { merges.resolve($0) ?? $0 })
+            // The person's own name for the speaker beats a profile they once said it wasn't.
+            if result.source.isPersonChosen, let own = result.profileID { moved.remove(own) }
+            result.rejectedProfileIDs = moved.isEmpty ? nil : moved.sorted { $0.uuidString < $1.uuidString }
+            return result
+        }
+
+        /// The active profile with this name (or a profile with this name merged into it), else the
+        /// profile the name started (`SpeakerProfile.id(forName:)`), when there is one; a profile
         /// renamed since its name gave it that ID is the same person.
         func existingProfileID(named name: String) -> UUID? {
             let key = SpeakerProfile.normalizedName(name)
             if let existing = activeProfiles.first(where: { SpeakerProfile.normalizedName($0.name) == key }) { return existing.id }
+            let merged = profiles.values.compactMap(\.value).filter { $0.mergedInto != nil && SpeakerProfile.normalizedName($0.name) == key }
+            if let target = merged.sorted(by: { $0.id.uuidString < $1.id.uuidString }).lazy.compactMap({ merges.resolve($0.id) }).first { return target }
             let id = SpeakerProfile.id(forName: name)
-            return profiles[id.uuidString]?.value != nil ? id : nil
+            return profiles[id.uuidString]?.value != nil ? merges.resolve(id) : nil
         }
 
         mutating func profileID(named name: String) -> UUID {
@@ -354,6 +404,7 @@ extension SpeakerProfileReconciler {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             profiles[id.uuidString] = LibraryValue(id: id.uuidString, value: SpeakerProfile(id: id, name: trimmed, createdAt: now), modifiedAt: now)
             changedProfileIDs.insert(id.uuidString)
+            merges = SpeakerProfileMerges(Array(profiles.values))
             return id
         }
 
@@ -361,12 +412,16 @@ extension SpeakerProfileReconciler {
         /// clean speech, unless it's far from what the person named before (an outlier) or was
         /// learned and then removed or retired (a record is kept for those).
         mutating func teach(_ profile: UUID, origin: Voiceprint.Origin, basis: String, prints: [MeetingVoices.Print], meeting: Meeting) {
-            guard profiles[profile.uuidString]?.value != nil else { return }
+            guard merges.isActive(profile) else { return }
             for print in prints where print.cleanSeconds >= learning.minimumNamedSeconds {
                 let id = Voiceprint.id(origin: origin, profileID: profile, meetingID: meeting.id, speakerID: print.speakerID,
                                        space: print.vector.space, basis: basis)
                 guard voiceprints[id] == nil else { continue }
-                let chosen = active(profile, space: print.vector.space).filter { $0.origin.isPersonChosen && $0.vector.values.count == print.vector.values.count }
+                // The same sample the profile already has from the person (taught through a profile
+                // merged into this one, or through another speaker that stands for the same voice).
+                let own = active(profile, space: print.vector.space)
+                if own.contains(where: { $0.origin.isPersonChosen && $0.$origin.isKnown && $0.meetingID == meeting.id && $0.speakerID == print.speakerID }) { continue }
+                let chosen = own.filter { $0.origin.isPersonChosen && $0.vector.values.count == print.vector.values.count }
                 if !chosen.isEmpty, let similarity = Self.centroidSimilarity(print.vector, chosen), similarity < learning.outlierSimilarity { continue }
                 add(Voiceprint(id: id, profileID: profile, origin: origin, vector: print.vector, meetingID: meeting.id, speakerID: print.speakerID,
                                trackID: print.trackID, condition: print.condition, speechSeconds: rounded(print.cleanSeconds),
@@ -378,7 +433,7 @@ extension SpeakerProfileReconciler {
         /// every learned voiceprint of a full profile (so a full profile doesn't churn over old recordings).
         mutating func learn(_ lesson: Lesson) {
             let print = lesson.print
-            guard profiles[lesson.profileID.uuidString]?.value != nil, voiceprints[lesson.id] == nil else { return }
+            guard merges.isActive(lesson.profileID), voiceprints[lesson.id] == nil else { return }
             let existing = active(lesson.profileID, space: print.vector.space).filter { $0.vector.values.count == print.vector.values.count }
             if existing.contains(where: { (SpeakerProfileBook.similarity($0.vector.values, print.vector.values) ?? 0) >= learning.duplicateSimilarity }) { return }
             let learned = existing.filter { !$0.origin.isPersonChosen }
@@ -581,16 +636,31 @@ extension Meeting {
         return ids.filter { seen.insert($0).inserted }
     }
 
+    /// The voices other speakers of this conversation give `profile` by the person's choice (named or
+    /// confirmed, merges followed): one recording's voice can stand for two speakers, and taking it
+    /// from one mustn't take it from the other.
+    public func voiceSourceIDs(claimedFor profile: UUID, besides speakerID: String, merges: SpeakerProfileMerges) -> Set<String> {
+        var result = Set<String>()
+        for identity in speakerIdentities ?? [] where identity.speakerID != speakerID && identity.$source.isKnown && identity.source.isPersonChosen {
+            guard let own = identity.profileID, (merges.resolve(own) ?? own) == profile else { continue }
+            result.formUnion(voiceSourceIDs(of: identity.speakerID))
+        }
+        return result
+    }
+
     /// Applies the changes for this conversation's speakers, each only while the speaker still has
-    /// the name and identity it was decided from. Returns whether every change applied.
+    /// the name and identity it was decided from. A name Daybook gave that the summary still uses
+    /// follows into it (`summaryFollowsRename`). Returns whether every change applied.
     @discardableResult
     public mutating func apply(_ changes: [SpeakerIdentityChange]) -> Bool {
         var all = true
         for change in changes where change.meetingID == id {
             guard let index = speakers.firstIndex(where: { $0.id == change.speakerID }), speakers[index].name == change.expectedName,
                   speakerIdentity(change.speakerID) == change.expectedIdentity else { all = false; continue }
+            let daybooks = isDaybooksName(change.expectedName, for: change.speakerID, identity: change.expectedIdentity)
             speakers[index].name = change.name
             setSpeakerIdentity(change.identity, for: change.speakerID)
+            if daybooks, change.name != change.expectedName { summaryFollowsRename(of: change.speakerID, from: change.expectedName, to: change.name) }
         }
         return all
     }

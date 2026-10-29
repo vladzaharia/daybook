@@ -34,67 +34,94 @@ extension LibraryController {
     public func confirmSpeakerProfile(_ speakerID: String, in id: UUID) {
         guard let meeting = meeting(id), let identity = meeting.speakerIdentity(speakerID), identity.$source.isKnown,
               identity.source == .recognized || identity.source == .suggested,
-              let profileID = identity.profileID, let profile = metadata.speakerProfile(profileID) else { return }
+              let stored = identity.profileID, let profile = metadata.speakerProfile(stored) else { return }
         update(id) { meeting in
             if meeting.speakerName(speakerID) != profile.name { meeting.renameSpeaker(id: speakerID, name: profile.name) }
             let basis = meeting.revisions.filter { $0.field == "speaker:\(speakerID)" }
                 .max { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }?.id
-            meeting.setSpeakerIdentity(SpeakerIdentity(speakerID: speakerID, profileID: profileID, source: .confirmed, basis: basis,
-                                                       rejectedProfileIDs: identity.rejectedProfileIDs), for: speakerID)
+            meeting.setSpeakerIdentity(SpeakerIdentity(speakerID: speakerID, profileID: profile.id, source: .confirmed, basis: basis,
+                                                       rejectedProfileIDs: identity.rejectedProfileIDs?.filter { $0 != profile.id }), for: speakerID)
         }
     }
 
     /// The person says the speaker isn't the profile Daybook labelled or suggested: a label comes off
     /// (the speaker gets back the name it had), the profile isn't offered for this speaker again, and
-    /// it forgets what it learned from it.
+    /// it forgets what it learned from it (but not a voice another speaker the person named that
+    /// profile still stands for).
     public func rejectSpeakerProfile(_ speakerID: String, in id: UUID) {
         guard let meeting = meeting(id), let identity = meeting.speakerIdentity(speakerID), identity.$source.isKnown,
-              identity.source == .recognized || identity.source == .suggested, let profileID = identity.profileID else { return }
+              identity.source == .recognized || identity.source == .suggested, let stored = identity.profileID else { return }
+        let merges = metadata.speakerProfileMerges
+        let profileID = merges.resolve(stored) ?? stored
         update(id) { meeting in
             if identity.source == .recognized, let previous = identity.previousName, meeting.speakerName(speakerID) == identity.appliedName,
                let index = meeting.speakers.firstIndex(where: { $0.id == speakerID }) {
                 meeting.speakers[index].name = previous
+                meeting.summaryFollowsRename(of: speakerID, from: identity.appliedName ?? "", to: previous)
             }
             let rejected = Array(Set((identity.rejectedProfileIDs ?? []) + [profileID])).sorted { $0.uuidString < $1.uuidString }
             meeting.setSpeakerIdentity(SpeakerIdentity(speakerID: speakerID, profileID: nil, source: .dismissed, basis: identity.basis,
                                                        rejectedProfileIDs: rejected), for: speakerID)
         }
-        let sources = Set(meeting.voiceSourceIDs(of: speakerID))
+        let sources = Set(meeting.voiceSourceIDs(of: speakerID)).subtracting(meeting.voiceSourceIDs(claimedFor: profileID, besides: speakerID, merges: merges))
+        let members = merges.members(of: profileID)
         updateMetadata { metadata in
-            Self.retireVoiceprints(in: &metadata) { $0.profileID == profileID && $0.meetingID == id && sources.contains($0.speakerID) }
+            Self.retireVoiceprints(in: &metadata) { members.contains($0.profileID) && $0.meetingID == id && sources.contains($0.speakerID) }
         }
     }
 
     // MARK: Profiles
 
-    /// Renames a profile; speakers Daybook labelled with it follow. A name another profile has is refused.
+    /// Renames a profile; speakers Daybook labelled with it follow. A name another profile has is
+    /// refused (`speakerProfile(named:besides:)` finds it, to offer a merge instead).
     @discardableResult
     public func renameSpeakerProfile(_ profileID: UUID, to name: String, at now: Date = Date()) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !SpeakerProfile.isPlaceholder(trimmed), var profile = metadata.speakerProfile(profileID) else { return false }
-        guard profile.name != trimmed else { return true }
-        let key = SpeakerProfile.normalizedName(trimmed)
-        guard !speakerProfiles.contains(where: { $0.id != profileID && SpeakerProfile.normalizedName($0.name) == key }) else { return false }
+        guard !SpeakerProfile.isPlaceholder(trimmed), let current = metadata.speakerProfile(profileID),
+              let record = metadata.speakerProfiles?.first(where: { $0.id == current.id.uuidString }) else { return false }
+        guard current.name != trimmed else { return true }
+        guard speakerProfile(named: trimmed, besides: current.id) == nil else { return false }
+        var profile = current
         profile.name = trimmed
         updateMetadata { metadata in
             var profiles = metadata.speakerProfiles ?? []
-            profiles.removeAll { $0.id == profileID.uuidString }
-            profiles.append(LibraryValue(id: profileID.uuidString, value: profile, modifiedAt: now))
+            profiles.removeAll { $0.id == record.id }
+            profiles.append(LibraryValue(id: record.id, value: profile, modifiedAt: now))
             metadata.speakerProfiles = profiles.sorted { $0.id < $1.id }
         }
         return true
     }
 
-    /// Deletes a profile and its voiceprints. Speakers Daybook labelled with it lose the label; names
-    /// the person gave stay.
+    /// Another profile already called `name` (names compare without case or accents).
+    public func speakerProfile(named name: String, besides profileID: UUID) -> SpeakerProfile? {
+        let key = SpeakerProfile.normalizedName(name.trimmingCharacters(in: .whitespacesAndNewlines))
+        return speakerProfiles.first { $0.id != profileID && SpeakerProfile.normalizedName($0.name) == key }
+    }
+
+    /// Merges a profile into another, the same person named two ways (`LibraryMetadata.mergeSpeakerProfile`):
+    /// its voiceprints and conversations go to `target`, which keeps its name, and it leaves the list.
+    /// Speakers Daybook labelled with it take `target`'s name; names the person gave stay. Returns
+    /// whether it merged.
+    @discardableResult
+    public func mergeSpeakerProfile(_ profileID: UUID, into target: UUID, at now: Date = Date()) -> Bool {
+        let merges = metadata.speakerProfileMerges
+        guard merges.isActive(profileID), merges.isActive(target), profileID != target else { return false }
+        var merged = false
+        updateMetadata { merged = $0.mergeSpeakerProfile(profileID, into: target, at: now) }
+        return merged
+    }
+
+    /// Deletes a profile and its voiceprints (those of profiles merged into it too). Speakers Daybook
+    /// labelled with it lose the label; names the person gave stay.
     public func deleteSpeakerProfile(_ profileID: UUID, at now: Date = Date()) {
-        guard metadata.speakerProfile(profileID) != nil else { return }
+        guard let profile = metadata.speakerProfile(profileID) else { return }
+        let members = metadata.speakerProfileMerges.members(of: profile.id)
         updateMetadata { metadata in
             var profiles = metadata.speakerProfiles ?? []
-            profiles.removeAll { $0.id == profileID.uuidString }
-            profiles.append(LibraryValue(id: profileID.uuidString, value: nil, modifiedAt: now))
+            profiles.removeAll { $0.id == profile.id.uuidString }
+            profiles.append(LibraryValue(id: profile.id.uuidString, value: nil, modifiedAt: now))
             metadata.speakerProfiles = profiles.sorted { $0.id < $1.id }
-            Self.retireVoiceprints(in: &metadata, at: now) { $0.profileID == profileID }
+            Self.retireVoiceprints(in: &metadata, at: now) { members.contains($0.profileID) }
         }
     }
 
@@ -106,14 +133,17 @@ extension LibraryController {
     /// Undoes what a profile learned on its own: every recognized voiceprint goes, leaving the ones from
     /// names the person gave or confirmed.
     public func forgetLearnedVoiceprints(of profileID: UUID, at now: Date = Date()) {
-        updateMetadata { Self.retireVoiceprints(in: &$0, at: now) { $0.profileID == profileID && !$0.origin.isPersonChosen } }
+        let members = metadata.speakerProfileMerges.members(of: profileID)
+        updateMetadata { Self.retireVoiceprints(in: &$0, at: now) { members.contains($0.profileID) && !$0.origin.isPersonChosen } }
     }
 
-    /// Conversations and speakers a profile is given to, newest first.
+    /// Conversations and speakers a profile is given to (through profiles merged into it too), newest first.
     public func speakers(of profileID: UUID) -> [(meeting: Meeting, speaker: Speaker, identity: SpeakerIdentity)] {
-        meetings.sorted { $0.date > $1.date }.flatMap { meeting in
+        let merges = metadata.speakerProfileMerges
+        return meetings.sorted { $0.date > $1.date }.flatMap { meeting in
             meeting.speakers.compactMap { speaker in
-                guard let identity = meeting.speakerIdentity(speaker.id), identity.profileID == profileID,
+                guard let identity = meeting.speakerIdentity(speaker.id), identity.$source.isKnown, let stored = identity.profileID,
+                      (merges.resolve(stored) ?? stored) == profileID,
                       identity.source != .suggested, identity.source != .dismissed else { return nil }
                 return (meeting, speaker, identity)
             }

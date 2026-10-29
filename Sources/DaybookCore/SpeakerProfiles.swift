@@ -12,11 +12,15 @@ public struct SpeakerProfile: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
     public var createdAt: Date
+    /// The profile this one was merged into (the same person): everything that names this profile
+    /// (voiceprints, speakers' identities, a name that started it) stands for that one instead
+    /// (`SpeakerProfileMerges`). The record stays, with its name, so the name still finds the person.
+    public var mergedInto: UUID?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
 
-    public init(id: UUID, name: String, createdAt: Date = Date()) {
-        self.id = id; self.name = name; self.createdAt = createdAt
+    public init(id: UUID, name: String, createdAt: Date = Date(), mergedInto: UUID? = nil) {
+        self.id = id; self.name = name; self.createdAt = createdAt; self.mergedInto = mergedInto
     }
 
     /// The profile a name starts: the same name gives the same ID on every device, so two devices
@@ -38,7 +42,7 @@ public struct SpeakerProfile: Codable, Equatable, Identifiable, Sendable {
         return !number.isEmpty && number.allSatisfy(\.isNumber)
     }
 
-    private enum CodingKeys: String, CodingKey, CaseIterable { case id, name, createdAt }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, name, createdAt, mergedInto }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
     public init(from decoder: Decoder) throws {
@@ -46,6 +50,7 @@ public struct SpeakerProfile: Codable, Equatable, Identifiable, Sendable {
         id = try values.decode(UUID.self, forKey: .id)
         name = try values.decode(String.self, forKey: .name)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
+        mergedInto = try values.decodeIfPresent(UUID.self, forKey: .mergedInto)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -54,8 +59,58 @@ public struct SpeakerProfile: Codable, Equatable, Identifiable, Sendable {
         try values.encode(id, forKey: .id)
         try values.encode(name, forKey: .name)
         try values.encode(createdAt, forKey: .createdAt)
+        try values.encodeIfPresent(mergedInto, forKey: .mergedInto)
         try unknownFields.encode(to: encoder)
     }
+}
+
+/// Which profile each profile ID stands for now. Merging one profile into another (the same person,
+/// named two ways) writes a single record, the merged profile with `mergedInto`, so it's safe through
+/// sync: voiceprints and identities another device adds to the merged profile meanwhile follow it
+/// when the merge arrives, and nothing has to be rewritten for them to. Chains are followed to the
+/// end. Two devices merging each profile into the other make a cycle; the merge made first is set
+/// aside, so the later choice stands, the same on every device. A profile merged into one that was
+/// deleted is gone too.
+public struct SpeakerProfileMerges: Sendable {
+    /// Every profile ID with a record, and the active profile it stands for (nil: deleted).
+    private var targets: [UUID: UUID] = [:]
+
+    public init(_ records: [LibraryValue<SpeakerProfile>]) {
+        var latest: [String: LibraryValue<SpeakerProfile>] = [:]
+        for record in records where latest[record.id].map({ $0.modifiedAt < record.modifiedAt }) ?? true { latest[record.id] = record }
+        var byID: [UUID: (profile: SpeakerProfile, modifiedAt: Date)] = [:]
+        for record in latest.values {
+            if let profile = record.value { byID[profile.id] = (profile, record.modifiedAt) }
+        }
+        for id in byID.keys {
+            var path: [UUID] = [], current = id
+            while true {
+                guard let entry = byID[current] else { break }
+                guard let next = entry.profile.mergedInto, next != current else { targets[id] = current; break }
+                if let start = path.firstIndex(of: current) {
+                    // A cycle: the merge made first is set aside; its profile stays.
+                    let cycle = path[start...]
+                    targets[id] = cycle.min { a, b in
+                        let x = byID[a]!.modifiedAt, y = byID[b]!.modifiedAt
+                        return x == y ? a.uuidString < b.uuidString : x < y
+                    }
+                    break
+                }
+                path.append(current)
+                current = next
+            }
+        }
+    }
+
+    /// The active profile `id` stands for: itself, the profile it was merged into, or nil when that
+    /// profile (or this one) was deleted or isn't known here.
+    public func resolve(_ id: UUID) -> UUID? { targets[id] }
+
+    /// Whether `id` is a profile of its own (not merged into another, not deleted).
+    public func isActive(_ id: UUID) -> Bool { targets[id] == id }
+
+    /// Profile IDs that stand for `id`, itself included.
+    public func members(of id: UUID) -> Set<UUID> { Set(targets.filter { $0.value == id }.keys).union([id]) }
 }
 
 /// A voice embedding and the space it lives in. Embeddings from different spaces (models, or
@@ -285,6 +340,24 @@ extension SpeakerIdentity.Source: ExtensibleSyncEnum {
 extension SpeakerProfile: PreservesUnknownFields {}
 extension Voiceprint: PreservesUnknownFields {}
 extension SpeakerIdentity: PreservesUnknownFields {}
+
+extension LibraryMetadata {
+    /// Merges profile `id` into `target` (the same person, named two ways): `id`'s record says so
+    /// (`mergedInto`), and from then on its voiceprints count for `target`, its speakers are
+    /// `target`'s (the Mac moves their identities, and labels take `target`'s name), and its name
+    /// finds `target`. Names the person gave speakers stay. Returns whether it merged.
+    @discardableResult
+    public mutating func mergeSpeakerProfile(_ id: UUID, into target: UUID, at now: Date = Date()) -> Bool {
+        let merges = speakerProfileMerges
+        guard id != target, merges.isActive(id), merges.isActive(target),
+              let index = speakerProfiles?.firstIndex(where: { $0.id == id.uuidString }),
+              let record = speakerProfiles?[index], var profile = record.value else { return false }
+        profile.mergedInto = target
+        // Later than the record it replaces, whatever this device's clock says.
+        speakerProfiles?[index] = LibraryValue(id: record.id, value: profile, modifiedAt: max(now, record.modifiedAt.addingTimeInterval(0.001)))
+        return true
+    }
+}
 
 extension Meeting {
     /// The identity recorded for one of the conversation's speakers.
