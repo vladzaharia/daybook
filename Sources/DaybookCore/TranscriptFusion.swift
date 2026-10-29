@@ -34,6 +34,9 @@ public struct FusionResult: Sendable {
     public var summary: FusionSummary? = nil
     /// Speakers fusion introduced (the person recording); `applyFusion` adds those not yet present.
     public var addedSpeakers: [Speaker] = []
+    /// Passages left out as background audio (`FusionInputs.background`): every source passage they
+    /// came from was judged a TV, radio, or music. `applyFusion` keeps them in `Meeting.backgroundPassages`.
+    public var backgroundSegments: [TranscriptSegment] = []
     public var unalignedTrackIDs: [UUID] { alignments.filter { $0.method == .unaligned }.map(\.trackID) }
 }
 

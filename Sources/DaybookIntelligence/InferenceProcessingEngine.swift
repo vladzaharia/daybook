@@ -110,22 +110,34 @@ public struct InferenceProcessingEngine: ProcessingEngine {
                 if input.mode == .speakerRefresh { throw error }
                 notices.append("Transcription succeeded, but speaker detection failed for \(input.track.fileName): \(error.localizedDescription)")
             }
-            // Routing by capability: a diarizer without voice profiles gets them from the embedding model.
-            if let found = analysis, found.embeddingModelID == nil, let embedder = configuration.voiceEmbeddingModel {
-                do { analysis = try await inference.embedVoices(url: input.audioURL, analysis: found, model: embedder, progress: report) }
-                catch is CancellationError { throw CancellationError() }
-                catch { notices.append("Speakers were found, but voice profiles couldn’t be made for \(input.track.fileName): \(error.localizedDescription)") }
-            }
         }
-        if let warnings = analysis?.warnings, !warnings.isEmpty { notices.append(warnings.joined(separator: "\n")) }
+        let background = try await backgroundAudio(input, progress: report)
         let runID = UUID()
         let segments = TranscriptBuilder.segments(result: result, speakers: analysis, track: input.track, runID: runID)
+        // Music, a TV, or radio: its passages stay in the run (fusion leaves them out of the transcript),
+        // and it's never evidence for anyone's voice profile.
+        let verdict = BackgroundAudio.judge(segments, analysis: background)
+        if configuration.detectSpeakers, let found = analysis, found.embeddingModelID == nil, let embedder = configuration.voiceEmbeddingModel {
+            // Routing by capability: a diarizer without voice profiles gets them from the embedding model.
+            do {
+                let embedded = try await inference.embedVoices(url: input.audioURL, analysis: Self.withoutBackground(found, verdict: verdict,
+                                                               segments: segments, runID: runID), model: embedder, progress: report)
+                analysis = SpeakerAnalysis(turns: found.turns, embeddings: embedded.embeddings, embeddingModelID: embedded.embeddingModelID,
+                                           warnings: embedded.warnings, provenance: embedded.provenance ?? found.provenance,
+                                           embeddingProvenance: embedded.embeddingProvenance)
+            }
+            catch is CancellationError { throw CancellationError() }
+            catch { notices.append("Speakers were found, but voice profiles couldn’t be made for \(input.track.fileName): \(error.localizedDescription)") }
+        }
+        if let warnings = analysis?.warnings, !warnings.isEmpty { notices.append(warnings.joined(separator: "\n")) }
         let settings = ProcessingSettings(modelID: transcriptModel,
                                           parameters: configuration.parameters(mode: input.mode).merging(routing) { $1 },
                                           model: transcriptProvenance)
         let speakers = Set(segments.compactMap(\.speakerID)).sorted().map { label in
             let cluster = String(label.dropFirst(runID.uuidString.count + 1))
-            return Speaker(id: label, name: "", sourceTrackID: input.track.id, embedding: analysis?.embeddings[cluster],
+            // A broadcast voice (a TV's presenter) gets no voice profile: it's no one in the conversation.
+            let embedding = verdict.speakers[label] == nil ? analysis?.embeddings[cluster] : nil
+            return Speaker(id: label, name: "", sourceTrackID: input.track.id, embedding: embedding,
                            embeddingModelID: analysis?.embeddingModelID,
                            analysisSettings: ProcessingSettings(modelID: configuration.speakerModel.id, parameters: settings.parameters,
                                                                 model: analysis?.provenance))
@@ -135,7 +147,34 @@ public struct InferenceProcessingEngine: ProcessingEngine {
                                          modelID: transcriptModel, knownOffset: input.track.offset, processingSettings: settings,
                                          words: words.isEmpty ? nil : words)
         return TrackProcessingOutput(transcript: transcript, speakers: speakers, speakerEmbeddingModelID: analysis?.embeddingModelID,
-                                     duration: result.duration, notices: notices)
+                                     duration: result.duration, notices: notices, backgroundAudio: background)
+    }
+
+    /// What the sound classifier hears in the recording: the track's stored analysis when it's
+    /// current (the audio hasn't changed), otherwise measured now. Nil when it can't run, so nothing
+    /// is left out; that needs no notice.
+    private func backgroundAudio(_ input: TrackProcessingInput, progress: @escaping IntelligenceProgressHandler) async throws -> BackgroundAudioAnalysis? {
+        if let stored = input.track.backgroundAudio, stored.version == BackgroundAudioAnalysis.currentVersion { return stored }
+        do { return try await inference.classifySound(url: input.audioURL, progress: progress) }
+        catch is CancellationError { throw CancellationError() }
+        catch { return nil }
+    }
+
+    /// Speaker turns without background audio, for voice profiles: a broadcast voice's turns, and
+    /// turns at least half inside passages judged music or broadcast, are left out.
+    static func withoutBackground(_ analysis: SpeakerAnalysis, verdict: BackgroundAudio.Verdict, segments: [TranscriptSegment],
+                                  runID: UUID) -> SpeakerAnalysis {
+        guard !verdict.isEmpty else { return analysis }
+        let ranges = segments.filter { verdict.segments[$0.id] != nil }.map { ($0.start, $0.end) }
+        let turns = analysis.turns.filter { turn in
+            if verdict.speakers["\(runID.uuidString):\(turn.speakerID)"] != nil { return false }
+            let length = turn.end - turn.start
+            guard length > 0 else { return true }
+            let covered = ranges.reduce(0.0) { $0 + max(0, min($1.1, turn.end) - max($1.0, turn.start)) }
+            return covered < length / 2
+        }
+        return SpeakerAnalysis(turns: turns, embeddings: analysis.embeddings, embeddingModelID: analysis.embeddingModelID,
+                               warnings: analysis.warnings, provenance: analysis.provenance, embeddingProvenance: analysis.embeddingProvenance)
     }
 
     public func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],

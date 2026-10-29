@@ -129,6 +129,11 @@ public enum MeetingMerge {
         result.alignmentReports = view.alignments
         result.correctionTransferIssues = view.correctionIssues
         result.fusionSummary = view.fusionSummary
+        result.backgroundPassages = view.backgroundPassages
+        if local.includesBackgroundAudio != nil || remote.includesBackgroundAudio != nil {
+            result.includesBackgroundAudio = choose("background-audio", local.includesBackgroundAudio, remote.includesBackgroundAudio,
+                base.map(\.includesBackgroundAudio) ?? unset(local.includesBackgroundAudio, remote.includesBackgroundAudio, isDefault: { $0 == nil }, otherwise: nil))
+        }
         result.summary = choose("summary", local.summary, remote.summary, base.map(\.summary) ?? unset(local.summary, remote.summary, isDefault: { $0 == nil }, otherwise: nil))
         // Completion is a separate user decision from generated prose; exact task+owner identity survives.
         if var summary = result.summary {
@@ -214,12 +219,14 @@ private struct MergedTranscriptView: Codable, Equatable {
     var alignments: [TrackAlignment] = []
     var correctionIssues: [CorrectionTransferIssue]?
     var fusionSummary: FusionSummary?
+    var backgroundPassages: [TranscriptSegment]?
     init() {}
     init(_ meeting: Meeting) {
         segments = meeting.unifiedTranscript; alignments = meeting.alignmentReports
         correctionIssues = meeting.correctionTransferIssues; fusionSummary = meeting.fusionSummary
+        backgroundPassages = meeting.backgroundPassages
     }
-    var isEmpty: Bool { segments.isEmpty && alignments.isEmpty && correctionIssues == nil && fusionSummary == nil }
+    var isEmpty: Bool { segments.isEmpty && alignments.isEmpty && correctionIssues == nil && fusionSummary == nil && backgroundPassages == nil }
 }
 private struct MergedNotes: Codable, Equatable {
     var text: String
