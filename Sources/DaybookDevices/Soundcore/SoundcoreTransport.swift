@@ -128,7 +128,13 @@ public final class CoreBluetoothSoundcoreTransport: NSObject, SoundcoreTransport
         resetLink()
         peripheral = target
         target.delegate = self
-        central.connect(target)
+        if target.state == .connected {
+            // Already connected: iOS relaunched the app in the background and restored the link
+            // (`willRestoreState`), or another app on this iPhone holds it. Carry on from discovery.
+            target.discoverServices([Self.service])
+        } else {
+            central.connect(target)
+        }
     }
 
     public func disconnect(_ id: UUID) {
@@ -192,7 +198,12 @@ extension CoreBluetoothSoundcoreTransport: @preconcurrency CBCentralManagerDeleg
     /// The system relaunched the app and hands back the recorders it was connected or connecting to.
     public func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
         let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? []
-        for peripheral in restored { peripherals[peripheral.identifier] = peripheral }
+        for peripheral in restored {
+            peripherals[peripheral.identifier] = peripheral
+            // The system's callbacks for it come here again; the connection's own state machine adopts
+            // the link (`connect`, which picks up a link that's still up) once the radio reports.
+            peripheral.delegate = self
+        }
         onRestore?(restored.map(\.identifier))
     }
 

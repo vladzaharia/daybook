@@ -38,6 +38,8 @@ public final class DeviceSession: ObservableObject, Identifiable {
     public var importer: DeviceImporter?
     /// Persists a changed configuration.
     public var onDeviceChange: ((ConfiguredDevice) -> Void)?
+    /// The recorder's own button started (true) or stopped (false) a recording (`SoundcoreConnection.onButton`).
+    public var onRecorderButton: ((DeviceSession, Bool) -> Void)?
     /// Libraries load after devices start; nothing imports automatically until then.
     public private(set) var libraryReady = false
     private var meetings: [Meeting] = []
@@ -83,7 +85,13 @@ public final class DeviceSession: ObservableObject, Identifiable {
         }
         browser.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         if let soundcore = direct as? SoundcoreConnection {
-            soundcore.onLiveSaved = { [weak self] url, id, seconds in self?.saveLive(url: url, recordingID: id, seconds: seconds) }
+            soundcore.onLiveSaved = { [weak self] url, id, seconds, conversation in
+                self?.saveLive(url: url, recordingID: id, seconds: seconds, into: conversation)
+            }
+            soundcore.onButton = { [weak self] on in
+                guard let self else { return }
+                self.onRecorderButton?(self, on)
+            }
         }
         if let listening = connections.lazy.compactMap({ $0 as? any LiveListeningConnection }).first {
             listening.live.$captions.removeDuplicates().sink { [weak self] in self?.liveCaptions = $0 }.store(in: &subscriptions)
@@ -525,15 +533,67 @@ public final class DeviceSession: ObservableObject, Identifiable {
         secondsLeft = rate.secondsLeft(remainingBytes: queue.remainingBytes(currentReceived: bytes))
     }
 
-    /// A Listen Live portion becomes a conversation now; the full recording joins it later.
-    private func saveLive(url: URL, recordingID: String, seconds: TimeInterval) {
+    /// A Listen Live portion becomes a conversation now (or joins the shared recording it was captured
+    /// for); the full recording joins it later.
+    private func saveLive(url: URL, recordingID: String, seconds: TimeInterval, into conversation: UUID?) {
         // With nowhere to put it, the staged audio goes now (the recorder still has the recording).
         guard let importer else { try? FileManager.default.removeItem(at: url); return }
-        let identity = DeviceRecordingIdentity(kind: kind.id, serial: status?.serial, recordingID: DeviceLibraryLinks.partialID(recordingID))
-        Task {
+        let identity = DeviceRecordingIdentity(kind: kind.id, serial: recorderSerial, recordingID: DeviceLibraryLinks.partialID(recordingID))
+        let target = conversation ?? links.partial[recordingID] ?? links.imported[recordingID]
+        let previous = liveSave
+        liveSave = Task {
+            await previous?.value
             defer { try? FileManager.default.removeItem(at: url) }
-            _ = try? await importer(url, identity, links.partial[recordingID] ?? links.imported[recordingID], kind.audioSource)
+            do {
+                let meeting = try await importer(url, identity, target, kind.audioSource)
+                lastLiveSave = .init(recordingID: recordingID, meetingID: meeting, seconds: seconds)
+            } catch {
+                lastLiveSave = .init(recordingID: recordingID, meetingID: nil, seconds: seconds, failure: error.localizedDescription)
+            }
         }
+    }
+
+    /// The last live portion saved (or that couldn't be), for the shared recording that captured it.
+    public struct LiveSave: Equatable, Sendable {
+        public var recordingID: String
+        public var meetingID: UUID?
+        public var seconds: TimeInterval
+        public var failure: String?
+    }
+
+    public private(set) var lastLiveSave: LiveSave?
+    private var liveSave: Task<Void, Never>?
+
+    // MARK: Live audio for a shared recording
+
+    /// Saves the recorder's audio into `conversation` as it records, from the stream Listen Live uses,
+    /// so a shared recording has it the moment it stops. False when it can't start now (not connected,
+    /// not recording, already listening).
+    @discardableResult
+    public func captureLive(into conversation: UUID) -> Bool {
+        guard let soundcore = direct as? SoundcoreConnection, managedElsewhere == nil else { return false }
+        if soundcore.live.isListening { return soundcore.liveConversation == conversation }
+        return soundcore.startListening(into: conversation, captions: false)
+    }
+
+    /// The conversation the recorder's live audio is being saved into, while it is.
+    public var liveCaptureConversation: UUID? {
+        guard let soundcore = direct as? SoundcoreConnection, soundcore.live.isListening else { return nil }
+        return soundcore.liveConversation
+    }
+
+    /// Ends a live capture and waits (at most `limit`) until what arrived is in the library. Returns the
+    /// latest live portion saved (or that couldn't be), which the caller checks against its conversation.
+    @discardableResult
+    public func endLiveCapture(within limit: Duration = .seconds(15)) async -> LiveSave? {
+        guard let soundcore = direct as? SoundcoreConnection else { return nil }
+        if soundcore.live.isListening { soundcore.stopListening() }
+        let deadline = ContinuousClock.now.advanced(by: limit)
+        while soundcore.live.isListening, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        await liveSave?.value
+        return lastLiveSave
     }
 
     // MARK: Automatic import
@@ -639,6 +699,17 @@ public final class DeviceSession: ObservableObject, Identifiable {
             }
         }
         adoptedImports = (listed > (adoptedAt ?? .distantFuture) ? [] : remaining) + recordingNow
+    }
+
+    /// Imports a recording the recorder is making (or has made) into `conversation` once it's finished
+    /// and listed here: a shared recording's file, after the recorder stops, whenever it's next in range.
+    /// The same waiting list as a handoff's (`adoptedImports`), so it survives the link dropping.
+    public func importWhenFinished(_ recordingID: String, into conversation: UUID, at now: Date = Date()) {
+        guard links.imported[recordingID] == nil, !queue.contains(recordingID),
+              !adoptedImports.contains(where: { $0.recordingID == recordingID }) else { return }
+        adoptedImports.append(DeviceHandedOffImport(recordingID: recordingID, attachTo: conversation, isAutomatic: true))
+        adoptedAt = now
+        scheduleEvaluation()
     }
 
     /// The conversation a recording goes into once it's imported, when the device that let go of the
