@@ -292,8 +292,10 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let ready = ContinuousClock.now - stopped
         let audioSeconds = try XCTUnwrap(rig.session.lastLiveSave?.seconds)
 
-        let perSecond = bytes / elapsed
-        print(String(format: "Live audio: %.0f B/s on the link (%.1f kbit/s), %.1f notifications/s; %.2f s recorded, %.2f s received after %.2f s; in the library %.0f ms after the stop; %.2f s saved",
+        // Per second of the audio it carried, not of the clock: a busy machine paces the simulated
+        // recorder more slowly, but each second of audio costs the link the same.
+        let perSecond = bytes / (notifications * Double(device.slicesPerPacket) * 0.02)
+        print(String(format: "Live audio: %.0f B/s of audio on the link (%.1f kbit/s), %.1f notifications/s; %.2f s recorded, %.2f s received after %.2f s; in the library %.0f ms after the stop; %.2f s saved",
                      perSecond, perSecond * 8 / 1000, notifications / elapsed, recorded, received, elapsed,
                      Double(ready.components.attoseconds) / 1e15 + Double(ready.components.seconds) * 1000, audioSeconds))
         // 166 bytes a slice (160 of Opus), 10 of framing a notification of three: 508 bytes every 60 ms.

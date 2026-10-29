@@ -148,15 +148,16 @@ extension PhoneAppModel {
         let start = session.status?.recordingStartedAt ?? Date()
         recorderOnly = RecorderOnlyRecording(conversationID: id, title: title, startedAt: start, recorderID: session.id,
                                              recorderName: session.device.name)
-        multipoint = MultipointSession(conversationID: id, role: .phoneLed)
-        if let stale = devices.cascade.conversation?.id, stale != id { await devices.cascade.stop(stale) }
-        devices.cascade.begin(id, title: title, date: start, ledHere: true)
-        _ = await devices.cascade.start(session, for: id, role: .led)
+        // Told at once, not after the recorder and the Macs answer.
         if isInFront {
             say("\(session.device.name) is recording. This iPhone couldn’t start its microphone, so it saves the recorder’s audio.")
         } else {
             cascadeNotices.recorderRecording(session.device.name)
         }
+        multipoint = MultipointSession(conversationID: id, role: .phoneLed)
+        if let stale = devices.cascade.conversation?.id, stale != id { await devices.cascade.stop(stale) }
+        devices.cascade.begin(id, title: title, date: start, ledHere: true)
+        _ = await devices.cascade.start(session, for: id, role: .led)
         // A background relaunch for the recorder skips `launch`: the link starts here.
         if !link.started { await link.start() }
         await link.setActivity(.backgroundRecording)
