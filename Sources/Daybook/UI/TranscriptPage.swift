@@ -29,14 +29,9 @@ struct TranscriptPage: View {
         ScrollViewReader { proxy in
             PageScroll(lazy: true, bottomInset: playerShown ? 56 : 0) {
                 PageHeader(state: state, player: player, meeting: meeting, play: play)
+                // The same status line as the summary page, so turning the page keeps it in view.
+                ConversationStatus(state: state, meeting: meeting)
                 notices
-                if meeting.unifiedTranscript.isEmpty {
-                    MarginRow {
-                        Text(meeting.tracks.isEmpty ? "No transcript yet." : meeting.status == .failed ? "No speech was found in this recording." : "Not transcribed yet.")
-                            .font(TypeStyle.status).foregroundStyle(Ink.secondary)
-                    }
-                    .padding(.top, Space.s5)
-                }
                 ForEach(layout.blocks) { block in
                     switch block {
                     case .turn(_, let speakerID, let segments):
@@ -93,32 +88,25 @@ struct TranscriptPage: View {
         .onChange(of: meeting) { _, _ in followPlayhead(TranscriptLayout.cached(for: meeting)) }
     }
 
+    /// What the transcript needs from the person, in the page's status boxes.
     @ViewBuilder private var notices: some View {
         let unaligned = meeting.alignmentReports.filter { $0.method == .unaligned }
         if let report = unaligned.first {
             let name = meeting.tracks.first { $0.id == report.trackID }?.source.recordingName ?? "added"
-            notice(symbol: "exclamationmark.triangle.fill", tint: Ink.warning,
-                   text: "Couldn’t line up the \(name) recording with the others.",
+            notice(.problem, symbol: "exclamationmark.triangle.fill", text: "Couldn’t line up the \(name) recording with the others",
                    action: "Adjust Timing…") { state.activeSheet = .adjustTiming(report.trackID) }
         }
         if let issues = meeting.correctionTransferIssues, !issues.isEmpty {
-            notice(symbol: "pencil.line", tint: Ink.secondary,
-                   text: issues.count == 1 ? "An earlier correction needs a look." : "\(issues.count) earlier corrections need a look.",
+            notice(.info, symbol: "pencil.circle.fill",
+                   text: issues.count == 1 ? "An earlier correction needs a look" : "\(issues.count) earlier corrections need a look",
                    action: "Review…") { state.activeSheet = .reviewCorrections }
         }
     }
 
-    private func notice(symbol: String, tint: Color, text: String, action: String, perform: @escaping () -> Void) -> some View {
+    private func notice(_ kind: StatusBoxKind, symbol: String, text: String, action: String, perform: @escaping () -> Void) -> some View {
         MarginRow {
-            HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                Image(systemName: symbol).foregroundStyle(tint)
-                Text(text).fixedSize(horizontal: false, vertical: true).layoutPriority(1)
-                Spacer(minLength: Space.s3)
-                Button(action, action: perform).buttonStyle(.daybookLink).fixedSize()
-            }
-            .font(TypeStyle.status)
-            .padding(Space.s3)
-            .quietBox()
+            StatusBox(kind: kind, symbol: symbol, title: text, message: nil,
+                      actions: Button(action, action: perform).buttonStyle(.daybookLink))
         }
         .padding(.top, Space.s4)
     }
