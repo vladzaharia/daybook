@@ -122,14 +122,15 @@ final class ModelEngineTests: XCTestCase {
     func testTheStandardRegistryDeclaresEachEngine() {
         let registry = ModelEngineRegistry.standard
         XCTAssertEqual(registry.descriptors.map(\.id), [.whisperKit, .community1, .sortformer, .mlxLanguage, .parakeet, .nemotronDiarizer,
-                                                        .appleFoundationModels, .appleVision])
+                                                        .nemotronStreaming, .appleFoundationModels, .appleVision])
+        XCTAssertEqual(registry.engine(.nemotronStreaming)?.descriptor.roles, [.liveTranscription])
         XCTAssertEqual(registry.engine(.appleVision)?.descriptor.roles, [.imageDescription])
         XCTAssertEqual(registry.engine(.appleVision)?.descriptor.residency, .system)
         XCTAssertEqual(registry.engine(.mlxLanguage)?.descriptor.roles, [.summarization, .imageDescription])
         XCTAssertEqual(registry.engine(.whisperKit)?.descriptor.roles, [.transcription])
         XCTAssertEqual(registry.engine(.community1)?.descriptor.roles, [.diarization, .speakerEmbedding])
         XCTAssertEqual(registry.engine(.parakeet)?.descriptor.roles, [.transcription])
-        XCTAssertEqual(registry.engine(.nemotronDiarizer)?.descriptor.roles, [.diarization])
+        XCTAssertEqual(registry.engine(.nemotronDiarizer)?.descriptor.roles, [.diarization, .liveDiarization])
         XCTAssertEqual(registry.engine(.parakeet)?.descriptor.versionString, "1 (FluidAudio 0.17.7)")
         XCTAssertEqual(registry.engine(.nemotronDiarizer)?.descriptor.residency, .shared)
         XCTAssertEqual(registry.engine(.mlxLanguage)?.descriptor.residency, .exclusive)

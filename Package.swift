@@ -8,6 +8,9 @@ import PackageDescription
 //   DaybookKit           the library both apps share: edits, search, sync, processing status and requests,
 //                        recorder handoff (macOS + iOS)
 //   DaybookModelStore    the model store: verified downloads and installs of catalog models (macOS + iOS)
+//   DaybookLive          live speech on this device: streaming transcription, speaker detection, and
+//                        live identification against voice profiles, behind DaybookCaptions' captioner
+//                        protocol; and the voice-profile recipe the Mac's final pipeline shares (macOS + iOS)
 //   DaybookIntelligence  local models: the Mac's ProcessingEngine (macOS for now; no AppKit)
 //   DaybookLink          the Mac <-> iPhone local-network channel: pairing, control, status (macOS + iOS)
 //   DaybookCaptions      tentative on-device live captions for any audio source (Speech framework; macOS + iOS)
@@ -23,6 +26,7 @@ let package = Package(
         .library(name: "DaybookDevices", targets: ["DaybookDevices"]),
         .library(name: "DaybookKit", targets: ["DaybookKit"]),
         .library(name: "DaybookModelStore", targets: ["DaybookModelStore"]),
+        .library(name: "DaybookLive", targets: ["DaybookLive"]),
         .library(name: "DaybookIntelligence", targets: ["DaybookIntelligence"]),
         .library(name: "DaybookLink", targets: ["DaybookLink"]),
         .library(name: "DaybookCaptions", targets: ["DaybookCaptions"]),
@@ -53,17 +57,27 @@ let package = Package(
         // a result and list their licenses.
         .target(name: "DaybookKit", dependencies: ["DaybookCore", "DaybookDevices", "DaybookLink"],
                 resources: [.copy("Resources/ModelCatalog")]),
-        // Downloads, verification, and installs (docs/models.md, "Storage"), apart from the Mac's engines so
-        // the iPhone can link it. Hub: swift-transformers' downloader.
+        // Downloads, verification, and installs (docs/models.md, "Storage"); the iPhone links it for its
+        // live models without the Mac's engines. Hub: swift-transformers' downloader.
         .target(name: "DaybookModelStore", dependencies: [
             "DaybookCore",
             "DaybookKit",
             .product(name: "Hub", package: "swift-transformers")
         ]),
+        // Live captions from local models (docs/model-runtime.md, "Live"): FluidAudio only, no MLX or
+        // WhisperKit, so the iPhone links it without the Mac's processing stack.
+        .target(name: "DaybookLive", dependencies: [
+            "DaybookCore",
+            "DaybookKit",
+            "DaybookCaptions",
+            "DaybookModelStore",
+            .product(name: "FluidAudio", package: "FluidAudio")
+        ]),
         .target(name: "DaybookIntelligence", dependencies: [
             "DaybookCore",
             "DaybookKit",
             "DaybookModelStore",
+            "DaybookLive",
             .product(name: "WhisperKit", package: "argmax-oss-swift"),
             .product(name: "MLX", package: "mlx-swift"),
             .product(name: "MLXLLM", package: "mlx-swift-lm"),
@@ -80,6 +94,7 @@ let package = Package(
             "DaybookDevices",
             "DaybookKit",
             "DaybookModelStore",
+            "DaybookLive",
             "DaybookIntelligence",
             "DaybookLink",
             "DaybookCaptions",
@@ -107,6 +122,7 @@ let package = Package(
             "DaybookDevices",
             "DaybookKit",
             "DaybookModelStore",
+            "DaybookLive",
             "DaybookIntelligence",
             "DaybookLink",
             "DaybookCaptions",
@@ -114,7 +130,9 @@ let package = Package(
             "DaybookTestSupport"
         ], resources: [.copy("Fixtures")]), // Fixtures/Shipped: files written by shipped versions.
         .testTarget(name: "DaybookLinkTests", dependencies: ["DaybookLink", "DaybookTestSupport"]),
-        .testTarget(name: "DaybookCaptionsTests", dependencies: ["DaybookCaptions", "DaybookTestSupport"])
+        .testTarget(name: "DaybookCaptionsTests", dependencies: ["DaybookCaptions", "DaybookTestSupport"]),
+        .testTarget(name: "DaybookLiveTests", dependencies: ["DaybookLive", "DaybookCaptions", "DaybookKit", "DaybookCore",
+                                                             "DaybookModelStore", "DaybookTestSupport"])
     ],
     swiftLanguageModes: [.v5]
 )

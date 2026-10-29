@@ -130,6 +130,7 @@ public struct ModelEngineRegistry: Sendable {
             MLXLanguageEngine(),
             ParakeetEngine(),
             NemotronDiarizerEngine(),
+            NemotronStreamingEngine(),
             AppleFoundationModelsEngine(),
             AppleVisionEngine()
         ])

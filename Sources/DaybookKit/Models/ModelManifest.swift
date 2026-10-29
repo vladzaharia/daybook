@@ -26,13 +26,18 @@ public struct ModelManifest: Equatable, Sendable {
     public var recommendedPreset: ModelRecommendedPreset?
     /// What a new installation selects before anyone chooses.
     public var initialSelection: ModelChoiceTable?
+    /// The live roles' defaults (`ModelRole.live`), best first, per platform and tier: live captions
+    /// on the Mac and the iPhone (docs/models.md, "Live models"). Readers before it ignore it.
+    public var liveSelection: ModelChoiceTable?
 
     public init(schemaVersion: Int = ModelManifest.readerVersion, minimumReaderVersion: Int = 1, catalogVersion: String? = nil,
                 families: [ModelFamilyEntry] = [], presets: [ModelPresetEntry] = [],
-                recommendedPreset: ModelRecommendedPreset? = nil, initialSelection: ModelChoiceTable? = nil) {
+                recommendedPreset: ModelRecommendedPreset? = nil, initialSelection: ModelChoiceTable? = nil,
+                liveSelection: ModelChoiceTable? = nil) {
         self.schemaVersion = schemaVersion; self.minimumReaderVersion = minimumReaderVersion
         self.catalogVersion = catalogVersion; self.families = families; self.presets = presets
         self.recommendedPreset = recommendedPreset; self.initialSelection = initialSelection
+        self.liveSelection = liveSelection
     }
 }
 
@@ -232,19 +237,29 @@ public struct VoiceEmbeddingSpace: Codable, Hashable, Sendable {
     public init(space: String, dimensions: Int? = nil) { self.space = space; self.dimensions = dimensions }
 }
 
-/// Ordered choices per role ("family/variant" keys, best first), with per-tier overrides.
+/// Ordered choices per role ("family/variant" keys, best first), with per-tier and per-platform
+/// overrides.
 public struct ModelChoiceTable: Equatable, Sendable {
     public var roles: [String: [String]]
     /// Device tier → role → choices, replacing `roles` for that role on that tier.
     public var tiers: [String: [String: [String]]]
+    /// Platform ("macOS", "iOS") → role → choices, replacing `roles` and `tiers` for that role on
+    /// that platform: an iPhone's defaults differ from a Mac's of the same memory.
+    public var platforms: [String: [String: [String]]]
 
-    public init(roles: [String: [String]] = [:], tiers: [String: [String: [String]]] = [:]) {
-        self.roles = roles; self.tiers = tiers
+    public init(roles: [String: [String]] = [:], tiers: [String: [String: [String]]] = [:],
+                platforms: [String: [String: [String]]] = [:]) {
+        self.roles = roles; self.tiers = tiers; self.platforms = platforms
     }
 
-    /// The choices for `role` on `tier`.
+    /// The choices for `role` on `tier`, on any platform the table doesn't single out.
     public func choices(for role: ModelRole, tier: String) -> [String] {
         tiers[tier]?[role.rawValue] ?? roles[role.rawValue] ?? []
+    }
+
+    /// The choices for `role` on `platform` and `tier`: the platform's own list first, then the tier's.
+    public func choices(for role: ModelRole, tier: String, platform: ModelPlatform) -> [String] {
+        platforms[platform.rawValue]?[role.rawValue] ?? choices(for: role, tier: tier)
     }
 }
 
@@ -388,7 +403,7 @@ enum ManifestValidation {
 
 extension ModelManifest: Codable {
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, minimumReaderVersion, catalogVersion, families, presets, recommendedPreset, initialSelection
+        case schemaVersion, minimumReaderVersion, catalogVersion, families, presets, recommendedPreset, initialSelection, liveSelection
     }
 
     public init(from decoder: Decoder) throws {
@@ -403,6 +418,7 @@ extension ModelManifest: Codable {
         presets = (try? values.decodeIfPresent(LossyList<ModelPresetEntry>.self, forKey: .presets))?.elements ?? []
         recommendedPreset = (try? values.decodeIfPresent(ModelRecommendedPreset.self, forKey: .recommendedPreset)) ?? nil
         initialSelection = (try? values.decodeIfPresent(ModelChoiceTable.self, forKey: .initialSelection)) ?? nil
+        liveSelection = (try? values.decodeIfPresent(ModelChoiceTable.self, forKey: .liveSelection)) ?? nil
         // Duplicate family IDs: the first wins.
         var seen = Set<String>()
         families = families.filter { family in
@@ -422,6 +438,7 @@ extension ModelManifest: Codable {
         if !presets.isEmpty { try values.encode(presets, forKey: .presets) }
         try values.encodeIfPresent(recommendedPreset, forKey: .recommendedPreset)
         try values.encodeIfPresent(initialSelection, forKey: .initialSelection)
+        try values.encodeIfPresent(liveSelection, forKey: .liveSelection)
     }
 }
 
@@ -672,16 +689,18 @@ extension ModelCapabilities: Codable {
 }
 
 extension ModelChoiceTable: Codable {
-    private enum CodingKeys: String, CodingKey { case roles, tiers }
+    private enum CodingKeys: String, CodingKey { case roles, tiers, platforms }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         roles = (try? values.decodeIfPresent([String: [String]].self, forKey: .roles)) ?? [:]
         tiers = (try? values.decodeIfPresent([String: [String: [String]]].self, forKey: .tiers)) ?? [:]
+        platforms = (try? values.decodeIfPresent([String: [String: [String]]].self, forKey: .platforms)) ?? [:]
     }
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(roles, forKey: .roles)
         if !tiers.isEmpty { try values.encode(tiers, forKey: .tiers) }
+        if !platforms.isEmpty { try values.encode(platforms, forKey: .platforms) }
     }
 }
 

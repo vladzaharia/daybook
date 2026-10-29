@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "minimumReaderVersion": 1,
+  "families": [
+    {
+      "id": "nemotron-3.5-asr-streaming",
+      "name": "Nemotron 3.5 ASR Streaming",
+      "maker": "NVIDIA",
+      "engine": "nemotronStreaming",
+      "roles": [
+        "liveTranscription"
+      ],
+      "summary": "Live transcription, a second or two behind the speaker.",
+      "homepage": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+      "license": {
+        "id": "OpenMDW-1.1",
+        "name": "OpenMDW License 1.1",
+        "url": "https://openmdw.ai/license/1-1/",
+        "allowsCommercialUse": true,
+        "attribution": "Nemotron 3.5 ASR Streaming by NVIDIA Corporation (nvidia/nemotron-3.5-asr-streaming-0.6b), licensed under the OpenMDW License Agreement, version 1.1 (https://openmdw.ai/license/1-1/); the agreement's full text is in Daybook's third-party notices. Converted to Core ML and quantized by Fluid Inference (FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML), under the same license."
+      },
+      "variants": [
+        {
+          "id": "latin-1120ms",
+          "name": "Nemotron 3.5 Streaming · Latin",
+          "detail": "Live captions in English, Spanish, French, Italian, Portuguese, and German.",
+          "homepage": "https://huggingface.co/FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
+          "releaseDate": "2026-05-29",
+          "recommendedMemoryGB": 6,
+          "capabilities": {
+            "wordTimestamps": true,
+            "wordConfidence": true,
+            "languages": [
+              "en",
+              "es",
+              "fr",
+              "it",
+              "pt",
+              "de"
+            ],
+            "vocabularyPrompt": false,
+            "streaming": true,
+            "memoryGB": 0.8
+          },
+          "engineOptions": {
+            "chunk": "1120ms",
+            "vocabulary": "latin"
+          },
+          "revisions": [
+            {
+              "id": "1a41b75758b0337ff67db7d5408280aaaf23074e",
+              "releaseDate": "2026-07-03",
+              "summary": "Correct license to OpenMDW-1.1 (commercial-ok) and fix base-model provenance",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
+                  "revision": "1a41b75758b0337ff67db7d5408280aaaf23074e",
+                  "include": [
+                    "latin/1120ms/encoder.mlmodelc/*",
+                    "latin/1120ms/decoder_joint.mlmodelc/*",
+                    "latin/1120ms/metadata.json",
+                    "latin/1120ms/tokenizer.json"
+                  ],
+                  "root": "latin/1120ms",
+                  "files": [
+                    {
+                      "path": "latin/1120ms/decoder_joint.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "0908aa04510db0fde1188519ae0a067789a7826613e8f96c47832ded7d0de131"
+                    },
+                    {
+                      "path": "latin/1120ms/decoder_joint.mlmodelc/coremldata.bin",
+                      "size": 454,
+                      "sha256": "468b807cf84fff48e2647a842a52b98e78048d1c10847d4cfb4e87e32cd733f7"
+                    },
+                    {
+                      "path": "latin/1120ms/decoder_joint.mlmodelc/model.mil",
+                      "size": 15791,
+                      "gitOID": "a74099fa94fca54b433d1c19fba076c3ebec7948"
+                    },
+                    {
+                      "path": "latin/1120ms/decoder_joint.mlmodelc/weights/weight.bin",
+                      "size": 22498714,
+                      "sha256": "5792bda2b88daae2ccb66689069da286e801f7bd168a95aa430590efa93e8e04"
+                    },
+                    {
+                      "path": "latin/1120ms/encoder.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "5488ed81fa1e370dd5411218d9b0e0562d01ca33c45b9ea1935bab6c8e8dc943"
+                    },
+                    {
+                      "path": "latin/1120ms/encoder.mlmodelc/coremldata.bin",
+                      "size": 572,
+                      "sha256": "619b2ef038eb3004e08be78bf068a54a8b9e1943928810b2ea48adaf211e6c35"
+                    },
+                    {
+                      "path": "latin/1120ms/encoder.mlmodelc/model.mil",
+                      "size": 998158,
+                      "gitOID": "e58690e908348bc1e001f76035c84738d12cb38c"
+                    },
+                    {
+                      "path": "latin/1120ms/encoder.mlmodelc/weights/weight.bin",
+                      "size": 564646848,
+                      "sha256": "e3dbd37659c7ef51d2dc691afac42fbdd1f04998fa62816ff0f2eebec5cc3d01"
+                    },
+                    {
+                      "path": "latin/1120ms/metadata.json",
+                      "size": 3063,
+                      "gitOID": "d19c6329e9211869a65670be42ff65eaeb915ae1"
+                    },
+                    {
+                      "path": "latin/1120ms/tokenizer.json",
+                      "size": 47848,
+                      "gitOID": "80284abdddfb6788445da9533cfce251c723c789"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "multilingual-2240ms",
+          "name": "Nemotron 3.5 Streaming · Multilingual",
+          "detail": "Live captions in 35 languages, about 2.5 seconds behind.",
+          "homepage": "https://huggingface.co/FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
+          "releaseDate": "2026-05-29",
+          "recommendedMemoryGB": 6,
+          "capabilities": {
+            "wordTimestamps": true,
+            "wordConfidence": true,
+            "languages": [
+              "en",
+              "es",
+              "de",
+              "fr",
+              "it",
+              "ar",
+              "ja",
+              "ko",
+              "pt",
+              "ru",
+              "hi",
+              "zh",
+              "vi",
+              "he",
+              "nl",
+              "cs",
+              "da",
+              "pl",
+              "no",
+              "sv",
+              "th",
+              "tr",
+              "bg",
+              "el",
+              "et",
+              "fi",
+              "hr",
+              "hu",
+              "lt",
+              "lv",
+              "ro",
+              "sk",
+              "uk",
+              "mt",
+              "sl"
+            ],
+            "vocabularyPrompt": false,
+            "streaming": true,
+            "memoryGB": 0.9
+          },
+          "engineOptions": {
+            "chunk": "2240ms",
+            "vocabulary": "full"
+          },
+          "revisions": [
+            {
+              "id": "1a41b75758b0337ff67db7d5408280aaaf23074e",
+              "releaseDate": "2026-07-03",
+              "summary": "Correct license to OpenMDW-1.1 (commercial-ok) and fix base-model provenance",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML",
+                  "revision": "1a41b75758b0337ff67db7d5408280aaaf23074e",
+                  "include": [
+                    "multilingual/2240ms/encoder.mlmodelc/*",
+                    "multilingual/2240ms/decoder_joint.mlmodelc/*",
+                    "multilingual/2240ms/metadata.json",
+                    "multilingual/2240ms/tokenizer.json"
+                  ],
+                  "root": "multilingual/2240ms",
+                  "files": [
+                    {
+                      "path": "multilingual/2240ms/decoder_joint.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "8a8e98a54ed1f16c3d5125816a002b991e167d620beb8fcc557f26d9a1c092f8"
+                    },
+                    {
+                      "path": "multilingual/2240ms/decoder_joint.mlmodelc/coremldata.bin",
+                      "size": 454,
+                      "sha256": "6404b542fb5d5faa79648fc96a79a0b981cbd087df0378adefd1f45ae56dd86e"
+                    },
+                    {
+                      "path": "multilingual/2240ms/decoder_joint.mlmodelc/model.mil",
+                      "size": 15801,
+                      "gitOID": "8ed23d599c24d330f6d3774ef11154dec22c6f70"
+                    },
+                    {
+                      "path": "multilingual/2240ms/decoder_joint.mlmodelc/weights/weight.bin",
+                      "size": 48782272,
+                      "sha256": "01f21eb747fbc53bd0ed7efebea1bf0aa655ebf2816f21d0bb6554c9b7fcfc0b"
+                    },
+                    {
+                      "path": "multilingual/2240ms/encoder.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "af569fd95237bdf8b91d38094691bfc990fcf3534316fa615bac5964c02809e4"
+                    },
+                    {
+                      "path": "multilingual/2240ms/encoder.mlmodelc/coremldata.bin",
+                      "size": 573,
+                      "sha256": "d5471a4edf55ce02dab51e5d01c86b419a7659bcdd6aac216ba6f0b795eae8bf"
+                    },
+                    {
+                      "path": "multilingual/2240ms/encoder.mlmodelc/model.mil",
+                      "size": 1010788,
+                      "gitOID": "46267b034c98ae3aefa1f72eaf8650a254deedfc"
+                    },
+                    {
+                      "path": "multilingual/2240ms/encoder.mlmodelc/weights/weight.bin",
+                      "size": 565336640,
+                      "sha256": "2e00be98049a22e095452c020f183d2b23728e145cc814ba031436931b4f2e8f"
+                    },
+                    {
+                      "path": "multilingual/2240ms/metadata.json",
+                      "size": 3005,
+                      "gitOID": "d0cc24c3804a6259a43c2c4ac968f24d2a1a2c7f"
+                    },
+                    {
+                      "path": "multilingual/2240ms/tokenizer.json",
+                      "size": 284969,
+                      "gitOID": "5c9c31a266fd62950553b9d5fef65598813f55e0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

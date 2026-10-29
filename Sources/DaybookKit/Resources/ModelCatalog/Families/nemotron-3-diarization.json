@@ -147,6 +147,77 @@
               ]
             }
           ]
+        },
+        {
+          "id": "live",
+          "name": "Nemotron 3 · Live",
+          "detail": "Speakers as they talk, about three seconds behind. Up to 8.",
+          "roles": [
+            "liveDiarization"
+          ],
+          "homepage": "https://huggingface.co/FluidInference/nemotron-3-diarization-coreml",
+          "releaseDate": "2026-09-23",
+          "recommendedMemoryGB": 4,
+          "capabilities": {
+            "maxSpeakers": 8,
+            "expectedSpeakerCount": false,
+            "streaming": true,
+            "memoryGB": 0.2
+          },
+          "engineOptions": {
+            "preset": "fast32-split-w8a8"
+          },
+          "revisions": [
+            {
+              "id": "25a90f97f254428d4b30374b76af9c74fdee8327",
+              "releaseDate": "2026-09-25",
+              "summary": "Add config.json",
+              "artifacts": [
+                {
+                  "name": "model",
+                  "repository": "FluidInference/nemotron-3-diarization-coreml",
+                  "revision": "25a90f97f254428d4b30374b76af9c74fdee8327",
+                  "include": [
+                    "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/*",
+                    "learnable_sil_emb.bin",
+                    "pre_encode_proj_t.bin"
+                  ],
+                  "files": [
+                    {
+                      "path": "learnable_sil_emb.bin",
+                      "size": 2048,
+                      "sha256": "d4417b3c0eabdf7c47032fac2b5b5a7ee83d819a6ddda8fd8eaf74e2b5cc4ac7"
+                    },
+                    {
+                      "path": "pre_encode_proj_t.bin",
+                      "size": 2097152,
+                      "sha256": "eb15b89e7af9813331a7d8db02e83e30bf97463d272c748e72086bafd4e81c60"
+                    },
+                    {
+                      "path": "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/analytics/coremldata.bin",
+                      "size": 243,
+                      "sha256": "3241bd5be194abbf0f625be8bd639b5c2035359594a6a513d70e9159e294ce39"
+                    },
+                    {
+                      "path": "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/coremldata.bin",
+                      "size": 603,
+                      "sha256": "b349771fbdb19443fb0af32b6c061fdb183d58e54c0b6376c2fbdca0a9941b70"
+                    },
+                    {
+                      "path": "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/model.mil",
+                      "size": 759102,
+                      "gitOID": "3087d5d4317d82bf884464a7e94c4fc1b8a9e74d"
+                    },
+                    {
+                      "path": "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/weights/weight.bin",
+                      "size": 99237504,
+                      "sha256": "99e2ae43ac6a513abf99951b35a75fb6bc51d2287c3c1af48a9657d917e57aed"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ]
     }
