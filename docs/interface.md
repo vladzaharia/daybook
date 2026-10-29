@@ -146,6 +146,7 @@ Tokens live in `Sources/Daybook/UI/DaybookStyle.swift`. The values the Mac and t
   - Add Photos… everywhere; Photo Deleted for a photo that's gone; Microphone silent, never "Mic silent".
   - Errors: the alert's title names what couldn't be done ("Couldn’t Import Audio"), its message is one plain sentence with what to do, and the system's own words are behind Details… (`AppState.report`, `AppProblem`).
   - Diarization, alignment, offset, and provenance never appear in the main interface.
+  - The inspector's Audio says each thing about a recording once: its name ("Microphone", "Soundcore Work", "Alex's iPhone"), then where it was made when the name doesn't say ("This Mac"), then, only when the conversation has several, how it lines up ("Lined up by sound · starts 0:12", "The main recording", "Couldn't line up"). A 0:00 start, confidence, and clock drift aren't shown (`AppState.recordingName`, `sourceLine`).
 
 ## Motion
 
