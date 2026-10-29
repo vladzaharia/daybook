@@ -486,6 +486,9 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var backgroundPassages: [TranscriptSegment]?
     /// The person chose to keep background audio in this conversation's transcript. Nil leaves it out.
     public var includesBackgroundAudio: Bool?
+    /// Which speaker profile each speaker is, and whether the person or Daybook decided
+    /// (`SpeakerProfiles.swift`). Nil until a speaker is named or recognized.
+    public var speakerIdentities: [SpeakerIdentity]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
@@ -573,7 +576,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         case schemaVersion, id, title, date, updatedAt, kind, notes, timedNotes, folderID, tags, templateID,
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
-            audioAlignments, fusionSummary, processingRequests, photos, backgroundPassages, includesBackgroundAudio
+            audioAlignments, fusionSummary, processingRequests, photos, backgroundPassages, includesBackgroundAudio,
+            speakerIdentities
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -611,6 +615,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         photos = try values.decodeIfPresent([MeetingPhoto].self, forKey: .photos)
         backgroundPassages = try values.decodeIfPresent([TranscriptSegment].self, forKey: .backgroundPassages)
         includesBackgroundAudio = try values.decodeIfPresent(Bool.self, forKey: .includesBackgroundAudio)
+        speakerIdentities = try values.decodeIfPresent([SpeakerIdentity].self, forKey: .speakerIdentities)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -648,6 +653,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(photos, forKey: .photos)
         try values.encodeIfPresent(backgroundPassages, forKey: .backgroundPassages)
         try values.encodeIfPresent(includesBackgroundAudio, forKey: .includesBackgroundAudio)
+        try values.encodeIfPresent(speakerIdentities, forKey: .speakerIdentities)
         try unknownFields.encode(to: encoder)
     }
 }
