@@ -99,14 +99,15 @@ final class LibrarySyncEncryptionTests: XCTestCase {
     // MARK: Turning it on
 
     /// A presence record as Daybook 0.3.0 writes one: no features, so that iPhone can't read an encrypted library.
-    private func writeEarlierDaybookPresence(_ deviceID: String, lastSeen: Date) throws {
+    private func writeEarlierDaybookPresence(_ name: String, lastSeen: Date, id: String? = nil) throws {
+        let deviceID = id ?? name
         let record: [String: Any] = ["format": "DaybookDevice", "schemaVersion": 1, "deviceID": deviceID, "deviceClass": "phone",
-                                     "displayName": deviceID, "canProcess": false, "audioPolicy": "onDemand",
+                                     "displayName": name, "canProcess": false, "audioPolicy": "onDemand",
                                      "lastSeen": ISO8601DateFormatter().string(from: lastSeen)]
         let directory = container.appendingPathComponent("Devices", isDirectory: true)
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        let name = SHA256.hash(data: Data(deviceID.utf8)).map { String(format: "%02x", $0) }.joined() + ".json"
-        try JSONSerialization.data(withJSONObject: record).write(to: directory.appendingPathComponent(name))
+        let file = SHA256.hash(data: Data(deviceID.utf8)).map { String(format: "%02x", $0) }.joined() + ".json"
+        try JSONSerialization.data(withJSONObject: record).write(to: directory.appendingPathComponent(file))
     }
 
     func testANewLibraryStartsEncrypted() async throws {
@@ -139,6 +140,28 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         XCTAssertTrue(summary.isMigrator); XCTAssertFalse(summary.hasRecoveryKey)
         await pass(mac)
         XCTAssertTrue(mac.sync.encryption.isOn)
+    }
+
+    /// An iPhone reinstalled with the same sync folder took a new device ID; its earlier one, last seen on Daybook 0.3.0
+    /// yesterday, is the same iPhone. It isn't listed as a device that would stop syncing, and doesn't hold encryption back.
+    func testAnEarlierIdentityOfAReinstalledIPhoneDoesntHoldEncryptionBack() async throws {
+        let keychain = MemoryLibraryKeyStore()
+        let mac = try await device("Mac", phone: false, role: .receive, keys: keychain)
+        try writeEarlierDaybookPresence("Phone", lastSeen: Date().addingTimeInterval(-86_400), id: "Phone before reinstall")
+        await pass(mac)
+        let before = await mac.sync.devicesNotReadyForEncryption()
+        XCTAssertEqual(before.map(\.id), ["Phone before reinstall"])
+        // The reinstalled iPhone syncs under its new device ID.
+        let phone = try await device("Phone", phone: true, role: .send, keys: keychain)
+        await pass(phone)
+        await pass(mac)
+        let notReady = await mac.sync.devicesNotReadyForEncryption()
+        XCTAssertTrue(notReady.isEmpty, "\(notReady.map(\.id))")
+        let known = await mac.sync.knownDevices()
+        XCTAssertEqual(known.first { $0.id == "Phone before reinstall" }?.supersededBy, "Phone", "still known by its ID")
+        mac.sync.encryptsAutomatically = true
+        await mac.sync.encryptOnceEveryDeviceCan()
+        try await wait("encryption to turn on") { mac.sync.encryption.isOn }
     }
 
     func testAnIPhoneLeavesAutomaticEncryptionToAMacThatsAround() async throws {
