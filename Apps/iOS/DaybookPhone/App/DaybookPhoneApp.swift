@@ -23,8 +23,13 @@ struct DaybookPhoneApp: App {
         sync.replica = PhoneSync.replica(displayName: ProcessingRequest.Device.currentName, budget: settings.audioCacheBudget)
         // An encrypted library's key, from iCloud Keychain (never in tests).
         if !options.isRunningTests, !LaunchOptions.isTestHost { sync.replica.keyStore = KeychainLibraryKeyStore.system }
-        // Sealing an encrypted library's history downloads recordings only on Wi‑Fi (never limited in tests).
-        if !options.isRunningTests, !LaunchOptions.isTestHost { sync.replica.network = { NetworkConditionMonitor.shared.condition } }
+        // Sealing an encrypted library's history downloads recordings only on Wi‑Fi, unless the person allows cellular
+        // (never limited in tests).
+        if !options.isRunningTests, !LaunchOptions.isTestHost {
+            sync.replica.network = {
+                NetworkConditionMonitor.shared.condition.allowing(cellular: UserDefaults.standard.bool(forKey: PhoneSettings.Keys.encryptsOverCellular))
+            }
+        }
         // The courier sends what each pass writes to the Mac through CloudKit, ahead of iCloud Drive
         // (docs/icloud-sync.md, "Courier (CloudKit)"). Never in tests or with a debug sync folder.
         if !options.isRunningTests, !LaunchOptions.isTestHost, options.syncFolder == nil {

@@ -20,9 +20,12 @@ final class LibraryWordsTests: XCTestCase {
         progress.waitsForWiFi = true
         XCTAssertEqual(LibraryWords.encryptionStatus(SealingSummary(currentKey: "k", hasKey: true, hasRecoveryKey: false, isMigrator: true,
                                                                     progress: progress)), "Encrypting · 12 left · Waiting for Wi‑Fi")
-        // Only the device sealing the history says how far it's got.
+        // Only the device sealing the history says how far it's got, and offers cellular (Use Cellular Data).
         XCTAssertEqual(LibraryWords.encryptionStatus(SealingSummary(currentKey: "k", hasKey: true, hasRecoveryKey: false, isMigrator: false,
                                                                     progress: progress)), "On")
+        XCTAssertTrue(LibraryWords.encryptsHere(SealingSummary(currentKey: "k", hasKey: true, hasRecoveryKey: false, isMigrator: true, progress: progress)))
+        XCTAssertFalse(LibraryWords.encryptsHere(SealingSummary(currentKey: "k", hasKey: true, hasRecoveryKey: false, isMigrator: false, progress: progress)))
+        XCTAssertFalse(LibraryWords.encryptsHere(summary), "nothing left to encrypt")
     }
 
     func testANetworkSuitsLargeDownloadsOnlyOnWiFiOutsideLowDataMode() {
@@ -31,6 +34,7 @@ final class LibraryWordsTests: XCTestCase {
         XCTAssertEqual(SyncNetworkCondition(satisfied: true, expensive: false, constrained: true), .restricted, "Low Data Mode")
         XCTAssertEqual(SyncNetworkCondition(satisfied: false, expensive: false, constrained: false), .restricted, "offline")
         XCTAssertEqual(SyncReplicaConfiguration().network(), .unrestricted, "a Mac never waits")
+        XCTAssertEqual(SyncNetworkCondition.restricted.allowing(cellular: true), .unrestricted, "cellular allowed, as for model downloads")
     }
 
     func testAPhotoIsReadWithItsTimeAndCaptionNotItsFileName() {
