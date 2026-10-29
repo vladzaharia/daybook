@@ -157,11 +157,17 @@ struct LiveCaptionFeed: View {
     var lineCount = 6
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The label's glyph column, which Listen Live's Listening row shares, so their words start together.
+    static let glyphColumn: CGFloat = 24
+
     var body: some View {
         if let content = content {
             VStack(alignment: .leading, spacing: Space.s2) {
-                Label("Live captions · tentative", systemImage: "captions.bubble")
-                    .font(TypeStyle.statusLead).foregroundStyle(Ink.meta)
+                HStack(spacing: Space.s3) {
+                    Image(systemName: "captions.bubble").frame(width: Self.glyphColumn)
+                    Text("Live captions · tentative")
+                }
+                .font(TypeStyle.statusLead).foregroundStyle(Ink.meta)
                 content
             }
             .frame(maxWidth: .infinity, alignment: .leading)

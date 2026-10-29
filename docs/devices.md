@@ -300,7 +300,7 @@ fires for a Mac that was already connected.
 The interface is generic and capability-driven:
 
 - **Sidebar › Devices**: every configured device, with at most one accessory (a progress ring
-  while importing, else a count of new recordings this Mac can import: none for a recorder another
+  while importing, a teal arc drawn by Daybook so it reads the same in an inactive window, else a count of new recordings this Mac can import: none for a recorder another
   device manages). The glyph is teal while a recorder is linked, as on the iPhone, and the
   sidebar's own colour otherwise. A `+` on hover adds a device.
 - **List column**: Recording Now, the queue, New on <device>, and Already in Daybook (collapsed).
@@ -308,9 +308,14 @@ The interface is generic and capability-driven:
   margin; a status dot and byline (with Cancel while connecting); the problem under it, in a
   conversation's status box with at most two actions; figure tiles for whatever status the method
   reports; the page's one action (Import N New, Connect, or Use on This Mac), which neither the
-  problem box nor a method row repeats; Import (each method in preference order); Recent imports.
-  Daybook on iPhone's page has the same header and boxes, without imports: its recordings are the
-  list beside it.
+  problem box nor a method row repeats; Import (each method in preference order, each saying only
+  what the byline doesn't: a connected link is just its name, a watched folder just where it is);
+  Recent imports. Daybook on iPhone's page has the same header and boxes, without Import or method
+  rows: the byline says the link, the box says when sync is off, and its recordings are the list
+  beside it.
+- **More menu** (the page's toolbar): Refresh Status and Device Settings… always, dimmed when they
+  can't run; the rest (Start or Pause Recording on <device>, Listen Live, Device Details…, Connect or
+  Disconnect, the handoff items) only when it applies (`DeviceMenuOffer`).
 - **Add Device…** (File menu, sidebar, Settings, Welcome): choose a kind, then its methods in
   order of preference. The first is marked Recommended. A direct method's card is the
   pre-permission screen; its one button starts the search.
@@ -382,7 +387,7 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
   never opens a listener, and `LinkService` advertises over Bonjour under the same rule. Tests use
   loopback and memory keys.
 - **Device page.** Paired and connected or when last seen, what it's recording now (with Stop on
-  iPhone), how recordings arrive, and its recent recordings. The list column shows all of them, as
+  iPhone), and a box when it isn't paired or sync is off. The list column shows all of them, as
   they're all in Daybook.
 - **Settings › Devices.** Over Wi‑Fi status, Record along with this Mac (both ways:
   off, the phone's cascading starts are declined too), how recordings arrive (with a link to sync

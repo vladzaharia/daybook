@@ -67,7 +67,7 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
         self.interval = interval
     }
 
-    /// "Watching · last import 2 hours ago" for the page and Settings.
+    /// "Watching iCloud Drive › Daybook Import · Last import 2 hours ago", as the page's line and Settings say it.
     public var summary: String {
         if let problem {
             guard let name = folderDisplayName else { return problem.message }
@@ -79,7 +79,7 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
         }
         guard isWatching else { return "Not watching \(name)." }
         guard let lastImportDate else { return "Watching \(name)" }
-        return "Watching \(name) · last import \(DeviceDateFormat.relative(lastImportDate))"
+        return "Watching \(name) · Last import \(DeviceDateFormat.relative(lastImportDate))"
     }
 
     /// "iCloud Drive › Daybook Import".
