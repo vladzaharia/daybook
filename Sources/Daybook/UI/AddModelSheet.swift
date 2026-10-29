@@ -25,7 +25,7 @@ struct AddModelSheet: View {
     @State private var problem: String?
     /// The system's words for `problem`, behind Details.
     @State private var problemDetails: String?
-    @State private var showingDetails = false
+    @State private var showingFiles = false
     @State private var rejections: [ModelAdditionPreview.Rejection] = []
     /// The fields as they were checked; editing them makes the result stale.
     @State private var checkedFields = ""
@@ -78,20 +78,7 @@ struct AddModelSheet: View {
 
     private func problemSection(_ problem: String) -> some View {
         Section {
-            HStack(alignment: .firstTextBaseline) {
-                Label {
-                    Text(problem).fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
-                }
-                if let problemDetails {
-                    Spacer(minLength: Space.s3)
-                    Button("Details…") { showingDetails = true }
-                        .popover(isPresented: $showingDetails) {
-                            Text(problemDetails).textSelection(.enabled).padding(Space.s4).frame(maxWidth: 360, alignment: .leading)
-                        }
-                }
-            }
+            ProblemLine(text: problem, details: problemDetails)
             ForEach(Self.grouped(rejections), id: \.engine) { group in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(group.engine).font(.subheadline.weight(.semibold))
@@ -140,31 +127,42 @@ struct AddModelSheet: View {
             if !candidate.proposal.capabilities.descriptions.isEmpty {
                 LabeledContent("Capabilities", value: candidate.proposal.capabilities.descriptions.joined(separator: " · "))
             }
-            DisclosureGroup {
+            // The files behind a button, so this row's label and value line up with the rest.
+            LabeledContent("Download") {
+                HStack(spacing: Space.s2) {
+                    Text("\(candidate.files.count == 1 ? "1 file" : "\(candidate.files.count) files") · \(ModelSize.format(candidate.bytes))")
+                        .monospacedDigit()
+                    Button { showingFiles = true } label: { Image(systemName: "info.circle") }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Files")
+                        .accessibilityLabel("Files")
+                        .popover(isPresented: $showingFiles, arrowEdge: .bottom) { files(candidate) }
+                }
+            }
+            if let duplicate = candidate.duplicateOf {
+                ProblemLine(text: "Already in your models as \(duplicate).")
+            }
+        }
+    }
+
+    private func files(_ candidate: ModelAdditionPreview.Candidate) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Space.s1) {
                 ForEach(candidate.files, id: \.path) { file in
                     HStack {
                         Text(file.path).lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: Space.s3)
                         Text(ModelSize.format(file.size)).monospacedDigit().foregroundStyle(.secondary)
                     }
-                    .font(.subheadline)
-                }
-            } label: {
-                LabeledContent("Download") {
-                    Text("\(candidate.files.count == 1 ? "1 file" : "\(candidate.files.count) files") · \(ModelSize.format(candidate.bytes))")
-                        .monospacedDigit()
                 }
             }
-            if let duplicate = candidate.duplicateOf {
-                Label {
-                    Text("Already in your models as \(duplicate).")
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
-                }
-            }
-        } header: {
-            Text(preview.repository)
+            .font(.subheadline)
+            .padding(Space.s4)
         }
+        .frame(width: 360)
+        .frame(maxHeight: 280)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var footer: some View {

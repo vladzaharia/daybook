@@ -491,8 +491,9 @@ final class ModelManagerTests: XCTestCase {
         ]
         XCTAssertEqual(catalog.resultCounts(in: meetings), ["whisper/small": 2, "qwen2.5/7b-4bit": 1, "someone/gone": 1],
                        "Counted once per conversation, legacy IDs and unlisted models included")
-        XCTAssertEqual(ModelDetailsSheet.variantName(qwen), "7B")
-        XCTAssertEqual(ModelDetailsSheet.variantName(catalog.model("whisper/small")!), "Small")
+        XCTAssertNil(ModelDetailsSheet.unnamedFamily(qwen), "The title names the family and the variant")
+        XCTAssertNil(ModelDetailsSheet.unnamedFamily(catalog.model("whisper/small")!))
+        XCTAssertEqual(ModelDetailsSheet.unnamedFamily(catalog.model("nemotron-3-diarization/offline")!), "Nemotron 3 Diarization")
         XCTAssertEqual(ModelDetailsSheet.results(1), "1 conversation")
     }
 
@@ -504,6 +505,7 @@ final class ModelManagerTests: XCTestCase {
             if let attribution = entry.attribution { XCTAssertTrue(credits.contains(attribution)) }
         }
         XCTAssertTrue(credits.contains("Non-commercial"))
+        XCTAssertEqual(credits.components(separatedBy: "Apple Vision").count - 1, 1, "A family of one model isn't named twice")
     }
 
     // MARK: Helpers
