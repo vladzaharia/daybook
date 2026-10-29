@@ -395,8 +395,11 @@ private struct VoiceMatchingSheet: View {
 enum ModelSettingsDemo {
     private static var applied = false
 
+    /// "add" opens Add Model on the scripted repository; "add:<owner/name>" on another, which the scripted Hugging Face
+    /// doesn't have, to show what Add Model says when a check fails.
     static var addText: String {
-        ModelDemo.value("add") != nil ? "https://huggingface.co/\(ModelDemo.addRepository)" : ""
+        guard let repository = ModelDemo.value("add") else { return "" }
+        return "https://huggingface.co/\(repository.isEmpty ? ModelDemo.addRepository : repository)"
     }
 
     static func apply(state: AppState, manager: ModelManager, proxy: ScrollViewProxy, details: Binding<ModelDetailsRequest?>,
