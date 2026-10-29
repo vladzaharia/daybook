@@ -48,7 +48,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
     - A trailing glyph appears only when a conversation isn't ready: recording, transcribing (a 2 pt gradient line), waiting, waiting for models, paused, couldn't finish, or not transcribed.
     - The column's subtitle speaks only while work is happening. An empty place says "No Conversations" (a folder adds how to fill it); an empty library says so once, on the page, and the column stays empty.
   - **Detail:** the page, on the Paper reading surface.
-  - **Inspector:** hidden by default (⌃⌘I). It holds Details, People, Audio, and Processing. When opening it would leave the page under 560 pt, the sidebar steps aside. Tags sit under their label, like Finder's Get Info; Template is a picker whose first item carries the guess ("Automatic (Meeting)").
+  - **Inspector:** hidden by default (⌃⌘I). It holds Details, People, Audio, and Processing. Under a speaker Daybook named by voice, People reads Recognized with Not <name>; under one it's unsure of, Maybe <name> with Yes and No (docs/architecture.md, "Speakers and profiles"). When opening it would leave the page under 560 pt, the sidebar steps aside. Tags sit under their label, like Finder's Get Info; Template is a picker whose first item carries the guess ("Automatic (Meeting)").
 - **Detail toolbar:** declared once on the stable detail column (`DetailToolbar`), never inside the per-conversation view. Its groups are always present, dimmed when they don't apply:
   - Record (the red elapsed-time pill while recording)
   - the Summary | Transcript switch (disabled until a transcript exists; Bookmark replaces it while that conversation is recording) and More
@@ -86,7 +86,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
   - **Library** is the library's location, iCloud Sync, and the privacy statement. iCloud Sync is one row saying where sync stands with its one action ("Up to date · 11:42 AM", Sync Now); a problem follows it once, in place (`ProblemLine`); then encryption and this Mac's preference. Turn Off Sync… and Erase Deleted Conversations from iCloud… sit under the group.
   - A problem anywhere in Settings or its sheets is a `ProblemLine`: the warning glyph, one sentence in the label colour, Details…, and its actions, which move under a long sentence.
   - The About Daybook panel's credits carry the same acknowledgements.
-- **Vocabulary** and **Summary Templates** are separate single windows.
+- **Vocabulary**, **Summary Templates**, and **Speaker Profiles** are separate single windows. Speaker Profiles lists each profile with its voiceprints (where each came from: Named, Confirmed, or Learned, with the conversation and date; each removable), Forget Learned Voiceprints, the conversations it labels, rename, and delete.
 - **Welcome** is a three-step first-run window.
 
 ## Design tokens
@@ -193,7 +193,7 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --select "<conversation title>"     --page transcript     --inspector
   --search "<query>"                  --sheet history|timing|corrections
   --open-settings general|models|devices|library
-  --open-window vocabulary|templates|welcome
+  --open-window vocabulary|templates|speaker-profiles|welcome
   --show-notes   --show-setup (Add Device)
   --device-demo <scenario>            device surfaces with an inert transport; see devices.md
   --simulate-recording "<title>"      fakes the recording state; no microphone

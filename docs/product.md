@@ -27,7 +27,7 @@ Current delivery: a runnable Developer ID signed preview, installed locally, wit
 ## Follow-on work requiring evidence or external access
 
 - Direct Soundcore synchronization: Bluetooth is the recommended connection, with files as the fallback ([devices.md](devices.md)). It is verified against a simulated recorder and protocol fixtures; physical-firmware validation, complete marker extraction, Wi-Fi, and MFi acceptance are still pending.
-- Longitudinal speaker identity: a user-controlled voice enrollment flow and evaluation set before making persistent identity claims.
+- Longitudinal speaker identity: speaker profiles learn from names the person gives and label other conversations conservatively ([architecture](architecture.md#speakers-and-profiles)); an evaluation set of real recordings is still needed to calibrate their thresholds.
 - Distribution: a Developer ID and notarization credentials are needed for a broadly distributed trusted release. An ad-hoc signed local app can be built without those credentials.
 - Real-call acceptance: Zoom, Meet, Teams, muted microphones, headphones, device changes, sleep/wake, long sessions, overlapping voices, and partial recordings need recordings on actual devices.
 
