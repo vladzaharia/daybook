@@ -31,6 +31,15 @@ public struct SoundcoreTiming {
     /// After the recorder doesn't list its recordings (it didn't answer, or refused), the waits
     /// before each quiet try again while the link stays up.
     public var relist: [Duration] = [15, 60].map { .seconds($0) }
+    /// Holding the link for the recorder's button (`SoundcoreConnection.staysConnected`): the wait
+    /// before trying again when an attempt failed at once (the recorder isn't known to the system).
+    public var holdRetry: Duration = .seconds(30)
+    /// After the recorder says it stopped recording, how long live audio still being received may take
+    /// to end on its own before what arrived is kept.
+    public var liveTail: Duration = .seconds(2)
+    /// A recording the recorder started this recently, found as the held link comes back, counts as its
+    /// button pressed while the link was away.
+    public var buttonCatchUp: Duration = .seconds(60)
 
     public init(request: Duration = .seconds(10), stall: Duration = .seconds(45), settle: Duration = .seconds(1), scan: Duration = .seconds(15), connect: Duration = .seconds(20), reconnect: Duration = .seconds(10), recordConfirm: Duration = .seconds(10), backoff: [Duration] = [2, 5, 15, 30, 60].map { .seconds($0) }, idleRelease: Duration = .seconds(300), automaticIdleRelease: Duration = .seconds(30), automaticCooldown: Duration = .seconds(900), lastKnownRecording: Duration = .seconds(1_200), relist: [Duration] = [15, 60].map { .seconds($0) }) {
         self.request = request
@@ -476,7 +485,19 @@ public final class SoundcoreSession {
         transfer.stallTimer = Task { [weak self] in
             try? await Task.sleep(for: wait)
             guard !Task.isCancelled else { return }
-            self?.abort(token, SoundcoreError.stalled)
+            self?.stalled(token)
+        }
+    }
+
+    /// No audio for the stall timeout. A transfer fails; live audio keeps what arrived (the recording
+    /// it follows ended, or the stream went quiet), as a disconnect does.
+    private func stalled(_ token: UUID) {
+        guard let transfer, transfer.token == token, transfer.outcome == nil else { return }
+        if transfer.isLive, transfer.receivedBytes > 0 {
+            stopTransport()
+            completeLive(transfer)
+        } else {
+            abort(transfer, SoundcoreError.stalled)
         }
     }
 

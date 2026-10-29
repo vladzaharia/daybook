@@ -76,15 +76,37 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     public var onChange: (() -> Void)?
     /// A Listen Live portion to save: the staged file (the handler removes it once it's saved), the
-    /// recording's ID, and its length.
-    public var onLiveSaved: ((URL, String, TimeInterval) -> Void)?
+    /// recording's ID, its length, and the conversation it was captured for (a shared recording), if any.
+    public var onLiveSaved: ((URL, String, TimeInterval, UUID?) -> Void)?
+    /// The recorder's own button started (true) or stopped (false) a recording: a pushed state that
+    /// changes what this device knew, while no Start or Pause of its own is waiting for an answer.
+    public var onButton: ((Bool) -> Void)?
+    /// Holds the link while the recorder is in range, so its button is heard (a shared recording
+    /// starts from it): never let go when idle, and after a drop or a failed attempt a pending
+    /// connection with no deadline, rather than the cooldown automatic import waits. The iPhone sets
+    /// it for a recorder it manages that records along with it; iOS shares the one link to the
+    /// recorder between apps, so holding it doesn't keep the Soundcore app away.
+    public var staysConnected = false {
+        didSet {
+            guard staysConnected != oldValue else { return }
+            if staysConnected {
+                switch phase {
+                case .idle: if automaticDueAt != nil { cancelTimer() }; armAutomatic(after: nil)
+                case .connected: idleTimer?.cancel()
+                default: break
+                }
+            } else {
+                scheduleIdleRelease()
+            }
+        }
+    }
     /// Set from the device's preference. Turning it on arms a quiet connection to the remembered recorder.
     public var importsAutomatically: Bool {
         didSet {
             guard importsAutomatically != oldValue else { return }
             if importsAutomatically {
                 if case .idle = phase { armAutomatic(after: nil) }
-            } else {
+            } else if !staysConnected {
                 switch phase {
                 case .idle, .waitingInRange, .waitingForRadio(.automatic): stopAutomatic()
                 default: break
@@ -128,7 +150,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     public var isEnabled = true {
         didSet {
             guard isEnabled != oldValue else { return }
-            if isEnabled { if importsAutomatically { armAutomatic(after: nil) } } else { disconnect(rearm: false) }
+            if isEnabled { if importsAutomatically || staysConnected { armAutomatic(after: nil) } } else { disconnect(rearm: false) }
         }
     }
 
@@ -305,12 +327,13 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         // Publishing first lets the session apply ownership now that the serial is known, so a
         // recorder another device manages is never reached for.
         publish()
-        if remembered != nil, isEnabled, importsAutomatically { armAutomatic(after: nil) }
+        if remembered != nil, isEnabled, importsAutomatically || staysConnected { armAutomatic(after: nil) }
     }
 
     /// Connect or Reconnect: the remembered recorder directly, then a scan for it.
     public func connect() {
         guard isEnabled, remembered != nil, managedElsewhere == nil else { return }
+        personLetGo = false
         if case .connected = phase { return }
         cancelTimer()
         problem = nil
@@ -319,7 +342,15 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         begin(.reconnect)
     }
 
-    public func disconnect() { disconnect(rearm: true) }
+    public func disconnect() {
+        // The person let it go: holding it for the button waits like automatic import does.
+        personLetGo = true
+        disconnect(rearm: true)
+    }
+
+    /// The person disconnected; holding the link for the recorder's button waits until they connect
+    /// again (or the next launch).
+    private var personLetGo = false
 
     /// After a handoff: waits for the recorder with no deadline (like automatic import, whatever its
     /// preference), because the device that had it may still be finishing before it lets go.
@@ -561,17 +592,30 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     // MARK: Listen Live
 
-    public func startListening() {
-        guard case .connected = phase, let session, !live.isListening else { return }
-        guard info?.isRecording == true else { problem = SoundcoreIssue.notRecording.problem; publish(); return }
-        origin = .person
+    public func startListening() { startListening(into: nil, captions: true) }
+
+    /// The conversation the live audio being received is saved into, when it's a shared recording's.
+    public private(set) var liveConversation: UUID?
+
+    /// Listen Live: receives the recording in progress and saves it as it arrives. With `conversation`,
+    /// for a shared recording: the audio is saved into that conversation when listening ends, and
+    /// captioning is up to `captions` (the device's own recording captions the room already).
+    @discardableResult
+    public func startListening(into conversation: UUID?, captions: Bool) -> Bool {
+        guard case .connected = phase, let session, !live.isListening else { return false }
+        guard info?.isRecording == true else {
+            if conversation == nil { problem = SoundcoreIssue.notRecording.problem; publish() }
+            return false
+        }
+        if conversation == nil { origin = .person }
         problem = nil
         live.isListening = true
         live.saved = nil
         live.receivedSeconds = 0
+        liveConversation = conversation
         liveSleep.hold(true)
         beginActivity()
-        startCaptions()
+        if captions { startCaptions() }
         publish()
         let staging = stagingDirectory
         listeningTask = Task {
@@ -583,19 +627,23 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
                 let id = String(result.recordingID)
                 self.live.saved = .init(seconds: result.download.seconds, recordingID: id)
                 // Whoever saves it removes the staged audio; with nobody to, it goes now.
-                if let onLiveSaved = self.onLiveSaved { onLiveSaved(result.download.url, id, result.download.seconds) }
+                if let onLiveSaved = self.onLiveSaved { onLiveSaved(result.download.url, id, result.download.seconds, self.liveConversation) }
                 else { try? FileManager.default.removeItem(at: result.download.url) }
             } catch {
-                if (error as? SoundcoreError) == .liveFileUnavailable { self.problem = SoundcoreIssue.notRecording.problem }
-                else if !(error is CancellationError), (error as? SoundcoreError) != .disconnected { self.lastTechnicalProblem = error.localizedDescription }
+                if (error as? SoundcoreError) == .liveFileUnavailable {
+                    // A shared recording's capture says nothing on the device page: its recording carries on.
+                    if self.liveConversation == nil { self.problem = SoundcoreIssue.notRecording.problem }
+                } else if !(error is CancellationError), (error as? SoundcoreError) != .disconnected { self.lastTechnicalProblem = error.localizedDescription }
             }
             self.live.isListening = false
+            self.liveConversation = nil
             self.listeningTask = nil
             self.endCaptions()
             self.liveSleep.hold(false)
             self.endActivity()
             self.publish()
         }
+        return true
     }
 
     /// Saves what arrived as a conversation. The recorder keeps recording.
@@ -604,6 +652,16 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         // stops setup or removes a listener waiting behind a different transfer.
         session?.stopListening()
         listeningTask?.cancel()
+    }
+
+    private func endLiveSoon() {
+        let task = listeningTask
+        Task { [weak self] in
+            guard let wait = self?.timing.liveTail else { return }
+            try? await Task.sleep(for: wait)
+            guard let self, self.listeningTask == task, task != nil, self.live.isListening else { return }
+            self.session?.stopListening()
+        }
     }
 
     private func liveProgress(_ bytes: UInt64) {
@@ -767,6 +825,11 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         if transport.canReconnect(to: id) {
             if timed { open(id, deadline: timing.reconnect, fallbackToScan: true) }
             else { phase = .waitingInRange(id); peripheral = id; transport.connect(id) }
+        } else if !timed, staysConnected {
+            // Holding the link never scans (iOS restricts scanning in the background, and it costs
+            // battery): the system's record of the recorder is tried again shortly.
+            phase = .idle
+            armAutomatic(after: timing.holdRetry)
         } else {
             startScan(target: id)
         }
@@ -819,7 +882,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         guard reconnectAttempt <= timing.backoff.count, remembered != nil, isEnabled, managedElsewhere == nil else {
             reconnectAttempt = 0
             phase = .idle
-            if importsAutomatically && isEnabled && remembered != nil { armAutomatic(after: nil) }
+            if (importsAutomatically || staysConnected) && isEnabled && remembered != nil { armAutomatic(after: nil) }
             publish()
             return
         }
@@ -829,9 +892,13 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     }
 
     private func armAutomatic(after delay: Duration?) {
-        guard importsAutomatically, isEnabled, remembered != nil, managedElsewhere == nil else { return }
+        guard importsAutomatically || staysConnected, isEnabled, remembered != nil, managedElsewhere == nil else { return }
         origin = .automatic
-        if let delay {
+        // Holding the link for the recorder's button: no cooldown, a pending connection now, or after a
+        // short wait when the last attempt failed at once (never a busy loop).
+        let holding = staysConnected && !personLetGo
+        let delay = holding ? delay.map { min($0, timing.holdRetry) } : delay
+        if let delay, delay > .zero {
             phase = .idle
             automaticDueAt = Date().addingTimeInterval(Self.seconds(delay))
             startTimer(delay) { [weak self] in self?.armAutomatic(after: nil) }
@@ -845,7 +912,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     /// suspended, so a wait for the next automatic import that has run out starts its quiet
     /// connection now; the system keeps that pending, and wakes the app when the recorder answers.
     public func resumeAutomaticImportIfDue(now: Date = Date()) {
-        guard case .idle = phase, importsAutomatically, isEnabled, remembered != nil, managedElsewhere == nil else { return }
+        guard case .idle = phase, importsAutomatically || staysConnected, isEnabled, remembered != nil, managedElsewhere == nil else { return }
         if let due = automaticDueAt, due > now { return }
         cancelTimer()
         armAutomatic(after: nil)
@@ -867,7 +934,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         transport?.stopScan()
         if let peripheral { dropLink(peripheral) }
         phase = .idle
-        if rearm, importsAutomatically, isEnabled, remembered != nil { armAutomatic(after: timing.automaticCooldown) }
+        if rearm, importsAutomatically || staysConnected, isEnabled, remembered != nil { armAutomatic(after: timing.automaticCooldown) }
         publish()
     }
 
@@ -919,7 +986,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
                 problem = nil
                 phase = .idle
                 if let intent = deferredIntent { deferredIntent = nil; begin(intent) }
-                else if importsAutomatically { armAutomatic(after: nil) }
+                else if importsAutomatically || staysConnected { armAutomatic(after: nil) }
             }
         case .poweredOff, .unauthorized, .unsupported:
             if case .waitingForRadio(let intent) = phase, intent != .automatic { deferredIntent = intent }
@@ -961,8 +1028,26 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         }
         session.onPush = { [weak self] in self?.receivePush($0) }
         self.session = session
+        // What it was doing as last seen, so a press missed while the link came back is still heard.
+        recordingBeforeLink = remembered?.info?.isRecording ?? false
         publish()
         Task { await confirm(id, session) }
+    }
+
+    /// Whether the recorder was recording when last seen, before this connection: nil once its first
+    /// list on this connection has been read.
+    private var recordingBeforeLink: Bool?
+
+    /// The recorder's button pressed just before the link came back (iOS relaunching Daybook in the
+    /// background for it, the push arriving before the link was ready): when the link is held for the
+    /// button, a recording it started within `buttonCatchUp` that this device didn't know of counts as
+    /// the press. One running longer was started by the person some time ago and isn't a press now.
+    private func catchUpMissedButton() {
+        guard let before = recordingBeforeLink else { return }
+        recordingBeforeLink = nil
+        guard staysConnected, !before, info?.isRecording == true, !recordCommandPending,
+              let start = startDate(of: activeRecordingID), abs(Date().timeIntervalSince(start)) <= Self.seconds(timing.buttonCatchUp) else { return }
+        onButton?(true)
     }
 
     /// The recorder answers a status request before it counts as connected.
@@ -971,6 +1056,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             let status = try await session.readStatus()
             guard self.session === session else { return }
             listedThisConnection = false
+            personLetGo = false
             phase = .connected(id)
             reconnectAttempt = 0
             connectingTo = nil
@@ -1013,7 +1099,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private func applyListing(_ result: SoundcoreSession.Listing) {
         listing = result.recordings.sorted { $0.id > $1.id }
         activeRecordingID = result.activeRecordingID
+        let firstListing = !listedThisConnection
         listedThisConnection = true
+        defer { if firstListing { catchUpMissedButton() } }
         let now = Date()
         inventoryUpdatedAt = now
         lastListing = ListingOutcome(at: now, result: .listed(count: listing.count, pages: result.pages, endedOnRefusal: result.endedOnRefusal))
@@ -1040,9 +1128,19 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             current.microphoneCharging = recorder
             current.caseCharging = caseCharging
         case .recording(let on):
+            let changed = current.isRecording != on
             current.isRecording = on
+            // Live audio of a recording that ended has all there is: the stream ends on its own (the
+            // last frames may still be on their way), else it's kept after a moment rather than waiting
+            // for the stream to go quiet.
+            if !on, live.isListening { endLiveSoon() }
             // Either way the list changes: a recording appears in progress, or one is finished.
             relist()
+            applyStatus(current)
+            publish()
+            // The person pressed the recorder's button; a state its own command asked for isn't news.
+            if changed, !recordCommandPending { onButton?(on) }
+            return
         }
         applyStatus(current)
         publish()
@@ -1091,7 +1189,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     private func scheduleIdleRelease() {
         idleTimer?.cancel()
-        guard case .connected = phase, activity == 0, !live.isListening else { return }
+        guard case .connected = phase, activity == 0, !live.isListening, !(staysConnected && managedElsewhere == nil) else { return }
         let wait = managedElsewhere != nil ? .zero : origin == .automatic ? timing.automaticIdleRelease : timing.idleRelease
         idleTimer = Task { [weak self] in
             try? await Task.sleep(for: wait)
@@ -1102,7 +1200,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     /// Nothing has happened for a while: let the recorder go so the phone app can reach it.
     private func releaseIdle() {
-        guard case .connected = phase, activity == 0, !live.isListening else { return }
+        guard case .connected = phase, activity == 0, !live.isListening, !(staysConnected && managedElsewhere == nil) else { return }
         disconnect(rearm: true)
     }
 

@@ -12,6 +12,8 @@ public final class DeviceHub: ObservableObject {
     @Published public private(set) var pendingSetup: DeviceSession?
     public let environment: DeviceEnvironment
     public var importer: DeviceImporter? { didSet { (sessions + [pendingSetup].compactMap { $0 }).forEach { $0.importer = importer } } }
+    /// A recorder's own button started (true) or stopped (false) a recording, on any device here.
+    public var onRecorderButton: ((DeviceSession, Bool) -> Void)?
 
     private var meetings: [Meeting] = []
     private var index = DeviceLibraryIndex(meetings: [])
@@ -209,6 +211,7 @@ public final class DeviceHub: ObservableObject {
         let session = DeviceSession(device: device, kind: kind, connections: connections, defaults: environment.defaults)
         session.importer = importer
         session.onDeviceChange = { [weak self] _ in self?.persist() }
+        session.onRecorderButton = { [weak self] session, on in self?.onRecorderButton?(session, on) }
         return session
     }
 

@@ -83,12 +83,24 @@ public final class SimulatedSoundcore {
     public var slicesPerPacket = 3
     /// Time between audio notifications; nil sends as fast as possible.
     public var pace: Duration?
+    /// Firmware closer to a real recorder's: a recording grows as it records (`slicesPerPacket` 20 ms
+    /// frames every `pace`, 60 ms when there is none), live audio streams it from its first frame and
+    /// then each frame as it's recorded, and the stream ends (`1A 0A`) when the recording does. Off,
+    /// a new recording has four seconds of frames and live audio repeats them until it's stopped.
+    public var recordsInRealTime = false
+    /// What the recorder sent the app: notifications, and their bytes (framing included), for
+    /// measuring what live audio costs the link.
+    public private(set) var notificationsSent = 0
+    public private(set) var bytesSent = 0
 
     /// Every command received, for tests: (type, command).
     public private(set) var received: [(type: UInt8, command: UInt8)] = []
     private var privateKey = P256.KeyAgreement.PrivateKey()
     private var sessionKey: SymmetricKey?
     private var streaming: Task<Void, Never>?
+    /// Adds frames to the recording in progress while it records (`recordsInRealTime`).
+    private var growth: Task<Void, Never>?
+    private static let tone = frames(seconds: 2, frequency: 520)
     fileprivate weak var link: SimulatedSoundcoreTransport?
     /// The device connected now. Like the real recorder, it talks to one device at a time: while one
     /// is connected it doesn't advertise, and another device's connection waits until it's free.
@@ -202,19 +214,45 @@ public final class SimulatedSoundcore {
             // Firmware that keeps a paused recording open resumes it.
             if !(keepsActiveWhilePaused && activeRecording != nil) {
                 let now = Date().timeIntervalSince1970 + clockOffset
-                activeRecording = Recording(id: UInt32(now), frames: Self.frames(seconds: 4, frequency: 520))
+                activeRecording = Recording(id: UInt32(now), frames: recordsInRealTime ? [] : Self.frames(seconds: 4, frequency: 520))
             }
+            if recordsInRealTime { grow() }
         } else if !on && isRecording {
             isRecording = false
+            growth?.cancel()
+            growth = nil
             if !keepsActiveWhilePaused { finishRecording() }
+        }
+    }
+
+    /// Records in real time: frames join the recording in progress as it records.
+    private func grow() {
+        growth?.cancel()
+        let perTick = max(1, slicesPerPacket)
+        let tick = pace ?? .milliseconds(20 * perTick)
+        growth = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: tick)
+                guard let self, !Task.isCancelled, self.isRecording, var active = self.activeRecording else { return }
+                for _ in 0..<perTick { active.frames.append(Self.tone[active.frames.count % Self.tone.count]) }
+                self.activeRecording = active
+            }
         }
     }
 
     /// Closes the recording in progress: it joins the list as a finished recording.
     public func finishRecording() {
         isRecording = false
+        growth?.cancel()
+        growth = nil
         if let active = activeRecording { recordings.insert(active, at: 0) }
         activeRecording = nil
+    }
+
+    /// The frames of a recording as they stand now: the one in progress, or a finished one.
+    private func frames(of id: UInt32) -> [Data]? {
+        if activeRecording?.id == id { return activeRecording?.frames }
+        return recordings.first { $0.id == id }?.frames
     }
 
     /// The recorder's own button: starts or stops recording and reports the new state unasked.
@@ -249,6 +287,7 @@ public final class SimulatedSoundcore {
     public func connectionEnded() {
         streaming?.cancel()
         streaming = nil
+        // The recording carries on without anyone connected.
         sessionKey = nil
         privateKey = P256.KeyAgreement.PrivateKey()
     }
@@ -344,6 +383,10 @@ public final class SimulatedSoundcore {
         let perPacket = max(1, slicesPerPacket)
         let pace = self.pace
         streaming?.cancel()
+        if live, recordsInRealTime {
+            streaming = Task { [weak self] in await self?.streamAsRecorded(id: id, fileKey: fileKey, nonce: nonce, perPacket: perPacket) }
+            return
+        }
         streaming = Task { [weak self] in
             var sequence: UInt32 = 0
             var sent = 0
@@ -377,11 +420,44 @@ public final class SimulatedSoundcore {
         }
     }
 
+    /// Live audio from a recorder that records in real time: what it has recorded so far as fast as the
+    /// link goes, then each frame as it's recorded, and the end once the recording is finished.
+    private func streamAsRecorded(id: UInt32, fileKey: Data, nonce: Data, perPacket: Int) async {
+        var sequence: UInt32 = 0
+        var index = 0
+        let wait = pace ?? .milliseconds(20 * perPacket)
+        while !Task.isCancelled {
+            guard let frames = frames(of: id) else { return }
+            if index < frames.count {
+                var payload = Data()
+                for frame in frames[index..<min(frames.count, index + perPacket)] {
+                    let audio = (try? SoundcoreFileKey.crypt(frame, sequence: sequence, key: fileKey, nonce: nonce)) ?? frame
+                    payload.append(SoundcoreAudioSlice.encode(sequence: sequence, audio: audio))
+                    sequence += 1; index += 1
+                }
+                send(SoundcorePacket.frame(type: 0x1a, command: 0x12, payload: payload))
+                await Task.yield()
+            } else if activeRecording?.id == id {
+                try? await Task.sleep(for: wait)
+            } else {
+                // The recording has ended and every frame of it went: the stream ends with it.
+                send(SoundcorePacket.frame(type: 0x1a, command: 0x0a))
+                streaming = nil
+                return
+            }
+        }
+    }
+
     private func reply(_ type: UInt8, _ command: UInt8, _ payload: Data, status: UInt8 = 1) {
         send(SoundcorePacket.frame(type: type, command: command, status: status, payload: payload))
     }
 
-    private func send(_ frame: Data) { link?.notify(frame) }
+    private func send(_ frame: Data) {
+        guard link?.connected == true else { return }
+        notificationsSent += 1
+        bytesSent += frame.count
+        link?.notify(frame)
+    }
 }
 
 /// The simulated link: it advertises the recorder, connects it, and delivers its notifications in
