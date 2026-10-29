@@ -39,6 +39,9 @@ public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable
     private var latest: [LiveCaptionSegment] = []
     private var timeline: LiveSpeakerTimeline?
     private var identifier: LiveVoiceIdentifier?
+    /// The voice of each final caption the timeline has long moved past, kept so it isn't looked up
+    /// again on every update and outlives the timeline's horizon.
+    private var settled: [UUID: Int?] = [:]
     private var forwarding: [Task<Void, Never>] = []
     private var worker: Task<Void, Never>?
     private var started = false
@@ -176,17 +179,30 @@ public final class SpeakerLabelledCaptioner: LiveCaptioning, @unchecked Sendable
         if !snapshot.isEmpty { updatesContinuation.yield(snapshot) }
     }
 
-    /// Each caption with the voice that spoke most of it, named when known. Call with the lock held.
+    /// Each caption with the voice that spoke most of it, named when known (a name found later
+    /// reaches the voice's earlier captions too). Call with the lock held.
     private func labelled(_ segments: [LiveCaptionSegment]) -> [LiveCaptionSegment] {
         guard let timeline else { return segments }
         let times = self.times
+        // Captions this far behind what the speaker model has heard won't gain more of it.
+        let heard = times.sourceTime(Double(timeline.frame) * timeline.frameSeconds)
         return segments.map { segment in
             var segment = segment
-            if let slot = timeline.dominantSlot(from: segment.start, to: segment.end, time: times.sourceTime) {
+            let slot: Int?
+            if let known = settled[segment.id] {
+                slot = known
+            } else {
+                slot = timeline.dominantSlot(from: segment.start, to: segment.end, time: times.sourceTime)
+                if !segment.isTentative, segment.end < heard - Self.settleAfter { settled[segment.id] = slot }
+            }
+            if let slot {
                 let match = identifier?.matches[slot]
                 segment.speaker = LiveCaptionSpeaker(slot: "S\(slot + 1)", name: match?.name, profileID: match?.voiceID)
             }
             return segment
         }
     }
+
+    /// Seconds behind the speaker model's newest frame after which a final caption's voice is kept.
+    static let settleAfter: TimeInterval = 30
 }

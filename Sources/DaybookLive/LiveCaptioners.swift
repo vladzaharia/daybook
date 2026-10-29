@@ -29,11 +29,12 @@ public struct LiveCaptioners: Sendable {
     /// `backlog` and `timelineOrigin` are as for `SpeechCaptioner`.
     public func captioner(models: LiveModelSet, locale: Locale, backlog: Int, timelineOrigin: TimeInterval? = nil,
                           fallback: () -> (any LiveCaptioning)?) -> (any LiveCaptioning)? {
-        let governor = LiveLoadGovernor(policy: policy, conditions: conditions)
+        // Each part judges its own backlog.
         let words: (any LiveCaptioning)?
         if let recognizer = models.transcription, models.transcribes(locale) {
             let use = LiveModelUse(host: host)
-            words = LocalStreamingCaptioner(backlog: backlog, timelineOrigin: timelineOrigin, governor: governor,
+            words = LocalStreamingCaptioner(backlog: backlog, timelineOrigin: timelineOrigin,
+                                            governor: LiveLoadGovernor(policy: policy, conditions: conditions),
                                             makeTranscriber: { locale in
                                                 let shared = try await use.transcription(recognizer)
                                                 return try await NemotronStreamingTranscriber(shared: shared, language: Self.language(locale))
@@ -45,7 +46,8 @@ public struct LiveCaptioners: Sendable {
         guard let speakers = models.diarization else { return words }
         let voiceModel = models.voiceProfiles, voices = self.voices
         let use = LiveModelUse(host: host)
-        return SpeakerLabelledCaptioner(inner: words, backlog: backlog, timelineOrigin: timelineOrigin, governor: governor,
+        return SpeakerLabelledCaptioner(inner: words, backlog: backlog, timelineOrigin: timelineOrigin,
+                                        governor: LiveLoadGovernor(policy: policy, conditions: conditions),
                                         makeSpeakers: {
                                             let diarizer = try NemotronLiveDiarizer(shared: try await use.diarization(speakers))
                                             guard let voiceModel, let space = voiceModel.capabilities.voiceEmbeddings?.space,
