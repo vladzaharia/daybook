@@ -43,6 +43,7 @@ final class SoundcoreSimulatorTests: XCTestCase {
         timing.idleRelease = .seconds(60)
         timing.automaticIdleRelease = .milliseconds(300)
         timing.automaticCooldown = .seconds(60)
+        timing.otherAppQuiet = .milliseconds(300)
         return timing
     }
 
@@ -285,6 +286,89 @@ final class SoundcoreSimulatorTests: XCTestCase {
         try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
     }
 
+    // MARK: Two apps on one link
+
+    private func requests(_ rig: Rig) -> Int { rig.device.received.filter { $0 == (0x1a, 0x07) }.count }
+
+    /// The Soundcore app transfers over the link iOS shares: Daybook's import waits, says so, never asks
+    /// the recorder for anything that would cut the other transfer off, and starts once it has been quiet.
+    func testAnImportWaitsForAnotherAppsTransferAndNeverCutsItOff() async throws {
+        let rig = rig(recorder(count: 2))
+        try await connectThroughSetup(rig)
+        rig.device.beginAnotherAppsTransfer(recordingID: base + 1, slices: 60)
+        try await waitUntil("the other app's audio") { rig.connection.technicalDetails.contains { $0.label == "Another app" } }
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the import to wait") { rig.session.isWaitingForOtherApp }
+        XCTAssertEqual(rig.session.otherAppWait, "Waiting for the Soundcore app to finish")
+        XCTAssertTrue(rig.session.diagnostics.contains("Waiting for the Soundcore app to finish"))
+        XCTAssertEqual(rig.session.phase, .preparing)
+
+        try await waitUntil("the other app's transfer to finish") { rig.device.anotherAppsTransfersFinished == 1 }
+        XCTAssertEqual(requests(rig), 0, "nothing was requested over it")
+        XCTAssertTrue(rig.session.isWaitingForOtherApp, "a few quiet seconds first")
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        XCTAssertFalse(rig.session.isWaitingForOtherApp)
+        XCTAssertNil(rig.session.otherAppWait)
+        XCTAssertTrue(rig.device.commandsDuringAnotherAppsTransfer.isEmpty)
+        XCTAssertNil(rig.session.transferProblem)
+        XCTAssertTrue(rig.session.failures.isEmpty)
+    }
+
+    /// Start waits too: sent over another app's transfer, it could end it.
+    func testStartWaitsForAnotherAppsTransfer() async throws {
+        let rig = rig(recorder(count: 1))
+        try await connectThroughSetup(rig)
+        rig.device.beginAnotherAppsTransfer(recordingID: base + 1, slices: 45)
+        try await waitUntil("the other app's audio") { rig.connection.technicalDetails.contains { $0.label == "Another app" } }
+        rig.connection.startRecording()
+        XCTAssertTrue(rig.connection.recordCommandPending)
+        try await waitUntil("Start to wait") { rig.session.isWaitingForOtherApp }
+        XCTAssertFalse(rig.device.received.contains { $0.type == 0x18 })
+        try await waitUntil("the other app's transfer to finish") { rig.device.anotherAppsTransfersFinished == 1 }
+        try await waitUntil("recording") { !rig.connection.recordCommandPending && rig.connection.status?.isRecording == true }
+        XCTAssertTrue(rig.device.commandsDuringAnotherAppsTransfer.isEmpty)
+        XCTAssertNil(rig.connection.problem)
+    }
+
+    /// A transfer of Daybook's under way when the other app starts one gives way: it keeps nothing,
+    /// doesn't ask the recorder to stop sending (that would stop the other app's), and starts again from
+    /// the beginning once the other transfer has finished. It isn't a failure.
+    func testATransferUnderWayGivesWayToAnotherAppsWithoutStoppingIt() async throws {
+        let device = recorder(count: 1)
+        device.pace = .milliseconds(20)
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("audio arriving") { if case .receiving = rig.session.phase { return true } else { return false } }
+        device.beginAnotherAppsTransfer(recordingID: base + 1, slices: 30)
+        try await waitUntil("the import to wait") { rig.session.isWaitingForOtherApp }
+        XCTAssertTrue(rig.session.queue.isActive)
+        try await waitUntil("the other app's transfer to finish") { device.anotherAppsTransfersFinished == 1 }
+        XCTAssertFalse(device.received.contains { $0 == (0x1a, 0x11) }, "the recorder was never asked to stop sending")
+        try await waitUntil("the import, from the start") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        XCTAssertEqual(requests(rig), 2, "cut off once, then asked for again")
+        XCTAssertEqual(rig.library.imports[0].seconds, 1, accuracy: 0.1, "the whole recording")
+        XCTAssertTrue(device.commandsDuringAnotherAppsTransfer.isEmpty)
+        XCTAssertTrue(rig.session.failures.isEmpty)
+        XCTAssertNil(rig.session.transferProblem)
+        XCTAssertTrue(stagedFiles.isEmpty)
+    }
+
+    /// The recorder keeps one audio key: when another app exchanges keys, Daybook's next transfer
+    /// exchanges its own again rather than failing to unwrap the file's key.
+    func testAnotherAppsKeyExchangeIsFollowedByOneOfDaybooksOwn() async throws {
+        let rig = rig(recorder(count: 2))
+        try await connectThroughSetup(rig)
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the first import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        rig.device.anotherAppExchangesKeys()
+        try await waitUntil("the other app's reply") { rig.connection.technicalDetails.contains { $0.label == "Replies not requested here" } }
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the second import") { rig.library.imports.count == 2 && !rig.session.queue.isActive }
+        XCTAssertEqual(rig.device.received.filter { $0 == (0x2e, 0x01) }.count, 2)
+        XCTAssertTrue(rig.session.failures.isEmpty)
+    }
+
     /// Details says why each recording on the recorder is or isn't new, matching what's offered.
     func testDetailsSayWhyEachRecordingIsOrIsNotNew() async throws {
         let device = recorder(count: 3)
@@ -520,6 +604,7 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(device.recordings.count, 2, "Nothing is deleted from the recorder")
         XCTAssertTrue(device.received.contains { $0 == (0x1a, 0x11) })
         XCTAssertNil(rig.session.transferProblem, "Stopping isn't a problem")
+        XCTAssertFalse(rig.connection.technicalDetails.contains { $0.label == "Another app" }, "its own stragglers aren't another app's")
     }
 
     func testDisconnectMidTransferWaitsReconnectsAndResumes() async throws {

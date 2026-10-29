@@ -170,6 +170,7 @@ private struct DeviceOverview: View {
         case .unavailable: return problem == nil ? "Not available" : notConnected()
         case .notSetUp: return "Not set up"
         case .connected:
+            if let wait = session.otherAppWait { return "Connected · \(wait)" }
             if (primary as? any LiveListeningConnection)?.live.isListening == true { return "Connected · Recording · Listening" }
             if (primary as? any RecordControlConnection)?.recordCommandPending == true { return "Connected · Waiting for \(session.kind.shortName)…" }
             return session.status?.isRecording == true ? "Connected · Recording" : "Connected"

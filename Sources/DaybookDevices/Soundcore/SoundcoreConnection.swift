@@ -72,6 +72,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     @Published public private(set) var lastTechnicalProblem: String?
     @Published public private(set) var keyExchangeComplete = false
     @Published public private(set) var reconnectAttempt = 0
+    /// A transfer, Listen Live, or a Start or Pause is waiting for another app's transfer to finish (the
+    /// Soundcore app, over the link iOS shares between apps): Daybook never starts one over it.
+    @Published public private(set) var isWaitingForOtherApp = false
     public let live = LiveCapture()
 
     public var onChange: (() -> Void)?
@@ -484,7 +487,15 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         defer { endActivity() }
         let url = stagingDirectory.appendingPathComponent("Soundcore-\(id)-\(UUID().uuidString.prefix(8)).wav")
         do {
-            _ = try await session.download(native, to: url) { phase, bytes in progress(phase, bytes) }
+            while true {
+                do {
+                    _ = try await session.download(native, to: url) { phase, bytes in progress(phase, bytes) }
+                    break
+                } catch SoundcoreError.yielded {
+                    // Another app took the recorder for a transfer of its own: this one starts again once it's done.
+                    progress(.preparing, 0)
+                }
+            }
             keyExchangeComplete = session.keyExchangeComplete
             let serial = info?.serial ?? remembered?.serial
             return TransferredAudio(url: url, isStaged: true, serial: serial?.isEmpty == false ? serial : nil)
@@ -768,6 +779,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         if let session, session.unrequestedReplies > 0 {
             rows.append(DeviceDetail(label: "Replies not requested here", value: session.unrequestedReplies.formatted()))
         }
+        if let session, session.otherAppIsTransferring {
+            rows.append(DeviceDetail(label: "Another app", value: isWaitingForOtherApp ? "Transferring; Daybook waits" : "Transferring"))
+        }
         if let clock {
             rows.append(DeviceDetail(label: "Recorder clock", value: clock.summary))
         }
@@ -959,6 +973,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         clearListingFailure()
         recordCommandPending = false
         keyExchangeComplete = false
+        isWaitingForOtherApp = false
         rebuildRecordings()
         scheduleRecordingExpiry()
     }
@@ -1027,6 +1042,11 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             try transport.send(data)
         }
         session.onPush = { [weak self] in self?.receivePush($0) }
+        session.onWaitingForOtherApp = { [weak self, weak session] waiting in
+            guard let self, let session, self.session === session else { return }
+            self.isWaitingForOtherApp = waiting
+            self.publish()
+        }
         self.session = session
         // What it was doing as last seen, so a press missed while the link came back is still heard.
         recordingBeforeLink = remembered?.info?.isRecording ?? false

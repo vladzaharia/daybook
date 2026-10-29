@@ -155,6 +155,13 @@ public final class DeviceSession: ObservableObject, Identifiable {
     public var status: DeviceStatus? { direct?.status }
     public var capabilities: DeviceCapabilities { primary?.capabilities ?? [] }
 
+    /// An import, Listen Live, or a Start or Pause is waiting for another app on the same link (the
+    /// Soundcore app, through the link iOS shares between apps) to finish its transfer.
+    public var isWaitingForOtherApp: Bool { (direct as? SoundcoreConnection)?.isWaitingForOtherApp == true }
+
+    /// What the recorder's page and status line say meanwhile: "Waiting for the Soundcore app to finish".
+    public var otherAppWait: String? { isWaitingForOtherApp ? "Waiting for the \(kind.shortName) app to finish" : nil }
+
     /// One problem at a time: a transfer's first, then the primary connection's, then any other's.
     public var problem: DeviceProblem? {
         transferProblem ?? primary?.problem ?? connections.lazy.compactMap(\.problem).first
@@ -215,6 +222,7 @@ public final class DeviceSession: ObservableObject, Identifiable {
         if let problem { lines.append("Problem: \(problem.title)") }
         if let last = detailed?.lastTechnicalProblem { lines.append("Last problem: \(last)") }
         if queue.isActive { lines.append("Queue: \(queue.total), \(queue.isSuspended ? "waiting to reconnect" : queue.current == nil ? "waiting" : "importing")") }
+        if let otherAppWait { lines.append(otherAppWait) }
         let standings = self.standings
         lines.append("On the device: \(standings.count)")
         for standing in standings {
