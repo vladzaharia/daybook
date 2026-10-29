@@ -104,6 +104,12 @@ public enum MeetingMerge {
         }
         result.speakerMatches = items("speaker-match", local.speakerMatches ?? [], remote.speakerMatches ?? [], base?.speakerMatches ?? [])
         if result.speakerMatches?.isEmpty == true { result.speakerMatches = nil }
+        // Who each speaker is: a speaker's identity merges like the speaker, and one removed on one side stays removed.
+        if local.speakerIdentities != nil || remote.speakerIdentities != nil || base?.speakerIdentities != nil {
+            let merged = items("speaker-identity", local.speakerIdentities ?? [], remote.speakerIdentities ?? [], base?.speakerIdentities ?? [],
+                               allowsRemoval: true).sorted { $0.speakerID < $1.speakerID }
+            result.speakerIdentities = merged.isEmpty ? nil : merged
+        }
         // A multipoint link made on one Mac lets the recorder's recording join on another.
         if local.companions != nil || remote.companions != nil {
             result.companions = items("companion", local.companions ?? [], remote.companions ?? [], base?.companions ?? [])

@@ -264,6 +264,11 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
     /// Recorder handoffs travelling through sync, by recorder (`RecorderOwnership.id`). Optional, like
     /// `recorders`, so earlier files decode and earlier versions ignore it.
     public var handoffs: [LibraryValue<RecorderHandoffRecord>]?
+    /// People Daybook knows by voice, by `SpeakerProfile.id`, and their voiceprints, one record each by
+    /// `Voiceprint.id`, so two devices teaching one profile keep every voiceprint (SpeakerProfiles.swift).
+    /// Optional, like `recorders`, so earlier files decode and earlier versions keep them as they came.
+    public var speakerProfiles: [LibraryValue<SpeakerProfile>]?
+    public var voiceprints: [LibraryValue<Voiceprint>]?
     /// Settings a newer Daybook keeps under keys this version doesn't know, written back as they came
     /// and merged by `merging` (a list of per-item records item by item).
     public var unknownFields = UnknownFields()
@@ -276,6 +281,10 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         value.vocabulary = Self.merge(vocabulary, other.vocabulary)
         if recorders != nil || other.recorders != nil { value.recorders = Self.merge(recorders ?? [], other.recorders ?? []) }
         if handoffs != nil || other.handoffs != nil { value.handoffs = Self.merge(handoffs ?? [], other.handoffs ?? []) }
+        if speakerProfiles != nil || other.speakerProfiles != nil {
+            value.speakerProfiles = Self.merge(speakerProfiles ?? [], other.speakerProfiles ?? [])
+        }
+        if voiceprints != nil || other.voiceprints != nil { value.voiceprints = Self.merge(voiceprints ?? [], other.voiceprints ?? []) }
         var unknown: [String: SyncJSONValue] = [:]
         for key in Set(unknownFields.values.keys).union(other.unknownFields.values.keys) {
             switch (unknownFields[key], other.unknownFields[key]) {
@@ -288,7 +297,7 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, folders, templates, vocabulary, recorders, handoffs
+        case schemaVersion, folders, templates, vocabulary, recorders, handoffs, speakerProfiles, voiceprints
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -300,6 +309,8 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         vocabulary = try values.decode([LibraryValue<GlossaryTerm>].self, forKey: .vocabulary)
         recorders = try values.decodeIfPresent([LibraryValue<RecorderOwnership>].self, forKey: .recorders)
         handoffs = try values.decodeIfPresent([LibraryValue<RecorderHandoffRecord>].self, forKey: .handoffs)
+        speakerProfiles = try values.decodeIfPresent([LibraryValue<SpeakerProfile>].self, forKey: .speakerProfiles)
+        voiceprints = try values.decodeIfPresent([LibraryValue<Voiceprint>].self, forKey: .voiceprints)
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -311,6 +322,8 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         try values.encode(vocabulary, forKey: .vocabulary)
         try values.encodeIfPresent(recorders, forKey: .recorders)
         try values.encodeIfPresent(handoffs, forKey: .handoffs)
+        try values.encodeIfPresent(speakerProfiles, forKey: .speakerProfiles)
+        try values.encodeIfPresent(voiceprints, forKey: .voiceprints)
         try unknownFields.encode(to: encoder)
     }
 
@@ -319,6 +332,7 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         folders.contains { $0.unreadableValue != nil } || templates.contains { $0.unreadableValue != nil }
             || vocabulary.contains { $0.unreadableValue != nil } || (recorders ?? []).contains { $0.unreadableValue != nil }
             || (handoffs ?? []).contains { $0.unreadableValue != nil }
+            || (speakerProfiles ?? []).contains { $0.unreadableValue != nil } || (voiceprints ?? []).contains { $0.unreadableValue != nil }
     }
 
     /// Handoffs under way or answered (cleared ones left out).
@@ -337,7 +351,23 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
         return recorders?.first { $0.id == id }?.value
     }
 
-    private static func merge<T>(_ lhs: [LibraryValue<T>], _ rhs: [LibraryValue<T>]) -> [LibraryValue<T>] {
+    /// Speaker profiles (deletion markers and ones a newer Daybook wrote left out), by name.
+    public var activeSpeakerProfiles: [SpeakerProfile] {
+        (speakerProfiles ?? []).compactMap(\.value).sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedSame ? $0.id.uuidString < $1.id.uuidString
+                : $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    public func speakerProfile(_ id: UUID) -> SpeakerProfile? { speakerProfiles?.first { $0.id == id.uuidString }?.value }
+
+    /// A profile's voiceprints, newest first.
+    public func voiceprints(of profileID: UUID) -> [Voiceprint] {
+        (voiceprints ?? []).compactMap(\.value).filter { $0.profileID == profileID }
+            .sorted { $0.recordedAt == $1.recordedAt ? $0.id < $1.id : $0.recordedAt > $1.recordedAt }
+    }
+
+    static func merge<T>(_ lhs: [LibraryValue<T>], _ rhs: [LibraryValue<T>]) -> [LibraryValue<T>] {
         var entries: [String: LibraryValue<T>] = [:]
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         for candidate in lhs + rhs {
