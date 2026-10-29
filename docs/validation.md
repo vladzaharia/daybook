@@ -1,5 +1,55 @@
 # Validation record
 
+## iPhone follow-ups and processing-status gaps (2026-10-29)
+
+What changed:
+
+- **Not summarized yet.** `ProcessingStatus.transcribed`: a transcript with no summary and nothing asked
+  for one. The iPhone's page says "Not summarized yet" with Summarize, a `summaryOnly` request a Mac
+  carries out; its list row keeps the preview. The Mac's page is unchanged: Summarize and the template
+  stay at its foot (`SummaryPage`'s colophon condition now reads `.transcribed`).
+- **Mac first, whatever "Transcribe synced recordings on this Mac" says.** A recording a conversation was
+  waiting for (`Meeting.hasAwaitedRecordingToAdd`) is queued as it arrives on a Mac with the models, with
+  the request it brought, so it's added as with the setting on; other synced recordings still follow the
+  setting. With another device's request open and a recording still awaited, the Mac's page keeps the
+  waiting line.
+- **The status sheet's queue** lists conversations waiting for a recording ("Waiting for Soundcore Work
+  audio"), after the requests waiting, outside the Mac's "2 waiting".
+- **The recorder page's toggles:** Import Automatically, Record Along, Hand Back to My Mac.
+- **The notebook's status panel:** the preview keeps the panel's room (compact or medium) as a safe-area
+  bar with the hard scroll edge effect, as the library's list does under Record. The effect runs only
+  under something drawn, so the bar's room is drawn at 0.1% opacity; a clear bar gave no effect.
+- **Live Activity caption:** the newest live caption, at most 80 characters ending with the newest words,
+  while captions are on and showing; a new caption alone updates the activity at most every 5 s;
+  `privacySensitive`, and hidden at Always-On brightness, paused, or stale.
+- **Recorder only:** "Soundcore Work is recording. This iPhone isn't." over Record (the status sheet in
+  the hand, the notebook's left page), and Record records along into the same conversation.
+- **Open Duo crease:** Settings and its two-page sheets (Pair with Your Mac, Add Recorder) were already
+  clear of the crease, open and opened while shown. The sheets Settings screens show over themselves
+  (Add Term, a new template, the encryption sheets, Details) were cards across it; they're a card on the
+  right page now (`pageSheet`), and still sheets in the hand.
+
+How it was checked: `swift test` passed 1,188 XCTest cases (one skipped, as before): Captions 8, Core
+373, Devices 101, Intelligence 131, Kit 186, Link 73, Live 30, Mac app 286. New:
+`ProcessingStatusTests.testATranscriptWithoutASummaryIsTranscribed`,
+`AwaitedRecordingTests.testAnArrivedRecordingItWaitedForIsToBeAdded`,
+`MacFirstMultipointTests.testTheWaitAndTheArrivalDontDependOnTranscribingSyncedRecordings`, which fails
+without the change: the phone's recording was never added. `scripts/build-ios.sh --test` on a clone of
+the iPhone 17 Pro simulator (iOS 27.0): 183 passed, 177 before; new in `ReadingTests` (Summarize),
+`StatusSheetModelTests` (the queue), `RecordingSurfacesTests` (the caption line, its pacing, who shows it,
+and an earlier build's state decoding), and the recorder-only words in `CascadingRecordingTests`. Window
+screenshots, before and after, on clones of the iPhone 17 Pro and the Daybook Shell Duo (open and
+closed): the Dentist page, the recorder page's toggles, the queue at large, the panel at compact and
+medium, recorder only (`--demo-recorder-only`), and Settings' screens and sheets (`--open-settings
+add-term`); the Mac's transcript-only page through `--snapshot`. The clones answered the notification
+prompt by a copied BulletinBoard entry, since simctl can't grant notifications.
+
+Still needs hardware, or can't be captured: simctl can't show the Lock Screen or the Dynamic Island, so
+the caption line was checked by its content state and pacing tests and a widget `#Preview`, not on
+screen; the system's real update budget for local Live Activity updates needs a device. Recorder only
+needs a real recorder's button with Daybook in the background. Two Macs with the setting off both queue
+an awaited recording; the request's claim settles it within a sync round (docs/multipoint.md, "Limits").
+
 ## The four streams together (2026-10-29)
 
 Processing quality, speaker profiles, live transcription, and recording across devices were built
