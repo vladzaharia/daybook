@@ -143,8 +143,9 @@ final class LibrarySyncEncryptionTests: XCTestCase {
     }
 
     /// An iPhone reinstalled with the same sync folder took a new device ID; its earlier one, last seen on Daybook 0.3.0
-    /// yesterday, is the same iPhone. It isn't listed as a device that would stop syncing, and doesn't hold encryption back.
-    func testAnEarlierIdentityOfAReinstalledIPhoneDoesntHoldEncryptionBack() async throws {
+    /// yesterday, is the same iPhone. It isn't listed as a device that would stop syncing. Automatic encryption still waits
+    /// for it to be a month old: a device that only looks like an earlier install may be one that's merely away.
+    func testAnEarlierIdentityOfAReinstalledIPhoneIsListedOnce() async throws {
         let keychain = MemoryLibraryKeyStore()
         let mac = try await device("Mac", phone: false, role: .receive, keys: keychain)
         try writeEarlierDaybookPresence("Phone", lastSeen: Date().addingTimeInterval(-86_400), id: "Phone before reinstall")
@@ -161,6 +162,8 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         XCTAssertEqual(known.first { $0.id == "Phone before reinstall" }?.supersededBy, "Phone", "still known by its ID")
         mac.sync.encryptsAutomatically = true
         await mac.sync.encryptOnceEveryDeviceCan()
+        XCTAssertEqual(mac.sync.encryption, .off)
+        await mac.sync.encryptOnceEveryDeviceCan(now: Date().addingTimeInterval(31 * 86_400))
         try await wait("encryption to turn on") { mac.sync.encryption.isOn }
     }
 

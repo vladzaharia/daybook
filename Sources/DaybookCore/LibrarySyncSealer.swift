@@ -55,6 +55,9 @@ struct SealerInput {
     var metadata: [String: SyncMetadataRecord]
     var eventEntries: [JournalEntry]
     var metadataEntries: [JournalEntry]
+    /// Compaction records (LibrarySyncCompaction.swift): history like the rest, sealed again under a new key before an old
+    /// one retires.
+    var compactionEntries: [JournalEntry] = []
     /// Deleted conversations.
     var deleted: Set<UUID>
     /// The objects each live conversation's merged heads use (and highlight sidecars).
@@ -254,11 +257,11 @@ extension LibrarySyncEngine {
             self.sealing?.manifest = description
             isMigrator = true
         }
-        var sealedPaths = Set(input.eventEntries.filter(\.isSealed).map(\.path) + input.metadataEntries.filter(\.isSealed).map(\.path)).union(ownJournalWrites)
+        var sealedPaths = Set((input.eventEntries + input.metadataEntries + input.compactionEntries).filter(\.isSealed).map(\.path)).union(ownJournalWrites)
         func counterpart(_ kind: SealedKind, _ id: String) -> String { "\(kind.directory!)/\(current.objectName(kind, plaintextSHA256: id) ?? "")" }
 
-        // Journal entries: from before, or sealed under another key.
-        for (entries, kind) in [(input.eventEntries, SealedKind.event), (input.metadataEntries, .metadata)] {
+        // Journal entries and compaction records: from before, or sealed under another key.
+        for (entries, kind) in [(input.eventEntries, SealedKind.event), (input.metadataEntries, .metadata), (input.compactionEntries, .compaction)] {
             for entry in entries where !entry.isSealed || sealedKeys[entry.path] != current.id {
                 guard let id = entry.isSealed ? sealedNames[entry.path] : entry.name else { progress.remaining += 1; continue }
                 let author: String
@@ -267,6 +270,9 @@ extension LibrarySyncEngine {
                     // A deleted conversation keeps only its deletion.
                     if input.deleted.contains(header.meetingID), !header.deleted { continue }
                     author = header.deviceID
+                } else if kind == .compaction {
+                    guard let record = compactionRecords[entry.path], record.id == id else { progress.remaining += 1; continue }
+                    author = record.record.deviceID
                 } else {
                     guard let record = input.metadata[id] else { progress.remaining += 1; continue }
                     author = record.deviceID
@@ -367,7 +373,7 @@ extension LibrarySyncEngine {
         let knownShas = Set(input.events.values.flatMap { $0.assets.map(\.sha256) }).union(liveShas)
 
         // Retiring the plaintext from before.
-        let legacyEntries = (input.eventEntries + input.metadataEntries).filter { !$0.isSealed }
+        let legacyEntries = (input.eventEntries + input.metadataEntries + input.compactionEntries).filter { !$0.isSealed }
         let legacyBlobs = (try? journalBlobNames()) ?? []
         if !legacyEntries.isEmpty || !legacyBlobs.isEmpty || sealing.manifest.legacyRetired == nil {
             // Once retired, plaintext that reappears (iCloud.com's Data Recovery restores deleted files for 30 days) is
@@ -382,6 +388,11 @@ extension LibrarySyncEngine {
                                                 liveShas: liveShas, knownShas: knownShas, unnamedAreReplaced: sealing.manifest.replaces != nil,
                                                 progress: &progress) {
                 for url in plan { deleteRemote(url) }
+                // Plaintext entries compaction pruned need no sealed counterpart: they go too, once what says they're pruned
+                // is in iCloud.
+                if compactionRecords.values.filter(\.record.isCommit).allSatisfy({ cloud.isUploaded($0.url) }) {
+                    for path in prunedEntryPaths where !path.hasPrefix("Sealed/") { deleteRemote(remoteRoot.appendingPathComponent(path)) }
+                }
                 deleteStalePresence()
                 if sealing.manifest.legacyRetired == nil, let updated = try? updateManifest({ $0.sealing?.legacyRetired = now }), let description = updated.sealing {
                     self.sealing?.manifest = description
@@ -395,7 +406,7 @@ extension LibrarySyncEngine {
         // Retiring keys that aren't current.
         let oldKeys = sealing.keys.values.filter { $0.id != current.id }
         let listedOld = sealing.manifest.keys.filter { $0.id != current.idHex }
-        let oldEntriesListed = (input.eventEntries + input.metadataEntries).contains { $0.isSealed && sealedKeys[$0.path] != current.id }
+        let oldEntriesListed = (input.eventEntries + input.metadataEntries + input.compactionEntries).contains { $0.isSealed && sealedKeys[$0.path] != current.id }
         guard !listedOld.isEmpty || oldEntriesListed else { progress.oldKeysRetired = true; return }
         progress.oldKeysRetired = false
         var ready = true
@@ -407,7 +418,7 @@ extension LibrarySyncEngine {
         }
         if recent.contains(where: { $0.key != SyncDeviceKeyState(state: .ready, id: current.idHex) }) { ready = false; progress.waitingFor.append(.devicesWithCurrentKey) }
         guard ready else { return }
-        let oldEntries = (input.eventEntries + input.metadataEntries).filter { $0.isSealed && sealedKeys[$0.path] != current.id }
+        let oldEntries = (input.eventEntries + input.metadataEntries + input.compactionEntries).filter { $0.isSealed && sealedKeys[$0.path] != current.id }
         // An old key's objects: every object the journal ever named, under every old key the manifest still lists (once
         // it doesn't, they're gone; a stray one is left, unreadable to no one with the key).
         var oldBlobs: [(String, Data?)] = []
@@ -483,13 +494,17 @@ extension LibrarySyncEngine {
         var delete: [URL] = []
         var waitingForUploads = false
         for entry in entries {
-            let kind: SealedKind = entry.directory.hasSuffix("Events") ? .event : .metadata
+            let kind: SealedKind = entry.directory.hasSuffix("Events") ? .event : entry.directory.hasSuffix(Self.compactionDirectory) ? .compaction : .metadata
             guard let id = entry.isSealed ? sealedNames[entry.path] : entry.name else { progress.waitingFor.append(.completeRead); return nil }
             let wanted: Bool
-            if kind == .event {
+            switch kind {
+            case .event:
                 guard let header = input.events[id] else { progress.waitingFor.append(.completeRead); return nil }
                 wanted = !input.deleted.contains(header.meetingID) || header.deleted
-            } else {
+            case .compaction:
+                guard compactionRecords[entry.path]?.id == id else { progress.waitingFor.append(.completeRead); return nil }
+                wanted = true
+            default:
                 guard input.metadata[id] != nil else { progress.waitingFor.append(.completeRead); return nil }
                 wanted = true
             }
@@ -573,7 +588,7 @@ extension LibrarySyncEngine {
 
     /// Whether any plaintext journal file from before is still in the sync folder.
     func hasLegacyFiles() -> Bool {
-        for name in ["Events", "Metadata", "Blobs"] {
+        for name in ["Events", "Metadata", "Blobs", Self.compactionDirectory] {
             let folder = remoteRoot.appendingPathComponent(name, isDirectory: true)
             if let names = try? fm.contentsOfDirectory(atPath: folder.path), names.contains(where: { !$0.hasPrefix(".") || $0.hasSuffix(".icloud") }) { return true }
         }
