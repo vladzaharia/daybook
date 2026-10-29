@@ -113,13 +113,14 @@ public enum RecorderRemoteControl {
                 return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) didn’t start recording."))
             }
             switch member.state {
-            case .recording, .stopping, .stopped:
+            case .recording:
                 return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: member.startedAt, recordingID: member.recordingID,
                                                wasAlreadyRecording: member.role == .alreadyRecording))
             case .unavailable(let words), .stopFailed(let words):
                 return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: words))
-            case .starting:
-                return .refused(LinkRecordRefusal(reason: .busy, message: "\(name) is still starting."))
+            case .starting, .stopping, .stopped:
+                // Never a yes for a recorder that isn't recording now.
+                return .refused(LinkRecordRefusal(reason: .busy, message: "\(name) is starting or stopping."))
             }
         }
         if let cascade, request.action == .stop { await cascade.prepareToStop(session) }

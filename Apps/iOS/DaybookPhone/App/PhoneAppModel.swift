@@ -76,6 +76,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// Recording here asks the connected Macs on its own (a cascading start). Tests of the person's own
     /// "Record on Studio Mac too" turn it off.
     @ObservationIgnored var cascadesToMacs = true
+    /// A recorder's button is starting a recording here.
+    @ObservationIgnored var startingFromRecorder = false
     /// Stops this iPhone owes Macs it started, by Mac: the conversation to stop. Kept in a file in the
     /// library's folder that never syncs (`owedStops`), so a relaunch still sends them as the Mac connects.
     @ObservationIgnored private(set) var pendingStops: [UUID: UUID] = [:] {
@@ -941,7 +943,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         activities.end(final)
         let session = multipoint
         stopMacsStartedHere(session)
-        endCascade(recording?.id ?? session?.conversationID, session: session, cascadesUp: false)
+        endCascade(recording?.id ?? session?.conversationID ?? devices.cascade.conversation?.id, session: session, cascadesUp: false)
         multipoint = nil
         startedFromMac = nil
         recorder.audioTap = nil
