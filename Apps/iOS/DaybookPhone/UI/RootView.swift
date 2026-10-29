@@ -54,13 +54,11 @@ struct RootView: View {
     /// The environment's default reads the library's local files once it knows the library; an
     /// injected provider (sync-backed, at the app root) is used as it is.
     private var boundAudioProvider: any AudioProviding {
-        if let local = audioProvider as? LocalAudioProvider, local.library == nil {
-            let bound = LocalAudioProvider(library: model.library)
-            #if DEBUG
-            if let simulated = SimulatedAudioProvider.fromArguments(base: bound) { return simulated }
-            #endif
-            return bound
-        }
+        #if DEBUG
+        // `--simulate-download` and `--simulate-offline` stand in for the app's sync-backed provider too.
+        if let simulated = SimulatedAudioProvider.fromArguments(base: LocalAudioProvider(library: model.library)) { return simulated }
+        #endif
+        if let local = audioProvider as? LocalAudioProvider, local.library == nil { return LocalAudioProvider(library: model.library) }
         return audioProvider
     }
 }
