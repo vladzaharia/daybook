@@ -69,7 +69,26 @@ connected ──idle──▶ released (idle) ──cooldown──▶ waitingInR
   this connection (`isInventoryCurrent`). The recording it names as active (after the list's
   entries) is in progress whether or not its status says it's recording, kept in the snapshot
   across disconnects, and never imported until it's finished. Whether firmware lists the growing
-  file among the entries, and whether Pause keeps it open, is unverified; both are handled.
+  file among the entries, and whether Pause keeps it open, is unverified; both are handled. The
+  protocol notes call that field `currTransportFileTimestamp`, so it may instead name a file being
+  transferred (to the Soundcore app, say); Device Details shows what it names ("Named in progress").
+- **A list that doesn't come.** When the recorder doesn't answer the list request (10 s) or refuses
+  both layouts, the device says so ("Soundcore didn't list its recordings", with Refresh Status),
+  `DeviceSession.listingState` is `.notListed` rather than current, so nothing reads as "nothing
+  new", and it's tried again quietly after 15 and 60 s (`SoundcoreTiming.relist`) while the link is
+  up. A refusal of both layouts doesn't switch the connection to the 8-byte layout. Status and the
+  list are read separately, so a status that doesn't arrive doesn't stop the list.
+- **Another app on the same iPhone.** iOS shares one link to the recorder between apps, so while the
+  Soundcore app lists or transfers, its replies and audio reach Daybook too, and a reply to its list
+  request can satisfy Daybook's. Daybook ignores audio it didn't ask for and counts it, and replies
+  that matched nothing, in Device Details ("Audio packets not requested here", "Replies not
+  requested here"); a large count means the Soundcore app was transferring.
+- **Details.** Device Details' technical rows include the last list (how many, pages, when, or why
+  it failed) and what the recorder names as in progress. On iPhone, the device page's Details lists
+  every recording on the recorder with why it is or isn't new (`DeviceSession.standings`: New, In
+  Daybook, Recording now, Importing, Arriving from another device), and Copy puts it all, with the
+  app's version, on the clipboard (`DeviceSession.diagnostics`). Listing outcomes are also logged
+  (`local.daybook.devices`, category `Soundcore`).
 - A transfer is accepted only when: the file key unwraps to the expected prefix for that
   recording ID; every slice arrives in sequence (an exact repeat of the last slice is ignored;
   a gap or conflict fails); the byte count matches the size the recorder reported; and the
@@ -155,7 +174,9 @@ wrong sizes) with one retry, stalls, Try Again, Stop, disconnect mid-transfer wi
 the reconnect, Bluetooth off mid-import, Bluetooth off and denied at setup, idle release,
 automatic import since setup and its release, no automatic import before the library loads,
 record control with and without confirmation, Listen Live portions, and the read-only command
-set. The simulator also has firmware variants that list the active file and keep a paused one
+set. A list request the recorder leaves unanswered or refuses is reported, tried again on its
+schedule (and automatic import carries on once it lists), and another app's replies and audio on a
+shared link are counted without changing anything. The simulator also has firmware variants that list the active file and keep a paused one
 open, a button press, and a skewed clock, for: no import from a remembered list on reconnect, a
 paused-open recording neither imported nor queued, listing again on the button's start and stop,
 the last-known recording as of its time and its expiry, the clock measured on Start and applied to
@@ -166,4 +187,5 @@ the cooldown. No microphone, real Bluetooth, or downloads are used.
 and storage values, the active recording's place in the list (among the entries or only after
 them) and whether Pause keeps it open, whether the button reports `18 82`, how far real recorder
 clocks drift, transfer throughput and packet loss, reconnect timing, live reception, and automatic
-import alongside the phone app.
+import alongside the phone app: whether the recorder answers a list request while the Soundcore app
+is transferring, and what the list's trailing field names then.

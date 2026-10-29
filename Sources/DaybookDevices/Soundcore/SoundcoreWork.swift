@@ -56,6 +56,8 @@ public struct SoundcoreWorkIntegration: DeviceIntegration {
 public enum SoundcoreIssue: String, CaseIterable {
     case bluetoothOff, bluetoothDenied, bluetoothUnsupported, notFound, connectTimeout, rejected
     case notConnected, disconnectedDuringImport, stalled, integrity, didNotConfirm, notRecording
+    /// Connected, but the recorder didn't answer the request for its recordings, or refused it.
+    case listFailed
 
     public var title: String {
         switch self {
@@ -71,6 +73,7 @@ public enum SoundcoreIssue: String, CaseIterable {
         case .integrity: return "This recording couldn’t be imported"
         case .didNotConfirm: return "Soundcore didn’t confirm"
         case .notRecording: return "Soundcore isn’t recording"
+        case .listFailed: return "Soundcore didn’t list its recordings"
         }
     }
 
@@ -90,6 +93,7 @@ public enum SoundcoreIssue: String, CaseIterable {
             return "Some audio didn’t arrive intact. The recording is still on your Soundcore."
         case .didNotConfirm: return "Check its light: solid orange means it’s recording."
         case .notRecording: return "Start recording on your Soundcore, then listen live."
+        case .listFailed: return "Close the Soundcore app on your phone, then refresh."
         }
     }
 
@@ -104,6 +108,7 @@ public enum SoundcoreIssue: String, CaseIterable {
         case .disconnectedDuringImport: return [.reconnect, .dismiss]
         case .integrity: return [.tryAgain, .technicalDetails]
         case .didNotConfirm: return [.refreshStatus]
+        case .listFailed: return [.refreshStatus, .technicalDetails]
         case .notRecording: return []
         }
     }

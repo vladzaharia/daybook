@@ -161,6 +161,60 @@ public final class DeviceSession: ObservableObject, Identifiable {
         split.new.filter { !queue.contains($0.id) && arrivingThroughSync[$0.id] == nil }
     }
 
+    /// Where the list the recordings come from stands, so "nothing new" is said only of a list
+    /// that's current.
+    public enum ListingState: Equatable {
+        /// Listed since it connected (or a watched folder): what's new is known.
+        case current
+        /// Connected and being listed.
+        case listing
+        /// Connected but not listed since: the recorder didn't answer or refused, so the recordings
+        /// shown are the remembered list's.
+        case notListed
+        /// Not connected: the remembered list, as of its time.
+        case notConnected
+    }
+
+    public var listingState: ListingState {
+        guard let primary, primary.state.isConnected else { return .notConnected }
+        if primary.isInventoryCurrent { return .current }
+        return primary.isRefreshing ? .listing : .notListed
+    }
+
+    /// Every recording the primary connection lists, newest first, with why it is or isn't new
+    /// (Details).
+    public var standings: [DeviceRecordingStanding] {
+        let split = self.split
+        var result: [DeviceRecordingStanding] = split.inProgress.map { [.init(recording: $0, reason: .recordingNow)] } ?? []
+        for recording in split.new {
+            let reason: DeviceRecordingStanding.Reason = queue.contains(recording.id) ? .queued
+                : arrivingThroughSync[recording.id] != nil ? .arrivingThroughSync : .new
+            result.append(.init(recording: recording, reason: reason))
+        }
+        result += split.imported.map { .init(recording: $0.recording, reason: .inDaybook($0.meetingID)) }
+        return result.sorted { DeviceRecordingSplit.newestFirst($0.recording, $1.recording) }
+    }
+
+    /// What Details shows, as plain text to copy and send: the status, the technical facts, and
+    /// each recording on the device with why it is or isn't new.
+    public var diagnostics: String {
+        var lines = [device.name]
+        lines.append("State: \(state)\(managedElsewhere.map { ", managed by \($0.ownerName)" } ?? ""), list: \(listingState)")
+        let detailed = direct as? any DetailedConnection
+        for detail in (detailed?.details ?? []) + (detailed?.technicalDetails ?? []) {
+            lines.append("\(detail.label): \(detail.value)")
+        }
+        if let problem { lines.append("Problem: \(problem.title)") }
+        if let last = detailed?.lastTechnicalProblem { lines.append("Last problem: \(last)") }
+        if queue.isActive { lines.append("Queue: \(queue.total), \(queue.isSuspended ? "waiting to reconnect" : queue.current == nil ? "waiting" : "importing")") }
+        let standings = self.standings
+        lines.append("On the device: \(standings.count)")
+        for standing in standings {
+            lines.append("\(standing.recording.title) · \(standing.recording.detail) · \(standing.reason.label) · \(standing.recording.id)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Progress through the batch, for the sidebar ring; nil when idle or waiting to reconnect.
     public var importProgress: Double? {
         guard queue.isActive, !queue.isSuspended else { return nil }

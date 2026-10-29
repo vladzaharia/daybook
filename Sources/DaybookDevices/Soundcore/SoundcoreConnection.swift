@@ -3,6 +3,7 @@ import Combine
 import DaybookCaptions
 import DaybookCore
 import Foundation
+import os
 
 /// Soundcore Work's direct method: a connection state machine over a `SoundcoreTransport`.
 ///
@@ -36,6 +37,21 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     public enum Intent: Equatable { case discover, reconnect, automatic }
     /// Who asked for the connection, which sets how soon it's let go.
     public enum Origin { case person, automatic }
+
+    /// What the last listing on this connection found, or why it found nothing.
+    public struct ListingOutcome: Equatable {
+        public enum Result: Equatable {
+            case listed(count: Int, pages: Int, endedOnRefusal: Bool)
+            /// The protocol error, in words (Device Details only).
+            case failed(String)
+        }
+
+        public let at: Date
+        public let result: Result
+        public var failed: Bool { if case .failed = result { return true } else { return false } }
+    }
+
+    private static let log = Logger(subsystem: "local.daybook.devices", category: "Soundcore")
 
     public let method = ConnectionMethodKind.direct
     public let capabilities: DeviceCapabilities = [.battery, .caseBattery, .storage, .liveListening, .recordControl, .details, .wirelessTransfer]
@@ -138,6 +154,11 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private var listedThisConnection = false
     /// Listings under way (a refresh, or one after the recorder's button), for `isRefreshing`.
     private var listingsInFlight = 0
+    /// The last listing on this connection: what it found, or why it found nothing (Device Details).
+    @Published public private(set) var lastListing: ListingOutcome?
+    /// Quiet tries again after a listing that failed, while the link stays up.
+    private var relistAttempt = 0
+    private var relistTimer: Task<Void, Never>?
     /// The recording this device asked the recorder to start.
     private var startedHereID: UInt32?
     /// Redraws a remembered recording as unknown once it's too old to show.
@@ -319,10 +340,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         guard case .connected = phase, let session, !isRefreshing, !live.isListening else { return }
         beginListing()
         Task {
-            await perform {
-                self.applyStatus(try await session.readStatus())
-                self.applyListing(try await session.listRecordings())
-            }
+            // A status that doesn't arrive doesn't keep the list from being read.
+            await perform { self.applyStatus(try await session.readStatus()) }
+            await self.list(session)
             self.endListing()
         }
     }
@@ -333,9 +353,50 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         guard let session else { return }
         beginListing()
         Task {
-            await perform { self.applyListing(try await session.listRecordings()) }
+            await list(session)
             self.endListing()
         }
+    }
+
+    /// Reads the recorder's list. When it doesn't come (no answer, or refused), that's said rather
+    /// than leaving the remembered list to read as current, and it's tried again quietly.
+    private func list(_ session: SoundcoreSession) async {
+        await perform {
+            do {
+                self.applyListing(try await session.listRecordings())
+            } catch {
+                if self.session === session { self.listingFailed(error) }
+                throw error
+            }
+        }
+    }
+
+    private func listingFailed(_ error: Error) {
+        guard case .connected = phase, (error as? SoundcoreError) != .disconnected, !(error is CancellationError) else { return }
+        lastListing = ListingOutcome(at: Date(), result: .failed(error.localizedDescription))
+        Self.log.notice("Recording list failed: \(error.localizedDescription, privacy: .public)")
+        if problem == nil { problem = SoundcoreIssue.listFailed.problem }
+        scheduleRelist()
+        publish()
+    }
+
+    private func scheduleRelist() {
+        relistTimer?.cancel()
+        guard relistAttempt < timing.relist.count else { return }
+        let wait = timing.relist[relistAttempt]
+        relistAttempt += 1
+        relistTimer = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard !Task.isCancelled, let self, self.lastListing?.failed == true else { return }
+            self.refresh()
+        }
+    }
+
+    private func clearListingFailure() {
+        relistTimer?.cancel()
+        relistTimer = nil
+        relistAttempt = 0
+        if problem?.id == SoundcoreIssue.listFailed.rawValue { problem = nil }
     }
 
     private func beginListing() {
@@ -633,13 +694,44 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             DeviceDetail(label: "Connection", value: "Bluetooth LE, community-documented protocol"),
             DeviceDetail(label: "Audio key exchange", value: keyExchangeComplete ? "Complete" : "Not yet in this connection")
         ]
+        rows.append(DeviceDetail(label: "Recording list", value: listingSummary))
+        let named = listedThisConnection ? activeRecordingID : remembered?.activeRecordingID
+        if let named {
+            let start = startDate(of: named).map { DeviceDateFormat.title($0) } ?? String(named)
+            let recording = state.isConnected ? (info?.isRecording == true ? "recording" : "not recording") : "as last listed"
+            rows.append(DeviceDetail(label: "Named in progress", value: "\(start) (\(recording))"))
+        }
         if let session, session.rejectedFrames > 0 {
             rows.append(DeviceDetail(label: "Malformed frames ignored", value: "\(session.rejectedFrames)"))
+        }
+        if let session, session.unrequestedAudio > 0 {
+            rows.append(DeviceDetail(label: "Audio packets not requested here", value: session.unrequestedAudio.formatted()))
+        }
+        if let session, session.unrequestedReplies > 0 {
+            rows.append(DeviceDetail(label: "Replies not requested here", value: session.unrequestedReplies.formatted()))
         }
         if let clock {
             rows.append(DeviceDetail(label: "Recorder clock", value: clock.summary))
         }
         return rows
+    }
+
+    /// "6, in 2 pages, Today, 11:14 AM", "Not listed: The recorder didn’t answer in time.", or the
+    /// remembered list's time while not connected.
+    private var listingSummary: String {
+        guard state.isConnected else {
+            return inventoryUpdatedAt.map { "\(listing.count), remembered from \(DeviceDateFormat.title($0))" } ?? "Never listed"
+        }
+        if isRefreshing && !listedThisConnection { return "Listing…" }
+        switch lastListing?.result {
+        case .listed(let count, let pages, let refused)?:
+            let time = lastListing.map { DeviceDateFormat.title($0.at) } ?? ""
+            return "\(count), in \(pages) \(pages == 1 ? "page" : "pages")\(refused ? " (the last refused)" : ""), \(time)"
+        case .failed(let reason)?:
+            return listedThisConnection ? "Listed earlier; the last try failed: \(reason)" : "Not listed: \(reason)"
+        case nil:
+            return "Not listed on this connection"
+        }
     }
 
     // MARK: The state machine
@@ -796,6 +888,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         info = nil
         activeRecordingID = nil
         listedThisConnection = false
+        lastListing = nil
+        clearListingFailure()
         recordCommandPending = false
         keyExchangeComplete = false
         rebuildRecordings()
@@ -920,7 +1014,11 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         listing = result.recordings.sorted { $0.id > $1.id }
         activeRecordingID = result.activeRecordingID
         listedThisConnection = true
-        inventoryUpdatedAt = Date()
+        let now = Date()
+        inventoryUpdatedAt = now
+        lastListing = ListingOutcome(at: now, result: .listed(count: listing.count, pages: result.pages, endedOnRefusal: result.endedOnRefusal))
+        clearListingFailure()
+        Self.log.notice("Recording list: \(result.recordings.count, privacy: .public) in \(result.pages, privacy: .public) pages\(result.endedOnRefusal ? ", the last refused" : "", privacy: .public); in progress: \(result.activeRecordingID.map(String.init) ?? "none", privacy: .public); recording: \(self.info?.isRecording == true, privacy: .public)")
         if var snapshot = remembered {
             snapshot.recordings = Array(listing.prefix(1_000))
             snapshot.recordingsUpdatedAt = inventoryUpdatedAt

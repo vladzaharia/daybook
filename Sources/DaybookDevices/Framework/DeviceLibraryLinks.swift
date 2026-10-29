@@ -179,6 +179,40 @@ public struct DeviceRecordingSplit: Equatable {
     }
 }
 
+/// A recording a device lists, with why it is or isn't offered as new (Details).
+public struct DeviceRecordingStanding: Equatable, Identifiable {
+    public enum Reason: Equatable {
+        case new
+        /// The library holds it, in this conversation.
+        case inDaybook(UUID)
+        /// The recorder names it as the one it's making, or keeps open while paused.
+        case recordingNow
+        /// Waiting or importing now.
+        case queued
+        /// Another device imported it; it's on its way through sync.
+        case arrivingThroughSync
+
+        public var label: String {
+            switch self {
+            case .new: return "New"
+            case .inDaybook: return "In Daybook"
+            case .recordingNow: return "Recording now"
+            case .queued: return "Importing"
+            case .arrivingThroughSync: return "Arriving from another device"
+            }
+        }
+    }
+
+    public let recording: DeviceRecording
+    public let reason: Reason
+    public var id: String { recording.id }
+
+    public init(recording: DeviceRecording, reason: Reason) {
+        self.recording = recording
+        self.reason = reason
+    }
+}
+
 /// A conversation recorded on this Mac whose time span intersects a device recording.
 public struct DeviceOverlap: Equatable, Identifiable {
     public let meetingID: UUID
