@@ -42,7 +42,10 @@ enum LaunchOptions {
     static let deviceName: String? = libraryURL == nil ? nil : value(after: "--device-name")
     #endif
     static let libraryURL: URL? = value(after: "--library").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
-    static let defaults: UserDefaults = libraryURL == nil ? .standard : UserDefaults(suiteName: "local.daybook.app.alternate-library") ?? .standard
+    /// One suite per library, so runs on different libraries side by side don't share settings or panels.
+    static let defaults: UserDefaults = libraryURL.flatMap { url in
+        UserDefaults(suiteName: "local.daybook.app.alternate-library." + AudioDigest.sha256(data: Data(url.standardizedFileURL.path.utf8)).prefix(12))
+    } ?? .standard
     static func value(after flag: String) -> String? {
         let arguments = CommandLine.arguments
         guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
@@ -82,6 +85,8 @@ struct DaybookApp: App {
             .windowStyle(.hiddenTitleBar)
             .windowResizability(.contentSize)
             .restorationBehavior(.disabled)
+            // Help › Show Welcome opens it; the Window menu doesn't list it as well.
+            .commandsRemoved()
             // A library to move first (docs/sandbox.md) is asked about in the library window, which opens instead.
             .defaultLaunchBehavior(onboardingCompleted || LaunchOptions.libraryURL != nil || state.libraryMoveOffer?.holdsLibrary == true
                                    ? .suppressed : .presented)
