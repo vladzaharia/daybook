@@ -78,7 +78,8 @@ struct PhonePairingStep: View {
                     .tracking(2)
                     .textSelection(.enabled)
                     .accessibilityLabel("Pairing code \(code.digits.map(String.init).joined(separator: " "))")
-                Text("On your iPhone, open Daybook › Settings › Pair with Your Mac, choose “\(link.identity.name)”, and enter this code.")
+                // The Mac's name stays on one line ("Vlad’s MacBook Pro (755)"), never split across two.
+                Text("On your iPhone, open Daybook › Settings › Pair with Your Mac, choose “\(link.identity.name.replacingOccurrences(of: " ", with: "\u{00A0}"))”, and enter this code.")
                     .font(TypeStyle.status).foregroundStyle(Ink.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -98,18 +99,10 @@ struct PhonePairingStep: View {
             // The title says who paired, and the list below shows it connected.
             EmptyView()
         case .unavailable(let message):
-            DeviceBox {
-                HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning).accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: Space.s3) {
-                        Text(message).font(TypeStyle.status).foregroundStyle(Ink.body).fixedSize(horizontal: false, vertical: true)
-                        HStack {
-                            Spacer()
-                            Button("Show New Code") { state.beginPhonePairing() }.controlSize(.small)
-                        }
-                    }
-                }
+            DeviceAttentionBox(kind: .problem, symbol: "exclamationmark.triangle.fill", title: message) {
+                DeviceBoxPrimaryButton(title: "Show New Code") { state.beginPhonePairing() }
             }
+            .padding(.top, -Space.s4)
         }
     }
 
