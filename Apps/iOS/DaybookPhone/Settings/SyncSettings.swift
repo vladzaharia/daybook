@@ -2,88 +2,103 @@ import DaybookKit
 import SwiftUI
 import UIKit
 
-/// Settings › iCloud: what sync is doing right now, in one honest line, and the library's devices.
-struct SyncSection: View {
+/// Settings' iCloud row: what sync is doing, in a line, opening Settings › iCloud.
+struct ICloudRow: View {
+    @Environment(PhoneAppModel.self) private var model
+
+    var body: some View {
+        let sync = model.sync
+        let needsYou = SyncSymbol.needsAttention(sync)
+        SettingsRow(title: "iCloud", detail: sync.statusLine, systemImage: SyncSymbol.name(sync),
+                    tone: needsYou ? .attention : .neutral, detailNeedsAttention: needsYou)
+    }
+}
+
+/// The sync status's symbol, and whether it needs the person (orange).
+@MainActor
+enum SyncSymbol {
+    static func name(_ sync: PhoneSync) -> String {
+        if case .unavailable = sync.connection { return "icloud.slash" }
+        if needsAttention(sync) { return "exclamationmark.icloud" }
+        return "icloud"
+    }
+
+    /// iCloud can't be used, a pass failed, or the library's key is missing.
+    static func needsAttention(_ sync: PhoneSync) -> Bool {
+        if case .unavailable = sync.connection { return true }
+        return sync.isConnected && (sync.lastError != nil || sync.encryption == .waitingForKey)
+    }
+}
+
+/// Settings › iCloud: what sync is doing right now, in one honest line; Sync Now; the library's
+/// devices; and encryption.
+struct ICloudScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @State private var showingDetails = false
 
     var body: some View {
         let sync = model.sync
-        Section {
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                HStack(spacing: 12) {
-                    SyncGlyph()
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(sync.statusLine)
-                            .foregroundStyle(.primary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let detail = sync.detailLine(now: context.date) {
-                            Text(detail).font(.footnote).foregroundStyle(.secondary)
+        let needsYou = SyncSymbol.needsAttention(sync)
+        Form {
+            Section {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    HStack(spacing: SettingsMetrics.gap) {
+                        SettingsTile(systemImage: SyncSymbol.name(sync), tone: needsYou ? .attention : .neutral)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(sync.statusLine)
+                                .foregroundStyle(needsYou ? PhoneStyle.Ink.warning : PhoneStyle.Ink.title)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if let detail = sync.detailLine(now: context.date) {
+                                Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                            }
                         }
                     }
+                    .padding(.vertical, 1)
+                    .accessibilityElement(children: .combine)
                 }
-                .padding(.vertical, 2)
-                .accessibilityElement(children: .combine)
+                if sync.isConnected {
+                    if sync.lastError != nil {
+                        Button { showingDetails = true } label: { SettingsActionLabel(title: "Details", systemImage: "info.circle") }
+                    }
+                    // A pass already running takes this as another to run after it.
+                    Button {
+                        Task { await model.sync.synchronize(.manual) }
+                    } label: {
+                        SettingsActionLabel(title: "Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                } else if case .unavailable = sync.connection {
+                    if model.cloud.settingsCanFix, let url = URL(string: UIApplication.openSettingsURLString) {
+                        Button { openURL(url) } label: { SettingsActionLabel(title: "Open Settings", systemImage: "gear") }
+                    }
+                    Button {
+                        Task { await model.refreshCloud() }
+                    } label: {
+                        SettingsActionLabel(title: "Check Again", systemImage: "arrow.clockwise")
+                    }
+                }
             }
             if sync.isConnected {
-                if sync.lastError != nil {
-                    Button("Details") { showingDetails = true }
+                Section {
+                    NavigationLink(value: SettingsRoute.libraryDevices) {
+                        LabeledContent("Devices in This Library", value: devicesSummary)
+                    }
                 }
-                Button {
-                    Task { await model.sync.synchronize(.manual) }
-                } label: {
-                    Text(sync.isSyncing ? "Syncing…" : "Sync Now")
+                if sync.encryption != .unavailable {
+                    Section { EncryptionRows() }
                 }
-                .disabled(sync.isSyncing)
-                NavigationLink(value: SettingsRoute.libraryDevices) {
-                    LabeledContent("Devices in This Library", value: devicesSummary)
-                }
-                EncryptionRows()
-            } else if case .unavailable = sync.connection {
-                if model.cloud.settingsCanFix, let url = URL(string: UIApplication.openSettingsURLString) {
-                    Button("Open Settings") { openURL(url) }
-                }
-                Button("Check Again") { Task { await model.refreshCloud() } }
             }
-        } header: {
-            Text("iCloud")
-        } footer: {
-            if let footer { Text(footer) }
+            SettingsScrollEndMarker()
         }
+        .settingsScrollEnd()
+        .navigationTitle("iCloud")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: model.sync.lastError ?? "") }
     }
 
     private var devicesSummary: String {
         let others = model.sync.devices.filter { !$0.isCurrentDevice }
         return others.isEmpty ? "Only this iPhone" : others.count == 1 ? "1 other" : "\(others.count) others"
-    }
-
-    /// Where your Mac stands: "Studio Mac synced just now."
-    private var footer: String? {
-        if case .unavailable = model.sync.connection { return nil }
-        return model.macPresence.summary()
-    }
-}
-
-/// The status glyph: a check when up to date, arrows while syncing, a slash when sync can't run.
-private struct SyncGlyph: View {
-    @Environment(PhoneAppModel.self) private var model
-
-    var body: some View {
-        let sync = model.sync
-        let (symbol, tint): (String, Color) = {
-            if !sync.isConnected { return ("icloud.slash", PhoneStyle.Ink.warning) }
-            if sync.lastError != nil { return ("exclamationmark.icloud", PhoneStyle.Ink.warning) }
-            if sync.isSyncing || sync.pendingUploads > 0 || sync.hasMoreWork { return ("arrow.triangle.2.circlepath.icloud", PhoneStyle.accent) }
-            return ("checkmark.icloud", PhoneStyle.accent)
-        }()
-        Image(systemName: symbol)
-            .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(tint)
-            .symbolEffect(.rotate, isActive: sync.isSyncing)
-            .frame(width: 30)
-            .accessibilityHidden(true)
     }
 }
 
@@ -97,23 +112,13 @@ struct LibraryDevicesScreen: View {
             List {
                 Section {
                     ForEach(devices) { device in
-                        HStack(spacing: 12) {
-                            Image(systemName: symbol(device))
-                                .font(.system(size: 18))
-                                .foregroundStyle(device.isCurrentDevice ? PhoneStyle.accent : .secondary)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(name(device) + (device.isCurrentDevice ? " (this iPhone)" : ""))
-                                Text(detail(device, now: context.date)).font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                        .accessibilityElement(children: .combine)
+                        SettingsRow(title: name(device), detail: Self.detail(device, now: context.date), systemImage: symbol(device))
                     }
                 }
             }
             .refreshable { await model.sync.refreshDevices() }
         }
+        .settingsScrollEnd()
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.sync.refreshDevices() }
@@ -133,23 +138,25 @@ struct LibraryDevicesScreen: View {
         device.displayName ?? (device.deviceClass == nil ? "A device that hasn’t checked in" : "Unnamed device")
     }
 
-    private func detail(_ device: KnownSyncDevice, now: Date) -> String {
-        var parts: [String] = []
+    /// "This iPhone · Synced just now", "Recording now · Transcribes and summarizes · Last seen 2 h ago";
+    /// nil when there's nothing to say.
+    static func detail(_ device: KnownSyncDevice, now: Date) -> String? {
+        var parts: [String] = device.isCurrentDevice ? ["This iPhone"] : []
         if device.deviceClass == .mac, device.isRecording(at: now) { parts.append("Recording now") }
         if device.canProcess == true { parts.append("Transcribes and summarizes") }
         if let seen = device.lastSeen {
             parts.append(device.isCurrentDevice ? "Synced \(MacPresence.age(now.timeIntervalSince(seen)))" : "Last seen \(MacPresence.age(now.timeIntervalSince(seen)))")
-        } else {
-            parts.append(device.isCurrentDevice ? "Not synced yet" : "Last seen: not reported")
+        } else if device.isCurrentDevice {
+            parts.append("Not synced yet")
         }
-        return parts.joined(separator: " · ")
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 
-/// Settings › Storage: the audio cache budget, what's used, and Clear Downloaded Audio.
+/// Settings › Storage: the audio kept on this iPhone against its budget, Clear Downloaded Audio
+/// (only while there's some to clear), and backups.
 struct StorageScreen: View {
     @Environment(PhoneAppModel.self) private var model
-    @State private var cleared: UInt64?
     @State private var clearing = false
 
     var body: some View {
@@ -159,41 +166,41 @@ struct StorageScreen: View {
             Section {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text(bytes(usage.bytes)).font(.title2.weight(.semibold).monospacedDigit())
-                        Text("of \(bytes(settings.audioCacheBudget))").foregroundStyle(.secondary)
+                        Text(bytes(usage.bytes)).font(.title2.weight(.semibold).monospacedDigit()).foregroundStyle(PhoneStyle.Ink.title)
+                        Text("of \(bytes(settings.audioCacheBudget))").foregroundStyle(PhoneStyle.Ink.secondary)
                     }
+                    // A meter, not an action or work in progress: neutral ink.
                     ProgressView(value: min(1, Double(usage.bytes) / Double(max(1, settings.audioCacheBudget))))
-                        .tint(PhoneStyle.accent)
-                    Text(usage.items == 0 ? "No audio is kept on this iPhone yet." : breakdown(usage))
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .tint(PhoneStyle.Ink.secondary)
+                    if let breakdown = Self.breakdown(bytes: usage.bytes, downloaded: usage.downloadedBytes) {
+                        Text(breakdown).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                    }
                 }
                 .padding(.vertical, 4)
-            } header: {
-                Text("Audio on This iPhone")
-            }
-            Section {
+                .accessibilityElement(children: .combine)
                 Picker("Keep Up To", selection: $settings.audioCacheBudget) {
                     ForEach(PhoneSettings.budgetChoices, id: \.self) { Text(bytes($0)).tag($0) }
                 }
+            } header: {
+                Text("Audio on This iPhone")
             }
-            Section {
-                Button(role: .destructive) {
-                    clearing = true
-                    Task {
-                        cleared = await model.audio.clearDownloaded()
-                        clearing = false
+            // Downloads go back to iCloud, so they can be cleared only while it's there to get them again.
+            if (usage.downloadedBytes > 0 && model.sync.isConnected) || clearing {
+                Section {
+                    Button(role: .destructive) {
+                        clearing = true
+                        Task {
+                            _ = await model.audio.clearDownloaded()
+                            clearing = false
+                        }
+                    } label: {
+                        HStack {
+                            Text("Clear Downloaded Audio")
+                            if clearing { Spacer(); ProgressView() }
+                        }
                     }
-                } label: {
-                    HStack {
-                        Text("Clear Downloaded Audio")
-                        if clearing { Spacer(); ProgressView() }
-                    }
-                }
-                .disabled(usage.downloadedBytes == 0 || clearing || !model.sync.isConnected)
-            } footer: {
-                if let cleared {
-                    Text(cleared == 0 ? "Nothing to clear." : "Freed \(bytes(cleared)).")
-                } else {
+                    .disabled(clearing)
+                } footer: {
                     Text("Only downloaded audio is removed.")
                 }
             }
@@ -203,6 +210,7 @@ struct StorageScreen: View {
                        ? $settings.includesEncryptedLibraryInBackups : $settings.includesLibraryInBackups)
             }
         }
+        .settingsScrollEnd()
         .navigationTitle("Storage")
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.audio.refreshUsage() }
@@ -211,13 +219,19 @@ struct StorageScreen: View {
         .onChange(of: settings.includesEncryptedLibraryInBackups) { model.applyBackupExclusion() }
     }
 
-    private func bytes(_ value: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file) }
+    private func bytes(_ value: UInt64) -> String { Self.bytes(value) }
 
-    private func breakdown(_ usage: SyncAudioProvider.CacheUsage) -> String {
-        let downloaded = usage.downloadedBytes, here = usage.bytes - min(usage.bytes, usage.downloadedBytes)
-        var parts: [String] = []
-        if downloaded > 0 { parts.append("\(bytes(downloaded)) downloaded for playback") }
-        if here > 0 { parts.append("\(bytes(here)) recorded on this iPhone") }
-        return parts.joined(separator: " · ")
+    static func bytes(_ value: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file) }
+
+    /// What the audio is, under its total: both kinds with their sizes, one kind without repeating the
+    /// total, or nil when there's none.
+    static func breakdown(bytes total: UInt64, downloaded: UInt64) -> String? {
+        let downloaded = min(total, downloaded), here = total - downloaded
+        switch (downloaded > 0, here > 0) {
+        case (true, true): return "\(bytes(downloaded)) downloaded · \(bytes(here)) recorded on this iPhone"
+        case (true, false): return "Downloaded for playback"
+        case (false, true): return "Recorded on this iPhone"
+        case (false, false): return nil
+        }
     }
 }

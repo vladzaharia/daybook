@@ -4,6 +4,7 @@ import SwiftUI
 
 /// Where a Settings row leads.
 enum SettingsRoute: Hashable {
+    case icloud
     case libraryDevices
     case mac(UUID)
     case device(String)
@@ -16,8 +17,8 @@ enum SettingsRoute: Hashable {
     case acknowledgements
 }
 
-/// Settings: iCloud and sync, your Macs, recorders, recording, storage, templates and vocabulary,
-/// and About. `LibraryBrowser` presents it.
+/// Settings: iCloud, your Macs, recorders, recording, storage, templates and vocabulary, and About.
+/// `LibraryBrowser` presents it.
 struct SettingsScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -26,62 +27,61 @@ struct SettingsScreen: View {
     @State private var showingAddDevice = false
 
     var body: some View {
-        NavigationStack(path: $path) {
-            Form {
-                SyncSection()
-                MacsSection(showingPairing: $showingPairing)
-                RecordersSection(showingAddDevice: $showingAddDevice)
-                Section {
-                    NavigationLink(value: SettingsRoute.recording) {
-                        // Red means recording right now, so the tile isn't red.
-                        SettingsRow(title: "Recording", detail: recordingSummary, systemImage: "waveform", tint: PhoneStyle.accent)
-                    }
-                    NavigationLink(value: SettingsRoute.storage) {
-                        SettingsRow(title: "Storage", detail: storageSummary, systemImage: "internaldrive")
-                    }
-                }
-                Section {
-                    NavigationLink(value: SettingsRoute.templates) {
-                        SettingsRow(title: "Summary Templates", detail: templatesSummary, systemImage: "doc.text", tint: PhoneStyle.accent)
-                    }
-                    NavigationLink(value: SettingsRoute.vocabulary) {
-                        SettingsRow(title: "Vocabulary", detail: vocabularySummary, systemImage: "character.book.closed", tint: PhoneStyle.accent)
-                    }
-                } header: {
-                    Text("Library")
-                }
-                Section {
-                    NavigationLink(value: SettingsRoute.about) {
-                        SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle")
-                    }
-                }
+        column
+        .pairingSheet(isPresented: $showingPairing)
+        .sheet(isPresented: $showingAddDevice) {
+            AddDeviceSheet { id in
+                showingAddDevice = false
+                if let id { path = [.device(id)] }
             }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .navigationDestination(for: SettingsRoute.self) { route in
-                switch route {
-                case .libraryDevices: LibraryDevicesScreen()
-                case .mac(let id): MacDetailScreen(macID: id)
-                case .device(let id): DevicePage(sessionID: id)
-                case .recording: RecordingSettingsScreen()
-                case .storage: StorageScreen()
-                case .templates: TemplatesScreen()
-                case .template(let id): TemplateEditor(templateID: id)
-                case .vocabulary: VocabularyScreen()
-                case .about: AboutScreen()
-                case .acknowledgements: AcknowledgementsScreen()
-                }
-            }
-            .pairingSheet(isPresented: $showingPairing)
-            .sheet(isPresented: $showingAddDevice) {
-                AddDeviceSheet { id in
-                    showingAddDevice = false
-                    if let id { path = [.device(id)] }
-                }
-            }
-            .task { await openRequestedScreen() }
         }
+        .task { await openRequestedScreen() }
+    }
+
+    /// In the hand: the list, and each screen pushed over it.
+    private var column: some View {
+        NavigationStack(path: $path) {
+            list
+                .navigationDestination(for: SettingsRoute.self) { SettingsDestination(route: $0) }
+        }
+    }
+
+    private var list: some View {
+        Form {
+            Section {
+                NavigationLink(value: SettingsRoute.icloud) { ICloudRow() }
+            }
+            MacsSection(showingPairing: $showingPairing)
+            RecordersSection(showingAddDevice: $showingAddDevice)
+            Section {
+                NavigationLink(value: SettingsRoute.recording) {
+                    SettingsRow(title: "Recording", detail: recordingSummary, systemImage: "waveform")
+                }
+                NavigationLink(value: SettingsRoute.storage) {
+                    SettingsRow(title: "Storage", detail: storageSummary, systemImage: "internaldrive")
+                }
+            }
+            Section {
+                NavigationLink(value: SettingsRoute.templates) {
+                    SettingsRow(title: "Summary Templates", detail: templatesSummary, systemImage: "doc.text")
+                }
+                NavigationLink(value: SettingsRoute.vocabulary) {
+                    SettingsRow(title: "Vocabulary", detail: vocabularySummary, systemImage: "character.book.closed")
+                }
+            } header: {
+                Text("Library")
+            }
+            Section {
+                NavigationLink(value: SettingsRoute.about) {
+                    SettingsRow(title: "About Daybook", detail: nil, systemImage: "info.circle")
+                }
+            }
+            SettingsScrollEndMarker()
+        }
+        .settingsScrollEnd()
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
 
     private var recordingSummary: String {
@@ -90,7 +90,7 @@ struct SettingsScreen: View {
 
     private var storageSummary: String {
         let used = model.audio.usage.bytes
-        return used == 0 ? "No downloaded audio" : "\(ByteCountFormatter.string(fromByteCount: Int64(used), countStyle: .file)) of audio"
+        return used == 0 ? "No audio on this iPhone" : "\(ByteCountFormatter.string(fromByteCount: Int64(clamping: used), countStyle: .file)) of audio"
     }
 
     private var templatesSummary: String {
@@ -100,13 +100,13 @@ struct SettingsScreen: View {
 
     private var vocabularySummary: String {
         let count = model.library.controller.glossary.filter(\.approved).count
-        return count == 0 ? "No terms yet" : count == 1 ? "1 term" : "\(count) terms"
+        return count == 0 ? "No terms" : count == 1 ? "1 term" : "\(count) terms"
     }
 
     /// `--open-settings <screen>` (debug), for screenshots.
     private func openRequestedScreen() async {
         guard let screen = model.options.openSettings else { return }
-        if screen == "device" || screen == "devices" {
+        if screen.hasPrefix("device") {
             // A recorder the device autopilot is still adding: wait for it to connect and import.
             for _ in 0..<150 where model.devices.sessions.first?.links.recent.isEmpty != false {
                 try? await Task.sleep(for: .milliseconds(100))
@@ -117,16 +117,17 @@ struct SettingsScreen: View {
             try? await Task.sleep(for: .milliseconds(800))
         }
         switch screen {
+        case "icloud": path = [.icloud]
         case "macs": if let mac = model.link.macs.first { path = [.mac(mac.id)] }
         case "pairing": showingPairing = true
-        case "devices", "device": if let session = model.devices.sessions.first { path = [.device(session.id)] }
+        case "devices", "device", "device-details": if let session = model.devices.sessions.first { path = [.device(session.id)] }
         case "add-device", "add-recorder": showingAddDevice = true
         case "storage": path = [.storage]
         case "templates": path = [.templates]
         case "template": path = [.templates, .template("general")]
         case "vocabulary": path = [.vocabulary]
         case "recording": path = [.recording]
-        case "library-devices": path = [.libraryDevices]
+        case "library-devices": path = [.icloud, .libraryDevices]
         case "about": path = [.about]
         case "acknowledgements": path = [.about, .acknowledgements]
         default: break
@@ -134,29 +135,208 @@ struct SettingsScreen: View {
     }
 }
 
-/// A Settings row: a tinted symbol tile, the title, and one line of what it's set to.
+/// The screen a route opens.
+struct SettingsDestination: View {
+    let route: SettingsRoute
+
+    var body: some View {
+        switch route {
+        case .icloud: ICloudScreen()
+        case .libraryDevices: LibraryDevicesScreen()
+        case .mac(let id): MacDetailScreen(macID: id)
+        case .device(let id): DevicePage(sessionID: id)
+        case .recording: RecordingSettingsScreen()
+        case .storage: StorageScreen()
+        case .templates: TemplatesScreen()
+        case .template(let id): TemplateEditor(templateID: id)
+        case .vocabulary: VocabularyScreen()
+        case .about: AboutScreen()
+        case .acknowledgements: AcknowledgementsScreen()
+        }
+    }
+}
+
+// MARK: Rows
+
+/// The measurements every Settings row shares, so titles line up whatever the symbol.
+enum SettingsMetrics {
+    /// The symbol tile at the default text size; it grows with Dynamic Type, up to `tileLimit`.
+    static let tile: CGFloat = 30
+    static let tileLimit: CGFloat = 42
+    /// Between the tile column and the text.
+    static let gap: CGFloat = 12
+}
+
+/// The tile column's width at the person's text size.
+struct SettingsTileWidth: DynamicProperty {
+    @ScaledMetric(relativeTo: .body) private var scaled = SettingsMetrics.tile
+    var value: CGFloat { min(scaled, SettingsMetrics.tileLimit) }
+}
+
+/// A row's symbol on a neutral tile, like the status sheet's: teal only while the device it stands
+/// for is connected, orange while something needs you.
+struct SettingsTile: View {
+    enum Tone { case neutral, active, attention }
+
+    let systemImage: String
+    var tone: Tone = .neutral
+    /// A larger tile (a device page's header); nil for the row column.
+    var size: CGFloat?
+    private let column = SettingsTileWidth()
+    @ScaledMetric(relativeTo: .title) private var scale: CGFloat = 1
+
+    var body: some View {
+        let side = size.map { min($0 * scale, $0 * 1.35) } ?? column.value
+        Image(systemName: systemImage)
+            .font(.system(size: side * 0.5, weight: .medium))
+            .foregroundStyle(ink)
+            .frame(width: side, height: side)
+            .background(fill.opacity(0.12), in: RoundedRectangle(cornerRadius: side * 0.24, style: .continuous))
+            .accessibilityHidden(true)
+    }
+
+    private var ink: Color {
+        switch tone {
+        case .neutral: return PhoneStyle.Ink.secondary
+        case .active: return PhoneStyle.accent
+        case .attention: return PhoneStyle.Ink.warning
+        }
+    }
+
+    private var fill: Color {
+        switch tone {
+        case .neutral: return .gray
+        case .active: return PhoneStyle.accent
+        case .attention: return PhoneStyle.Ink.warning
+        }
+    }
+}
+
+/// A Settings row: its symbol on a tile, the title, and one line of what it's set to or doing.
+/// Explicit inks, so a row inside a button keeps them.
 struct SettingsRow: View {
     let title: String
     let detail: String?
     let systemImage: String
-    /// System gray, which keeps its contrast in Dark Mode and Increase Contrast; teal for what you set up.
-    var tint: Color = Color(uiColor: .systemGray)
+    var tone: SettingsTile.Tone = .neutral
+    /// The detail in orange: it needs you.
+    var detailNeedsAttention = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background(tint.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        HStack(spacing: SettingsMetrics.gap) {
+            SettingsTile(systemImage: systemImage, tone: tone)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).foregroundStyle(.primary)
+                Text(title.wrappingAsName)
+                    .foregroundStyle(PhoneStyle.Ink.title)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let detail {
-                    Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                    Text(detail.keepingSeparators)
+                        .font(.footnote)
+                        .foregroundStyle(detailNeedsAttention ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
         .padding(.vertical, 1)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// An action in a list of rows ("Pair with Your Mac…", "Sync Now"): its symbol in the tile column,
+/// then its title, both in the link's ink, so it lines up with the rows around it.
+struct SettingsActionLabel: View {
+    let title: String
+    let systemImage: String
+    private let column = SettingsTileWidth()
+
+    var body: some View {
+        HStack(spacing: SettingsMetrics.gap) {
+            Image(systemName: systemImage)
+                .font(.body.weight(.medium))
+                .frame(width: column.value)
+                .accessibilityHidden(true)
+            Text(title).fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(PhoneStyle.Ink.link)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The top of a device's page (a recorder, a Mac): its tile, its name in New York, and its status.
+/// The bar stays quiet, so the name is shown once.
+struct DevicePageHeader: View {
+    let systemImage: String
+    let isActive: Bool
+    let title: String
+    let status: String
+    var statusNeedsAttention = false
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        // At the accessibility sizes the tile sits above the name, which then has the page's width.
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: PhoneStyle.Space.s3))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 14))
+        layout {
+            SettingsTile(systemImage: systemImage, tone: isActive ? .active : .neutral, size: 56)
+            VStack(alignment: .leading, spacing: 4) {
+                // On one line when it fits; else a size smaller, wrapping at spaces (a page of the open Duo).
+                ViewThatFits(in: .horizontal) {
+                    Text(title).font(PhoneStyle.Typeface.title(.title)).lineLimit(1)
+                    Text(title.wrappingAsName)
+                        .font(PhoneStyle.Typeface.title(.title2))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(PhoneStyle.Ink.title)
+                .accessibilityAddTraits(.isHeader)
+                Text(status.keepingSeparators)
+                    .font(.subheadline)
+                    .foregroundStyle(statusNeedsAttention ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension View {
+    /// A device page's header as a list row: on the list's background, not in a cell.
+    func devicePageHeaderRow() -> some View {
+        listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+    }
+
+    /// `--scroll-end` (debug): the screen scrolled to its foot (`SettingsScrollEndMarker`), for screenshots.
+    func settingsScrollEnd() -> some View { modifier(SettingsScrollEnd()) }
+}
+
+/// The foot of a Settings list that `--scroll-end` scrolls to (debug); nothing otherwise.
+struct SettingsScrollEndMarker: View {
+    @Environment(PhoneAppModel.self) private var model
+
+    var body: some View {
+        if model.options.scrollEnd {
+            Color.clear.frame(height: 1).listRowBackground(Color.clear).id(SettingsScrollEnd.anchor)
+        }
+    }
+}
+
+private struct SettingsScrollEnd: ViewModifier {
+    static let anchor = "settings-scroll-end"
+    @Environment(PhoneAppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        if model.options.scrollEnd {
+            ScrollViewReader { proxy in
+                content.task {
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    proxy.scrollTo(Self.anchor, anchor: .bottom)
+                }
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -170,31 +350,21 @@ struct RecordingSettingsScreen: View {
         Form {
             Section {
                 Toggle("Ask Your Mac to Transcribe", isOn: $settings.requestsTranscription)
-            } footer: {
-                if !settings.requestsTranscription {
-                    Text("Recordings wait until you choose Transcribe.")
-                }
-            }
-            Section {
                 Toggle("Recording with Your Mac", isOn: $settings.acceptsMacRecordRequests)
-            } footer: {
-                Text("A paired Mac can start and stop recordings on this iPhone.")
             }
             CaptionSettingsSection()
             Section {
                 Toggle("Lock Screen and Dynamic Island", isOn: $settings.showsLiveActivity)
-            } footer: {
-                Text("Shows the clock, Bookmark, and Stop while recording.")
             }
             Section {
                 LabeledContent("Format", value: "AAC, 48 kHz mono")
                 LabeledContent("Size", value: "About 29 MB an hour")
             } header: {
                 Text("Quality")
-            } footer: {
-                Text("Records this iPhone’s microphone only, not calls or other apps.")
             }
+            SettingsScrollEndMarker()
         }
+        .settingsScrollEnd()
         .navigationTitle("Recording")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -203,21 +373,28 @@ struct RecordingSettingsScreen: View {
 // MARK: About
 
 struct AboutScreen: View {
+    @Environment(PhoneAppModel.self) private var model
+
     var body: some View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Daybook").font(PhoneStyle.Typeface.title(.title)).foregroundStyle(PhoneStyle.Ink.title)
-                    Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Version \(version)").font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
                 }
                 .padding(.vertical, 6)
+                .accessibilityElement(children: .combine)
             }
             Section("Privacy") {
                 Text("Recordings, notes, and transcripts stay on your devices and in your iCloud.")
                     .font(.subheadline)
+                    .foregroundStyle(PhoneStyle.Ink.body)
             }
-            Section {
-                NavigationLink("Acknowledgements", value: SettingsRoute.acknowledgements)
+            // Credits for the models behind this library's transcripts and summaries: only once there are some.
+            if !AcknowledgementsScreen.entries(for: model).isEmpty {
+                Section {
+                    NavigationLink("Acknowledgements", value: SettingsRoute.acknowledgements)
+                }
             }
         }
         .navigationTitle("About")

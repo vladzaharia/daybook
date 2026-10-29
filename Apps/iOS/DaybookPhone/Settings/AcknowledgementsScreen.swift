@@ -7,19 +7,16 @@ import SwiftUI
 struct AcknowledgementsScreen: View {
     @Environment(PhoneAppModel.self) private var model
 
-    private var entries: [ModelAcknowledgement] {
+    /// The models behind this library's results. About links here only when there are some.
+    @MainActor
+    static func entries(for model: PhoneAppModel) -> [ModelAcknowledgement] {
         let catalog = ModelCatalog.builtIn
         return ModelAcknowledgements.list(from: catalog, only: catalog.resultModelKeys(in: model.library.controller.meetings))
     }
 
     var body: some View {
-        let entries = entries
+        let entries = Self.entries(for: model)
         Form {
-            if entries.isEmpty {
-                Section {
-                    Text("No transcripts or summaries yet.").foregroundStyle(.secondary)
-                }
-            }
             ForEach(entries) { entry in
                 Section {
                     LabeledContent("Models") {
@@ -27,8 +24,11 @@ struct AcknowledgementsScreen: View {
                     }
                     if let url = URL(string: entry.licenseURL), !entry.licenseURL.isEmpty {
                         Link(destination: url) {
-                            LabeledContent("License") {
-                                Text(entry.licenseName).foregroundStyle(PhoneStyle.accent)
+                            // Explicit inks: a link tints its label, so "License" would be teal too.
+                            LabeledContent {
+                                Text(entry.licenseName).foregroundStyle(PhoneStyle.Ink.link)
+                            } label: {
+                                Text("License").foregroundStyle(PhoneStyle.Ink.title)
                             }
                         }
                     } else {
@@ -38,7 +38,7 @@ struct AcknowledgementsScreen: View {
                     if let attribution = entry.attribution {
                         Text(attribution)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(PhoneStyle.Ink.secondary)
                             .textSelection(.enabled)
                     }
                 } header: {
