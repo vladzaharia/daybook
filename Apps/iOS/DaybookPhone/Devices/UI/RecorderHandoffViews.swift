@@ -3,21 +3,13 @@ import SwiftUI
 
 /// A recorder's handoff (docs/devices.md, "Handing a recorder over"): "Use on This iPhone" when a
 /// Mac manages it, "Use on Studio Mac" when this iPhone does and the Mac is on Wi‑Fi, and the
-/// handoff's progress in between. The device page shows it under its own header; the status sheet
-/// shows it as a row of the recorder's card.
+/// handoff's progress in between. The same rows in the status sheet's recorder card and on the
+/// device page: a glyph column, then the words. "Managed by" is the line above them, not repeated.
 ///
 /// A working state is a bare line; a state that needs the person (an answer, or waiting too long)
 /// offers at most two actions (docs/interface.md).
 struct RecorderHandoffCard: View {
-    enum Style {
-        /// The device page: full-width buttons.
-        case page
-        /// A row of the status sheet's recorder card: the card's glyph column, then the words.
-        case row
-    }
-
     @ObservedObject var session: DeviceSession
-    var style: Style = .page
     @Environment(PhoneAppModel.self) private var model
     @State private var confirmingTakeOver = false
 
@@ -31,12 +23,9 @@ struct RecorderHandoffCard: View {
     var body: some View {
         let devices = model.devices
         let state = devices.handoffState(session)
-        VStack(alignment: .leading, spacing: style == .page ? PhoneStyle.Space.s2 : 0) {
+        VStack(alignment: .leading, spacing: 0) {
             if session.direct is any ManagedConnection {
-                switch style {
-                case .page: handoff(state, devices: devices)
-                case .row: rows(state, devices: devices)
-                }
+                rows(state, devices: devices)
             }
         }
         .confirmationDialog("Take over \(session.device.name) now?", isPresented: $confirmingTakeOver, titleVisibility: .visible) {
@@ -47,60 +36,7 @@ struct RecorderHandoffCard: View {
         }
     }
 
-    // MARK: The device page
-
-    @ViewBuilder
-    private func handoff(_ state: RecorderHandoff.State, devices: PhoneDevices) -> some View {
-        let recorder = session.device.name
-        let headline = RecorderHandoff.Words.headline(state, recorder: recorder, here: "this iPhone")
-        TimelineView(.periodic(from: .now, by: 15)) { context in
-            let overdue = devices.handoff.isOverdue(state, now: context.date)
-            let detail = RecorderHandoff.Words.detail(state, recorder: recorder, here: "this iPhone", overdue: overdue, now: context.date)
-            VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-                switch state {
-                case .idle:
-                    if let owner = session.managedElsewhere {
-                        actionButton("Use on This iPhone", systemImage: "iphone") { devices.useHere(session) }
-                            .accessibilityHint("Asks \(owner.ownerName) to let go of \(recorder), then connects here")
-                    } else {
-                        ForEach(devices.handoffTargets(session), id: \.linkID) { mac in
-                            actionButton("Use on \(mac.name)", systemImage: "desktopcomputer") { devices.give(session, to: mac) }
-                                .accessibilityHint("This iPhone finishes any import first")
-                        }
-                    }
-                case .done:
-                    Label(headline ?? "", systemImage: "checkmark.circle.fill")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(PhoneStyle.Ink.secondary)
-                        .symbolRenderingMode(.hierarchical)
-                case .refused:
-                    Text(headline ?? "").font(.footnote.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.warning)
-                    if let detail { Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary).fixedSize(horizontal: false, vertical: true) }
-                    refusedActions(devices: devices)
-                default:
-                    HStack(alignment: .center, spacing: PhoneStyle.Space.s2) {
-                        ProgressView().controlSize(.small)
-                        Text(headline ?? "").font(.footnote.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.title)
-                    }
-                    .accessibilityElement(children: .combine)
-                    if let detail {
-                        Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                    if case .waitingForSync = state { waitingActions(devices: devices, overdue: overdue) }
-                }
-            }
-        }
-    }
-
-    private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Label(title, systemImage: systemImage).frame(maxWidth: .infinity) }
-            .buttonStyle(.glass)
-            .controlSize(.large)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(PhoneStyle.Ink.link)
-    }
-
-    // MARK: The status sheet's row
+    // MARK: The rows
 
     @ViewBuilder
     private func rows(_ state: RecorderHandoff.State, devices: PhoneDevices) -> some View {
