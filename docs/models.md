@@ -210,7 +210,7 @@ The additive APIs the manager needed are in their own files:
 - `LocalIntelligenceRuntime.previewAddition`, `recordUpdate`, and `ModelInventory.replacedRevisions` (`DaybookIntelligence/LocalIntelligenceRuntime+Manager.swift`);
 - `ModelCatalog.resultModelKeys(in:)` and `resultCounts(in:)` (`DaybookKit/Models/ModelCatalog+Manager.swift`).
 
-Debug builds take `--model-demo <step,…>` (`ModelDemo`) to show any state against synthetic installs, with a download that stalls and a scripted Hugging Face, never the network: `preset:`, `use:<role>=<key>`, `downloading:<key>`, `updates:<key>`, `add`, `details:<key>`, `remove:<key>`, `acknowledgements`, `about`, `scroll:library|updates|family:<id>`.
+Debug builds take `--model-demo <step,…>` (`ModelDemo`) to show any state against synthetic installs, with a download that stalls and a scripted Hugging Face, never the network: `preset:`, `use:<role>=<key>`, `downloading:<key>`, `updates:<key>`, `add` (or `add:<owner/name>`, a repository the scripted hub doesn't have), `details:<key>`, `remove:<key>`, `acknowledgements`, `voice-matching`, `about`, `scroll:library|updates|family:<id>`.
 
 **Limits:**
 

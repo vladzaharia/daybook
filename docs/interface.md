@@ -82,6 +82,9 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
     - Model Library (disk use, old revisions, updates), then every model grouped by family, ending with Acknowledgements… and Add Model….
     - A row speaks only when something isn't ready: "Not downloaded · 1.6 GB" with Download, "Downloading · 40%" with Cancel. Labels are facts ("Non-commercial", "Added by you", "Recommended"); "In use" and "Update available" are teal because you can act on them; "Needs downloading again" is a warning.
     - Details, Add Model, and Acknowledgements are sheets. Removal is an alert that states what it frees and what each role will use.
+    - What the chosen speaker model can't do (matching voices across recordings, a number of speakers) isn't offered, rather than shown dimmed.
+  - **Library** is the library's location, iCloud Sync, and the privacy statement. iCloud Sync is one row saying where sync stands with its one action ("Up to date · 11:42 AM", Sync Now); a problem follows it once, in place (`ProblemLine`); then encryption and this Mac's preference. Turn Off Sync… and Erase Deleted Conversations from iCloud… sit under the group.
+  - A problem anywhere in Settings or its sheets is a `ProblemLine`: the warning glyph, one sentence in the label colour, Details…, and its actions, which move under a long sentence.
   - The About Daybook panel's credits carry the same acknowledgements.
 - **Vocabulary** and **Summary Templates** are separate single windows.
 - **Welcome** is a three-step first-run window.
@@ -201,6 +204,11 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --notes-contrast                    Floating Notes as Increase Contrast draws it (simulated: the shared tokens and SwiftUI's contrast)
   --play-muted                        plays the selected conversation silently
   --model-demo <step,…>               Settings › Models states without the network; see models.md
+  --sync-demo <state>                 Settings › Library › iCloud Sync in a state, without iCloud; see SyncSettingsDemo
+  --sync-sheet encrypt|recovery-key|enter-key   with --sync-demo, one of its sheets
+  --move-demo <case>                  with --open-settings library, the library move sheet; see LibraryMoveDemo
+  --vocabulary-demo   --templates-demo
+                                      fill the scratch library's vocabulary or templates (with --open-window)
   --snapshot <dir> [--snapshot-delay <seconds>]
 ```
 
