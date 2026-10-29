@@ -121,6 +121,7 @@ final class BackgroundAudioTests: XCTestCase {
         XCTAssertEqual(meeting.backgroundPassages?.map(\.text), ["Tonight on the evening news, heavy rain.", "Officials urge drivers to stay home.",
                                                                  "Stay tuned for the weather."])
         XCTAssertEqual(meeting.backgroundDuration, 15.5, accuracy: 0.01)
+        XCTAssertEqual(meeting.backgroundOnlySpeakerIDs, ["TV"], "The presenter isn't one of the people")
         XCTAssertEqual(meeting.transcripts[0].segments.count, 5, "The transcript run keeps every passage")
 
         // The person includes it: everything is back, and nothing is left out.

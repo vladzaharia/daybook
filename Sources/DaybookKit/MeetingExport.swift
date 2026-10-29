@@ -58,10 +58,13 @@ public enum MeetingExport {
             }
         }
         if let highlights = MeetingEvidence.highlights(meeting) { lines += ["", "## Bookmarks and what was said", "", safe(highlights)] }
+        // Background audio (a TV, music) stays out here too, as it does the unified transcript.
+        let background = meeting.alignmentReports.contains { $0.method == .unaligned } ? meeting.backgroundSegmentKinds() : [:]
         for report in meeting.alignmentReports where report.method == .unaligned {
             let name = meeting.tracks.first { $0.id == report.trackID }.map { sourceName(of: $0, in: meeting) } ?? "Recording"
             lines += ["", "## Unaligned source: \(safe(name))", "", report.explanation, ""]
-            lines += meeting.transcripts.filter { $0.trackID == report.trackID }.max { $0.createdAt < $1.createdAt }?.segments.map { "[\(TimeLabel.format($0.start))] \(safe($0.text))" } ?? []
+            lines += meeting.transcripts.filter { $0.trackID == report.trackID }.max { $0.createdAt < $1.createdAt }?.segments
+                .filter { background[$0.id] == nil }.map { "[\(TimeLabel.format($0.start))] \(safe($0.text))" } ?? []
         }
         return lines.joined(separator: "\n") + "\n"
     }
