@@ -167,7 +167,7 @@ private struct WelcomeQuality: View {
                 .foregroundStyle(Ink.secondary)
                 .padding(.top, Space.s2)
             WelcomePresetGroup(state: state, selection: $preset)
-                .frame(width: 472)
+                .frame(width: 496)
                 .padding(.top, Space.s5)
             Text("You can change this later in Settings.")
                 .font(.subheadline)
@@ -190,7 +190,8 @@ private struct WelcomeQuality: View {
     }
 }
 
-/// Quick, Balanced and Detailed as one radio group, with each total size.
+/// Quick, Balanced and Detailed as one radio group, with each total size: laid out as Settings › Models › Quality
+/// lays them out, with this Mac's recommendation marked the same way.
 private struct WelcomePresetGroup: View {
     @ObservedObject var state: AppState
     @Binding var selection: ModelPreset
@@ -200,15 +201,17 @@ private struct WelcomePresetGroup: View {
             ForEach(ModelPreset.allCases) { preset in
                 if preset != ModelPreset.allCases.first { Divider().padding(.leading, 44) }
                 Button { selection = preset } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
+                    HStack(alignment: .center, spacing: Space.s3) {
                         PresetRadio(isOn: selection == preset)
-                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                        Text(preset.title)
-                            .fontWeight(.semibold)
-                            .frame(width: 72, alignment: .leading)
-                        Text(description(preset))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(preset.title).fontWeight(.semibold)
+                                if preset == .recommended { ModelLabelChip("Recommended") }
+                            }
+                            Text(description(preset))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         Spacer(minLength: Space.s3)
                         Text(ModelSize.format(preset.bytes(in: state)))
                             .foregroundStyle(.secondary)
@@ -234,12 +237,13 @@ private struct WelcomePresetGroup: View {
         }
     }
 
+    /// What each is for. Memory is named only where it rules a Mac out.
     private func description(_ preset: ModelPreset) -> String {
-        if preset == .recommended { return "Best for this Mac." }
         switch preset {
         case .quick: return "Fastest. Good for clear audio."
         case .balanced: return "Good accuracy for most conversations."
-        case .detailed: return "Most accurate. Needs \(preset.recommendedMemoryGB(in: state)) GB of memory."
+        case .detailed:
+            return preset == .recommended ? "Most accurate." : "Most accurate. Needs \(preset.recommendedMemoryGB(in: state)) GB of memory."
         }
     }
 }
@@ -266,8 +270,12 @@ private struct WelcomeReady: View {
     }
 
     var body: some View {
+        // The actions sit where the other steps put Continue, rather than floating mid-window.
         VStack(spacing: 0) {
             Spacer(minLength: Space.s7)
+            // The mark again, closing the welcome it opened.
+            DaybookMark(size: 64)
+                .padding(.bottom, Space.s4)
             Text("You’re Ready")
                 .font(TypeStyle.docTitleSmall)
                 .foregroundStyle(Ink.title)
@@ -308,11 +316,11 @@ private struct WelcomeReady: View {
                 }
             }
             .controlSize(.extraLarge)
-            Spacer(minLength: Space.s5)
             HStack(spacing: Space.s1) {
                 Text("Use a wearable or handheld recorder?").foregroundStyle(Ink.secondary)
                 Button("Set Up a Recorder…", action: setUpRecorder).buttonStyle(.daybookLink)
             }
+            .padding(.top, Space.s5)
             Button("Not Now", action: finish)
                 .buttonStyle(.plain)
                 .foregroundStyle(Ink.secondary)
