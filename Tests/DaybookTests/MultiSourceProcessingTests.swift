@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookDevices
 @testable import DaybookKit
 import DaybookTestSupport
 import Foundation
@@ -81,7 +82,32 @@ final class MultiSourceProcessingTests: XCTestCase {
         try await rig.processed()
         let aside = try XCTUnwrap(rig.meeting(call)?.unifiedTranscript.first { $0.text.contains("aside about hiring") })
         XCTAssertEqual(aside.start, 7.25 + 100 * 1.0002, accuracy: 0.0001)
-        XCTAssertEqual(rig.state.sourceTimingLine(track, in: try XCTUnwrap(rig.meeting(call))), "Lined up by sound · starts 0:07 · 90% sure · drift +0.020%")
+        XCTAssertEqual(rig.state.sourceTimingLine(track, in: try XCTUnwrap(rig.meeting(call))), "Lined up by sound · starts 0:07")
+    }
+
+    func testTheInspectorSaysWhereARecordingCameFromAndHowItLinesUpOnce() async throws {
+        let rig = try await rig(models: false)
+        let state = rig.state
+        let mic = RecordingTrack(source: .microphone, relativePath: "Originals/mic.wav", fileName: "mic.wav", offset: 0)
+        let alone = Meeting(title: "Alone", tracks: [mic])
+        XCTAssertEqual(state.recordingName(mic, in: alone), "Microphone")
+        XCTAssertEqual(state.sourceLine(mic, in: alone), "This Mac", "Its only recording: no timing, and the microphone said once")
+
+        let soundcore = DeviceRecordingIdentity(kind: SoundcoreWorkIntegration.id, serial: "S1", recordingID: "1")
+        let aligned = RecordingTrack(source: .soundcore, relativePath: "Originals/a.wav", fileName: "a.wav", device: soundcore,
+                                     alignment: SourceAlignment(method: .audio, offset: 12.4, rate: 1.0002, confidence: 0.93))
+        let together = RecordingTrack(source: .imported, relativePath: "Originals/b.wav", fileName: "Interview.m4a",
+                                      device: DeviceRecordingIdentity(kind: OtherRecorderIntegration.id, recordingID: "file:b"),
+                                      alignment: SourceAlignment(method: .transcript, offset: 0.3))
+        var several = Meeting(title: "Several", tracks: [mic, aligned, together])
+        several.alignmentReports = [TrackAlignment(trackID: mic.id, method: .reference)]
+        XCTAssertEqual(state.sourceLine(mic, in: several), "This Mac · The main recording")
+        XCTAssertEqual(state.recordingName(aligned, in: several), "Soundcore Work")
+        XCTAssertEqual(state.sourceLine(aligned, in: several), "Lined up by sound · starts 0:12", "Its name says the recorder; no confidence or drift")
+        XCTAssertEqual(state.sourceLine(together, in: several), "Other Recorder · Lined up by shared phrases", "A start of 0:00 isn't said")
+
+        several.tracks[1].alignment = SourceAlignment(method: .unaligned)
+        XCTAssertEqual(state.sourceTimingLine(several.tracks[1], in: several), "Couldn’t line up")
     }
 
     func testRecordingOverlappingTwoConversationsBecomesASuggestionUntilConfirmed() async throws {
