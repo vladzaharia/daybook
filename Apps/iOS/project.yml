@@ -26,8 +26,9 @@ settings:
     LOCALIZATION_PREFERS_STRING_CATALOGS: YES
 
 packages:
-  # The repository's Swift package: DaybookKit (which re-exports DaybookCore and DaybookDevices)
-  # and DaybookLink. DaybookIntelligence stays out until on-device processing is wanted.
+  # The repository's Swift package: DaybookKit (which re-exports DaybookCore and DaybookDevices),
+  # DaybookLink, and, for live captions, DaybookLive and DaybookModelStore. DaybookIntelligence (the
+  # Mac's processing: MLX, WhisperKit) stays out: final transcription and summaries run on a Mac.
   Daybook:
     path: ../..
 
@@ -47,6 +48,11 @@ targets:
         product: DaybookLink
       - package: Daybook
         product: DaybookCaptions
+      # Live transcription from local models (FluidAudio) and their store; no MLX or WhisperKit.
+      - package: Daybook
+        product: DaybookLive
+      - package: Daybook
+        product: DaybookModelStore
       - target: DaybookPhoneWidgets
         embed: true
         codeSign: true

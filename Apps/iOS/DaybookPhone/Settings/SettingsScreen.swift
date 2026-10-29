@@ -12,6 +12,7 @@ enum SettingsRoute: Hashable {
     case device(String)
     case recording
     case storage
+    case models
     case templates
     case template(String)
     case vocabulary
@@ -19,7 +20,7 @@ enum SettingsRoute: Hashable {
     case acknowledgements
 }
 
-/// Settings: iCloud, your Macs, recorders, recording, storage, templates and vocabulary, and About.
+/// Settings: iCloud, your Macs, recorders, recording, storage, models, templates and vocabulary, and About.
 /// `LibraryBrowser` presents it (`settingsSheet`). In the hand it's one column of pushed screens; on
 /// the open iPhone Duo, two pages: the list on the left, the chosen screen on the right.
 struct SettingsScreen: View {
@@ -98,6 +99,9 @@ struct SettingsScreen: View {
                 SettingsLink(route: .storage) {
                     SettingsRow(title: "Storage", detail: storageSummary, systemImage: "internaldrive")
                 }
+                SettingsLink(route: .models) {
+                    SettingsRow(title: "Models", detail: modelsSummary, systemImage: "cpu")
+                }
             }
             Section {
                 SettingsLink(route: .templates) {
@@ -127,6 +131,11 @@ struct SettingsScreen: View {
     }
 
     private var storageSummary: String { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
+
+    private var modelsSummary: String {
+        let missing = model.models.missingBytes
+        return missing == 0 ? "Live transcription on this iPhone" : "\(ModelsSettingsScreen.size(missing)) to download"
+    }
 
     private var templatesSummary: String {
         let count = model.library.controller.templates.count
@@ -158,6 +167,7 @@ struct SettingsScreen: View {
         case "devices", "device", "device-details": if let session = model.devices.sessions.first { path = [.device(session.id)] }
         case "add-device", "add-recorder": if surface == .pocket { showingAddDevice = true } else { path = [.addRecorder] }
         case "storage": path = [.storage]
+        case "models": path = [.models]
         case "templates": path = [.templates]
         case "template": path = [.templates, .template("general")]
         case "vocabulary": path = [.vocabulary]
@@ -193,6 +203,7 @@ struct SettingsDestination: View {
         case .device(let id): DevicePage(sessionID: id)
         case .recording: RecordingSettingsScreen()
         case .storage: StorageScreen()
+        case .models: ModelsSettingsScreen()
         case .templates: TemplatesScreen()
         case .template(let id): TemplateEditor(templateID: id)
         case .vocabulary: VocabularyScreen()
