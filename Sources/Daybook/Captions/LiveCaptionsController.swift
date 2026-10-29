@@ -326,6 +326,9 @@ final class LiveCaptionSettings: ObservableObject {
     /// A downloaded live transcription model captions in this language (`MacLiveModels`), so captions
     /// run even where the Speech framework can't (macOS 15). Not stored: read from what's installed.
     @Published var hasLiveModels = false
+    /// The languages the downloaded live recognizers cover ("en", "ja"): what the language choice
+    /// offers where the Speech framework can't. Not stored.
+    @Published var liveLanguages: [String] = []
     var locale: Locale { localeIdentifier.map(Locale.init(identifier:)) ?? .current }
 
     private let defaults: UserDefaults
@@ -344,8 +347,12 @@ final class LiveCaptionSettings: ObservableObject {
 /// Which captioner a source gets on this Mac.
 @MainActor
 enum MacCaptioners {
-    /// Captions need macOS 26's `SpeechAnalyzer`. On macOS 15 there are none, and nothing says otherwise.
+    /// The Speech framework's captions need macOS 26's `SpeechAnalyzer`; on macOS 15 only downloaded
+    /// live models caption. `--captions-as-macos-15` (debug) acts as macOS 15 for screenshots.
     nonisolated static var systemSupportsCaptions: Bool {
+        #if DEBUG
+        if CommandLine.arguments.contains("--captions-as-macos-15") { return false }
+        #endif
         if #available(macOS 26, *) { return true } else { return false }
     }
 

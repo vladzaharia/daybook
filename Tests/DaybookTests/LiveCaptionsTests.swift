@@ -238,6 +238,28 @@ final class LiveCaptionsTests: XCTestCase {
 
     // MARK: macOS 15
 
+    func testOnMacOS15TheLanguagesAreTheLiveRecognizers() {
+        let latin = ["en", "es", "fr", "it", "pt", "de"]
+        let offered = LiveCaptionLanguages.options(speech: [], live: latin, selected: nil)
+        XCTAssertEqual(Set(offered.map(\.identifier)), Set(latin), "the downloaded recognizers' languages, not only Same as This Mac")
+        XCTAssertEqual(offered.map { LiveCaptionAvailability.name($0) }, offered.map { LiveCaptionAvailability.name($0) }.sorted(), "by name")
+        XCTAssertTrue(LiveCaptionLanguages.supported(systemCaptions: false, liveLanguages: latin), "the switch works whatever this Mac's language")
+        // Where the Speech framework exists, its languages are offered as before.
+        let speech = [Locale(identifier: "en_US"), Locale(identifier: "ja_JP")]
+        XCTAssertEqual(LiveCaptionLanguages.options(speech: speech, live: latin, selected: "en_US"), speech)
+        // A language chosen before its model was removed stays chosen, and the footer says why it's quiet.
+        XCTAssertEqual(LiveCaptionLanguages.options(speech: [], live: latin, selected: "ja").last?.identifier, "ja")
+        XCTAssertEqual(LiveCaptionLanguages.footer(systemCaptions: false, liveLanguages: latin, liveCovers: false, enabled: true,
+                                                   locale: Locale(identifier: "ja"), availability: nil),
+                       "Live transcription doesn’t cover \(LiveCaptionAvailability.name(Locale(identifier: "ja"))).")
+        XCTAssertNil(LiveCaptionLanguages.footer(systemCaptions: false, liveLanguages: latin, liveCovers: true, enabled: true,
+                                                 locale: Locale(identifier: "de"), availability: nil))
+        XCTAssertEqual(LiveCaptionLanguages.footer(systemCaptions: false, liveLanguages: [], liveCovers: false, enabled: true,
+                                                   locale: .current, availability: nil),
+                       "Live captions need macOS 26, or Live transcription from Settings › Models.")
+        XCTAssertFalse(LiveCaptionLanguages.supported(systemCaptions: false, liveLanguages: []))
+    }
+
     func testWithoutSpeechSupportThereAreNoCaptionsAndNoErrors() async throws {
         let defaults = makeTestDefaults("LiveCaptionsTests")
         let settings = LiveCaptionSettings(defaults: defaults)

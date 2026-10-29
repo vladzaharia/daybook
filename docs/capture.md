@@ -407,15 +407,19 @@ Code: `Sources/Daybook/Captions/` (controller, echo rule, store, views, settings
   labelled You and Call, in lighter ink than a transcript, with no editing. Both observe the captions
   directly, so a revised word redraws only them.
 - **Settings › General › Live Captions.** "Show while recording" (on by default, as on the
-  iPhone) and the language ("Same as This Mac" or any `SpeechTranscriber` locale), with a footer
-  that says whether the language is ready or downloads the first time (never asking triggers a
-  download). It's in General, beside the other recording choices, rather than Models: captions use
+  iPhone) and the language ("Same as This Mac" or any `SpeechTranscriber` locale; on macOS 15, the
+  languages the downloaded live recognizers cover, `LiveModelSet.languages`: the Latin model's six,
+  the multilingual model's 35), with a footer that says whether the language is ready or downloads
+  the first time (never asking triggers a download), or, on macOS 15, that live transcription doesn't
+  cover the chosen language. A language chosen before its model was removed stays chosen and listed,
+  so the choice still reads, and captions return when a model covers it again (`LiveCaptionLanguages`). It's in General, beside the other recording choices, rather than Models: captions use
   the system's speech assets, which Daybook doesn't download or manage, and they never feed the
   transcript that the Models pane is about. The same setting and language apply to a recorder's
   Listen Live.
 - **Availability.** The Speech framework's captions need macOS 26. On macOS 15 captions run only
-  from downloaded live models; without them no captioner is made, no tap is installed, nothing is
-  shown, and Settings says why. A real recording may download the language from Apple
+  from downloaded live models, in the languages they cover; without them (or in another language) no
+  captioner is made, no tap is installed, nothing is shown, and Settings says why.
+  `--captions-as-macos-15` (debug) acts as macOS 15 for screenshots. A real recording may download the language from Apple
   (system-managed `AssetInventory`) and, if the analyzer fails before any result while
   speech-recognition authorization is undetermined, ask once (`NSSpeechRecognitionUsageDescription`).
   Tests, demos, and the device simulator never do either.

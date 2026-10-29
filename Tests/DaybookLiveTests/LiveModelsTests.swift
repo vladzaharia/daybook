@@ -128,6 +128,13 @@ final class LiveModelsTests: XCTestCase {
         XCTAssertEqual(japanese.transcription?.key, multilingual.key, "the other installed recognizer covers Japanese")
         let welsh = LiveModelSet.resolve(choices, inventory: inventory, locale: Locale(identifier: "cy_GB"), alternatives: alternatives)
         XCTAssertFalse(welsh.transcribes(Locale(identifier: "cy_GB")), "neither covers Welsh: the system's recognizer captions it")
+        // What Settings can offer without the Speech framework: every installed recognizer's languages, once each.
+        let languages = LiveModelSet.languages(of: alternatives, inventory: inventory)
+        XCTAssertEqual(Array(languages.prefix(6)), ["en", "es", "fr", "it", "pt", "de"])
+        XCTAssertTrue(languages.contains("ja"))
+        XCTAssertEqual(languages.count, Set(languages).count)
+        let latinOnly = ModelInventory(revisions: [InstalledModelRevision(installation: latin, state: .ready)])
+        XCTAssertFalse(LiveModelSet.languages(of: alternatives, inventory: latinOnly).contains("ja"))
     }
 
     // MARK: Which captioner

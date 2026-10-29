@@ -213,10 +213,14 @@ struct LiveCaptionFeed: View {
 struct LiveCaptionSettingsSection: View {
     @ObservedObject var settings: LiveCaptionSettings
     @State private var availability: LiveCaptionAvailability?
-    @State private var locales: [Locale] = []
+    @State private var speechLocales: [Locale] = []
 
+    private var systemCaptions: Bool { MacCaptioners.systemSupportsCaptions }
     /// The Speech framework (macOS 26), or downloaded live models (any macOS).
-    private var supported: Bool { MacCaptioners.systemSupportsCaptions || settings.hasLiveModels }
+    private var supported: Bool { LiveCaptionLanguages.supported(systemCaptions: systemCaptions, liveLanguages: settings.liveLanguages) }
+    private var locales: [Locale] {
+        LiveCaptionLanguages.options(speech: speechLocales, live: systemCaptions ? [] : settings.liveLanguages, selected: settings.localeIdentifier)
+    }
 
     var body: some View {
         Section {
@@ -235,18 +239,45 @@ struct LiveCaptionSettingsSection: View {
         } header: {
             Text("Live Captions")
         } footer: {
-            if let footer { SettingsFooter(footer) }
+            if let footer = LiveCaptionLanguages.footer(systemCaptions: systemCaptions, liveLanguages: settings.liveLanguages,
+                                                        liveCovers: settings.hasLiveModels, enabled: settings.isEnabled,
+                                                        locale: settings.locale, availability: availability) {
+                SettingsFooter(footer)
+            }
         }
         .task(id: settings.localeIdentifier) {
-            guard MacCaptioners.systemSupportsCaptions else { return }
-            if locales.isEmpty { locales = await LiveCaptionAvailability.supportedLocales() }
+            guard systemCaptions else { return }
+            if speechLocales.isEmpty { speechLocales = await LiveCaptionAvailability.supportedLocales() }
             availability = await LiveCaptionAvailability.check(locale: settings.locale)
         }
     }
+}
 
-    private var footer: String? {
-        guard supported else { return "Live captions need macOS 26 or later." }
-        guard settings.isEnabled, !settings.hasLiveModels else { return nil }
+/// The languages live captions can be asked for on this Mac, and what Settings says about the choice.
+enum LiveCaptionLanguages {
+    /// Captions can run here: the Speech framework (macOS 26), or a downloaded live recognizer.
+    static func supported(systemCaptions: Bool, liveLanguages: [String]) -> Bool { systemCaptions || !liveLanguages.isEmpty }
+
+    /// The Speech framework's languages where it exists; without it (macOS 15), those the downloaded
+    /// live recognizers cover, by name. A language chosen earlier that's no longer offered (its model
+    /// was removed) stays listed, so the choice still reads and the footer can say why it's quiet.
+    static func options(speech: [Locale], live: [String], selected: String?) -> [Locale] {
+        var options = speech.isEmpty
+            ? live.map { Locale(identifier: $0) }.sorted { LiveCaptionAvailability.name($0) < LiveCaptionAvailability.name($1) }
+            : speech
+        if let selected, !options.contains(where: { $0.identifier == selected }) { options.append(Locale(identifier: selected)) }
+        return options
+    }
+
+    /// The footer: why captions can't run here, why they won't in the chosen language, or what the
+    /// Speech framework still has to download. Nil when there's nothing to say.
+    static func footer(systemCaptions: Bool, liveLanguages: [String], liveCovers: Bool, enabled: Bool, locale: Locale,
+                       availability: LiveCaptionAvailability?) -> String? {
+        guard supported(systemCaptions: systemCaptions, liveLanguages: liveLanguages) else {
+            return "Live captions need macOS 26, or Live transcription from Settings › Models."
+        }
+        guard enabled, !liveCovers else { return nil }
+        guard systemCaptions else { return "Live transcription doesn’t cover \(LiveCaptionAvailability.name(locale))." }
         switch availability {
         case .needsDownload(let locale)?:
             return "Captions for \(LiveCaptionAvailability.name(locale)) download the first time you record with them on."

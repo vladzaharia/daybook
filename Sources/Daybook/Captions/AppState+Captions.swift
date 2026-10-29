@@ -39,9 +39,10 @@ extension AppState {
     func refreshLiveModels() {
         let settings = captionSettings
         liveModels.refresh(selections: modelSelections, catalog: modelCatalog, engines: runtime.engines,
-                           locale: settings.locale, store: runtime.store) { [weak settings] models in
+                           locale: settings.locale, store: runtime.store) { [weak settings] models, languages in
             let ready = models.transcribes(settings?.locale ?? .current)
             if settings?.hasLiveModels != ready { settings?.hasLiveModels = ready }
+            if settings?.liveLanguages != languages { settings?.liveLanguages = languages }
         }
     }
 
