@@ -174,6 +174,8 @@ public final class SpeakerProfileCoordinator {
     private var again = false
     private var reconciled: Int?
     public var delay: Duration = .seconds(2)
+    /// After each look at the library (the Mac gives voices to speakers without them from here).
+    public var didRefresh: (() -> Void)?
 
     public init(library: LibraryController, options: @escaping () -> SpeakerProfileOptions, skipping: @escaping () -> Set<UUID> = { [] }) {
         self.library = library; self.options = options; self.skipping = skipping
@@ -219,6 +221,7 @@ public final class SpeakerProfileCoordinator {
             if !changed { reconciled = inputs; break }
         }
         if again { again = false; schedule() }
+        didRefresh?()
         return changedAny
     }
 

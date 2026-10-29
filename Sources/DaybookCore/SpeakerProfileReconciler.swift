@@ -133,9 +133,11 @@ public enum SpeakerProfileReconciler {
                 for rejected in entry.identity?.rejectedProfileIDs ?? [] {
                     forget(speaker.id, in: meeting, profile: rejected)
                 }
-                // A name that joined no profile (no voice yet) joins one made since from another conversation.
+                // A name that joined no profile (no voice yet) joins one made since from another conversation,
+                // or starts one once its voice is known (given since: `Meeting.giveVoices`).
                 if var identity = entry.identity, identity.source == .named, identity.profileID == nil, !SpeakerProfile.isPlaceholder(entry.name),
-                   let profile = work.existingProfileID(named: entry.name) {
+                   let profile = prints.contains(where: { $0.cleanSeconds >= options.learning.minimumNamedSeconds })
+                    ? work.profileID(named: entry.name) : work.existingProfileID(named: entry.name) {
                     identity.profileID = profile
                     entry.identity = identity
                     current[meeting.id]?[speaker.id] = entry
@@ -646,6 +648,36 @@ extension Meeting {
             result.formUnion(voiceSourceIDs(of: identity.speakerID))
         }
         return result
+    }
+
+    /// Each recording's latest run whose speakers were found without voice embeddings (Sortformer
+    /// before voice profiles, or a voice-profile model that couldn't run), with those speakers: they
+    /// can be given voices without finding them again (`giveVoices`), so profiles recognize them.
+    public var runsWithoutVoices: [(track: RecordingTrack, run: TrackTranscript, speakerIDs: [String])] {
+        transcribableTracks.compactMap { track in
+            guard let run = transcripts.filter({ $0.trackID == track.id }).max(by: { $0.createdAt < $1.createdAt }) else { return nil }
+            let labels = Set(run.segments.compactMap(\.speakerID))
+            let found = speakers.filter { labels.contains($0.id) }
+            guard !found.isEmpty, found.allSatisfy({ $0.embedding == nil }) else { return nil }
+            return (track, run, found.map(\.id).sorted())
+        }
+    }
+
+    /// Gives speakers without a voice embedding the ones made for them since (`runsWithoutVoices`),
+    /// in `space`, by `model`. Nothing else changes: names, identities, and the transcript stay.
+    /// Returns whether any speaker got one.
+    @discardableResult
+    public mutating func giveVoices(_ embeddings: [String: [Float]], space: String, model: String) -> Bool {
+        var gave = false
+        for index in speakers.indices {
+            guard speakers[index].embedding == nil, let vector = embeddings[speakers[index].id],
+                  VoiceVector(space: space, values: vector).isUsable else { continue }
+            speakers[index].embedding = vector
+            speakers[index].embeddingModelID = space
+            speakers[index].analysisSettings?.parameters["voiceEmbeddingModel"] = model
+            gave = true
+        }
+        return gave
     }
 
     /// Applies the changes for this conversation's speakers, each only while the speaker still has
