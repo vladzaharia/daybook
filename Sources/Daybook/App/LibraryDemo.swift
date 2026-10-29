@@ -86,7 +86,8 @@ enum LibraryDemo {
         state.installedModels = Set(state.routedRequiredModelIDs)
         state.processingTask = Task { try? await Task.sleep(for: .seconds(86_400)) }
         func id(_ title: String) -> UUID? { state.meetings.first { $0.title == title }?.id }
-        if let running = id(transcribing) {
+        // A Floating Notes scenario (`--notes-demo`) sets what this Mac is processing itself.
+        if FloatingNotesDemo.scenario == nil, let running = id(transcribing) {
             state.update(running) { $0.status = .transcribing }
             state.processingID = running
             state.processingProgress = IntelligenceProgress(0.4, "Transcribing")
