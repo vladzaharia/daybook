@@ -7,9 +7,10 @@ import UIKit
 /// Debug only: `--demo-library` fills an empty library (use it with `--library <scratch folder>`)
 /// with conversations in every state the reading screens show, for screenshots: transcribed with a
 /// summary, photos, notes, and bookmarks; recorded but not transcribed (with saved live captions);
-/// waiting for a Mac; transcribing; couldn't finish; no speech; notes only; a long title; Personal;
-/// a folder with one conversation and an empty one; and one in the Trash. The audio is generated
-/// tone, never a recording. Nothing is written when the library already has conversations.
+/// waiting for a Mac; transcribing; couldn't finish; no speech; audio not on this iPhone; notes only;
+/// a long title; Personal; a folder with one conversation and an empty one; and one in the Trash.
+/// The audio is generated tone, never a recording. Nothing is written when the library already has
+/// conversations.
 @MainActor
 enum DemoLibrary {
     static var isRequested: Bool { CommandLine.arguments.contains("--demo-library") }
@@ -117,6 +118,11 @@ enum DemoLibrary {
         dentist.meeting.status = .ready
         library.add(dentist.meeting)
 
+        // Audio that isn't on this iPhone (its file never written), for the player's offline line.
+        var offline = recorded("Offsite walk", at: now.addingTimeInterval(-30 * 3600), seconds: 18, rootURL: rootURL, writesAudio: false).meeting
+        offline.status = .imported
+        library.add(offline)
+
         // Older ones, for the date groups and a long selection.
         for (index, title) in ["Design critique", "Roadmap review", "Vendor intro", "Team retro", "Board prep"].enumerated() {
             var older = recorded(title, at: now.addingTimeInterval(-Double(20 + index * 9) * 86_400), seconds: 10, rootURL: rootURL).meeting
@@ -130,11 +136,12 @@ enum DemoLibrary {
     }
 
     /// A conversation with one generated recording of `seconds`, written where the library keeps originals.
-    private static func recorded(_ title: String, at date: Date, seconds: Double, rootURL: URL) -> (meeting: Meeting, trackID: UUID) {
+    private static func recorded(_ title: String, at date: Date, seconds: Double, rootURL: URL,
+                                 writesAudio: Bool = true) -> (meeting: Meeting, trackID: UUID) {
         let id = UUID(), trackID = UUID()
         let folder = rootURL.appendingPathComponent("Meetings/\(id.uuidString)/Originals", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        tone(seconds: seconds, to: folder.appendingPathComponent("Microphone.wav"))
+        if writesAudio { tone(seconds: seconds, to: folder.appendingPathComponent("Microphone.wav")) }
         let track = RecordingTrack(id: trackID, source: .microphone, relativePath: "Originals/Microphone.wav", fileName: "Microphone.wav",
                                    createdAt: date, duration: seconds, offset: 0, startedAt: date)
         return (Meeting(id: id, title: title, date: date, updatedAt: date, tracks: [track], status: .imported), trackID)
