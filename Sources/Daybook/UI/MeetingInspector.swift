@@ -204,6 +204,7 @@ private struct AudioRow: View {
 
     private var name: String {
         if track.source == .imported { return track.fileName }
+        if track.isLivePortion { return "\(track.source.recordingName), live" }
         if track.derivedFrom != nil { return "\(track.source.recordingName), \(RecordingTrack.processingName(track.processing))" }
         if meeting.tracks.contains(where: { $0.derivedFrom == track.id }) { return "\(track.source.recordingName), original" }
         return track.source.recordingName
@@ -238,7 +239,10 @@ private struct AudioRow: View {
                     .accessibilityLabel("More for \(name)")
             }
             HStack(spacing: 4) {
-                if alignment?.method == .unaligned {
+                if meeting.supersededLivePortions[track.id] != nil {
+                    // Kept for playback; the recorder's own file is what's transcribed.
+                    Text("Replaced by the full recording")
+                } else if alignment?.method == .unaligned {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Ink.warning)
                     Text("Couldn’t line up")
                     Button("Adjust Timing…") { state.activeSheet = .adjustTiming(track.id) }
