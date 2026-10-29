@@ -71,7 +71,8 @@ struct ModelSettings: View {
             .task {
                 await manager.refresh()
                 await ModelSettingsDemo.apply(state: state, manager: manager, proxy: proxy, details: $details, removal: $removal,
-                                              showingAddModel: $showingAddModel, showingAcknowledgements: $showingAcknowledgements)
+                                              showingAddModel: $showingAddModel, showingAcknowledgements: $showingAcknowledgements,
+                                              showingVoiceMatching: $showingVoiceMatching)
             }
         }
         .onChange(of: state.installedModels) { _, _ in Task { await manager.refresh() } }
@@ -399,7 +400,8 @@ enum ModelSettingsDemo {
     }
 
     static func apply(state: AppState, manager: ModelManager, proxy: ScrollViewProxy, details: Binding<ModelDetailsRequest?>,
-                      removal: Binding<ModelRemoval?>, showingAddModel: Binding<Bool>, showingAcknowledgements: Binding<Bool>) async {
+                      removal: Binding<ModelRemoval?>, showingAddModel: Binding<Bool>, showingAcknowledgements: Binding<Bool>,
+                      showingVoiceMatching: Binding<Bool>) async {
         #if DEBUG
         guard ModelDemo.isRequested, !applied else { return }
         applied = true
@@ -421,6 +423,8 @@ enum ModelSettingsDemo {
         if let key = ModelDemo.value("remove"), !key.isEmpty { removal.wrappedValue = manager.removal(of: key) }
         if ModelDemo.value("add") != nil { showingAddModel.wrappedValue = true }
         if ModelDemo.value("acknowledgements") != nil { showingAcknowledgements.wrappedValue = true }
+        // "voice-matching" opens the voice-matching thresholds.
+        if ModelDemo.value("voice-matching") != nil { showingVoiceMatching.wrappedValue = true }
         if ModelDemo.value("about") != nil { AboutPanel.show(catalog: state.modelCatalog) }
         #endif
     }
