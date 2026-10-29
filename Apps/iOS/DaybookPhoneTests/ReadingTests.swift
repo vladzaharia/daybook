@@ -396,6 +396,17 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(pasteboard.string, "Ship it")
     }
 
+    // MARK: Search
+
+    func testASummarySnippetReadsAsWordsWithoutMarkdown() {
+        XCTAssertEqual(SearchSnippet.plain("…date. - The sync conflict fix is the release gate."),
+                       "…date. The sync conflict fix is the release gate.", "a joined list item loses its marker")
+        XCTAssertEqual(SearchSnippet.plain("- Keep the **14th** as the beta date."), "Keep the 14th as the beta date.")
+        XCTAssertEqual(SearchSnippet.plain("• One: * two"), "One: two")
+        XCTAssertEqual(SearchSnippet.plain("Pre-release notes - mostly done"), "Pre-release notes - mostly done",
+                       "hyphens and dashes inside a sentence stay")
+    }
+
     // MARK: The session across folds
 
     func testANewNoteIsAConversationWithoutAudioInThePlaceBeingViewed() async throws {
