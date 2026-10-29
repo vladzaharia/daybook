@@ -21,6 +21,8 @@ extension ModelRole {
         case .summarization: return "Summaries"
         case .smallTasks: return "Titles and tags"
         case .imageDescription: return "Photos"
+        case .liveTranscription: return "Live transcription"
+        case .liveDiarization: return "Live speakers"
         default: return Self.words(rawValue)
         }
     }
@@ -326,7 +328,8 @@ struct ModelManagerSnapshot {
                            current: preset.matches(selections, speakerQuality: speakerQuality, catalog: catalog, engines: engines))
         }
         if !summaries.contains(where: \.isCurrent) {
-            let keys = choiceRoles.compactMap { selections[$0] }
+            // Live captions' models are optional downloads, not part of what processing needs.
+            let keys = choiceRoles.filter { $0 != .liveTranscription && $0 != .liveDiarization }.compactMap { selections[$0] }
             summaries.append(summary(nil, keys: keys, recommended: recommended, current: true))
         }
         return summaries

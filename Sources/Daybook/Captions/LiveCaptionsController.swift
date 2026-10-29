@@ -360,28 +360,34 @@ enum MacCaptioners {
                                backlog: backlog(for: source), timelineOrigin: 0)
     }
 
-    /// Recordings' captioners: none when captions are off, in tests (they inject their own), or
-    /// before macOS 26; a script for `--demo-captions`; otherwise the Speech framework.
-    static func recordingFactory(settings: LiveCaptionSettings) -> (LiveCaptionSource) -> (any LiveCaptioning)? {
-        { [weak settings] source in
+    /// Recordings' captioners: none when captions are off or in tests (they inject their own); a
+    /// script for `--demo-captions`; the live models when they're downloaded (`MacLiveModels`, any
+    /// macOS), else the Speech framework (macOS 26).
+    static func recordingFactory(settings: LiveCaptionSettings, live: MacLiveModels? = nil) -> (LiveCaptionSource) -> (any LiveCaptioning)? {
+        { [weak settings, weak live] source in
             guard let settings, settings.isEnabled else { return nil }
             #if DEBUG
             if DemoCaptions.isRequested { return DemoCaptions.captioner(for: source) }
             #endif
             guard !isRunningTests else { return nil }
-            return speechCaptioner(for: source, allowsDownload: !isDemo)
+            let speech = { speechCaptioner(for: source, allowsDownload: !isDemo) }
+            // Demos and the device simulator never load models.
+            guard let live, !isDemo else { return speech() }
+            return live.captioner(locale: settings.locale, backlog: backlog(for: source), timelineOrigin: 0, fallback: speech)
         }
     }
 
-    /// Listen Live's captioner for a recorder: the same setting and language as recordings.
-    static func recorderFactory(settings: LiveCaptionSettings) -> () -> (any LiveCaptioning)? {
-        { [weak settings] in
+    /// Listen Live's captioner for a recorder: the same setting, language, and live models as recordings.
+    static func recorderFactory(settings: LiveCaptionSettings, live: MacLiveModels? = nil) -> () -> (any LiveCaptioning)? {
+        { [weak settings, weak live] in
             guard let settings, settings.isEnabled else { return nil }
             #if DEBUG
             if DemoCaptions.isRequested { return DemoCaptions.captioner(for: nil) }
             #endif
             guard !isRunningTests else { return nil }
-            return LiveCaptionHooks.speechCaptioner(allowsDownload: !isDemo, asksForAuthorization: !isDemo)
+            let speech = { LiveCaptionHooks.speechCaptioner(allowsDownload: !isDemo, asksForAuthorization: !isDemo) }
+            guard let live, !isDemo else { return speech() }
+            return live.captioner(locale: settings.locale, backlog: LiveCaptionHooks.backlog, timelineOrigin: 0, fallback: speech)
         }
     }
 

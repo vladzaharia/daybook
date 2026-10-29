@@ -17,7 +17,7 @@ import Foundation
 /// an always-running menu-bar app doesn't keep a 16–34 GB language model resident.
 public actor LocalIntelligenceRuntime {
     public let modelsDirectory: URL
-    public let store: ModelStore
+    public nonisolated let store: ModelStore
     public nonisolated let registry: ModelEngineRegistry
     /// The engines this build runs, for availability ("Needs a newer Daybook") on any actor. Read
     /// afresh each time: a system engine's availability changes with the device's settings.
