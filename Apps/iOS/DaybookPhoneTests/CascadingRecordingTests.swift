@@ -220,6 +220,8 @@ final class CascadingRecordingTests: XCTestCase {
         XCTAssertFalse(model.recorder.isActive, "never a microphone open in the background")
         XCTAssertEqual(only.recorderID, session.id)
         XCTAssertEqual(posted, ["Soundcore Work is recording"], "the person is told")
+        // In the app, over Record (which records on this iPhone too, into the same conversation).
+        XCTAssertEqual(RecorderOnlyLine.text(only.recorderName), "Soundcore Work is recording. This iPhone isn’t.")
         try await waitUntil("its audio is saved here as it records") { session.liveCaptureConversation == only.conversationID }
         try await eventually("the Mac is asked, with the link back up", timeout: 15) { await macRecorder.recording == only.conversationID }
         let start = await macRecorder.log.first
