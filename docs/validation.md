@@ -1149,7 +1149,6 @@ in-memory keychains and couriers and temporary folders standing in for iCloud.
 Still requires the owner's devices, in addition to the "Library encryption" checks: the owner's existing library
 encrypting itself once both the Mac and the iPhone run 0.4.1, the iPhone getting the key through iCloud Keychain, and
 a device left on 0.3.0 or earlier, if any, saying to update (0.4.0 reads encrypted libraries).
-||||||| parent of 03be095 (Keep model downloads out of the shared Hugging Face cache on swift-transformers 1.3.5)
 
 ## swift-transformers 1.3.5 (2026-10-28)
 
