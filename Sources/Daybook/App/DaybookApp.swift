@@ -21,6 +21,10 @@ enum DaybookEntry {
             Darwin.exit(code)
         }
         #if DEBUG
+        // Speaker profiles reconciled over a copy of a library as a dry run, in numbers (docs/validation.md).
+        if CommandLine.arguments.contains("--speaker-report") {
+            Darwin.exit(SpeakerReport.run(arguments: CommandLine.arguments))
+        }
         // Whether process taps work in the App Sandbox (docs/sandbox.md): the tap alone, nothing recorded.
         if CommandLine.arguments.contains("--capture-probe") {
             let code = await CaptureProbe.run(arguments: CommandLine.arguments)

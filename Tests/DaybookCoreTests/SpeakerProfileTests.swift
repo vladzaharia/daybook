@@ -638,6 +638,46 @@ final class SpeakerProfileTests: XCTestCase {
         XCTAssertEqual(SummaryNames.replacing("Zoë", with: "Zoe", in: "Zoë’s idea"), "Zoe’s idea")
     }
 
+    // MARK: The dry-run report
+
+    func testTheReportCountsALibraryAsTheMacWouldReconcileItWithoutChangingIt() throws {
+        var named = meeting("Qnamed", daysAgo: 30, [voice("me", mine(281), 300), voice("guest", SyntheticVoice.near(guest, similarity: 0.95, seed: 282), 200)])
+        named.renameSpeaker(id: "Qnamed:me", name: "Vladislav")
+        let later = meeting("Qlater", daysAgo: 1, [voice("me", mine(283), 300), voice("x", nil, 60)])
+        let named2 = { () -> Meeting in
+            var value = meeting("Qagain", daysAgo: 10, [voice("me", mine(284), 200)])
+            value.renameSpeaker(id: "Qagain:me", name: "Vladislav")
+            return value
+        }()
+        let room = meeting("Qroom", daysAgo: 2, [voice("me", SyntheticVoice.near(try XCTUnwrap(named.speakers[0].embedding), similarity: 0.75, seed: 285), 100)],
+                           source: .soundcore, device: DeviceRecordingIdentity(kind: "soundcore.work", serial: "S1", recordingID: "r1"))
+        let meetings = [named, later, named2, room], metadata = LibraryMetadata()
+        let report = SpeakerProfileReport.make(meetings: meetings, metadata: metadata, now: now)
+
+        XCTAssertEqual(report.conversations, 4)
+        XCTAssertEqual(report.profiles, 1)
+        XCTAssertGreaterThanOrEqual(report.rounds, 1)
+        XCTAssertEqual(report.counts["microphone"]?[.named], 2)
+        XCTAssertEqual(report.counts["microphone"]?[.labelled], 1)
+        XCTAssertEqual(report.counts["microphone"]?[.unknown], 1, "The guest")
+        XCTAssertEqual(report.counts["microphone"]?[.noVoice], 1)
+        XCTAssertEqual(report.counts["soundcore.work"]?[.suggested], 1)
+        XCTAssertEqual(report.changedSpeakers, 4, "Two names to identities, one label, one suggestion")
+        XCTAssertGreaterThan(report.addedVoiceprints, 0)
+        XCTAssertEqual(report.samples.filter { $0.series == .samePerson }.count, 2, "Each named voice against the other's voiceprint")
+        XCTAssertTrue(report.samples.filter { $0.series == .samePerson }.allSatisfy { $0.value > 0.85 })
+        XCTAssertEqual(report.samples.filter { $0.series == .labelled }.count, 1)
+        XCTAssertEqual(report.samples.filter { $0.series == .suggested }.first?.kind, "soundcore.work")
+
+        let text = report.text
+        XCTAssertTrue(text.contains("nothing was written"))
+        for secret in ["Vladislav", "Qnamed", "Qlater", "Qagain", "Qroom", "Speaker 1", "Words"] {
+            XCTAssertFalse(text.contains(secret), "\(secret) appears in the report")
+        }
+        XCTAssertNil(metadata.speakerProfiles, "What was passed in is untouched")
+        XCTAssertEqual(meetings[1].speakers[0].name, "Speaker 1")
+    }
+
     // MARK: Matching for live identification (the iPhone)
 
     func testABookFromLibrarySettingsIdentifiesALiveVoice() throws {
