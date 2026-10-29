@@ -75,7 +75,9 @@ struct MarginNotesEditor: NSViewRepresentable {
         if let scrollView = view as? NSScrollView, scrollView.contentInsets.bottom != bottomInset {
             scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: bottomInset, right: 0)
         }
-        if textView.string != text && !context.coordinator.isEditing {
+        // While typing, only a change from elsewhere (a phone's paragraph during a shared recording) is taken.
+        if textView.string != text && (!context.coordinator.isEditing || text != context.coordinator.lastWritten) {
+            context.coordinator.lastWritten = text
             let selection = textView.selectedRanges
             textView.string = text
             textView.applyTypingStyle()
@@ -106,6 +108,8 @@ struct MarginNotesEditor: NSViewRepresentable {
         var parent: MarginNotesEditor
         weak var textView: MarginTextView?
         var isEditing = false
+        /// The text this editor last wrote back, so a change from elsewhere is told from its own.
+        var lastWritten: String?
         init(_ parent: MarginNotesEditor) { self.parent = parent }
 
         func textDidBeginEditing(_ notification: Notification) { isEditing = true }
@@ -113,6 +117,7 @@ struct MarginNotesEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             isEditing = true
+            lastWritten = textView.string
             parent.text = textView.string
             textView.invalidateIntrinsicContentSize()
             textView.needsDisplay = true
