@@ -36,6 +36,23 @@ final class SyncDeviceIdentityTests: XCTestCase {
         return controller
     }
 
+    /// The iPhone's container, and the library's path with it, moves when the app is updated or reinstalled: the identity's
+    /// keychain account stays the same. A Mac's library, anywhere, keeps the full path; earlier items used it everywhere.
+    func testTheIdentitysKeychainAccountSurvivesTheContainerMoving() {
+        let before = "/var/mobile/Containers/Data/Application/1A2B/Library/Application Support/Daybook"
+        let after = "/var/mobile/Containers/Data/Application/9F8E/Library/Application Support/Daybook"
+        XCTAssertEqual(SyncDeviceIdentityStore.account(for: before, home: "/var/mobile/Containers/Data/Application/1A2B"),
+                       SyncDeviceIdentityStore.account(for: after, home: "/var/mobile/Containers/Data/Application/9F8E"))
+        XCTAssertNotEqual(SyncDeviceIdentityStore.account(for: before, home: nil), SyncDeviceIdentityStore.account(for: after, home: nil))
+        // Another library in the same container has its own.
+        XCTAssertNotEqual(SyncDeviceIdentityStore.account(for: after, home: "/var/mobile/Containers/Data/Application/9F8E"),
+                          SyncDeviceIdentityStore.account(for: after + " Demo", home: "/var/mobile/Containers/Data/Application/9F8E"))
+        // A path outside the home folder, or no home, is the full path, as before.
+        XCTAssertEqual(SyncDeviceIdentityStore.account(for: "/Users/sam/Library/Daybook", home: "/var/mobile/x"),
+                       SyncDeviceIdentityStore.account(for: "/Users/sam/Library/Daybook", home: nil))
+        XCTAssertTrue(SyncDeviceIdentityStore.account(for: before, home: nil).hasPrefix("identity-"))
+    }
+
     func testTheIdentityInPreferencesMovesToThisDeviceUnchanged() throws {
         let preferences = try defaults()
         preferences.set("existing-mac", forKey: "syncDeviceID")
