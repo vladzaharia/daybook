@@ -6,7 +6,7 @@ import SwiftUI
 struct ConversationInfo: View {
     @ObservedObject var library: LibraryController
     let meetingID: UUID
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
 
     var body: some View {

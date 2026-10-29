@@ -45,7 +45,9 @@ private struct ReadingLayout: View {
         .environment(\.findQuery, session.isSearching ? session.searchText : "")
         // reading: until the recording work exposes its store on the app model, read the same folder.
         .environment(\.liveCaptionStore, LiveCaptionStore(libraryRoot: rootURL))
-        .sheet(item: $session.sheet) { sheet in
+        // One column presents a sheet; two pages show it on the right page instead (`PageSheet`),
+        // so nothing sits across the crease. The share sheet is always the system's.
+        .sheet(item: Binding(get: { sheetOnPage ? nil : session.sheet }, set: { session.sheet = $0 })) { sheet in
             ReadingSheetContent(sheet: sheet, library: library)
                 .environment(session)
                 .tint(PhoneStyle.accent)
@@ -137,8 +139,27 @@ private struct ReadingLayout: View {
             leftPage
         } trailing: {
             rightPage
+                .accessibilityHidden(sheetOnPage)
+                .overlay {
+                    if sheetOnPage, let sheet = session.sheet {
+                        PageSheet {
+                            ReadingSheetContent(sheet: sheet, library: library)
+                                .environment(\.closePageSheet) { session.sheet = nil }
+                        }
+                        .id(sheet.id)
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : PhoneStyle.Motion.state, value: session.sheet?.id)
         }
         .animation(reduceMotion ? .easeOut(duration: 0.15) : PhoneStyle.Motion.page, value: session.reading)
+    }
+
+    /// The sheet shows on the right page: two pages, and anything but the system's share sheet.
+    private var sheetOnPage: Bool {
+        guard style != .pocket, let sheet = session.sheet else { return false }
+        if case .share = sheet { return false }
+        return true
     }
 
     @ViewBuilder private var leftPage: some View {
@@ -230,6 +251,31 @@ private struct ReadingLayout: View {
                 session.chosen = false
             }
         }
+    }
+}
+
+/// A reading sheet on the notebook's right page: a card on that page, clear of the crease, where one
+/// column would present a sheet. Its Done or Cancel closes it (`SheetDismiss`); the left page stays
+/// as it was.
+private struct PageSheet<Content: View>: View {
+    @ViewBuilder var content: Content
+    @Environment(\.creaseEdge) private var creaseEdge
+
+    var body: some View {
+        content
+            .background(Color(uiColor: .systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
+            .padding(.leading, creaseEdge == .leading ? PhoneStyle.Page.creaseClearance : PhoneStyle.Space.s3)
+            .padding(.trailing, PhoneStyle.Space.s3)
+            .padding(.vertical, PhoneStyle.Space.s2)
+            // The page under it steps back, as under a sheet; the other page doesn't.
+            .background {
+                Rectangle().fill(.ultraThinMaterial)
+                    .overlay(Color.black.opacity(0.12))
+                    .ignoresSafeArea(edges: [.top, .bottom, .trailing])
+                    .accessibilityHidden(true)
+            }
     }
 }
 
