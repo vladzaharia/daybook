@@ -105,25 +105,20 @@ private struct DeviceOverview: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let new = session.newRecordings
+        let problem = session.problem
         DevicePageScroll {
-            if let problem = session.problem {
-                DeviceProblemBanner(problem: problem) { DeviceActions.perform($0, session: session, state: state) }
-                    .padding(.bottom, Space.s5)
-                    .transition(.deviceNotice(reduceMotion: reduceMotion))
-            }
             DevicePageTitle(title: session.device.name) {
                 DeviceGlyph(symbol: session.kind.systemImage, size: 26, linked: session.isLinked)
             }
             TimelineView(.periodic(from: .now, by: 30)) { context in
-                HStack(spacing: Space.s2) {
-                    DeviceStatusDot(state: session.state, linked: session.isLinked)
-                    Text(byline(now: context.date))
-                }
-                .font(TypeStyle.byline())
-                .foregroundStyle(Ink.secondary)
+                DeviceByline(session: session, text: byline(problem: problem, now: context.date))
             }
             .padding(.top, 6)
+
+            if let problem {
+                DeviceProblemBanner(problem: problem, perform: { DeviceActions.perform($0, session: session, state: state) },
+                                    hidden: DeviceActions.inapplicable(for: session))
+            }
             RecorderHandoffNotice(state: state, session: session)
 
             if session.queue.isActive {
@@ -132,57 +127,82 @@ private struct DeviceOverview: View {
                     .transition(.deviceNotice(reduceMotion: reduceMotion))
             }
             if let live = session.primary as? SoundcoreConnection {
-                LiveSavedNotice(state: state, session: session, live: live.live, spacing: Space.s5)
+                LiveSavedNotice(state: state, session: session, live: live.live)
             }
 
             DeviceFigures(session: session)
 
-            primaryAction(new)
+            DevicePrimaryAction(state: state, session: session, problem: problem)
 
             DeviceHeading("Import")
             DeviceMethodRows(state: state, session: session)
 
             RecentImports(state: state, session: session)
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: session.problem)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: problem)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: session.queue.isActive)
         .onAppear { session.primary?.refreshIfStale() }
     }
 
-    private func byline(now: Date) -> String {
+    /// The device's state in a few words. The import's progress, the problem, and the figures each
+    /// say the rest in their own place, so the line doesn't repeat them.
+    private func byline(problem: DeviceProblem?, now: Date) -> String {
         guard let primary = session.primary else { return "Not set up" }
+        func notConnected() -> String {
+            if let last = primary.lastConnectedAt { return "Not connected · Last connected \(DeviceDateFormat.lastSeen(last, now: now))" }
+            return "Not connected"
+        }
         if let files = primary as? ImportFolderWatcher {
-            guard files.problem != nil else { return files.summary }
-            if let last = files.lastImportDate { return "Not watching · Last import \(DeviceDateFormat.lastSeen(last, now: now))" }
-            return "Not watching"
+            if files.problem != nil {
+                if let last = files.lastImportDate { return "Not watching · Last import \(DeviceDateFormat.lastSeen(last, now: now))" }
+                return "Not watching"
+            }
+            if files.waitingForICloud > 0 { return files.summary }
+            guard files.isWatching else { return "Not watching" }
+            guard let last = files.lastImportDate else { return "Watching" }
+            return "Watching · Last import \(DeviceDateFormat.relative(last, now: now))"
         }
         switch primary.state {
         case .searching: return "Looking for \(session.kind.name)…"
         case .connecting: return "Connecting…"
         case .reconnecting: return "Reconnecting…"
-        case .unavailable: return session.problem?.title ?? "Not available"
+        // The problem box below says why.
+        case .unavailable: return problem == nil ? "Not available" : notConnected()
         case .notSetUp: return "Not set up"
         case .connected:
-            var parts = ["Connected"]
-            if session.queue.isActive, !session.queue.isSuspended { parts.append("Importing \(session.queue.position) of \(session.queue.total)") }
-            else if (primary as? any LiveListeningConnection)?.live.isListening == true { parts.append("Recording · Listening") }
-            else if (primary as? any RecordControlConnection)?.recordCommandPending == true { parts.append("Waiting for \(session.kind.shortName)…") }
-            else if let recording = session.status?.isRecording { parts.append(recording ? "Recording" : "Not recording") }
-            if let updated = session.status?.updatedAt, !session.queue.isActive { parts.append(DeviceDateFormat.updated(updated, now: now)) }
-            return parts.joined(separator: " · ")
+            if (primary as? any LiveListeningConnection)?.live.isListening == true { return "Connected · Recording · Listening" }
+            if (primary as? any RecordControlConnection)?.recordCommandPending == true { return "Connected · Waiting for \(session.kind.shortName)…" }
+            return session.status?.isRecording == true ? "Connected · Recording" : "Connected"
         case .notConnected:
             if let owner = session.managedElsewhere, primary.method == .direct {
                 return "Managed by \(owner.ownerName)"
             }
             if let status = session.status, status.isRecording == true { return DeviceDateFormat.recordingAsOf(status.updatedAt) }
-            if let last = primary.lastConnectedAt { return "Not connected · Last connected \(DeviceDateFormat.lastSeen(last, now: now))" }
-            return "Not connected"
+            return notConnected()
         }
     }
 
-    @ViewBuilder
-    private func primaryAction(_ new: [DeviceRecording]) -> some View {
+}
+
+/// The page's one action for its state: Import N New, Connect, or Use on This Mac. Nothing when the
+/// problem box already offers it, or while a handoff is under way.
+private struct DevicePrimaryAction: View {
+    @ObservedObject var state: AppState
+    @ObservedObject var session: DeviceSession
+    @ObservedObject var handoff: RecorderHandoff
+    let problem: DeviceProblem?
+
+    init(state: AppState, session: DeviceSession, problem: DeviceProblem?) {
+        self.state = state
+        self.session = session
+        self.handoff = state.recorderHandoff
+        self.problem = problem
+    }
+
+    var body: some View {
         let primary = session.primary
+        let new = session.newRecordings
+        let offered = problem.map { Set(DeviceProblemBanner.actions($0, excluding: DeviceActions.inapplicable(for: session))) } ?? []
         if !new.isEmpty, !session.queue.isActive, primary?.state.isConnected == true {
             let total = new.compactMap(\.length).reduce(0) { $0 + $1.seconds }
             let estimated = new.contains { $0.length?.isEstimate ?? true }
@@ -201,29 +221,47 @@ private struct DeviceOverview: View {
                 }
             }
             .padding(.top, Space.s5)
-        } else if let primary, primary.state.isBusy {
-            HStack(spacing: Space.s2) {
-                ProgressView().controlSize(.small)
-                Text(primary.state == .searching ? "Looking for \(session.kind.name)…" : "Connecting…")
-                    .font(TypeStyle.status).foregroundStyle(Ink.secondary)
-                Button("Cancel") { session.disconnect(primary.method) }
-                    .buttonStyle(.daybookLink).font(TypeStyle.status)
+        } else if let direct = session.direct, direct.method == primary?.method, direct.state == .notConnected, direct.isSetUp,
+                  session.device.isEnabled(.direct) {
+            if session.managedElsewhere != nil {
+                if !handoff.state(of: session).isPending {
+                    Button { state.useRecorderOnThisMac(session) } label: { Label("Use on This Mac", systemImage: "laptopcomputer") }
+                        .controlSize(.large)
+                        .help("Your other device stops connecting to it.")
+                        .padding(.top, Space.s5)
+                }
+            } else if offered.isDisjoint(with: [.connect, .reconnect]) {
+                Button { session.connect() } label: { Label("Connect", systemImage: "antenna.radiowaves.left.and.right") }
+                    .controlSize(.large)
+                    .padding(.top, Space.s5)
             }
-            .padding(.top, Space.s5)
-        } else if let primary, primary.method == .direct, primary.state == .notConnected, primary.isSetUp, !session.queue.isActive,
-                  session.managedElsewhere == nil {
-            Button {
-                session.connect()
-            } label: {
-                Label("Connect", systemImage: "antenna.radiowaves.left.and.right")
-            }
-            .controlSize(.large)
-            .padding(.top, Space.s5)
         }
     }
 }
 
-/// Recorder, Case, Storage: what the device reports, in tiles. Stale values carry their time.
+/// The status line under a device's title: its dot, its state, and Cancel while it's looking or
+/// connecting.
+struct DeviceByline: View {
+    @ObservedObject var session: DeviceSession
+    let text: String
+
+    var body: some View {
+        HStack(spacing: Space.s2) {
+            DeviceStatusDot(state: session.state)
+            Text(text)
+                .foregroundStyle(Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let primary = session.primary, primary.state.isBusy, primary.method == .direct {
+                Button("Cancel") { session.disconnect(primary.method) }
+                    .buttonStyle(.daybookLink)
+            }
+        }
+        .font(TypeStyle.byline())
+    }
+}
+
+/// Recorder, Case, Storage: what the device reports, in tiles. Values the recorder hasn't confirmed
+/// since it was last connected are drawn quieter, with their time once under the tiles.
 private struct DeviceFigures: View {
     @ObservedObject var session: DeviceSession
 
@@ -231,21 +269,19 @@ private struct DeviceFigures: View {
         let capabilities = session.direct?.capabilities ?? []
         if let status = session.status, !capabilities.isDisjoint(with: [.battery, .caseBattery, .storage]) {
             let stale = !session.isLinked
-            let asOf = stale ? DeviceDateFormat.asOf(status.updatedAt) : nil
             let lowStorage = status.storage.map(StorageFormat.isLow) ?? false
-            VStack(alignment: .leading, spacing: Space.s3) {
+            VStack(alignment: .leading, spacing: Space.s2) {
                 HStack(alignment: .top, spacing: Space.s3) {
                     if capabilities.contains(.battery) {
-                        battery("Recorder", status.battery, asOf: asOf, stale: stale)
+                        battery("Recorder", status.battery, stale: stale)
                     }
                     if capabilities.contains(.caseBattery) {
-                        battery("Case", status.caseBattery, asOf: asOf, stale: stale)
+                        battery("Case", status.caseBattery, stale: stale)
                     }
                     if capabilities.contains(.storage), let storage = status.storage {
-                        let value = lowStorage ? "\(StorageFormat.roundedHours(storage.hoursLeft)) hr left" : "\(StorageFormat.roundedHours(storage.hoursLeft)) hr"
+                        let hours = storage.hoursLeft < 1 ? "< 1 hr" : "\(StorageFormat.roundedHours(storage.hoursLeft)) hr\(lowStorage ? " left" : "")"
                         DeviceFigureTile(label: "Storage", symbol: lowStorage ? "externaldrive.trianglebadge.exclamationmark" : "externaldrive",
-                                         value: storage.hoursLeft < 1 ? "< 1 hr" : value,
-                                         detail: lowStorage ? "Nearly full" : asOf.map { "As of \($0.replacingOccurrences(of: "at ", with: ""))" } ?? "of recording left",
+                                         value: hours, detail: lowStorage ? "Nearly full" : "of recording left",
                                          warning: lowStorage, stale: stale,
                                          accessibility: "Storage, " + StorageFormat.hoursLeft(storage))
                     }
@@ -255,18 +291,32 @@ private struct DeviceFigures: View {
                         .font(TypeStyle.status).foregroundStyle(Ink.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if stale, !bylineDates(status.updatedAt) {
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        Text("As of \(DeviceDateFormat.lastSeen(status.updatedAt, now: context.date))")
+                            .font(TypeStyle.colophon).foregroundStyle(Ink.meta).monospacedDigit()
+                    }
+                }
             }
             .padding(.top, Space.s5)
         }
     }
 
-    private func battery(_ label: String, _ battery: DeviceStatus.Battery?, asOf: String?, stale: Bool) -> some View {
+    /// The line under the title says "Last connected" at the same minute, so the figures needn't.
+    private func bylineDates(_ updated: Date) -> Bool {
+        guard session.managedElsewhere == nil, session.status?.isRecording != true,
+              session.state == .notConnected || session.state == .unavailable,
+              let last = session.primary?.lastConnectedAt else { return false }
+        return abs(last.timeIntervalSince(updated)) < 60
+    }
+
+    private func battery(_ label: String, _ battery: DeviceStatus.Battery?, stale: Bool) -> some View {
         let low = BatteryFormat.isLow(battery)
         let detail: String
-        if let asOf { detail = "As of \(asOf.replacingOccurrences(of: "at ", with: ""))" }
-        else if battery?.charging == true { detail = "Charging" }
+        if battery?.level == nil { detail = "Not reported" }
         else if low { detail = "Charge soon" }
-        else { detail = battery?.level == nil ? "Not reported" : " " }
+        else if battery?.charging == true, !stale { detail = "Charging" }
+        else { detail = " " }
         return DeviceFigureTile(label: label, symbol: BatteryFormat.symbol(battery), value: BatteryFormat.value(battery),
                                 detail: detail, warning: low, stale: stale,
                                 accessibility: BatteryFormat.accessibilityLabel("\(label) battery", battery))
@@ -294,29 +344,24 @@ private struct ImportProgress: View {
                              ? 0 : queue.fraction(current: session.phase?.fraction))
                     .progressViewStyle(.brand(width: nil))
                     .accessibilityLabel("Import progress")
-            }
-            if let footnote {
-                Text(footnote)
-                    .font(TypeStyle.status).foregroundStyle(Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if session.capabilities.contains(.wirelessTransfer) {
+                    Text("Keep your \(session.kind.shortName) near this Mac.")
+                        .font(TypeStyle.status).foregroundStyle(Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
 
+    /// Waiting, it says for what: the line above says it isn't connected.
     private var title: String {
         let queue = session.queue
-        if queue.isSuspended { return queue.total == 1 ? "1 recording waiting to import" : "\(queue.total) recordings waiting to import" }
+        let name = session.kind.shortName
+        if queue.isSuspended { return queue.total == 1 ? "1 recording waiting for \(name)" : "\(queue.total) recordings waiting for \(name)" }
         var text = "Importing \(queue.position) of \(queue.total)"
         if session.phase == .preparing { text += " · Preparing…" }
         else if let seconds = session.secondsLeft { text += " · " + TransferRateEstimator.label(secondsLeft: seconds) }
         return text
-    }
-
-    private var footnote: String? {
-        let name = session.kind.shortName
-        if session.queue.isSuspended { return "They import when your \(name) reconnects." }
-        if session.capabilities.contains(.wirelessTransfer) { return "Keep your \(name) near this Mac." }
-        return nil
     }
 }
 
@@ -328,30 +373,34 @@ struct DeviceMethodRows: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // What the problem box above already offers isn't offered again here.
+        let covered = Set(session.problem.map { DeviceProblemBanner.actions($0, excluding: DeviceActions.inapplicable(for: session)) } ?? [])
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(session.kind.implementedMethods.enumerated()), id: \.element.id) { index, method in
-                if index > 0 { Divider().padding(.leading, 40) }
+                if index > 0 { Divider().padding(.leading, Self.glyphColumn + Space.s3) }
                 if let connection = session.connection(method.kind) {
-                    row(method, connection, preferred: index == 0)
+                    row(method, connection, preferred: index == 0, covered: covered)
                 }
             }
         }
         .padding(.vertical, Space.s1)
         .padding(.horizontal, Space.s3)
-        .quietBox(cornerRadius: 12)
-        .padding(.horizontal, -Space.s3)
+        .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private func row(_ method: ConnectionMethod, _ connection: any DeviceConnection, preferred: Bool) -> some View {
+    /// Every row's symbol sits in one column, so the titles line up whatever the symbols' widths.
+    static let glyphColumn: CGFloat = 24
+
+    private func row(_ method: ConnectionMethod, _ connection: any DeviceConnection, preferred: Bool,
+                     covered: Set<DeviceProblemAction>) -> some View {
         let enabled = session.device.isEnabled(method.kind)
         let linked = method.kind == .direct && connection.state.isConnected
         return HStack(alignment: .center, spacing: Space.s3) {
             Image(systemName: symbol(method, connection))
                 .font(.system(size: 15))
-                .foregroundStyle(linked ? DaybookStyle.neonMint : Ink.secondary)
-                .neonGlow(linked ? DaybookStyle.neonMint : .clear, radius: 3)
+                .foregroundStyle(linked ? DaybookStyle.accent : Ink.secondary)
                 .symbolEffect(.variableColor.iterative, isActive: connection.state.isBusy && !reduceMotion)
-                .frame(width: 28, height: 28)
+                .frame(width: Self.glyphColumn, height: 28)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Space.s2) {
@@ -360,15 +409,28 @@ struct DeviceMethodRows: View {
                         RecommendedBadge()
                     }
                 }
-                Text(connection.isSetUp && !enabled ? "Off in Settings › Devices." : connection.summary)
+                Text(summary(connection, enabled: enabled))
                     .font(TypeStyle.status).foregroundStyle(Ink.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: Space.s2)
-            action(method, connection, enabled: enabled)
+            action(method, connection, enabled: enabled, covered: covered)
         }
         .padding(.vertical, Space.s2 + 2)
         .accessibilityElement(children: .combine)
+    }
+
+    /// The method's own state. A watched folder that is the device's only way in says just where it
+    /// is: the line under the title says it's watching.
+    private func summary(_ connection: any DeviceConnection, enabled: Bool) -> String {
+        if connection.isSetUp && !enabled { return "Off" }
+        if let files = connection as? ImportFolderWatcher, connection.method == session.primary?.method,
+           files.problem == nil, files.isWatching, files.waitingForICloud == 0, let name = files.folderDisplayName {
+            return name
+        }
+        return connection.summary
     }
 
     private func symbol(_ method: ConnectionMethod, _ connection: any DeviceConnection) -> String {
@@ -380,19 +442,15 @@ struct DeviceMethodRows: View {
         }
     }
 
+    /// One action per row, and only one that works now and isn't offered elsewhere on the page:
+    /// connecting, and moving a recorder to this Mac, are the page's own action above.
     @ViewBuilder
-    private func action(_ method: ConnectionMethod, _ connection: any DeviceConnection, enabled: Bool) -> some View {
+    private func action(_ method: ConnectionMethod, _ connection: any DeviceConnection, enabled: Bool,
+                        covered: Set<DeviceProblemAction>) -> some View {
         if session.kind.id == DaybookPhoneIntegration.id {
-            // The phone connects to this Mac itself; only pairing and sync need the person.
-            if method.kind == .direct, !connection.isSetUp {
-                Button("Pair…") { state.requestAddDevice(kind: session.kind.id) }.controlSize(.small)
-            } else if method.kind == .files, !connection.state.isConnected {
-                Button("Library Settings…") {
-                    LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: "settingsPane")
-                    openSettings()
-                }
-                .controlSize(.small)
-            }
+            // The phone connects to this Mac itself; only pairing and sync need the person, and the
+            // page's box asks for them.
+            EmptyView()
         } else if !connection.isSetUp {
             Button(method.kind == .files ? "Choose Folder…" : "Set Up…") {
                 if method.kind == .files { state.chooseDeviceFolder(for: session) }
@@ -403,29 +461,26 @@ struct DeviceMethodRows: View {
             Button("Settings…") { DeviceActions.openSettings(openSettings) }.controlSize(.small)
         } else if let files = connection as? ImportFolderWatcher {
             if files.problem != nil {
-                Button("Choose Folder…") { state.chooseDeviceFolder(for: session) }.controlSize(.small)
+                if covered.isDisjoint(with: [.chooseFolder, .setUpFolder]) {
+                    Button("Choose Folder…") { state.chooseDeviceFolder(for: session) }.controlSize(.small)
+                }
             } else if let folder = files.folder {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }.controlSize(.small)
             }
-        } else if method.kind == .direct, session.managedElsewhere != nil, connection.state == .notConnected {
-            Button("Use on This Mac") { state.useRecorderOnThisMac(session) }
-                .controlSize(.small)
-                .help("Your other device stops connecting to it.")
-        } else if connection.state == .notConnected {
-            Button("Connect") { session.connect() }.controlSize(.small)
         }
     }
 }
 
-/// "Recommended", for the method setup offers first.
+/// "Recommended", for the method setup offers first: a label, in the secondary ink, since the
+/// accent is for what you can act on.
 struct RecommendedBadge: View {
     var body: some View {
         Text("Recommended")
             .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Ink.link)
+            .foregroundStyle(Ink.secondary)
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
-            .background(DaybookStyle.accent.opacity(0.13), in: Capsule())
+            .background(DaybookStyle.quietFill, in: Capsule())
     }
 }
 
@@ -433,7 +488,8 @@ struct RecommendedBadge: View {
 struct RecentImports: View {
     @ObservedObject var state: AppState
     @ObservedObject var session: DeviceSession
-    var heading = "Recently imported"
+    /// "Recent imports", which holds what didn't import too.
+    var heading = "Recent imports"
 
     private enum Entry: Identifiable {
         case imported(DeviceLibraryLinks.Entry)
@@ -492,13 +548,21 @@ struct RecentImports: View {
                 Text(failure.recording.title).font(TypeStyle.body()).foregroundStyle(Ink.body).monospacedDigit().lineLimit(1).truncationMode(.middle)
                 HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
                     Text(failure.message).font(TypeStyle.status).foregroundStyle(Ink.secondary).lineLimit(1)
-                    Button("Try Again") { session.retry(failure) }
-                        .buttonStyle(.daybookLink).font(TypeStyle.status)
+                    if failure.id != retriedAbove {
+                        Button("Try Again") { session.retry(failure) }
+                            .buttonStyle(.daybookLink).font(TypeStyle.status)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityElement(children: .combine)
         }
+    }
+
+    /// The failure the problem box's Try Again retries, which its row doesn't offer again.
+    private var retriedAbove: String? {
+        guard let problem = session.problem, problem.isTransferProblem, problem.actions.contains(.tryAgain) else { return nil }
+        return session.failures.first?.id
     }
 
     /// "Mon 19 Oct, 4:00 PM" for a recorder's recording, the file name for an export.
@@ -557,7 +621,8 @@ struct DeviceMoreMenu: View {
             if let direct = session.direct, direct.isSetUp, session.kind.id != DaybookPhoneIntegration.id {
                 if direct.state.isConnected || direct.state.isBusy {
                     Button("Disconnect") { session.disconnect(.direct) }
-                } else {
+                } else if session.managedElsewhere == nil {
+                    // Connect does nothing while another device manages it: Use on This Mac, below, does.
                     Button("Connect") { session.connect() }
                         .disabled(direct.state == .unavailable || !session.device.isEnabled(.direct))
                 }

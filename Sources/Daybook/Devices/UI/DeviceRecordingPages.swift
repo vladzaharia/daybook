@@ -19,7 +19,7 @@ struct RecordingPage: View {
     }
 
     private var connected: Bool { session.primary?.state.isConnected == true }
-    private var canImport: Bool { connected || session.primary?.isSetUp == true }
+    private var canImport: Bool { session.importsHere && (connected || session.primary?.isSetUp == true) }
 
     @ViewBuilder private func single(_ recording: DeviceRecording) -> some View {
         let queue = session.queue
@@ -51,16 +51,17 @@ struct RecordingPage: View {
             }
             .padding(.top, Space.s5)
         } else {
-            HStack(spacing: Space.s3) {
-                Button { session.importRecordings([recording]) } label: { Label("Import", systemImage: "arrow.down.circle") }
-                    .buttonStyle(.borderedProminent)
-                    .tint(DaybookStyle.prominentFill)
-                ImportAndAddMenu(session: session, recordings: [recording])
-                    .fixedSize()
+            if canImport {
+                HStack(spacing: Space.s3) {
+                    Button { session.importRecordings([recording]) } label: { Label("Import", systemImage: "arrow.down.circle") }
+                        .buttonStyle(.borderedProminent)
+                        .tint(DaybookStyle.prominentFill)
+                    ImportAndAddMenu(session: session, recordings: [recording])
+                        .fixedSize()
+                }
+                .controlSize(.large)
+                .padding(.top, Space.s5)
             }
-            .controlSize(.large)
-            .disabled(!canImport)
-            .padding(.top, Space.s5)
             if let failure = session.failures.first(where: { $0.id == recording.id }) {
                 Label {
                     Text(failure.message).foregroundStyle(Ink.secondary)
@@ -72,23 +73,12 @@ struct RecordingPage: View {
             }
         }
 
-        ForEach(session.overlaps(recording)) { overlap in
-            DeviceBox {
-                HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                    Image(systemName: "link").foregroundStyle(Ink.secondary).accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: Space.s3) {
-                        Text("This overlaps “\(overlap.title)”, recorded on this Mac \(overlap.span).")
-                            .font(TypeStyle.status).foregroundStyle(Ink.body).fixedSize(horizontal: false, vertical: true)
-                        HStack {
-                            Spacer()
-                            Button("Add to “\(overlap.title)”") { session.importRecordings([recording], attachTo: overlap.meetingID) }
-                                .controlSize(.small)
-                                .disabled(!canImport || queue.contains(recording.id))
-                        }
-                    }
+        if canImport, !queue.contains(recording.id) {
+            ForEach(session.overlaps(recording)) { overlap in
+                DeviceAttentionBox(symbol: "link", title: "Overlaps “\(overlap.title)”", message: "Recorded on this Mac \(overlap.span)") {
+                    Button("Add to “\(overlap.title)”") { session.importRecordings([recording], attachTo: overlap.meetingID) }
                 }
             }
-            .padding(.top, Space.s5)
         }
     }
 
@@ -98,23 +88,24 @@ struct RecordingPage: View {
         DevicePageTitle(title: "\(recordings.count) Recordings Selected") { recordingGlyph(false) }
         Text("\(total > 0 ? "\(estimated ? "About " : "")\(DurationLabel.format(total)) in all · " : "")\(location) · Not in Daybook yet")
             .font(TypeStyle.byline()).foregroundStyle(Ink.secondary).padding(.top, 6)
-        HStack(spacing: Space.s3) {
-            Button { session.importRecordings(recordings) } label: {
-                Label("Import \(recordings.count) Recordings", systemImage: "arrow.down.circle")
+        if canImport {
+            HStack(spacing: Space.s3) {
+                Button { session.importRecordings(recordings) } label: {
+                    Label("Import \(recordings.count) Recordings", systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(DaybookStyle.prominentFill)
+                ImportAndAddMenu(session: session, recordings: recordings).fixedSize()
             }
-            .buttonStyle(.borderedProminent)
-            .tint(DaybookStyle.prominentFill)
-            ImportAndAddMenu(session: session, recordings: recordings).fixedSize()
+            .controlSize(.large)
+            .padding(.top, Space.s5)
         }
-        .controlSize(.large)
-        .disabled(!canImport)
-        .padding(.top, Space.s5)
     }
 
     private func recordingGlyph(_ queued: Bool) -> some View {
         Image(systemName: queued ? "arrow.down.circle.fill" : "arrow.down.circle")
             .font(.system(size: 22))
-            .foregroundStyle(DaybookStyle.brandGradient)
+            .foregroundStyle(Ink.secondary)
             .contentTransition(.symbolEffect(.replace))
             .accessibilityHidden(true)
     }
@@ -147,11 +138,6 @@ struct LivePage: View {
 
     var body: some View {
         DevicePageScroll {
-            if let problem = session.problem {
-                DeviceProblemBanner(problem: problem) { DeviceActions.perform($0, session: session, state: state) }
-                    .padding(.bottom, Space.s5)
-                    .transition(.deviceNotice(reduceMotion: reduceMotion))
-            }
             DevicePageTitle(title: "Recording on \(session.kind.shortName)") {
                 Image(systemName: "record.circle.fill")
                     .font(.system(size: 22))
@@ -166,6 +152,10 @@ struct LivePage: View {
                let meeting = state.meetings.first(where: { $0.id == waiting }) {
                 Text("For \(meeting.title)").font(TypeStyle.status).foregroundStyle(Ink.secondary).padding(.top, Space.s2)
             }
+            if let problem = session.problem {
+                DeviceProblemBanner(problem: problem, perform: { DeviceActions.perform($0, session: session, state: state) },
+                                    hidden: DeviceActions.inapplicable(for: session))
+            }
 
             if live.isListening {
                 listening
@@ -179,7 +169,7 @@ struct LivePage: View {
                 if session.queue.current != nil {
                     Text("Available when the import finishes.").font(TypeStyle.status).foregroundStyle(Ink.secondary).padding(.top, Space.s2)
                 }
-                LiveSavedNotice(state: state, session: session, live: live, spacing: Space.s5)
+                LiveSavedNotice(state: state, session: session, live: live)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: live.isListening)
@@ -233,16 +223,14 @@ struct LiveSavedNotice: View {
     @ObservedObject var state: AppState
     @ObservedObject var session: DeviceSession
     @ObservedObject var live: LiveCapture
-    var spacing: CGFloat = 0
 
     var body: some View {
         if let saved = live.saved, !live.isListening {
             let meetingID = session.links.partial[saved.recordingID] ?? session.links.imported[saved.recordingID]
-            DeviceNotice(symbol: "checkmark.circle",
-                         text: "Saved \(DurationLabel.format(saved.seconds)) as a new conversation.",
+            DeviceNotice(symbol: "checkmark.circle.fill",
+                         text: "Saved \(DurationLabel.format(saved.seconds)) as a new conversation",
                          action: meetingID.map { id in ("Show Conversation", { state.showConversation(id) }) },
                          dismiss: { live.saved = nil })
-                .padding(.top, spacing)
         }
     }
 }

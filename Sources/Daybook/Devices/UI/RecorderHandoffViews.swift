@@ -46,60 +46,37 @@ struct RecorderHandoffNotice: View {
         case .idle:
             EmptyView()
         case .refused:
-            // Needs the person: a quiet box, with Take Over Anyway and OK.
-            DeviceBox {
-                VStack(alignment: .leading, spacing: Space.s3) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(headline ?? "").font(TypeStyle.statusLead).foregroundStyle(Ink.body)
-                        if let detail { Text(detail).font(TypeStyle.status).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true) }
-                    }
-                    HStack(spacing: Space.s3) {
-                        Spacer(minLength: 0)
-                        if session.managedElsewhere != nil {
-                            Button("Take Over Anyway…") { confirmingTakeOver = true }.buttonStyle(.daybookLink)
-                        }
-                        Button("OK") { state.cancelRecorderHandoff(session) }.controlSize(.small)
-                    }
-                    .font(TypeStyle.status)
+            // Needs the person: the page's quiet box, with Take Over Anyway and OK.
+            DeviceAttentionBox(symbol: "exclamationmark.circle.fill", title: headline ?? "", message: detail) {
+                if session.managedElsewhere != nil {
+                    Button("Take Over Anyway…") { confirmingTakeOver = true }.buttonStyle(.daybookLink)
                 }
+                Button("OK") { state.cancelRecorderHandoff(session) }
             }
-            .padding(.top, Space.s5)
             .accessibilityElement(children: .contain)
         case .waitingForSync where overdue:
-            DeviceBox {
-                VStack(alignment: .leading, spacing: Space.s3) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(headline ?? "").font(TypeStyle.statusLead).foregroundStyle(Ink.body)
-                        if let detail { Text(detail).font(TypeStyle.status).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true) }
-                    }
-                    HStack(spacing: Space.s3) {
-                        Spacer(minLength: 0)
-                        Button("Stop Waiting") { state.cancelRecorderHandoff(session) }.buttonStyle(.daybookLink)
-                        Button("Take Over Anyway…") { confirmingTakeOver = true }.controlSize(.small)
-                    }
-                    .font(TypeStyle.status)
-                }
+            DeviceAttentionBox(symbol: "hourglass", title: headline ?? "", message: detail) {
+                Button("Stop Waiting") { state.cancelRecorderHandoff(session) }.buttonStyle(.daybookLink)
+                Button("Take Over Anyway…") { confirmingTakeOver = true }
             }
-            .padding(.top, Space.s5)
             .accessibilityElement(children: .contain)
         case .done:
-            HStack(spacing: Space.s2) {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(DaybookStyle.accent).accessibilityHidden(true)
-                Text(headline ?? "").foregroundStyle(Ink.secondary)
-            }
-            .font(TypeStyle.status)
-            .padding(.top, Space.s4)
+            Label { Text(headline ?? "") } icon: { Image(systemName: "checkmark.circle") }
+                .font(TypeStyle.status)
+                .foregroundStyle(Ink.secondary)
+                .labelStyle(HandoffLineLabelStyle())
+                .padding(.top, Space.s4)
         default:
-            // Working: one bare line, its detail, and, while waiting through iCloud, the way out.
+            // Working: one bare line, its detail, and, while waiting through iCloud, the way out. Handing
+            // over after an import, the import's own progress below says what's left.
+            let showsDetail = !(current.isHandingOver && session.queue.isActive)
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: Space.s2) {
-                    ProgressView().controlSize(.small)
-                    Text(headline ?? "").font(TypeStyle.statusLead).foregroundStyle(Ink.body)
-                }
-                if let detail {
+                Label { Text(headline ?? "").font(TypeStyle.statusLead).foregroundStyle(Ink.body) } icon: { ProgressView().controlSize(.mini) }
+                    .labelStyle(HandoffLineLabelStyle())
+                if let detail, showsDetail {
                     Text(detail).font(TypeStyle.status).foregroundStyle(Ink.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 24)
+                        .padding(.leading, HandoffLineLabelStyle.indent)
                 }
                 if case .waitingForSync = current {
                     HStack(spacing: Space.s4) {
@@ -108,7 +85,7 @@ struct RecorderHandoffNotice: View {
                     }
                     .buttonStyle(.daybookLink)
                     .font(TypeStyle.status)
-                    .padding(.leading, 24)
+                    .padding(.leading, HandoffLineLabelStyle.indent)
                     .padding(.top, 2)
                 }
             }
@@ -124,6 +101,24 @@ struct RecorderHandoffNotice: View {
         default: return session.managedElsewhere?.ownerName ?? "the other device"
         }
     }
+}
+
+/// A handoff line: its symbol in a fixed column (a box's width), so the lines under it start where
+/// its text does.
+private struct HandoffLineLabelStyle: LabelStyle {
+    static let column: CGFloat = 18
+    static let indent: CGFloat = column + Space.s2
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: Space.s2) {
+            configuration.icon.frame(width: Self.column).accessibilityHidden(true)
+            configuration.title
+        }
+    }
+}
+
+private extension RecorderHandoff.State {
+    var isHandingOver: Bool { if case .handingOver = self { return true } else { return false } }
 }
 
 /// "Use on This Mac" / "Use on Alex’s iPhone" in the device page's More menu and the menu bar.
