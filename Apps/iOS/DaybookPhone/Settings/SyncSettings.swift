@@ -93,7 +93,7 @@ struct ICloudScreen: View {
         .settingsScrollEnd()
         .navigationTitle("iCloud")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: model.sync.lastError ?? "") }
+        .pageSheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: model.sync.lastError ?? "") }
     }
 
     private var devicesSummary: String {

@@ -41,11 +41,11 @@ struct EncryptionRows: View {
             }
             if let problem { ProblemText(problem: problem) }
         }
-        .sheet(isPresented: $enabling) {
+        .pageSheet(isPresented: $enabling) {
             EncryptLibraryScreen { recovery in shownKey = recovery.map(ShownRecoveryKey.init(key:)) }
         }
-        .sheet(item: $shownKey) { shown in RecoveryKeyScreen(key: shown.key) }
-        .sheet(isPresented: $enteringKey) { EnterRecoveryKeyScreen() }
+        .pageSheet(item: $shownKey) { shown in RecoveryKeyScreen(key: shown.key) }
+        .pageSheet(isPresented: $enteringKey) { EnterRecoveryKeyScreen() }
         .confirmationDialog("Erase deleted conversations from iCloud?", isPresented: $confirmingErase, titleVisibility: .visible) {
             Button("Erase", role: .destructive) { erase() }
         } message: {
@@ -238,7 +238,7 @@ private struct ProblemText: View {
                 Button("Details") { showingDetails = true }
                     .font(.footnote)
                     .buttonStyle(.borderless)
-                    .sheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: details) }
+                    .pageSheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: details) }
             }
         }
     }
