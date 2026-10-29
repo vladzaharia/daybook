@@ -12,11 +12,19 @@ struct DeviceRecordingsList: View {
             DeviceRecordingsListContent(state: state, session: session, browser: session.browser)
                 .id(session.id)
                 .navigationTitle(session.device.name)
-                .navigationSubtitle(session.subtitle)
+                // The subtitle follows the device ("Connected · Recording") without redrawing the list.
+                .modifier(DeviceListSubtitle(session: session))
         } else {
             Color.clear.navigationTitle("Devices")
         }
     }
+}
+
+/// The list's subtitle, kept current by the session on its own.
+private struct DeviceListSubtitle: ViewModifier {
+    @ObservedObject var session: DeviceSession
+
+    func body(content: Content) -> some View { content.navigationSubtitle(session.subtitle) }
 }
 
 private struct DeviceRecordingsListContent: View {
@@ -44,14 +52,14 @@ private struct DeviceRecordingsListContent: View {
         let hasRows = !split.new.isEmpty || !split.imported.isEmpty || session.queue.isActive || split.inProgress != nil
         guard !hasRows, let primary = session.primary else { return nil }
         let kind = session.kind
-        func unavailable(_ title: String, _ symbol: String, _ text: String?, animated: Bool = false, quiet: Bool = false,
+        func unavailable(_ title: String, _ symbol: String, _ text: String?, animated: Bool = false,
                          action: (title: String, run: () -> Void)? = nil) -> AnyView {
             AnyView(ContentUnavailableView {
                 Label {
                     Text(title)
                 } icon: {
                     Image(systemName: symbol)
-                        .foregroundStyle(quiet ? AnyShapeStyle(Color.secondary) : AnyShapeStyle(DaybookStyle.brandGradient))
+                        .foregroundStyle(.secondary)
                         .symbolEffect(.variableColor.iterative, isActive: animated && !reduceMotion)
                 }
             } description: {
@@ -70,14 +78,17 @@ private struct DeviceRecordingsListContent: View {
             return unavailable(primary.state == .reconnecting ? "Reconnecting…" : "Connecting…", "dot.radiowaves.left.and.right", nil, animated: true)
         case .unavailable:
             // The page's banner explains; the list only says why it's empty.
-            if isPhone { return unavailable("Sync Is Off", "icloud.slash", nil, quiet: true) }
+            if isPhone { return unavailable("Sync Is Off", "icloud.slash", nil) }
             return primary.method == .files
-                ? unavailable("Not Watching", "folder.badge.questionmark", nil, quiet: true)
-                : unavailable("Not Connected", "antenna.radiowaves.left.and.right.slash", nil, quiet: true)
+                ? unavailable("Not Watching", "folder.badge.questionmark", nil)
+                : unavailable("Not Connected", "antenna.radiowaves.left.and.right.slash", nil)
         case .notConnected:
             if primary.method == .files {
                 return unavailable("Not Watching", "folder", nil,
                                    action: ("Watch Folder", { primary.connect() }))
+            }
+            if let owner = session.managedElsewhere {
+                return unavailable("Managed by \(owner.ownerName)", "antenna.radiowaves.left.and.right.slash", nil)
             }
             return unavailable("Not Connected", "antenna.radiowaves.left.and.right.slash",
                                "Take your \(kind.shortName) out of its case to wake it.", action: ("Connect", { session.connect() }))
@@ -88,8 +99,7 @@ private struct DeviceRecordingsListContent: View {
                 })
             }
             if primary.method == .files, !isPhone {
-                let folder = (primary as? ImportFolderWatcher)?.folderDisplayName ?? "the folder"
-                return unavailable("Watching for Audio", "folder.badge.gearshape", "New audio saved to \(folder) becomes a conversation.")
+                return unavailable("Watching for Audio", "folder.badge.gearshape", (primary as? ImportFolderWatcher)?.folderDisplayName)
             }
             return unavailable("No Recordings on Your \(kind.shortName)", kind.systemImage, kind.emptyHint)
         }
@@ -101,7 +111,7 @@ private struct DeviceRecordingsListContent: View {
         let queue = session.queue
         let new = split.new.filter { !queue.contains($0.id) }
         let selectedNew = new.filter { browser.selection.contains(.recording($0.id)) }
-        let canImport = session.primary?.state.isConnected == true || session.primary?.isSetUp == true
+        let canImport = session.importsHere && (session.primary?.state.isConnected == true || session.primary?.isSetUp == true)
         let fromFolder = session.primary?.method == .files
         return List(selection: $browser.selection) {
             if let recording = split.inProgress {
@@ -147,7 +157,7 @@ private struct DeviceRecordingsListContent: View {
                             }
                             .buttonStyle(.daybookLink)
                         } else if let updated = session.primary?.inventoryUpdatedAt {
-                            Text("As of \(updated.formatted(date: .omitted, time: .shortened))")
+                            Text("As of \(DeviceDateFormat.lastSeen(updated))").lineLimit(1)
                         }
                     }
                 }
@@ -361,7 +371,7 @@ private struct DeviceRowMenu: View {
             Button("Stop Importing") { session.requestStop(all: false) }
         } else if !ids.isEmpty, ids.allSatisfy({ session.queue.isWaiting($0) }) {
             Button("Remove from Queue") { ids.forEach(session.removeFromQueue) }
-        } else if !fresh.isEmpty, imported.isEmpty {
+        } else if !fresh.isEmpty, imported.isEmpty, session.importsHere {
             Button(fresh.count > 1 ? "Import \(fresh.count) Recordings" : "Import") { session.importRecordings(fresh) }
             ImportAndAddMenu(session: session, recordings: fresh)
         } else if imported.count == 1, let recording = imported.first, let meetingID = links.imported[recording.id] {
