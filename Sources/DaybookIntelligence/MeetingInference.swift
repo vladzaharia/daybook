@@ -36,6 +36,12 @@ public protocol MeetingInference: Sendable {
     /// music, an audience, and the level, for leaving background audio out. Nil when it can't run;
     /// the default (inference that predates it, and tests' fakes) hears nothing, so nothing is left out.
     func classifySound(url: URL, progress: @escaping IntelligenceProgressHandler) async throws -> BackgroundAudioAnalysis?
+    /// A summary from the transcript with the person's notes and bookmarks in place (`SummarySource`):
+    /// passages near them carry more weight, and notes are folded in where they belong. The default
+    /// hands inference that takes strings the transcript, notes, and bookmark evidence as before.
+    func summarize(_ source: SummarySource, template: MeetingKind, glossary: [String], model: ModelReference,
+                   templateInstructions: String?, photos: [PhotoEvidence],
+                   progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes
 }
 
 extension MeetingInference {
@@ -71,6 +77,13 @@ extension MeetingInference {
 
 extension MeetingInference {
     public func classifySound(url: URL, progress: @escaping IntelligenceProgressHandler) async throws -> BackgroundAudioAnalysis? { nil }
+
+    public func summarize(_ source: SummarySource, template: MeetingKind, glossary: [String], model: ModelReference,
+                          templateInstructions: String?, photos: [PhotoEvidence],
+                          progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes {
+        try await summarize(transcript: source.transcript, notes: source.notesText, template: template, glossary: glossary, model: model,
+                            templateInstructions: templateInstructions, highlightEvidence: source.highlightText, photos: photos, progress: progress)
+    }
 }
 
 extension LocalIntelligenceRuntime: MeetingInference {}

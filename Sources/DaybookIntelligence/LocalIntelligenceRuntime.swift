@@ -342,6 +342,24 @@ public actor LocalIntelligenceRuntime {
         try await detachedWork(priority: .userInitiated) { try SoundClassifier.analyze(url: url, progress: progress) }
     }
 
+    /// A summary from the transcript with notes and bookmarks in place (`SummarySource`).
+    public func summarize(_ source: SummarySource, template: MeetingKind = .auto, glossary: [String] = [], model: ModelReference,
+                          templateInstructions: String? = nil, photos: [PhotoEvidence] = [],
+                          progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> GeneratedMeetingNotes {
+        try begin(); defer { finish() }
+        let (loaded, provenance) = try await use(model, for: .summarization, message: "Loading language model locally", progress: progress)
+        guard let summarizer = loaded as? any Summarizing else {
+            throw LocalIntelligenceError.unsupportedRole(model: model.id, role: "summaries")
+        }
+        try Task.checkCancellation()
+        var notes = try await summarizer.summarize(
+            SummaryRequest(source: source, template: template, glossary: glossary, templateInstructions: templateInstructions,
+                           modelID: model.id, photos: photos),
+            progress: progress)
+        notes.provenance = provenance
+        return notes
+    }
+
     /// Titles, the meeting kind, and vocabulary suggestions from a small-tasks model (Apple
     /// Foundation Models). Throws when the model can't run here; callers keep the summarizer's.
     public func performSmallTasks(transcript: String, notes: String, template: MeetingKind = .auto, glossary: [String] = [],

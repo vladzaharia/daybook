@@ -179,19 +179,20 @@ public struct InferenceProcessingEngine: ProcessingEngine {
 
     public func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],
                           progress: @escaping ProcessingProgressHandler) async throws -> SummaryProcessingOutput {
-        let transcript = MeetingEvidence.transcript(meeting)
+        let source = MeetingEvidence.summarySource(meeting)
+        let transcript = source.transcript
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DaybookError.noSpeech }
         let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
-        let notes = MeetingEvidence.notes(meeting)
+        let notes = source.notesText
         let requestedKind = template?.kind ?? meeting.kind
         let small = try await smallTasks(transcript: transcript, notes: notes, kind: requestedKind, vocabulary: vocabulary, progress: report)
         // The small-tasks model's kind guides the summary's sections, as a chosen kind would.
         let summaryKind = requestedKind == .auto ? (small?.kind ?? .auto) : requestedKind
         let photos = PhotoPlacement.candidates(in: meeting)
+        // Notes and bookmarks in place: the passages around them carry more weight (`SummarySource`).
         let generated = try await inference.summarize(
-            transcript: transcript, notes: notes, template: summaryKind,
-            glossary: vocabulary, model: configuration.summaryModel, templateInstructions: template?.instructions,
-            highlightEvidence: MeetingEvidence.highlights(meeting), photos: photos, progress: report)
+            source, template: summaryKind, glossary: vocabulary, model: configuration.summaryModel,
+            templateInstructions: template?.instructions, photos: photos, progress: report)
         // The model's photo placements, kept only where valid, plus the time fallback (PhotoPlacement).
         var summary = PhotoPlacement.arrange(generated.summary, in: meeting)
         var parameters = ["configuration": configuration.fingerprint, "templateID": template?.id ?? "auto",
