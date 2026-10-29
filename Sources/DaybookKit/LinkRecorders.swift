@@ -94,14 +94,35 @@ public enum RecorderRemoteControl {
     /// The answer to `request` about `target`, among this device's `sessions`. A start that finds it
     /// recording already says so (and leaves it to the person); a stop pauses only the recording it
     /// names, then imports it into the requester's conversation.
+    ///
+    /// With `cascade` (the device's shared recordings), a start for the conversation it records along
+    /// with already, or that it starts at the same moment on its own, is the same start, answered once;
+    /// the recorder's audio is saved into that conversation as it records; and a stop saves that audio
+    /// before it pauses the recorder.
     public static func answer(_ request: LinkRecordRequest, target: LinkRecorderTarget, sessions: [DeviceSession],
-                              timing: Timing = Timing()) async -> LinkRecordReply.Outcome {
+                              timing: Timing = Timing(), cascade: RecorderCascade? = nil) async -> LinkRecordReply.Outcome {
         guard let session = sessions.first(where: { session in
                   session.kind.id == target.kind && (target.serial == nil || session.recorderSerial == nil || session.recorderSerial == target.serial)
               }), session.managedElsewhere == nil, let control = session.direct as? any RecordControlConnection else {
             return .refused(LinkRecordRefusal(reason: .unsupported, message: "This device doesn’t manage that recorder."))
         }
         let name = session.device.name
+        if let cascade, request.action == .start, cascade.conversation == nil || cascade.conversation?.id == request.conversationID {
+            cascade.begin(request.conversationID, title: request.title, date: request.date)
+            guard let member = await cascade.start(session, for: request.conversationID) else {
+                return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) didn’t start recording."))
+            }
+            switch member.state {
+            case .recording, .stopping, .stopped:
+                return .accepted(LinkRecordAck(conversationID: request.conversationID, startedAt: member.startedAt, recordingID: member.recordingID,
+                                               wasAlreadyRecording: member.role == .alreadyRecording))
+            case .unavailable(let words), .stopFailed(let words):
+                return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: words))
+            case .starting:
+                return .refused(LinkRecordRefusal(reason: .busy, message: "\(name) is still starting."))
+            }
+        }
+        if let cascade, request.action == .stop { await cascade.prepareToStop(session) }
         let asked = Date()
         if !control.state.isConnected {
             guard control.isSetUp, control.state != .unavailable else {
@@ -145,6 +166,7 @@ public enum RecorderRemoteControl {
             guard await wait(timing.confirm, timing.poll, until: { control.status?.isRecording == false && !control.recordCommandPending }) else {
                 return .refused(LinkRecordRefusal(reason: .recorderUnavailable, message: "\(name) didn’t confirm it stopped."))
             }
+            cascade?.remoteStopped(session, recordingID: target.recordingID ?? inProgress())
             // Brought in for the requester's conversation once it's finished, which its link joins wherever it lands.
             if let recordingID = target.recordingID {
                 Task {
