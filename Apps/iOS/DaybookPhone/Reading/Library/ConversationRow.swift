@@ -124,8 +124,12 @@ struct SearchResultRow: View {
     }
 
     private var snippet: AttributedString {
-        var text = AttributedString(hit.snippet)
-        if let match = hit.match, let lower = AttributedString.Index(match.lowerBound, within: text),
+        // A summary is Markdown: shown as words, without "- " list markers or "**" around them.
+        let source = hit.field == .summary ? SearchSnippet.plain(hit.snippet) : hit.snippet
+        let matched = hit.match.map { String(hit.snippet[$0]) }
+        var text = AttributedString(source)
+        if let matched, let match = source.range(of: matched, options: [.caseInsensitive, .diacriticInsensitive]),
+           let lower = AttributedString.Index(match.lowerBound, within: text),
            let upper = AttributedString.Index(match.upperBound, within: text) {
             text[lower..<upper].font = .subheadline.weight(.semibold)
             text[lower..<upper].foregroundColor = PhoneStyle.Ink.link
@@ -142,6 +146,18 @@ struct SearchResultRow: View {
             if hit.matchCount > 1 { return "Transcript · \(hit.matchCount) matches" }
             return (["Transcript", hit.speaker, hit.time.map(TimeLabel.short)].compactMap { $0 }).joined(separator: " · ")
         }
+    }
+}
+
+/// Search snippets as plain words.
+enum SearchSnippet {
+    /// Markdown from a summary, as it reads: emphasis marks and list markers (at the start, or where
+    /// the lines were joined after a sentence) removed. The words themselves are untouched.
+    static func plain(_ markdown: String) -> String {
+        var text = markdown.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
+        let marker = try? NSRegularExpression(pattern: "(^|^…|(?<=[.!?:;…])\\s)[-*•]\\s+")
+        text = marker?.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1") ?? text
+        return text
     }
 }
 
