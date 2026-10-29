@@ -107,7 +107,7 @@ private struct DevicePageContent: View {
                                 .font(.headline)
                                 .foregroundStyle(PhoneStyle.Ink.title)
                         }
-                        RecorderHandoffCard(session: session, showsHeader: false, boxed: false)
+                        RecorderHandoffCard(session: session)
                     }
                     .padding(.vertical, 4)
                 }

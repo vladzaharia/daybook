@@ -2,9 +2,9 @@ import DaybookKit
 import Foundation
 
 /// What the status sheet says (docs/iphone.md, "Status sheet"): the recorder, your Mac, and sync,
-/// one line each when compact; devices with handoff, the Mac's queue, and live captions at medium;
-/// full management when large. Plain values built from plain inputs, so tests read exactly what
-/// each state says, and the views only draw them.
+/// one line each when compact; then at most three groups, a card each: recorders, Macs, and (large)
+/// this iPhone. Plain values built from plain inputs, so tests read exactly what each state says,
+/// and the views only draw them.
 enum StatusDetent: String, CaseIterable, Sendable {
     case compact, medium, large
 }
@@ -56,9 +56,20 @@ struct StatusQueueEntry: Equatable, Identifiable, Sendable {
     var detail: String?
     /// For a failure: the Mac's own words, shown only behind Details.
     var details: String?
+    /// The Mac doing the work (or that failed), when known.
+    var mac: String?
+    /// The line without the Mac's name ("Transcribing · 40%", "Couldn’t finish"), for under that Mac's row.
+    var brief: String?
+
+    /// The line under a Mac's row in the Macs card: that Mac isn't named again.
+    func line(under macName: String?) -> String {
+        guard let mac, mac == macName, let brief else { return line }
+        return brief
+    }
 }
 
-/// What the sheet shows, top to bottom; each detent adds to the one before.
+/// What the sheet shows, top to bottom; each detent adds to the one before. Below the lines, each
+/// group is a heading and one card, and each device is in one card only.
 enum StatusSection: Hashable, Sendable {
     /// Record, Import, and Search (the pocket sheet hosts them).
     case quickActions
@@ -66,18 +77,40 @@ enum StatusSection: Hashable, Sendable {
     case lines
     /// Live listening captions, while a recorder streams.
     case captions
-    /// Every recorder, with "Use on This iPhone" / "Use on Studio Mac" and handoff progress.
+    /// A card per recorder: its status and handoff ("Use on This iPhone" / "Use on Studio Mac"); large
+    /// adds its storage, its actions, and the recordings waiting on it. Add Recorder… when there's none.
     case recorders
-    /// The Mac: presence and its queue.
-    case mac
-    /// Import now, record on the recorder, Listen Live.
-    case controls
-    /// Recordings waiting on a recorder.
-    case waiting
-    /// The recorder's space and this iPhone's downloaded audio.
-    case storage
-    /// Macs paired over Wi‑Fi.
-    case pairing
+    /// One card: every paired Mac, the queue under the Mac doing it, and Pair with Your Mac….
+    case macs
+    /// This iPhone's downloaded audio, and Storage.
+    case iphone
+}
+
+/// What a recorder's card offers at the large detent: only what can be done now, never a disabled button.
+enum StatusRecorderAction: Hashable, Sendable {
+    case connect
+    case record
+    case pause
+    case importNew(Int)
+    case listenLive
+    case stopListening
+}
+
+/// A Mac in the Macs card.
+struct StatusMacRow: Equatable, Identifiable, Sendable {
+    enum ID: Hashable, Sendable {
+        /// Paired over Wi‑Fi: the row opens its details.
+        case paired(UUID)
+        /// Known only by its presence in the library (it syncs, but isn't paired with this iPhone).
+        case synced(String)
+    }
+
+    var id: ID
+    var name: String
+    var text: String
+    var isConnected: Bool
+    /// The transcription queue shows under this row.
+    var showsQueue = false
 }
 
 /// The facts the sheet is built from, gathered by the view from the app model.
@@ -115,6 +148,23 @@ struct StatusInputs: Equatable {
         var lastConnected: Date?
         var storageHours: Double?
         var storageIsLow = false
+        /// It can start and pause recording (Record on Soundcore).
+        var hasRecordControl = false
+        /// It can stream what it hears (Listen Live).
+        var hasLiveListening = false
+        /// It isn't linked and Connect would do something now.
+        var canConnect = false
+        /// A recording is coming off it right now (not just queued).
+        var importRunning = false
+    }
+
+    /// A Mac paired over Wi‑Fi.
+    struct Mac: Equatable {
+        var id: UUID
+        var name: String
+        /// "Connected", "Recording now", "Last connected 3 days ago".
+        var line: String
+        var isConnected: Bool
     }
 
     enum SyncTone: Equatable { case upToDate, working, attention, checking }
@@ -128,25 +178,87 @@ struct StatusInputs: Equatable {
     var syncTone: SyncTone = .checking
     var hostsRecordButton = false
     var hasLiveCaptions = false
-    var pairedMacs = 0
+    var pairedMacs: [Mac] = []
 }
 
 enum StatusSheetModel {
     // MARK: Sections
 
     /// What each detent shows. Compact: the lines (with Record and Import when the sheet hosts them).
-    /// Medium adds live captions while a recorder streams (first: they're what's happening now),
-    /// devices with handoff, and the Mac with its queue. Large adds full management.
+    /// Medium adds live captions while a recorder streams (first: they're what's happening now), the
+    /// recorders with handoff, and the Macs with the queue. Large adds this iPhone; the recorder cards
+    /// grow their storage, actions, and waiting recordings (`showsManagement`).
     static func sections(for detent: StatusDetent, _ inputs: StatusInputs) -> [StatusSection] {
         var sections: [StatusSection] = inputs.hostsRecordButton ? [.quickActions, .lines] : [.lines]
         guard detent != .compact else { return sections }
         if inputs.hasLiveCaptions { sections.append(.captions) }
-        sections += [.recorders, .mac]
-        guard detent == .large else { return sections }
-        if inputs.recorders.contains(where: { $0.isDirect && $0.managedBy == nil }) { sections.append(.controls) }
-        if inputs.recorders.contains(where: { $0.newCount > 0 && $0.managedBy == nil }) { sections.append(.waiting) }
-        sections += [.storage, .pairing]
+        sections += [.recorders, .macs]
+        if detent == .large { sections.append(.iphone) }
         return sections
+    }
+
+    /// Whether the recorder cards show storage, actions, and waiting recordings.
+    static func showsManagement(_ detent: StatusDetent) -> Bool { detent == .large }
+
+    // MARK: A recorder's card
+
+    /// The recorder's actions, in order: Connect, Record or Pause, Import N New, Listen Live or Stop
+    /// Listening. A recorder another device manages, or one without Bluetooth, has none here.
+    static func actions(for recorder: StatusInputs.Recorder) -> [StatusRecorderAction] {
+        guard recorder.isDirect, recorder.managedBy == nil else { return [] }
+        var actions: [StatusRecorderAction] = []
+        if !recorder.isLinked, recorder.canConnect { actions.append(.connect) }
+        if recorder.hasRecordControl, recorder.isLinked, !recorder.importRunning {
+            actions.append(recorder.isRecording ? .pause : .record)
+        }
+        if recorder.newCount > 0, recorder.importing == nil { actions.append(.importNew(recorder.newCount)) }
+        if recorder.hasLiveListening {
+            if recorder.isListeningLive {
+                actions.append(.stopListening)
+            } else if recorder.isRecording, recorder.isLinked, !recorder.importRunning {
+                actions.append(.listenLive)
+            }
+        }
+        return actions
+    }
+
+    /// "About 2,170 hours left": the recorder's room, on its card at the large detent.
+    static func storageLeft(hours: Double) -> String {
+        if hours < 1 { return "Less than an hour left" }
+        let rounded = StorageFormat.roundedHours(hours)
+        return rounded == 1 ? "About 1 hour left" : "About \(rounded.formatted()) hours left"
+    }
+
+    // MARK: The Macs card
+
+    /// Every paired Mac, then a Mac the library syncs with that isn't paired here (by its presence).
+    /// The queue goes under the Mac that does the work: the connected one, else the one presence names.
+    static func macRows(_ inputs: StatusInputs, now: Date = Date()) -> [StatusMacRow] {
+        var rows = inputs.pairedMacs.map { StatusMacRow(id: .paired($0.id), name: $0.name, text: $0.line, isConnected: $0.isConnected) }
+        if let name = inputs.mac.macName, !rows.contains(where: { $0.name == name }), let text = presenceText(inputs.mac, now: now) {
+            rows.append(StatusMacRow(id: .synced(name), name: name, text: text, isConnected: false))
+        }
+        if let index = rows.firstIndex(where: \.isConnected) ?? rows.firstIndex(where: { $0.name == inputs.mac.macName }) {
+            rows[index].showsQueue = true
+        }
+        return rows
+    }
+
+    /// A synced Mac's row, from its presence.
+    static func presenceText(_ presence: MacPresence, now: Date = Date()) -> String? {
+        switch presence {
+        case .connected: return "Connected"
+        case .seen(_, let date): return "Last seen \(MacPresence.age(now.timeIntervalSince(date)))"
+        case .recording: return "Recording"
+        case .notProcessing: return "Not set up to transcribe"
+        default: return nil
+        }
+    }
+
+    // MARK: This iPhone
+
+    static func downloadedAudio(bytes: UInt64) -> String {
+        bytes == 0 ? "No audio downloaded" : "\(ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)) of audio downloaded"
     }
 
     // MARK: Lines
@@ -256,26 +368,30 @@ enum StatusSheetModel {
             if let fraction = live.fraction, [.transcribing, .identifyingSpeakers, .summarizing, .aligning].contains(live.phase) {
                 text += " · \(Int((fraction * 100).rounded(.down)))%"
             }
-            return StatusLine(kind: .mac, symbol: "desktopcomputer", title: live.macName, text: text, tone: .working, progress: live.fraction)
+            return StatusLine(kind: .mac, symbol: "desktopcomputer", title: live.macName, text: text, tone: .working, progress: live.fraction,
+                              shortText: text == live.activity ? nil : live.activity)
         }
         if let running = inputs.queue.first(where: \.isRunning) {
             // Coarse progress from the claim that synced.
             let verb = running.line.components(separatedBy: " on ").first ?? "Transcribing"
             let percent = running.progress.map { " · \(Int(($0 * 100).rounded(.down)))%" } ?? ""
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: inputs.mac.macName ?? "Your Mac", text: verb + percent,
-                              tone: .working, progress: running.progress)
+                              tone: .working, progress: running.progress, shortText: percent.isEmpty ? nil : verb)
         }
         switch inputs.mac {
         case .connected(let name):
+            // Narrow, the waiting work stays: the teal glyph already says it's connected.
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name,
-                              text: ["Connected", waitingText].compactMap { $0 }.joined(separator: " · "), tone: .linked)
+                              text: ["Connected", waitingText].compactMap { $0 }.joined(separator: " · "), tone: .linked,
+                              shortText: waitingText)
         case .seen(let name, let date):
             let seen = "Last seen \(MacPresence.age(now.timeIntervalSince(date)))"
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name,
                               text: [seen, waitingText].compactMap { $0 }.joined(separator: " · "), tone: .calm)
         case .recording(let name, _):
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name,
-                              text: ["Recording", waitingText].compactMap { $0 }.joined(separator: " · "), tone: .recording)
+                              text: ["Recording", waitingText].compactMap { $0 }.joined(separator: " · "), tone: .recording,
+                              shortText: waitingText == nil ? nil : "Recording")
         case .notProcessing(let name, _):
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: name, text: "Not set up to transcribe", tone: .attention)
         case .olderMac:
@@ -311,7 +427,7 @@ enum StatusSheetModel {
             let requestedHere = meeting.openProcessingRequests.contains { $0.requestedBy.id == thisDevice }
             if let live = liveProgress[meeting.id], !live.isFinished {
                 running.append(StatusQueueEntry(id: meeting.id, title: meeting.title, line: live.line, requestedHere: requestedHere,
-                                                progress: live.fraction, isRunning: true))
+                                                progress: live.fraction, isRunning: true, mac: live.macName, brief: live.brief))
                 continue
             }
             switch ProcessingStatus(meeting, now: now) {
@@ -325,7 +441,8 @@ enum StatusSheetModel {
                 let percent = progress.fraction.map { " · \(Int(($0 * 100).rounded(.down)))%" } ?? ""
                 running.append(StatusQueueEntry(id: meeting.id, title: meeting.title,
                                                 line: "\(verb) on \(progress.device?.name ?? "your Mac")\(percent)",
-                                                requestedHere: requestedHere, progress: progress.fraction, isRunning: true))
+                                                requestedHere: requestedHere, progress: progress.fraction, isRunning: true,
+                                                mac: progress.device?.name, brief: verb + percent))
             case .requested(.device(let request)):
                 waiting.append((request.createdAt, StatusQueueEntry(id: meeting.id, title: meeting.title, line: "Waiting",
                                                                     requestedHere: request.requestedBy.id == thisDevice,
@@ -337,7 +454,8 @@ enum StatusSheetModel {
                 let detail = silent ? "The audio is saved." : FriendlyError.message(for: failure.reason, device: failure.device?.name)
                 failed.append(StatusQueueEntry(id: meeting.id, title: meeting.title, line: line, requestedHere: requestedHere,
                                                progress: nil, isRunning: false, failed: true, detail: detail,
-                                               details: failure.reason.isEmpty ? nil : failure.reason))
+                                               details: failure.reason.isEmpty ? nil : failure.reason,
+                                               mac: silent ? nil : failure.device?.name, brief: silent ? nil : "Couldn’t finish"))
             default:
                 break
             }

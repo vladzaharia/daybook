@@ -26,6 +26,7 @@ import Foundation
 ///     --open-latest              open the newest conversation's page
 ///     --library <path>           use this folder as the library
 ///     --status-detent compact|medium|large   open the status sheet (or the notebook's status panel) at this size
+///     --status-scroll-end        the status sheet's content scrolled to its foot
 ///     --handoff-demo <state>     with --device-simulator --device-autopilot: a recorder handoff state for screenshots
 ///                                (managed, asking, finishing, waiting, overdue, refused, connecting, done, handing)
 ///     --demo-live-captions       with --device-simulator --device-autopilot: the recorder records and streams scripted captions
@@ -55,6 +56,7 @@ struct LaunchOptions {
     var openLatest = false
     var libraryPath: String?
     var statusDetent: StatusDetent?
+    var statusScrollEnd = false
     var handoffDemo: String?
     var demoLiveCaptions = false
     /// Hosted unit tests: no recovery, no Live Activities, an inert UI.
@@ -90,6 +92,7 @@ struct LaunchOptions {
         importFile = Self.value(after: "--import-file", in: arguments)
         libraryPath = Self.value(after: "--library", in: arguments)
         statusDetent = Self.value(after: "--status-detent", in: arguments).flatMap(StatusDetent.init(rawValue:))
+        statusScrollEnd = arguments.contains("--status-scroll-end")
         handoffDemo = Self.value(after: "--handoff-demo", in: arguments)
         demoLiveCaptions = arguments.contains("--demo-live-captions")
         if arguments.contains("--open-settings") {
