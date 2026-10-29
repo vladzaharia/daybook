@@ -61,8 +61,8 @@ bookmarks on a recording (`alignedTime`) stay correct; the fused reports carry t
 ## Multipoint recording
 
 When this Mac starts recording (by hand or automatically), every configured recorder with record
-control whose direct method is set up and on, and whose **Also record on <device> when this Mac
-records** preference is on (the default), starts too:
+control whose direct method is set up and on, and whose **Record along with this Mac** preference
+is on (the default), starts too:
 
 1. A `CompanionRecording` link is stored on the conversation right away (`starting`).
 2. Daybook connects if needed (giving up when the connection does, or after 20 s): out of range →
@@ -232,8 +232,8 @@ and the phone's status sheet, for up to 20 minutes past when it was known. A pho
 by a call is still its recording on the Mac (Paused, and Stop on iPhone ends it).
 
 **This Mac records, and asks the phone.** When this Mac starts recording (by hand or
-automatically), each paired phone that is connected and whose **Also record on <iPhone> when this
-Mac records** is on (the default) is asked to record the same conversation. The request carries the
+automatically), each paired phone that is connected and whose **Record along with this Mac** is on
+(the default) is asked to record the same conversation. The request carries the
 conversation's title and date (so a phone it hasn't synced to makes the same record), this Mac's
 start, where the conversation's timeline began (earlier than this Mac's start when it records into a
 conversation that already had recordings) and how much of it has passed, and its estimate of the
@@ -269,7 +269,7 @@ start and the clock estimate, rather than asking it back. It refuses with a reas
 recording another conversation (`recordingSomethingElse`, naming it), starting or stopping
 (`busy`), or isn't allowed the microphone (`permissionDenied`; an undecided permission is refused
 too, since nobody may be at the Mac to answer the prompt). A phone that asks on its own (a cascading
-start, below) is declined when this Mac's **Also record on <iPhone>** for it is off: "Recording along
+start, below) is declined when this Mac's **Record along with this Mac** for it is off: "Recording along
 with Alex's iPhone is turned off on this Mac." The phone may stop a recording it asked for, or one it
 records along with (below), not one started on the Mac without it (`declined`); it stops each Mac it started when it stops, including
 one still being asked and one whose answer never came, and owes a stop that didn't arrive until that
@@ -331,8 +331,8 @@ conversation ID, however many ways it's asked.
 
 **Asked on its own.** The request a starting device sends carries `cascade` (what started it: the
 person, a recorder's button, a detected meeting, or another device), so the receiver joins the same
-conversation, says why, and never takes it for a conversation of its own. The Mac's **Also record on
-<iPhone> when this Mac records** decides both ways (on by default): off, a phone's cascading start is
+conversation, says why, and never takes it for a conversation of its own. The Mac's **Record along
+with this Mac** for the phone decides both ways (on by default): off, a phone's cascading start is
 declined, while a start the person chose for that Mac still records. The phone asks every Mac
 connected when it starts, and one that connects within the next minute (the link can take a moment
 to come back as the app comes forward); "Record on Studio Mac too" still asks one that connects later.
@@ -454,7 +454,8 @@ both record the conversation and list `sharedNotes`.
 
 | Preference | Default | Where |
 | --- | --- | --- |
-| Also record on <device> when this Mac records | On, for recorders with record control, Daybook on iPhone included. For an iPhone it decides both ways: off, the phone's cascading starts are declined too. On an iPhone, the same setting of a recorder it manages says whether it records along with the phone (and so whether the phone holds its link) | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); Settings › Devices |
+| Record along with this Mac | On, for recorders with record control, Daybook on iPhone included. For an iPhone it decides both ways: off, the phone's cascading starts are declined too | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); Settings › Devices |
+| Record Along with This iPhone (per recorder, on the iPhone) | On, for a recorder with record control the iPhone manages: whether it records along with the phone, its button starts the phone, and the phone holds its link for that | `ConfiguredDevice.alsoRecordsWithMac` (nil = on); the recorder's page |
 | Can Start Recording (per Mac, on the iPhone) | On when the Mac is paired | `PhoneSettings.macMayStartRecording`; Settings › Macs › <Mac> |
 | Add imported files to conversations they overlap | Off | `matchesImportedFilesToConversations`; Settings › General |
 

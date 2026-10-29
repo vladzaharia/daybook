@@ -148,7 +148,7 @@ private struct DeviceSettingsSection: View {
             .padding(.leading, Space.s5)
             .disabled(!direct.isSetUp || !session.device.isEnabled(.direct))
         if direct.capabilities.contains(.recordControl) {
-            Toggle("Also record on \(session.device.name) when this Mac records",
+            Toggle("Record along with this Mac",
                    isOn: Binding(get: { session.device.recordsAlongsideMac }, set: { on in session.update { $0.alsoRecordsWithMac = on } }))
                 .controlSize(.regular)
                 .padding(.leading, Space.s5)
@@ -257,7 +257,7 @@ private struct PhoneSettingsRows: View {
                 }
             }
         }
-        Toggle("Also record on \(session.device.name) when this Mac records",
+        Toggle("Record along with this Mac",
                isOn: Binding(get: { session.device.recordsAlongsideMac }, set: { on in session.update { $0.alsoRecordsWithMac = on } }))
             .controlSize(.regular)
             .padding(.leading, Space.s5)

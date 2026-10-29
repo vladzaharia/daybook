@@ -144,7 +144,7 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .stopped)
         XCTAssertEqual(rig.state.sources.recorders.status, "\(PhoneLinkRig.phoneName) stopped. Its recording will be added here.")
 
-        // "Also record on <iPhone>" off: the phone isn't asked.
+        // "Record along with this Mac" off: the phone isn't asked.
         rig.state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
         let other = macStartsRecording(rig)
         await rig.state.sources.recorders.settle()

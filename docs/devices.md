@@ -383,7 +383,7 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
 - **Device page.** Paired and connected or when last seen, what it's recording now (with Stop on
   iPhone), how recordings arrive, and its recent recordings. The list column shows all of them, as
   they're all in Daybook.
-- **Settings › Devices.** Over Wi‑Fi status, Also record on <iPhone> when this Mac records (both ways:
+- **Settings › Devices.** Over Wi‑Fi status, Record along with this Mac (both ways:
   off, the phone's cascading starts are declined too), how recordings arrive (with a link to sync
   settings when it's off), and Unpair….
 - **Bluetooth ownership** of a Soundcore shared with the phone is a synced device setting, moved
