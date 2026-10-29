@@ -75,8 +75,12 @@ struct VersionHistorySheet: View {
                         let diff = WordDiff.marked(old: RevisionText.readable(revision.oldValue, field: revision.field),
                                                    new: RevisionText.readable(revision.newValue, field: revision.field),
                                                    dark: scheme == .dark)
-                        comparison("Before", diff.old)
-                        comparison("After", diff.new)
+                        if RevisionText.hasBefore(revision) {
+                            comparison("Before", diff.old)
+                            comparison("After", diff.new)
+                        } else {
+                            comparison(nil, diff.new)
+                        }
                     }
                     // The headline lines up with the list's first section header.
                     .padding(.horizontal, Space.s5)
@@ -116,10 +120,10 @@ struct VersionHistorySheet: View {
         .onAppear { selection = revisions.first?.id }
     }
 
-    private func comparison(_ title: String, _ text: AttributedString) -> some View {
+    private func comparison(_ title: String?, _ text: AttributedString) -> some View {
         let empty = text.characters.isEmpty
         return VStack(alignment: .leading, spacing: Space.s2) {
-            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Ink.secondary)
+            if let title { Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Ink.secondary) }
             Group {
                 if empty { Text("Empty").italic().foregroundStyle(.secondary) }
                 else { Text(text).foregroundStyle(Ink.body) }
