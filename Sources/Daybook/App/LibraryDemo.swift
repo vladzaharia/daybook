@@ -42,6 +42,10 @@ enum LibraryDemo {
     static let notesOnly = "Grocery list for the weekend"
     static let older = "Offsite retro"
 
+    /// Filling the library and selecting `--select`'s conversation. Other demos that change the
+    /// place or add conversations wait for it, so they land in the same order every launch.
+    private(set) static var seeding: Task<Void, Never>?
+
     static func apply(to state: AppState) {
         resizeWindow()
         guard isRequested else { return }
@@ -51,7 +55,7 @@ enum LibraryDemo {
         if CommandLine.arguments.contains("--inspector-all") {
             for key in ["inspector.details", "inspector.people", "inspector.audio", "inspector.processing"] { LaunchOptions.defaults.set(true, forKey: key) }
         }
-        Task {
+        seeding = Task {
             if !state.meetings.contains(where: { $0.title == ready }) { await seed(state) }
             if SpeakerProfileDemo.isRequested { await SpeakerProfileDemo.seed(state.library) }
             settle(state)
