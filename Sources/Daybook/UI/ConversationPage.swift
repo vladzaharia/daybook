@@ -276,10 +276,18 @@ struct ConversationStatus: View {
                         .buttonStyle(.daybookLink)
                 }
             case .processing(let progress):
+                // Another device's work reads like this Mac's: its bar and percent once it reports one.
                 line(symbol: nil) {
-                    ProgressView().controlSize(.small)
-                    Text("\(progress.stage == .summarizing ? "Summarizing" : "Transcribing") on \(progress.device?.name ?? "another device")"
-                         + (progress.fraction.map { " · \(Int($0 * 100))%" } ?? ""))
+                    let verb = progress.stage == .summarizing ? "Summarizing" : "Transcribing"
+                    let device = progress.device?.name ?? "another device"
+                    if let fraction = progress.fraction {
+                        Text("\(verb) on \(device)")
+                        ProgressView(value: fraction).progressViewStyle(.brand(width: 140))
+                        Text("\(Int(fraction * 100))%").monospacedDigit()
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text("\(verb) on \(device)…")
+                    }
                 }
             case .requested(.queued(let position, _)):
                 line(symbol: "clock") {
