@@ -7,7 +7,7 @@ import UIKit
 struct VersionHistoryView: View {
     @ObservedObject var library: LibraryController
     let meetingID: UUID
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
 
     var body: some View {
         NavigationStack {
@@ -155,7 +155,7 @@ struct PassageCorrectionSheet: View {
     @ObservedObject var library: LibraryController
     let meetingID: UUID
     let segmentID: UUID
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @State private var draft = ""
     @FocusState private var focused: Bool
 
@@ -211,7 +211,7 @@ struct HeardInSheet: View {
     @ObservedObject var library: LibraryController
     let meetingID: UUID
     let segmentID: UUID
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
 
@@ -255,12 +255,11 @@ struct HeardInSheet: View {
     }
 }
 
-/// A Mac's own words about a failure.
 /// The words behind a plain message: a Mac's own reason for a failure, or the system's error.
 struct DetailsSheet: View {
     var title = "What Your Mac Said"
     let text: String
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
 
     var body: some View {
         NavigationStack {
@@ -287,6 +286,22 @@ struct ShareSheet: UIViewControllerRepresentable {
         return controller
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+extension EnvironmentValues {
+    /// Set while a reading sheet shows on the notebook's right page rather than presented: closes it.
+    @Entry var closePageSheet: (() -> Void)? = nil
+}
+
+/// Closes a reading sheet however it shows: presented (dismiss), or on the notebook's right page.
+struct SheetDismiss: DynamicProperty {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.isPresented) private var isPresented
+    @Environment(\.closePageSheet) private var closePageSheet
+
+    func callAsFunction() {
+        if !isPresented, let closePageSheet { closePageSheet() } else { dismiss() }
+    }
 }
 
 /// Presents whichever sheet the reading session asks for.

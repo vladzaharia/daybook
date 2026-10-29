@@ -76,7 +76,7 @@ struct TrashList: View {
 struct MoveSheet: View {
     @ObservedObject var library: LibraryController
     let ids: [UUID]
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
     @State private var newFolder = ""
     @FocusState private var naming: Bool
@@ -143,7 +143,7 @@ struct MoveSheet: View {
 struct TagsSheet: View {
     @ObservedObject var library: LibraryController
     let ids: [UUID]
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
     @State private var newTag = ""
 

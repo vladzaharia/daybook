@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 struct ImportPhotosSheet: View {
     @ObservedObject var library: LibraryController
     let meetingID: UUID
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @State private var selection: [PhotosPickerItem] = []
     @State private var choosingFiles = false
     @State private var importing = false
@@ -188,7 +188,7 @@ struct PhotoViewer: View {
     @State var photoID: UUID
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
-    @Environment(\.dismiss) private var dismiss
+    private let dismiss = SheetDismiss()
     @State private var caption = ""
     @State private var failure: String?
     @State private var confirmingDelete = false
