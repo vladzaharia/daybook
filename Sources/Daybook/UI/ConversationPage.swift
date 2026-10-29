@@ -126,7 +126,8 @@ struct PageHeader: View {
                     .font(TypeStyle.docTitle(scale))
                     .foregroundStyle(Ink.title)
                     .textFieldStyle(.plain)
-                    .lineLimit(1...2)
+                    // A long title wraps rather than being cut off mid-sentence.
+                    .lineLimit(1...4)
                     .focused($titleFocused)
                     .accessibilityLabel("Title")
                     .onAppear { focusTitleIfRequested() }
@@ -141,7 +142,20 @@ struct PageHeader: View {
         DispatchQueue.main.async { titleFocused = true; state.titleFocusRequest = nil }
     }
 
+    /// In a narrow column the byline gives up the month's full name, then the people, rather than
+    /// cutting the date short.
     private var byline: some View {
+        ViewThatFits(in: .horizontal) {
+            bylineRow(month: .wide, people: true)
+            bylineRow(month: .abbreviated, people: true)
+            bylineRow(month: .abbreviated, people: false)
+        }
+        .font(TypeStyle.byline(scale))
+        .foregroundStyle(Ink.secondary)
+        .lineLimit(1)
+    }
+
+    private func bylineRow(month: Date.FormatStyle.Symbol.Month, people showsPeople: Bool) -> some View {
         HStack(spacing: 0) {
             if isRecording {
                 Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(Ink.record)
@@ -157,17 +171,14 @@ struct PageHeader: View {
                 Text("Notes only")
                 separator
             }
-            Text(meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(.wide).hour().minute()))
-            if let people = meeting.peopleLine, !isRecording {
+            Text(meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(month).hour().minute()))
+            if showsPeople, let people = meeting.peopleLine, !isRecording {
                 separator
                 Button { inspectorPresented = true } label: { HoverLink(rest: Ink.secondary) { Text(people) } }
                     .buttonStyle(.plain)
                     .help("Show the people in this conversation")
             }
         }
-        .font(TypeStyle.byline(scale))
-        .foregroundStyle(Ink.secondary)
-        .lineLimit(1)
     }
 
     private var separator: some View { Text(" · ").foregroundStyle(Ink.meta).padding(.horizontal, 4) }
