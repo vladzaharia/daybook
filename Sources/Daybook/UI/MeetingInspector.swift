@@ -19,9 +19,14 @@ struct MeetingInspector: View {
         if let meeting {
             Form {
                 Section("Details", isExpanded: $detailsExpanded) { details(meeting) }
-                Section("People", isExpanded: $peopleExpanded) { people(meeting) }
+                // Notes alone have no speakers and nothing processed: those sections wait for audio.
+                if !meeting.tracks.isEmpty || !meeting.speakers.isEmpty {
+                    Section("People", isExpanded: $peopleExpanded) { people(meeting) }
+                }
                 Section("Audio", isExpanded: $audioExpanded) { audio(meeting) }
-                Section("Processing", isExpanded: $processingExpanded) { processing(meeting) }
+                if !meeting.tracks.isEmpty || !meeting.revisions.isEmpty {
+                    Section("Processing", isExpanded: $processingExpanded) { processing(meeting) }
+                }
             }
             .formStyle(.grouped)
             .controlSize(.small)
@@ -103,7 +108,7 @@ struct MeetingInspector: View {
         ForEach(meeting.tracks) { track in
             AudioRow(state: state, meeting: meeting, track: track)
         }
-        if meeting.tracks.isEmpty { Text("No recordings yet.").foregroundStyle(.secondary) }
+        if meeting.tracks.isEmpty { Text("No recordings yet").foregroundStyle(.secondary) }
         SourceHooks(state: state, meeting: meeting)
         Menu("Add Recording") {
             Button("From a File…") { state.chooseImport(attachTo: meeting.id) }
@@ -121,15 +126,20 @@ struct MeetingInspector: View {
             LabeledContent("Transcribed", value: state.modelCatalog.name(for: run.modelID, provenance: run.processingSettings?.model))
                 .help(run.createdAt.formatted(date: .abbreviated, time: .shortened))
         }
-        LabeledContent("Speakers", value: speakerModel(meeting) ?? "Not identified")
+        // Which model found the speakers; "Not identified" only for a transcript that has none.
+        if let model = speakerModel(meeting) {
+            LabeledContent("Speakers", value: model)
+        } else if !meeting.transcripts.isEmpty && meeting.speakers.isEmpty {
+            LabeledContent("Speakers", value: "Not identified")
+        }
         if let summary = meeting.summary {
             LabeledContent("Summary", value: state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))
                 .help(summary.createdAt.formatted(date: .abbreviated, time: .shortened))
         }
         HStack {
-            ReprocessMenu(state: state, meeting: meeting).fixedSize()
+            if !meeting.tracks.isEmpty { ReprocessMenu(state: state, meeting: meeting).fixedSize() }
             Spacer()
-            Button("Version History…") { state.activeSheet = .versionHistory }.disabled(meeting.revisions.isEmpty)
+            if !meeting.revisions.isEmpty { Button("Version History…") { state.activeSheet = .versionHistory } }
         }
     }
 

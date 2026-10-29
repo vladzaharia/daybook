@@ -1,10 +1,10 @@
 import DaybookCore
 import SwiftUI
 
-/// Unstyled hooks for several recordings of one conversation, shown in the inspector's Audio
-/// section: a recorder recording alongside this Mac, and a recording that may belong with another
-/// conversation, to confirm or dismiss. The state and actions live in `AppState+Sources`; the
-/// interface is to be designed.
+/// Several recordings of one conversation, in the inspector's Audio section under its recordings:
+/// a recorder's recording still to come, and a recording that may belong with another
+/// conversation, to confirm or dismiss. Each is laid out like a recording row. The state and
+/// actions live in `AppState+Sources`.
 struct SourceHooks: View {
     @ObservedObject var state: AppState
     let meeting: Meeting
@@ -12,23 +12,42 @@ struct SourceHooks: View {
     var body: some View {
         ForEach(meeting.companions ?? []) { link in
             if let line = Self.companionLine(link, recordingNow: state.recordingID == meeting.id) {
-                Text(line).font(.caption).foregroundStyle(.secondary)
+                // Laid out like a recording row (glyph column, then words), since it is one to come.
+                row(symbol: "clock") { Text(line).foregroundStyle(.secondary) }
             }
         }
         ForEach(meeting.sourceSuggestions ?? []) { suggestion in
-            VStack(alignment: .leading, spacing: 4) {
-                Text(Self.suggestionLine(suggestion, titles: titles(suggestion))).font(.caption)
-                HStack {
-                    ForEach(suggestion.candidateMeetingIDs.filter { id in state.meetings.contains { $0.id == id } }, id: \.self) { target in
-                        Button("Add to “\(title(target))”") {
-                            Task { await state.confirmSourceSuggestion(suggestion.id, in: meeting.id, into: target) }
-                        }
-                        .disabled(state.processingID == meeting.id || state.processingID == target || state.recordingID == meeting.id)
+            row(symbol: "questionmark.circle") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(Self.suggestionLine(suggestion, titles: titles(suggestion)))
+                        .fixedSize(horizontal: false, vertical: true)
+                    // The buttons share a line when their titles fit, else each takes its own.
+                    ViewThatFits(in: .horizontal) {
+                        HStack { buttons(suggestion) }
+                        VStack(alignment: .leading, spacing: 6) { buttons(suggestion) }
                     }
-                    Button("Keep Separate") { state.dismissSourceSuggestion(suggestion.id, in: meeting.id) }
                 }
             }
         }
+    }
+
+    private func row(symbol: String, @ViewBuilder _ content: () -> some View) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 16)
+            content().frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder private func buttons(_ suggestion: SourceSuggestion) -> some View {
+        let targets = suggestion.candidateMeetingIDs.filter { id in state.meetings.contains { $0.id == id } }
+        ForEach(targets, id: \.self) { target in
+            // The sentence above names a single conversation, so its button needn't repeat (and truncate) it.
+            Button(targets.count == 1 ? "Move There" : "Add to “\(title(target))”") {
+                Task { await state.confirmSourceSuggestion(suggestion.id, in: meeting.id, into: target) }
+            }
+            .disabled(state.processingID == meeting.id || state.processingID == target || state.recordingID == meeting.id)
+        }
+        Button("Keep Separate") { state.dismissSourceSuggestion(suggestion.id, in: meeting.id) }
     }
 
     private func title(_ id: UUID) -> String { state.meetings.first { $0.id == id }?.title ?? "Conversation" }
