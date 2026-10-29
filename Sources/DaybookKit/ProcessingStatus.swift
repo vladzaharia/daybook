@@ -206,18 +206,35 @@ extension Meeting {
         }
     }
 
-    /// The conversation holds a recording from the link's device that it was waiting for: by its
-    /// recording ID when the device reported one, otherwise one from that device that started after
-    /// this Mac did.
-    private func hasRecording(fulfilling link: CompanionRecording) -> Bool {
-        tracks.contains { track in
-            guard track.deviceKind == link.deviceKind else { return false }
-            if let a = link.deviceSerial, let b = track.deviceSerial, !a.isEmpty, !b.isEmpty, a != b { return false }
-            if let id = link.recordingID, let recording = track.deviceRecordingID {
-                return recording == id || recording.hasPrefix(id)
+    /// A recording this conversation was waiting for has arrived and isn't added yet: a multipoint
+    /// link that recorded (or may have), not yet attached, and an untranscribed recording of that
+    /// device's here that it was waiting for, within `AwaitedRecording.lifetime`. A Mac adds it
+    /// whatever "Transcribe synced recordings" says: it completes a recording made with a Mac, whose
+    /// own audio was processed straight away (docs/multipoint.md, "Mac first").
+    public func hasAwaitedRecordingToAdd(now: Date = Date()) -> Bool {
+        (companions ?? []).contains { link in
+            guard link.expectsRecording, link.trackID == nil else { return false }
+            guard now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) <= AwaitedRecording.lifetime else { return false }
+            return tracks.contains { track in
+                Self.track(track, fulfills: link) && !transcripts.contains { $0.trackID == track.id }
             }
-            return (track.startedAt ?? track.createdAt) >= link.macStartedAt.addingTimeInterval(-120)
         }
+    }
+
+    /// The conversation holds a recording from the link's device that it was waiting for.
+    private func hasRecording(fulfilling link: CompanionRecording) -> Bool {
+        tracks.contains { Self.track($0, fulfills: link) }
+    }
+
+    /// A recording from the link's device that it was waiting for: by its recording ID when the
+    /// device reported one, otherwise one from that device that started after this Mac did.
+    private static func track(_ track: RecordingTrack, fulfills link: CompanionRecording) -> Bool {
+        guard track.deviceKind == link.deviceKind else { return false }
+        if let a = link.deviceSerial, let b = track.deviceSerial, !a.isEmpty, !b.isEmpty, a != b { return false }
+        if let id = link.recordingID, let recording = track.deviceRecordingID {
+            return recording == id || recording.hasPrefix(id)
+        }
+        return (track.startedAt ?? track.createdAt) >= link.macStartedAt.addingTimeInterval(-120)
     }
 }
 
