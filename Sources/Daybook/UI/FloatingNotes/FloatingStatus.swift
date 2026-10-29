@@ -5,8 +5,8 @@ import DaybookKit
 import Foundation
 
 // What Floating Notes says about the recording and everything around it (docs/interface.md,
-// "Floating Notes"): the status bar's phase and chips, the home's status lines, and the multipoint
-// line under the clock. Plain values from plain inputs, as the iPhone's status sheet does it
+// "Floating Notes"): the status bar's phase and chips, and the home's status lines. Plain values
+// from plain inputs, as the iPhone's status sheet does it
 // (`StatusSheetModel`), so tests read exactly what each state says and the views only draw it.
 
 /// The facts the panel's status is built from, gathered from the app (`FloatingStatusInputs.make`).
@@ -276,8 +276,9 @@ enum FloatingStatus {
         if recording, let along = phone.along {
             switch along {
             case .recording, .alreadyRecording, .stopping:
+                // The chip is where a recording along shows, so a pause names the phone.
                 if phone.activity == .paused {
-                    return chip("Paused", short: "Paused", .attention, detail: "\(name) paused. This Mac keeps recording.")
+                    return chip("\(name) paused", short: "Paused", .attention, detail: "\(name) paused. This Mac keeps recording.")
                 }
                 return chip(name, .linked, dot: true, detail: "\(name) is recording too")
             case .starting:
@@ -291,7 +292,7 @@ enum FloatingStatus {
         guard phone.isConnected else { return nil }
         switch phone.activity {
         case .recording: return chip(name, .linked, dot: true, detail: "\(name) is recording")
-        case .paused: return chip("Paused", short: "Paused", .calm, detail: "\(name) paused its recording")
+        case .paused: return chip("\(name) paused", short: "Paused", .calm, detail: "\(name) paused its recording")
         case .idle: return chip(name, short: nil, .linked, detail: "\(name) · Connected")
         }
     }
@@ -413,29 +414,5 @@ enum FloatingStatus {
             if queue.waiting > 0 { return line("\(queue.waiting) waiting to transcribe", .calm, short: "\(queue.waiting) waiting") }
             return line("Waiting for models", .attention)
         }
-    }
-
-    // MARK: Multipoint
-
-    /// Under the clock while recording, as on iPhone: what records this conversation besides this
-    /// Mac ("Also recording on Alex’s iPhone and Soundcore Work"), and an iPhone that paused.
-    static func multipoint(_ inputs: FloatingStatusInputs) -> [StatusLineItem] {
-        guard inputs.phase == .recording else { return [] }
-        let recordingAlong: Set<CompanionRecording.State> = [.recording, .alreadyRecording, .stopping]
-        let phones = inputs.phones.filter { $0.along.map(recordingAlong.contains) == true }
-        let paused = phones.filter { $0.activity == .paused }
-        let names = phones.filter { $0.activity != .paused }.map(\.name)
-            + inputs.recorders.filter { $0.along.map(recordingAlong.contains) == true }.map(\.shortName)
-        var lines: [StatusLineItem] = []
-        if !names.isEmpty {
-            lines.append(StatusLineItem(id: "along", symbol: phones.isEmpty ? "waveform.badge.microphone" : "macbook.and.iphone",
-                                        title: "", text: "Also recording on \(names.formatted(.list(type: .and)))", tone: .recording))
-        }
-        for phone in paused {
-            lines.append(StatusLineItem(id: "paused-\(phone.id)", symbol: "pause.circle.fill", title: "",
-                                        text: "\(phone.name) paused · This Mac keeps recording", tone: .attention,
-                                        shortText: "\(phone.name) paused"))
-        }
-        return lines
     }
 }
