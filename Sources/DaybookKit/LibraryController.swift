@@ -874,7 +874,8 @@ public final class LibraryController: ObservableObject {
             applied = SyncApplied(before: snapshot, received: result.meetings.map(\.id), acknowledged: false,
                                   changed: result.changedMeetingIDs.union(result.deletedMeetingIDs), published: result.publishedEvents,
                                   hasMoreWork: result.hasMoreWork, notLocalAudio: result.notLocalAudio)
-            if !mergeWarnings.isEmpty { notice = Array(Set(mergeWarnings)).sorted().joined(separator: "\n") }
+            // The plain sentences; the system's words are behind Details in Settings › Library.
+            if !mergeWarnings.isEmpty { notice = Array(Set(mergeWarnings.map { SyncWarningWords.split($0).text })).sorted().joined(separator: "\n") }
             // What this pass saved must be durable before it's acknowledged: what it received, changed, or
             // deleted, conversations kept from a deletion (new IDs), and the library settings. An unrelated
             // conversation's failed save doesn't hold the pass back.

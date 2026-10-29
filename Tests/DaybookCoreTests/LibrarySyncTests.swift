@@ -458,7 +458,9 @@ final class LibrarySyncTests: XCTestCase {
         let modified = Data("externally modified recording".utf8); try modified.write(to: original)
         let repaired = try await b.synchronize(meetings: first.meetings)
         XCTAssertEqual(try Data(contentsOf: original), bytes)
-        XCTAssertTrue(repaired.warnings.contains { $0.contains("preserved") })
+        // One plain sentence; where the changed copy went is behind Details.
+        let kept = try XCTUnwrap(repaired.warnings.map(SyncWarningWords.split).first { $0.text == SyncWarningWords.keptBothRecordings + "." })
+        XCTAssertTrue(kept.details?.contains("SyncConflicts") == true)
         let conflicts = local("B").appendingPathComponent("Meetings/\(meeting.id)/SyncConflicts")
         let saved = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: conflicts, includingPropertiesForKeys: nil).first)
         XCTAssertEqual(try Data(contentsOf: saved), modified)

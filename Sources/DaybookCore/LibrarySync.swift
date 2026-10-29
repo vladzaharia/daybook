@@ -982,11 +982,12 @@ public actor LibrarySyncEngine {
         if error is SyncHashMismatch { return false }
         return error is DecodingError || error is LibrarySyncError || error is LibraryError
     }
-    private func markUnreadable(_ name: String, _ error: Error) -> String {
+    func markUnreadable(_ name: String, _ error: Error) -> String {
         let reason: String
         switch error {
         case LibrarySyncError.unsupportedVersion, is DecodingError: reason = "Some changes were made with a newer version of Daybook. Update Daybook to see them."
-        default: reason = error.localizedDescription
+        // A plain sentence, the entry's name and what's wrong with it behind Details.
+        default: reason = SyncWarningWords.compose(SyncWarningWords.damagedHistory, details: error.localizedDescription)
         }
         unreadableJournal[name] = reason
         return reason
@@ -1185,7 +1186,7 @@ public actor LibrarySyncEngine {
             let oldHash = try SyncDigest.sha256(fileURL: destination)
             let saved = conflict.appendingPathComponent("\(oldHash)-\(destination.lastPathComponent)")
             if !fm.fileExists(atPath: saved.path) { try fm.copyItem(at: destination, to: saved) }
-            warnings.append("An existing original differed from its sync object and was preserved at \(saved.path).")
+            warnings.append(SyncWarningWords.compose(SyncWarningWords.keptBothRecordings, details: "The one that was here is kept at \(saved.path)."))
             try fm.removeItem(at: destination)
         }
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
