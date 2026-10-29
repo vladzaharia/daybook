@@ -84,6 +84,10 @@ enum LibraryDemo {
         // models, and synced requests stay for another Mac. A queue that never starts keeps it so.
         state.processSyncedAudio = false
         state.installedModels = Set(state.routedRequiredModelIDs)
+        // The launch's own look at the models folder can land after this; say it again.
+        for delay in [1.0, 2.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { state.installedModels = Set(state.routedRequiredModelIDs) }
+        }
         state.processingTask = Task { try? await Task.sleep(for: .seconds(86_400)) }
         func id(_ title: String) -> UUID? { state.meetings.first { $0.title == title }?.id }
         // A Floating Notes scenario (`--notes-demo`) sets what this Mac is processing itself.
