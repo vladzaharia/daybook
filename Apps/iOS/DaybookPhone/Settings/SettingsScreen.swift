@@ -16,11 +16,14 @@ enum SettingsRoute: Hashable {
     case templates
     case template(String)
     case vocabulary
+    case speakerProfiles
+    case speakerProfile(UUID)
     case about
     case acknowledgements
 }
 
-/// Settings: iCloud, your Macs, recorders, recording, storage, models, templates and vocabulary, and About.
+/// Settings: iCloud, your Macs, recorders, recording, storage, models, templates, vocabulary, and
+/// speaker profiles, and About.
 /// `LibraryBrowser` presents it (`settingsSheet`). In the hand it's one column of pushed screens; on
 /// the open iPhone Duo, two pages: the list on the left, the chosen screen on the right.
 struct SettingsScreen: View {
@@ -110,6 +113,10 @@ struct SettingsScreen: View {
                 SettingsLink(route: .vocabulary) {
                     SettingsRow(title: "Vocabulary", detail: vocabularySummary, systemImage: "character.book.closed")
                 }
+                SettingsLink(route: .speakerProfiles) {
+                    SettingsRow(title: "Speaker Profiles", detail: SpeakerProfilesScreen.summary(model.library.controller.speakerProfiles.count),
+                                systemImage: "person.wave.2")
+                }
             } header: {
                 Text("Library")
             }
@@ -171,11 +178,16 @@ struct SettingsScreen: View {
         case "templates": path = [.templates]
         case "template": path = [.templates, .template("general")]
         case "vocabulary", "add-term": path = [.vocabulary]
+        case "speaker-profiles": path = [.speakerProfiles]
         case "recording": path = [.recording]
         case "library-devices": path = [.icloud, .libraryDevices]
         case "about": path = [.about]
         case "acknowledgements": path = [.about, .acknowledgements]
-        default: break
+        default:
+            if screen.hasPrefix("speaker-profile:"),
+               let profile = model.library.controller.speakerProfiles.first(where: { $0.name == screen.dropFirst("speaker-profile:".count) }) {
+                path = [.speakerProfiles, .speakerProfile(profile.id)]
+            }
         }
     }
 }
@@ -207,6 +219,8 @@ struct SettingsDestination: View {
         case .templates: TemplatesScreen()
         case .template(let id): TemplateEditor(templateID: id)
         case .vocabulary: VocabularyScreen()
+        case .speakerProfiles: SpeakerProfilesScreen()
+        case .speakerProfile(let id): SpeakerProfileScreen(profileID: id)
         case .about: AboutScreen()
         case .acknowledgements: AcknowledgementsScreen()
         }
