@@ -176,6 +176,8 @@ final class AppState: ObservableObject {
     /// Live captions while this Mac records (You and Call), and their setting and language.
     let captions: LiveCaptionsController
     let captionSettings: LiveCaptionSettings
+    /// Live transcription from local models, when they're downloaded (Captions/MacLiveModels.swift).
+    let liveModels: MacLiveModels
     let monitor = MeetingMonitor()
     let storageURL: URL
     private let preferences: UserDefaults
@@ -267,6 +269,7 @@ final class AppState: ObservableObject {
         runtime = LocalIntelligenceRuntime(modelsDirectory: libraryURL.appendingPathComponent("Models"), fetcher: ModelDemo.fetcher)
         let captionSettings = LiveCaptionSettings(defaults: defaults)
         self.captionSettings = captionSettings
+        liveModels = MacLiveModels(store: runtime.store)
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: libraryURL),
                                           makeCaptioner: MacCaptioners.recordingFactory(settings: captionSettings))
         // Only what nearly every view reads through this object is forwarded: the library, and the
@@ -443,12 +446,19 @@ final class AppState: ObservableObject {
                     if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: "modelSelections") }
                 }
             }
+            // Live transcription's roles, once, so Settings › Models shows the live models captions would use.
+            if !defaults.bool(forKey: "modelSelections.liveAdded") {
+                defaults.set(true, forKey: "modelSelections.liveAdded")
+                stored = LiveModelChoices.addingDefaults(to: stored, platform: .macOS)
+                if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: "modelSelections") }
+            }
             return stored
         }
         let migrated = ModelSelections.migrating(
             legacy: [.transcription: defaults.string(forKey: "transcriptionModel"), .summarization: defaults.string(forKey: "summaryModel"),
                      .diarization: speakerModel],
-            catalog: .builtIn, defaults: ModelRecommendations.initialSelections())
+            catalog: .builtIn, defaults: LiveModelChoices.addingDefaults(to: ModelRecommendations.initialSelections(), platform: .macOS))
+        defaults.set(true, forKey: "modelSelections.liveAdded")
         if let data = try? JSONEncoder().encode(migrated) { defaults.set(data, forKey: "modelSelections") }
         return migrated
     }

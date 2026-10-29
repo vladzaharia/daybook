@@ -14,18 +14,23 @@ extension LiveCaptionSource {
     }
 }
 
-/// A source's run of consecutive captions, read like a turn in the transcript.
+/// A run of consecutive captions from one source and voice, read like a turn in the transcript.
 struct LiveCaptionTurn: Identifiable, Equatable {
     var source: LiveCaptionSource?
+    /// The voice live speakers heard ("S2"), and its name when it matched someone's voice profile.
+    var speaker: LiveCaptionSpeaker?
     var segments: [LiveCaptionSegment]
     var id: UUID { segments[0].id }
     var start: TimeInterval { segments[0].start }
+    /// The person when live speakers named them, else the source ("You", "Call").
+    var label: String { speaker?.name ?? source?.label ?? "Captions" }
 
     static func turns(_ segments: [LiveCaptionSegment]) -> [LiveCaptionTurn] {
         var turns: [LiveCaptionTurn] = []
         for segment in segments where !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let last = turns.last, last.source == segment.source { turns[turns.count - 1].segments.append(segment) }
-            else { turns.append(LiveCaptionTurn(source: segment.source, segments: [segment])) }
+            if let last = turns.last, last.source == segment.source, last.speaker?.slot == segment.speaker?.slot,
+               last.speaker?.name == segment.speaker?.name { turns[turns.count - 1].segments.append(segment) }
+            else { turns.append(LiveCaptionTurn(source: segment.source, speaker: segment.speaker, segments: [segment])) }
         }
         return turns
     }
@@ -122,7 +127,7 @@ private struct CaptionTurnView: View {
                     Text(TimeLabel.short(turn.start)).font(TypeStyle.margin(scale)).foregroundStyle(Ink.meta)
                 }
             } content: {
-                Text(turn.source?.label ?? "Captions").font(TypeStyle.speaker(scale)).foregroundStyle(Ink.secondary)
+                Text(turn.label).font(TypeStyle.speaker(scale)).foregroundStyle(Ink.secondary)
             }
             ForEach(turn.segments) { segment in
                 MarginRow {
@@ -136,7 +141,7 @@ private struct CaptionTurnView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(turn.source?.label ?? "Captions")\(showsTime ? " at \(SpokenTime.format(turn.start))" : ""), tentative: \(turn.segments.map(\.text).joined(separator: " "))")
+        .accessibilityLabel("\(turn.label)\(showsTime ? " at \(SpokenTime.format(turn.start))" : ""), tentative: \(turn.segments.map(\.text).joined(separator: " "))")
     }
 }
 

@@ -171,7 +171,7 @@ private struct PanelCaptions: View {
 
     var body: some View {
         let segments = captions.state == .listening ? captions.recent(compact ? 1 : 2) : []
-        LiveCaptionStrip(lines: segments.map { CaptionLine(id: $0.id, text: $0.text, isTentative: $0.isTentative, source: $0.source?.label) },
+        LiveCaptionStrip(lines: segments.map { CaptionLine(id: $0.id, text: $0.text, isTentative: $0.isTentative, source: $0.source?.label, speaker: $0.speaker?.name) },
                          status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
                          style: compact ? .panelCompact : .panel)
             .padding(.leading, FloatingLayout.inset)

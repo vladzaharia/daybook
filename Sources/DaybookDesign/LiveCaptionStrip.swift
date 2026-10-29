@@ -8,12 +8,15 @@ public struct CaptionLine: Identifiable, Equatable, Sendable {
     public var isTentative: Bool
     /// Who it's from ("You", "Call"), when a strip shows more than one source.
     public var source: String?
+    /// Who said it, when live speakers named the voice ("Priya"); shown before the words, never cut off.
+    public var speaker: String?
 
-    public init(id: UUID, text: String, isTentative: Bool, source: String? = nil) {
+    public init(id: UUID, text: String, isTentative: Bool, source: String? = nil, speaker: String? = nil) {
         self.id = id
         self.text = text
         self.isTentative = isTentative
         self.source = source
+        self.speaker = speaker
     }
 }
 
@@ -118,14 +121,23 @@ public struct LiveCaptionStrip: View {
                     ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                         let newest = index == lines.count - 1
                         row(source: line.source) {
-                            Text(line.text)
-                                .font(.system(size: newest ? style.newestSize : style.olderSize, weight: newest ? style.newestWeight : .regular))
-                                .foregroundStyle(line.isTentative ? DaybookPalette.Ink.meta
-                                                 : newest ? DaybookPalette.Ink.body : DaybookPalette.Ink.secondary)
-                                .lineLimit(newest ? style.newestLineLimit : style.olderLineLimit)
-                                // The newest line keeps its latest words; earlier ones read from their start.
-                                .truncationMode(newest ? .head : .tail)
-                                .fixedSize(horizontal: false, vertical: true)
+                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                                if let speaker = line.speaker {
+                                    Text(speaker)
+                                        .font(.system(size: (newest ? style.newestSize : style.olderSize) * 0.8, weight: .semibold))
+                                        .foregroundStyle(DaybookPalette.Ink.meta)
+                                        .lineLimit(1)
+                                        .fixedSize()
+                                }
+                                Text(line.text)
+                                    .font(.system(size: newest ? style.newestSize : style.olderSize, weight: newest ? style.newestWeight : .regular))
+                                    .foregroundStyle(line.isTentative ? DaybookPalette.Ink.meta
+                                                     : newest ? DaybookPalette.Ink.body : DaybookPalette.Ink.secondary)
+                                    .lineLimit(newest ? style.newestLineLimit : style.olderLineLimit)
+                                    // The newest line keeps its latest words; earlier ones read from their start.
+                                    .truncationMode(newest ? .head : .tail)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .transition(.opacity)
                     }
@@ -136,7 +148,7 @@ public struct LiveCaptionStrip: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
-        .accessibilityValue(lines.last.map { [$0.source, $0.text].compactMap { $0 }.joined(separator: ": ") } ?? status ?? "")
+        .accessibilityValue(lines.last.map { [$0.speaker ?? $0.source, $0.text].compactMap { $0 }.joined(separator: ": ") } ?? status ?? "")
     }
 
     /// Words in the text column; with a source lane, the source right-aligned in it.
