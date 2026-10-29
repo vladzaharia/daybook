@@ -347,6 +347,7 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+        PerfProbe.start()
         switch LaunchOptions.value(after: "--appearance") {
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -431,6 +432,17 @@ private struct DebugLaunchActions: ViewModifier {
             PhotoDemo.apply(to: state)
             LibraryDemo.apply(to: state)
             if let query = LaunchOptions.value(after: "--search") { state.search = query }
+            PerfProbe.stage = { [weak state] in
+                guard let state, let id = state.processingID else { return "idle" }
+                let status = state.meetings.first { $0.id == id }?.status.rawValue ?? ""
+                return "\(status): \(state.processingProgress.message)"
+            }
+            PerfProbe.driveProgress(state.processingActivity)
+            // `DAYBOOK_IMPORT_AUDIO=<file>` imports a recording into a new conversation, which then processes. (A path
+            // among the arguments would be opened as a document, and the window wouldn't open.)
+            if LaunchOptions.libraryURL != nil, let path = ProcessInfo.processInfo.environment["DAYBOOK_IMPORT_AUDIO"] {
+                Task { try? await state.importFiles([URL(fileURLWithPath: path)], source: .imported, attachTo: nil) }
+            }
             // A sheet is for the selected conversation, which the library demo selects once it's seeded.
             if let sheet = LaunchOptions.value(after: "--sheet") {
                 Task {
