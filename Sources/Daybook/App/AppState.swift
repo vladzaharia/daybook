@@ -200,6 +200,15 @@ final class AppState: ObservableObject {
     var phoneProgressSend: Task<Void, Never>?
     /// Recordings this Mac is making because a phone asked, by conversation.
     var phoneLeads: [UUID: CompanionLead] = [:]
+    /// The device whose word is stopping this Mac's recording now (a phone that stopped, or asked this
+    /// Mac to stop), by session ID: it isn't asked to stop in turn.
+    var stopCause: String?
+    /// A recorder whose own button is starting this Mac's recording, by session ID.
+    var pendingRecorderLead: String?
+    /// Notes and bookmarks of this Mac's recording, kept in step with the phones recording it too.
+    let sharedNotes = SharedNotesTracker()
+    var sharedNotesWatch: AnyCancellable?
+    var sharedNotesSend: Task<Void, Never>?
     /// Starts and stops this Mac's capture when a phone asks. Tests replace it: no microphone.
     var phoneCapture = PhoneCapture()
     /// Whether this Mac may use the microphone without asking. Tests replace it.
@@ -208,6 +217,8 @@ final class AppState: ObservableObject {
     private var downloadTask: Task<Void, Never>?
     var subscriptions: Set<AnyCancellable> = []
     private var recordingWasAutomatic = false
+    /// This Mac's recording started on its own (a detected meeting).
+    var recordingWasStartedAutomatically: Bool { recordingWasAutomatic }
     private var captureDirectory: URL?
     private var notesPanel: NotesPanelController?
     /// Bumped whenever the library's conversations change: the key for what's derived from them.
@@ -549,6 +560,11 @@ final class AppState: ObservableObject {
 
     /// While this Mac records the conversation, new paragraphs get the recording's time.
     func editNotes(_ id: UUID, text: String) {
+        // A paragraph a phone wrote a moment ago that the editor hadn't shown yet isn't deleted by it.
+        var text = text
+        if sharedNotes.conversationID == id, let meeting = meetings.first(where: { $0.id == id }) {
+            text = sharedNotes.keepingArrivals(text, anchors: NoteTimeline.anchors(meeting.timedNotes, text: meeting.notes))
+        }
         library.editNotes(id, text: text, captureTime: recordingID == id ? recorder.elapsedTime : nil)
     }
 

@@ -6,8 +6,8 @@ import DaybookKit
 import DaybookLink
 import Foundation
 
-/// Starts and stops this Mac's capture when a phone asks. Nil uses the real recorder; tests supply
-/// their own so nothing touches the microphone.
+/// Starts and stops this Mac's capture when another device asks (a phone, a recorder's button). Nil
+/// uses the real recorder; tests supply their own so nothing touches the microphone.
 struct PhoneCapture {
     /// Records into the conversation; true once recording.
     var start: (@MainActor (UUID) async -> Bool)?
@@ -27,7 +27,8 @@ extension AppState {
         else { id = UUID(); defaults.set(id.uuidString, forKey: "linkDeviceID") }
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         return LinkIdentity(deviceID: id, name: ProcessingRequest.Device.currentName, deviceClass: .mac, appVersion: version,
-                            canProcess: false, features: ["recordControl", "processingProgress", LinkCapabilities.recorderHandoffFeature],
+                            canProcess: false, features: ["recordControl", "processingProgress", LinkCapabilities.recorderHandoffFeature,
+                                                          LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature],
                             syncDeviceID: sync.deviceID)
     }
 
@@ -137,12 +138,11 @@ extension AppState {
             // "I just wrote a request": look now rather than at the next pass.
             Task { await synchronizeLibrary(); pickUpRequests() }
         case .bookmark(let mark):
-            // A bookmark on the phone while this Mac records the same conversation, at this Mac's time.
-            // It keeps the phone's ID, so the phone's own copy, arriving with its recording, is the same bookmark.
-            guard recordingID == mark.conversationID, let start = recordingStartedAt else { return }
-            let clock = phoneLink.peers[phone]?.clock
-            let when = clock?.localDate(fromPeer: mark.createdAt) ?? mark.createdAt
-            library.addBookmark(id: mark.id, in: mark.conversationID, at: max(0, when.timeIntervalSince(start)))
+            phoneBookmarked(mark, from: phone)
+        case .note(let note):
+            phoneWroteNote(note, from: phone)
+        case .bookmarkChange(let change):
+            phoneChangedBookmark(change, from: phone)
         case .recordingState(let state):
             phoneReported(state, from: phone)
         case .processingProgress:
@@ -190,7 +190,8 @@ extension AppState {
     /// phone's stop may never have arrived.
     func phoneReported(_ state: LinkRecordingState, from phone: UUID) {
         guard let id = recordingID, let lead = phoneLeads[id], lead.sessionID == phone.uuidString else { return }
-        guard state.conversationID != id || state.phase == .idle else { return }
+        // Its microphone, or only its recorders (an iPhone in the background), may be what records.
+        guard !state.takesPart(in: id) else { return }
         stopFollowing(id, because: "\(lead.deviceName) stopped recording, so this Mac stopped too.")
     }
 
@@ -208,6 +209,8 @@ extension AppState {
 
     private func stopFollowing(_ id: UUID, because message: String) {
         guard !isStoppingRecording else { return }
+        // The phone it follows has stopped: it isn't asked to stop in turn.
+        stopCause = phoneLeads[id]?.sessionID
         Task {
             if let stop = phoneCapture.stop { await stop(id) } else { await stopRecording(manual: false) }
             notice = message
@@ -272,6 +275,12 @@ extension AppState {
             if recordingID == id {
                 return .accepted(LinkRecordAck(conversationID: id, startedAt: recordingStartedAt, wasAlreadyRecording: true))
             }
+            // A phone that started recording asks every Mac it's connected to (a cascading start); this
+            // Mac's "Record along with" for that phone (on by default) says whether it joins on its own.
+            if request.cascade != nil, devices.session(peer.deviceID.uuidString)?.device.recordsAlongsideMac == false {
+                return .refused(LinkRecordRefusal(reason: .declined,
+                    message: "Recording along with \(devices.session(peer.deviceID.uuidString)?.device.name ?? peer.name) is turned off on this Mac."))
+            }
             if let current = recordingID {
                 return .refused(LinkRecordRefusal(reason: .recordingSomethingElse, message: "This Mac is recording another conversation.", conversationID: current))
             }
@@ -300,7 +309,8 @@ extension AppState {
             }
             phoneLeads[id] = CompanionLead(sessionID: peer.deviceID.uuidString, deviceKind: DaybookPhoneIntegration.id,
                                            deviceName: devices.session(peer.deviceID.uuidString)?.device.name ?? peer.name,
-                                           startedAt: request.timing?.startedAt, clock: clock.map(CompanionClock.init))
+                                           startedAt: request.timing?.startedAt, clock: clock.map(CompanionClock.init),
+                                           recordsItself: request.cascade?.requesterRecords ?? true)
             let started: Bool
             if let start = phoneCapture.start { started = await start(id) }
             else { await startRecording(into: id); started = recordingID == id }
@@ -311,15 +321,27 @@ extension AppState {
             return .accepted(LinkRecordAck(conversationID: id, startedAt: recordingStartedAt))
         case .stop:
             guard recordingID == id else { return .refused(LinkRecordRefusal(reason: .notRecording)) }
-            guard phoneLeads[id]?.sessionID == peer.deviceID.uuidString else {
+            // The phone this Mac records for, or one recording this conversation with it (a cascading stop:
+            // stopping on any device stops the rest).
+            guard phoneLeads[id]?.sessionID == peer.deviceID.uuidString || isRecording(id, with: peer.deviceID.uuidString) else {
                 return .refused(LinkRecordRefusal(reason: .declined, message: "This recording was started on the Mac. Stop it there."))
             }
+            stopCause = peer.deviceID.uuidString
             let end = Date()
             if let stop = phoneCapture.stop { await stop(id) } else { await stopRecording(manual: true) }
             return .accepted(LinkRecordAck(conversationID: id, stoppedAt: end))
         default:
             return .refused(LinkRecordRefusal(reason: .unsupported))
         }
+    }
+
+    /// Whether a phone records this Mac's recording `id` along with it: its link here says so.
+    func isRecording(_ id: UUID, with phoneSession: String) -> Bool {
+        guard let since = recordingStartedAt else { return false }
+        return meetings.first { $0.id == id }?.companions?.contains { link in
+            link.deviceID == phoneSession && link.deviceKind == DaybookPhoneIntegration.id && link.macEndedAt == nil
+                && link.macStartedAt >= since.addingTimeInterval(-1) && [.starting, .recording, .alreadyRecording, .failed].contains(link.state)
+        } == true
     }
 
     // MARK: A phone's recording arrives through sync

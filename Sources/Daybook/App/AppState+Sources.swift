@@ -191,7 +191,9 @@ extension AppState {
                     meeting.highlights.append(Highlight(trackID: track.id, time: mark.time, text: mark.text, duration: mark.duration))
                 }
             }
-            if let link, var links = meeting.companions, let linkIndex = links.firstIndex(where: { $0.id == link.id }) {
+            // A recorder's live audio isn't its recording: the link waits for the recorder's own file
+            // (and stays stoppable meanwhile).
+            if let link, !track.isLivePortion, var links = meeting.companions, let linkIndex = links.firstIndex(where: { $0.id == link.id }) {
                 links[linkIndex].state = .attached
                 links[linkIndex].trackID = track.id
                 links[linkIndex].recordingID = links[linkIndex].recordingID ?? device.map(Self.fullRecording)?.recordingID
@@ -308,12 +310,20 @@ extension AppState {
             update(id) { $0.date = context.date }
         }
         // A recording a phone asked for links that phone as already recording, rather than asking it.
-        sources.recorders.macRecordingStarted(id, at: recordingStartedAt ?? Date(), lead: phoneLeads[id])
+        let recorderLead = pendingRecorderLead
+        pendingRecorderLead = nil
+        sources.recorders.macRecordingStarted(id, at: recordingStartedAt ?? Date(), lead: phoneLeads[id], recorderLead: recorderLead,
+                                              trigger: recordingWasStartedAutomatically ? .automatic : .person)
+        startSharingNotes(id)
     }
 
-    /// This Mac's recording is ending: stop the recorders Daybook started with it.
+    /// This Mac's recording is ending: stop the recorders Daybook started with it, and the devices
+    /// recording with it (a cascading stop), except the one whose word this is.
     func recordingWillFinish(_ id: UUID, at end: Date) {
-        sources.recorders.macRecordingStopped(id, at: end)
+        let cause = stopCause
+        stopCause = nil
+        sources.recorders.macRecordingStopped(id, at: end, stoppedBy: cause)
+        stopSharingNotes(id)
     }
 
     /// At launch, once devices and the link are up: recordings an interrupted run recovered close their

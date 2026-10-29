@@ -126,7 +126,7 @@ final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
         }
         return await send(LinkRecordRequest(id: start.requestID, action: .start, conversationID: start.conversationID, timing: timing,
                                             title: start.title, date: start.date, standalone: start.standalone ? true : nil,
-                                            recorder: start.recorder))
+                                            recorder: start.recorder, cascade: start.cascade))
     }
 
     func requestStop(conversationID: UUID, macEndedAt: Date?, recorder: LinkRecorderTarget?) async -> CompanionAnswer {

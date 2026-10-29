@@ -113,6 +113,33 @@ extension AppState {
             .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }.eraseToAnyPublisher())
         wireRecorderHandoff()
         wireSources()
+        devices.onRecorderButton = { [weak self] session, on in self?.recorderButton(session, on) }
+    }
+
+    /// A recorder this Mac manages started or stopped from its own button, which this Mac hears while
+    /// it's connected (docs/multipoint.md, "Starting anywhere"). Started, this Mac records too (and so
+    /// every device that records along with it), or the recorder joins the recording under way; stopped,
+    /// the recording it's part of stops everywhere. Its "Record along" preference decides, and this Mac
+    /// never asks for the microphone for it: nobody may be at the Mac to answer.
+    func recorderButton(_ session: DeviceSession, _ on: Bool) {
+        guard isReady, session.managedElsewhere == nil, session.device.recordsAlongsideMac else { return }
+        if on {
+            if let id = recordingID { sources.recorders.recorderJoined(session, meetingID: id); return }
+            guard !isStartingRecording, !isStoppingRecording, microphoneAccess() == .authorized else { return }
+            pendingRecorderLead = session.id
+            Task {
+                if let start = phoneCapture.start {
+                    _ = await start(newMeeting(title: "Conversation at \(Date().formatted(date: .omitted, time: .shortened))", selecting: false))
+                } else {
+                    await startRecording()
+                }
+                if recordingID == nil { pendingRecorderLead = nil }
+            }
+        } else {
+            guard let id = recordingID, !isStoppingRecording, sources.recorders.records(session.id, in: id) else { return }
+            notice = "\(session.device.name) stopped recording, so this Mac stopped too."
+            Task { if let stop = phoneCapture.stop { await stop(id) } else { await stopRecording(manual: true) } }
+        }
     }
 
     // MARK: Recorder handoff (docs/devices.md, "Handing a recorder over")

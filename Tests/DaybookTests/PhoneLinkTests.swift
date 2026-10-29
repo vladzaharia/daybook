@@ -309,7 +309,7 @@ final class PhoneLinkTests: XCTestCase {
         let meeting = try XCTUnwrap(rig.meeting(conversation), "Created here before it has synced")
         let lead = try XCTUnwrap(meeting.companions?.first)
         XCTAssertEqual(lead.deviceKind, DaybookPhoneIntegration.id)
-        XCTAssertEqual(lead.state, .alreadyRecording, "The phone leads; this Mac never stops it")
+        XCTAssertEqual(lead.state, .alreadyRecording, "The phone leads; this Mac stops it only when this Mac is stopped (CascadingRecordingTests)")
         XCTAssertFalse(lead.startedByDaybook)
         XCTAssertEqual(lead.recorderStartedAt?.timeIntervalSince1970 ?? 0, phoneStart.timeIntervalSince1970, accuracy: 0.001)
         XCTAssertEqual(lead.clock?.offset ?? 0, -1.5, accuracy: 0.05)
@@ -336,9 +336,12 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(reason.reason, .permissionDenied)
         XCTAssertNil(state.recordingID)
 
-        // A recording started on the Mac can't be stopped from the phone.
+        // A recording started on the Mac that the phone doesn't record along with can't be stopped from
+        // it (one it records along with can: CascadingRecordingTests).
         state.microphoneAccess = { .authorized }
+        state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
         let own = macStartsRecording(rig)
+        await state.sources.recorders.settle()
         let declined = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: own), from: phone.macID)
         guard case .refused(let no) = declined.outcome else { return XCTFail() }
         XCTAssertEqual(no.reason, .declined)
