@@ -170,7 +170,7 @@ struct SettingsScreen: View {
         case "models": path = [.models]
         case "templates": path = [.templates]
         case "template": path = [.templates, .template("general")]
-        case "vocabulary": path = [.vocabulary]
+        case "vocabulary", "add-term": path = [.vocabulary]
         case "recording": path = [.recording]
         case "library-devices": path = [.icloud, .libraryDevices]
         case "about": path = [.about]
