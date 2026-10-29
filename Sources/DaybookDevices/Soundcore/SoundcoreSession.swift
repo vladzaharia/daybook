@@ -28,8 +28,11 @@ public struct SoundcoreTiming {
     /// After letting the recorder go, a recording it was making is shown as "Recording · as of 10:07"
     /// for this long, then as unknown: nobody can see it stop.
     public var lastKnownRecording: Duration = .seconds(1_200)
+    /// After the recorder doesn't list its recordings (it didn't answer, or refused), the waits
+    /// before each quiet try again while the link stays up.
+    public var relist: [Duration] = [15, 60].map { .seconds($0) }
 
-    public init(request: Duration = .seconds(10), stall: Duration = .seconds(45), settle: Duration = .seconds(1), scan: Duration = .seconds(15), connect: Duration = .seconds(20), reconnect: Duration = .seconds(10), recordConfirm: Duration = .seconds(10), backoff: [Duration] = [2, 5, 15, 30, 60].map { .seconds($0) }, idleRelease: Duration = .seconds(300), automaticIdleRelease: Duration = .seconds(30), automaticCooldown: Duration = .seconds(900), lastKnownRecording: Duration = .seconds(1_200)) {
+    public init(request: Duration = .seconds(10), stall: Duration = .seconds(45), settle: Duration = .seconds(1), scan: Duration = .seconds(15), connect: Duration = .seconds(20), reconnect: Duration = .seconds(10), recordConfirm: Duration = .seconds(10), backoff: [Duration] = [2, 5, 15, 30, 60].map { .seconds($0) }, idleRelease: Duration = .seconds(300), automaticIdleRelease: Duration = .seconds(30), automaticCooldown: Duration = .seconds(900), lastKnownRecording: Duration = .seconds(1_200), relist: [Duration] = [15, 60].map { .seconds($0) }) {
         self.request = request
         self.stall = stall
         self.settle = settle
@@ -42,6 +45,7 @@ public struct SoundcoreTiming {
         self.automaticIdleRelease = automaticIdleRelease
         self.automaticCooldown = automaticCooldown
         self.lastKnownRecording = lastKnownRecording
+        self.relist = relist
     }
 }
 
@@ -53,10 +57,17 @@ public final class SoundcoreSession {
     public struct Listing: Equatable {
         public var recordings: [SoundcoreRecording]
         public var activeRecordingID: UInt32?
+        /// Pages that held recordings not seen on an earlier page, the first always counted (Device Details).
+        public var pages = 1
+        /// Paging stopped at a page the recorder refused, rather than at one with nothing new.
+        /// Whether firmware ends its list that way is unverified, so it's only reported.
+        public var endedOnRefusal = false
 
-        public init(recordings: [SoundcoreRecording], activeRecordingID: UInt32? = nil) {
+        public init(recordings: [SoundcoreRecording], activeRecordingID: UInt32? = nil, pages: Int = 1, endedOnRefusal: Bool = false) {
             self.recordings = recordings
             self.activeRecordingID = activeRecordingID
+            self.pages = pages
+            self.endedOnRefusal = endedOnRefusal
         }
     }
 
@@ -84,6 +95,12 @@ public final class SoundcoreSession {
     public var keyExchangeComplete: Bool { crypto.isReady }
     public var rejectedFrames: Int { buffer.rejectedFrames }
     public var isTransferring: Bool { transfer != nil }
+    /// Audio packets (file heads, slices, ends) that arrived with no transfer of this session's
+    /// running: a few stragglers after a stopped transfer, or many when another app on the same
+    /// iPhone is transferring over the link iOS shares between apps (Device Details).
+    public private(set) var unrequestedAudio = 0
+    /// Replies that matched no request waiting here: late ones, or another app's.
+    public private(set) var unrequestedReplies = 0
 
     private let send: (Data) throws -> Void
     private let timing: SoundcoreTiming
@@ -149,10 +166,13 @@ public final class SoundcoreSession {
             guard b.count >= 2 else { return }
             onPush?(.charging(recorder: b[0] == 1, case: b[1] == 1))
         case (0x1a, 0x07), (0x1b, 0x07):
+            if transfer == nil { unrequestedAudio += 1 }
             receiveFileKey(packet)
         case (0x1a, 0x08), (0x1a, 0x12), (0x1b, 0x08), (0x1b, 0x12):
+            if transfer == nil { unrequestedAudio += 1 }
             receiveAudio(packet)
         case (0x1a, 0x0a), (0x1b, 0x0a):
+            if transfer == nil { unrequestedAudio += 1 }
             receiveEnd()
         default:
             if let reply, reply.matches(packet) {
@@ -162,6 +182,8 @@ public final class SoundcoreSession {
             } else if packet.type == 0x18, packet.command == 0x82, let status = packet.payload.first, status <= 2 {
                 // Pressing the recorder's own button reports the new state.
                 onPush?(.recording(status == 1))
+            } else {
+                unrequestedReplies += 1
             }
         }
     }
@@ -311,8 +333,10 @@ public final class SoundcoreSession {
     private func firstPageLocked() async throws -> Listing {
         var first = try await request(listingType, 0x0e, Self.page(0), matching: Self.isListing)
         if !first.succeeded, listingType == 0x1b {
-            listingType = 0x1a
             first = try await request(0x1a, 0x0e, Self.page(0), matching: Self.isListing)
+            // Firmware without the 12-byte layout. A recorder refusing both (busy) says nothing
+            // about which it has, so the next listing asks for the 12-byte one again.
+            if first.succeeded { listingType = 0x1a }
         }
         guard first.succeeded else { throw SoundcoreError.rejected }
         let page = try SoundcoreRecording.page(first)
@@ -328,8 +352,9 @@ public final class SoundcoreSession {
         while !fresh.isEmpty, number < 100 {
             number += 1
             let packet = try await request(listingType, 0x0e, Self.page(number), matching: Self.isListing)
-            guard packet.succeeded else { break }
+            guard packet.succeeded else { listing.endedOnRefusal = true; break }
             fresh = try SoundcoreRecording.page(packet).recordings.filter { seen.insert($0.id).inserted }
+            if !fresh.isEmpty { listing.pages += 1 }
             listing.recordings += fresh
         }
         return listing

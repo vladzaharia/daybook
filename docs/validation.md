@@ -1,5 +1,34 @@
 # Validation record
 
+## Soundcore: a list that doesn't come, and Details (2026-10-28)
+
+From the owner's iPhone (0.4.1): Soundcore Work "Connected · 100%" with "Nothing New to Import" while
+the Soundcore app listed two recordings on it and was transferring them over Bluetooth. A list
+request the recorder didn't answer (or refused) left the connection "connected" with the remembered
+list, which read as current, nothing said so, and nothing tried again; automatic import and queued
+imports waited silently. Now (docs/direct-soundcore.md, "A list that doesn't come"): the device says
+"Soundcore didn't list its recordings" with Refresh Status, `DeviceSession.listingState` is
+`.notListed`, it's tried again after 15 and 60 s, a refusal of both layouts keeps the 12-byte one,
+and status and list are read separately. Device Details gains the last list (count, pages, when, or
+why it failed), what the recorder names as in progress, and counts of audio and replies Daybook
+didn't ask for (another app on the iPhone's shared link). The iPhone's device page gains Details:
+every recording on the recorder with why it is or isn't new, and Copy (with the app's version).
+
+Automated, against `SimulatedSoundcore` (new: unanswered and refused list requests, and another
+app's list reply and transfer on the same link): `SoundcoreSimulatorTests` (48, six new) covers the
+problem and `.notListed` state, the quiet try again and its limit, automatic import carrying on once
+listed (it times out with no try again, as before), the 12-byte layout after a refusal, another
+app's traffic counted and ignored, and each recording's standing matching what's offered.
+On Apple silicon with Xcode 27.1, `swift test` passed 1,050 XCTest cases across the seven bundles (one
+skipped, as before), and `scripts/build-ios.sh --test` on a dedicated clone of the iPhone 17 Pro
+simulator passed 152, including Details' copied text. No Bluetooth, recording, or model downloads.
+
+**Still to check with a physical Soundcore Work and the Soundcore app on the same iPhone:** whether
+the recorder answers a list request while the Soundcore app is transferring (and whether its reply
+can satisfy Daybook's request), and what the list's trailing field (`currTransportFileTimestamp` in
+the protocol notes; Daybook's "named in progress") names while it transfers. If it names the file
+being transferred, Daybook shows that recording as Recording now until it's named no longer.
+
 ## App Sandbox readiness and the switch (2026-10-26)
 
 The Mac app's move to the App Sandbox (docs/sandbox.md): release N's changes, unsandboxed, and the switch, with signed

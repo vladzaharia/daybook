@@ -74,6 +74,11 @@ public final class SimulatedSoundcore {
     /// Leaves the key exchange unanswered, as a recorder that went quiet would: a transfer waits in
     /// it until its request times out or the transfer is stopped.
     public var answersKeyExchange = true
+    /// The next this-many requests for the recording list go unanswered, as a recorder busy with
+    /// another app might leave them.
+    public var unansweredListings = 0
+    /// The next this-many requests for the recording list are refused (both layouts).
+    public var refusedListings = 0
     /// Audio slices per notification.
     public var slicesPerPacket = 3
     /// Time between audio notifications; nil sends as fast as possible.
@@ -160,6 +165,12 @@ public final class SimulatedSoundcore {
         switch (type, command) {
         case (0x01, 0x01):
             reply(0x01, 0x01, statusPayload())
+        case (0x1a, 0x0e) where unansweredListings > 0, (0x1b, 0x0e) where unansweredListings > 0:
+            unansweredListings -= 1
+        case (0x1a, 0x0e) where refusedListings > 0, (0x1b, 0x0e) where refusedListings > 0:
+            // A refused 12-byte request is followed by the 8-byte one, refused too: one listing.
+            if type == 0x1a { refusedListings -= 1 }
+            reply(type, 0x0e, Data(), status: 0)
         case (0x1b, 0x0e) where !supportsExtendedListing:
             reply(0x1b, 0x0e, Data(), status: 0)
         case (0x1a, 0x0e), (0x1b, 0x0e):
@@ -215,6 +226,18 @@ public final class SimulatedSoundcore {
     /// The recorder's clock against true time, in seconds (positive: it runs ahead). New recordings'
     /// IDs are their start by this clock.
     public var clockOffset: TimeInterval = 0
+
+    /// Another app on the same iPhone lists the recorder and pulls a recording. iOS shares one link
+    /// between apps, so its replies and audio reach every app listening, unasked.
+    public func serveAnotherApp(recordingID id: UInt32, slices: Int = 6) {
+        send(SoundcorePacket.frame(type: 0x1b, command: 0x0e, payload: listPayload(page: 0, extended: true)))
+        send(SoundcorePacket.frame(type: 0x1a, command: 0x07, payload: littleEndian32(id) + littleEndian32(UInt32(slices * 160))))
+        for sequence in 0..<slices {
+            let slice = SoundcoreAudioSlice.encode(sequence: UInt32(sequence), audio: Data(repeating: 1, count: 160))
+            send(SoundcorePacket.frame(type: 0x1a, command: 0x08, payload: slice))
+        }
+        send(SoundcorePacket.frame(type: 0x1a, command: 0x0a))
+    }
 
     /// Pushes a battery update, as the recorder does on its own.
     public func pushBattery(recorder: UInt8, case caseLevel: UInt8) {

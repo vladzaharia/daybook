@@ -178,6 +178,138 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertTrue(device.received.contains { $0 == (0x1a, 0x0e) })
     }
 
+    // MARK: A list that doesn't come
+
+    private func connectWithoutWaitingForTheList(_ rig: Rig) async throws {
+        rig.connection.search()
+        try await waitUntil("a recorder to be found") { !rig.connection.discovered.isEmpty }
+        rig.connection.connect(to: rig.connection.discovered[0])
+    }
+
+    /// The recorder connects but doesn't answer the request for its list (on an iPhone, the Soundcore
+    /// app may be transferring over the same link). That isn't "nothing new": the session says it
+    /// hasn't been listed, the page says why, and it's tried again quietly until it lists.
+    func testARecorderThatDoesNotListSaysSoAndIsListedAgainOnItsOwn() async throws {
+        let device = recorder(count: 2)
+        device.unansweredListings = 1
+        let rig = rig(device, configure: { $0.request = .milliseconds(250); $0.relist = [.milliseconds(150), .milliseconds(300)] })
+        try await connectWithoutWaitingForTheList(rig)
+        try await waitUntil("the list request to go unanswered") { rig.connection.lastListing?.failed == true && !rig.connection.isRefreshing }
+
+        XCTAssertEqual(rig.connection.state, .connected)
+        XCTAssertFalse(rig.connection.isInventoryCurrent)
+        XCTAssertEqual(rig.session.listingState, .notListed, "not \"nothing new\"")
+        XCTAssertTrue(rig.session.newRecordings.isEmpty, "a first connection has no remembered list")
+        XCTAssertEqual(rig.connection.problem?.id, SoundcoreIssue.listFailed.rawValue)
+        XCTAssertEqual(rig.connection.problem?.actions, [.refreshStatus, .technicalDetails])
+        let row = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Recording list" })
+        XCTAssertEqual(row.value, "Not listed: " + (SoundcoreError.timedOut.errorDescription ?? ""))
+
+        try await waitUntil("listed on a quiet try again") { rig.connection.isInventoryCurrent }
+        XCTAssertEqual(rig.session.listingState, .current)
+        XCTAssertNil(rig.connection.problem, "the problem goes once it lists")
+        XCTAssertEqual(rig.session.newRecordings.count, 2)
+        let listed = try XCTUnwrap(rig.connection.technicalDetails.first { $0.label == "Recording list" })
+        XCTAssertTrue(listed.value.hasPrefix("2, in 1 page, "), listed.value)
+    }
+
+    /// Automatic import waits for a list from this connection; when the first request goes
+    /// unanswered, the quiet try again lists it and the recordings import.
+    func testAutomaticImportCarriesOnOnceAnUnansweredListIsTriedAgain() async throws {
+        let device = recorder(count: 2)
+        device.unansweredListings = 1
+        let rig = rig(device, automatic: true, since: .distantPast,
+                      configure: { $0.request = .milliseconds(250); $0.relist = [.milliseconds(150)]; $0.automaticIdleRelease = .seconds(30) },
+                      remembered: true)
+        try await waitUntil("the list request to go unanswered") { rig.connection.lastListing?.failed == true }
+        XCTAssertTrue(rig.library.imports.isEmpty, "nothing imports from a list that isn't current")
+        try await waitUntil("the automatic imports") { rig.library.imports.count == 2 && !rig.session.queue.isActive }
+        XCTAssertNil(rig.connection.problem)
+        rig.connection.shutDown()
+    }
+
+    /// A recorder refusing both list layouts (busy, not old firmware) is asked for the 12-byte one
+    /// again next time, so recordings keep their exact lengths.
+    func testARefusedListIsTriedAgainInTheLayoutWithEndTimes() async throws {
+        let device = recorder(count: 2)
+        device.refusedListings = 1
+        let rig = rig(device, configure: { $0.relist = [.milliseconds(100)] })
+        try await connectWithoutWaitingForTheList(rig)
+        try await waitUntil("the refusal") { rig.connection.lastListing?.failed == true }
+        XCTAssertEqual(rig.connection.problem?.id, SoundcoreIssue.listFailed.rawValue)
+        try await waitUntil("listed on a try again") { rig.connection.isInventoryCurrent }
+        XCTAssertEqual(rig.connection.recordings.count, 2)
+        XCTAssertTrue(rig.connection.recordings.allSatisfy { $0.length?.isEstimate == false }, "end times, from the 12-byte layout")
+        XCTAssertEqual(device.received.filter { $0 == (0x1b, 0x0e) }.count, 3, "refused, then the list and its empty second page")
+    }
+
+    /// Every attempt fails: it stops trying after the schedule, says so, and Refresh still works.
+    func testTryingAgainStopsAfterItsScheduleAndRefreshStillLists() async throws {
+        let device = recorder(count: 1)
+        device.unansweredListings = 3
+        let rig = rig(device, configure: { $0.request = .milliseconds(150); $0.relist = [.milliseconds(50)] })
+        try await connectWithoutWaitingForTheList(rig)
+        try await waitUntil("both attempts to go unanswered") {
+            device.unansweredListings == 1 && rig.connection.lastListing?.failed == true && !rig.connection.isRefreshing
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(device.unansweredListings, 1, "no third attempt on its own")
+        XCTAssertEqual(rig.session.listingState, .notListed)
+        XCTAssertEqual(rig.connection.problem?.id, SoundcoreIssue.listFailed.rawValue)
+
+        rig.connection.refresh()
+        try await waitUntil("the person's refresh to go unanswered") { device.unansweredListings == 0 && !rig.connection.isRefreshing }
+        rig.connection.refresh()
+        try await waitUntil("listed") { rig.connection.isInventoryCurrent }
+        XCTAssertNil(rig.connection.problem)
+        XCTAssertEqual(rig.session.newRecordings.count, 1)
+    }
+
+    /// On iPhone, iOS shares the recorder's link between apps: the Soundcore app's list replies and
+    /// transfer reach Daybook unasked. They're counted for Device Details and change nothing here.
+    func testAnotherAppsRepliesAndAudioAreCountedAndChangeNothing() async throws {
+        let rig = rig(recorder(count: 2))
+        try await connectThroughSetup(rig)
+        let before = rig.connection.recordings
+        rig.device.serveAnotherApp(recordingID: base)
+        try await waitUntil("the other app's audio") {
+            rig.connection.technicalDetails.contains { $0.label == "Audio packets not requested here" && $0.value == "8" }
+        }
+        XCTAssertTrue(rig.connection.technicalDetails.contains { $0.label == "Replies not requested here" && $0.value == "1" })
+        XCTAssertEqual(rig.connection.recordings, before)
+        XCTAssertTrue(rig.library.imports.isEmpty)
+        XCTAssertNil(rig.connection.problem)
+
+        // An import of Daybook's own still works.
+        rig.session.importRecordings([rig.session.newRecordings[0]])
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+    }
+
+    /// Details says why each recording on the recorder is or isn't new, matching what's offered.
+    func testDetailsSayWhyEachRecordingIsOrIsNotNew() async throws {
+        let device = recorder(count: 3)
+        device.isRecording = true
+        device.activeRecording = .init(id: base + 600, frames: Self.frames)
+        device.listsActiveRecording = true
+        let rig = rig(device)
+        try await connectThroughSetup(rig)
+        let newest = String(base), middle = String(base - 3_600), oldest = String(base - 7_200)
+        rig.session.importRecordings(rig.session.newRecordings.filter { $0.id == newest })
+        try await waitUntil("the import") { rig.library.imports.count == 1 && !rig.session.queue.isActive }
+        rig.session.adoptHandedOffImports([], alreadyImported: [middle])
+
+        let standings = rig.session.standings
+        XCTAssertEqual(standings.map(\.id), [String(base + 600), newest, middle, oldest], "newest first")
+        XCTAssertEqual(standings.map(\.reason), [.recordingNow, .inDaybook(rig.library.meetings[0].id), .arrivingThroughSync, .new])
+        XCTAssertEqual(standings.filter { $0.reason == .new }.map(\.recording), rig.session.newRecordings)
+
+        let text = rig.session.diagnostics
+        for line in ["list: current", "Recording list: 4, in 1 page, ", "Named in progress: ", "(recording)", "On the device: 4",
+                     "Recording now · \(base + 600)", "In Daybook · \(newest)", "Arriving from another device · \(middle)", "New · \(oldest)"] {
+            XCTAssertTrue(text.contains(line), "Details text lacks \(line):\n\(text)")
+        }
+    }
+
     func testReconnectUsesTheRememberedRecorderThenFallsBackToAScan() async throws {
         let rig = rig(recorder())
         try await connectThroughSetup(rig)
