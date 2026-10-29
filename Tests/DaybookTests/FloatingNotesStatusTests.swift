@@ -7,7 +7,7 @@ import SwiftUI
 import XCTest
 @testable import Daybook
 
-/// What Floating Notes' status bar, home lines, and multipoint line say in each state
+/// What Floating Notes' status bar and home lines say in each state
 /// (`FloatingStatus`), read from plain inputs as the iPhone's status-sheet tests do.
 final class FloatingNotesStatusTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -135,7 +135,8 @@ final class FloatingNotesStatusTests: XCTestCase {
         along.activity = .paused
         let paused = FloatingStatus.phoneChip(along, recording: true)
         XCTAssertEqual(paused?.tone, .attention)
-        XCTAssertEqual(paused?.label, "Paused")
+        XCTAssertEqual(paused?.label, "Alex’s iPhone paused")
+        XCTAssertEqual(paused?.shortLabel, "Paused")
         XCTAssertEqual(paused?.detail, "Alex’s iPhone paused. This Mac keeps recording.")
     }
 
@@ -224,25 +225,26 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(FloatingStatus.queueLine(.init(waiting: 3))?.text, "3 waiting to transcribe")
     }
 
-    func testMultipointSaysWhatRecordsAlongAndAPausedIPhone() {
+    func testWhatRecordsAlongShowsOnceInTheChips() {
         var along = phone()
         along.along = .recording
         var recorder = soundcore()
         recorder.along = .recording
-        let lines = FloatingStatus.multipoint(recording {
+        let chips = FloatingStatus.chips(recording {
             $0.phones = [along]
             $0.recorders = [recorder]
         })
-        XCTAssertEqual(lines.map(\.text), ["Also recording on Alex’s iPhone and Soundcore"])
+        XCTAssertEqual(chips.filter(\.showsDot).map(\.id), ["recorder-sc", "phone-ph"], "The red dot on each, and no line under the clock")
+        XCTAssertEqual(chips.first { $0.id == "phone-ph" }?.detail, "Alex’s iPhone is recording too")
 
         along.activity = .paused
-        let paused = FloatingStatus.multipoint(recording {
+        let paused = FloatingStatus.chips(recording {
             $0.phones = [along]
             $0.recorders = [recorder]
         })
-        XCTAssertEqual(paused.map(\.text), ["Also recording on Soundcore", "Alex’s iPhone paused · This Mac keeps recording"])
-        XCTAssertEqual(paused.last?.tone, .attention)
-        XCTAssertTrue(FloatingStatus.multipoint(FloatingStatusInputs()).isEmpty, "Only while recording")
+        XCTAssertEqual(paused.filter(\.showsDot).map(\.id), ["recorder-sc"])
+        XCTAssertEqual(paused.first { $0.id == "phone-ph" }?.label, "Alex’s iPhone paused")
+        XCTAssertEqual(paused.first { $0.id == "phone-ph" }?.tone, .attention)
     }
 }
 
