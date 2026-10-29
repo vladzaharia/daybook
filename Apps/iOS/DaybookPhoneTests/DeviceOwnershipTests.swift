@@ -200,6 +200,36 @@ final class DeviceOwnershipTests: XCTestCase {
         XCTAssertEqual(PhoneDeviceCopy.line(for: session).hasPrefix("Connected"), true)
         _ = model
     }
+
+    /// The device page's Details copies what the owner can send: the app's version, the recorder's
+    /// technical facts, and every recording on it with why it is or isn't new. A list that doesn't
+    /// come says so in the iPhone's words.
+    func testDetailsCopyTheAppVersionAndWhyEachRecordingIsOrIsNotNew() async throws {
+        let container = try temporaryDirectory("container")
+        let phone = try await makePhone(container)
+        let settings = PhoneSettings(defaults: UserDefaults(suiteName: "DeviceOwnershipTests-\(UUID().uuidString)")!)
+        let recorder = Recorder()
+        let devices = try makeDevices(phone.library, recorder, settings: settings)
+        devices.start()
+        let kind = try XCTUnwrap(DeviceCatalog.kind(SoundcoreWorkIntegration.id))
+        let session = try XCTUnwrap(devices.beginSetup(kind))
+        let soundcore = try XCTUnwrap(session.direct as? SoundcoreConnection)
+        soundcore.search()
+        try await waitUntil("the recorder is found") { !soundcore.discovered.isEmpty }
+        soundcore.connect(to: soundcore.discovered[0])
+        try await waitUntil("listed") { session.isLinked && soundcore.isInventoryCurrent }
+        devices.commitSetup()
+
+        let text = DeviceDetailsScreen.text(session)
+        XCTAssertTrue(text.hasPrefix("Daybook "), text)
+        XCTAssertTrue(text.contains(" on iPhone\n"), text)
+        for line in ["Recording list: 2, in 1 page, ", "On the device: 2", " · New · "] {
+            XCTAssertTrue(text.contains(line), "lacks \(line):\n\(text)")
+        }
+        let copy = PhoneDeviceCopy.problem(SoundcoreIssue.listFailed.problem)
+        XCTAssertEqual(copy.title, "Soundcore didn’t list its recordings")
+        XCTAssertFalse(copy.message.contains("phone"), "on the iPhone, the Soundcore app is on this phone")
+    }
 }
 
 /// What the test's Mac hears on the link.

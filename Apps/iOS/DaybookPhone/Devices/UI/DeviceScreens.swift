@@ -161,6 +161,11 @@ private struct DevicePageContent: View {
             } header: {
                 Text("Import")
             }
+            if session.direct is any DetailedConnection {
+                Section {
+                    NavigationLink("Details") { DeviceDetailsScreen(session: session) }
+                }
+            }
         }
         .navigationTitle(session.device.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -272,6 +277,68 @@ private struct DevicePageContent: View {
         var parts = ["\(session.queue.position) of \(session.queue.total)"]
         if let seconds = session.secondsLeft { parts.append("about \(DurationLabel.format(seconds)) left") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// The recorder's status and technical facts, and every recording on it with why it is or isn't
+/// new. Copy puts all of it on the clipboard, to send when something looks wrong.
+struct DeviceDetailsScreen: View {
+    @ObservedObject var session: DeviceSession
+    @State private var copied = false
+
+    var body: some View {
+        let detailed = session.direct as? any DetailedConnection
+        List {
+            if let detailed {
+                Section {
+                    ForEach(detailed.details) { row($0) }
+                }
+                Section("Technical") {
+                    ForEach(detailed.technicalDetails) { row($0) }
+                    if let last = detailed.lastTechnicalProblem { row(DeviceDetail(label: "Last problem", value: last)) }
+                }
+            }
+            Section("On \(session.kind.shortName)") {
+                let standings = session.standings
+                if standings.isEmpty {
+                    Text("None listed").foregroundStyle(.secondary)
+                }
+                ForEach(standings) { standing in
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(standing.recording.title)
+                            Text(standing.recording.detail).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(standing.reason.label).font(.footnote).foregroundStyle(standing.reason == .new ? PhoneStyle.Ink.link : .secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+        }
+        .navigationTitle("Details")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(copied ? "Copied" : "Copy") {
+                    UIPasteboard.general.string = Self.text(session)
+                    copied = true
+                }
+            }
+        }
+        .refreshable { session.direct?.refresh() }
+    }
+
+    private func row(_ detail: DeviceDetail) -> some View {
+        LabeledContent(detail.label, value: detail.value)
+            .textSelection(.enabled)
+    }
+
+    /// The app's version first, then the session's own account.
+    static func text(_ session: DeviceSession, bundle: Bundle = .main) -> String {
+        let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "Daybook \(version) (\(build)) on iPhone\n" + session.diagnostics
     }
 }
 
@@ -562,6 +629,7 @@ enum PhoneDeviceCopy {
         case .notFound?: return ("No Soundcore found nearby", "Take it out of its case, close the Soundcore app, and bring it close to this iPhone.")
         case .connectTimeout?: return ("Soundcore didn’t finish connecting", "Take it out of its case to wake it, and close the Soundcore app.")
         case .rejected?: return ("This Soundcore didn’t accept the connection", "Export from the Soundcore app and import the file instead.")
+        case .listFailed?: return ("Soundcore didn’t list its recordings", "Close the Soundcore app, then refresh.")
         default: return nil
         }
     }
