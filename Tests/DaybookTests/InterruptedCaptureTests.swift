@@ -96,7 +96,7 @@ final class InterruptedCaptureTests: XCTestCase {
         XCTAssertEqual(call.channelCount, 2)
         XCTAssertNil(call.clockAnchors)
         XCTAssertTrue(recovered.warnings.contains("The call audio recording’s start time is approximate."), "\(recovered.warnings)")
-        XCTAssertTrue(recovered.tracks[0].notes?.contains { $0.contains("timing details were missing") } == true,
+        XCTAssertTrue(call.notes?.contains { $0.contains("timing file was missing") } == true,
                       "What went wrong is in the capture notes, not the conversation's notice")
 
         // A damaged sidecar is the same as a missing one.
