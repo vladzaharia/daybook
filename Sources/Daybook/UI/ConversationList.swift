@@ -135,13 +135,12 @@ struct ConversationList: View {
         }
     }
 
-    /// Says something only while work is happening.
+    /// Says something only while work is happening (a selection's count is on the page).
     private var subtitle: String {
         if state.isSearching {
             let count = state.searchHits.count
             return count == 1 ? "1 result" : "\(count) results"
         }
-        if state.multiSelection.count > 1 { return "\(state.multiSelection.count) selected" }
         if state.isStoppingRecording { return "Saving recording…" }
         if state.isRecording { return "Recording" }
         if state.processingID != nil {
@@ -355,11 +354,13 @@ private struct RowMenu: View {
             placementButton
             Divider()
             ReprocessMenu(state: state, meeting: meeting)
+            Divider()
+            // In the More menu's order: share, then file actions.
+            if meeting.summary != nil { Button("Copy Summary") { state.copySummary(meeting.id) } }
             Menu("Export") {
                 Button("Markdown…") { state.export(meeting.id) }
                 Button("Full Data (JSON)…") { state.export(meeting.id, json: true) }
             }
-            if meeting.summary != nil { Button("Copy Summary") { state.copySummary(meeting.id) } }
             Button("Show in Finder") { state.showInFinder(meeting.id) }
             Divider()
             Button("Move to Trash…", role: .destructive) { state.trashRequestIDs = ids }
@@ -392,7 +393,8 @@ private struct LibraryNotice: View {
     var body: some View {
         if let notice = state.notice {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "info.circle.fill").symbolRenderingMode(.hierarchical).foregroundStyle(DaybookStyle.accent)
+                // Information, not an action: the glyph stays quiet rather than taking the accent.
+                Image(systemName: "info.circle.fill").symbolRenderingMode(.hierarchical).foregroundStyle(.secondary)
                 Text(notice).font(TypeStyle.status).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
                 Button { withAnimation(.easeOut(duration: 0.2)) { state.notice = nil } } label: { Image(systemName: "xmark") }
