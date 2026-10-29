@@ -143,6 +143,12 @@ or words:
   voiceprints left out (the same person) against the closest other profile (someone else), which is what the
   label threshold has to separate; then the same percentiles by kind of recording, with the label margin.
 
+On the owner's library (2026-10-29, a JSON-only copy, deleted afterwards): 4 conversations, 1 profile (named on
+the iPhone), 8 speakers. A reconciliation would label 1 microphone speaker (0.97 to the profile: the owner's
+voice from the iPhone recognized through the MacBook microphone), suggest 1 (0.76), leave 2 iPhone speakers
+unknown (0.01 and 0.63), and 2 microphone speakers from older runs have no voice yet (the Mac gives them one
+when idle). Too few to tune the thresholds; the label and the suggestion both sit where expected.
+
 ## The four streams together (2026-10-29)
 
 Processing quality, speaker profiles, live transcription, and recording across devices were built
