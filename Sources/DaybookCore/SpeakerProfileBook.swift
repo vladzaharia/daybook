@@ -111,7 +111,7 @@ public struct SpeakerProfileBook: Sendable {
     let models: [UUID: [String: Model]]
 
     public init(metadata: LibraryMetadata, learning: SpeakerProfileLearning = .init()) {
-        self.init(profiles: metadata.activeSpeakerProfiles, voiceprints: (metadata.voiceprints ?? []).compactMap(\.value), learning: learning)
+        self.init(profiles: metadata.activeSpeakerProfiles, voiceprints: metadata.resolvedVoiceprints, learning: learning)
     }
 
     public init(profiles: [SpeakerProfile], voiceprints: [Voiceprint], learning: SpeakerProfileLearning = .init()) {
