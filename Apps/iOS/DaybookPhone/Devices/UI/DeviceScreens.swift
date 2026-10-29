@@ -290,6 +290,13 @@ private struct DevicePageContent: View {
                     Toggle("Import New Recordings Automatically", isOn: Binding(
                         get: { session.device.importsAutomatically },
                         set: { value in session.update { $0.importsAutomatically = value } }))
+                    if session.direct?.capabilities.contains(.recordControl) == true {
+                        // Off: this iPhone doesn't start it, its button doesn't start this iPhone, and its
+                        // link isn't held in the background for that.
+                        Toggle("Record Along with This iPhone", isOn: Binding(
+                            get: { session.device.recordsAlongsideMac },
+                            set: { value in session.update { $0.alsoRecordsWithMac = value } }))
+                    }
                     Toggle("Hand Back to My Mac When It’s Nearby", isOn: Binding(
                         get: { model.settings.handsRecorderBackToMac },
                         set: { value in

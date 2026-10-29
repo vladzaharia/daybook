@@ -219,7 +219,7 @@ final class CompanionRecorders: ObservableObject {
     }
 
     /// Recorders that record alongside this Mac: record control, set up, its direct method on, and
-    /// "Also record on <device>" on.
+    /// "Record along with this Mac" on.
     func eligible() -> [(session: DeviceSession, control: any RecordControlConnection)] {
         sessions().compactMap { session in
             guard session.device.recordsAlongsideMac, session.device.isEnabled(.direct),
