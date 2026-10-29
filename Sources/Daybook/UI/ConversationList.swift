@@ -63,18 +63,15 @@ struct ConversationList: View {
         .overlay { if meetings.isEmpty && state.isReady { emptyPlace } }
     }
 
+    /// The column's title already names the place, so an empty one just says so (and, for a folder,
+    /// how to fill it). An empty library says it once, on the page beside the column.
     @ViewBuilder private var emptyPlace: some View {
         switch state.place {
-        case .section(.all):
-            if state.meetings.isEmpty { EmptyColumnHint() } else { ContentUnavailableView("No Conversations", systemImage: "tray") }
-        case .section(.work):
-            ContentUnavailableView("No Work Conversations", systemImage: "briefcase",
-                                   description: Text("Conversations about work appear here automatically."))
-        case .section(.personal):
-            ContentUnavailableView("No Personal Conversations", systemImage: "house",
-                                   description: Text("Personal conversations appear here automatically."))
-        case .folder(let id):
-            ContentUnavailableView("Nothing in \(state.folders.first { $0.id == id }?.name ?? "This Folder")", systemImage: "folder",
+        case .section(let section):
+            if section == .all && state.meetings.isEmpty { Color.clear }
+            else { ContentUnavailableView("No Conversations", systemImage: section.systemImage) }
+        case .folder:
+            ContentUnavailableView("No Conversations", systemImage: "folder",
                                    description: Text("Drag conversations here, or choose Move to Folder."))
         case .device:
             Color.clear
@@ -430,22 +427,6 @@ struct DropOutline: View {
 struct CompactLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 4) { configuration.icon; configuration.title }
-    }
-}
-
-/// The list column of an empty library: says what will appear, so the window doesn't read as broken.
-private struct EmptyColumnHint: View {
-    var body: some View {
-        VStack(spacing: Space.s2) {
-            Image(systemName: "tray").font(.system(size: 24)).foregroundStyle(.tertiary)
-            Text("Conversations you record or import appear here.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 200)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
     }
 }
 

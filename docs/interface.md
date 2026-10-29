@@ -46,7 +46,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
   - **List column:** two-line rows grouped Today / Yesterday / Previous 7 Days / Previous 30 Days / months / years.
     - The date reads in `.primary`, the preview in `.secondary`. A first note line that repeats the title is skipped.
     - A trailing glyph appears only when a conversation isn't ready: recording, transcribing (a 2 pt gradient line), waiting, waiting for models, paused, couldn't finish, or not transcribed.
-    - The column's subtitle speaks only while work is happening. In an empty library the column says what will appear there.
+    - The column's subtitle speaks only while work is happening. An empty place says "No Conversations" (a folder adds how to fill it); an empty library says so once, on the page, and the column stays empty.
   - **Detail:** the page, on the Paper reading surface.
   - **Inspector:** hidden by default (⌃⌘I). It holds Details, People, Audio, and Processing. When opening it would leave the page under 560 pt, the sidebar steps aside. Tags sit under their label, like Finder's Get Info; Template is a picker whose first item carries the guess ("Automatic (Meeting)").
 - **Detail toolbar:** declared once on the stable detail column (`DetailToolbar`), never inside the per-conversation view. Its groups are always present, dimmed when they don't apply:
