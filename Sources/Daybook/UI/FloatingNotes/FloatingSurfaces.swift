@@ -11,9 +11,9 @@ import SwiftUI
 
 // MARK: - Recording
 
-/// While recording: the title, the red clock beside You and Call meters, what else records this
-/// conversation, your notes with their times, live captions, and large Bookmark and Stop. Compact:
-/// the clock and meters, one caption line, and the controls.
+/// While recording: the title, the red clock beside You and Call meters, your notes with their
+/// times, live captions, and large Bookmark and Stop. What else records this conversation is in the
+/// chips above, at every size. Compact: the clock and meters, one caption line, and the controls.
 struct RecordingSurface: View {
     let context: PanelContext
     let meeting: Meeting
@@ -44,17 +44,6 @@ struct RecordingSurface: View {
                 HStack(alignment: .center, spacing: 14) {
                     clock(size: 34)
                     PanelMeters(levels: levels, inputs: inputs, showsCall: state.includeComputerAudio, height: 17)
-                }
-                let along = FloatingStatus.multipoint(inputs)
-                if !along.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(along) { line in
-                            StatusChip(symbol: line.symbol, text: line.text, tone: line.tone == .recording ? .calm : line.tone,
-                                       showsDot: line.tone == .recording, truncates: true, metrics: .mac)
-                                .accessibilityLabel(line.text)
-                        }
-                    }
-                    .transition(.opacity)
                 }
             }
             .padding(.horizontal, FloatingLayout.inset)
