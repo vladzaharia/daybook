@@ -231,6 +231,13 @@ background relaunch that never reaches `launch`), so each says what it can still
   it's confirmed. Paused, the clock is frozen ("Paused · 12:03").
 - **Every launch** clears a recording state and activities an earlier run left (`App.init`).
 - **Privacy.** Conversation titles are `privacySensitive`: hidden on the Lock Screen while locked.
+- **Live caption.** While live captions are on and showing for the recording, the activity adds a
+  line with the newest caption (`ContentState.caption`): at most 80 characters, ending with the newest
+  words, two lines on the Lock Screen and one in the expanded Dynamic Island. A new caption alone
+  updates the activity at most every 5 seconds (`captionInterval`), within the system's update
+  budget; one going away (captions off, paused) goes at once. What was said is `privacySensitive`,
+  hidden while locked, and isn't shown at the dimmed Always-On brightness, paused, or once the
+  activity is stale.
 - **Soundcore Work** gets its own Live Activity (`RecorderLiveActivity`) for Listen Live (with Stop
   Listening) and for a recording this iPhone started on it: live while connected, "Recording · as
   of 10:07 AM" after it lets the recorder go, and "Not confirmed" once that's 20 minutes old.

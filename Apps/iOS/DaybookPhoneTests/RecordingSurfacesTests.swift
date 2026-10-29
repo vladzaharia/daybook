@@ -137,6 +137,61 @@ final class RecordingSurfacesTests: XCTestCase {
         XCTAssertTrue(send(bookmarked, now, now, now.addingTimeInterval(0.1)), "a change goes at once")
     }
 
+    func testTheCaptionLineIsShortAndEndsWithWhatWasJustSaid() {
+        typealias State = RecordingActivityAttributes.ContentState
+        XCTAssertEqual(State.captionLine("  So the first   screen\nasks for a name "), "So the first screen asks for a name")
+        XCTAssertNil(State.captionLine(nil))
+        XCTAssertNil(State.captionLine("   "))
+        let long = "Then we skip straight to inviting people, which tested well in the last round, though the empty state needs another pass"
+        let line = State.captionLine(long)
+        XCTAssertLessThanOrEqual(line?.count ?? .max, State.captionLength)
+        XCTAssertEqual(line?.first, "…", "the start goes")
+        XCTAssertTrue(line?.hasSuffix("the empty state needs another pass") == true, "the newest words stay")
+        XCTAssertFalse(line?.dropFirst().hasPrefix(" ") ?? true, "whole words")
+        XCTAssertEqual(State.captionLine(String(repeating: "a", count: 200))?.count, State.captionLength)
+    }
+
+    func testTheActivityShowsACaptionOnlyWhileCaptionsAreOnAndShowing() {
+        let say = "Let's hold the fourteenth."
+        XCTAssertEqual(PhoneAppModel.activityCaption(captionsOn: true, showing: true, forThisRecording: true, paused: false, newest: say), say)
+        XCTAssertNil(PhoneAppModel.activityCaption(captionsOn: false, showing: true, forThisRecording: true, paused: false, newest: say))
+        XCTAssertNil(PhoneAppModel.activityCaption(captionsOn: true, showing: false, forThisRecording: true, paused: false, newest: say))
+        XCTAssertNil(PhoneAppModel.activityCaption(captionsOn: true, showing: true, forThisRecording: false, paused: false, newest: say))
+        XCTAssertNil(PhoneAppModel.activityCaption(captionsOn: true, showing: true, forThisRecording: true, paused: true, newest: say))
+        XCTAssertNil(PhoneAppModel.activityCaption(captionsOn: true, showing: true, forThisRecording: true, paused: false, newest: nil),
+                     "nothing heard yet, no line")
+    }
+
+    func testANewCaptionUpdatesTheActivityAtMostEveryFewSeconds() {
+        var shown = RecordingActivityAttributes.ContentState(phase: .recording, timerStart: now, level: 0.33, bookmarkCount: 0)
+        shown.caption = "So the first screen"
+        var next = shown
+        next.caption = "So the first screen asks for a name"
+        let interval = RecordingActivityAttributes.ContentState.captionInterval
+        let held = RecordingActivityController.paced(next, current: shown, captionSentAt: now, now: now.addingTimeInterval(interval - 1))
+        XCTAssertEqual(held.caption, "So the first screen", "the line on screen stays until it's due")
+        XCTAssertFalse(RecordingActivityController.shouldSend(held, current: shown, sentAt: now, levelSentAt: now,
+                                                              now: now.addingTimeInterval(interval - 1)), "so nothing is sent")
+        let due = RecordingActivityController.paced(next, current: shown, captionSentAt: now, now: now.addingTimeInterval(interval))
+        XCTAssertEqual(due.caption, next.caption)
+        XCTAssertTrue(RecordingActivityController.shouldSend(due, current: shown, sentAt: now, levelSentAt: now, now: now.addingTimeInterval(interval)))
+        var off = shown
+        off.caption = nil
+        XCTAssertNil(RecordingActivityController.paced(off, current: shown, captionSentAt: now, now: now.addingTimeInterval(1)).caption,
+                     "a caption going away (captions off, paused) goes at once")
+        var louder = next
+        louder.level = 0.66
+        XCTAssertEqual(RecordingActivityController.paced(louder, current: shown, captionSentAt: now, now: now.addingTimeInterval(3)).caption,
+                       shown.caption, "a level update doesn't bring a new caption early")
+    }
+
+    func testAnActivityStateFromAnEarlierBuildDecodes() throws {
+        let earlier = #"{"phase":"recording","timerStart":800000000,"level":0.33,"bookmarkCount":1,"multipoint":"Also on Studio Mac"}"#
+        let decoded = try JSONDecoder().decode(RecordingActivityAttributes.ContentState.self, from: Data(earlier.utf8))
+        XCTAssertNil(decoded.caption)
+        XCTAssertEqual(decoded.multipoint, "Also on Studio Mac")
+    }
+
     /// WCAG 2 contrast of each Live Activity button's label on its fill, in light, dark, and both with
     /// Increase Contrast.
     func testTheLiveActivitysButtonLabelsAreReadableOnTheirFills() {
