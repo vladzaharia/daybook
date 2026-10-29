@@ -92,6 +92,7 @@ public final class DeviceSession: ObservableObject, Identifiable {
                 guard let self else { return }
                 self.onRecorderButton?(self, on)
             }
+            soundcore.hasMoreQueued = { [weak self] in self?.queue.waiting.contains { $0.method == .direct } == true }
         }
         if let listening = connections.lazy.compactMap({ $0 as? any LiveListeningConnection }).first {
             listening.live.$captions.removeDuplicates().sink { [weak self] in self?.liveCaptions = $0 }.store(in: &subscriptions)
@@ -161,6 +162,12 @@ public final class DeviceSession: ObservableObject, Identifiable {
 
     /// What the recorder's page and status line say meanwhile: "Waiting for the Soundcore app to finish".
     public var otherAppWait: String? { isWaitingForOtherApp ? "Waiting for the \(kind.shortName) app to finish" : nil }
+
+    /// Recordings can come over the recorder's own Wi‑Fi here (Fast Transfer, iPhone).
+    public var offersFastTransfer: Bool { managedElsewhere == nil && (direct as? SoundcoreConnection)?.offersFastTransfer == true }
+
+    /// Fast Transfer's stage while it runs.
+    public var fastTransferStage: FastTransferStage? { (direct as? SoundcoreConnection)?.fastTransferStage }
 
     /// One problem at a time: a transfer's first, then the primary connection's, then any other's.
     public var problem: DeviceProblem? {
@@ -303,6 +310,7 @@ public final class DeviceSession: ObservableObject, Identifiable {
         if let soundcore = direct as? SoundcoreConnection {
             soundcore.importsAutomatically = updated.importsAutomatically
             soundcore.isEnabled = updated.isEnabled(.direct)
+            soundcore.usesFastTransfer = updated.usesFastTransfer
         }
         if let files {
             if updated.isEnabled(.files) { if files.isSetUp && !files.isWatching { files.connect() } } else { files.disconnect() }
@@ -345,8 +353,10 @@ public final class DeviceSession: ObservableObject, Identifiable {
 
     /// Queues recordings from the primary connection. One transfer runs at a time; the rest wait.
     /// `automatic` marks imports Daybook started on its own (a multipoint recording's file).
-    public func importRecordings(_ recordings: [DeviceRecording], attachTo: UUID? = nil, automatic: Bool = false) {
+    /// `overWiFi`: the person chose Fast Transfer for these, whatever their length.
+    public func importRecordings(_ recordings: [DeviceRecording], attachTo: UUID? = nil, automatic: Bool = false, overWiFi: Bool = false) {
         guard let primary else { return }
+        if overWiFi { (primary as? SoundcoreConnection)?.requestFastTransfer(recordings.map(\.id)) }
         enqueue(recordings, method: primary.method, attachTo: attachTo, automatic: automatic)
     }
 

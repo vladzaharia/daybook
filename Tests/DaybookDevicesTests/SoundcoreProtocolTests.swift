@@ -21,6 +21,76 @@ final class SoundcoreProtocolTests: XCTestCase {
         XCTAssertEqual(parser.rejectedFrames, 1)
     }
 
+    // MARK: Wi‑Fi Fast Transfer
+
+    func testAccessPointRequestAndReply() throws {
+        let request = try SoundcoreWiFi.accessPointRequest(ssid: "WiFi-1730000000000", password: "4815162342108")
+        XCTAssertEqual([UInt8](request.prefix(1)), [18])
+        XCTAssertEqual(String(decoding: request.dropFirst().prefix(18), as: UTF8.self), "WiFi-1730000000000")
+        XCTAssertEqual(request[request.startIndex + 19], 13)
+        XCTAssertEqual(String(decoding: request.suffix(13), as: UTF8.self), "4815162342108")
+        XCTAssertEqual(SoundcoreWiFi.credentials(inRequest: request)?.ssid, "WiFi-1730000000000")
+        XCTAssertEqual(SoundcoreWiFi.credentials(inRequest: request)?.password, "4815162342108")
+        XCTAssertThrowsError(try SoundcoreWiFi.accessPointRequest(ssid: "", password: "4815162342108"))
+        XCTAssertThrowsError(try SoundcoreWiFi.accessPointRequest(ssid: "WiFi-1", password: "short"))
+
+        // The reply's address is in reverse byte order, its port little-endian (full frame offsets 9–14).
+        let frame = SoundcorePacket.frame(type: 0x1a, command: 0x05, payload: Data([1, 4, 168, 192, 0xbb, 0x01]))
+        XCTAssertEqual(frame.count, 16)
+        XCTAssertEqual([UInt8](frame[9..<15]), [1, 4, 168, 192, 0xbb, 0x01])
+        let packet = SoundcorePacket(type: 0x1a, command: 0x05, status: 1, payload: Data([1, 4, 168, 192, 0xbb, 0x01]))
+        let endpoint = try SoundcoreWiFi.endpoint(from: packet)
+        XCTAssertEqual(endpoint.host, "192.168.4.1")
+        XCTAssertEqual(endpoint.port, 443)
+        XCTAssertEqual(SoundcoreWiFi.endpointPayload(address: [192, 168, 4, 1], port: 443), packet.payload)
+        XCTAssertThrowsError(try SoundcoreWiFi.endpoint(from: SoundcorePacket(type: 0x1a, command: 0x05, status: 0, payload: packet.payload)))
+        XCTAssertThrowsError(try SoundcoreWiFi.endpoint(from: SoundcorePacket(type: 0x1a, command: 0x05, status: 1, payload: Data([1, 2]))))
+
+        let credentials = SoundcoreWiFi.credentials(at: Date(timeIntervalSince1970: 1_730_000_000.25))
+        XCTAssertEqual(credentials.ssid, "WiFi-1730000000250")
+        XCTAssertEqual(credentials.password.count, 13)
+        XCTAssertTrue(credentials.password.allSatisfy(\.isNumber))
+        XCTAssertNoThrow(try SoundcoreWiFi.accessPointRequest(ssid: credentials.ssid, password: credentials.password))
+    }
+
+    func testFileRequestOverWiFiIsEighteenBytesOfHexText() throws {
+        let text = SoundcoreWiFi.fileRequest(recordingID: 0x6720_1a2b, offset: 160)
+        XCTAssertEqual(text, "08ee0000001a071200" + "a0000000" + "2b1a2067" + "1b")
+        XCTAssertEqual(SoundcoreWiFi.bytes(hex: text)?.count, 18)
+        let parsed = try XCTUnwrap(SoundcoreWiFi.parseFileRequest(text))
+        XCTAssertEqual(parsed.recordingID, 0x6720_1a2b)
+        XCTAssertEqual(parsed.offset, 160)
+        XCTAssertNil(SoundcoreWiFi.parseFileRequest("FINISH"))
+        XCTAssertNil(SoundcoreWiFi.parseFileRequest(String(text.dropLast(2)) + "00"))
+        XCTAssertNil(SoundcoreWiFi.bytes(hex: "0g"))
+        XCTAssertEqual(SoundcoreWiFi.bytes(hex: "09 ff"), Data([9, 255]))
+    }
+
+    func testWebSocketFramesRoundTripMaskedAndAtEveryLengthForm() throws {
+        for count in [0, 5, 125, 126, 65_535, 65_536, 70_000] {
+            let payload = Data((0..<count).map { UInt8($0 & 255) })
+            for mask in [nil, [UInt8]([1, 2, 3, 4])] {
+                var buffer = WebSocketFrame.encode(opcode: WebSocketFrame.binary, payload: payload, mask: mask)
+                buffer.append(contentsOf: [0x81])
+                let frame = try XCTUnwrap(WebSocketFrame.decode(&buffer), "\(count)")
+                XCTAssertTrue(frame.fin)
+                XCTAssertEqual(frame.opcode, WebSocketFrame.binary)
+                XCTAssertEqual(frame.masked, mask != nil)
+                XCTAssertEqual(frame.payload, payload)
+                XCTAssertEqual(buffer, Data([0x81]), "only the next frame's start is left")
+            }
+        }
+        // Partial frames wait; a frame claiming more than the limit is refused.
+        var partial = WebSocketFrame.encode(opcode: WebSocketFrame.text, payload: Data("FINISH".utf8)).dropLast()
+        var data = Data(partial)
+        XCTAssertNil(try WebSocketFrame.decode(&data))
+        partial = Data([0x82, 127, 0, 0, 0, 0, 0x7f, 0xff, 0xff, 0xff])
+        data = Data(partial)
+        XCTAssertThrowsError(try WebSocketFrame.decode(&data))
+        // RFC 6455's example key.
+        XCTAssertEqual(WebSocketFrame.accept(for: "dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+    }
+
     func testBatteryBucketsAndStorageUnits() throws {
         var bytes = [UInt8](repeating: 0, count: 56)
         bytes[1] = 0; bytes[38] = 9; bytes[2] = 1; bytes[50] = 1
