@@ -126,10 +126,7 @@ struct SettingsScreen: View {
         model.settings.requestsTranscription ? "Transcribes automatically" : "Transcribes when you ask"
     }
 
-    private var storageSummary: String {
-        let used = model.audio.usage.bytes
-        return used == 0 ? "No audio on this iPhone" : "\(ByteCountFormatter.string(fromByteCount: Int64(clamping: used), countStyle: .file)) of audio"
-    }
+    private var storageSummary: String { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
 
     private var templatesSummary: String {
         let count = model.library.controller.templates.count
