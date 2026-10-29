@@ -10,29 +10,38 @@ struct TrashList: View {
 
     var body: some View {
         List {
-            Section {
-                ForEach(trashed) { meeting in
+            ForEach(trashed) { meeting in
+                HStack(alignment: .center, spacing: PhoneStyle.Space.s3) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title).font(.headline).lineLimit(1)
+                        Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title)
+                            .font(.headline).foregroundStyle(PhoneStyle.Ink.title).lineLimit(1)
                         Text([meeting.date.formatted(date: .abbreviated, time: .shortened), meeting.duration.map(DurationLabel.format)]
                             .compactMap { $0 }.joined(separator: " · "))
-                            .font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                            .font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary).monospacedDigit()
                     }
-                    .padding(.vertical, 4)
-                    .listRowBackground(PhoneStyle.paper)
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        Button { restore(meeting.id) } label: { Label("Restore", systemImage: "arrow.uturn.backward") }
-                            .tint(PhoneStyle.prominentFill)
+                    .accessibilityElement(children: .combine)
+                    Spacer(minLength: 0)
+                    // Restore in sight, as the status sheet's Import is: no instructions needed.
+                    Button { restore(meeting.id) } label: {
+                        Text("Restore")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(PhoneStyle.Ink.link)
+                            .padding(.horizontal, PhoneStyle.Space.s3)
+                            .padding(.vertical, 5)
+                            .background(PhoneStyle.accent.opacity(0.12), in: Capsule())
+                            .contentShape(Capsule())
                     }
-                    .contextMenu {
-                        Button { restore(meeting.id) } label: { Label("Restore", systemImage: "arrow.uturn.backward") }
-                    }
-                    .accessibilityAction(named: "Restore") { restore(meeting.id) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Restore \(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title)")
                 }
-            } footer: {
-                if !trashed.isEmpty {
-                    Text("Swipe right to restore a conversation.")
-                        .font(.footnote).foregroundStyle(PhoneStyle.Ink.meta)
+                .padding(.vertical, 4)
+                .listRowBackground(PhoneStyle.paper)
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    Button { restore(meeting.id) } label: { Label("Restore", systemImage: "arrow.uturn.backward") }
+                        .tint(PhoneStyle.prominentFill)
+                }
+                .contextMenu {
+                    Button { restore(meeting.id) } label: { Label("Restore", systemImage: "arrow.uturn.backward") }
                 }
             }
         }
@@ -41,11 +50,10 @@ struct TrashList: View {
         .paperBackground()
         .overlay {
             if trashed.isEmpty {
-                ContentUnavailableView("Trash Is Empty", systemImage: "trash")
+                EmptyPlace(title: "Trash Is Empty", systemImage: "trash")
             }
         }
         .task(id: library.meetings.map(\.id)) { reload() }
-
     }
 
     private func reload() {
