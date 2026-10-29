@@ -283,7 +283,7 @@ private struct SearchResultRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline) {
-                Text(meeting.title).font(TypeStyle.rowTitle).lineLimit(1)
+                Text(title).font(TypeStyle.rowTitle).lineLimit(1)
                 Spacer(minLength: 6)
                 Text(meeting.date.formatted(.dateTime.day().month(.abbreviated))).font(TypeStyle.rowDetail).foregroundStyle(.secondary)
             }
@@ -311,11 +311,20 @@ private struct SearchResultRow: View {
         }
     }
 
-    private var snippet: AttributedString {
-        var text = AttributedString(hit.snippet)
-        if let match = hit.match, let lower = AttributedString.Index(match.lowerBound, within: text),
+    private var snippet: AttributedString { Self.marked(hit.snippet, match: hit.match, weight: .semibold, size: 12) }
+
+    /// A title match is marked in the title itself, as a snippet's is in the snippet.
+    private var title: AttributedString {
+        let text = meeting.title.isEmpty ? "Untitled Conversation" : meeting.title
+        guard hit.field == .title, let match = hit.match, text == hit.snippet else { return AttributedString(text) }
+        return Self.marked(text, match: match, weight: .bold, size: 13)
+    }
+
+    private static func marked(_ string: String, match: Range<String.Index>?, weight: Font.Weight, size: CGFloat) -> AttributedString {
+        var text = AttributedString(string)
+        if let match, let lower = AttributedString.Index(match.lowerBound, within: text),
            let upper = AttributedString.Index(match.upperBound, within: text) {
-            text[lower..<upper].font = .system(size: 12, weight: .semibold)
+            text[lower..<upper].font = .system(size: size, weight: weight)
             text[lower..<upper].foregroundColor = Ink.link
         }
         return text
