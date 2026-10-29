@@ -43,6 +43,22 @@ public struct SoundcoreTiming {
     /// Audio Daybook didn't ask for (another app's transfer over a link iOS shares between apps) must
     /// have stopped for this long before Daybook starts a transfer or sends Start or Pause.
     public var otherAppQuiet: Duration = .seconds(3)
+    /// Wi‑Fi Fast Transfer (iPhone): recordings at least this long go over Wi‑Fi when the device's
+    /// preference is on.
+    public var fastTransferMinimum: Duration = .seconds(600)
+    /// After the recorder answers `1A 05` and Bluetooth is let go, the time its access point takes to start.
+    public var accessPointStartup: Duration = .seconds(10)
+    /// Opening the recorder's WebSocket: each attempt's limit, how many, and the wait between them.
+    public var webSocketConnect: Duration = .seconds(10)
+    public var webSocketAttempts = 3
+    public var webSocketRetry: Duration = .seconds(2)
+    /// The UDP keep-alive's interval while the WebSocket is open.
+    public var keepAlive: Duration = .seconds(2)
+    /// After a Wi‑Fi transfer with another recording queued, how long the Wi‑Fi link waits for it.
+    public var fastTransferLinger: Duration = .seconds(30)
+    /// After Fast Transfer fails (the join declined, the network didn't appear), how long transfers stay
+    /// on Bluetooth.
+    public var fastTransferPause: Duration = .seconds(1_800)
 
     public init(request: Duration = .seconds(10), stall: Duration = .seconds(45), settle: Duration = .seconds(1), scan: Duration = .seconds(15), connect: Duration = .seconds(20), reconnect: Duration = .seconds(10), recordConfirm: Duration = .seconds(10), backoff: [Duration] = [2, 5, 15, 30, 60].map { .seconds($0) }, idleRelease: Duration = .seconds(300), automaticIdleRelease: Duration = .seconds(30), automaticCooldown: Duration = .seconds(900), lastKnownRecording: Duration = .seconds(1_200), relist: [Duration] = [15, 60].map { .seconds($0) }) {
         self.request = request
@@ -167,8 +183,18 @@ public final class SoundcoreSession {
         }
     }
 
-    public init(timing: SoundcoreTiming = SoundcoreTiming(), send: @escaping (Data) throws -> Void) {
+    /// The link a session runs over. Over Wi‑Fi (Fast Transfer) it only transfers: its file request is
+    /// the WebSocket's hex text, its audio key is the one exchanged over Bluetooth, and it never asks the
+    /// recorder to stop sending (ending the WebSocket does).
+    public enum Medium: Equatable { case bluetooth, wifi }
+
+    public let medium: Medium
+
+    public init(timing: SoundcoreTiming = SoundcoreTiming(), medium: Medium = .bluetooth, crypto: SoundcoreCrypto = SoundcoreCrypto(),
+                send: @escaping (Data) throws -> Void) {
         self.timing = timing
+        self.medium = medium
+        self.crypto = crypto
         self.send = send
     }
 
@@ -278,13 +304,48 @@ public final class SoundcoreSession {
     /// app is transferring.
     public func listen(destination: (UInt32) -> URL, onPCM: @escaping (AVAudioPCMBuffer) -> Void,
                 progress: @escaping (TransferPhase, UInt64) -> Void) async throws -> (recordingID: UInt32, download: Download) {
-        try await exclusiveWhenQuiet {
+        guard medium == .bluetooth else { throw SoundcoreError.unsupported }
+        return try await exclusiveWhenQuiet {
             let listing = try await firstPageLocked()
             guard let active = listing.activeRecordingID else { throw SoundcoreError.liveFileUnavailable }
             let result = try await transferLocked(recordingID: active, expectedBytes: 0, live: true, url: destination(active),
                                                   onPCM: onPCM, progress: progress)
             return (active, result)
         }
+    }
+
+    // MARK: Wi‑Fi Fast Transfer (docs/direct-soundcore.md)
+
+    /// Asks the recorder to open its access point with these credentials (`1A 05`), after the audio key
+    /// exchange its Wi‑Fi transfers reuse, and returns where its WebSocket listens. Waits while another
+    /// app is transferring.
+    public func openAccessPoint(ssid: String, password: String) async throws -> SoundcoreAccessPoint {
+        guard medium == .bluetooth else { throw SoundcoreError.unsupported }
+        let payload = try SoundcoreWiFi.accessPointRequest(ssid: ssid, password: password)
+        return try await exclusiveWhenQuiet {
+            try await ensureKey()
+            let packet = try await request(0x1a, 0x05, payload) { $0.type == 0x1a && $0.command == 0x05 }
+            guard packet.succeeded else { throw SoundcoreError.rejected }
+            let endpoint = try SoundcoreWiFi.endpoint(from: packet)
+            return SoundcoreAccessPoint(ssid: ssid, password: password, host: endpoint.host, port: endpoint.port)
+        }
+    }
+
+    /// Asks the recorder to close its access point (`1A 02`). What it answers, if anything, is
+    /// unverified, so a reply that doesn't come isn't an error.
+    public func closeAccessPoint() async throws {
+        guard medium == .bluetooth else { throw SoundcoreError.unsupported }
+        try await exclusive {
+            do { _ = try await request(0x1a, 0x02) { $0.type == 0x1a && $0.command == 0x02 } } catch SoundcoreError.timedOut {}
+        }
+    }
+
+    /// The audio key exchanged on this link, for a session over the recorder's Wi‑Fi; this one gets a
+    /// fresh one (and exchanges again if it transfers).
+    public func handOverKey() -> SoundcoreCrypto {
+        let key = crypto
+        crypto = SoundcoreCrypto()
+        return key
     }
 
     /// Ends Listen Live, keeping what arrived. The recorder keeps recording.
@@ -471,7 +532,12 @@ public final class SoundcoreSession {
         if let quietUntil, ContinuousClock.now < quietUntil { try await Task.sleep(until: quietUntil, clock: .continuous) }
         quietUntil = nil
         progress(.preparing, 0)
-        try await ensureKey()
+        if medium == .wifi {
+            // Over Wi‑Fi the key is the one exchanged over Bluetooth; nothing else could be sent here.
+            guard crypto.isReady else { throw SoundcoreError.invalidEncryption }
+        } else {
+            try await ensureKey()
+        }
         try Task.checkCancellation()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
@@ -484,7 +550,10 @@ public final class SoundcoreSession {
         var payload = littleEndian32(0)
         payload.append(littleEndian32(recordingID))
         payload.append(live ? 1 : 0)
-        do { try send(SoundcorePacket.command(type: 0x1a, id: 0x07, payload: payload)) } catch {
+        do {
+            if medium == .wifi { try send(Data(SoundcoreWiFi.fileRequest(recordingID: recordingID).utf8)) }
+            else { try send(SoundcorePacket.command(type: 0x1a, id: 0x07, payload: payload)) }
+        } catch {
             finish(transfer, .failure(error))
         }
         armStall(transfer)
@@ -619,7 +688,7 @@ public final class SoundcoreSession {
     /// Asks the recorder to stop sending. It stops transport only; it doesn't stop or delete a recording.
     /// Never while another app's transfer is arriving: the recorder would stop that one.
     private func stopTransport() {
-        guard !otherAppIsTransferring else { return }
+        guard medium == .bluetooth, !otherAppIsTransferring else { return }
         try? send(SoundcorePacket.command(type: 0x1a, id: 0x11, payload: Data([1])))
     }
 }

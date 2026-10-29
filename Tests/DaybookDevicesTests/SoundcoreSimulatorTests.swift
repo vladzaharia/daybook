@@ -1183,6 +1183,13 @@ final class SoundcoreSimulatorTests: XCTestCase {
 
     // MARK: The read-only promise
 
+    /// Every command Daybook may send: status, both list layouts, the key exchange, a transfer, stopping
+    /// a transfer, record control (only when the person asks), and for Wi‑Fi Fast Transfer only opening
+    /// (`1A 05`) and closing (`1A 02`) the recorder's access point (its file requests are `1A 07` too, over
+    /// the WebSocket). Never delete (`1A 10`), reset, bind, firmware, or time sync.
+    static let readOnlyCommands: Set<[UInt8]> = [[0x01, 0x01], [0x1b, 0x0e], [0x1a, 0x0e], [0x2e, 0x01], [0x1a, 0x07], [0x1a, 0x11],
+                                                 [0x18, 0x82], [0x1a, 0x05], [0x1a, 0x02]]
+
     func testOnlyReadOnlyCommandsAreEverSent() async throws {
         let device = recorder()
         device.isRecording = true
@@ -1193,11 +1200,11 @@ final class SoundcoreSimulatorTests: XCTestCase {
         try await waitUntil("imports") { rig.library.imports.count == 2 && !rig.session.queue.isActive }
         rig.connection.refresh()
         try await waitUntil("refresh") { !rig.connection.isRefreshing }
-        let allowed: Set<[UInt8]> = [[0x01, 0x01], [0x1b, 0x0e], [0x1a, 0x0e], [0x2e, 0x01], [0x1a, 0x07], [0x1a, 0x11], [0x18, 0x82]]
         for command in device.received {
-            XCTAssertTrue(allowed.contains([command.type, command.command]), "Unexpected command \(command)")
+            XCTAssertTrue(Self.readOnlyCommands.contains([command.type, command.command]), "Unexpected command \(command)")
         }
         XCTAssertFalse(device.received.contains { $0.type == 0x18 }, "Recording control only when asked")
+        XCTAssertFalse(device.received.contains { $0 == (0x1a, 0x05) || $0 == (0x1a, 0x02) }, "No Wi‑Fi without a hotspot (the Mac)")
         XCTAssertEqual(device.recordings.count, 2)
     }
     // MARK: One owner per recorder

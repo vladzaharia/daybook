@@ -12,6 +12,8 @@ public final class SoundcoreCrypto {
     public var isReady: Bool { sessionKey != nil }
     public var publicKey: Data { privateKey.publicKey.x963Representation }
 
+    public init() {}
+
     public func reset() { sessionKey = nil; privateKey = P256.KeyAgreement.PrivateKey() }
 
     public func completeHandshake(_ payload: Data) throws {

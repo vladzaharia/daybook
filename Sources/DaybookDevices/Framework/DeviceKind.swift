@@ -160,6 +160,10 @@ public struct ConfiguredDevice: Codable, Identifiable, Hashable {
     /// joins the same conversation; its button starts that device. Nil (the default) means on.
     public var alsoRecordsWithMac: Bool?
     public var recordsAlongsideMac: Bool { alsoRecordsWithMac ?? true }
+    /// "Fast Transfer for Long Recordings" (iPhone): recordings over ten minutes come over the recorder's
+    /// own Wi‑Fi while Daybook is open. Nil (the default) means on.
+    public var fastTransferForLongRecordings: Bool?
+    public var usesFastTransfer: Bool { fastTransferForLongRecordings ?? true }
 
     public init(id: String = UUID().uuidString, kind: DeviceKind, name: String? = nil, addedAt: Date = Date()) {
         self.id = id
@@ -185,6 +189,9 @@ public struct DeviceEnvironment {
     public var liveCaptions = LiveCaptionHooks()
     /// Timing for the Soundcore connection; tests shorten these.
     public var soundcoreTiming = SoundcoreTiming()
+    /// Wi‑Fi Fast Transfer: joining the recorder's network, and whether Daybook is in the foreground.
+    /// Without a hotspot (the Mac), every transfer is over Bluetooth. Shared by reference.
+    public var soundcoreWiFi = SoundcoreWiFiHooks()
     /// What Daybook on iPhone's connections need from the app: its local link and whether the
     /// library syncs. Shared by reference, so the app can fill it in after the devices exist.
     public var phone = DaybookPhoneHooks()

@@ -75,6 +75,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     /// A transfer, Listen Live, or a Start or Pause is waiting for another app's transfer to finish (the
     /// Soundcore app, over the link iOS shares between apps): Daybook never starts one over it.
     @Published public private(set) var isWaitingForOtherApp = false
+    /// Wi‑Fi Fast Transfer's stage while it runs (iPhone).
+    @Published public private(set) var fastTransferStage: FastTransferStage?
     public let live = LiveCapture()
 
     public var onChange: (() -> Void)?
@@ -149,6 +151,19 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         return serial?.isEmpty == false ? serial : nil
     }
 
+    /// The device's "Fast Transfer for Long Recordings". Turning it on again tries Fast Transfer afresh,
+    /// even where a join failed before.
+    public var usesFastTransfer = true {
+        didSet {
+            guard usesFastTransfer, !oldValue else { return }
+            storage.set(nil, "fastTransferUnavailableIn")
+            fastTransferPausedUntil = nil
+        }
+    }
+    /// The import queue has another recording from this recorder waiting (the device's session sets it):
+    /// Fast Transfer keeps the recorder's Wi‑Fi open for it.
+    public var hasMoreQueued: (() -> Bool)?
+
     /// Settings › Devices › Connect over Bluetooth.
     public var isEnabled = true {
         didSet {
@@ -200,6 +215,14 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private var lastLiveProgress = Date.distantPast
     private let liveSleep = SleepAssertion(reason: "Listening live to Soundcore Work")
     private var isDemo = false
+    private let wifiHooks: SoundcoreWiFiHooks
+    private lazy var fastTransfer = SoundcoreFastTransfer(host: self, hooks: wifiHooks, timing: timing)
+    /// Recordings the person chose to bring over Wi‑Fi, whatever their length.
+    private var fastTransferRequested: Set<String> = []
+    /// After Fast Transfer failed, transfers stay on Bluetooth until then.
+    private var fastTransferPausedUntil: Date?
+    /// The Bluetooth link is down on purpose: the recorder is on its own Wi‑Fi (Fast Transfer).
+    private var wifiHoldsLink = false
 
     public init(device: ConfiguredDevice, environment: DeviceEnvironment) {
         storage = environment.storage(for: device, method: .direct)
@@ -209,6 +232,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         captionHooks = environment.liveCaptions
         importsAutomatically = device.importsAutomatically
         isEnabled = device.isEnabled(.direct)
+        usesFastTransfer = device.usesFastTransfer
+        wifiHooks = environment.soundcoreWiFi
     }
 
     // MARK: DeviceConnection
@@ -327,6 +352,12 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             rebuildRecordings()
         }
         scheduleRecordingExpiry()
+        // A run that ended during Fast Transfer may have left the recorder's access point open: the next
+        // connection closes it.
+        if let ssid = remembered?.accessPointSSID {
+            wifiHooks.hotspot?.leave(ssid: ssid)
+            problem = SoundcoreIssue.fastTransferInterrupted.problem
+        }
         // Publishing first lets the session apply ownership now that the serial is known, so a
         // recorder another device manages is never reached for.
         publish()
@@ -473,6 +504,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     }
 
     public func shutDown() {
+        endFastTransferHere()
         disconnect(rearm: false)
         transport?.stopScan()
         transport = nil
@@ -480,13 +512,27 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     public func transfer(_ recording: DeviceRecording,
                   progress: @escaping @MainActor (TransferPhase, UInt64) -> Void) async throws -> TransferredAudio {
-        guard case .connected = phase, let session else { throw DeviceTransferError.notConnected }
+        guard case .connected = phase, session != nil || wifiHoldsLink else { throw DeviceTransferError.notConnected }
         guard let id = UInt32(recording.id) else { throw DeviceTransferError.rejected("Not a Soundcore recording.") }
         let native = listing.first { $0.id == id } ?? SoundcoreRecording(id: id, size: UInt32(clamping: recording.byteCount ?? 0))
         beginActivity()
         defer { endActivity() }
         let url = stagingDirectory.appendingPathComponent("Soundcore-\(id)-\(UUID().uuidString.prefix(8)).wav")
         do {
+            await fastTransfer.settled()
+            // Just after Fast Transfer ended, the link is on its way back to Bluetooth: wait for it first.
+            if !fastTransfer.isLinked, bluetoothSession == nil, try await bluetoothSessionAfterWiFi() == nil {
+                throw SoundcoreError.disconnected
+            }
+            if fastTransfer.isLinked || fastTransferFits(native, id: recording.id) {
+                fastTransferRequested.remove(recording.id)
+                if try await fastTransfer.transfer(native, to: url, progress: { phase, bytes in progress(phase, bytes) }) {
+                    return TransferredAudio(url: url, isStaged: true, serial: recorderSerial)
+                }
+                // It fell back: the rest is over Bluetooth, once the link is back.
+                progress(.preparing, 0)
+            }
+            guard let session = try await bluetoothSessionAfterWiFi() else { throw SoundcoreError.disconnected }
             while true {
                 do {
                     _ = try await session.download(native, to: url) { phase, bytes in progress(phase, bytes) }
@@ -785,6 +831,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         if let clock {
             rows.append(DeviceDetail(label: "Recorder clock", value: clock.summary))
         }
+        if let fastTransfer = fastTransferSummary {
+            rows.append(DeviceDetail(label: "Fast Transfer", value: fastTransfer))
+        }
         return rows
     }
 
@@ -888,7 +937,10 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         connectingTo = nil
         if reconnectAttempt > 0 { scheduleReconnect(); return }
         phase = .idle
-        if origin == .person { problem = issue.problem } else { armAutomatic(after: timing.automaticCooldown) }
+        // The recorder's access point may still be open: that's said whoever asked.
+        if remembered?.accessPointSSID != nil { problem = SoundcoreIssue.fastTransferInterrupted.problem }
+        else if origin == .person { problem = issue.problem }
+        if origin != .person { armAutomatic(after: timing.automaticCooldown) }
     }
 
     private func scheduleReconnect() {
@@ -942,6 +994,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     }
 
     private func disconnect(rearm: Bool) {
+        endFastTransferHere()
         cancelTimer()
         reconnectAttempt = 0
         connectingTo = nil
@@ -974,6 +1027,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         recordCommandPending = false
         keyExchangeComplete = false
         isWaitingForOtherApp = false
+        // Bluetooth went for real (turned off, say) while the recorder was on its Wi‑Fi: the next link
+        // is an ordinary one, and closes the access point.
+        wifiHoldsLink = false
         rebuildRecordings()
         scheduleRecordingExpiry()
     }
@@ -1034,6 +1090,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     private func linkIsUp(_ id: UUID) {
         cancelTimer()
+        wifiHoldsLink = false
         phase = .opening(id)
         peripheral = id
         let transport = transport
@@ -1085,6 +1142,10 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
             applyStatus(status)
             scheduleIdleRelease()
             publish()
+            if remembered?.accessPointSSID != nil {
+                await closeAccessPoint(session)
+                guard self.session === session else { return }
+            }
             refresh()
         } catch {
             guard self.session === session else { return }
@@ -1209,7 +1270,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     private func scheduleIdleRelease() {
         idleTimer?.cancel()
-        guard case .connected = phase, activity == 0, !live.isListening, !(staysConnected && managedElsewhere == nil) else { return }
+        guard case .connected = phase, activity == 0, !live.isListening, !(staysConnected && managedElsewhere == nil),
+              !fastTransfer.isActive, !wifiHoldsLink else { return }
         let wait = managedElsewhere != nil ? .zero : origin == .automatic ? timing.automaticIdleRelease : timing.idleRelease
         idleTimer = Task { [weak self] in
             try? await Task.sleep(for: wait)
@@ -1220,7 +1282,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     /// Nothing has happened for a while: let the recorder go so the phone app can reach it.
     private func releaseIdle() {
-        guard case .connected = phase, activity == 0, !live.isListening, !(staysConnected && managedElsewhere == nil) else { return }
+        guard case .connected = phase, activity == 0, !live.isListening, !(staysConnected && managedElsewhere == nil),
+              !fastTransfer.isActive, !wifiHoldsLink else { return }
         disconnect(rearm: true)
     }
 
@@ -1298,7 +1361,7 @@ extension SoundcoreConnection: SoundcoreTransportEvents {
     }
 
     public func transportFailed(_ id: UUID, _ failure: TransportFailure) {
-        guard peripheral == id else { return }
+        guard peripheral == id, !wifiHoldsLink else { return }
         cancelTimer()
         peripheral = nil
         switch failure {
@@ -1317,7 +1380,8 @@ extension SoundcoreConnection: SoundcoreTransportEvents {
     }
 
     public func transportDisconnected(_ id: UUID, error: String?) {
-        guard peripheral == id else { return }
+        // The recorder dropping Bluetooth for its access point is expected.
+        guard peripheral == id, !wifiHoldsLink else { return }
         if let error { lastTechnicalProblem = error }
         let wasLinked: Bool
         switch phase {
@@ -1338,5 +1402,138 @@ extension SoundcoreConnection: SoundcoreTransportEvents {
 
     public func transportReceived(_ data: Data) {
         session?.receive(data)
+    }
+}
+
+// MARK: - Wi‑Fi Fast Transfer (iPhone; docs/direct-soundcore.md, "Wi‑Fi Fast Transfer")
+
+extension SoundcoreConnection: SoundcoreFastTransferHost {
+    /// This device can bring recordings over the recorder's Wi‑Fi: it can join networks (the iPhone), and
+    /// this build hasn't found it can't.
+    public var offersFastTransfer: Bool { wifiHooks.hotspot != nil && !fastTransferUnavailableHere }
+
+    /// The person chose these recordings to come over Wi‑Fi, whatever their length.
+    public func requestFastTransfer(_ ids: [String]) {
+        fastTransferRequested.formUnion(ids)
+    }
+
+    /// A join failed because this build can't join networks: not tried again until the build changes.
+    private var fastTransferUnavailableHere: Bool {
+        guard let build = storage.string("fastTransferUnavailableIn") else { return false }
+        return build == wifiHooks.build
+    }
+
+    /// Over Wi‑Fi: on iPhone, in the foreground, when the person chose it or the recording is long enough
+    /// and the preference is on; never during Listen Live or another app's transfer, nor for a while
+    /// after Fast Transfer failed.
+    private func fastTransferFits(_ recording: SoundcoreRecording, id: String) -> Bool {
+        guard offersFastTransfer, wifiHooks.isForeground, !live.isListening, session?.otherAppIsTransferring != true,
+              (fastTransferPausedUntil ?? .distantPast) <= Date() else { return false }
+        if fastTransferRequested.contains(id) { return true }
+        return usesFastTransfer && recording.length.seconds >= Self.seconds(timing.fastTransferMinimum)
+    }
+
+    /// The Bluetooth session, waiting while the link comes back after Fast Transfer. Nil when it isn't
+    /// coming back (the reconnect gave up, Bluetooth went off).
+    private func bluetoothSessionAfterWiFi() async throws -> SoundcoreSession? {
+        while true {
+            if case .connected = phase, !wifiHoldsLink, let session { return session }
+            switch phase {
+            case .connected where wifiHoldsLink, .waitingForRadio(.reconnect), .searching(target: .some), .connecting, .opening, .backingOff:
+                try await Task.sleep(for: .milliseconds(50))
+            default:
+                return nil
+            }
+        }
+    }
+
+    /// The recorder's access point may still be open (Fast Transfer ended, or a run ended during it).
+    private func closeAccessPoint(_ session: SoundcoreSession) async {
+        do {
+            try await session.closeAccessPoint()
+            accessPointMayBeOpen(nil)
+            if problem?.id == SoundcoreIssue.fastTransferInterrupted.rawValue { problem = nil }
+            Self.log.notice("Closed the recorder's access point")
+            publish()
+        } catch {
+            lastTechnicalProblem = "Closing the recorder’s Wi‑Fi: \(error.localizedDescription)"
+        }
+    }
+
+    /// The connection is going away during Fast Transfer: its Wi‑Fi side ends where it is, and the
+    /// access point, still marked, is closed on the next connection.
+    private func endFastTransferHere() {
+        guard fastTransfer.isActive || wifiHoldsLink else { return }
+        fastTransfer.abandon()
+        wifiHoldsLink = false
+        if remembered?.accessPointSSID != nil { problem = SoundcoreIssue.fastTransferInterrupted.problem }
+    }
+
+    /// "Over Wi‑Fi, Today, 10:02 AM", "Back to Bluetooth, …: why", or how it's set; nil where it can't run.
+    private var fastTransferSummary: String? {
+        guard wifiHooks.hotspot != nil else { return nil }
+        if fastTransferUnavailableHere { return "Unavailable in this build" }
+        switch fastTransfer.outcome {
+        case .transferred(let at)?: return "Over Wi‑Fi, \(DeviceDateFormat.title(at))"
+        case .fellBack(let at, let why)?: return "Back to Bluetooth, \(DeviceDateFormat.title(at)): \(why)"
+        case nil: return usesFastTransfer ? "On for long recordings" : "Off"
+        }
+    }
+
+    // MARK: SoundcoreFastTransferHost
+
+    var bluetoothSession: SoundcoreSession? {
+        guard case .connected = phase, !wifiHoldsLink else { return nil }
+        return session
+    }
+
+    var moreQueued: Bool { hasMoreQueued?() == true }
+
+    func leaveBluetoothForWiFi() {
+        guard case .connected(let id) = phase else { return }
+        wifiHoldsLink = true
+        idleTimer?.cancel()
+        relistTimer?.cancel()
+        let closing = session
+        session = nil
+        closing?.close()
+        transport?.disconnect(id)
+        Self.log.notice("Let Bluetooth go for the recorder's access point")
+        publish()
+    }
+
+    func returnToBluetooth() {
+        guard wifiHoldsLink else { return }
+        wifiHoldsLink = false
+        guard case .connected = phase, remembered != nil else { return }
+        // As a reconnect: the remembered recorder, then a scan, then the backoff schedule.
+        phase = .idle
+        peripheral = nil
+        reconnectAttempt = 0
+        begin(.reconnect)
+        publish()
+    }
+
+    func accessPointMayBeOpen(_ ssid: String?) {
+        guard var snapshot = remembered else { return }
+        snapshot.accessPointSSID = ssid
+        snapshot.accessPointSince = ssid == nil ? nil : Date()
+        remembered = snapshot
+        persist()
+    }
+
+    func fastTransferChanged() {
+        fastTransferStage = fastTransfer.stage
+        publish()
+    }
+
+    func fastTransferFailed(_ error: Error) {
+        lastTechnicalProblem = "Fast Transfer: \(error.localizedDescription)"
+        Self.log.notice("Fast Transfer fell back to Bluetooth: \(error.localizedDescription, privacy: .public)")
+        if (error as? SoundcoreHotspotError) == .unavailable {
+            storage.set(wifiHooks.build, "fastTransferUnavailableIn")
+        } else if (error as? SoundcoreFastTransferError) != .background {
+            fastTransferPausedUntil = Date().addingTimeInterval(Self.seconds(timing.fastTransferPause))
+        }
     }
 }
