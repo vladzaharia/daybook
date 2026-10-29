@@ -112,7 +112,9 @@ extension Meeting {
     public var hasUntranscribedAudio: Bool { hasUntranscribedTranscribableAudio }
     /// Names of the people, for the byline: up to three, then "and 2 others".
     public var peopleLine: String? {
-        let named = speakers.map(\.name).filter { !$0.hasPrefix("Speaker ") }
+        // One person can be several speakers (recognized by voice in more than one recording): named once.
+        var seen = Set<String>()
+        let named = speakers.map(\.name).filter { !$0.hasPrefix("Speaker ") && seen.insert($0).inserted }
         if named.isEmpty { return speakers.count > 1 ? "\(speakers.count) speakers" : nil }
         if named.count <= 3 { return named.formatted(.list(type: .and)) }
         return named.prefix(3).joined(separator: ", ") + " and \(named.count - 3) others"

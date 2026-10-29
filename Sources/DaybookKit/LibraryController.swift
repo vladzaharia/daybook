@@ -203,6 +203,15 @@ public final class LibraryController: ObservableObject {
         }
     }
 
+    /// Changes library settings and saves them, for this module's own kinds of settings (speaker
+    /// profiles). Nothing is saved when nothing changed.
+    func updateMetadata(_ change: (inout LibraryMetadata) -> Void) {
+        let before = metadata
+        change(&metadata)
+        guard metadata != before else { return }
+        persistMetadata()
+    }
+
     private func persistMetadata(requestingSync: Bool = true) {
         noteChange(nil, requestingSync: requestingSync)
         // Settings that couldn't be read, or that a newer Daybook wrote, are never overwritten.
