@@ -440,16 +440,24 @@ struct AddDeviceSheet: View {
                                 Button {
                                     session = model.devices.beginSetup(kind)
                                 } label: {
+                                    // Explicit inks: in a list, a button tints its label, and `.primary` and
+                                    // `.secondary` would follow that tint, turning the whole row teal.
                                     HStack(spacing: 14) {
                                         Image(systemName: kind.systemImage)
                                             .font(.system(size: 20, weight: .medium))
-                                            .foregroundStyle(PhoneStyle.accent)
+                                            .foregroundStyle(PhoneStyle.Ink.secondary)
                                             .frame(width: 44, height: 44)
-                                            .background(PhoneStyle.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                            .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                            .accessibilityHidden(true)
                                         VStack(alignment: .leading, spacing: 3) {
-                                            Text(kind.name).foregroundStyle(.primary)
-                                            Text(PhoneDeviceCopy.kindSummary(kind)).font(.footnote).foregroundStyle(.secondary)
+                                            Text(kind.name).foregroundStyle(PhoneStyle.Ink.title)
+                                            Text(PhoneDeviceCopy.kindSummary(kind)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                                         }
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "chevron.forward")
+                                            .font(.footnote.weight(.semibold))
+                                            .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                                            .accessibilityHidden(true)
                                     }
                                     .padding(.vertical, 4)
                                 }
@@ -505,10 +513,11 @@ private struct SetupScreen: View {
                         ForEach(soundcore.discovered) { recorder in
                             Button { soundcore.connect(to: recorder) } label: {
                                 HStack {
-                                    Image(systemName: "waveform.badge.microphone").foregroundStyle(PhoneStyle.accent)
+                                    Image(systemName: "waveform.badge.microphone").foregroundStyle(PhoneStyle.Ink.secondary)
+                                        .accessibilityHidden(true)
                                     VStack(alignment: .leading) {
-                                        Text(recorder.name).foregroundStyle(.primary)
-                                        Text(recorder.signal.word).font(.footnote).foregroundStyle(.secondary)
+                                        Text(recorder.name).foregroundStyle(PhoneStyle.Ink.title)
+                                        Text(recorder.signal.word).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                                     }
                                     Spacer()
                                     if soundcore.connectingTo == recorder.id { ProgressView() }
@@ -533,7 +542,13 @@ private struct SetupScreen: View {
                 }
                 Section("If It Doesn’t Appear") {
                     ForEach(PhoneDeviceCopy.tips(session.kind), id: \.text) { tip in
-                        Label(tip.text, systemImage: tip.symbol).font(.subheadline)
+                        // Tips aren't actions: secondary symbols, so the accent stays on Search.
+                        Label {
+                            Text(tip.text)
+                        } icon: {
+                            Image(systemName: tip.symbol).foregroundStyle(PhoneStyle.Ink.secondary)
+                        }
+                        .font(.subheadline)
                     }
                 }
                 if let problem = session.problem {
