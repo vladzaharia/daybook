@@ -181,7 +181,11 @@ set by `PhoneDevices.holdRecorders`):
   wait automatic import keeps (iOS keeps a pending connection with no deadline and completes it when
   the recorder is back). iOS shares the one link to the recorder between apps, so holding it doesn't
   keep the Soundcore app on the same iPhone away (docs/direct-soundcore.md); a Mac doesn't reach for a
-  recorder the iPhone manages.
+  recorder the iPhone manages. While the Soundcore app transfers over that link, Daybook's own imports,
+  Listen Live, and Start and Pause wait until it's done ("Two apps on one link" there), and its page and
+  status line say "Waiting for the Soundcore app to finish".
+- **Fast Transfer.** In the foreground, a long recording comes over the recorder's own Wi‑Fi rather than
+  Bluetooth, and the link comes back afterwards (docs/direct-soundcore.md, "Wi‑Fi Fast Transfer").
 - **No scanning, ever, while holding**: only the system's record of the recorder
   (`retrievePeripherals`, then `connect`). If the system doesn't know it, it's tried again after 30 s
   (`SoundcoreTiming.holdRetry`), never in a busy loop.
@@ -404,6 +408,10 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
 - `--device-simulator` runs the real Soundcore connection against `SimulatedSoundcore`, a
   recorder that speaks the protocol from generated fixtures. Its devices live in a throwaway
   preferences suite. Add `--autopilot` to walk through Add Device, connect, and import on its own.
+- `--device-demo other-app` shows an import waiting for the Soundcore app's transfer. On iPhone,
+  `--device-simulator --device-autopilot --demo-transfer wifi|other-app` imports the next recording
+  over the simulated recorder's Wi‑Fi (its access point runs on loopback), or has it wait for another
+  app's long transfer.
 - `--device other` opens the Other Recorder in a demo; `--snapshot-appearance light|dark` sets
   the appearance; `--place device` opens the first device; `--device-window 860x700` sets the
   library window's size (a narrow page); `--recorder-name "<name>"` names the demo's recorders (a
