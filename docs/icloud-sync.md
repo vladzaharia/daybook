@@ -17,7 +17,7 @@ Daybook keeps a local working library and exchanges changes through a journal in
 - **A new library, once.** A device creates `daybook-sync.json` only when the container holds none *and* iCloud has listed it: the engine is created with `waitsForListing`, and the controller calls `listingGathered()` when its `NSMetadataQuery` finishes its first gather. Until then a pass returns nothing and the status reads "Waiting for iCloud…", so a fresh iPhone or Mac doesn't start a second library beside one it can't see yet.
 - **Two manifests anyway** (two devices launched at once on a new container and each wrote one; iCloud kept a conflict version or a renamed copy such as `daybook-sync 2.json`): every device resolves them the same way, whichever is the file and which the copy. The smallest library ID wins.
   - Plaintext libraries share one journal: the manifest lists the IDs it `supersedes` (an additive field older versions ignore), and a device whose checkpoint belongs to a superseded ID carries it over (with its bases), so it continues from the same heads and publishes nothing again.
-  - New encrypted libraries (every new library is one) can't share a journal: each is sealed with its own key. Two whose `created` dates (an additive field set when a device starts a library) are within a week of each other were started together. The first one started wins (the other is usually a device's that was offline when it first launched, with less in it), and of two started the same second, the smallest ID; the winner replaces the others (`sealing.replaces`, as after Start Over): their files are deleted wherever they're found, their keys leave iCloud Keychain, and their devices publish what they hold into the winner once they have its key. Encrypted libraries that weren't started together, or started over from different ones, still pause sync.
+  - New encrypted libraries (every new library is one) can't share a journal: each is sealed with its own key. Two whose `created` dates (an additive field set when a device starts a library) are within a week of each other were started together. The first one started wins, by the clocks of the devices that started them, and of two started the same second, the smallest ID. Every device must reach the same answer from the manifests alone (what each holds differs with what each has downloaded), so this is a way to agree, not a judgment of which holds more, and nothing depends on it being the fuller one: the winner replaces the others (`sealing.replaces`, as after Start Over, and `sealing.rivals`), their devices publish what they hold into it once they have its key, and nothing of a rival's is deleted until that's done. Its files are left alone (not read, not waited for, no warning) until every device that has written presence, at any time (an earlier identity of a reinstalled device aside), holds the winner's key: each has moved on and published what it holds, and what it failed to publish it still holds and publishes on a later pass. Then a rival's entries go as passes find them, and its objects once the winner holds what they hold (a recording republished under the winner's key); one nothing republished stays. Its key leaves iCloud Keychain once nothing in the sync folder is that library's any more. Encrypted libraries that weren't started together, or started over from different ones, still pause sync.
   - Once the resolved manifest is written, conflict versions are marked resolved and the renamed copies that were read are deleted, so one marker is left. A copy still in iCloud is asked for and resolved on a later pass. Only a conflict version that can't be read stops sync, as before.
 - **Turning sync off** keeps local and iCloud copies, and stays off across launches until Turn On.
 
@@ -143,7 +143,7 @@ A replica configured with a `SyncDeviceIdentity` writes its own `Devices/<SHA-25
 
 - **Activity** (optional) says what the device is doing: the conversation it's recording into, since when, and the recorders it drives. `LibrarySyncController.publishActivity(recording:since:recorders:)` writes it at once; the Mac calls it when a recording starts and stops, as does the iPhone's recorder. Its `expiresAt` is set at each write, two and a half refresh intervals ahead, and readers ignore it after that (`KnownSyncDevice.isRecording(at:)`, `recordingMac(at:)`). On the iPhone, `MacPresence.recordingLine` names a Mac that's recording. An activity that can't be read is left out; the device is still listed.
 - **Installation** is a random ID kept with the device ID. A record written recently (within an hour) by another installation means two devices share this device ID (one was cloned from the other): the one with the greater installation ID stops writing the record (`sharesIdentity`), and its controller takes a new device ID after the pass, carries its checkpoints over, and reconnects; the other keeps the ID.
-- **The device ID** is kept in a this-device-only keychain item (`SyncDeviceIdentityStore.keychain(for:)`, one per library folder), mirrored in preferences. On the iPhone the item is named by the library's path within the app's container, because the container's own path changes when the app is updated or reinstalled (an item named by the full path, as earlier versions kept it, moves over; the app's own library also takes the latest item kept under an earlier container's path). Before, each such move gave the iPhone a new device ID. On the first launch with it, the ID in preferences moves there unchanged. Preferences that say it moved, with no keychain item here, were copied from another Mac (Migration Assistant, a backup): this Mac takes a new ID and carries its checkpoints over, so two Macs never share one. Without a keychain (unsigned builds, `swift test`), preferences hold it as before.
+- **The device ID** is kept in a this-device-only keychain item (`SyncDeviceIdentityStore.keychain(for:)`, one per library folder), mirrored in preferences. On the iPhone the item is named by the library's path within the app's container, because the container's own path changes when the app is updated or reinstalled (an item named by the full path, as earlier versions kept it, moves over; the app's own library also takes the latest item kept under an earlier container's path). Each item records its library (the keychain item's label, the path within the container), and an item kept under another path is taken only when it records this library, or, in a release build, records none (an earlier version's, which only the app's library ever had). A debug build, which may have opened demo libraries in the same container, takes none of those, so a library never takes another library's identity (`SyncDeviceIdentityStore.adoptable`). Before, each such move gave the iPhone a new device ID. On the first launch with it, the ID in preferences moves there unchanged. Preferences that say it moved, with no keychain item here, were copied from another Mac (Migration Assistant, a backup): this Mac takes a new ID and carries its checkpoints over, so two Macs never share one. Without a keychain (unsigned builds, `swift test`), preferences hold it as before.
 
 `knownDevices()` lists every presence record, this device, and any device seen only on journal entries, which is an older Daybook with no presence (`reportsPresence == false`). `lastSeen` is clamped to the reader's clock. On the phone, `devices.latestProcessor` gives "Waiting for your Mac · last seen 2 h ago". If it's nil and `hasPeersWithoutPresence` is false, no Mac has synced this library yet.
 
@@ -319,15 +319,21 @@ reference only to an object in the sync folder; one the journal names but that i
 live under it, and once every device seen in the last 30 days that reads encrypted libraries reports it holds the new key
 and a week has passed, the old key's files are deleted and the manifest stops listing it. Deleted conversations' history
 isn't carried over, so it's erased from iCloud. The manifest records when the old key was retired (`sealing.retired`).
-For 30 days the old key stays in iCloud Keychain, so a file sealed with it later (a device that was away) or restored from
-iCloud.com's Data Recovery (which keeps deleted files that long) stays readable and is sealed again, or deleted if it's a
-deleted conversation's. Then it's removed (`removeRetiredKeys`), on whichever device next completes a full pass, once every
-device seen in the last 30 days holds the current key and nothing in the sync folder is still sealed with it (compaction
-records included: they're sealed again under the current key first). On iCloud Keychain that removes it from every device,
-which finishes the erasing: a copy of the old files Apple might still hold can't be opened with a key that's gone. A file
-found sealed with a retired key no device holds any more is a leftover: deleted where it's found, never waited for (a
-device away all that time merges its own changes again, see [Compaction](#compaction)). Remove a lost device from the Apple
-Account before rotating. There are no per-conversation keys: a deletion can't shred one key, so erasing is this coarse step.
+For at least 30 days the old key stays in iCloud Keychain, so a file sealed with it later (a device that was away) or
+restored from iCloud.com's Data Recovery (which keeps deleted files that long) stays readable and is sealed again, or
+deleted if it's a deleted conversation's. Then it's removed (`removeRetiredKeys`), on whichever device next completes a full
+pass, once every device that has written presence, however long ago, holds the current key (one away for months may hold
+only the old key, with files sealed with it to bring, and it's the one to seal them again; an earlier identity of a
+reinstalled device counts as that device's later one), and nothing in the sync folder
+is still sealed with it: entries, compaction records (sealed again under the current key first), and objects, by their
+headers. On iCloud Keychain that removes it from every device, which finishes the erasing: a copy of the old files Apple
+might still hold can't be opened with a key that's gone. A file found sealed with a retired key this device doesn't hold is
+never deleted: it's left for a device that holds the key to seal again, not waited for, and not a warning. Its author, if it
+no longer holds the key either, can't read its own entries: when what it last applied of a conversation is gone that way,
+it publishes its copy again, changed or not, merged with what's there or as new when nothing else of it is there (see
+[Compaction](#compaction)). What it remembers of a file sealed with a key it no longer holds vouches for nothing. Remove
+a lost device from the Apple Account before rotating (until then it holds the old key back). There are no
+per-conversation keys: a deletion can't shred one key, so erasing is this coarse step.
 
 **Starting over** (`startOver`, LibrarySyncStartOver.swift; "Start Over…" beside the waiting line on both apps, behind a
 confirmation: "What’s only in iCloud is lost. Conversations on your devices stay and sync again."). When the key is lost
@@ -492,7 +498,11 @@ its own whenever it next syncs, however long it was away.
   most every six hours. More than eight commit records are consolidated into one. In an encrypted library the records
   are history like the rest: the sealer seals them again under a new key, and an old key isn't retired while one is
   still sealed with it. A record a newer Daybook wrote that this version can't read is a warning, and stops this Mac
-  from compacting.
+  from compacting. A Mac that sees no other device in the last 30 days, while another that isn't an earlier identity was
+  seen in the last 180 (or a presence record can't be read), prunes no conversation's history: every acknowledgement
+  would pass for want of anyone to give one. That covers devices all away for a while and this Mac's clock running a
+  month or more ahead; six months ahead looks like every other device gone, and a device back after that merges as one
+  away that long does.
 - **Earlier Daybooks.** They'd wait forever for parents that are gone, so before the first commit the manifest becomes
   version 3 (`compactedSchemaVersion`, with `compaction.since`), plaintext or encrypted. Every earlier Daybook stops at it
   with "This library was synced by a newer Daybook (version 3). Update Daybook to sync." and changes nothing (the frozen
@@ -501,8 +511,10 @@ its own whenever it next syncs, however long it was away.
 - **A device back after what it applied was pruned** (away more than 30 days, or restored from a backup) has edits made
   meanwhile merged against the base it stored when it applied them (`Sync/Bases/`, history every device built on), with
   the current heads, and published on the next pass as an ordinary edit (`Rebase`). Heads a commit lists as pruned aren't
-  waited for, even while part of the journal is unread; heads gone without a commit saying so (a retired key's
-  leftovers) wait for a whole read, and then merge with no common ancestor. Without local edits it simply applies what's
+  waited for, even while part of the journal is unread; heads gone without a commit saying so wait for a whole read, and
+  then merge with no common ancestor. When they're gone because they're sealed with a retired key this device no longer
+  holds, its copy is published again even unchanged (merged with no common ancestor, or as new when nothing else of the
+  conversation is there): nobody else may ever read what it wrote then. Without local edits it simply applies what's
   there. A deleted conversation it still holds with changes since it last synced keeps only what it added since then
   (what it had synced stands for what the deletion saw), never derived work alone. An edit it published before it went
   away that never reached iCloud, against what has since been pruned, merges with no common ancestor, as two devices that
