@@ -251,6 +251,69 @@ microphone with music on; the listening pass over a real library of earlier reco
 recordings not yet downloaded from iCloud; Gemma 4 on real conversations with typed notes, and other
 summary models (12B, E4B) with the new prompts.
 
+## Second polish round: recordings, model names, Version History, chips, ticks, test hygiene (2026-10-30)
+
+- **Recordings on the iPhone.** Info › Audio says what the Mac's inspector says, from DaybookKit's
+  `RecordingWords`: the name says what the recording is, "Your Mac" only when the name doesn't say where
+  it was made ("This Mac" on the Mac), and timing only when a conversation has several recordings (a
+  later start, "The main recording", "Couldn't line up"); no 0:00 start, confidence, or drift. A
+  recorder's live audio its full recording replaced says so, as on the Mac. `AppState.recordingName`,
+  `sourceRole`, `sourceLine`, and `sourceTimingLine` are now the shared words with the Mac's place and
+  pending wording. Tests: `RecordingWordsTests` (3); `MultiSourceProcessingTests` and `PhoneLinkTests`
+  unchanged and passing.
+- **Model names.** No ID a shipped Daybook stored shows raw: the first catalog's nine IDs (v0.1.0:
+  `whisper-base`, `whisper-small`, `whisper-large-turbo`, `qwen-1.5b`, `qwen-3b`, `qwen-7b`,
+  `speaker-community-1`, `speaker-sortformer-v2.1`, `speaker-sortformer-v2.1-compact`) name their models
+  through the catalog's migration table, and no variant key has changed since v0.2.0 (the catalogs at
+  v0.2.0, v0.3.0, and v0.4.2 hold the same keys). "parakeet-tdt-0.6b-v3" was never stored by Daybook: only
+  the demos used it (`LibraryDemo`, `PhotoDemo`, `SpeakerProfileDemo`), and they name `parakeet/ultra`
+  now. Test: `ModelSelectionTests.testEveryIDAShippedVersionStoredNamesItsModel`. The v0.1.0
+  voice-embedding space (`fluid-community1-embedding-…`) is stored but never shown, so it isn't mapped.
+- **Version History.** A summary's Markdown is drawn as the page draws it (bold, italics, "•" bullets,
+  subheadings bold, links dropped) on both apps, with the changed words marked over that styling
+  (`RevisionText.styled`, `WordChanges`, which both apps' `WordDiff` now use); the iPhone's list line has no
+  marks either, and a summary two devices left in History ("sync:summary") reads as a summary. The iPhone's
+  change page keeps its kind as the navigation title and shows the headline under it only when it says
+  more. Tests: `VersionHistoryRestoreTests` (2 new). `--history-change "<title>"` opens a change on the
+  iPhone for screenshots.
+- **Floating Notes chips.** A chip whose short label says as much with its glyph (a paused iPhone's
+  "Paused") shortens first (`ChipRow.Fit.shortFirst`), and a short recorder chip keeps its name
+  ("Soundcore") instead of only its battery. At 360 pt, Call + Soundcore + a paused iPhone now reads
+  "Call · ● Soundcore · 80% · Paused" (it was "● 80%"); at 280 pt, "Call · ● Soundcore · Paused". Every
+  combination of Call, Soundcore, iPhone, and paused was captured at 360 and 280 pt wide, full (560 pt)
+  and compact (212 pt), light and dark (48 window snapshots each, before and after). Compact panels
+  still give way to glyphs first, as before, since the phase shares the band. Test:
+  `FloatingNotesStatusTests.testChipsShortenThePausedIPhoneFirstAndKeepNames`.
+- **Ticks through sync.** A summary's words now merge without its ticks, and each next step's tick merges
+  on its own, found by its ID, else by its words and owner (a summary written again, or one written on
+  each device). Before, a tick on one device and a speaker's name following into the summary on another
+  conflicted over the whole summary, and either the tick or the new name was lost. Tests:
+  `MeetingMergeTests.testATickSurvivesTheSummaryRenamingItsOwnerOnAnotherDevice` and
+  `…testATickFindsAStepWrittenAgainByItsWordsAndOwner`, both failing on the merge before the change.
+- **Test hygiene.** Tests that left folders in the temporary directory (`DaybookKit-…`,
+  `DaybookPlaceTests-…`, `DaybookStatus-…`, `DaybookMultiSource-…`, `DaybookSaving-…`, `DaybookInspector-…`,
+  `DaybookSealingTests-…`, and others) use `makeTemporaryFolder` (DaybookTestSupport): a folder per test
+  in one folder per process, removed when the test ends (again if a queued save refilled it, which is how
+  most leaked: a library's `local-work.json` landing while teardown emptied the folder) and with the
+  bundle. `WindowInvalidationTests`, `DevicePageTests`, and a device link test named suites in
+  ~/Library/Preferences; they use `makeTestDefaults`. The iPhone's tests name their suites by paths in the
+  temporary directory (`makeTestSuite`, `makeTestDefaults` in its `TestSupport`), deleted per test. The
+  library demo's recordings wait in one folder for the run, removed at exit, so a snapshot that exits
+  mid-seed no longer leaves a `Daybook Library Demo <UUID>` folder.
+
+How it was checked: `swift test` passed 1,226 XCTest cases (one skipped, as before): Captions 8, Core 391, Devices 101,
+Intelligence 132, Kit 196, Link 73, Live 30, Mac app 295.
+`scripts/build-ios.sh --test` on a clone of the iPhone 17 Pro simulator (iOS 27.0, deleted afterwards)
+passed all 183. Window snapshots, before and after, light and dark: Floating Notes in every chip
+combination (`--notes-demo multipoint|paused` with `--device-demo connected` and `--phone-demo
+connected`, `--notes-size`), the Mac's Version History and inspector on `--library-demo`, and the
+iPhone's Info › Audio and Processing, Version History's list, and a summary and a notes change
+(`--demo-library`, which now has a Soundcore recording lined up by sound and the summary's "Summary
+written" entry).
+
+Still to check on hardware: the chips over a real call with a real Soundcore and iPhone (their names
+and battery come from the device hub), and ticks made on two real devices at once.
+
 ## Words split off as "Unknown speaker" (2026-10-29)
 
 From the owner (0.2.2, a microphone and call-audio conversation): the transcript read "Me: … / Unknown
