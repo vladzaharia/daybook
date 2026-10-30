@@ -46,7 +46,7 @@ final class CascadingRecordingTests: XCTestCase {
 
     private func makeModel(link: PhoneLink, rig: RecorderRig, recorder: Recorder? = nil) throws -> PhoneAppModel {
         let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
-        let settings = PhoneSettings(defaults: UserDefaults(suiteName: "CascadingRecordingTests-\(UUID().uuidString)")!)
+        let settings = PhoneSettings(defaults: makeTestDefaults("CascadingRecordingTests"))
         var devices: PhoneDevices?
         if let recorder {
             var timing = PhoneDevices.Timing()
@@ -57,8 +57,7 @@ final class CascadingRecordingTests: XCTestCase {
             timing.soundcore.idleRelease = .seconds(600)
             timing.soundcore.automaticIdleRelease = .seconds(600)
             timing.cascade.poll = .milliseconds(20)
-            let suite = "CascadingRecordingTests-devices-\(UUID().uuidString)"
-            let made = PhoneDevices(library: library, settings: settings, mode: .inert, defaults: UserDefaults(suiteName: suite)!,
+            let made = PhoneDevices(library: library, settings: settings, mode: .inert, defaults: makeTestDefaults("CascadingRecordingTests-devices"),
                                     timing: timing) { SimulatedSoundcoreTransport(device: recorder.device) }
             addTeardownBlock { made.shutDown() }
             devices = made

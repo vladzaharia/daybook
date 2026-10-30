@@ -90,7 +90,7 @@ final class ShellTests: XCTestCase {
     }
 
     func testSharedStateRoundTripsThroughTheAppGroup() throws {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "DaybookPhoneTests-\(UUID().uuidString)"))
+        let defaults = makeTestDefaults("ShellTests")
         var state = SharedRecordingState()
         state.phase = .recording
         state.startedAt = Date(timeIntervalSince1970: 1_800_000_000)

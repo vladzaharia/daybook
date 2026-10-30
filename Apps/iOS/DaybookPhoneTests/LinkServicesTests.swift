@@ -106,7 +106,7 @@ final class LinkServicesTests: XCTestCase {
 
     func makeModel(link: PhoneLink, rig: RecorderRig, settings: PhoneSettings? = nil) throws -> PhoneAppModel {
         let library = PhoneLibrary(rootURL: try temporaryDirectory("library"), installation: UUID().uuidString)
-        let settings = settings ?? PhoneSettings(defaults: UserDefaults(suiteName: "LinkServicesTests-\(UUID().uuidString)")!)
+        let settings = settings ?? PhoneSettings(defaults: makeTestDefaults("LinkServicesTests"))
         let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
                                   options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]),
                                   settings: settings, link: link)
@@ -730,7 +730,7 @@ final class LinkServicesTests: XCTestCase {
 
     /// Macs paired before this iPhone started asking keep working as they did: they may start recording.
     func testMacsPairedBeforeAskingMayStillStartRecording() async throws {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "LinkServicesTests-\(UUID().uuidString)"))
+        let defaults = makeTestDefaults("LinkServicesTests")
         defaults.set(Date().addingTimeInterval(3_600), forKey: PhoneSettings.Keys.macRecordDecisionsSince)   // pairing below predates it
         let settings = PhoneSettings(defaults: defaults)
         let mac = try await makeMac()
@@ -746,7 +746,7 @@ final class LinkServicesTests: XCTestCase {
     }
 
     func testAChoiceBelongsToOnePairingAndSurvivesARelaunch() throws {
-        let suite = "LinkServicesTests-\(UUID().uuidString)"
+        let suite = makeTestSuite("LinkServicesTests")
         let settings = PhoneSettings(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
         let macID = UUID(), pairedAt = Date().addingTimeInterval(5)
         XCTAssertTrue(settings.macMayStartRecording(macID, pairedAt: pairedAt), "on when paired")

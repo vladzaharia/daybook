@@ -40,10 +40,8 @@ final class RecorderActivityTests: XCTestCase {
     }
 
     func testTheActivityFollowsTheRecorder() async throws {
-        let suite = "RecorderActivityTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = makeTestDefaults("RecorderActivityTests")
         let staging = try temporaryDirectory()
-        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         let base = UInt32(Date().timeIntervalSince1970) - 50_000
         let device = SimulatedSoundcore(recordings: [.init(id: base, frames: SimulatedSoundcore.frames(seconds: 1))])
         device.pace = .milliseconds(10)

@@ -30,9 +30,7 @@ final class DeviceOwnershipTests: XCTestCase {
     /// The app's devices against `recorder` (a new transport for each connection, never Bluetooth),
     /// with preferences in a throwaway suite.
     private func makeDevices(_ library: PhoneLibrary, _ recorder: Recorder, settings: PhoneSettings) throws -> PhoneDevices {
-        let suite = "DeviceOwnershipTests-devices-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let defaults = makeTestDefaults("DeviceOwnershipTests-devices")
         let devices = PhoneDevices(library: library, settings: settings, mode: .inert, defaults: defaults, timing: Self.timing) { [recorder] in
             let transport = SimulatedSoundcoreTransport(device: recorder.device)
             recorder.transports.append(transport)
@@ -63,7 +61,7 @@ final class DeviceOwnershipTests: XCTestCase {
     func testSetupClaimsTheRecorderAndAMacTakingItOverIsHonoured() async throws {
         let container = try temporaryDirectory("container")
         let phone = try await makePhone(container)
-        let settings = PhoneSettings(defaults: UserDefaults(suiteName: "DeviceOwnershipTests-\(UUID().uuidString)")!)
+        let settings = PhoneSettings(defaults: makeTestDefaults("DeviceOwnershipTests"))
         let recorder = Recorder()
         let devices = try makeDevices(phone.library, recorder, settings: settings)
         var imported: [PhoneLibrary.Filed] = []
@@ -132,7 +130,7 @@ final class DeviceOwnershipTests: XCTestCase {
     func testUseOnThisIPhoneAsksTheMacOverTheLinkAndTakesOver() async throws {
         let container = try temporaryDirectory("container")
         let phone = try await makePhone(container)
-        let settings = PhoneSettings(defaults: UserDefaults(suiteName: "DeviceOwnershipTests-\(UUID().uuidString)")!)
+        let settings = PhoneSettings(defaults: makeTestDefaults("DeviceOwnershipTests"))
         let devices = try makeDevices(phone.library, Recorder(), settings: settings)
         let link = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil,
                                                            syncDeviceID: phone.library.controller.thisDevice.id),
@@ -207,7 +205,7 @@ final class DeviceOwnershipTests: XCTestCase {
     func testDetailsCopyTheAppVersionAndWhyEachRecordingIsOrIsNotNew() async throws {
         let container = try temporaryDirectory("container")
         let phone = try await makePhone(container)
-        let settings = PhoneSettings(defaults: UserDefaults(suiteName: "DeviceOwnershipTests-\(UUID().uuidString)")!)
+        let settings = PhoneSettings(defaults: makeTestDefaults("DeviceOwnershipTests"))
         let recorder = Recorder()
         let devices = try makeDevices(phone.library, recorder, settings: settings)
         devices.start()

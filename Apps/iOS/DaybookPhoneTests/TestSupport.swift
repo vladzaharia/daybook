@@ -161,6 +161,23 @@ extension XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
     }
+
+    /// A new UserDefaults suite name for this test: a path in the temporary directory, so its file is
+    /// there and not among the app's preferences, deleted when the test ends.
+    func makeTestSuite(_ prefix: String = "DaybookPhoneTests") -> String {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookPhoneTests Defaults", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let name = folder.appendingPathComponent("\(prefix).\(UUID().uuidString)").path
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: name + ".plist") }
+        return name
+    }
+
+    /// A new UserDefaults suite for this test, removed when it ends.
+    func makeTestDefaults(_ prefix: String = "DaybookPhoneTests") -> UserDefaults {
+        let name = makeTestSuite(prefix)
+        guard let defaults = UserDefaults(suiteName: name) else { preconditionFailure("UserDefaults refused the suite \(name)") }
+        return defaults
+    }
 }
 
 /// A small solid image, as a camera photo taken at `capturedAt`.
