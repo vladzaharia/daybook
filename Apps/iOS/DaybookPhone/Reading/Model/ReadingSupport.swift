@@ -69,26 +69,13 @@ enum WordDiff {
     }
 }
 
-/// Words for a recording in Info › Audio: where it came from and how it was lined up.
+/// Words for a recording in Info › Audio, as the Mac's inspector says them from its side
+/// (`RecordingWords`): its name, where it was made when the name doesn't say ("Your Mac"), and,
+/// only when the conversation has several recordings, how it lines up.
 @MainActor
 enum SourceDescription {
     static func name(_ track: RecordingTrack, in meeting: Meeting) -> String {
-        if track.deviceKind == PhoneDevice.kind { return "iPhone" }
-        if track.source == .imported { return track.fileName }
-        var name = recordingName(track.source)
-        if let kind = track.deviceKind, let device = DeviceCatalog.kind(kind)?.name { name = device }
-        if track.derivedFrom != nil { return "\(name), \(track.processing == RecordingTrack.echoCancelledProcessing ? "echo removed" : "processed")" }
-        if meeting.tracks.contains(where: { $0.derivedFrom == track.id }) { return "\(name), original" }
-        return name
-    }
-
-    static func recordingName(_ source: AudioSource) -> String {
-        switch source {
-        case .microphone: return "Microphone"
-        case .systemAudio: return "Computer audio"
-        case .soundcore: return "Soundcore Work"
-        case .imported: return "Imported file"
-        }
+        RecordingWords.name(track, in: meeting)
     }
 
     static func symbol(_ track: RecordingTrack) -> String {
@@ -101,36 +88,13 @@ enum SourceDescription {
         }
     }
 
-    /// "Lined up by sound · starts 0:12 · 93% sure", as the Mac's inspector says it.
-    static func timing(_ track: RecordingTrack, in meeting: Meeting) -> String {
-        let report = meeting.alignmentReports.first { $0.trackID == track.id }
-        let placement = meeting.timelinePlacement(of: track.id)
-        let starts = placement.map { "starts \(TimeLabel.short($0.offset))" }
-        let sure = track.alignment?.confidence.map { "\(Int(($0 * 100).rounded()))% sure" }
-        let drift = placement.flatMap { abs($0.rate - 1) > 0.000_001 ? String(format: "drift %+.3f%%", ($0.rate - 1) * 100) : nil }
-        func line(_ parts: String?...) -> String { parts.compactMap { $0 }.joined(separator: " · ") }
-        switch track.alignment?.method {
-        case .audio?: return line("Lined up by sound", starts, sure, drift)
-        case .transcript?: return line("Lined up by shared phrases", starts, sure, drift)
-        case .clock?: return line("Placed by the clocks only", starts)
-        case .manual?: return line("Timing set by you", starts)
-        case .pending?: return "Lines up when your Mac processes it"
-        case .unaligned?: return "Couldn’t line up"
-        case nil:
-            switch report?.method {
-            case .unaligned?: return "Couldn’t line up"
-            case .anchors?: return line("Lined up by shared phrases", starts, drift)
-            case .audio?: return line("Lined up by sound", starts, report?.confidence.map { "\(Int(($0 * 100).rounded()))% sure" }, drift)
-            case .timestamps?: return line("Placed by the clocks only", starts)
-            case .reference?: return meeting.tracks.count > 1 ? line("The main recording", starts) : "The main recording"
-            case .provided?: return line("Placed when recorded", starts)
-            case nil: return placement == nil ? "Not lined up yet" : line(starts)
-            }
-        }
+    /// "Your Mac · The main recording", "Lined up by sound · starts 0:12"; nil when there's nothing to say.
+    static func line(_ track: RecordingTrack, in meeting: Meeting) -> String? {
+        RecordingWords.line(track, in: meeting, mac: "Your Mac", pending: "Lines up when your Mac processes it")
     }
 
     static func isUnaligned(_ track: RecordingTrack, in meeting: Meeting) -> Bool {
-        track.alignment?.method == .unaligned || meeting.alignmentReports.contains { $0.trackID == track.id && $0.method == .unaligned }
+        RecordingWords.isUnaligned(track, in: meeting)
     }
 }
 
