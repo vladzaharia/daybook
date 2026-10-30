@@ -1,4 +1,5 @@
 import Accelerate
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -7,12 +8,7 @@ final class AudioAlignerTests: XCTestCase {
     private var directory: URL!
 
     override func setUpWithError() throws {
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookAlignerTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    }
-
-    override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: directory)
+        directory = makeTemporaryFolder("DaybookAlignerTests")
     }
 
     private func url(_ name: String) -> URL { directory.appendingPathComponent(name) }

@@ -251,8 +251,7 @@ struct MultiSourceRig {
     let inference = FakeInference()
 
     static func make(in test: XCTestCase, models: Bool = true) async throws -> MultiSourceRig {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookMultiSource-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let root = test.makeTemporaryFolder("DaybookMultiSource")
         let suite = test.makeTestSuite("daybook.multisource")
         let defaults = UserDefaults(suiteName: suite)!
         let state = AppState(libraryURL: root, defaults: defaults)

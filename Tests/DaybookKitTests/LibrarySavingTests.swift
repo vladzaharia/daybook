@@ -1,5 +1,6 @@
 import Combine
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -11,11 +12,7 @@ final class LibrarySavingTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSaving-\(UUID().uuidString)", isDirectory: true)
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: root)
+        root = makeTemporaryFolder("DaybookSaving")
     }
 
     private func open() async throws -> LibraryController {

@@ -13,9 +13,8 @@ import XCTest
 @MainActor
 final class LibraryInspectorTests: XCTestCase {
     func testSwitchingPagesKeepsTheInspectorsSplitItems() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookInspector-\(UUID().uuidString)")
+        let root = makeTemporaryFolder("DaybookInspector")
         let defaults = makeTestDefaults()
-        defer { try? FileManager.default.removeItem(at: root) }
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         defaults.set(true, forKey: "isInspectorPresented")

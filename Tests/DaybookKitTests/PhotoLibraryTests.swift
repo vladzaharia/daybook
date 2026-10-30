@@ -1,5 +1,6 @@
 import CoreGraphics
 import DaybookCore
+import DaybookTestSupport
 import ImageIO
 import UniformTypeIdentifiers
 import XCTest
@@ -10,11 +11,8 @@ final class PhotoLibraryTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("PhotoLibraryTests-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        root = makeTemporaryFolder("PhotoLibraryTests")
     }
-
-    override func tearDown() async throws { try? FileManager.default.removeItem(at: root) }
 
     private func jpeg(type: UTType = .jpeg, located: Bool = false) throws -> Data {
         let context = try XCTUnwrap(CGContext(data: nil, width: 80, height: 40, bitsPerComponent: 8, bytesPerRow: 0,
