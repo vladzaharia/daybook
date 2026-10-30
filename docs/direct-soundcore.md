@@ -194,8 +194,7 @@ firmware accepts commands during a live stream is unverified; Daybook doesn't tr
 
 A long recording comes over the recorder's own Wi‑Fi rather than Bluetooth LE: in the official app's
 words, Fast Transfer. Only on iPhone, only with Daybook in the foreground, for recordings at least ten
-minutes long (`SoundcoreTiming.fastTransferMinimum`) while the recorder page's "Fast Transfer for Long
-Recordings" is on (the default, `ConfiguredDevice.fastTransferForLongRecordings`), or for any recording
+minutes long (`SoundcoreTiming.fastTransferMinimum`) while the recorder page's "Fast Transfer" is on (the default, `ConfiguredDevice.fastTransferForLongRecordings`), or for any recording
 the person picks "Import over Wi‑Fi" for (a new recording's menu). Never during Listen Live or another
 app's transfer. The Mac has no hotspot (`SoundcoreWiFiHooks.hotspot` is nil), so it never uses it.
 
