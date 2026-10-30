@@ -180,6 +180,11 @@ Animations go through `.motion(_:value:)`, which falls back to a short fade unde
 - A time before the start (a note an iPhone took before the Mac started recording) reads "−0:12", and VoiceOver says "12 seconds before the start" (`SpokenTime`), on both apps. Both count whole seconds toward zero, so what's heard matches what's seen, and less than a second before the start is "0:00".
 - Playback is disabled while recording, so computer-audio capture doesn't record it.
 - `AppState` forwards only the library's and the device list's changes, which nearly every view reads through it. Views that show the recorder, call detection, sync, multipoint sources, the iPhone link, or processing and download progress observe those objects themselves (`ActivityReader` for progress, `@ObservedObject` for the rest), so a sync pass or a progress report redraws only what shows it. A new view that reads `state.sync`, `state.monitor`, `state.sources`, `state.phoneLink`, or `state.recorder` must observe that object directly.
+- What keeps the window quick while a job runs (measurements in validation.md, 2026-10-29):
+  - Progress redraws its views only when the percent or the message changes (`ActivityProgress`), and progress doesn't animate: the bar and the page's percent step, and a list row fades its line only when its words change (`RowStatus.phrase`). An animation per report kept the main thread drawing frames for as long as a job ran.
+  - The app holds `AppState` without observing it (`AppStateHolder`). Observed there, every change of the library rebuilt every scene, drew the library window twice, and made SwiftUI write the menu bar item's visibility back to its setting, which redraws every view that keeps a setting. The menu bar item observes the state in its own label, and the setting is written only when it changes.
+  - The page and the inspector observe the library themselves and are `Equatable` by conversation, so the window redrawing them for the same conversation doesn't draw them again.
+  - `LibraryController.update` announces a change once (with its time stamp), and not at all when nothing changed. Each announcement redraws every window that shows the library, so batch a change's parts into one `update`.
 - A conversation whose kind isn't known yet appears only in All Conversations, never in Work or Personal. The person's placement (`Meeting.placement`) always wins and never changes the template.
 - Choosing a different template summarizes again right away. The earlier summary stays in Version History.
 - Version History can put back the text from before a change (notes, a corrected passage, a speaker's name, or a summary). The restore is itself a change, so the text it replaces stays in Version History. A conversation's first summary reads "Summary written" and shows on its own, with no empty Before, on both apps (`RevisionText.hasBefore`).
@@ -223,6 +228,13 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --vocabulary-demo   --templates-demo
                                       fill the scratch library's vocabulary or templates (with --open-window)
   --snapshot <dir> [--snapshot-delay <seconds>]
+  --perf-log <file>                   once a second, a JSON line: the main thread's CPU use, the longest a ping
+                                      waited for it, every wait over 100 ms, what's processing, and frames
+                                      presented (with the display awake); see PerfProbe.swift. With it:
+                                      --perf-progress (progress reported as an engine does, for --library-demo's
+                                      transcribing conversation), --perf-touch (the selected conversation changes
+                                      every two seconds)
+DAYBOOK_IMPORT_AUDIO=<file>           (environment) imports the file into a new conversation, which processes
 ```
 
 `.build/debug/Daybook` isn't sandboxed and takes any path. A sandboxed build (docs/sandbox.md) can reach only its
