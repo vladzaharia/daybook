@@ -145,6 +145,7 @@ xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --demo-recorder
 xcrun simctl launch <udid> local.daybook.phone --demo-link --open-settings add-term   # Vocabulary with Add Term showing (a card on the right page when open)
 xcrun simctl launch <udid> local.daybook.phone --library <dir> --demo-library --speaker-demo --select "Vendor call" --sheet info --info-detent large --info-scroll people   # Recognized and Maybe
 xcrun simctl launch <udid> local.daybook.phone --library <dir> --open-settings speaker-profile:Vladimir --profile-name Vlad   # a profile; also --merge-into Vlad [--confirm-merge]
+xcrun simctl launch <udid> local.daybook.phone --library <dir> --demo-library --select "Weekly product sync" --sheet history --history-change "Summary written"   # a change in Version History
 Apps/iOS/Tools/duo-fold/duo-fold.sh <udid> open                      # or closed, book, 0.0–1.0
 ```
 
