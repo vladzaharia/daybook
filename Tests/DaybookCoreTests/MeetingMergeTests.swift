@@ -89,4 +89,60 @@ final class MeetingMergeTests: XCTestCase {
         let merged = assertLaws(a, b, base: Meeting(id: id))
         XCTAssertEqual(merged.audioAlignments?.count, 2)
     }
+
+    // MARK: Next steps
+
+    /// Regression: a tick on one device and a speaker's name following into the summary on another, at
+    /// the same moment, conflicted over the whole summary, and the tick (matched by its words and owner,
+    /// which the rename changed) or the name was lost.
+    func testATickSurvivesTheSummaryRenamingItsOwnerOnAnotherDevice() throws {
+        let id = UUID()
+        let deck = ActionItem(text: "Send Speaker 2 the deck", owner: "Speaker 1"), notes = ActionItem(text: "Write up the notes", owner: "Speaker 2")
+        var base = Meeting(id: id, title: "Launch", speakers: [Speaker(id: "s1", name: "Speaker 1"), Speaker(id: "s2", name: "Speaker 2")])
+        base.summary = MeetingSummary(overview: "Speaker 1 walked Speaker 2 through the launch.", actionItems: [deck, notes])
+        var phone = base, mac = base
+        phone.summary?.actionItems[0].completed = true
+        mac.renameSpeaker(id: "s1", name: "Vlad")
+        mac.renameSpeaker(id: "s2", name: "Priya")
+        XCTAssertEqual(mac.summary?.actionItems.map(\.owner), ["Vlad", "Priya"], "The names followed into the summary")
+
+        let merged = assertLaws(phone, mac, base: base)
+        let summary = try XCTUnwrap(merged.summary)
+        XCTAssertEqual(summary.overview, "Vlad walked Priya through the launch.")
+        XCTAssertEqual(summary.actionItems.map(\.text), ["Send Priya the deck", "Write up the notes"])
+        XCTAssertEqual(summary.actionItems.map(\.id), [deck.id, notes.id])
+        XCTAssertEqual(summary.actionItems.map(\.completed), [true, false], "The phone's tick stays")
+        XCTAssertFalse(merged.revisions.contains { $0.field.hasPrefix("sync:") }, "A tick and new words don't conflict")
+        XCTAssertTrue(MeetingMerge.merge(base: base, local: phone, remote: mac).warnings.isEmpty)
+
+        // Both devices ticking the same step, one before the rename and one after, is one tick.
+        var later = merged
+        later.summary?.actionItems[1].completed = true
+        var earlier = phone
+        earlier.summary?.actionItems[1].completed = true
+        XCTAssertEqual(assertLaws(later, earlier, base: phone).summary?.actionItems.map(\.completed), [true, true])
+    }
+
+    /// A summary written again has new next steps; a tick on the earlier one still finds its step by its
+    /// words and owner (older data, and two devices that each wrote the same summary).
+    func testATickFindsAStepWrittenAgainByItsWordsAndOwner() throws {
+        let id = UUID()
+        var base = Meeting(id: id, title: "Launch")
+        base.summary = MeetingSummary(overview: "First pass.", actionItems: [ActionItem(text: "Book the room", owner: "Priya")])
+        var phone = base, mac = base
+        phone.summary?.actionItems[0].completed = true
+        mac.setSummary(MeetingSummary(overview: "Second pass.", actionItems: [ActionItem(text: "Book the room", owner: "Priya"),
+                                                                              ActionItem(text: "Send the agenda", owner: "Dana")]))
+        let merged = assertLaws(phone, mac, base: base)
+        XCTAssertEqual(merged.summary?.overview, "Second pass.")
+        XCTAssertEqual(merged.summary?.actionItems.map(\.completed), [true, false])
+        XCTAssertFalse(merged.revisions.contains { $0.field == "sync:summary" })
+
+        // With no common ancestor, the same summary written on each device with its own IDs.
+        var a = Meeting(id: id), b = Meeting(id: id)
+        a.summary = MeetingSummary(overview: "Plan.", actionItems: [ActionItem(text: "Book the room", owner: "Priya", completed: true)])
+        b.summary = MeetingSummary(overview: "Plan.", actionItems: [ActionItem(text: "Book the room", owner: "Priya")])
+        b.summary?.createdAt = a.summary!.createdAt
+        XCTAssertEqual(assertLaws(a, b).summary?.actionItems.map(\.completed), [true])
+    }
 }
