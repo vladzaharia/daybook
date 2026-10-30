@@ -53,6 +53,34 @@ final class SyncDeviceIdentityTests: XCTestCase {
         XCTAssertTrue(SyncDeviceIdentityStore.account(for: before, home: nil).hasPrefix("identity-"))
     }
 
+    /// After the container moved, the app's library takes its identity from an item kept under its earlier path: one that
+    /// records this library, or one an earlier version kept (which records none) in a release build, where only the app's
+    /// library ever had one. Never another library's, such as a demo library's in the same container.
+    func testTheAppsLibraryNeverAdoptsAnotherLibrarysIdentity() {
+        let library = "~/Library/Application Support/Daybook", account = SyncDeviceIdentityStore.account(library)
+        func item(_ name: String, _ library: String?, _ minutes: Double) -> SyncDeviceIdentityStore.IdentityItem {
+            .init(account: "identity-\(name)", library: library, modified: Date(timeIntervalSince1970: minutes * 60),
+                  identity: StoredSyncIdentity(deviceID: name, installation: name))
+        }
+        let demo = item("demo", "~/Library/Application Support/Daybook Demo", 30)
+        let elsewhere = item("elsewhere", "/private/var/mobile/Containers/Data/Application/1A2B/Library/Daybook", 40)
+        let earlier = item("earlier", nil, 10), mine = item("mine", library, 20)
+        func adopted(_ items: [SyncDeviceIdentityStore.IdentityItem], release: Bool) -> String? {
+            SyncDeviceIdentityStore.adoptable(items, account: account, library: library, unmarkedAreThisLibrarys: release)?.identity.deviceID
+        }
+        // Another library's, however recent, is never taken.
+        XCTAssertNil(adopted([demo, elsewhere], release: true))
+        XCTAssertEqual(adopted([demo, mine, elsewhere], release: false), "mine")
+        // One an earlier version kept: in a release build only.
+        XCTAssertEqual(adopted([demo, earlier], release: true), "earlier")
+        XCTAssertNil(adopted([demo, earlier], release: false))
+        // Of several, the latest.
+        XCTAssertEqual(adopted([earlier, mine, demo], release: true), "mine")
+        // Nor its own account, nor anything not an identity.
+        XCTAssertNil(adopted([.init(account: account, library: library, modified: .distantFuture, identity: mine.identity),
+                              .init(account: "other", library: library, modified: .distantFuture, identity: mine.identity)], release: true))
+    }
+
     func testTheIdentityInPreferencesMovesToThisDeviceUnchanged() throws {
         let preferences = try defaults()
         preferences.set("existing-mac", forKey: "syncDeviceID")
