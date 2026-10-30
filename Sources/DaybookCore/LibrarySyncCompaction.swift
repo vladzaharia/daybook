@@ -252,9 +252,15 @@ extension LibrarySyncEngine {
 
         // What can go now: settings versions that aren't heads.
         var prunable = Set(input.metadata.keys).subtracting(input.metadataHeads)
-        // Conversations' history, once every device seen lately has acknowledged the proposal.
+        // Conversations' history, once every device seen lately has acknowledged the proposal. With no other device
+        // seen lately while another has written presence that isn't superseded or six months old (all away for a while,
+        // or this Mac's clock running a month or more ahead), every acknowledgement would pass for want of anyone to
+        // give one: nothing of a conversation goes until another device is seen.
+        let dormant = others.isEmpty && (allPresence().map { records in
+            records.contains { !superseded.contains($0.deviceID) && now.timeIntervalSince($0.lastSeen) < KnownSyncDevice.retiredAfter }
+        } ?? true)
         var executed: String?
-        if let proposal = pendingProposal, let roots = proposal.record.roots, state.compactionAck == proposal.id,
+        if let proposal = pendingProposal, let roots = proposal.record.roots, state.compactionAck == proposal.id, !dormant,
            others.allSatisfy({ $0.compaction == proposal.id }) {
             executed = proposal.id
             let grouped = Dictionary(grouping: input.events.keys, by: { input.events[$0]!.meetingID })
