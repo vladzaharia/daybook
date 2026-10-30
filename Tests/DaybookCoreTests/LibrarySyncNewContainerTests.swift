@@ -165,6 +165,39 @@ final class LibrarySyncNewContainerTests: XCTestCase {
         }
     }
 
+    /// A device that synced the losing library and was then lost or given away never moves on: it holds the loser's files
+    /// and key back only until it hasn't been seen for six months.
+    func testALostDeviceHoldsTheLoserBackForSixMonthsAtMost() async throws {
+        let macView = root.appendingPathComponent("Mac view"), phoneView = root.appendingPathComponent("Phone view")
+        try await pass(try engine("Mac", remote: macView), "Mac", [Meeting(title: "From the Mac")])
+        try await pass(try engine("Phone", remote: phoneView, phone: true), "Phone", [Meeting(title: "From the phone")])
+        let macLibrary = try manifest(macView).libraryID, phoneLibrary = try manifest(phoneView).libraryID
+        let started = [macLibrary: try XCTUnwrap(try manifest(macView).created), phoneLibrary: try XCTUnwrap(try manifest(phoneView).created)]
+        let winner = [macLibrary, phoneLibrary].min { (started[$0]!, $0.uuidString) < (started[$1]!, $1.uuidString) }!
+        let loser = winner == macLibrary ? phoneLibrary : macLibrary
+        let loserKey = try XCTUnwrap(try keychain.keys(for: loser).first)
+        try meet(phoneView, into: macView)
+        let lost = macView.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data("Lost".utf8))).json")
+        func lostPresence(daysAgo days: Double) throws {
+            let record = """
+            {"format":"DaybookDevice","schemaVersion":1,"deviceID":"Lost","deviceClass":"mac","displayName":"","canProcess":true,
+             "lastSeen":"\(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-days * 86_400)))","features":["sealed-1","compact-1"],
+             "key":{"state":"ready","id":"\(loserKey.idHex)"}}
+            """
+            try Data(record.utf8).write(to: lost)
+        }
+        try lostPresence(daysAgo: 170)
+        let mac = try engine("Mac", remote: macView), phone = try engine("Phone", remote: macView, phone: true)
+        for _ in 0..<2 { try await pass(mac, "Mac"); try await pass(phone, "Phone") }
+        XCTAssertEqual(try manifest(macView).libraryID, winner)
+        XCTAssertEqual(try sealedLibraries(macView, in: ["Sealed/Events"]), [winner, loser], "seen less than six months ago")
+        XCTAssertFalse(try keychain.keys(for: loser).isEmpty)
+        try lostPresence(daysAgo: 181)
+        for _ in 0..<2 { try await pass(mac, "Mac"); try await pass(phone, "Phone") }
+        XCTAssertEqual(try sealedLibraries(macView), [winner], "not seen for six months")
+        XCTAssertEqual(try keychain.keys(for: loser), [])
+    }
+
     /// Whichever marker iCloud kept as the file and which it renamed, every device picks the same winner: the library
     /// started first (here, an hour before the other, by a device that was offline when the other started), whatever
     /// the IDs.

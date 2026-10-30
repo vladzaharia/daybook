@@ -156,7 +156,7 @@ extension LibrarySyncEngine {
     /// leaves compaction off here, and what it lists is waited for, as before.
     func readCompaction(warnings: inout [String]) throws -> Int {
         var read: [String: CompactionEntry] = [:]
-        var pending = 0, unreadable = 0
+        var pending = 0, unreadable = 0, heldBack = 0
         let entries = try compactionEntries()
         compactionPaths = Set(entries.map(\.path))
         for entry in entries {
@@ -168,7 +168,12 @@ extension LibrarySyncEngine {
                 let (id, bytes) = try readEntry(entry, kind: .compaction)
                 read[entry.path] = CompactionEntry(entry: entry, id: id, record: try SyncCompactionRecord.decode(bytes))
             } catch is SyncReplacedFile { setAside(entry) }
-            catch let held as SyncHeldAsideFile { heldAsideEntries[entry.path] = held.reason }
+            catch let held as SyncHeldAsideFile {
+                // One sealed with a retired key that a device holding it may yet seal again may list what was pruned:
+                // this Mac doesn't compact meanwhile. After a month, nothing will open it.
+                noteHeldAside(entry, held)
+                if heldAsideLately(entry.path) { heldBack += 1 }
+            }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) { warnings.append(markUnreadable(unreadableKey, error)); unreadable += 1 }
             catch { pending += 1 }
@@ -181,7 +186,7 @@ extension LibrarySyncEngine {
         let executed = Set(read.values.compactMap(\.record.proposal))
         let latest = read.values.filter(\.record.isProposal).max { ($0.record.createdAt, $0.id) < ($1.record.createdAt, $1.id) }
         pendingProposal = latest.flatMap { executed.contains($0.id) ? nil : $0 }
-        compactionReadComplete = pending == 0 && unreadable == 0
+        compactionReadComplete = pending == 0 && unreadable == 0 && heldBack == 0
         return pending
     }
 
@@ -234,7 +239,8 @@ extension LibrarySyncEngine {
     func runCompaction(_ input: CompactionInput, now: Date) {
         guard let policy = compactionPolicy, audioPolicy == .eager, device?.deviceClass == .mac, libraryID != nil,
               input.complete, compactionReadComplete, unreadableJournal.isEmpty else { return }
-        if let last = lastCompaction, now.timeIntervalSince(last) < policy.interval { return }
+        // A run dated after now was by a clock that was ahead, since set right: it doesn't hold compaction back.
+        if let last = lastCompaction, last <= now, now.timeIntervalSince(last) < policy.interval { return }
         // Every device seen lately reads a compacted library, and this is the Mac to compact it.
         guard let others = recentPresence(now: now), others.allSatisfy({ ($0.features ?? []).contains(Self.compactionFeature) }) else { return }
         let candidates = others.filter { record in
@@ -256,11 +262,11 @@ extension LibrarySyncEngine {
         // seen lately while another has written presence that isn't superseded or six months old (all away for a while,
         // or this Mac's clock running a month or more ahead), every acknowledgement would pass for want of anyone to
         // give one: nothing of a conversation goes until another device is seen.
-        let dormant = others.isEmpty && (allPresence().map { records in
-            records.contains { !superseded.contains($0.deviceID) && now.timeIntervalSince($0.lastSeen) < KnownSyncDevice.retiredAfter }
-        } ?? true)
+        let dormant = others.isEmpty && (allPresence(now: now).map { records in records.contains { !superseded.contains($0.deviceID) } } ?? true)
+        // A clock more than a week ahead makes devices in use look away, or gone: nothing of a conversation goes either.
+        let ahead = clockLooksAhead(now: now)
         var executed: String?
-        if let proposal = pendingProposal, let roots = proposal.record.roots, state.compactionAck == proposal.id, !dormant,
+        if let proposal = pendingProposal, let roots = proposal.record.roots, state.compactionAck == proposal.id, !dormant, !ahead,
            others.allSatisfy({ $0.compaction == proposal.id }) {
             executed = proposal.id
             let grouped = Dictionary(grouping: input.events.keys, by: { input.events[$0]!.meetingID })
@@ -296,6 +302,33 @@ extension LibrarySyncEngine {
             if let stale, pendingProposal?.id == stale.id { removeCompactionRecord(stale); pendingProposal = nil }
         }
         compactionReport = report
+    }
+
+    /// How far behind this device's clock the freshest presence it has seen change may say it was written.
+    static let clockAheadTolerance: TimeInterval = 7 * 24 * 60 * 60
+
+    /// Whether this device's clock looks more than a week ahead: of the other devices whose presence it has seen change in
+    /// the last week (by its own clock), even the most recently written says it was written more than a week before it
+    /// was seen. A device whose presence never changes (lost, given away) says nothing either way, so it never holds
+    /// compaction back, and neither does one read only once. What it read is remembered in the checkpoint
+    /// (`SyncCheckpoint.presenceSightings`), so a change made while this device was off counts too.
+    func clockLooksAhead(now: Date) -> Bool {
+        guard let records = allPresence(now: now, includingRetired: true) else { return false }
+        var sightings: [String: SyncPresenceSighting] = [:]
+        for record in records {
+            let known = state.presenceSightings?[record.deviceID]
+            if let known, known.lastSeen == record.lastSeen { sightings[record.deviceID] = known; continue }
+            // Written since this device last read it. (Presence never goes back; a record that does, restored from
+            // somewhere, says nothing about the clock.)
+            let written = known.map { record.lastSeen > $0.lastSeen } ?? false
+            sightings[record.deviceID] = SyncPresenceSighting(lastSeen: record.lastSeen, changed: written ? now : nil)
+        }
+        state.presenceSightings = sightings.isEmpty ? nil : sightings
+        let lags = sightings.values.compactMap { sighting -> TimeInterval? in
+            guard let changed = sighting.changed, changed <= now, now.timeIntervalSince(changed) < Self.clockAheadTolerance else { return nil }
+            return changed.timeIntervalSince(sighting.lastSeen)
+        }
+        return (lags.min() ?? 0) > Self.clockAheadTolerance
     }
 
     /// Presence of every other device seen in the last 30 days, or nil while one can't be read (still downloading, or
@@ -427,7 +460,9 @@ extension LibrarySyncEngine {
     /// device's concurrent edit, which keeps that device from acknowledging it): a new one replaces it.
     private func proposalIsStale(_ input: CompactionInput, now: Date) -> Bool {
         guard let proposal = pendingProposal, let roots = proposal.record.roots else { return true }
-        if now.timeIntervalSince(proposal.record.createdAt) >= Self.proposalLifetime { return true }
+        // So is one dated more than a week after now: proposed by a clock that was ahead.
+        let age = now.timeIntervalSince(proposal.record.createdAt)
+        if age >= Self.proposalLifetime || age < -Self.clockAheadTolerance { return true }
         let grouped = Dictionary(grouping: input.events.keys, by: { input.events[$0]!.meetingID })
         for (meeting, root) in roots {
             guard let id = UUID(uuidString: meeting), !input.deleted.contains(id), let ids = grouped[id] else { continue }
