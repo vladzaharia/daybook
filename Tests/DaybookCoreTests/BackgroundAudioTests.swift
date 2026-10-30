@@ -131,6 +131,46 @@ final class BackgroundAudioTests: XCTestCase {
         XCTAssertNil(meeting.backgroundPassages)
     }
 
+    func testAPassageThePersonCorrectedIsNeverLeftOut() {
+        // 0–10 s the person; 10–30 s music alone, with two passages a recognizer wrote over it.
+        let frames = repeated((0.95, 0.1, 0, -20), 10) + repeated((0.05, 0.9, 0, -22), 20)
+        let segments = [segment(0.5, 9.5, "Let's look at the budget first.", "A"), segment(10.5, 19, "Thank you for watching.", "B"),
+                        segment(20.5, 29, "Stay tuned.", "B")]
+        var meeting = meeting(frames: frames, segments: segments)
+        meeting.includesBackgroundAudio = true
+        meeting.applyFusion(SourceFusion.fuse(meeting).fusion)
+        // Heard with the music included, the person corrected one of them; then left the music out.
+        meeting.correctSegment(id: segments[2].id, text: "Stay tuned, she said.")
+        meeting.includesBackgroundAudio = nil
+        meeting.applyFusion(SourceFusion.fuse(meeting).fusion)
+        XCTAssertEqual(meeting.unifiedTranscript.map(\.text), ["Let's look at the budget first.", "Stay tuned, she said."])
+        XCTAssertEqual(meeting.backgroundPassages?.map(\.text), ["Thank you for watching."])
+        XCTAssertNil(meeting.correctionTransferIssues, "The correction still has its passage")
+        XCTAssertTrue(meeting.unifiedTranscript.contains { $0.id == segments[2].id }, "So Version History can still put it back")
+        // Judged directly, a corrected passage is protected like a named speaker.
+        XCTAssertEqual(BackgroundAudio.judge(segments, analysis: analysis(frames), protectedSegments: [segments[1].id]).segments,
+                       [segments[2].id: .music])
+    }
+
+    func testRecordingsTranscribedBeforeListeningAwaitAnAnalysis() {
+        var meeting = meeting(frames: repeated((0.95, 0.1, 0, -20), 4), segments: [segment(0.5, 3, "Hello.")])
+        XCTAssertTrue(meeting.recordingsAwaitingBackgroundAudio.isEmpty, "Analysed when it was transcribed")
+        meeting.tracks[0].backgroundAudio = nil
+        // Another recording not transcribed yet; a microphone transcribed through its echo-cancelled copy.
+        let untranscribed = RecordingTrack(source: .soundcore, relativePath: "b.m4a", fileName: "b.m4a")
+        let original = RecordingTrack(source: .microphone, relativePath: "m.caf", fileName: "m.caf")
+        var derived = RecordingTrack(source: .microphone, relativePath: "m-clean.caf", fileName: "m-clean.caf")
+        derived.derivedFrom = original.id
+        meeting.tracks += [untranscribed, original, derived]
+        meeting.transcripts += [TrackTranscript(trackID: original.id, segments: [], modelID: "old"),
+                                TrackTranscript(trackID: derived.id, segments: [], modelID: "test")]
+        XCTAssertEqual(meeting.recordingsAwaitingBackgroundAudio.map(\.id), [track, derived.id])
+        var older = analysis(repeated((0.95, 0.1, 0, -20), 4))
+        older.version = 0
+        meeting.tracks[0].backgroundAudio = older
+        XCTAssertEqual(meeting.recordingsAwaitingBackgroundAudio.map(\.id), [track, derived.id], "An older analysis is measured again")
+    }
+
     func testAPassageAnotherRecordingHeardAsConversationStays() {
         // The microphone's passage is judged music; a second recording heard the same words with no music.
         let frames = repeated((0.05, 0.9, 0, -22), 12)

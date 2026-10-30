@@ -465,6 +465,22 @@ public final class LibraryController: ObservableObject {
         }
     }
 
+    /// Keeps what the sound classifier heard on a recording transcribed before Daybook listened for
+    /// music and TV, and fuses again only when that leaves something out, so nothing else moves.
+    /// Nothing is transcribed or summarized; corrections, names, and the person's Include stand.
+    /// Returns false when the recording is gone or already has an analysis.
+    @discardableResult
+    public func addBackgroundAudio(_ analysis: BackgroundAudioAnalysis, toTrack trackID: UUID, in id: UUID) async -> Bool {
+        guard let before = meeting(id), before.recordingsAwaitingBackgroundAudio.contains(where: { $0.id == trackID }) else { return false }
+        update(id) { meeting in
+            guard let index = meeting.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+            meeting.tracks[index].backgroundAudio = analysis
+        }
+        guard let after = meeting(id), after.backgroundSegmentKinds() != before.backgroundSegmentKinds() else { return true }
+        await realign(id)
+        return true
+    }
+
     // MARK: Folders and templates
 
     public func saveFolder(_ folder: LibraryFolder) {

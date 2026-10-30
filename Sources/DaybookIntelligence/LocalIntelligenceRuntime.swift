@@ -337,9 +337,10 @@ public actor LocalIntelligenceRuntime {
     }
 
     /// What Apple's built-in sound classifier hears in a recording, off the actor: it loads no model
-    /// Daybook manages, so it neither waits for nor holds one.
+    /// Daybook manages, so it neither waits for nor holds one. It runs at the caller's priority: a
+    /// job's, or the low one of listening to earlier recordings when the Mac is idle.
     public nonisolated func classifySound(url: URL, progress: @escaping IntelligenceProgressHandler = { _ in }) async throws -> BackgroundAudioAnalysis? {
-        try await detachedWork(priority: .userInitiated) { try SoundClassifier.analyze(url: url, progress: progress) }
+        try await detachedWork(priority: Task.currentPriority) { try SoundClassifier.analyze(url: url, progress: progress) }
     }
 
     /// A summary from the transcript with notes and bookmarks in place (`SummarySource`).

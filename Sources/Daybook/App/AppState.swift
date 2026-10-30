@@ -90,6 +90,12 @@ final class AppState: ObservableObject {
     /// Photos that couldn't be read wait before they're tried again (AppState+Photos.swift).
     var photoBackoff = PhotoReadingBackoff()
     var photoRetry: Task<Void, Never>?
+    /// Listening to recordings transcribed before Daybook listened for music and TV, when idle
+    /// (AppState+BackgroundAudio.swift): the pass, whether it has started, and the recordings tried.
+    var backgroundListening: Task<Void, Never>?
+    var isListeningToEarlierRecordings = false
+    var listenedRecordings = Set<UUID>()
+    var backgroundListeningDelay: Duration = .seconds(20)
     /// The running job's progress, throttled (`ActivityProgress`). The window isn't redrawn by it: the
     /// views that draw it observe `processingActivity`, and redraw when its percent or message changes.
     let processingActivity = ActivityProgress(IntelligenceProgress(0, "Ready"))
@@ -530,6 +536,7 @@ final class AppState: ObservableObject {
             // Requests this Mac held when it last quit or crashed run again (or are given back).
             pickUpRequests()
             Task { await library.relabelStrandedWords() }
+            listenToEarlierRecordingsWhenIdle()
         } catch { report("Couldn’t Open Your Library", "Quit Daybook and open it again.", error) }
     }
 
@@ -760,6 +767,7 @@ final class AppState: ObservableObject {
             self.startPendingDownload()
             self.readNextPhotosWhenIdle()
             self.giveVoicesWhenIdle()
+            self.listenToEarlierRecordingsWhenIdle()
         }
     }
 
@@ -923,6 +931,7 @@ final class AppState: ObservableObject {
         }
         pickUpRequests(start: false)
         requeueUnreadPhotos()
+        listenToEarlierRecordingsWhenIdle()
     }
 
     func realign(_ id: UUID) async { await library.realign(id) }
@@ -965,6 +974,7 @@ final class AppState: ObservableObject {
                 if self.canProcess { for id in self.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) { self.enqueue(id) } }
                 self.runQueue()
                 self.readNextPhotosWhenIdle()
+                self.listenToEarlierRecordingsWhenIdle()
             }
         }
     }

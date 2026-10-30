@@ -224,6 +224,7 @@ extension AppState {
                 runQueue()
                 startPendingDownload()
                 readNextPhotosWhenIdle()
+                listenToEarlierRecordingsWhenIdle()
             }
             // The models run one at a time: while another reading or a download holds them, try again shortly.
             for attempt in 0..<6 {

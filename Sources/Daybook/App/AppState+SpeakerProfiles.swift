@@ -86,6 +86,7 @@ extension AppState {
                 self.startPendingDownload()
                 self.readNextPhotosWhenIdle()
                 if again { self.giveVoicesWhenIdle() }
+                self.listenToEarlierRecordingsWhenIdle()
             }
             for (track, run) in next.runs {
                 guard !Task.isCancelled, let meeting = self.meetings.first(where: { $0.id == id }),

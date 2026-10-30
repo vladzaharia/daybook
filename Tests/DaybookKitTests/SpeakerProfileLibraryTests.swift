@@ -305,7 +305,13 @@ final class SpeakerProfileLibraryTests: XCTestCase {
         // A conversation processed later is labelled too.
         let three = conversation("three", in: library, daysAgo: 0, [("me", mine(63), 200)])
         try await waitUntil("a new conversation's speaker to be named") { name(library, three, "three:me") == "Vlad" }
-        let changed = await coordinator.refresh()
-        XCTAssertFalse(changed, "Nothing left to do")
+        // Its voice turns out to be only in background audio (a TV, found when the Mac listened to the
+        // recording later): the label comes off.
+        library.update(three) { $0.backgroundPassages = $0.transcripts[0].segments }
+        try await waitUntil("the label to come off a voice heard only in background audio") { name(library, three, "three:me") == "Speaker 1" }
+        // Unlearning can take more than one pass; it settles, with what the voice taught forgotten.
+        try await waitUntilAsync("nothing left to do") {
+            await !coordinator.refresh() && !activeVoiceprints(library).contains { $0.meetingID == three }
+        }
     }
 }
