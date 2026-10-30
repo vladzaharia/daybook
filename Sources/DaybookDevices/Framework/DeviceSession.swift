@@ -166,6 +166,9 @@ public final class DeviceSession: ObservableObject, Identifiable {
     /// Recordings can come over the recorder's own Wi‑Fi here (Fast Transfer, iPhone).
     public var offersFastTransfer: Bool { managedElsewhere == nil && (direct as? SoundcoreConnection)?.offersFastTransfer == true }
 
+    /// This device can join the recorder's network, so Fast Transfer's preference applies.
+    public var hasFastTransfer: Bool { managedElsewhere == nil && (direct as? SoundcoreConnection)?.joinsRecorderWiFi == true }
+
     /// Fast Transfer's stage while it runs.
     public var fastTransferStage: FastTransferStage? { (direct as? SoundcoreConnection)?.fastTransferStage }
 

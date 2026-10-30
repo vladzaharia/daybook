@@ -37,6 +37,8 @@ import Foundation
 ///     --demo-live-captions       with --device-simulator --device-autopilot: the recorder records and streams scripted captions
 ///     --demo-recorder-only <name>  only that recorder records a shared recording; this iPhone's microphone didn't start
 ///                                (use with --synthetic-audio; nothing is recorded)
+///     --demo-transfer wifi|other-app   with --device-simulator --device-autopilot: the next recording imports over the simulated
+///                                recorder's Wi‑Fi, or waits for another app's transfer, for screenshots
 ///
 /// Release builds ignore all of them except --posture, which only changes layout.
 struct LaunchOptions {
@@ -69,6 +71,7 @@ struct LaunchOptions {
     var handoffDemo: String?
     var demoLiveCaptions = false
     var demoRecorderOnly: String?
+    var demoTransfer: String?
     /// Hosted unit tests: no recovery, no Live Activities, an inert UI.
     var isRunningTests = false
 
@@ -108,6 +111,7 @@ struct LaunchOptions {
         handoffDemo = Self.value(after: "--handoff-demo", in: arguments)
         demoLiveCaptions = arguments.contains("--demo-live-captions")
         demoRecorderOnly = Self.value(after: "--demo-recorder-only", in: arguments)
+        demoTransfer = Self.value(after: "--demo-transfer", in: arguments)
         if arguments.contains("--open-settings") {
             let next = Self.value(after: "--open-settings", in: arguments)
             openSettings = next.flatMap { $0.hasPrefix("--") ? nil : $0 } ?? "root"

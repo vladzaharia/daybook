@@ -358,7 +358,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         await audio.setBudget(settings.audioCacheBudget)
         if let path = options.importFile { await importFiles([URL(fileURLWithPath: path)]) }
         if options.deviceAutopilot { runDeviceAutopilot() }
-        if options.handoffDemo != nil || options.demoLiveCaptions { runStatusDemo() }
+        if options.handoffDemo != nil || options.demoLiveCaptions || options.demoTransfer != nil { runStatusDemo() }
         if options.startRecording, !recorder.isActive {
             try? await startRecording()
             runDemoScript()
@@ -377,6 +377,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     func scenePhaseChanged(_ phase: ScenePhase) {
         isForeground = phase == .active
         sync.isForeground = isForeground
+        devices.foregroundChanged(isForeground)
         DeviceNotifications.isInForeground = { [weak self] in self?.isForeground ?? false }
         switch phase {
         case .active:
@@ -1185,6 +1186,16 @@ final class PhoneAppModel: RecordingCommandHandling {
                     }
                     try? await Task.sleep(for: .seconds(1.5))
                 }
+            }
+            if let demo = self.options.demoTransfer, let recorder = self.devices.simulatedRecorder,
+               let next = session.newRecordings.first, let id = UInt32(next.id) {
+                // Slow enough to see: the import over Wi‑Fi, or another app's long transfer it waits for.
+                recorder.pace = .milliseconds(400)
+                if demo == "other-app" {
+                    recorder.beginAnotherAppsTransfer(recordingID: id &+ 1, slices: 30_000, pace: .milliseconds(60))
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+                session.importRecordings([next], automatic: true, overWiFi: demo == "wifi")
             }
             guard let state = self.options.handoffDemo else { return }
             let mac = ProcessingRequest.Device(id: "demo-studio-mac", name: "Studio Mac")

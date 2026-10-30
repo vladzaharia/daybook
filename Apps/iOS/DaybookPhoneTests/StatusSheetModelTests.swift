@@ -80,6 +80,18 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(problem.tone, .attention)
     }
 
+    /// The Soundcore app transferring over the link iOS shares: Daybook's import waits, and the line says so
+    /// in place of "Importing 1 of 3".
+    func testRecorderLineSaysAnImportWaitsForTheSoundcoreApp() {
+        let waiting = line(recorder {
+            $0.importing = .init(position: 1, total: 3, fraction: 0)
+            $0.otherAppWait = "Waiting for the Soundcore app to finish"
+        })
+        XCTAssertEqual(waiting.text, "Waiting for the Soundcore app to finish")
+        XCTAssertEqual(waiting.tone, .working)
+        XCTAssertEqual(waiting.shortText, "Waiting…")
+    }
+
     func testRecorderLineForOwnershipAndHandoff() {
         let managed = line(recorder { $0.managedBy = "Studio Mac"; $0.isLinked = false; $0.state = .notConnected })
         XCTAssertEqual(managed.text, "Managed by Studio Mac")
