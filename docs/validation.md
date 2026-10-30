@@ -353,6 +353,90 @@ the file request's form and last byte, the keep-alive, the recorder accepting Bl
 access point is open, `1A 02`'s reply and whether `FINISH` closes the access point on its own, and the
 throughput against Bluetooth ([verifying it](direct-soundcore.md#verifying-it-on-a-recorder)).
 
+## The Mac while it transcribes and summarizes (2026-10-29)
+
+The owner found the Mac's window very slow while it transcribes or summarizes, on 0.2.2. There, every
+engine report set `AppState.processingProgress` from its own main-actor task, so each report redrew every
+window; 0.4.0 throttled progress and gave it its own observed object. Measured again on main (3420e2f), in
+a debug build, with a 15.4-minute dialogue of three `say` voices (Samantha, Daniel, Karen) imported into a
+scratch library whose models were the owner's installed ones, mirrored read-only (Parakeet ultra,
+Community-1, Gemma 4 26B-A4B for summaries).
+
+**How.** `--perf-log` (debug, `PerfProbe`) writes a line a second: the main thread's CPU time
+(`thread_info`), the longest a ping from another thread waited for it and every wait over 100 ms, the
+stage, and frames a tiny Metal layer got on screen. Body counts came from temporary `PerfProbe.body`
+calls in 18 views (the library window, list and rows, page parts, inspector, Floating Notes; not kept).
+`sample` attributed the time. Two harnesses repeat one cause in isolation: `--perf-progress` reports
+progress as an engine does for the demo library's transcribing conversation, and `--perf-touch` changes the
+selected conversation every two seconds, as each step of a job does. Other agents shared the machine
+(load averages of 100 to 1,000, swap nearly full), so before and after ran interleaved, and CPU time
+counts for more than waits.
+
+**What it found on main.**
+
+- Summarizing: the main thread was idle (0.1% busy, no waits over 100 ms, no redraws). Frames reached the
+  screen at 57.5 a second with the display awake, two gaps over 50 ms (at most 83 ms) in 220 s, so the
+  model on the GPU didn't hold the window's frames back on this Mac (64 GB).
+- Transcribing, while the percent moved (recognition, listening for music): the main thread was 31 to 35%
+  busy. Each report (up to ten a second) started animations that overlapped for the whole job: the bar
+  eased to its width under its glow, the page's percent rolled its digits, and the list row faded its line.
+  Each frame laid the window out again from its root through every split-view column. Turning off the
+  animations alone took the synthetic progress from 32% to 11%.
+- Every change of the library (a step of the job finishing, a status, a typed note) drew the window twice:
+  the app observed `AppState`, so each change also rebuilt every scene; that made SwiftUI write the menu bar
+  item's visibility back to its setting, and the write redrew every view that keeps a setting, the library
+  window again among them. `LibraryController.update` also announced each change twice, and once for an
+  update that changed nothing. The page and the inspector were drawn again by the window after drawing
+  themselves. With forty conversations, most of a change's main-thread time went to the list rows: each
+  routed the models through the whole catalog again to ask whether this Mac can process.
+- When the transcript arrived, the window stalled for 0.9 to 2.1 s in all.
+
+**What changed.**
+
+- Progress redraws its views only on a new percent or message (`ActivityProgress`); the bar and the percent
+  step without animating; a row fades its line only when its words change (`RowStatus.phrase`).
+- The app holds `AppState` without observing it (`AppStateHolder`), the menu bar item observes it in its own
+  label, and an unchanged visibility isn't written back.
+- The page and the inspector are `Equatable` by conversation, so the window doesn't draw them again.
+- `LibraryController.update` announces a change once, and not at all when nothing changed.
+- The routed models are worked out once per change of what routes them (`routedRequiredModelIDs`).
+
+**Before and after.** Main-thread CPU, waits over 100 ms, and bodies of the 18 counted views:
+
+| Run | Before | After |
+| --- | --- | --- |
+| Synthetic progress, recognition (2 rounds, 20 s each) | 49.2%, 16.7/min, 18.7/s | 10.4%, 2.9/min, 11.3/s |
+| Synthetic progress, finding speakers | 25.1%, 0/min, 9.5/s | 2.4%, 0/min, 5.2/s |
+| Synthetic progress, listening for music | 43.8%, 26.2/min, 8.9/s | 5.8%, 0/min, 5.0/s |
+| A change every 2 s, transcript page (2 rounds) | 7.5%, 30/min, 62/s | 2.4%, 1.7/min, 17/s |
+| A change every 2 s, summary page | 6.2%, 27/min, 20.5/s | 2.4%, 0.8/min, 7/s |
+| A change every 2 s, 40 conversations | 8.5%, 30/min, 20/s | 3.1%, 1.7/min, 7/s |
+| Real job, transcribing while the percent moves | 35.2%, 6.7/min, 5.7/s | 4.2%, 0/min, 4.2/s |
+| Real job, finding speakers | 2.7%, 0/min, 0.9/s | 0.9%, 0/min, 1.5/s |
+| Real job, all of transcription | 8.9%, 3.2/min, 2.9/s | 1.8%, see below, 3.2/s |
+| Real job, summarizing | 0.1%, 0/min, 0/s | 0.0%, see below, 0/s |
+
+On the transcript page a change now costs about 47 ms of main-thread time in the debug build, from 150 ms;
+the longest wait in most seconds with a change went from 130 ms to 28 ms (median), 217 ms to 50 ms (90th
+percentile). The real runs compare runs with the display asleep (the first before run, and the after run).
+In the after run the transcript's arrival stalled the window once, 137 ms with the main thread busy;
+before, 0.9 s. The after run's other waits over 100 ms (up to 0.94 s, while the summary model loaded) came
+with the main thread idle, 0% CPU, while the machine paged with 29.5 of 30.7 GB of swap in use, and the
+Mac slept twice during it.
+
+Tests: `WindowInvalidationTests` (progress that changes neither percent nor message redraws nothing but
+reaches the app; every delivery reaches `onChange`, only visible ones redraw; a row fades on its words,
+not its percent), `LibrarySavingTests.testAnUpdateChangesTheLibraryOnceAndAnUpdateThatChangesNothingNotAtAll`,
+`SpeechRoutingTests.testRoutedModelsAreWorkedOutOncePerChangeOfWhatRoutesThem`.
+
+Not established here: a release build (the debug build's own code runs unoptimized; SwiftUI's and AppKit's
+work, most of what was measured, doesn't change); frames with the display awake after the change (the
+display slept for the after runs); a Mac where the summary model barely fits in memory, where paging can
+stall the window whatever it draws; and the owner's 0.2.2 build itself. Still drawn per change: a
+conversation's visible passages (they take the whole conversation), 18 on the transcript page. Floating
+Notes' progress line (`WorkProgressLine`, shared with the iPhone) still eases each step, at most five
+times a second and now only on a new percent.
+
 ## The four streams together (2026-10-29)
 
 Processing quality, speaker profiles, live transcription, and recording across devices were built
