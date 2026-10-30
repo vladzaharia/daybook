@@ -68,7 +68,7 @@ final class RecordingSurfacesTests: XCTestCase {
         XCTAssertEqual(idle.clearedAtLaunch(), idle)
 
         // Through the app group's storage, as the app does at every launch.
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "RecordingSurfacesTests-\(UUID().uuidString)"))
+        let defaults = makeTestDefaults("RecordingSurfacesTests")
         left.save(to: defaults)
         RecordingActivityController.clearLeftoversAtLaunch(defaults: defaults)
         XCTAssertEqual(SharedRecordingState.load(from: defaults).phase, .idle)

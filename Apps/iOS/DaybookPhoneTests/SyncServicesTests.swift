@@ -324,7 +324,7 @@ extension XCTestCase {
     func makePhone(_ container: URL, name: String = "Test iPhone", budget: UInt64 = 1_000_000_000, cloud: SyncCloudFiles = .system,
                    courier: ((URL) -> any SyncCourier)? = nil, keyStore: (any LibraryKeyStore)? = nil) async throws -> PhoneRig {
         let root = try temporaryDirectory("phone-\(name)")
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
+        let defaults = makeTestDefaults("SyncServicesTests")
         let controller = LibrarySyncController(localRoot: root, defaults: defaults)
         controller.replica = PhoneSync.replica(displayName: name, budget: budget, cloud: cloud)
         controller.replica.keyStore = keyStore
@@ -352,7 +352,7 @@ extension XCTestCase {
     /// A Mac with models: an eager replica that writes presence.
     func makeMac(_ container: URL, name: String = "Studio Mac", keyStore: (any LibraryKeyStore)? = nil) async throws -> LibraryController {
         let root = try temporaryDirectory("mac-\(name)")
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "PhoneTests-\(UUID().uuidString)"))
+        let defaults = makeTestDefaults("SyncServicesTests")
         let controller = LibrarySyncController(localRoot: root, defaults: defaults)
         controller.replica = .mac(displayName: name, canProcess: true)
         controller.replica.keyStore = keyStore

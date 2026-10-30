@@ -20,7 +20,7 @@ final class BackupExclusionTests: XCTestCase {
         try Data("b".utf8).write(to: recordedHere)
         XCTAssertEqual(downloaded.path, root.appendingPathComponent("Meetings/\(meeting.uuidString)/Audio/fetched.m4a").path)
 
-        let settings = PhoneSettings(defaults: try XCTUnwrap(UserDefaults(suiteName: "BackupExclusionTests-\(UUID())")))
+        let settings = PhoneSettings(defaults: makeTestDefaults("BackupExclusionTests"))
         XCTAssertTrue(settings.includesLibraryInBackups, "on unless turned off")
         BackupExclusion.apply(libraryRoot: root, inbox: inbox, includesLibrary: settings.includesLibraryInBackups)
         BackupExclusion.set(downloaded, excluded: true)   // as `excludeDownloads` does for fetched audio
@@ -64,7 +64,7 @@ final class BackupExclusionTests: XCTestCase {
                        "off for the plaintext library still keeps the whole folder out")
         XCTAssertEqual(BackupExclusion.library(includesLibrary: false, encrypted: true, includesEncryptedLibrary: true), .whole,
                        "turned on for the encrypted library, it's included")
-        let settings = PhoneSettings(defaults: try XCTUnwrap(UserDefaults(suiteName: "BackupExclusionTests-\(UUID())")))
+        let settings = PhoneSettings(defaults: makeTestDefaults("BackupExclusionTests"))
         XCTAssertFalse(settings.includesEncryptedLibraryInBackups, "off unless turned on")
 
         BackupExclusion.apply(libraryRoot: root, inbox: inbox, library: .withoutEncryptedFolders)

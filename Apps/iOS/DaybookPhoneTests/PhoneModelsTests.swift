@@ -40,9 +40,7 @@ final class PhoneModelsTests: XCTestCase {
                             memoryGB: UInt64 = 12) -> PhoneModels {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneModelsTests-\(UUID())", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let suite = "PhoneModelsTests-\(UUID().uuidString)"
-        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
-        return PhoneModels(root: root, defaults: UserDefaults(suiteName: suite)!, fetcher: fetcher, network: network,
+        return PhoneModels(root: root, defaults: makeTestDefaults("PhoneModelsTests"), fetcher: fetcher, network: network,
                            physicalMemory: memoryGB * 1_073_741_824)
     }
 
