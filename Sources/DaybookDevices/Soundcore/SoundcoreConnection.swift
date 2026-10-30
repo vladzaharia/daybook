@@ -656,7 +656,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
 
     /// Listen Live: receives the recording in progress and saves it as it arrives. With `conversation`,
     /// for a shared recording: the audio is saved into that conversation when listening ends, and
-    /// captioning is up to `captions` (the device's own recording captions the room already).
+    /// captioning is up to `captions` (a shared recording shows them beside its own).
     @discardableResult
     public func startListening(into conversation: UUID?, captions: Bool) -> Bool {
         guard case .connected = phase, let session, !live.isListening else { return false }

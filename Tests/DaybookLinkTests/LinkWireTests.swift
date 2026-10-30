@@ -20,6 +20,9 @@ final class LinkWireTests: XCTestCase {
                 LinkRecorderState(kind: "soundcore.work", serial: "S1", name: "Soundcore Work", isRecording: true, recordingID: "1",
                                   startedAt: t0, asOf: t0, conversationID: id)]))),
             .app(.bookmark(LinkBookmark(conversationID: id, recordingTime: 1.5, createdAt: t0, label: nil))),
+            .app(.captions(LinkCaptions(conversationID: id, startedAt: t0, lines: [
+                .init(id: id, start: 1.5, end: 3, text: "Heard on the phone.", isTentative: false, speakerSlot: "S2", speakerName: "Priya"),
+                .init(id: UUID(), start: 3.5, end: 4, text: "and by its recorder", isTentative: true, device: "Soundcore")], sentAt: t0))),
             .app(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .failed, fraction: nil, macName: "M",
                                                             detail: "Out of space"))),
             .app(.processingNudge(LinkProcessingNudge(requestID: UUID(), meetingID: id, mode: .transcribe, requestedAt: t0))),
@@ -51,6 +54,16 @@ final class LinkWireTests: XCTestCase {
             XCTAssertEqual(decoded.version, 2)
             XCTAssertEqual(decoded.message, message, String(decoding: frame, as: UTF8.self))
         }
+    }
+
+    func testCaptionsAreAFeatureOlderBuildsIgnore() throws {
+        let mac = LinkCapabilities(deviceClass: .mac, name: "Studio Mac", appVersion: "0.4", libraryID: nil, canProcess: false,
+                                   features: [LinkCapabilities.liveCaptionsFeature])
+        XCTAssertTrue(mac.showsCaptions)
+        XCTAssertFalse(LinkCapabilities(deviceClass: .mac, name: "Older Mac", appVersion: "0.3", libraryID: nil, canProcess: false,
+                                        features: [LinkCapabilities.sharedNotesFeature]).showsCaptions, "an older Mac is never sent captions")
+        let frame = try LinkWire.encode(.app(.captions(LinkCaptions(conversationID: UUID(), startedAt: t0, lines: []))), version: 1)
+        XCTAssertTrue(String(decoding: frame, as: UTF8.self).contains(#""type":"captions""#), "a type an older build reads as unknown")
     }
 
     func testUnknownTypesDecodeAsUnknownAndBrokenKnownTypesThrow() throws {

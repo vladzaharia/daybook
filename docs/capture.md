@@ -390,6 +390,29 @@ Code: `Sources/Daybook/Captions/` (controller, echo rule, store, views, settings
   factor counts as speakers, which costs nothing when there's no echo). With headphones both
   sources show in full, so a line you repeat is kept. Route changes mid-recording apply from their
   time on. Verdicts are recomputed while lines are fresh and kept once they're 30 seconds old.
+- **Every source.** Live captions cover every source a recording has, not only this Mac's:
+  - **You and Call** with the live models, each its own captioner over models loaded once
+    (`LiveModelHost`): checked with the real models on this Mac, both captioning at once
+    (docs/validation.md). With computer audio off ("Include computer audio" in Settings › General)
+    there's no Call track and no Call captions; that's the setting, not the captions.
+  - **A recorder recording along** (Soundcore Work through `DeviceSession.captureLive`): its live
+    audio is captioned as Listen Live is, and `LiveCaptureCaptions` hands each recorder's lines to the
+    recording's captions with when its recording began (its live audio starts there), so they move onto
+    this Mac's timeline (lines from before this Mac started are left out).
+  - **A paired iPhone recording the same conversation**: the phone sends the captions it makes (its
+    microphone's, and its recorder's) over the local link, a second at a time, only the lines that
+    changed (`LinkCaptions`, to a Mac listing `liveCaptions`; docs/link.md). Its recording's start,
+    mapped through the link's clock estimate, places them. The Mac never receives the phone's audio
+    while it records, so it can't caption it itself.
+
+  Other devices' lines join by time (`LiveCaptionMix`), each tagged with its source
+  (`LiveCaptionSource.device`). Several devices in one room hear the same speech: a line another
+  device captioned that repeats, in order, at least 60% of the words of one already shown within 4
+  seconds is left out, so the room reads once; this Mac's own lines come first. Labels: You and Call
+  keep the time lane in Floating Notes; another device's line names the person live speakers
+  recognized before its words, else the device ("Soundcore", "iPhone"); the conversation page reads
+  them as turns labelled the same way. The devices' names are saved with the captions
+  (`LiveCaptions.sourceNames`).
 - **Storage.** `LiveCaptionStore` keeps `<library>/LiveCaptions/<meeting id>.json` (directory 0700,
   file 0600), laid out as on the iPhone: one `LiveCaptions` with You and Call as segments tagged
   `source` (`.microphone`, `.call`), saved every 10 seconds while listening and at Stop (what stood

@@ -79,7 +79,8 @@ struct CaptionRows: View {
         .accessibilityElement(children: .combine)
         .id("captions-header")
         ForEach(captions.segments.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { segment in
-            CaptionRow(segment: segment, isPlaying: playing == segment.id) {
+            CaptionRow(segment: segment, name: LiveCaptionsController.name(of: segment, names: captions.sourceNames ?? [:]),
+                       isPlaying: playing == segment.id) {
                 play(SavedCaptions.playback(segment, captions: captions, in: meeting))
             }
             .id("caption:\(segment.id.uuidString)")
@@ -89,6 +90,8 @@ struct CaptionRows: View {
 
 private struct CaptionRow: View {
     let segment: LiveCaptionSegment
+    /// Before the words: the person live speakers recognized, or the recorder that heard it.
+    let name: String?
     let isPlaying: Bool
     let play: () -> Void
 
@@ -97,8 +100,8 @@ private struct CaptionRow: View {
             TimeButton(time: segment.start, play: play)
                 .frame(minWidth: 36, alignment: .leading)
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                // The person live speakers recognized, never cut off by the words.
-                if let name = segment.speaker?.name {
+                // Never cut off by the words.
+                if let name {
                     Text(name)
                         .font(PhoneStyle.Typeface.body.weight(.semibold))
                         .foregroundStyle(PhoneStyle.Ink.meta)
@@ -121,7 +124,7 @@ private struct CaptionRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(segment.speaker?.name.map { "\($0), caption" } ?? "Caption") at \(SpokenTime.format(segment.start))\(segment.isTentative ? ", tentative" : ""): \(segment.text)")
+        .accessibilityLabel("\(name.map { "\($0), caption" } ?? "Caption") at \(SpokenTime.format(segment.start))\(segment.isTentative ? ", tentative" : ""): \(segment.text)")
         .accessibilityHint("Plays from here")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, play)

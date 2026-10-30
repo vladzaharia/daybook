@@ -178,6 +178,7 @@ can copy the tags, but it can't complete TLS without the key.
 | `bookmark` | `LinkBookmark` | both | conversation, recording time, created-at, label: a bookmark made during a shared recording, by its ID |
 | `bookmark.change` | `LinkBookmarkChange` | both | a shared bookmark's label changed, or it was deleted; changed-at |
 | `note` | `LinkNote` | both | a paragraph written, edited, or deleted during a shared recording: its anchor ID, text, the time its writer files it at, made-at, changed-at |
+| `captions` | `LinkCaptions` | iPhone → Mac | the live captions an iPhone makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the phone), and when its recording began on its clock; only to a Mac recording the same conversation that lists `liveCaptions` |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail |
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
@@ -262,7 +263,8 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
 - **Features.** `cascade` (`LinkCapabilities.cascadeFeature`): the device joins and stops shared
   recordings on its own, reads `cascade` and `sharedConversationID`, and accepts a stop from a device
   recording a conversation with it. `sharedNotes`: it takes `note`, `bookmark.change`, and `bookmark` in
-  both directions. Both apps list both.
+  both directions. Both apps list both. `liveCaptions` (the Mac lists it): it shows another device's
+  `captions` of a shared recording beside its own; an older Mac is never sent them.
 - **Cascading start.** `LinkRecordRequest.cascade` says what started the requester's recording
   (`person`, `recorder`, `automatic`, or another `device`; an open value), whether the requester records
   the conversation itself (`requesterRecords`; false for an iPhone whose recorder records while it

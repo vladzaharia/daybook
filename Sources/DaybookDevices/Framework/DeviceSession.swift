@@ -588,13 +588,14 @@ public final class DeviceSession: ObservableObject, Identifiable {
     // MARK: Live audio for a shared recording
 
     /// Saves the recorder's audio into `conversation` as it records, from the stream Listen Live uses,
-    /// so a shared recording has it the moment it stops. False when it can't start now (not connected,
-    /// not recording, already listening).
+    /// so a shared recording has it the moment it stops, and captions it as Listen Live does
+    /// (`liveCaptions`), for the recording's captions (`LiveCaptureCaptions`). False when it can't
+    /// start now (not connected, not recording, already listening).
     @discardableResult
     public func captureLive(into conversation: UUID) -> Bool {
         guard let soundcore = direct as? SoundcoreConnection, managedElsewhere == nil else { return false }
         if soundcore.live.isListening { return soundcore.liveConversation == conversation }
-        return soundcore.startListening(into: conversation, captions: false)
+        return soundcore.startListening(into: conversation, captions: true)
     }
 
     /// The conversation the recorder's live audio is being saved into, while it is.

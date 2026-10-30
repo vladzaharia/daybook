@@ -1,3 +1,4 @@
+import Combine
 import DaybookCaptions
 import DaybookCore
 import DaybookTestSupport
@@ -42,14 +43,14 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         let library: Library
     }
 
-    private func rig(_ device: SimulatedSoundcore, holds: Bool = false, known: Bool = true,
+    private func rig(_ device: SimulatedSoundcore, holds: Bool = false, known: Bool = true, captioner: (any LiveCaptioning)? = nil,
                      configure: ((inout SoundcoreTiming) -> Void)? = nil) -> Rig {
         let transport = SimulatedSoundcoreTransport(device: device)
         transport.isKnown = known
         var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging)
         environment.soundcoreTransport = { transport }
         let hooks = LiveCaptionHooks()
-        hooks.makeCaptioner = { nil }
+        hooks.makeCaptioner = { captioner }
         environment.liveCaptions = hooks
         var timing = SoundcoreTiming()
         timing.request = .seconds(3)
@@ -218,6 +219,36 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         XCTAssertEqual(meeting.tracks.count, 1, "no duplicate track")
         XCTAssertEqual(meeting.tracks[0].deviceRecordingID, recordingID)
         XCTAssertEqual(meeting.transcribableTracks.map(\.id), [meeting.tracks[0].id])
+    }
+
+    func testARecordersLiveAudioIsCaptionedForTheSharedRecording() async throws {
+        let device = SimulatedSoundcore(recordings: [])
+        device.recordsInRealTime = true
+        device.pace = .milliseconds(15)
+        let captioner = FeedRecordingCaptioner()
+        let rig = rig(device, captioner: captioner)
+        try await connected(rig)
+        let conversation = UUID()
+        final class Heard { var updates: [LiveCaptureCaptions.Update] = [] }
+        let heard = Heard(), elsewhere = Heard()
+        let follower = LiveCaptureCaptions(), other = LiveCaptureCaptions()
+        follower.follow(Just([rig.session]), conversation: { conversation }) { heard.updates.append($0) }
+        other.follow(Just([rig.session]), conversation: { UUID() }) { elsewhere.updates.append($0) }
+
+        rig.connection.startRecording()
+        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        XCTAssertTrue(rig.session.captureLive(into: conversation))
+        try await waitUntil("its live audio reaches the captioner") { !captioner.fed.isEmpty }
+        captioner.post([LiveCaptionSegment(start: 0.2, end: 1.4, text: "Heard by the recorder", isTentative: false,
+                                           speaker: LiveCaptionSpeaker(slot: "S1", name: "Priya"))])
+        try await waitUntil("the shared recording hears it") { heard.updates.last?.segments.map(\.text) == ["Heard by the recorder"] }
+        let update = try XCTUnwrap(heard.updates.last)
+        XCTAssertEqual(update.recorderID, rig.session.id)
+        XCTAssertEqual(update.name, "Soundcore", "labelled with the recorder where no person was recognized")
+        XCTAssertEqual(update.segments.first?.speaker?.name, "Priya")
+        XCTAssertNotNil(update.startedAt, "its live audio starts with its recording, which says when it began")
+        XCTAssertTrue(elsewhere.updates.isEmpty, "only the conversation it records into")
+        _ = await rig.session.endLiveCapture()
     }
 
     func testARecordersFileThatDiffersFromItsLiveAudioReplacesIt() async throws {

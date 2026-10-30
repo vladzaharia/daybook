@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCaptions
 import DaybookKit
+import DaybookLink
 import XCTest
 @testable import DaybookPhone
 
@@ -107,6 +108,46 @@ final class LiveCaptionsTests: XCTestCase {
         stale.segments = [LiveCaptionSegment(start: 0, end: 1, text: "Something else", isTentative: false)]
         captions.saveLabelled(stale)
         XCTAssertEqual(captions.store.captions(for: newer.meetingID)?.segments.map(\.text), ["In a pocket"])
+    }
+
+    func testARecordersCaptionsJoinThePhonesAndGoToAMacOnlyOnceEach() async throws {
+        let rig = RecorderRig()
+        let captioner = ScriptedCaptioner(lines: [])
+        let model = try makeModel(rig: rig, captioner: captioner)
+        try await model.startRecording()
+        try await waitUntil("listening") { model.captions.state == .listening }
+        rig.pump(2)
+        captioner.apply(text: "Heard on the phone.", start: 0.5, end: 1.5, isFinal: true)
+        try await waitUntil("the phone's own line") { model.captions.segments.map(\.text) == ["Heard on the phone."] }
+        model.recorder.updateLevels()  // as the meter does: the recording's start, from its first sample
+        let start = try XCTUnwrap(model.recorder.startedAt)
+        // The recorder began two seconds before this iPhone: its 4 s is this recording's 2 s.
+        model.recorderCaptioned(.init(recorderID: "sim", name: "Soundcore", startedAt: start.addingTimeInterval(-2), segments: [
+            LiveCaptionSegment(start: 4, end: 5, text: "Heard by the recorder.", isTentative: false),
+            LiveCaptionSegment(start: 6, end: 7, text: "heard on the phone", isTentative: false)]))
+        try await waitUntil("both") { model.captions.segments.count == 2 }
+        XCTAssertEqual(model.captions.segments.map(\.text), ["Heard on the phone.", "Heard by the recorder."],
+                       "the recorder's copy of what the phone heard is left out")
+        XCTAssertEqual(model.captions.segments[1].start, 2, accuracy: 0.01)
+        XCTAssertEqual(model.captions.segments.map { LiveCaptionsController.name(of: $0, names: model.captions.sourceNames) },
+                       [nil, "Soundcore"], "a recorder's line says which recorder heard it")
+
+        // What goes to a Mac recording it too: each line once, then only what changes.
+        var share = CaptionShare()
+        let first = share.changes(model.captions.segments, names: model.captions.sourceNames)
+        XCTAssertEqual(first.map(\.text), ["Heard on the phone.", "Heard by the recorder."])
+        XCTAssertEqual(first.map(\.device), [nil, "Soundcore"])
+        XCTAssertTrue(share.changes(model.captions.segments, names: model.captions.sourceNames).isEmpty)
+        var revised = model.captions.segments
+        revised[0].text = "Heard on the phone, clearly."
+        XCTAssertEqual(share.changes(revised, names: model.captions.sourceNames).map(\.text), ["Heard on the phone, clearly."])
+        XCTAssertTrue(model.macsShowingCaptions(try XCTUnwrap(model.recorder.captureID)).isEmpty, "no Mac here to send them to")
+
+        let id = try XCTUnwrap(model.recorder.captureID)
+        try await model.stopRecording()
+        let saved = try XCTUnwrap(model.captions.store.captions(for: id))
+        XCTAssertEqual(saved.segments.count, 2)
+        XCTAssertEqual(saved.sourceNames?[LiveCaptionSource.device("sim").rawValue], "Soundcore")
     }
 
     func testCaptionsOffMeansNoCaptioner() async throws {

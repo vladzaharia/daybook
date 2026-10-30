@@ -69,8 +69,8 @@ struct LiveCaptionsView: View {
             ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
                 let newest = index == segments.count - 1
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    // The person live speakers recognized, never cut off by the words.
-                    if let name = segment.speaker?.name {
+                    // The person live speakers recognized (or the recorder that heard it), never cut off by the words.
+                    if let name = LiveCaptionsController.name(of: segment, names: model.captions.sourceNames) {
                         Text(name).font(lineFont(newest: false).weight(.semibold)).foregroundStyle(PhoneStyle.Ink.meta)
                             .lineLimit(1).fixedSize()
                     }

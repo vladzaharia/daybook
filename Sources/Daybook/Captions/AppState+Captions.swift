@@ -1,7 +1,10 @@
 import Combine
 import DaybookCaptions
 import DaybookCore
+import DaybookDevices
 import DaybookIntelligence
+import DaybookKit
+import DaybookLink
 import Foundation
 
 /// Live captions on this Mac: its own recordings (You and Call, `LiveCaptionsController`) and a
@@ -16,6 +19,10 @@ extension AppState {
         devices.environment.liveCaptions.makeCaptioner = MacCaptioners.recorderFactory(settings: settings, live: liveModels)
         devices.environment.liveCaptions.locale = { [weak settings] in settings?.locale ?? .current }
         captions.follow(recorder)
+        // Recorders recording along: their live audio is captioned here and joins this Mac's captions.
+        captions.recorders.follow(devices, conversation: { [weak self] in self?.captions.meetingID }) { [weak self] update in
+            self?.recorderCaptioned(update)
+        }
         // Live recognizers are biased toward the library's approved vocabulary, including a term
         // approved while a recording runs.
         library.$glossary
@@ -61,6 +68,32 @@ extension AppState {
     func finishCaptions() {
         recorder.captionTap = nil
         Task { await captions.finish() }
+    }
+
+    /// A recorder recording along captioned its live audio, which starts with its recording: its lines
+    /// move onto this Mac's recording by when each began.
+    func recorderCaptioned(_ update: LiveCaptureCaptions.Update) {
+        guard let id = recordingID, captions.meetingID == id, let start = recordingStartedAt else { return }
+        let link = meetings.first { $0.id == id }?.companions?.last { $0.deviceID == update.recorderID && $0.macEndedAt == nil }
+        let began = update.startedAt ?? link?.recorderStartedAt ?? start
+        captions.received(update.segments, from: .device(update.recorderID), name: update.name, offset: began.timeIntervalSince(start))
+    }
+
+    /// A paired iPhone recording this conversation too sent the captions it's making (its microphone,
+    /// and a recorder it manages): they join this Mac's, placed by when its recording began on this
+    /// Mac's clock.
+    func phoneCaptioned(_ message: LinkCaptions, from phone: UUID) {
+        guard let id = recordingID, message.conversationID == id, captions.meetingID == id, let start = recordingStartedAt else { return }
+        let began = phoneLink.peers[phone]?.clock?.localDate(fromPeer: message.startedAt) ?? message.startedAt
+        let offset = began.timeIntervalSince(start)
+        for (device, lines) in Dictionary(grouping: message.lines, by: \.device) {
+            let segments = lines.map { line in
+                LiveCaptionSegment(id: line.id, start: line.start, end: line.end, text: line.text, isTentative: line.isTentative,
+                                   speaker: line.speakerSlot.map { LiveCaptionSpeaker(slot: $0, name: line.speakerName) })
+            }
+            let source = LiveCaptionSource.device("phone:\(phone.uuidString)" + (device.map { ":\($0)" } ?? ""))
+            captions.received(segments, from: source, name: device ?? DaybookPhoneIntegration().kind.shortName, offset: offset, changesOnly: true)
+        }
     }
 
     func pruneCaptions(_ meetings: [Meeting]) {
