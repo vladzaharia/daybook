@@ -427,7 +427,9 @@ Mac slept twice during it.
 Tests: `WindowInvalidationTests` (progress that changes neither percent nor message redraws nothing but
 reaches the app; every delivery reaches `onChange`, only visible ones redraw; a row fades on its words,
 not its percent), `LibrarySavingTests.testAnUpdateChangesTheLibraryOnceAndAnUpdateThatChangesNothingNotAtAll`,
-`SpeechRoutingTests.testRoutedModelsAreWorkedOutOncePerChangeOfWhatRoutesThem`.
+`SpeechRoutingTests.testRoutedModelsAreWorkedOutOncePerChangeOfWhatRoutesThem`. `swift test` passed 1,189
+XCTest cases across the eight bundles, one skipped: Captions 8, Core 373, Devices 101, Intelligence 131,
+Kit 185, Link 73, Live 30, Mac app 288.
 
 Not established here: a release build (the debug build's own code runs unoptimized; SwiftUI's and AppKit's
 work, most of what was measured, doesn't change); frames with the display awake after the change (the
