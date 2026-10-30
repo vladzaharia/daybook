@@ -203,6 +203,49 @@ listed in the branch's report. Still to check on hardware: the owner's layout re
 setup (`--window-actions` is there for it), the sidebar ring in an active window on a real import, and
 a real recorder's device change during a recording.
 
+## Soundcore: two apps on one link, and Wi‑Fi Fast Transfer (2026-10-29)
+
+Two follow-ups for the Soundcore Work ([direct Soundcore](direct-soundcore.md)), built and tested
+against `SimulatedSoundcore` only: no Bluetooth scanning, no Wi‑Fi, no recording, no downloads.
+
+**Two apps on one link.** On iPhone the Soundcore app's transfer reaches Daybook as audio it didn't ask
+for. While that's arriving, Daybook's transfers, Listen Live, and Start and Pause wait until it has been
+quiet for three seconds, and the recorder's page (Mac byline, iPhone header and import row) and the
+iPhone's status line say "Waiting for the Soundcore app to finish". Daybook never sends Stop Transport
+over it, a transfer of Daybook's that the other app's request cuts off starts again afterwards (not a
+failure), its own stragglers aren't taken for another app's, and another app's key exchange makes
+Daybook exchange keys again. The simulator emulates the other app's paced transfer
+(`beginAnotherAppsTransfer`) and records any command of Daybook's that would cut it off; four new
+`SoundcoreSimulatorTests` cover the import, Start, a transfer under way, and the key exchange.
+
+**Wi‑Fi Fast Transfer (iPhone).** Built from the community protocol notes and tested end to end on
+loopback: `SoundcoreFastTransferTests` (10) run the real connection, session, and queue against the
+simulated recorder's access point, a TLS WebSocket server whose self-signed identity is made in memory
+(`SecPKCS12Import` with `kSecImportToMemoryOnly`; the login keychain was checked untouched) and whose
+parser takes only the official client's header names, plus a UDP keep-alive listener. Three new
+`SoundcoreProtocolTests` pin the byte formats and WebSocket framing. The read-only allow-list gained
+only `1A 05` and `1A 02` (file requests over Wi‑Fi are `1A 07`). A race found while testing (a
+recording queued just after the Wi‑Fi link ended tried to open it without Bluetooth, and paused Fast
+Transfer) is fixed, and its test fails without the fix. The owner enabled the Hotspot Configuration
+capability on `local.daybook.phone`; the entitlement is in the iPhone app (`Apps/iOS/project.yml` and
+`DaybookPhone.entitlements`), not the widgets or the Mac app.
+
+`swift test` passed 1,202 XCTest cases across the eight bundles (one skipped, as before): Captions 8,
+Core 373, Devices 118, Intelligence 131, Kit 184, Link 73, Live 30, Mac app 285.
+`scripts/build-ios.sh --test` on a dedicated iPhone 17 Pro simulator clone (iOS 27.0, deleted
+afterwards) passed all 178, with the status line's new case. In the iOS Simulator, the iPhone app ran
+Fast Transfer end to end against the simulated recorder's access point (`--device-simulator
+--device-autopilot --demo-transfer wifi`), and waited for its emulated other app (`--demo-transfer
+other-app`); screenshots of both, the new preference, and the Mac page (`--device-demo other-app`), each
+before and after.
+
+**Needs a recorder.** Whether the Soundcore app's transfer reaches Daybook on iOS, and whether three
+quiet seconds is enough between its files. All of Fast Transfer: `1A 05` and its reply, the ten-second
+start, joining (iOS's prompt, the address), TLS and the WebSocket handshake on the recorder's parser,
+the file request's form and last byte, the keep-alive, the recorder accepting Bluetooth while its
+access point is open, `1A 02`'s reply and whether `FINISH` closes the access point on its own, and the
+throughput against Bluetooth ([verifying it](direct-soundcore.md#verifying-it-on-a-recorder)).
+
 ## The four streams together (2026-10-29)
 
 Processing quality, speaker profiles, live transcription, and recording across devices were built
