@@ -27,6 +27,9 @@ enum DaybookStyle {
 
     static let neonMint = Color(light: 0x00B894, dark: 0x3DFFD0)
     static let neonCyan = Color(light: 0x0096C7, dark: 0x33E1FF)
+    /// A glyph for audio that's live (playing, listening): neon mint in Dark Mode, where neon reads as
+    /// light; link ink in Light Mode, where mint is too faint (2.4:1) to read as a glyph.
+    static func liveGlyph(_ scheme: ColorScheme) -> Color { scheme == .dark ? neonMint : Ink.link }
     static let neonMagenta = Color(light: 0xD6249F, dark: 0xFF4FD8)
     static let neonViolet = Color(light: 0x7C3AED, dark: 0xB388FF)
     /// Daybook's signature: mint into cyan into violet. The app glyph, empty states, and Welcome.

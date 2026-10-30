@@ -27,7 +27,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
    | Red (`Ink.record`) | Recording, right now | The recording dot in the byline and list row; the Floating Notes clock; Stop (panel and toolbar pill); the Record button's dot. |
    | Amber (`bookmark`) | Something you marked | Bookmark glyphs, the transcript's bookmark label and 2 pt rule, count badges. Nothing else. |
    | Teal (`accent` fills / `Ink.link` text) | Selected, or you can act on it | Selection, focus, checkboxes, every link and text button in content, tag chips, the play pill, the transcript note rule, "Saved ✓". |
-   | Neon mint | Playing now | Playhead rule and wash, slider, play button, byline waveform. Inserted words in Version History. |
+   | Neon mint | Playing now | Playhead rule and wash, slider, play button, byline waveform, a recorder's Listening waveform (both Dark Mode; link ink in Light, `DaybookStyle.liveGlyph`). Inserted words in Version History. |
    | Brand gradient (mint → cyan → violet) | Daybook itself, or work in progress | Mark, Welcome bullets, the Settings privacy lock, progress bars (including the 2 pt line in a list row that is transcribing). |
    | Orange (`Ink.warning`) | Needs you | Failure glyphs, problem boxes, "Recording stopped", "No conversations". |
    | Speaker inks | A person | Speaker names, owner chips, inspector dots and bars. |

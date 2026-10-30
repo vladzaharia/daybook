@@ -135,6 +135,7 @@ struct LivePage: View {
     @ObservedObject var live: LiveCapture
     @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         DevicePageScroll {
@@ -177,11 +178,13 @@ struct LivePage: View {
 
     @ViewBuilder private var listening: some View {
         HStack(alignment: .center, spacing: Space.s3) {
+            // Live, like the byline's playing waveform: mint, glowing and moving, in Dark Mode; steady link
+            // ink in Light, where dimmed layers would leave it faint.
             Image(systemName: "waveform")
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(DaybookStyle.neonCyan)
-                .symbolEffect(.variableColor.iterative.dimInactiveLayers, isActive: !reduceMotion)
-                .neonGlow(DaybookStyle.neonCyan, radius: 4)
+                .foregroundStyle(DaybookStyle.liveGlyph(scheme))
+                .symbolEffect(.variableColor.iterative.dimInactiveLayers, isActive: !reduceMotion && scheme == .dark)
+                .neonGlow(DaybookStyle.neonMint, radius: 4)
                 // The captions' label below keeps its glyph in the same column, so the words line up.
                 .frame(width: LiveCaptionFeed.glyphColumn)
                 .accessibilityHidden(true)
