@@ -69,10 +69,10 @@ struct MeetingDetailView: View {
     }
 }
 
-/// The page observes the library itself. The window redrawing it for the same conversation adds nothing,
-/// so it isn't drawn again: each change of the library draws the page once.
+/// The page observes the library itself. The window redrawing it for the same conversation (the app has one
+/// state) adds nothing, so it isn't drawn again: each change of the library draws the page once.
 extension MeetingDetailView: Equatable {
-    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.meetingID == rhs.meetingID && lhs.state === rhs.state }
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.meetingID == rhs.meetingID }
 }
 
 // MARK: - Toolbar
