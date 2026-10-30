@@ -778,8 +778,8 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(try manifest().sealing?.keys.map(\.id), [second.idHex])
     }
 
-    /// A rotated key leaves iCloud Keychain once it has been retired for 30 days and every device seen lately holds the
-    /// current key; a file found sealed with it after that is a leftover, deleted rather than waited for.
+    /// A rotated key leaves iCloud Keychain once it has been retired for 30 days and every device holds the current key;
+    /// a file found sealed with it after that is left alone, neither waited for nor deleted.
     func testARetiredKeyLeavesTheKeychainOnceEveryDeviceHasMovedOn() async throws {
         let mac = try mac(), phone = try phone()
         let kept = Meeting(title: "Kept")
@@ -815,15 +815,118 @@ final class LibrarySyncSealingTests: XCTestCase {
         try await pass(mac, "Mac", [kept])
         XCTAssertEqual(try keychain.keys(for: first.libraryID).map(\.id), [second.id], "removed from iCloud Keychain")
 
-        // A file sealed with it that turns up afterwards (a device away all this time) can't be opened by anyone: it's
-        // deleted, not waited for.
+        // A file sealed with it that turns up afterwards can't be opened here: it's left alone, neither waited for nor
+        // deleted, for a device that still holds the key to seal again.
         let leftover = SealedObject.seal(Data(#"{"schemaVersion":1}"#.utf8), kind: .event, key: first)
         try leftover.bytes.write(to: remote.appendingPathComponent("Sealed/Events/\(leftover.name)"))
         let after = try await pass(mac, "Mac", [kept])
         XCTAssertEqual(after.warnings, []); XCTAssertEqual(after.pendingDownloads, 0)
-        XCTAssertFalse(files("Sealed/Events").contains(leftover.name))
+        XCTAssertTrue(files("Sealed/Events").contains(leftover.name), "never deleted here")
         let onPhone = try await pass(phone, "Phone", [kept])
         XCTAssertEqual(onPhone.warnings, []); XCTAssertEqual(onPhone.pendingDownloads, 0)
+    }
+
+    /// A retired key stays in iCloud Keychain while a device that last synced with it, however long ago, hasn't moved on
+    /// (it may bring files sealed with it, and it's the one to seal them again), and while an object is still sealed with it.
+    func testARetiredKeyStaysWhileAnyDeviceOrObjectStillNeedsIt() async throws {
+        let mac = try mac()
+        let kept = Meeting(title: "Kept")
+        try await pass(mac, "Mac", [kept])
+        let first = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac", [kept])
+        // A Mac that synced with the first key, then went away for months.
+        let away = remote.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data("Away".utf8))).json")
+        func awayPresence(lastSeen: Date, key: String) throws {
+            let record = """
+            {"format":"DaybookDevice","schemaVersion":1,"deviceID":"Away","deviceClass":"mac","displayName":"","canProcess":true,
+             "lastSeen":"\(ISO8601DateFormatter().string(from: lastSeen))","features":["sealed-1","compact-1"],
+             "key":{"state":"ready","id":"\(key)"}}
+            """
+            try Data(record.utf8).write(to: away)
+        }
+        try awayPresence(lastSeen: Date().addingTimeInterval(-100 * 86_400), key: first.idHex)
+        let start = Date()
+        await mac.setSealerClock { start }
+        let second = try await mac.rotateKey(now: start)
+        try await pass(mac, "Mac", [kept])
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60) }
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(try manifest().sealing?.retired?.map(\.id), [first.idHex], "retired: the Mac away isn't recent")
+        let due = start.addingTimeInterval(LibrarySyncEngine.retirementGrace + LibrarySyncEngine.retiredKeyRemoval + 120)
+        await mac.setSealerClock { due }
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(Set(try keychain.keys(for: first.libraryID).map(\.id)), [first.id, second.id], "the Mac away still holds it")
+
+        // Back, it holds the current key; a recording it uploaded while away is still sealed with the old one.
+        try awayPresence(lastSeen: due, key: second.idHex)
+        let stray = SealedObject.seal(Data("recorded while away".utf8), kind: .blob, key: first)
+        try stray.bytes.write(to: remote.appendingPathComponent("Sealed/Blobs/\(stray.name)"))
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(Set(try keychain.keys(for: first.libraryID).map(\.id)), [first.id, second.id], "an object is sealed with it")
+        try FileManager.default.removeItem(at: remote.appendingPathComponent("Sealed/Blobs/\(stray.name)"))
+        // An earlier identity of this Mac, from before it was reinstalled, never moves on; the Mac itself has.
+        let earlier = """
+        {"format":"DaybookDevice","schemaVersion":1,"deviceID":"Earlier","deviceClass":"mac","displayName":"Studio Mac","canProcess":true,
+         "lastSeen":"\(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-200 * 86_400)))","features":["sealed-1","compact-1"],
+         "key":{"state":"ready","id":"\(first.idHex)"}}
+        """
+        try Data(earlier.utf8).write(to: remote.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data("Earlier".utf8))).json"))
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(try keychain.keys(for: first.libraryID).map(\.id), [second.id])
+    }
+
+    /// A Mac away while the key rotated published under the old key, whose files reach iCloud after the old key is gone
+    /// from every keychain. Nobody deletes them, nothing waits for them, and the Mac, which can't open its own files either,
+    /// publishes its copy again: its offline edit and the conversation it started reach the other Mac.
+    func testFilesSealedWithARemovedKeyAreKeptAndTheirAuthorPublishesItsCopyAgain() async throws {
+        let macKeys = MemoryLibraryKeyStore(), awayKeys = MemoryLibraryKeyStore()
+        let mac = try self.mac(keys: macKeys), away = try self.mac("Away", keys: awayKeys)
+        let shared = Meeting(title: "Shared")
+        try await pass(mac, "Mac", [shared])
+        let first = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try awayKeys.store(first)
+        try await pass(mac, "Mac", [shared])
+        let onAway = try await pass(away, "Away")
+        // Away: an edit, and a new conversation, sealed with the first key; iCloud doesn't have them yet.
+        var edited = try XCTUnwrap(onAway.meetings.first(where: { $0.id == shared.id }))
+        edited.setNotes("Written away")
+        let startedAway = Meeting(title: "Started away")
+        let before = Set(files("Sealed/Events"))
+        try await pass(away, "Away", [edited, startedAway])
+        let offline = Set(files("Sealed/Events")).subtracting(before)
+        XCTAssertEqual(offline.count, 2)
+        for name in offline { try cloud.withhold(remote.appendingPathComponent("Sealed/Events/\(name)")) }
+
+        // Meanwhile the key rotates and the first key retires (the Mac away isn't recent), and then it's gone from every
+        // keychain; iCloud Keychain brings the new key to the Mac away.
+        let start = Date()
+        await mac.setSealerClock { start }
+        let second = try await mac.rotateKey(now: start)
+        try awayKeys.store(second)
+        try await pass(mac, "Mac", [shared])
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.recentDevice + LibrarySyncEngine.retirementGrace) }
+        try await pass(mac, "Mac", [shared])
+        XCTAssertEqual(try manifest().sealing?.retired?.map(\.id), [first.idHex])
+        try macKeys.remove(keyID: first.id, libraryID: first.libraryID)
+        try awayKeys.remove(keyID: first.id, libraryID: first.libraryID)
+
+        // Back: its files arrive. The other Mac can't open them; they stay, and nothing waits for them.
+        for name in offline { try cloud.deliver(remote.appendingPathComponent("Sealed/Events/\(name)")) }
+        let meanwhile = try await pass(mac, "Mac", [shared])
+        XCTAssertEqual(meanwhile.pendingDownloads, 0); XCTAssertEqual(meanwhile.warnings, [])
+        XCTAssertTrue(offline.isSubset(of: Set(files("Sealed/Events"))), "never deleted")
+        // The Mac away can't open them either: it merges its copy with what's there and publishes it again.
+        let held = try await MeetingStore(rootURL: local("Away")).list()
+        let back = try await pass(away, "Away", held)
+        XCTAssertEqual(back.pendingDownloads, 0)
+        XCTAssertFalse(back.warnings.contains { $0.contains("damaged") }, "\(back.warnings)")
+        let again = try await MeetingStore(rootURL: local("Away")).list()
+        try await pass(away, "Away", again)
+        XCTAssertTrue(offline.isSubset(of: Set(files("Sealed/Events"))))
+        let onMac = try await pass(mac, "Mac", [shared])
+        XCTAssertEqual(onMac.pendingDownloads, 0)
+        XCTAssertEqual(onMac.meetings.first { $0.id == shared.id }?.notes, "Written away")
+        XCTAssertTrue(onMac.meetings.contains { $0.id == startedAway.id }, "the conversation started away")
     }
 
     // MARK: Review fixes
