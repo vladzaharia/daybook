@@ -323,6 +323,7 @@ private struct ImportedRow: View {
 private struct RecordingNowRow: View {
     let recording: DeviceRecording
     let listening: Bool
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         RowLayout {
@@ -335,8 +336,8 @@ private struct RecordingNowRow: View {
                 if let start = recording.startedAt { Text("Started \(start.formatted(date: .omitted, time: .shortened))") }
                 if listening {
                     Text("·")
-                    Image(systemName: "waveform").foregroundStyle(DaybookStyle.neonCyan)
-                        .symbolEffect(.variableColor.iterative, isActive: !reduceMotion)
+                    Image(systemName: "waveform").foregroundStyle(DaybookStyle.liveGlyph(scheme))
+                        .symbolEffect(.variableColor.iterative, isActive: !reduceMotion && scheme == .dark)
                     Text("Listening")
                 }
             }
