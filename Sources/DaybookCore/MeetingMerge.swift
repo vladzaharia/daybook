@@ -147,17 +147,23 @@ public enum MeetingMerge {
             result.includesBackgroundAudio = choose("background-audio", local.includesBackgroundAudio, remote.includesBackgroundAudio,
                 base.map(\.includesBackgroundAudio) ?? unset(local.includesBackgroundAudio, remote.includesBackgroundAudio, isDefault: { $0 == nil }, otherwise: nil))
         }
-        result.summary = choose("summary", local.summary, remote.summary, base.map(\.summary) ?? unset(local.summary, remote.summary, isDefault: { $0 == nil }, otherwise: nil))
-        // Completion is a separate user decision from generated prose; exact task+owner identity survives.
+        // Completion is a separate user decision from generated prose. The prose merges without the ticks, so a
+        // tick on one device and new words on another (a speaker's name following into them) don't conflict;
+        // then each next step's tick merges on its own, found by its ID, else by its words and owner.
+        let localProse = local.summary.map(Self.withoutTicks), remoteProse = remote.summary.map(Self.withoutTicks)
+        let ancestorProse: MeetingSummary?? = base.map { $0.summary.map(Self.withoutTicks) }
+            ?? unset(localProse, remoteProse, isDefault: { (summary: MeetingSummary?) in summary == nil }, otherwise: nil)
+        result.summary = choose("summary", localProse, remoteProse, ancestorProse)
         if var summary = result.summary {
             for index in summary.actionItems.indices {
                 let item = summary.actionItems[index]
-                let a = local.summary?.actionItems.first { $0.text == item.text && $0.owner == item.owner }
-                let b = remote.summary?.actionItems.first { $0.text == item.text && $0.owner == item.owner }
-                let old = base?.summary?.actionItems.first { $0.text == item.text && $0.owner == item.owner }
+                let a = Self.counterpart(of: item, in: local.summary), b = Self.counterpart(of: item, in: remote.summary)
                 if let a, let b {
+                    let old = Self.counterpart(of: item, in: base?.summary)
                     let ancestor = base == nil ? unset(a.completed, b.completed, isDefault: { !$0 }, otherwise: false) : old?.completed
                     summary.actionItems[index].completed = choose("action:\(item.text)", a.completed, b.completed, ancestor)
+                } else {
+                    summary.actionItems[index].completed = (a ?? b)?.completed ?? false
                 }
             }
             result.summary = summary
@@ -199,6 +205,20 @@ public enum MeetingMerge {
         case .transcribing: return 5
         case .recording: return 6
         }
+    }
+
+    /// A summary's words, with every next step unticked.
+    private static func withoutTicks(_ summary: MeetingSummary) -> MeetingSummary {
+        var summary = summary
+        for index in summary.actionItems.indices { summary.actionItems[index].completed = false }
+        return summary
+    }
+
+    /// The same next step in another version of the summary: by its ID, which stays while its words change
+    /// (a speaker's name following into them), else, for a summary written again, by its words and owner.
+    private static func counterpart(of item: ActionItem, in summary: MeetingSummary?) -> ActionItem? {
+        guard let items = summary?.actionItems else { return nil }
+        return items.first { $0.id == item.id } ?? items.first { $0.text == item.text && $0.owner == item.owner }
     }
 }
 
