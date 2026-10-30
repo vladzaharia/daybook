@@ -179,6 +179,13 @@ public actor LibrarySyncEngine {
     var compactionReadComplete = false
     /// Pruned entries a pass found still in the sync folder, by path (the compacting Mac deletes them).
     var prunedEntryPaths: Set<String> = []
+    /// Sealed files the last pass left alone (`SyncHeldAsideFile`), by path: under a retired key this device doesn't hold,
+    /// or a rival library's while a device that synced it hasn't moved on.
+    var heldAsideEntries: [String: SyncHeldAsideFile.Reason] = [:]
+    /// Every device has moved on to this library's current key, so a rival library's files may go (`everyDeviceOnCurrentKey`).
+    var rivalFilesMayGo = false
+    /// The key and library each sealed object's header names, by path, once read (`sealedObjectsNaming`).
+    var objectHeaders: [String: (keyID: Data, libraryID: UUID)] = [:]
     /// Conversations deleted elsewhere that the last pass kept here (recorded into, or waiting to tell what it added): their
     /// deletion isn't applied yet, so this device doesn't acknowledge a proposal to prune their history.
     var heldDeletions: Set<UUID> = []
@@ -234,13 +241,13 @@ public actor LibrarySyncEngine {
             throw error
         }
         try loadCheckpoint(libraryID: manifest.libraryID, superseding: manifest.supersedes ?? [])
-        ownJournalWrites = []; replacedEntries = []; prunedEntryPaths = []
+        ownJournalWrites = []; replacedEntries = []; prunedEntryPaths = []; heldAsideEntries = [:]
+        // A rival library's files go only once every device has moved on to this library's key.
+        rivalFilesMayGo = sealing?.manifest.rivals?.isEmpty == false && everyDeviceOnCurrentKey()
         var warnings: [String] = []
         // What compaction pruned (LibrarySyncCompaction.swift), before reading anything that may name it. A record not
         // read yet makes the read incomplete: a parent it may list is waited for.
         let compactionPending = try readCompaction(warnings: &warnings)
-        // Keys of libraries this one replaced aren't needed by anyone.
-        removeReplacedLibraryKeys()
         if scope == .metadataOnly { return try synchronizeMetadataOnly(libraryMetadata, limits: limits, warnings: warnings, compactionPending: compactionPending) }
         var budget = SyncPassBudget(limits)
         var pendingDownloads = compactionPending
@@ -257,7 +264,7 @@ public actor LibrarySyncEngine {
             // An entry's ID is its name when plaintext; a sealed one's is known once it has been opened.
             let name = entry.isSealed ? sealedNames[entry.path] : entry.name
             if let name, prunedIDs.contains(name) { setAsidePruned(entry); continue }
-            if let name, let cached = eventCache[name] { events[name] = cached; continue }
+            if let name, let cached = eventCache[name], !sealedWithKeyGone(entry) { events[name] = cached; continue }
             let unreadableKey = entry.isSealed ? entry.path : entry.name
             if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); unreadJournalFiles += 1; continue }
             guard budget.admitJournalRead() else { continue }
@@ -277,6 +284,7 @@ public actor LibrarySyncEngine {
                 events[hash] = header; eventCache[hash] = header
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
             catch is SyncReplacedFile { setAside(entry) }
+            catch let held as SyncHeldAsideFile { heldAsideEntries[entry.path] = held.reason }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) {
                 warnings.append(markUnreadable(unreadableKey, error)); unreadJournalFiles += 1
@@ -332,19 +340,30 @@ public actor LibrarySyncEngine {
                 try Task.checkCancellation()
                 let key = supplied.id.uuidString
                 guard !state.deletedIDs.contains(supplied.id) else { continue }
+                // What this device last applied of it is gone from the journal (pruned by compaction while it was away, or
+                // sealed with a key retired while it was away, which this device no longer holds): an edit published
+                // against it would name parents nobody can read.
+                let gone = (state.heads[key] ?? []).filter { events[$0] == nil && unreadableJournal[$0] == nil }
+                // Gone without a commit saying so, while the journal holds files sealed with a retired key nobody here can
+                // open: its own entries may be among them, which nobody else may ever read. Its copy is published again,
+                // changed or not: merged with what's there now, or as new when nothing else of it is there. Its heads
+                // change only once that's written, so a failed write is tried again.
+                var force = false
+                if !gone.isEmpty, !journalIncomplete, !deletedInJournal.contains(supplied.id), !gone.allSatisfy(prunedIDs.contains),
+                   heldAsideEntries.values.contains(.retiredKey) {
+                    if inJournal.contains(supplied.id) { rebases[supplied.id] = Rebase(base: nil); continue }
+                    force = true
+                }
                 // Cheap equality first: most meetings are unchanged on most passes.
                 let pendingBase = state.pending?.changedBases?[key]
                 // With a publication of this conversation not applied yet (the pass held it back), the base is behind
                 // the journal: matching the base is then a revert, which must be published too.
                 let baseIsCurrent = state.submittedHashes[key] == nil
-                if (baseIsCurrent && supplied == state.bases[key]) || pendingBase == supplied { continue }
+                if !force, (baseIsCurrent && supplied == state.bases[key]) || pendingBase == supplied { continue }
                 let fingerprint = try hash(supplied)
-                guard fingerprint != state.submittedHashes[key], !baseIsCurrent || fingerprint != state.bases[key].flatMap({ try? hash($0) }),
-                      fingerprint != pendingBase.flatMap({ try? hash($0) }) else { continue }
-                // What this device last applied of it is gone from the journal (pruned by compaction while it was away, or
-                // left behind with a retired key): an edit published against it would name parents nobody can read.
-                let gone = (state.heads[key] ?? []).filter { events[$0] == nil && unreadableJournal[$0] == nil }
-                if !gone.isEmpty, !deletedInJournal.contains(supplied.id) {
+                guard force || (fingerprint != state.submittedHashes[key] && (!baseIsCurrent || fingerprint != state.bases[key].flatMap({ try? hash($0) }))
+                      && fingerprint != pendingBase.flatMap({ try? hash($0) })) else { continue }
+                if !gone.isEmpty, !force, !deletedInJournal.contains(supplied.id) {
                     // Only a whole read can tell gone from still downloading, unless a commit says they were pruned.
                     if journalIncomplete, !gone.allSatisfy(prunedIDs.contains) { pendingUploads += 1; failedPublications.insert(supplied.id); continue }
                     if inJournal.contains(supplied.id) {
@@ -359,7 +378,7 @@ public actor LibrarySyncEngine {
                     let prepared = try prepareUpload(supplied, journalAssets: journalAssets)
                     pendingUploads += prepared.pendingUploads
                     let event = SyncEventRecord(meetingID: supplied.id, deviceID: deviceID, sequence: passSequence,
-                        parents: (state.heads[key] ?? []).sorted(), snapshot: prepared.meeting, deleted: false, assets: prepared.assets)
+                        parents: force ? [] : (state.heads[key] ?? []).sorted(), snapshot: prepared.meeting, deleted: false, assets: prepared.assets)
                     let id = try writeRecord(event, directory: "Events")
                     events[id] = SyncEventHeader(event); eventCache[id] = events[id]; snapshotCache[id] = prepared.meeting
                     state.submittedHashes[key] = fingerprint
@@ -537,12 +556,14 @@ public actor LibrarySyncEngine {
                 removeRetiredKeys(entries: eventEntries + metadataEntries, now: sealerClock())
             }
             sealerProgress = runSealer(SealerInput(events: events, metadata: metadata,
-                                                   eventEntries: eventEntries.filter { !replacedEntries.contains($0.path) && !prunedEntryPaths.contains($0.path) },
-                                                   metadataEntries: metadataEntries.filter { !replacedEntries.contains($0.path) && !prunedEntryPaths.contains($0.path) },
+                                                   eventEntries: eventEntries.filter { !setAsideFromSealer($0) },
+                                                   metadataEntries: metadataEntries.filter { !setAsideFromSealer($0) },
                                                    compactionEntries: compactionRecords.values.map(\.entry).filter { !replacedEntries.contains($0.path) },
                                                    deleted: deletes, liveAssets: liveAssets, complete: complete), budget: &budget, now: sealerClock())
-            // A library that started over: what's left here of the one it replaced goes.
-            deleteReplacedObjects()
+            // A library that started over: what's left here of the one it replaced goes (a rival's once it's safe), and
+            // then its keys.
+            deleteReplacedObjects(journalAssets: Set(events.values.flatMap { $0.assets.map(\.sha256) }))
+            removeReplacedLibraryKeys()
         }
         // History no device needs any more goes (on the Mac that compacts, after a pass that read everything).
         if !Task.isCancelled {
@@ -576,7 +597,7 @@ public actor LibrarySyncEngine {
             try Task.checkCancellation()
             let name = entry.isSealed ? sealedNames[entry.path] : entry.name
             if let name, prunedIDs.contains(name) { setAsidePruned(entry); continue }
-            if let name, let cached = metadataCache[name] { metadata[name] = cached; continue }
+            if let name, let cached = metadataCache[name], !sealedWithKeyGone(entry) { metadata[name] = cached; continue }
             let unreadableKey = entry.isSealed ? entry.path : entry.name
             if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); continue }
             guard budget.admitJournalRead() else { incomplete = true; continue }
@@ -593,6 +614,7 @@ public actor LibrarySyncEngine {
                 metadata[hash] = record; metadataCache[hash] = record
             } catch is SyncPendingDownload { downloading += 1; incomplete = true }
             catch is SyncReplacedFile { setAside(entry) }
+            catch let held as SyncHeldAsideFile { heldAsideEntries[entry.path] = held.reason }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) {
                 warnings.append(markUnreadable(unreadableKey, error))
@@ -867,10 +889,13 @@ public actor LibrarySyncEngine {
         let startedOver = Set(sealed.flatMap { $0.sealing?.replaces ?? [] })
         let sealedIDs = Set(sealed.map(\.libraryID)).subtracting(startedOver)
         var rivals = Set<UUID>()
-        // Of new libraries started together, the first one started wins (the other is usually a device's that was offline
-        // when it first launched, with less in it); of those started the same moment, or started over together, the
-        // smallest ID.
+        // Of new libraries started together, the first one started wins, by the clocks of the devices that started them;
+        // of those started the same second, or started over together, the smallest ID. Every device must reach the same
+        // answer from the manifests alone (counting what each holds would differ with what each has downloaded), so this
+        // is about agreeing, not about which holds more: a rival's files and key go only once every device has moved on
+        // to the winner's key, and its objects only once what they hold is in the winner (`deleteReplacedObjects`).
         var order: (UUID, UUID) -> Bool = { $0.uuidString < $1.uuidString }
+        var startedAtOnce = false
         if sealedIDs.count > 1 {
             let starts = sealedIDs.map { id in Set(sealed.filter { $0.libraryID == id }.flatMap { $0.sealing?.replaces ?? [] }) }
             let startedOverTogether = starts.allSatisfy({ !$0.isEmpty }) && !starts.dropFirst().reduce(starts[0], { $0.intersection($1) }).isEmpty
@@ -880,7 +905,7 @@ public actor LibrarySyncEngine {
             let startedTogether = dates.count == sealedIDs.count
                 && dates.max()!.timeIntervalSince(dates.min()!) <= Self.creationRace
             guard startedOverTogether || startedTogether else { throw LibrarySyncError.manifestConflict }
-            if !startedOverTogether { order = { (created[$0]!, $0.uuidString) < (created[$1]!, $1.uuidString) } }
+            if !startedOverTogether { order = { (created[$0]!, $0.uuidString) < (created[$1]!, $1.uuidString) }; startedAtOnce = true }
             rivals = sealedIDs
         }
         guard sealedIDs.isEmpty == sealed.isEmpty,
@@ -901,6 +926,7 @@ public actor LibrarySyncEngine {
             resolved.schemaVersion = SyncManifest.sealedSchemaVersion
             var sealing = sealings.dropFirst().reduce(sealings[0]) { $0.merged(with: $1) }
             if !replaced.isEmpty { sealing.replaces = SyncManifest.Sealing.union(sealing.replaces, Array(replaced)) }
+            if startedAtOnce, !rivals.isEmpty { sealing.rivals = SyncManifest.Sealing.union(sealing.rivals, Array(rivals)) }
             resolved.sealing = sealing
         }
         // The journal of every library that isn't replaced is part of the winner's: if any was compacted, the winner is,

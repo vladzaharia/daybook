@@ -109,10 +109,24 @@ extension LibrarySyncEngine {
     /// After a pass of a library that started over: objects here whose header names a library it replaced (a rival that
     /// started over at the same moment and lost, or what Start Over couldn't read), and the courier's inbox for those
     /// libraries. Only objects this device has downloaded are checked; their journal entries go as passes read them.
-    func deleteReplacedObjects() {
-        guard let replaced = sealing?.manifest.replaces, !replaced.isEmpty else { return }
-        deleteReplacedFiles(Set(replaced), starting: false)
-        for id in replaced {
+    ///
+    /// A rival started at the same time as this one (`Sealing.rivals`) had its key, and maybe things only it held (a
+    /// recording an iPhone let go of locally): its files go only once every device has moved on to this library's key
+    /// (`rivalFilesMayGo`), having published what it holds here, and an object only once what it holds is in this library
+    /// too (`journalAssets` names it and this library has it). One nothing here holds stays, with the rival's key.
+    func deleteReplacedObjects(journalAssets: Set<String> = []) {
+        guard let sealing, let replaced = sealing.manifest.replaces, !replaced.isEmpty else { return }
+        let going = Set(replaced.filter { !sealing.isRival($0) || rivalFilesMayGo })
+        var republished = Set<String>()
+        for rival in going where sealing.isRival(rival) {
+            for key in (try? keyStore?.keys(for: rival) ?? []) ?? [] {
+                for sha in journalAssets where hasRemoteObject(sha) {
+                    if let name = key.objectName(.blob, plaintextSHA256: sha) { republished.insert("Sealed/Blobs/\(name)") }
+                }
+            }
+        }
+        deleteReplacedFiles(going, starting: false) { path, library in !sealing.isRival(library) || republished.contains(path) }
+        for id in going {
             let inbox = inboxBase.appendingPathComponent(id.uuidString, isDirectory: true)
             if (try? SyncFiles.noSymlinks(inbox, below: inboxBase)) != nil { try? fm.removeItem(at: inbox) }
         }
@@ -121,7 +135,7 @@ extension LibrarySyncEngine {
     /// Deletes the replaced libraries' files. Downloaded sealed files go when their header names one of them. Starting
     /// over also deletes the plaintext history from before encryption and every sealed object not downloaded here (no
     /// other library's can be there yet: the new one has written nothing); entries not downloaded go as passes read them.
-    private func deleteReplacedFiles(_ replaced: Set<UUID>, starting: Bool) {
+    private func deleteReplacedFiles(_ replaced: Set<UUID>, starting: Bool, objectMayGo: (String, UUID) -> Bool = { _, _ in true }) {
         guard !replaced.isEmpty else { return }
         if starting {
             for name in ["Events", "Metadata", Self.compactionDirectory] {
@@ -141,7 +155,9 @@ extension LibrarySyncEngine {
                 switch SyncFiles.itemState(url) {
                 case .local:
                     guard let library = checkedObjects[path] ?? sealedLibrary(of: url) else { continue }
-                    if replaced.contains(library) { deleteRemote(url); checkedObjects[path] = nil } else { checkedObjects[path] = library }
+                    if replaced.contains(library), kind != .blob || objectMayGo(path, library) {
+                        deleteRemote(url); checkedObjects[path] = nil
+                    } else { checkedObjects[path] = library }
                 case .inCloud:
                     if starting && kind == .blob { deleteRemote(url) }
                 case .absent:

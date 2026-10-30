@@ -450,37 +450,107 @@ extension LibrarySyncEngine {
 
     // MARK: Retired keys
 
-    /// How long a retired key stays in iCloud Keychain: iCloud.com's Data Recovery keeps deleted files 30 days, and a
-    /// device away that long may still bring a file sealed with it. Every device seen in the last 30 days must have moved
-    /// on to the current key as well.
+    /// How long a retired key stays in iCloud Keychain at least: iCloud.com's Data Recovery keeps deleted files 30 days.
+    /// Every device that has written presence must have moved on to the current key as well, and nothing in the sync
+    /// folder may still be sealed with it (`removeRetiredKeys`).
     static let retiredKeyRemoval: TimeInterval = 30 * 24 * 60 * 60
 
-    /// Removes the keys of libraries this one replaced (Start Over, or two new libraries started at once): their files go
-    /// wherever they're found, so nothing can need them. On iCloud Keychain this removes them from every device.
+    /// Removes the keys of libraries this one replaced. A library started over from: at once, since its files go wherever
+    /// they're found. A rival started at the same time: only once every device has moved on to this library's key and no
+    /// file in the sync folder is still that library's (`sealedObjectsNaming`). On iCloud Keychain this removes them from
+    /// every device.
     func removeReplacedLibraryKeys() {
-        guard let keyStore, let replaced = sealing?.manifest.replaces else { return }
-        for library in replaced where library != sealing?.libraryID {
-            for key in (try? keyStore.keys(for: library)) ?? [] { try? keyStore.remove(keyID: key.id, libraryID: library) }
+        guard let keyStore, let sealing, let replaced = sealing.manifest.replaces else { return }
+        for library in replaced where library != sealing.libraryID {
+            let held = (try? keyStore.keys(for: library)) ?? []
+            guard !held.isEmpty else { continue }
+            if sealing.isRival(library) {
+                guard rivalFilesMayGo, sealedObjectsNaming(library: library) == false else { continue }
+            }
+            for key in held { try? keyStore.remove(keyID: key.id, libraryID: library) }
         }
     }
 
-    /// Removes a key this library retired once it's no longer needed: retired `retiredKeyRemoval` ago, every device seen
-    /// in the last 30 days holds the current key, and nothing in the sync folder this pass read (`entries`, compaction
-    /// records included) is still sealed with it. A file found sealed with it after that is a leftover nobody can open,
-    /// and is deleted where it's found (`readSealed`).
+    /// Removes a key this library retired once it's no longer needed: retired `retiredKeyRemoval` ago, every device that
+    /// ever wrote presence holds the current key (`everyDeviceOnCurrentKey`: one away for months may still hold the old
+    /// one, with files sealed with it to bring, and it's the one to seal them again), and nothing in the sync folder is
+    /// still sealed with it: entries and compaction records this pass read, and objects by their headers.
     func removeRetiredKeys(entries: [JournalEntry], now: Date) {
         guard let keyStore, let sealing, let retired = sealing.manifest.retired else { return }
         let due = Set(retired.filter { now.timeIntervalSince($0.at) >= Self.retiredKeyRemoval && sealing.manifest.isRetired($0.id) }.map(\.id))
         let held = sealing.keys.values.filter { due.contains($0.idHex) && $0.id != sealing.current.id }
-        guard !held.isEmpty else { return }
-        // Every presence record must be read: one still downloading might be a device that hasn't moved on.
-        guard let recent = recentPresence(now: now)?.filter({ ($0.features ?? []).contains(Self.sealingFeature) }),
-              recent.allSatisfy({ $0.key == SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }) else { return }
-        let inUse = Set((entries + compactionRecords.values.map(\.entry)).filter(\.isSealed).compactMap { sealedKeys[$0.path] })
+        guard !held.isEmpty, everyDeviceOnCurrentKey() else { return }
+        var inUse = Set((entries + compactionRecords.values.map(\.entry)).filter(\.isSealed).compactMap { sealedKeys[$0.path] })
+        for key in held {
+            guard let named = sealedObjectsNaming(key: key.id) else { return }
+            if named { inUse.insert(key.id) }
+        }
         for key in held where !inUse.contains(key.id) {
             guard (try? keyStore.remove(keyID: key.id, libraryID: sealing.libraryID)) != nil else { continue }
             self.sealing?.keys[key.id] = nil
         }
+    }
+
+    /// Every device that has written presence (at any time) and reads encrypted libraries says it holds this library's
+    /// current key: none is still on an older key, or on a rival library. False while a presence record can't be read.
+    /// An earlier identity of a reinstalled device (`supersededBy`) never will; the device itself, under its later
+    /// identity, counts instead.
+    func everyDeviceOnCurrentKey() -> Bool {
+        guard let sealing, let records = allPresence() else { return false }
+        let ready = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex)
+        let pending = records.filter { ($0.features ?? []).contains(Self.sealingFeature) && $0.key != ready }
+        guard !pending.isEmpty else { return true }
+        let superseded = Set(((try? knownDevices()) ?? []).filter { $0.supersededBy != nil }.map(\.id))
+        return pending.allSatisfy { superseded.contains($0.deviceID) }
+    }
+
+    /// Every other device's presence record, whenever it was written; nil while one isn't downloaded, or was written in
+    /// the last 30 days in a form this version can't read.
+    func allPresence() -> [SyncDeviceRecord]? {
+        let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
+        guard fm.fileExists(atPath: directory.path) else { return [] }
+        guard let urls = try? journalFiles(in: SyncPresenceFiles.directory) else { return nil }
+        var records: [SyncDeviceRecord] = []
+        for url in urls {
+            guard SyncFiles.itemState(url) == .local else { try? cloud.requestDownload(url); return nil }
+            if let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud), let record = SyncPresenceFiles.decode(bytes),
+               url.lastPathComponent == SyncPresenceFiles.fileName(for: record.deviceID) {
+                if record.deviceID != deviceID { records.append(record) }
+                continue
+            }
+            let written = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantFuture
+            if Date().timeIntervalSince(written) < Self.recentDevice { return nil }
+        }
+        return records
+    }
+
+    /// Whether any sealed file in the sync folder names `key` (or `library`) in its header; nil while one whose header
+    /// hasn't been read isn't downloaded. Headers are read once per path (objects never change under one name).
+    func sealedObjectsNaming(key: Data? = nil, library: UUID? = nil) -> Bool? {
+        var found = false
+        for directory in ["Sealed/Events", "Sealed/Metadata", "Sealed/Blobs", "Sealed/Compaction"] {
+            let folder = remoteRoot.appendingPathComponent(directory, isDirectory: true)
+            guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
+            for name in names {
+                let stem = name.hasPrefix(".") && name.hasSuffix(".icloud") ? String(name.dropFirst().dropLast(7)) : name
+                guard SyncFiles.isHash(stem) else { continue }
+                let url = folder.appendingPathComponent(stem), path = "\(directory)/\(stem)"
+                if objectHeaders[path] == nil {
+                    guard SyncFiles.itemState(url) == .local else { return nil }
+                    let header = try? SyncFiles.coordinateRead(url, below: remoteRoot) { source -> Data in
+                        let handle = try FileHandle(forReadingFrom: source)
+                        defer { try? handle.close() }
+                        return try handle.read(upToCount: SealedHeader.size) ?? Data()
+                    }
+                    guard let parsed = header.flatMap(SealedObject.header(of:)) else { continue }
+                    objectHeaders[path] = (parsed.keyID, parsed.libraryID)
+                }
+                guard let header = objectHeaders[path] else { continue }
+                if let key, header.keyID == key { found = true }
+                if let library, header.libraryID == library { found = true }
+            }
+        }
+        return found
     }
 
     /// The files to delete when retiring `entries` and objects `blobs` (by plaintext SHA-256, under the key whose ID is

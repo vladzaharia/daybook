@@ -35,9 +35,14 @@ extension SyncManifest {
         /// that didn't start over.
         var replaces: [UUID]?
         /// Keys retired after a rotation (`retire`), and when: their files are gone, and once every device has moved
-        /// on they're removed from iCloud Keychain (`removeRetiredKeys`). A file found sealed with one this device no
-        /// longer holds is a leftover, deleted rather than waited for. Additive: earlier versions ignore it.
+        /// on they're removed from iCloud Keychain (`removeRetiredKeys`). A file found sealed with one this device
+        /// doesn't hold is left alone, neither read nor waited for, for a device that holds it to seal again. Additive:
+        /// earlier versions ignore it.
         var retired: [RetiredKey]?
+        /// Of `replaces`, the libraries replaced because two devices started one at once (`resolveManifest`), not by
+        /// Start Over: their keys are known, so their files and keys go only once every device has moved on to this
+        /// library's key, and an object only once what it holds is in this library. Additive.
+        var rivals: [UUID]?
 
         struct Key: Codable, Equatable {
             var id: String
@@ -77,6 +82,7 @@ extension SyncManifest {
             result.migrator = [self, other].filter { $0.current == result.current }.map(\.migrator).min() ?? min(migrator, other.migrator)
             result.legacyRetired = [legacyRetired, other.legacyRetired].compactMap { $0 }.max()
             result.replaces = Self.union(replaces, other.replaces)
+            result.rivals = Self.union(rivals, other.rivals)
             // A key one version retired stays retired, from the earlier date; one the other still lists is listed again
             // until a later retirement takes it out once more.
             var retiredByID: [String: Date] = [:]
@@ -161,8 +167,10 @@ struct SealingState {
     var readingOrder: [LibraryKey] { [current] + keys.values.filter { $0.id != current.id }.sorted { $0.idHex < $1.idHex } }
     /// A key the manifest saved a recovery wrap for: the current one.
     var hasRecovery: Bool { manifest.keys.first { $0.id == current.idHex }?.recovery != nil }
-    /// Whether this library started over from `library` (Start Over).
+    /// Whether this library started over from `library` (Start Over), or replaced it as a rival started at once.
     func replaces(_ library: UUID) -> Bool { manifest.replaces?.contains(library) == true }
+    /// Whether `library` was a rival started at once, whose files wait for every device to move on.
+    func isRival(_ library: UUID) -> Bool { manifest.rivals?.contains(library) == true }
 }
 
 /// What this device remembers about encrypted libraries, beside its checkpoints (`Sync/sealing.json`): once it has
@@ -221,6 +229,14 @@ enum RemoteObject {
         case .legacy(let url), .sealed(let url, _, _): return url
         }
     }
+}
+
+/// A sealed file a pass leaves alone: not read, not waited for, not warned about, and not deleted. One sealed with a key
+/// this library retired that this device doesn't hold (a device away when it retired wrote it; a device that holds the key
+/// seals it again), or one of a rival library while a device that synced it hasn't moved on yet.
+struct SyncHeldAsideFile: Error {
+    enum Reason { case retiredKey, rival }
+    var reason: Reason
 }
 
 /// A sealed entry whose key this device doesn't hold yet (rotated elsewhere, iCloud Keychain still catching up). Read
@@ -365,6 +381,13 @@ extension LibrarySyncEngine {
         return (id, plaintext)
     }
 
+    /// Whether a sealed entry read or written here was sealed with a key this device no longer holds (retired and
+    /// removed): what's remembered of it vouches for nothing, since no device without the key can read it either.
+    func sealedWithKeyGone(_ entry: JournalEntry) -> Bool {
+        guard entry.isSealed, let sealing, let key = sealedKeys[entry.path] else { return false }
+        return sealing.keys[key] == nil
+    }
+
     /// Reads and opens a sealed entry from the sync folder, or from a courier delivery while the sync folder's copy
     /// isn't downloaded (or doesn't open).
     func readSealed(_ entry: JournalEntry, kind: SealedKind, sealing: SealingState) throws -> (Data, LibraryKey) {
@@ -373,10 +396,15 @@ extension LibrarySyncEngine {
                 let opened = try SealedObject.open(bytes, kind: kind, libraryID: sealing.libraryID, keyring: sealing.keyring, expectedName: entry.name)
                 return (opened.plaintext, opened.key)
             } catch let error as SealedObjectError {
-                // A library this one started over from: its files go (LibrarySyncStartOver.swift).
-                if error == .wrongLibrary, let header = SealedObject.header(of: bytes), sealing.replaces(header.libraryID) { throw SyncReplacedFile() }
-                // Sealed with a key this library retired and this device no longer holds: a leftover nobody can open.
-                if case .unknownKey(let id) = error, sealing.manifest.isRetired(id) { throw SyncReplacedFile() }
+                // A library this one started over from: its files go (LibrarySyncStartOver.swift). A rival's wait until
+                // every device has moved on.
+                if error == .wrongLibrary, let header = SealedObject.header(of: bytes), sealing.replaces(header.libraryID) {
+                    if sealing.isRival(header.libraryID), !rivalFilesMayGo { throw SyncHeldAsideFile(reason: .rival) }
+                    throw SyncReplacedFile()
+                }
+                // Sealed with a key this library retired that this device doesn't hold: its author may have been away when
+                // it retired. It's left for a device that holds the key to seal again, never deleted here.
+                if case .unknownKey(let id) = error, sealing.manifest.isRetired(id) { throw SyncHeldAsideFile(reason: .retiredKey) }
                 throw Self.syncError(error, name: entry.path)
             }
         }
@@ -392,7 +420,7 @@ extension LibrarySyncEngine {
             break
         }
         let bytes = try SyncFiles.coordinateRead(delivered, below: inboxBase) { try Data(contentsOf: $0) }
-        do { return try open(bytes) } catch let error as SyncKeyPending { throw error } catch {
+        do { return try open(bytes) } catch let error as SyncKeyPending { throw error } catch let error as SyncHeldAsideFile { throw error } catch {
             // A delivery damaged after it was stored is discarded; iCloud Drive's copy takes over.
             discardDelivery(delivered)
             throw SyncPendingDownload()
