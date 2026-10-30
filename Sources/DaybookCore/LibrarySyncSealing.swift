@@ -381,6 +381,25 @@ extension LibrarySyncEngine {
         return (id, plaintext)
     }
 
+    /// How long a file sealed with a retired key this device doesn't hold counts, from when this device first found it: it
+    /// may be what this device last applied (`synchronize` publishes its copy again), or a compaction record listing what
+    /// was pruned (this Mac doesn't compact). A device that still holds the key seals it again well within this; after
+    /// it, nothing will open it, and it's ignored: never read, waited for, or warned about, and never deleted.
+    static let heldAsideWindow: TimeInterval = 30 * 24 * 60 * 60
+
+    /// Notes a sealed file a pass leaves alone, and, for one sealed with a retired key, when this device first found it.
+    func noteHeldAside(_ entry: JournalEntry, _ held: SyncHeldAsideFile) {
+        heldAsideEntries[entry.path] = held.reason
+        if held.reason == .retiredKey, state.heldAside?[entry.path] == nil { state.heldAside = (state.heldAside ?? [:]).merging([entry.path: sealerClock()]) { $1 } }
+    }
+
+    /// Whether this pass held aside the file at `path` as sealed with a retired key, first found within `heldAsideWindow`.
+    func heldAsideLately(_ path: String) -> Bool {
+        guard heldAsideEntries[path] == .retiredKey else { return false }
+        let now = sealerClock()
+        return now.timeIntervalSince(state.heldAside?[path] ?? now) < Self.heldAsideWindow
+    }
+
     /// Whether a sealed entry read or written here was sealed with a key this device no longer holds (retired and
     /// removed): what's remembered of it vouches for nothing, since no device without the key can read it either.
     func sealedWithKeyGone(_ entry: JournalEntry) -> Bool {
@@ -392,6 +411,8 @@ extension LibrarySyncEngine {
     /// isn't downloaded (or doesn't open).
     func readSealed(_ entry: JournalEntry, kind: SealedKind, sealing: SealingState) throws -> (Data, LibraryKey) {
         func open(_ bytes: Data) throws -> (Data, LibraryKey) {
+            // Which key and library it names, for `sealedObjectsNaming`, whether or not it opens here.
+            if let header = SealedObject.header(of: bytes) { objectHeaders[entry.path] = (header.keyID, header.libraryID) }
             do {
                 let opened = try SealedObject.open(bytes, kind: kind, libraryID: sealing.libraryID, keyring: sealing.keyring, expectedName: entry.name)
                 return (opened.plaintext, opened.key)

@@ -476,6 +476,41 @@ final class LibrarySyncCompactionTests: XCTestCase {
         XCTAssertEqual(files("Events").count, 4)
     }
 
+    /// A Mac whose clock runs six months ahead sees every other device as gone. A phone whose presence it sees change says
+    /// otherwise: nothing of a conversation goes. Back on time, a device lost long ago, whose presence never changes, holds
+    /// nothing back.
+    func testAMacWhoseClockRunsSixMonthsAheadDoesntPruneConversations() async throws {
+        let mac = try mac(), phone = try phone()
+        let lost = """
+        {"format":"DaybookDevice","schemaVersion":1,"deviceID":"Lost","deviceClass":"phone","displayName":"Old iPhone","canProcess":false,
+         "lastSeen":"\(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-300 * 86_400)))","features":["sealed-1","compact-1"]}
+        """
+        let meeting = Meeting(title: "Standup")
+        try await pass(mac, "Mac", [meeting])
+        try await pass(phone, "Phone")
+        try Data(lost.utf8).write(to: remote.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data("Lost".utf8))).json"))
+        for index in 1...3 { try await edit("Mac", meeting.id) { $0.setNotes("Draft \(index)") }; try await pass(mac, "Mac") }
+        let proposal = await mac.pendingProposal
+        XCTAssertNotNil(proposal)
+        // The Mac's clock jumps six months ahead while the phone syncs: its presence changes, written six months before
+        // the Mac's clock says.
+        let ahead = Date().addingTimeInterval(200 * 24 * 60 * 60)
+        await mac.setCompactionClock({ ahead })
+        try agePresence("Phone", days: -0.0001)
+        for _ in 0..<3 { try await pass(mac, "Mac") }
+        var pruned = await mac.prunedIDs
+        XCTAssertTrue(pruned.isEmpty, "\(pruned.count) pruned with the clock six months ahead")
+        XCTAssertEqual(files("Events").count, 4)
+
+        // Back on time, the phone acknowledges, and the Mac prunes; the device lost long ago doesn't hold it back.
+        await mac.setCompactionClock({ Date() })
+        try await pass(phone, "Phone")
+        try agePresence("Phone", days: -0.001)
+        for _ in 0..<2 { try await pass(mac, "Mac"); try await pass(phone, "Phone") }
+        pruned = await mac.prunedIDs
+        XCTAssertEqual(pruned.count, 3)
+    }
+
     func testCompactionWaitsForEveryRecentDeviceToReadACompactedLibrary() async throws {
         let mac = try mac()
         try await pass(mac, "Mac", metadata: settings("First"))

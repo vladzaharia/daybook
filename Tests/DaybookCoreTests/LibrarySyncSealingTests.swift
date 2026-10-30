@@ -867,7 +867,7 @@ final class LibrarySyncSealingTests: XCTestCase {
         // An earlier identity of this Mac, from before it was reinstalled, never moves on; the Mac itself has.
         let earlier = """
         {"format":"DaybookDevice","schemaVersion":1,"deviceID":"Earlier","deviceClass":"mac","displayName":"Studio Mac","canProcess":true,
-         "lastSeen":"\(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-200 * 86_400)))","features":["sealed-1","compact-1"],
+         "lastSeen":"\(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-100 * 86_400)))","features":["sealed-1","compact-1"],
          "key":{"state":"ready","id":"\(first.idHex)"}}
         """
         try Data(earlier.utf8).write(to: remote.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data("Earlier".utf8))).json"))
@@ -927,6 +927,133 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(onMac.pendingDownloads, 0)
         XCTAssertEqual(onMac.meetings.first { $0.id == shared.id }?.notes, "Written away")
         XCTAssertTrue(onMac.meetings.contains { $0.id == startedAway.id }, "the conversation started away")
+    }
+
+    /// A device lost or given away never moves on, and its presence stays in the sync folder: it holds a retired key back
+    /// only until it hasn't been seen for six months.
+    func testALostDeviceHoldsARetiredKeyBackForSixMonthsAtMost() async throws {
+        let mac = try mac()
+        let kept = Meeting(title: "Kept")
+        try await pass(mac, "Mac", [kept])
+        let first = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac", [kept])
+        let start = Date()
+        await mac.setSealerClock { start }
+        let second = try await mac.rotateKey(now: start)
+        try await pass(mac, "Mac", [kept])
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60) }
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(try manifest().sealing?.retired?.map(\.id), [first.idHex])
+        let due = start.addingTimeInterval(LibrarySyncEngine.retirementGrace + LibrarySyncEngine.retiredKeyRemoval + 120)
+        let lost = remote.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data("Lost".utf8))).json")
+        func lostPresence(daysBefore days: Double) throws {
+            let record = """
+            {"format":"DaybookDevice","schemaVersion":1,"deviceID":"Lost","deviceClass":"phone","displayName":"","canProcess":false,
+             "lastSeen":"\(ISO8601DateFormatter().string(from: due.addingTimeInterval(-days * 86_400)))","features":["sealed-1","compact-1"],
+             "key":{"state":"ready","id":"\(first.idHex)"}}
+            """
+            try Data(record.utf8).write(to: lost)
+        }
+        await mac.setSealerClock { due }
+        try lostPresence(daysBefore: 170)
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(Set(try keychain.keys(for: first.libraryID).map(\.id)), [first.id, second.id], "seen less than six months ago")
+        try lostPresence(daysBefore: 181)
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(try keychain.keys(for: first.libraryID).map(\.id), [second.id], "not seen for six months")
+    }
+
+    /// An iPhone keeps most recordings only in iCloud. Removing a retired key doesn't download them: a recording the journal
+    /// names is known by its object's name. Only an object nothing names is downloaded, to read its header, on Wi-Fi only,
+    /// and let go of again.
+    func testAnIPhoneRemovesARetiredKeyWithoutDownloadingRecordings() async throws {
+        let mac = try mac()
+        let recorded = try await record(audioBytes(3000, seed: 9), on: "Mac", into: Meeting(title: "Talk"))
+        try await pass(mac, "Mac", [recorded])
+        let first = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac", [recorded])
+        let network = NetworkSwitch(.restricted)
+        let phone = try LibrarySyncEngine(localRoot: local("Phone"), remoteRoot: remote, deviceID: "Phone", replica: SyncReplicaConfiguration(
+            audioPolicy: .onDemand, device: SyncDeviceIdentity(deviceClass: .phone, displayName: "Pocket", canProcess: false),
+            cloud: cloud.files, keyStore: keychain, network: { network.condition }, sealsNewLibrary: false))
+        try await pass(phone, "Phone")
+        let start = Date()
+        await mac.setSealerClock { start }
+        let second = try await mac.rotateKey(now: start)
+        try await pass(mac, "Mac", [recorded]); try await pass(phone, "Phone")
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60) }
+        try await pass(mac, "Mac", [recorded]); try await pass(phone, "Phone")
+        XCTAssertEqual(try manifest().sealing?.retired?.map(\.id), [first.idHex])
+        let sha = try XCTUnwrap(recorded.tracks.first?.sha256)
+        let recording = "Sealed/Blobs/\(try XCTUnwrap(second.objectName(.blob, plaintextSHA256: sha)))"
+        XCTAssertTrue(files("Sealed/Blobs").contains(String(recording.dropFirst("Sealed/Blobs/".count))))
+        // On the phone, every object is only in iCloud; one of them nothing names.
+        let stray = SealedObject.seal(Data("nothing names this".utf8), kind: .blob, key: second)
+        try stray.bytes.write(to: remote.appendingPathComponent("Sealed/Blobs/\(stray.name)"))
+        for name in files("Sealed/Blobs") { try cloud.evict(remote.appendingPathComponent("Sealed/Blobs/\(name)")) }
+        func requested() -> [String] { cloud.downloadRequests.filter { $0.contains("/Sealed/Blobs/") } }
+
+        // A month on, it's the phone's pass that may remove it. Off Wi-Fi, nothing is downloaded, and the key waits.
+        await phone.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + LibrarySyncEngine.retiredKeyRemoval + 120) }
+        try await pass(phone, "Phone")
+        XCTAssertEqual(requested(), [])
+        XCTAssertEqual(Set(try keychain.keys(for: first.libraryID).map(\.id)), [first.id, second.id])
+        // On Wi-Fi, only the object nothing names is downloaded, read, and let go of again; the key goes.
+        network.condition = .unrestricted
+        try await pass(phone, "Phone")
+        let strayPath = remote.appendingPathComponent("Sealed/Blobs/\(stray.name)").path
+        XCTAssertEqual(requested(), [strayPath])
+        XCTAssertTrue(cloud.droppedLocalCopies.contains(strayPath))
+        XCTAssertEqual(try keychain.keys(for: first.libraryID).map(\.id), [second.id])
+    }
+
+    /// A file sealed with a removed key counts for a month from when a device first finds it: it may be what that device
+    /// last applied, and a compaction record among them keeps the Mac from compacting. Then nothing will open it: it stays,
+    /// and is ignored, also after the app is opened again.
+    func testAFileSealedWithARemovedKeyCountsForAMonthOnly() async throws {
+        let mac = try mac()
+        let kept = Meeting(title: "Kept")
+        try await pass(mac, "Mac", [kept])
+        let first = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac", [kept])
+        let start = Date()
+        await mac.setSealerClock { start }
+        _ = try await mac.rotateKey(now: start)
+        try await pass(mac, "Mac", [kept])
+        let retiredAt = start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60)
+        await mac.setSealerClock { retiredAt }
+        try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(try manifest().sealing?.retired?.map(\.id), [first.idHex])
+        try keychain.remove(keyID: first.id, libraryID: first.libraryID)
+        let event = SealedObject.seal(Data(#"{"schemaVersion":1}"#.utf8), kind: .event, key: first)
+        let record = SealedObject.seal(Data(#"{"schemaVersion":1}"#.utf8), kind: .compaction, key: first)
+        try FileManager.default.createDirectory(at: remote.appendingPathComponent("Sealed/Compaction"), withIntermediateDirectories: true)
+        try event.bytes.write(to: remote.appendingPathComponent("Sealed/Events/\(event.name)"))
+        try record.bytes.write(to: remote.appendingPathComponent("Sealed/Compaction/\(record.name)"))
+        let found = try await pass(mac, "Mac", [kept])
+        XCTAssertEqual(found.warnings, []); XCTAssertEqual(found.pendingDownloads, 0)
+        var counts = await mac.heldAsideLately("Sealed/Events/\(event.name)")
+        XCTAssertTrue(counts)
+        var complete = await mac.compactionReadComplete
+        XCTAssertFalse(complete, "a compaction record it can't read may list what was pruned")
+
+        let monthOn = retiredAt.addingTimeInterval(LibrarySyncEngine.heldAsideWindow + 60)
+        await mac.setSealerClock { monthOn }
+        try await pass(mac, "Mac", [kept])
+        counts = await mac.heldAsideLately("Sealed/Events/\(event.name)")
+        XCTAssertFalse(counts)
+        complete = await mac.compactionReadComplete
+        XCTAssertTrue(complete)
+        XCTAssertTrue(files("Sealed/Events").contains(event.name)); XCTAssertTrue(files("Sealed/Compaction").contains(record.name))
+        // Opened again, it remembers when it found them.
+        let reopened = try self.mac()
+        await reopened.setSealerClock { monthOn }
+        let again = try await pass(reopened, "Mac", [kept])
+        XCTAssertEqual(again.warnings, []); XCTAssertEqual(again.publishedEvents, 0)
+        counts = await reopened.heldAsideLately("Sealed/Events/\(event.name)")
+        XCTAssertFalse(counts)
+        complete = await reopened.compactionReadComplete
+        XCTAssertTrue(complete)
     }
 
     // MARK: Review fixes
