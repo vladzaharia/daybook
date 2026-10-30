@@ -1,9 +1,10 @@
+import Accelerate
 import AVFoundation
 import Foundation
 
-/// Recordings for tests, without a microphone: speech from `say` and music from tones and noise
-/// bursts, mixed at known levels, 16 kHz mono. Deterministic, except that `say` voices differ
-/// between macOS releases. Nothing is downloaded or recorded.
+/// Recordings for tests, without a microphone: speech from `say`, music from tones and noise bursts,
+/// rooms and small loudspeakers, mixed at known levels, 16 kHz mono. Deterministic, except that
+/// `say` voices differ between macOS releases. Nothing is downloaded or recorded.
 public enum SyntheticAudio {
     public static let rate = 16_000.0
 
@@ -90,5 +91,68 @@ public enum SyntheticAudio {
     public static func limited(_ mix: [Float]) -> [Float] {
         let peak = mix.map(abs).max() ?? 1
         return peak > 0.99 ? mix.map { $0 / peak * 0.99 } : mix
+    }
+
+    // MARK: Rooms and loudspeakers
+
+    /// A room's impulse response: the direct sound, six early reflections in the first 40 ms, and a
+    /// diffuse tail that decays by 60 dB in `rt60` seconds. `directToReverberant` is the direct
+    /// sound's energy against everything after it, in dB: about +10 close to the microphone, 0 at a
+    /// couple of metres, −5 or less across a living room. Deterministic by `seed`.
+    public static func room(rt60: Double, directToReverberant: Double, seed: UInt64 = 1) -> [Float] {
+        var state = seed | 1
+        func noise() -> Double {
+            state ^= state >> 12; state ^= state << 25; state ^= state >> 27
+            return Double((state &* 2_685_821_657_736_338_717) >> 11) / Double(1 << 53) * 2 - 1
+        }
+        let length = Int(rt60 * rate)
+        var tail = [Float](repeating: 0, count: max(1, length))
+        let decay = log(1000.0) / rt60
+        for index in tail.indices {
+            let t = Double(index) / rate
+            // Diffuse from about 5 ms; early reflections are sparse, louder taps.
+            tail[index] = t < 0.005 ? 0 : Float(noise() * exp(-decay * t))
+        }
+        for reflection in 0..<6 {
+            let delay = Int((0.006 + Double(reflection) * 0.0055 + abs(noise()) * 0.003) * rate)
+            if delay < tail.count { tail[delay] += Float((noise() > 0 ? 1 : -1) * 0.5 * exp(-decay * Double(delay) / rate)) }
+        }
+        let energy = tail.reduce(0) { $0 + Double($1) * Double($1) }
+        let scale = Float(sqrt(pow(10, -directToReverberant / 10) / max(energy, 1e-12)))
+        var impulse = tail.map { $0 * scale }
+        impulse[0] = 1
+        return impulse
+    }
+
+    /// `x` heard through `impulse` (a room, `room(rt60:directToReverberant:)`), the same length, its
+    /// tail cut off at the end.
+    public static func reverberated(_ x: [Float], _ impulse: [Float]) -> [Float] {
+        guard impulse.count > 1 else { return x.map { $0 * (impulse.first ?? 1) } }
+        let padded = [Float](repeating: 0, count: impulse.count - 1) + x
+        return vDSP.convolve(padded, withKernel: impulse)
+    }
+
+    /// A small loudspeaker, a TV's or a kitchen radio's: little below `low` Hz or above `high` Hz
+    /// (two second-order filters each way).
+    public static func loudspeaker(_ x: [Float], low: Double = 150, high: Double = 6_000) -> [Float] {
+        var y = x
+        for _ in 0..<2 { y = biquad(y, frequency: low, highPass: true); y = biquad(y, frequency: high, highPass: false) }
+        return y
+    }
+
+    /// A Butterworth second-order low- or high-pass filter (the Audio EQ Cookbook's), below Nyquist.
+    private static func biquad(_ x: [Float], frequency: Double, highPass: Bool) -> [Float] {
+        let w = 2 * Double.pi * min(frequency, rate * 0.45) / rate, alpha = sin(w) / (2 * 0.7071), c = cos(w)
+        let b0 = highPass ? (1 + c) / 2 : (1 - c) / 2, b1 = highPass ? -(1 + c) : 1 - c, b2 = b0
+        let a0 = 1 + alpha, a1 = -2 * c, a2 = 1 - alpha
+        var y = [Float](repeating: 0, count: x.count)
+        var x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0
+        for index in x.indices {
+            let input = Double(x[index])
+            let output = (b0 * input + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0
+            x2 = x1; x1 = input; y2 = y1; y1 = output
+            y[index] = Float(output)
+        }
+        return y
     }
 }
