@@ -300,8 +300,7 @@ enum LibraryDemo {
 
     /// Adds a short silent file as a recording, then gives the track the length a real one would have.
     private static func addTrack(_ state: AppState, to id: UUID, source: AudioSource, minutes: Double, seconds: Int = 4) async -> UUID? {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Daybook Library Demo \(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let folder = DemoAudio.newFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let audio = folder.appendingPathComponent(source == .soundcore ? "REC0042.wav" : "\(source.recordingName).wav")
         try? PhotoDemo.silentWAV(seconds: seconds).write(to: audio)
@@ -325,6 +324,26 @@ enum LibraryDemo {
         }
         meeting.transcripts = [TrackTranscript(trackID: track, segments: segments, modelID: "parakeet-tdt-0.6b-v3")]
         meeting.unifiedTranscript = segments
+    }
+}
+
+/// Where the demos' silent recordings wait to be added: a folder for the run in the temporary
+/// directory, removed as the app exits, since a snapshot can exit while a demo is still adding them.
+enum DemoAudio {
+    private static var path: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("Daybook Library Demo \(getpid())", isDirectory: true)
+    }
+
+    private static let folder: URL = {
+        atexit { try? FileManager.default.removeItem(at: DemoAudio.path) }
+        return path
+    }()
+
+    /// An empty folder of its own for one recording, so its file can keep the name it's added under.
+    static func newFolder() -> URL {
+        let url = folder.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 }
 #endif
