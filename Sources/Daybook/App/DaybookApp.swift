@@ -456,8 +456,8 @@ private struct DebugLaunchActions: ViewModifier {
             PhotoDemo.apply(to: state)
             LibraryDemo.apply(to: state)
             if let query = LaunchOptions.value(after: "--search") { state.search = query }
-            PerfProbe.stage = { [weak state] in
-                guard let state, let id = state.processingID else { return "idle" }
+            PerfProbe.stage = {
+                guard let id = state.processingID else { return "idle" }
                 let status = state.meetings.first { $0.id == id }?.status.rawValue ?? ""
                 return "\(status): \(state.processingProgress.message)"
             }

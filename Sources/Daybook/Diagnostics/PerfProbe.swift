@@ -90,7 +90,8 @@ enum PerfProbe {
         window.level = .floating
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        let layer = CAMetalLayer()
+        // Drawn from the probe's thread only, once it starts.
+        nonisolated(unsafe) let layer = CAMetalLayer()
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
         layer.drawableSize = CGSize(width: 6, height: 6)
