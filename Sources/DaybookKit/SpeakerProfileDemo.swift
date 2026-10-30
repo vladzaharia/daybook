@@ -50,7 +50,7 @@ public enum SpeakerProfileDemo {
                                                 embeddingModelID: space))
             }
             meeting.tracks = [track]
-            meeting.transcripts = [TrackTranscript(id: run, trackID: track.id, segments: segments, modelID: "parakeet-tdt-0.6b-v3", createdAt: date)]
+            meeting.transcripts = [TrackTranscript(id: run, trackID: track.id, segments: segments, modelID: "parakeet/ultra", createdAt: date)]
             meeting.unifiedTranscript = segments
             if let summary { meeting.summary = summary }
             meeting.status = .ready
