@@ -151,7 +151,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         return serial?.isEmpty == false ? serial : nil
     }
 
-    /// The device's "Fast Transfer for Long Recordings". Turning it on again tries Fast Transfer afresh,
+    /// The device's "Fast Transfer". Turning it on again tries Fast Transfer afresh,
     /// even where a join failed before.
     public var usesFastTransfer = true {
         didSet {

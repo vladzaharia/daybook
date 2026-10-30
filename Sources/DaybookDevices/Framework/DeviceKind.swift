@@ -160,7 +160,7 @@ public struct ConfiguredDevice: Codable, Identifiable, Hashable {
     /// joins the same conversation; its button starts that device. Nil (the default) means on.
     public var alsoRecordsWithMac: Bool?
     public var recordsAlongsideMac: Bool { alsoRecordsWithMac ?? true }
-    /// "Fast Transfer for Long Recordings" (iPhone): recordings over ten minutes come over the recorder's
+    /// "Fast Transfer" (iPhone): recordings over ten minutes come over the recorder's
     /// own Wi‑Fi while Daybook is open. Nil (the default) means on.
     public var fastTransferForLongRecordings: Bool?
     public var usesFastTransfer: Bool { fastTransferForLongRecordings ?? true }
