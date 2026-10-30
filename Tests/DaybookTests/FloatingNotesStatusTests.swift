@@ -73,7 +73,7 @@ final class FloatingNotesStatusTests: XCTestCase {
     func testConnectedRecorderShowsBatteryAndTheDotWhenRecordingAlong() {
         let connected = FloatingStatus.recorderChip(soundcore(), recording: true)
         XCTAssertEqual(connected?.label, "Soundcore · 80%")
-        XCTAssertEqual(connected?.shortLabel, "80%")
+        XCTAssertEqual(connected?.shortLabel, "Soundcore", "Short, it keeps its name")
         XCTAssertEqual(connected?.tone, .linked)
         XCTAssertEqual(connected?.showsDot, false)
         XCTAssertEqual(connected?.detail, "Soundcore Work · Connected · 80%")
@@ -138,6 +138,32 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(paused?.label, "Alex’s iPhone paused")
         XCTAssertEqual(paused?.shortLabel, "Paused")
         XCTAssertEqual(paused?.detail, "Alex’s iPhone paused. This Mac keeps recording.")
+    }
+
+    /// Regression: at the default width a paused iPhone's chip kept "Alex’s iPhone paused" and squeezed
+    /// the Soundcore's to "● 80%", which didn't say whose it was.
+    func testChipsShortenThePausedIPhoneFirstAndKeepNames() throws {
+        var along = phone()
+        along.along = .recording
+        along.activity = .paused
+        var recorder = soundcore()
+        recorder.along = .recording
+        let chips = FloatingStatus.chips(recording { $0.call = .detected; $0.recorders = [recorder]; $0.phones = [along] })
+        XCTAssertEqual(chips.map(\.target), [.call, .recorder("sc"), .phone("ph")])
+        func labels(_ fit: ChipRow.Fit) -> [String?] { chips.map(fit.label) }
+        XCTAssertEqual(labels(.full), ["Call", "Soundcore · 80%", "Alex’s iPhone paused"])
+        XCTAssertEqual(labels(.shortFirst), ["Call", "Soundcore · 80%", "Paused"], "The paused chip shortens first")
+        XCTAssertEqual(labels(.shortOthers), ["Call", "Soundcore", "Paused"], "Names stay")
+        XCTAssertEqual(labels(.glyphOthers), [nil, nil, "Paused"], "What needs the person keeps its words longest")
+        XCTAssertEqual(labels(.short), [nil, nil, "Paused"])
+        XCTAssertEqual(labels(.glyph), [nil, nil, nil])
+        XCTAssertEqual(ChipRow.Fit.allCases.first, .full)
+
+        // Processing keeps its whole words until only short labels are left.
+        let work = try XCTUnwrap(FloatingStatus.workChip(.transcribing(0.4)))
+        XCTAssertFalse(work.shortensFirst)
+        XCTAssertEqual([ChipRow.Fit.shortFirst, .shortOthers, .glyphOthers].map { $0.label(work) }, Array(repeating: work.label, count: 3))
+        XCTAssertEqual(ChipRow.Fit.short.label(work), work.shortLabel)
     }
 
     func testDisconnectedPhoneHasNoChipButKeepsItsLine() {
