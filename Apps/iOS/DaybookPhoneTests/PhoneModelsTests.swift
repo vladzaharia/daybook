@@ -2,6 +2,7 @@ import DaybookCaptions
 import DaybookKit
 import DaybookLive
 import DaybookModelStore
+import UIKit
 import XCTest
 @testable import DaybookPhone
 
@@ -82,6 +83,39 @@ final class PhoneModelsTests: XCTestCase {
         models.allowsCellular = true
         models.download(voices)
         try await waitUntil { fetcher.requests.count >= 2 }
+    }
+
+    func testADownloadCarriesOnAfterARelaunch() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneModelsTests-\(UUID())", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let suite = "PhoneModelsTests-\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let scripted = ScriptedNetwork(), fetcher = RecordingFetcher()
+        scripted.set(.unrestricted)
+        // The last run asked for the speaker model and iOS ended it before it finished.
+        defaults.set(["nemotron-3-diarization/live"], forKey: PhoneModels.Keys.downloading)
+        let models = PhoneModels(root: root, defaults: defaults, fetcher: fetcher, network: scripted.network,
+                                 physicalMemory: 12 * 1_073_741_824)
+        try await waitUntil { !fetcher.requests.isEmpty }
+        XCTAssertEqual(fetcher.requests, ["FluidInference/nemotron-3-diarization-coreml"], "picked up again at launch")
+        try await waitUntil { (defaults.stringArray(forKey: PhoneModels.Keys.downloading) ?? []).isEmpty }
+        let speakers = try XCTUnwrap(models.choice(for: .liveDiarization))
+        XCTAssertEqual(models.status(of: speakers), .failed("The Internet connection appears to be offline."),
+                       "a download that failed is shown, and not started again at the next launch")
+
+        // Asked for again, then cancelled: also not carried over.
+        scripted.set(.restricted)
+        models.download(speakers)
+        XCTAssertEqual(defaults.stringArray(forKey: PhoneModels.Keys.downloading), ["nemotron-3-diarization/live"])
+        models.cancel(speakers)
+        XCTAssertEqual(defaults.stringArray(forKey: PhoneModels.Keys.downloading), [])
+    }
+
+    func testAnotherSessionsEventsAreFinishedAtOnce() {
+        var finished = false
+        PhoneAppDelegate().application(UIApplication.shared, handleEventsForBackgroundURLSession: "some.other.session") { finished = true }
+        XCTAssertTrue(finished, "nothing waits on a session that isn't the models'")
     }
 
     func testWithoutDownloadedModelsCaptionsStayTheSystems() {

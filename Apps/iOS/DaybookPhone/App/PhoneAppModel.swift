@@ -4,6 +4,7 @@ import Combine
 import CryptoKit
 import DaybookKit
 import DaybookLink
+import DaybookModelStore
 import Foundation
 import Observation
 import SwiftUI
@@ -131,7 +132,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         pendingStops = Dictionary(owed.map { ($0.macID, $0.conversationID) }, uniquingKeysWith: { _, later in later })
         let models = PhoneModels(root: LaunchOptions.isTestHost ? FileManager.default.temporaryDirectory
                                     .appendingPathComponent("DaybookPhoneModels-\(UUID().uuidString)", isDirectory: true) : PhoneModels.defaultRoot,
-                                 defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard)
+                                 defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard,
+                                 // Tests never download, nor reach the system's background sessions.
+                                 fetcher: LaunchOptions.isTestHost ? HubSnapshotFetcher() : PhoneModels.downloads)
         self.models = models
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models))

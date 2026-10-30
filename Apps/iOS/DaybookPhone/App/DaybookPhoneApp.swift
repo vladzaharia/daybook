@@ -4,6 +4,7 @@ import UIKit
 
 @main
 struct DaybookPhoneApp: App {
+    @UIApplicationDelegateAdaptor(PhoneAppDelegate.self) private var delegate
     @State private var model: PhoneAppModel
     @Environment(\.scenePhase) private var scenePhase
 
