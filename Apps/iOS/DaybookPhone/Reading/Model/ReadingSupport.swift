@@ -4,68 +4,25 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// Marks what changed between two versions word by word: removed words struck through in magenta,
-/// inserted words washed in mint. Whitespace stays with the word before it, so the text reads
-/// unchanged. The Mac's Version History draws the same marks.
+/// Marks what changed between two versions word by word (`WordChanges`): removed words struck through
+/// in magenta, inserted words washed in mint, over the text's own styling. The Mac's Version History
+/// draws the same marks.
 enum WordDiff {
-    /// Above this many words a diff stops being readable, so both versions show plain.
-    static let limit = 4_000
+    static func tokens(_ text: String) -> [Substring] { WordChanges.tokens(text) }
+    static func changes(old: [Substring], new: [Substring]) -> (removed: IndexSet, inserted: IndexSet) { WordChanges.changes(old: old, new: new) }
 
-    static func tokens(_ text: String) -> [Substring] {
-        var result: [Substring] = []
-        var start = text.startIndex, index = text.startIndex, inSpace = false
-        while index < text.endIndex {
-            let space = text[index].isWhitespace
-            if !space && inSpace && start < index { result.append(text[start..<index]); start = index }
-            inSpace = space
-            index = text.index(after: index)
-        }
-        if start < text.endIndex { result.append(text[start...]) }
-        return result
-    }
-
-    /// Indices of removed tokens in `old` and inserted tokens in `new`, compared ignoring trailing whitespace.
-    static func changes(old: [Substring], new: [Substring]) -> (removed: IndexSet, inserted: IndexSet) {
-        let difference = new.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .difference(from: old.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
-        var removed = IndexSet(), inserted = IndexSet()
-        for change in difference {
-            switch change {
-            case .remove(let offset, _, _): removed.insert(offset)
-            case .insert(let offset, _, _): inserted.insert(offset)
-            }
-        }
-        return (removed, inserted)
+    static func marked(old: String, new: String, dark: Bool = false) -> (old: AttributedString, new: AttributedString) {
+        marked(old: AttributedString(old), new: AttributedString(new), dark: dark)
     }
 
     /// In dark mode the washes are stronger and an inserted word is itself neon mint.
-    static func marked(old: String, new: String, dark: Bool = false) -> (old: AttributedString, new: AttributedString) {
-        let before = tokens(old), after = tokens(new)
-        guard before.count + after.count <= limit, !before.isEmpty, !after.isEmpty else {
-            return (AttributedString(old), AttributedString(new))
-        }
-        let changes = changes(old: before, new: after)
-        return (build(before, marked: changes.removed) { word in
-                    word.strikethroughStyle = Text.LineStyle(pattern: .solid, color: PhoneStyle.neonMagenta)
-                    word.backgroundColor = PhoneStyle.neonMagenta.opacity(dark ? 0.20 : 0.16)
-                },
-                build(after, marked: changes.inserted) { word in
-                    word.backgroundColor = PhoneStyle.neonMint.opacity(dark ? 0.22 : 0.16)
-                    if dark { word.foregroundColor = PhoneStyle.neonMint }
-                })
-    }
-
-    private static func build(_ tokens: [Substring], marked: IndexSet, style: (inout AttributedString) -> Void) -> AttributedString {
-        var result = AttributedString()
-        for (index, token) in tokens.enumerated() {
-            guard marked.contains(index) else { result += AttributedString(token); continue }
-            let word = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            var styled = AttributedString(word)
-            style(&styled)
-            result += styled
-            result += AttributedString(token.dropFirst(word.count))
-        }
-        return result
+    static func marked(old: AttributedString, new: AttributedString, dark: Bool = false) -> (old: AttributedString, new: AttributedString) {
+        var removed = AttributeContainer(), inserted = AttributeContainer()
+        removed.strikethroughStyle = Text.LineStyle(pattern: .solid, color: PhoneStyle.neonMagenta)
+        removed.backgroundColor = PhoneStyle.neonMagenta.opacity(dark ? 0.20 : 0.16)
+        inserted.backgroundColor = PhoneStyle.neonMint.opacity(dark ? 0.22 : 0.16)
+        if dark { inserted.foregroundColor = PhoneStyle.neonMint }
+        return WordChanges.marked(old: old, new: new, removed: removed, inserted: inserted)
     }
 }
 

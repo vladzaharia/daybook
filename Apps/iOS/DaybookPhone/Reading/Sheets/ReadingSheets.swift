@@ -97,11 +97,15 @@ private struct RevisionDetail: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: PhoneStyle.Space.s5) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(RevisionText.subject(revision, in: meeting)).font(PhoneStyle.Typeface.rowTitle).foregroundStyle(PhoneStyle.Ink.title)
+                        // The title above says what kind of change it was; this says what it's about, when that's more.
+                        let subject = RevisionText.subject(revision, in: meeting)
+                        if subject != RevisionText.title(revision, in: meeting) {
+                            Text(subject).font(PhoneStyle.Typeface.rowTitle).foregroundStyle(PhoneStyle.Ink.title)
+                        }
                         Text(revision.date.formatted(date: .abbreviated, time: .shortened)).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
                     }
-                    let diff = WordDiff.marked(old: RevisionText.readable(revision.oldValue, field: revision.field),
-                                               new: RevisionText.readable(revision.newValue, field: revision.field), dark: scheme == .dark)
+                    let diff = WordDiff.marked(old: RevisionText.styled(revision.oldValue, field: revision.field),
+                                               new: RevisionText.styled(revision.newValue, field: revision.field), dark: scheme == .dark)
                     if RevisionText.hasBefore(revision) {
                         comparison("Before", diff.old)
                         comparison("After", diff.new)
