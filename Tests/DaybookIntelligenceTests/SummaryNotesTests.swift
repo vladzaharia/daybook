@@ -16,7 +16,8 @@ final class SummaryNotesTests: XCTestCase {
         private var _prompts: [String] = [], _instructions: [String] = []
         var prompts: [String] { lock.withLock { _prompts } }
         var instructions: [String] { lock.withLock { _instructions } }
-        var reply: (String) -> String = { _ in "{}" }
+        /// The reply to a prompt, given the most tokens it may take.
+        var reply: (String, Int) -> String = { _, _ in "{}" }
 
         func encode(_ text: String) async -> [Int] {
             lock.withLock {
@@ -31,7 +32,7 @@ final class SummaryNotesTests: XCTestCase {
         func decode(_ tokens: [Int]) async -> String { lock.withLock { tokens.map { vocabulary[$0] }.joined(separator: " ") } }
         func respond(instructions: String, prompt: String, maxTokens: Int) async throws -> String {
             lock.withLock { _prompts.append(prompt); _instructions.append(instructions) }
-            return reply(prompt)
+            return reply(prompt, maxTokens)
         }
         func respond(instructions: String, prompt: String, schema: String, maxTokens: Int) async throws -> String {
             struct Unsupported: Error {}
@@ -145,7 +146,7 @@ final class SummaryNotesTests: XCTestCase {
     func testAShortConversationReadsNotesInPlaceAndFoldsThemIn() async throws {
         let model = WordModel()
         let summary = self.summary
-        model.reply = { prompt in
+        model.reply = { prompt, _ in
             prompt.contains("Extract ALL explicit agreed tasks")
                 ? #"{"actions":[{"text":"Email the venue","owner":"Alex","evidence":"Alex: I will email the venue tomorrow morning."},{"text":"Keep the cap","owner":null,"evidence":"Budget cap is firm at 40k"}]}"#
                 : summary
@@ -160,7 +161,9 @@ final class SummaryNotesTests: XCTestCase {
         XCTAssertTrue(flat(final).contains("Do not list the notes separately, under a heading of their own, or at the end"))
         // Each note is compared with what was said: what the conversation says is the conversation's; what only
         // the note says goes in as the person's, never as said or decided; a conflict is mentioned.
-        XCTAssertTrue(flat(final).contains("What the conversation also says: write it from the conversation, without mentioning the note."))
+        XCTAssertTrue(flat(final).contains("What the conversation also says, in any words"))
+        XCTAssertTrue(flat(final).contains("write it from the conversation, without mentioning the note."))
+        XCTAssertTrue(flat(final).contains(#""Your notes add" is only for this."#), "A note that repeats what was said gets no sentence of its own")
         XCTAssertTrue(flat(final).contains(#"write it as the user's, in the section it relates to ("Your notes add that"#))
         XCTAssertTrue(flat(final).contains("never as something said, decided, or confirmed in the conversation"))
         XCTAssertTrue(flat(final).contains("What conflicts with what was said: mention the conflict."))
@@ -176,8 +179,8 @@ final class SummaryNotesTests: XCTestCase {
 
     func testALongConversationKeepsTheMarkedPassagesThroughCompression() async throws {
         var meeting = meeting()
-        // 700 passages of filler between the marked moments: far past one pass.
-        let filler = (0..<700).map { index in
+        // 2,000 passages of filler between the marked moments: far past one pass.
+        let filler = (0..<2_000).map { index in
             TranscriptSegment(trackID: track, start: 300 + Double(index) * 6, end: 305 + Double(index) * 6,
                               text: "We went over routine item number \(index) for the quarterly review.", speakerID: "sam")
         }
@@ -186,10 +189,11 @@ final class SummaryNotesTests: XCTestCase {
         meeting.notes += "\nAsk legal about item 450"
         let model = WordModel()
         let summary = self.summary
-        model.reply = { prompt in
+        model.reply = { prompt, maxTokens in
             if prompt.contains("Extract ALL explicit agreed tasks") { return #"{"actions":[]}"# }
-            // Long enough that the parts' evidence is compressed once.
-            if prompt.contains("Extract concise factual evidence") { return String(repeating: "Routine items were reviewed. ", count: 700) }
+            // Each part writes as much as it may without being cut off: more than the final pass reads, so
+            // the parts' evidence is compressed once.
+            if prompt.contains("Extract concise factual evidence") { return String(repeating: "Routine ", count: maxTokens - 20) }
             if prompt.contains("Compress these evidence notes") { return "Routine review." }
             return summary
         }
@@ -198,8 +202,9 @@ final class SummaryNotesTests: XCTestCase {
         let parts = model.prompts.filter { $0.contains("Extract concise factual evidence") }
         XCTAssertGreaterThan(parts.count, 1)
         XCTAssertTrue(parts.allSatisfy { $0.contains("THE USER'S NOTES AND BOOKMARKS, for reference") }, "Every part knows the notes")
-        XCTAssertTrue(parts.allSatisfy { flat($0).contains("anything the note adds that wasn't said, marked as the note's") },
+        XCTAssertTrue(parts.allSatisfy { flat($0).contains("For a note, add only what no speaker said, marked as the note's") },
                       "What only a note says stays the note's through the passes")
+        XCTAssertTrue(parts.allSatisfy { flat($0).contains("A bookmark's words only name the moment it marks; never record them as a fact.") })
         let compressions = model.prompts.filter { $0.contains("Compress these evidence notes") }
         XCTAssertFalse(compressions.isEmpty)
         XCTAssertTrue(compressions.allSatisfy { flat($0).contains("what each note adds, marked as the note's") })
@@ -219,7 +224,7 @@ final class SummaryNotesTests: XCTestCase {
     func testTemplatesStillShapeTheSummary() async throws {
         let model = WordModel()
         let summary = self.summary
-        model.reply = { $0.contains("Extract ALL explicit agreed tasks") ? #"{"actions":[]}"# : summary }
+        model.reply = { prompt, _ in prompt.contains("Extract ALL explicit agreed tasks") ? #"{"actions":[]}"# : summary }
         _ = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting()),
                                                 template: .oneOnOne, glossary: [], templateInstructions: "Sections: Wins, Worries, Next",
                                                 progress: { _ in })
