@@ -578,34 +578,20 @@ extension AppState {
     /// What the inspector calls a recording: "Microphone", "Computer audio, echo removed", the
     /// recorder or iPhone it came from ("Soundcore Work", "Alex’s iPhone"), or the file's name.
     func recordingName(_ track: RecordingTrack, in meeting: Meeting) -> String {
-        if track.source == .imported { return track.fileName }
-        var name = track.source.recordingName
-        if track.deviceKind == DaybookPhoneIntegration.id { name = phoneName(track) ?? "iPhone" }
-        else if let kind = track.deviceKind, let device = DeviceCatalog.kind(kind)?.name { name = device }
-        if track.isLivePortion { return "\(name), live" }
-        if track.derivedFrom != nil { return "\(name), \(RecordingTrack.processingName(track.processing))" }
-        if meeting.tracks.contains(where: { $0.derivedFrom == track.id }) { return "\(name), original" }
-        return name
+        RecordingWords.name(track, in: meeting, phoneName: phoneName(track))
     }
 
     /// Where a recording was made, when its name doesn't say: "This Mac" for its microphone and
     /// computer audio, the recorder a file was exported from. Nil when the name says it already.
     func sourceRole(_ track: RecordingTrack, in meeting: Meeting) -> String? {
-        guard track.deviceKind != DaybookPhoneIntegration.id else { return nil }
-        switch track.source {
-        case .microphone, .systemAudio: return "This Mac"
-        case .soundcore, .imported:
-            guard let device = track.deviceKind.flatMap({ DeviceCatalog.kind($0)?.name }) else { return nil }
-            return recordingName(track, in: meeting).hasPrefix(device) ? nil : device
-        }
+        RecordingWords.place(track, in: meeting, mac: "This Mac")
     }
 
     /// The line under a recording's name in the inspector, each thing said once: where it was
     /// made, then how it sits among the conversation's other recordings ("This Mac",
     /// "Lined up by sound · starts 0:12").
     func sourceLine(_ track: RecordingTrack, in meeting: Meeting) -> String? {
-        let parts = [sourceRole(track, in: meeting), sourceTimingLine(track, in: meeting)].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        RecordingWords.line(track, in: meeting, mac: "This Mac", pending: pendingTiming(meeting))
     }
 
     /// The paired phone a recording came from, by name, when this Mac knows it.
@@ -615,36 +601,12 @@ extension AppState {
     }
 
     /// How a recording sits among the conversation's others: "Lined up by sound · starts 0:12",
-    /// "The main recording", "Couldn’t line up". A conversation's only recording has nothing to
-    /// line up with, and starting with the conversation goes without saying, so neither is said.
+    /// "The main recording", "Couldn’t line up" (`RecordingWords.timing`).
     func sourceTimingLine(_ track: RecordingTrack, in meeting: Meeting) -> String? {
-        let report = meeting.alignmentReports.first { $0.trackID == track.id }
-        if track.alignment?.method == .unaligned || report?.method == .unaligned { return "Couldn’t line up" }
-        guard meeting.tracks.filter({ $0.derivedFrom == nil }).count > 1 else { return nil }
-        let placement = meeting.timelinePlacement(of: track.id)
-        let starts = placement.map { TimeLabel.short($0.offset) }.flatMap { $0 == TimeLabel.short(0) ? nil : "starts \($0)" }
-        func line(_ parts: String?...) -> String? {
-            let words = parts.compactMap { $0 }
-            return words.isEmpty ? nil : words.joined(separator: " · ")
-        }
-        switch track.alignment?.method {
-        case .audio?: return line("Lined up by sound", starts)
-        case .transcript?: return line("Lined up by shared phrases", starts)
-        case .clock?: return line("Placed by the clocks only", starts)
-        case .manual?: return line("Timing set by you", starts)
-        case .pending?: return processingID == meeting.id ? "Lining up…" : "Lines up when it’s processed"
-        case .unaligned?: return "Couldn’t line up"
-        case nil:
-            switch report?.method {
-            case .unaligned?: return "Couldn’t line up"
-            case .anchors?: return line("Lined up by shared phrases", starts)
-            case .audio?: return line("Lined up by sound", starts)
-            case .timestamps?: return line("Placed by the clocks only", starts)
-            case .reference?: return "The main recording"
-            // Placed as it was recorded: where is the role, and only a later start is news.
-            case .provided?: return line(starts)
-            case nil: return placement == nil ? "Not lined up yet" : line(starts)
-            }
-        }
+        RecordingWords.timing(track, in: meeting, pending: pendingTiming(meeting))
+    }
+
+    private func pendingTiming(_ meeting: Meeting) -> String {
+        processingID == meeting.id ? "Lining up…" : "Lines up when it’s processed"
     }
 }

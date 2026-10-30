@@ -422,22 +422,6 @@ extension AudioSource {
         case .imported: return "doc"
         }
     }
-    /// The plain name a recording goes by in the inspector.
-    var recordingName: String {
-        switch self {
-        case .microphone: return "Microphone"
-        case .systemAudio: return "Computer audio"
-        case .soundcore: return "Soundcore Work"
-        case .imported: return "Imported file"
-        }
-    }
-}
-
-extension RecordingTrack {
-    /// How a derived track's processing reads in the interface: "echo removed".
-    static func processingName(_ processing: String?) -> String {
-        processing == echoCancelledProcessing ? "echo removed" : "processed"
-    }
 }
 
 // MARK: - Components

@@ -336,13 +336,18 @@ private struct AudioSourceRow: View {
                     Spacer(minLength: 6)
                     Text(track.duration.map(TimeLabel.short) ?? "—").monospacedDigit().foregroundStyle(.secondary)
                 }
-                HStack(spacing: 4) {
-                    if SourceDescription.isUnaligned(track, in: meeting) {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(PhoneStyle.Ink.warning)
+                if meeting.supersededLivePortions[track.id] != nil {
+                    // Kept for playback; the recorder's own file is what's transcribed.
+                    Text("Replaced by the full recording").font(.footnote).foregroundStyle(.secondary)
+                } else if let line = SourceDescription.line(track, in: meeting) {
+                    HStack(spacing: 4) {
+                        if SourceDescription.isUnaligned(track, in: meeting) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(PhoneStyle.Ink.warning)
+                        }
+                        Text(line)
                     }
-                    Text(SourceDescription.timing(track, in: meeting))
+                    .font(.footnote).foregroundStyle(.secondary)
                 }
-                .font(.footnote).foregroundStyle(.secondary)
                 if let availability {
                     Label(availabilityText(availability), systemImage: availabilitySymbol(availability))
                         .labelStyle(CompactLabelStyle())
