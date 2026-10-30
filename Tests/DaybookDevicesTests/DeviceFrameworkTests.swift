@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookDevices
@@ -272,7 +273,7 @@ final class DeviceFrameworkTests: XCTestCase {
     func testLinksAreRebuiltOnlyWhenTheDevicesTracksChange() {
         let kind = SoundcoreWorkIntegration().kind
         let session = DeviceSession(device: ConfiguredDevice(id: "links", kind: kind), kind: kind, connections: [],
-                                    defaults: UserDefaults(suiteName: "links-\(UUID().uuidString)")!)
+                                    defaults: makeTestDefaults("local.daybook.tests.links"))
         let soundcore = DeviceRecordingIdentity(kind: kind.id, serial: "AAAA", recordingID: "1780000000")
         var meetings = [
             Meeting(title: "Soundcore", tracks: [RecordingTrack(source: .soundcore, relativePath: "a", fileName: "a.wav", device: soundcore)]),

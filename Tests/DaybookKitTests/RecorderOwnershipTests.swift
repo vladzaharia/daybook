@@ -12,12 +12,7 @@ final class RecorderOwnershipTests: XCTestCase {
     private let serial = "D3200SIM0000001"
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookOwnership-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: root)
+        root = makeTemporaryFolder("DaybookOwnership")
     }
 
     /// A library with its own sync identity, connected to the shared folder when given.

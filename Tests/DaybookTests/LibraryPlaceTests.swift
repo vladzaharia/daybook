@@ -76,8 +76,7 @@ final class LibraryPlaceTests: XCTestCase {
     }
 
     private func makeState() async throws -> (AppState, URL, UserDefaults) {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookPlaceTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let root = makeTemporaryFolder("DaybookPlaceTests")
         let defaults = makeTestDefaults()
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()

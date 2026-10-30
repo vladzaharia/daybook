@@ -2,6 +2,7 @@ import Combine
 import DaybookCore
 import DaybookIntelligence
 @testable import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -33,10 +34,8 @@ final class WindowInvalidationTests: XCTestCase {
     }
 
     func testProgressRedrawsWhatFollowsItNotTheWindow() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookWindow-\(UUID().uuidString)")
-        let suite = "local.daybook.tests.window.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        let root = makeTemporaryFolder("DaybookWindow")
+        let defaults = makeTestDefaults("local.daybook.tests.window")
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         var redraws = 0, followed = 0
@@ -96,10 +95,8 @@ final class WindowInvalidationTests: XCTestCase {
     }
 
     func testOnlyTheLibraryAndTheDeviceListRedrawTheWindow() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookWindow-\(UUID().uuidString)")
-        let suite = "local.daybook.tests.window.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        let root = makeTemporaryFolder("DaybookWindow")
+        let defaults = makeTestDefaults("local.daybook.tests.window")
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         var redraws = 0
@@ -114,10 +111,8 @@ final class WindowInvalidationTests: XCTestCase {
     }
 
     func testSearchAndTheVisibleListAreWorkedOutOncePerChange() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookWindow-\(UUID().uuidString)")
-        let suite = "local.daybook.tests.window.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        let root = makeTemporaryFolder("DaybookWindow")
+        let defaults = makeTestDefaults("local.daybook.tests.window")
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
         let older = state.newMeeting(title: "Launch review", date: Date(timeIntervalSinceNow: -3_600))

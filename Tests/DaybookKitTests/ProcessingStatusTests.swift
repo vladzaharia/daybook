@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -146,8 +147,7 @@ final class ProcessingStatusTests: XCTestCase {
     }
 
     func testLibraryControllerAnswersForAConversation() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookStatus-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = makeTemporaryFolder("DaybookStatus")
         let library = await LibraryController(rootURL: root, sync: nil)
         try await library.load()
         let id = await library.newMeeting(title: "Notes only")

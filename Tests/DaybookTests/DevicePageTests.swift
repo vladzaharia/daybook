@@ -1,5 +1,6 @@
 import DaybookCore
 import DaybookKit
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import Daybook
@@ -9,7 +10,7 @@ import XCTest
 @MainActor
 final class DevicePageTests: XCTestCase {
     private func session(_ recorder: FakeRecorder) -> DeviceSession {
-        let defaults = UserDefaults(suiteName: "DevicePageTests-\(UUID().uuidString)")!
+        let defaults = makeTestDefaults("local.daybook.tests.device-page")
         let session = DeviceSession(device: ConfiguredDevice(id: "recorder", kind: SoundcoreWorkIntegration().kind),
                                     kind: SoundcoreWorkIntegration().kind, connections: [recorder], defaults: defaults)
         session.libraryChanged([], ready: true)
