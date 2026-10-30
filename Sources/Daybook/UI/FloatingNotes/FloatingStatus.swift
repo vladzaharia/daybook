@@ -137,6 +137,9 @@ struct FloatingChip: Identifiable, Equatable {
     var progress: Double?
     /// The whole status in a sentence: the menu's first line, the tooltip, and VoiceOver.
     var detail: String
+    /// Its short label says as much with its glyph (a paused iPhone's "Paused"), so it shortens
+    /// before the other chips give up their names.
+    var shortensFirst = false
     /// Keeps its words longest as the bar narrows: what's happening to the conversation, and
     /// anything that needs the person.
     var isProminent: Bool { target == .processing || target == .queue || tone == .attention }
@@ -254,7 +257,8 @@ enum FloatingStatus {
                 return chip("Importing \(importing.position) of \(importing.total)", short: "\(importing.position)/\(importing.total)", .working,
                             progress: importing.fraction, detail: "\(name) · Importing \(importing.position) of \(importing.total)")
             }
-            return chip(battery.map { "\(recorder.shortName) · \($0)" } ?? recorder.shortName, short: battery, .linked, dot: recordingAlong,
+            // Short, it keeps its name: a battery level alone doesn't say whose it is.
+            return chip(battery.map { "\(recorder.shortName) · \($0)" } ?? recorder.shortName, short: recorder.shortName, .linked, dot: recordingAlong,
                         detail: parts.joined(separator: " · "))
         case .searching, .connecting, .reconnecting:
             return chip(recorder.state == .reconnecting ? "Reconnecting…" : "Connecting…", .working, detail: "\(name) · Connecting…")
@@ -269,16 +273,19 @@ enum FloatingStatus {
     }
 
     static func phoneChip(_ phone: FloatingStatusInputs.Phone, recording: Bool) -> FloatingChip? {
-        func chip(_ label: String, short: String? = "iPhone", _ tone: StatusTone, dot: Bool = false, detail: String) -> FloatingChip {
-            FloatingChip(target: .phone(phone.id), symbol: "iphone", label: label, shortLabel: short, tone: tone, showsDot: dot, detail: detail)
+        func chip(_ label: String, short: String? = "iPhone", _ tone: StatusTone, dot: Bool = false, shortensFirst: Bool = false,
+                  detail: String) -> FloatingChip {
+            FloatingChip(target: .phone(phone.id), symbol: "iphone", label: label, shortLabel: short, tone: tone, showsDot: dot, detail: detail,
+                         shortensFirst: shortensFirst)
         }
         let name = phone.name
         if recording, let along = phone.along {
             switch along {
             case .recording, .alreadyRecording, .stopping:
-                // The chip is where a recording along shows, so a pause names the phone.
+                // The chip is where a recording along shows, so a pause names the phone. Short,
+                // "Paused" by the phone's glyph still says it, so it gives way first.
                 if phone.activity == .paused {
-                    return chip("\(name) paused", short: "Paused", .attention, detail: "\(name) paused. This Mac keeps recording.")
+                    return chip("\(name) paused", short: "Paused", .attention, shortensFirst: true, detail: "\(name) paused. This Mac keeps recording.")
                 }
                 return chip(name, .linked, dot: true, detail: "\(name) is recording too")
             case .starting:
@@ -292,7 +299,7 @@ enum FloatingStatus {
         guard phone.isConnected else { return nil }
         switch phone.activity {
         case .recording: return chip(name, .linked, dot: true, detail: "\(name) is recording")
-        case .paused: return chip("\(name) paused", short: "Paused", .calm, detail: "\(name) paused its recording")
+        case .paused: return chip("\(name) paused", short: "Paused", .calm, shortensFirst: true, detail: "\(name) paused its recording")
         case .idle: return chip(name, short: nil, .linked, detail: "\(name) · Connected")
         }
     }

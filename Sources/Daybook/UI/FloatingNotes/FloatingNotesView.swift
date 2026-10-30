@@ -302,16 +302,18 @@ private struct StatusBand: View {
 /// The status chips in a row of their own under the band: whole labels when they fit, then short
 /// ones, then glyphs.
 struct ChipRow: View {
-    /// How much each chip says, widest first. Prominent chips (processing, anything that needs the
-    /// person) keep their words while the others give theirs up.
+    /// How much each chip says, widest first. A chip whose short label says as much shortens first;
+    /// then prominent chips (processing, anything that needs the person) keep their words while the
+    /// others give theirs up.
     enum Fit: CaseIterable {
-        case full, shortOthers, glyphOthers, short, glyph
+        case full, shortFirst, shortOthers, glyphOthers, short, glyph
 
         func label(_ chip: FloatingChip) -> String? {
             switch self {
             case .full: return chip.label
-            case .shortOthers: return chip.isProminent ? chip.label : chip.shortLabel
-            case .glyphOthers: return chip.isProminent ? chip.label : nil
+            case .shortFirst: return chip.shortensFirst ? chip.shortLabel : chip.label
+            case .shortOthers: return chip.isProminent ? Fit.shortFirst.label(chip) : chip.shortLabel
+            case .glyphOthers: return chip.isProminent ? Fit.shortFirst.label(chip) : nil
             case .short: return chip.isProminent ? chip.shortLabel : nil
             case .glyph: return nil
             }
