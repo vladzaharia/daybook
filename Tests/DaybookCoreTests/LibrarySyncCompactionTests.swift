@@ -62,6 +62,13 @@ final class LibrarySyncCompactionTests: XCTestCase {
         ((try? FileManager.default.contentsOfDirectory(atPath: remote.appendingPathComponent(directory).path)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
     }
     private func manifest() throws -> SyncManifest { try SyncManifest.decode(Data(contentsOf: remote.appendingPathComponent("daybook-sync.json"))) }
+    /// Rewrites a device's presence as last written `days` ago (it has been away since).
+    private func agePresence(_ deviceID: String, days: Double) throws {
+        let url = remote.appendingPathComponent("Devices/\(SyncDigest.sha256(data: Data(deviceID.utf8))).json")
+        var record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        record["lastSeen"] = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-days * 86_400))
+        try JSONSerialization.data(withJSONObject: record).write(to: url)
+    }
     private func settings(_ name: String) -> Data { Data(#"{"folders":[{"name":"\#(name)"}]}"#.utf8) }
     /// The bytes of every file in the sync folder, by path.
     private func remoteTree() throws -> [String: Data] {
@@ -189,18 +196,21 @@ final class LibrarySyncCompactionTests: XCTestCase {
         XCTAssertEqual(onPhoneMerged.title, "Planning 4"); XCTAssertEqual(onPhoneMerged.notes, "Phone notes")
     }
 
-    /// The phone was away for more than 30 days, so the Mac compacted without it, pruning what the phone had last applied.
-    /// The phone's edit made while away is merged against the base it stored, and published as an ordinary edit.
+    /// The phone was away for more than 30 days, so the Mac compacted without it (the iPad, in use, acknowledged), pruning
+    /// what the phone had last applied. The phone's edit made while away is merged against the base it stored, and
+    /// published as an ordinary edit.
     func testADeviceBackAfterItsHistoryWentMergesItsChangesAgainstItsBase() async throws {
-        let mac = try mac(), phone = try phone()
+        let mac = try mac(), phone = try phone(), pad = try self.phone("Pad")
         let meeting = Meeting(title: "Retro")
         try await pass(mac, "Mac", [meeting])
-        try await pass(phone, "Phone")
-        // The phone goes away; a month later, the Mac carries on alone.
-        let later = Date().addingTimeInterval(31 * 24 * 60 * 60)
-        await mac.setCompactionClock({ later })
-        for index in 1...3 { try await edit("Mac", meeting.id) { $0.title = "Retro \(index)" }; try await pass(mac, "Mac") }
-        try await pass(mac, "Mac")
+        try await pass(phone, "Phone"); try await pass(pad, "Pad")
+        // The phone goes away; it was last seen more than a month ago. The Mac and the iPad carry on.
+        try agePresence("Phone", days: 31)
+        for index in 1...3 {
+            try await edit("Mac", meeting.id) { $0.title = "Retro \(index)" }
+            try await pass(mac, "Mac"); try await pass(pad, "Pad")
+        }
+        for _ in 0..<2 { try await pass(mac, "Mac"); try await pass(pad, "Pad") }
         let pruned = await mac.prunedIDs
         XCTAssertEqual(pruned.count, 3, "the phone isn't waited for")
         XCTAssertEqual(files("Events").count, 1)
@@ -447,6 +457,24 @@ final class LibrarySyncCompactionTests: XCTestCase {
     }
 
     // MARK: Who compacts, and when
+
+    /// A Mac whose clock runs a month ahead sees no device as recent: every acknowledgement would pass for want of anyone
+    /// to give one. With another device's presence that isn't superseded or months old, nothing of a conversation goes.
+    func testAMacWhoseClockRunsAMonthAheadDoesntPruneConversationsAlone() async throws {
+        let mac = try mac(), phone = try phone()
+        let meeting = Meeting(title: "Standup")
+        try await pass(mac, "Mac", [meeting])
+        try await pass(phone, "Phone")
+        for index in 1...3 { try await edit("Mac", meeting.id) { $0.setNotes("Draft \(index)") }; try await pass(mac, "Mac") }
+        let proposal = await mac.pendingProposal
+        XCTAssertNotNil(proposal, "proposed; the phone hasn't acknowledged it")
+        let ahead = Date().addingTimeInterval(31 * 24 * 60 * 60)
+        await mac.setCompactionClock({ ahead })
+        try await pass(mac, "Mac"); try await pass(mac, "Mac")
+        let pruned = await mac.prunedIDs
+        XCTAssertTrue(pruned.isEmpty, "\(pruned.count) pruned on the Mac's own acknowledgement")
+        XCTAssertEqual(files("Events").count, 4)
+    }
 
     func testCompactionWaitsForEveryRecentDeviceToReadACompactedLibrary() async throws {
         let mac = try mac()
