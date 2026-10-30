@@ -1,5 +1,118 @@
 # Validation record
 
+## Live captions from every source, and the live follow-ups (2026-10-30)
+
+Live captions now cover every source a recording has, use the library's vocabulary, keep speakers in a
+pocket, name people wherever captions show, offer the live recognizers' languages on macOS 15, and
+download the iPhone's models in the background (docs/capture.md, "Every source"; docs/iphone.md, "Live
+transcription"; docs/model-runtime.md, "Live").
+
+**What changed.**
+
+- **Every source.** A recorder recording along with a shared recording is captioned from the live audio
+  it saves into the conversation (`DeviceSession.captureLive` now captions, `LiveCaptureCaptions`), on
+  the Mac and the iPhone. A paired iPhone sends the Mac the captions it makes (its microphone's and its
+  recorder's) over the local link (`LinkCaptions`, `liveCaptionsFeature`), only the lines that changed,
+  once a second. Other devices' lines join by time on the recording's timeline (`LiveCaptionMix`):
+  labelled with the person live speakers recognized, else the device; lines that repeat one already
+  shown within 4 s (60% of the words in order) are left out; devices' names are saved with the
+  captions (`LiveCaptions.sourceNames`).
+- **The owner's call with only You captions.** The live-model path for Call works: with the real models,
+  You and Call captioned two conversations at once over one loaded set of models (below), and the
+  composition the Mac uses is covered by `LiveSourcesTests.testYouAndCallShareTheLoadedModelsAndEachCaptionsItsOwnAudio`.
+  No defect was found in it. Two explanations remain and can't be told apart from here: computer audio
+  off (Settings › General › Include computer audio; then there's no Call track to caption), or the
+  Speech framework's captions rather than the live models'. This Mac's own library has no live
+  transcription model installed (`Models/` holds Nemotron 3 Diarization's offline build, not Nemotron
+  3.5 Streaming or the live speaker build), so a call recorded with it is captioned by two
+  `SpeechAnalyzer`s at once, which still hasn't been checked in a real call (it wasn't run here, to
+  avoid a speech-recognition permission prompt).
+- **Vocabulary.** The approved terms bias the live recognizer (`LiveVocabulary`, FluidAudio's
+  `setCustomVocabulary`), applied at the start of a capture and between batches when they change.
+- **Speakers in a pocket.** The iPhone shed speakers whenever the app was out of sight; that was
+  `LiveLoadPolicy.iPhone`'s choice, not an iOS limit. Out of sight they now go on at a lower cadence
+  (`LiveWorkLevel.reduced`: four-second batches, no new embeddings for voices already named). Captions
+  the speaker model didn't hear (shed for heat or battery, or a failure) are marked `needsSpeaker` and
+  labelled from the filed recording when the app is next in front (`LiveSpeakerPass`).
+- **Names** before the words on the Mac's Listen Live page, the iPhone's Live Captions page, and its
+  status sheet's Listen Live, as Floating Notes and the recording screen show them. The Listening
+  waveform is mint in Dark Mode and link ink in Light (`DaybookStyle.liveGlyph`), not neon cyan.
+- **macOS 15:** the caption language lists the downloaded live recognizers' languages; a choice whose
+  model was removed stays listed, and the footer says live transcription doesn't cover it.
+- **iPhone downloads** run in background `URLSession`s (`BackgroundModelFetcher`): Wi‑Fi only unless
+  cellular is allowed (two sessions), resumable from the system's resume data, reconnected after a
+  relaunch (`phone.liveModels.downloading`, `inFlight`), with `PhoneAppDelegate` taking
+  `handleEventsForBackgroundURLSession`.
+
+**Real models, once, in scratch** (an M5 Pro, 64 GB, macOS 27.0). The three iPhone defaults were downloaded
+through `ModelStore` with `HubSnapshotFetcher` into a scratch folder, every file checked against the
+catalog's digests (Nemotron 3.5 Streaming Latin 14.0 s, Nemotron 3 Live 5.6 s, Community-1 11.1 s),
+run by a scratch harness through `LiveCaptioners` as the apps compose them, and deleted afterwards.
+Input: macOS voices, You a 20.7 s conversation (Samantha and Daniel, four turns, fed as a microphone:
+44.1 kHz mono, 85 ms buffers) and Call a 21.7 s one (Karen and Fred, fed as a process tap: 48 kHz
+stereo, 10 ms IO cycles), in real time. Voice profiles for Samantha and Karen were made from separate
+utterances and read through `KnownVoices.fromProfiles`, as both apps read them.
+
+- Names from profiles: Samantha's and Karen's voices named in every passage they spoke; Daniel and
+  Fred, with no profile, unnamed. In both conversations the second speaker's last turn was labelled
+  with the first speaker's slot (Daniel's "I'll post a status…" as S1 Samantha; most of Fred's
+  closing line as S1 Karen), live and in the pass afterwards alike, so it's the speaker model's call
+  on these voices, not the labelling. Worth watching with real voices.
+- You and Call at once: both captioned their own audio throughout, sharing one loaded recognizer and
+  speaker model (three models loaded for both captures); caption lag after a passage's last word,
+  median 0.81 s (You) and 1.13 s (Call), at most 1.33 s.
+- Words: You's four turns right but "sink fixes green" for "sync fix is green"; Call's "Nah yet" for
+  "Not yet" and "the hell particles for the new X for feature" for "the help articles for the new
+  export feature".
+- Vocabulary: "Please ask Saharia whether Daybook…" became "Please ask Zaharia whether Daybook…" with
+  Zaharia, Daybook, Nemotron, Kubernetes, and Neural Engine as the vocabulary; nothing else changed.
+- Labelled afterwards: the You captions, marked as missed and labelled from an AAC copy of the
+  recording, came back with the same speakers and names in 0.3 s (0.1 s of CPU).
+- Cost: the first run loaded in 44.9 s (the Neural Engine compiling) and used 0.6 s of CPU for 20.8 s
+  of audio, 91 MB footprint. Later runs coincided with the disk filling and load averages of 200 to
+  670 from other work on this Mac: loads took 155 to 174 s, and CPU (5.8 s for one capture, 10.7 s for
+  You and Call) and footprint (1.4 GB) show the models running off the Neural Engine then. Those
+  numbers say nothing about the pipeline; the first run's do.
+
+**Automated.** New and changed tests (synthetic data, no model runs): `LiveCaptionerTests` (vocabulary
+given before audio and followed between batches, never given when empty, capped), `LiveSourcesTests`
+(You and Call share one recognizer and speaker model, each captioning its own audio at its own
+rate; speakers out of sight in four-second batches; shed speakers mark their captions; the pass labels
+every caption from the whole recording; a recording file read back at 16 kHz), `LiveModelsTests`
+(policy out of sight, languages of installed recognizers), `LiveCaptionMixTests`, `LinkWireTests`
+(captions round trip, the feature), `SoundcoreSharedRecordingTests` (a recorder's live audio captioned
+for the shared recording), `LiveCaptionsTests` on the Mac (other devices' lines joined, labelled, and
+saved; a phone's captions placed on the Mac's recording; the macOS 15 languages), `LiveTranscriptionTests`
+(approved terms only), `BackgroundModelFetcherTests` (against a local HTTP server: files at their
+repository paths installed and verified by the store, a stopped download resumed with a byte range,
+a server error failing cleanly, the sessions' network rules), and on the iPhone `LiveCaptionsTests`
+(captions waiting for their recording, a recorder's lines joined and deduplicated, what goes to a
+Mac) and `PhoneModelsTests` (downloads carried over a relaunch, other sessions' events).
+
+On the rebased tree, `swift test` ran 1,242 XCTest cases across the eight bundles (one skipped, as
+before): Captions 13, Core 389, Devices 102, Intelligence 137, Kit 190, Link 74, Live 39, Mac app 298.
+One Live test (`testSpeakersAndNamesAreAddedToAnotherCaptionersWords`, from before this work) failed in
+that run on a machine at load averages of several hundred: its 64-buffer backlog dropped the opening of
+its eight seconds, moving every voice later. It now holds all of its audio, and the Live bundle passed
+39 of 39 again. `scripts/build-ios.sh --test` on a dedicated iPhone 17 Pro simulator clone (deleted
+afterwards) passed all 187.
+
+Screenshots (before and after, in scratch): the Mac's Listen Live page with names and the new
+waveform colour in light and dark, Settings › General › Live Captions acting as macOS 15
+(`--captions-as-macos-15`) with German and with Japanese chosen, and the iPhone's Live Captions page.
+
+**Still needs hardware.**
+
+- A real call with live models on a Mac (both sources, an hour, no dropped buffers), and the same with
+  the Speech framework (two `SpeechAnalyzer`s at once), which may be what the owner saw.
+- An iPhone recording in a pocket: the Neural Engine's scheduling for a background app (Apple documents
+  the GPU limit only), what four-second batches save in battery, and the pass's time on a long recording.
+- Background downloads on a phone: suspended mid-download, ended by iOS, relaunched for the session's
+  events, Wi‑Fi to cellular and back, Low Data Mode; whether Hugging Face's CDN resume data survives
+  a long pause.
+- A shared recording with an iPhone and a recorder in one room: how often the room is heard twice
+  despite the 4 s window, and the link's clock estimate against real caption timing.
+
 ## Words split off as "Unknown speaker" (2026-10-29)
 
 From the owner (0.2.2, a microphone and call-audio conversation): the transcript read "Me: … / Unknown
@@ -1786,7 +1899,7 @@ Still to check on hardware:
 
 - An iPhone (A17 Pro or later, and an 8 GB phone without Pro): first and later load times, real-time factor, battery drain over an hour's recording with the screen on and in a pocket, heat, and memory headroom (jetsam) with the camera and Live Activity running. The Neural Engine compile on first load may take minutes on a phone; captions show "Getting captions ready…" meanwhile.
 - A 6 GB iPhone (the recognizer's suggested minimum) and a 4 GB one (offered speakers only).
-- Downloads on a phone: Wi‑Fi to cellular mid-download (it stops and waits), the app sent to the background mid-download (it may be suspended; the 566 MB encoder restarts if cut off partway), and Low Data Mode.
+- Downloads on a phone: Wi‑Fi to cellular mid-download (it stops and waits), the app sent to the background mid-download, and Low Data Mode. (Since 2026-10-30 the downloads run in background sessions and resume partway; see the top of this record.)
 - A Mac recording a real call with live models: You and Call each captioned, the shared models loaded once, echo removal with live models' timing, and an hour without the recording dropping buffers. macOS 15 with live models (no Speech framework): captions, and Settings › General › Live Captions enabled.
 - Real voices: whether live names match the Mac's profiles at the 0.82 threshold across microphones (a laptop's microphone against a phone's or a recorder's), how often two people's voices share a slot or one voice splits, and the multilingual model on Japanese and German.
 - Soundcore Listen Live through live models on both devices.
