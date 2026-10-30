@@ -201,7 +201,8 @@ final class LiveCaptionerTests: XCTestCase {
     func testSpeakersAndNamesAreAddedToAnotherCaptionersWords() async throws {
         let inner = ScriptedCaptioner(lines: [])
         let voices = [KnownVoice(id: "p", name: "Priya", embeddingSpace: "test-space", embeddings: [[1, 0, 0]])]
-        let captioner = SpeakerLabelledCaptioner(inner: inner, timelineOrigin: 0, makeSpeakers: {
+        // Room for all eight seconds, so a busy machine never drops the opening audio (which would move every voice later).
+        let captioner = SpeakerLabelledCaptioner(inner: inner, backlog: 128, timelineOrigin: 0, makeSpeakers: {
             LiveSpeakerSession(diarizer: ScriptedDiarizer([(0, 0, 4), (1, 4, 8)]), embedding: LoudnessEmbedding(), voices: voices)
         })
         let (updates, _) = collect(captioner)
