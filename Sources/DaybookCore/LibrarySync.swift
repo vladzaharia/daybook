@@ -186,6 +186,8 @@ public actor LibrarySyncEngine {
     var rivalFilesMayGo = false
     /// The key and library each sealed object's header names, by path, once read (`sealedObjectsNaming`).
     var objectHeaders: [String: (keyID: Data, libraryID: UUID)] = [:]
+    /// Objects downloaded only to read their headers (`sealedObjectsNaming`), by path.
+    var headerDownloads: Set<String> = []
     /// Conversations deleted elsewhere that the last pass kept here (recorded into, or waiting to tell what it added): their
     /// deletion isn't applied yet, so this device doesn't acknowledge a proposal to prune their history.
     var heldDeletions: Set<UUID> = []
@@ -243,7 +245,7 @@ public actor LibrarySyncEngine {
         try loadCheckpoint(libraryID: manifest.libraryID, superseding: manifest.supersedes ?? [])
         ownJournalWrites = []; replacedEntries = []; prunedEntryPaths = []; heldAsideEntries = [:]
         // A rival library's files go only once every device has moved on to this library's key.
-        rivalFilesMayGo = sealing?.manifest.rivals?.isEmpty == false && everyDeviceOnCurrentKey()
+        rivalFilesMayGo = sealing?.manifest.rivals?.isEmpty == false && everyDeviceOnCurrentKey(now: sealerClock())
         var warnings: [String] = []
         // What compaction pruned (LibrarySyncCompaction.swift), before reading anything that may name it. A record not
         // read yet makes the read incomplete: a parent it may list is waited for.
@@ -284,7 +286,7 @@ public actor LibrarySyncEngine {
                 events[hash] = header; eventCache[hash] = header
             } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
             catch is SyncReplacedFile { setAside(entry) }
-            catch let held as SyncHeldAsideFile { heldAsideEntries[entry.path] = held.reason }
+            catch let held as SyncHeldAsideFile { noteHeldAside(entry, held) }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) {
                 warnings.append(markUnreadable(unreadableKey, error)); unreadJournalFiles += 1
@@ -296,6 +298,12 @@ public actor LibrarySyncEngine {
         let metadataRead = try readMetadata(metadataEntries, budget: &budget, warnings: &warnings)
         metadata = metadataRead.records
         metadataIncomplete = metadataRead.incomplete
+        // Held-aside files no longer in the sync folder are forgotten.
+        let listed = Set((eventEntries + metadataEntries).map(\.path)).union(compactionPaths)
+        if let heldAside = state.heldAside {
+            let kept = heldAside.filter { listed.contains($0.key) }
+            state.heldAside = kept.isEmpty ? nil : kept
+        }
         pendingDownloads += metadataRead.downloading; unreadJournalFiles += metadataRead.downloading
         journalDeviceIDs = Set(events.values.map(\.deviceID)).union(metadata.values.map(\.deviceID))
         // A parent belongs to the same conversation. Malformed cross-conversation edges
@@ -333,6 +341,7 @@ public actor LibrarySyncEngine {
         let inJournal = Set(events.values.map(\.meetingID)), deletedInJournal = Set(events.values.filter(\.deleted).map(\.meetingID))
         /// Conversations changed here whose applied heads are gone from the journal, merged below against their stored base.
         var rebases: [UUID: Rebase] = [:]
+        let retiredKeyLeftovers = heldAsideEntries.keys.contains(where: heldAsideLately)
         do {
             // Publish changes against the last applied heads, not newly observed remote heads. This is what
             // distinguishes a genuine offline concurrent edit from a sequential edit after a pull.
@@ -345,12 +354,12 @@ public actor LibrarySyncEngine {
                 // against it would name parents nobody can read.
                 let gone = (state.heads[key] ?? []).filter { events[$0] == nil && unreadableJournal[$0] == nil }
                 // Gone without a commit saying so, while the journal holds files sealed with a retired key nobody here can
-                // open: its own entries may be among them, which nobody else may ever read. Its copy is published again,
-                // changed or not: merged with what's there now, or as new when nothing else of it is there. Its heads
-                // change only once that's written, so a failed write is tried again.
+                // open, found in the last month (`heldAsideLately`): its own entries may be among them, which nobody else
+                // may ever read. Its copy is published again, changed or not: merged with what's there now, or as new when
+                // nothing else of it is there. Its heads change only once that's written, so a failed write is tried again.
                 var force = false
                 if !gone.isEmpty, !journalIncomplete, !deletedInJournal.contains(supplied.id), !gone.allSatisfy(prunedIDs.contains),
-                   heldAsideEntries.values.contains(.retiredKey) {
+                   retiredKeyLeftovers {
                     if inJournal.contains(supplied.id) { rebases[supplied.id] = Rebase(base: nil); continue }
                     force = true
                 }
@@ -551,9 +560,10 @@ public actor LibrarySyncEngine {
             let liveConversations = Set(grouped.keys).subtracting(deletes)
             let complete = pendingDownloads == 0 && budget.deferred == 0 && !journalIncomplete && !metadataIncomplete
                 && liveConversations.isSubset(of: liveAssets.keys)
+            let namedAssets = Set(events.values.flatMap { $0.assets.map(\.sha256) })
             // A key retired long enough ago that every device has moved on leaves iCloud Keychain.
             if pendingDownloads == 0, budget.deferred == 0, !journalIncomplete {
-                removeRetiredKeys(entries: eventEntries + metadataEntries, now: sealerClock())
+                removeRetiredKeys(entries: eventEntries + metadataEntries, knownShas: namedAssets, now: sealerClock())
             }
             sealerProgress = runSealer(SealerInput(events: events, metadata: metadata,
                                                    eventEntries: eventEntries.filter { !setAsideFromSealer($0) },
@@ -562,8 +572,8 @@ public actor LibrarySyncEngine {
                                                    deleted: deletes, liveAssets: liveAssets, complete: complete), budget: &budget, now: sealerClock())
             // A library that started over: what's left here of the one it replaced goes (a rival's once it's safe), and
             // then its keys.
-            deleteReplacedObjects(journalAssets: Set(events.values.flatMap { $0.assets.map(\.sha256) }))
-            removeReplacedLibraryKeys()
+            deleteReplacedObjects(journalAssets: namedAssets)
+            removeReplacedLibraryKeys(knownShas: namedAssets)
         }
         // History no device needs any more goes (on the Mac that compacts, after a pass that read everything).
         if !Task.isCancelled {
@@ -614,7 +624,7 @@ public actor LibrarySyncEngine {
                 metadata[hash] = record; metadataCache[hash] = record
             } catch is SyncPendingDownload { downloading += 1; incomplete = true }
             catch is SyncReplacedFile { setAside(entry) }
-            catch let held as SyncHeldAsideFile { heldAsideEntries[entry.path] = held.reason }
+            catch let held as SyncHeldAsideFile { noteHeldAside(entry, held) }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) {
                 warnings.append(markUnreadable(unreadableKey, error))
@@ -1575,6 +1585,17 @@ struct SyncCheckpoint: Codable {
     /// The compaction proposal this device has acknowledged (LibrarySyncCompaction.swift), by ID: what it has applied of
     /// that proposal's conversations is each root or after it.
     var compactionAck: String?
+    /// Files sealed with a retired key this device doesn't hold, by path, and when this device first found each
+    /// (`heldAsideLately`). Nil in checkpoints from earlier versions.
+    var heldAside: [String: Date]?
+    /// Other devices' presence as this device last read it (`clockLooksAhead`), by device ID.
+    var presenceSightings: [String: SyncPresenceSighting]?
+}
+/// Another device's presence as this device last read it: when it says it was written, and when (by this device's clock)
+/// this device saw that change. Nil `changed`: the first time it was read.
+struct SyncPresenceSighting: Codable, Equatable {
+    var lastSeen: Date
+    var changed: Date?
 }
 /// A conversation changed here whose applied heads are gone from the journal: its changes are merged against `base`, what
 /// this device had applied (nil when that isn't known to be history others built on: the merge then has no common
