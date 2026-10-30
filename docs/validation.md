@@ -113,6 +113,144 @@ waveform colour in light and dark, Settings › General › Live Captions acting
 - A shared recording with an iPhone and a recorder in one room: how often the room is heard twice
   despite the 4 s window, and the link's clock estimate against real caption timing.
 
+## Processing follow-ups: earlier recordings, notes in real summaries, rooms (2026-10-30)
+
+Three follow-ups to the processing-quality work below: recordings transcribed before background
+audio detection are listened to on the Mac ([architecture](architecture.md#background-audio), step 6),
+the notes-in-summaries prompts on the real default model ([templates](templates.md#notes-and-bookmarks)),
+and the sound classifier in rooms more like real ones. No recording of the room, no Bluetooth.
+
+**Earlier recordings.** Tracks with a transcript run and no current analysis
+(`Meeting.recordingsAwaitingBackgroundAudio`) are classified once each, newest conversation first, 20 s
+after the last job, download, photo reading, voices given to speakers, sync, or recording, at utility
+priority, stopping when other work starts. `LibraryController.addBackgroundAudio` keeps the analysis on
+the track and fuses again only when that changes what's left out. Passages the person corrected are
+never judged background, so a correction keeps its passage and its Version History entry; speaker
+profiles reconcile when the passages left out change. Tests: `BackgroundListeningTests` (2, application: Apple's classifier on a
+36 s recording of a `say` voice and then the synthetic band, transcribed without an analysis: the
+words over the music left out, a corrected passage over the music kept with its correction, the
+transcript runs, revisions, summary, and a renamed speaker unchanged, nothing transcribed or
+summarized, the Inspector line, listened to once; nothing starts while a download runs, and a
+recording the classifier can't hear is tried once), `BackgroundAudioTests` (2 more: a corrected
+passage stays when background audio is left out again; which recordings await an analysis, with an
+echo-cancelled copy's original and an untranscribed recording excluded and an older analysis measured
+again), and `SpeakerProfileLibraryTests` (the coordinator takes a label off when the voice turns out to
+be only in background audio).
+
+**Notes in real summaries.** The default summary model for this Mac (M5 Pro, 64 GB: workstation tier,
+first launch), Gemma 4 26B A4B QAT 4-bit, revision `0e3cbab38ce568cf6e23543010d08d03b731910c`. All ten
+files matched the catalog (three safetensors and `tokenizer.json` by SHA-256, six small files by git
+blob ID). The disk had under 10 GB free, so the installed copy was used read-only: a scratch models
+folder with its own receipt and a symlink to the weights, the installed folder's listing unchanged
+afterwards; nothing was downloaded. A scratch, uncommitted XCTest built each conversation as a
+`Meeting` and ran `MeetingEvidence.summarySource` and `LocalIntelligenceRuntime.summarize` (debug build,
+MLX's metallib from the same build). Decoding is greedy, so the prompt is the only difference between
+runs. Four conversations written for this, with notes typed a few seconds after the passage they
+follow and bookmarks during one:
+
+- **Launch** (Priya, Marcus, Dana, Leo; 3 min, automatic template): an untimed prep note; "Budget
+  cap is firm at 40k, Dana confirmed by email this morning" where Dana only said finance would like
+  "around forty thousand"; "Launch May 12?" where the team chose the 19th because the 12th is too
+  early; "Leo owns beta signup page", said; a "Pricing decision" bookmark and a bare one on a risk.
+- **1:1** (Sam, Alex; 1:1 template): "Wants to lead onboarding redesign", said; "Seemed tired - third
+  late night this sprint" where Alex said twice this week; "Promo packet due Nov 15" where Sam said
+  mid-November; a "Feedback on demo" bookmark.
+- **Customer discovery** (Jordan, Elena, Raj; Customer discovery template): "Exports ~20 min each, run
+  daily" and "Stack: Notion + Google Sheets", both said; "Renewal is in March; procurement will need
+  SOC 2", never said; a "Pricing objection" bookmark and a bare one on single sign-on.
+- **Platform weekly** (five people; 22 min, 183 passages, read in two parts): "Postgres cutover moved
+  to Sat 2am - tell support", said; "Ben can maybe swap Dec 3 - ask him after", never said; "Hiring:
+  only 2 reqs approved per Mei's email" against "three backend reqs approved"; an "Incident root
+  cause" bookmark and a bare one on a cache TTL.
+
+Before the change, notes were never listed, given a heading, or quoted as a speaker, and every
+bookmark's passage kept its detail ("$12 per seat… $10 per seat… free tier capped at three seats";
+"Elena noted that $300 per month is higher than any other tool used by the team"; "lowered the cache
+TTL to 90 seconds… hit rate from 94% to 81%"). But two notes that add something were written as fact:
+"The budget cap is firm at $40,000, which includes the agency and paid social, as confirmed by Dana
+via email this morning", and "There is a potential swap for Ben and Aisha on Dec 3". "Launch May 12?"
+went unmentioned, and notes that only repeat what was said got a sentence of their own ("Your notes
+identify this stack as Notion and Google Sheets").
+
+The prompts changed in two places. The final pass compares each note with what was said around it:
+what the conversation also says is written from the conversation without mentioning the note; what
+only the note says is the person's ("Your notes add that…"), never something said, decided, or
+confirmed; a conflict is mentioned. The system instructions say the same in a line. A long
+conversation's extraction and compression keep what a note adds "marked as the note's". With both:
+
+| Note | Before | After |
+| --- | --- | --- |
+| Launch: cap firm, Dana's email | written as fact | "Your notes add that the budget cap is firm at 40k, as confirmed by Dana via email this morning." |
+| Launch: "Launch May 12?" | not mentioned | "Your notes suggest a potential launch of May 12th, but Leo noted that May 12th is too early due to the migration timeline." |
+| 1:1: tired, third late night | attributed | "Your notes add that Alex seemed tired and has worked late three times this sprint." |
+| 1:1: packet due Nov 15 | attributed | "Your notes add that the promo packet is due on November 15." |
+| Customer: renewal, SOC 2 | attributed | attributed |
+| Customer: two notes that repeat | own sentences | own sentences, now "Your notes add that these exports are run daily" |
+| Weekly: 2 reqs against three | conflict mentioned | conflict mentioned |
+| Weekly: tell support (said) | folded in | "Your notes add that support must be notified…" (it was said) |
+| Weekly: Ben may swap | written as fact | not in the summary |
+
+The extraction and compression change alone put the swap in as "Your notes suggest asking Ben about a
+potential swap for Dec 3" but left the budget note as fact; a third variant ("every note's subject
+belongs in the summary") wrote the budget note as fact again, so it wasn't kept. Four conversations
+and one decoding each are a small sample, and a few words of prompt move the long conversation's
+result; the change fixed the notes written as fact in the short conversations without adding one.
+`SummaryNotesTests` pin the new wording in the final, extraction, and compression prompts and the
+system instructions.
+
+Seen and not changed here: in the long conversation five of its eleven topics (security, cloud costs,
+customer escalations, CI times, single sign-on) were missing from every summary, and only one of about
+twenty commitments survived the action check, which compares quotes with compressed evidence there; in
+two of four runs a section's body stopped mid-sentence ("The root cause was a "), once followed by the
+section again in full (constrained decoding). Owners are dropped when the quote doesn't name them
+("Yes, I'll send the line items today"). Times in the debug build, with other work running: 49 to 147 s
+a short conversation, 282 to 473 s the long one; loading took 6 to 8 s.
+
+**Background audio in rooms.** `BackgroundRoomTests` (6) build rooms from `say` voices and the
+synthetic band: a room's impulse response (direct sound, early reflections, a diffuse tail) close to
+the microphone (RT60 0.45 s, direct sound 10 dB over the room) or across it (0.6 s, 4 dB under), a
+TV's loudspeaker (150 Hz to 6 kHz) and a kitchen radio's (250 Hz to 4 kHz), and a song sung by the
+"Good News" voice over the band. Levels are against the person at the table (about −22 dBFS). Scores
+are means over each passage (speech; music or applause), the level its median, in dBFS:
+
+| Scene | Passage | Speech | Music | Level | Result |
+| --- | --- | --- | --- | --- | --- |
+| TV across the room | the person at the table | 0.96 | 0.18 | −22 | kept |
+| | presenter, bed 3 dB under, TV 10 dB down | 0.49 | 0.64 | −32 | broadcast |
+| | the same, bed as loud as the voice | 0.53 | 0.66 | −32 | broadcast |
+| | the TV's music alone | 0.00 | 0.92 | −34 | music |
+| | a second person, 3 dB down | 0.94 | 0.28 | −25 | kept |
+| TV on the whole time, 14 dB under | the person over it | 0.95 | 0.48 | −22 | kept |
+| | the presenter between them | 0.44 | 0.63 | −36 | broadcast |
+| | a second person over it | 0.92 | 0.52 | −25 | kept |
+| Presenter, bed 3 dB under | 6 dB down | 0.49 | 0.64 | −28 | kept (missed) |
+| | 8, 10, 12, 14 dB down | 0.49–0.51 | 0.64–0.65 | −30 to −36 | broadcast |
+| | 10 dB down, bed 0 or 6 dB under | 0.37, 0.59 | 0.66, 0.62 | −32 | broadcast |
+| Radio host, no music, 10 dB down | | 0.89 | 0.10 | −31 | kept (missed) |
+| Song with vocals across the room, 8 dB down | | 0.06 | 0.88 | −30 | music |
+| | the person over the song, 18 dB down | 0.94 | 0.53 | −22 | kept |
+| Someone across the table, music in the room | 6 dB down, music 12 or 6 dB under them | 0.56, 0.43 | 0.74, 0.80 | −27 | kept |
+| | 8, 10, or 12 dB down, music 6 to 9 dB under | 0.42–0.50 | 0.78–0.80 | −29 to −33 | **left out** |
+
+What holds: a TV across the room is left out whether its bed is under or as loud as the presenter,
+also when it runs under the whole conversation; its music alone and a song with vocals are music; the
+people at the table stay, also over the TV or the song. What misses, as expected: a presenter only
+6 dB down, and a radio host without music. What's wrong: someone sitting farther away than the others,
+8 dB or more down, with music in the room within about 9 dB of their voice, is left out as a broadcast.
+To the classifier and the level they are the presenter: speech 0.42 to 0.50 against 0.49, music 0.78 to
+0.80 against 0.64 (higher only because the TV's loudspeaker takes the band's bass away), 7 to 11 dB
+down against 8 to 14. The level is the one threshold between them, and moving it (`quieterBy` 10 dB)
+would keep someone 8 dB down but still leave out someone 10 to 12 dB down and miss presenters 8 or
+9 dB down: a trade, not a general improvement, so the thresholds are unchanged. The test pins that case
+as an expected failure; Include brings such a passage back. `SyntheticAudio` (test support) now holds
+the speech, music, room, and loudspeaker fixtures that `SoundClassifierTests`, `BackgroundRoomTests`,
+and `BackgroundListeningTests` share.
+
+**Still to check:** real rooms (a TV, a radio, music) at several distances, and someone far from the
+microphone with music on; the listening pass over a real library of earlier recordings, including
+recordings not yet downloaded from iCloud; Gemma 4 on real conversations with typed notes, and other
+summary models (12B, E4B) with the new prompts.
+
 ## Words split off as "Unknown speaker" (2026-10-29)
 
 From the owner (0.2.2, a microphone and call-audio conversation): the transcript read "Me: … / Unknown
