@@ -33,6 +33,8 @@ final class PhoneLink {
         /// notes and bookmarks over the link (`sharedNotesFeature`), from its capabilities.
         var cascades = false
         var sharesNotes = false
+        /// It shows this iPhone's live captions of a shared recording beside its own (`liveCaptionsFeature`).
+        var showsCaptions = false
         /// The synced library it has open, from its capabilities.
         var libraryID: UUID?
         /// The recorders it manages, as it last said, on this iPhone's clock; kept after it disconnects,
@@ -377,6 +379,7 @@ final class PhoneLink {
                 mac.libraryID = peer.capabilities.libraryID
                 mac.cascades = peer.capabilities.cascades
                 mac.sharesNotes = peer.capabilities.sharesNotes
+                mac.showsCaptions = peer.capabilities.showsCaptions
             }
             onMacsChanged?()
             if case .connected = event { onMacConnected?(peer.deviceID) }
@@ -416,7 +419,8 @@ final class PhoneLink {
         case .bookmark, .note, .bookmarkChange:
             // While a Mac records a conversation with this iPhone, its notes and bookmarks show here too.
             onSharedNotes?(message, macID)
-        case .processingNudge:
+        case .processingNudge, .captions:
+            // A Mac's captions stay on the Mac; this iPhone shows its own.
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             onHandoffMessage?(message, macID)

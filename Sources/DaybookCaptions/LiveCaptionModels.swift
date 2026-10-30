@@ -58,6 +58,13 @@ public struct LiveCaptionSource: RawRepresentable, Codable, Hashable, Sendable {
     public static let microphone = LiveCaptionSource(rawValue: "microphone")
     /// The call, or everything the device plays: "Call".
     public static let call = LiveCaptionSource(rawValue: "call")
+
+    /// Another device recording the same conversation: a recorder recording along, or a paired
+    /// iPhone (and a recorder it manages). `id` stays the same for the recording; the device's name is
+    /// kept beside the captions (`LiveCaptions.sourceNames`).
+    public static func device(_ id: String) -> LiveCaptionSource { LiveCaptionSource(rawValue: "device:\(id)") }
+
+    public var isDevice: Bool { rawValue.hasPrefix("device:") }
 }
 
 /// The captions of one recording, as stored beside it on the device that made them.
@@ -69,11 +76,14 @@ public struct LiveCaptions: Codable, Equatable, Sendable {
     public var segments: [LiveCaptionSegment]
     public var createdAt: Date
     public var updatedAt: Date
+    /// Other devices' names by their source (`LiveCaptionSource.device`, raw value): "Soundcore",
+    /// "iPhone". Nil when every caption is this device's own.
+    public var sourceNames: [String: String]?
 
     public init(meetingID: UUID, trackID: UUID? = nil, localeIdentifier: String, segments: [LiveCaptionSegment] = [],
-                createdAt: Date = Date(), updatedAt: Date = Date()) {
+                createdAt: Date = Date(), updatedAt: Date = Date(), sourceNames: [String: String]? = nil) {
         self.meetingID = meetingID; self.trackID = trackID; self.localeIdentifier = localeIdentifier
-        self.segments = segments; self.createdAt = createdAt; self.updatedAt = updatedAt
+        self.segments = segments; self.createdAt = createdAt; self.updatedAt = updatedAt; self.sourceNames = sourceNames
     }
 }
 

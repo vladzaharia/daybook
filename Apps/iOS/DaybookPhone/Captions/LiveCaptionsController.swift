@@ -12,11 +12,17 @@ import Observation
 ///
 /// The recording never depends on them: the captioner runs on its own tasks and drops audio when
 /// it falls behind; a captioner that fails only changes `state`.
+///
+/// A recorder recording along (its live audio, captioned here) adds its lines (`received`), labelled
+/// with the recorder, without lines that repeat this iPhone's (`LiveCaptionMix`).
 @MainActor
 @Observable
 final class LiveCaptionsController {
     private(set) var state: LiveCaptionState = .off
+    /// This iPhone's captions with a recorder's added, in time order.
     private(set) var segments: [LiveCaptionSegment] = []
+    /// Other devices' names by source (raw value), for their lines' labels.
+    private(set) var sourceNames: [String: String] = [:]
     private(set) var meetingID: UUID?
     private(set) var localeIdentifier = Locale.current.identifier
     /// When captions were last written to the store, so pages showing saved captions read them again.
@@ -26,6 +32,9 @@ final class LiveCaptionsController {
     /// Makes the captioner for a recording; nil when captions are off or can't run in this build.
     @ObservationIgnored var makeCaptioner: () -> (any LiveCaptioning)?
     @ObservationIgnored private var captioner: (any LiveCaptioning)?
+    /// What this iPhone's captioner heard, and recorders' captions, before they're put together.
+    @ObservationIgnored private var own: [LiveCaptionSegment] = []
+    @ObservationIgnored private var feeds: [LiveCaptionSource: DeviceCaptionFeed] = [:]
     @ObservationIgnored private var listeners: [Task<Void, Never>] = []
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var saving: Task<Void, Never>?
@@ -70,8 +79,9 @@ final class LiveCaptionsController {
             Task { [weak self] in
                 for await snapshot in captioner.updates {
                     guard let self, self.generation == current else { return }
-                    self.segments = snapshot
+                    self.own = snapshot
                     self.dirty = true
+                    self.rebuild()
                 }
             },
             Task { [weak self] in
@@ -106,9 +116,41 @@ final class LiveCaptionsController {
         listeners = []
         saving?.cancel()
         saving = nil
-        for index in segments.indices where segments[index].isTentative { segments[index].isTentative = false }
+        own = own.map { segment in var segment = segment; segment.isTentative = false; return segment }
+        feeds = feeds.mapValues { feed in
+            var feed = feed
+            feed.segments = feed.segments.map { segment in var segment = segment; segment.isTentative = false; return segment }
+            return feed
+        }
+        rebuild()
         save()
+        feeds = [:]
         state = .off
+    }
+
+    // MARK: Recorders
+
+    /// A recorder recording along captioned its live audio (all it has heard); `offset` moves its times
+    /// onto this recording's. Ignored unless this iPhone is captioning a recording.
+    func received(_ segments: [LiveCaptionSegment], from source: LiveCaptionSource, name: String, offset: TimeInterval) {
+        guard captioner != nil, meetingID != nil else { return }
+        feeds[source] = DeviceCaptionFeed(source: source, name: name, offset: offset, segments: segments)
+        if sourceNames[source.rawValue] != name { sourceNames[source.rawValue] = name }
+        dirty = true
+        rebuild()
+    }
+
+    /// What a line is labelled with before its words: the person live speakers recognized, else, for a
+    /// recorder's line, the recorder ("Soundcore").
+    static func name(of segment: LiveCaptionSegment, names: [String: String]) -> String? {
+        if let name = segment.speaker?.name { return name }
+        guard let source = segment.source, source.isDevice else { return nil }
+        return names[source.rawValue]
+    }
+
+    private func rebuild() {
+        let all = LiveCaptionMix.adding(Array(feeds.values), to: own)
+        if all != segments { segments = all }
     }
 
     /// The recording was filed: the captions belong to its phone track.
@@ -158,6 +200,9 @@ final class LiveCaptionsController {
         saving = nil
         captioner = nil
         segments = []
+        own = []
+        feeds = [:]
+        sourceNames = [:]
         meetingID = nil
         dirty = false
         state = .off
@@ -177,7 +222,8 @@ final class LiveCaptionsController {
     private func save() {
         guard let meetingID, !segments.isEmpty else { return }
         let captions = LiveCaptions(meetingID: meetingID, trackID: store.captions(for: meetingID)?.trackID,
-                                    localeIdentifier: localeIdentifier, segments: segments, createdAt: createdAt, updatedAt: Date())
+                                    localeIdentifier: localeIdentifier, segments: segments, createdAt: createdAt, updatedAt: Date(),
+                                    sourceNames: sourceNames.isEmpty ? nil : sourceNames)
         do { try store.save(captions); dirty = false; lastSave = captions.updatedAt } catch {}
     }
 }

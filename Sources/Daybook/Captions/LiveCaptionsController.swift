@@ -16,11 +16,19 @@ import Foundation
 /// The recording never depends on them. Each captioner runs on its own tasks, keeps a bounded
 /// backlog and drops audio when it falls behind, and a captioner that can't start or fails changes
 /// only its own state; the other source keeps captioning.
+///
+/// Other devices recording the same conversation add their captions (`received`): a recorder
+/// recording along (its live audio, captioned on this Mac) and a paired iPhone (its captions, over
+/// the local link). Their lines join by time, labelled with the device, without lines that repeat
+/// this Mac's (`LiveCaptionMix`).
 @MainActor
 final class LiveCaptionsController: ObservableObject {
     /// What's on screen: You and Call interleaved by time and tagged with their source, without
-    /// microphone lines that only echo the call through the speakers (`CaptionEcho`).
+    /// microphone lines that only echo the call through the speakers (`CaptionEcho`), and other
+    /// devices' lines that add something.
     @Published private(set) var segments: [LiveCaptionSegment] = []
+    /// Other devices' names by source (raw value), for their lines' labels.
+    @Published private(set) var sourceNames: [String: String] = [:]
     /// Each source's captioner, as it stands.
     @Published private(set) var states: [LiveCaptionSource: LiveCaptionState] = [:]
     /// The conversation being captioned, from `prepare` until the captions are saved.
@@ -34,9 +42,13 @@ final class LiveCaptionsController: ObservableObject {
     let store: LiveCaptionStore
     /// Makes the captioner for one source; nil when captions are off or can't run on this system.
     var makeCaptioner: (LiveCaptionSource) -> (any LiveCaptioning)?
+    /// The captions of recorders recording along, as they're made (`AppState.wireCaptions`).
+    let recorders = LiveCaptureCaptions()
 
     private var captioners: [LiveCaptionSource: any LiveCaptioning] = [:]
     private var heard: [LiveCaptionSource: [LiveCaptionSegment]] = [:]
+    /// Other devices' captions of this recording, by source.
+    private var feeds: [LiveCaptionSource: DeviceCaptionFeed] = [:]
     private var listeners: [Task<Void, Never>] = []
     private var generation = UUID()
     private var routes: [(time: TimeInterval, echoes: Bool)] = []
@@ -90,6 +102,27 @@ final class LiveCaptionsController: ObservableObject {
 
     /// The newest lines, oldest first.
     func recent(_ count: Int) -> [LiveCaptionSegment] { Array(segments.suffix(count)) }
+
+    /// What a line from `source` is labelled with: "You", "Call", or the device that heard it.
+    func label(for source: LiveCaptionSource?) -> String { LiveCaptionLabels.label(for: source, names: sourceNames) }
+
+    // MARK: Other devices
+
+    /// Another device's captions of this recording: `segments` are all it has heard (a recorder's
+    /// captioner), or, with `changesOnly`, the lines that changed (a phone's link). `offset` moves its
+    /// times onto this recording's. Ignored unless this Mac is captioning a recording.
+    func received(_ segments: [LiveCaptionSegment], from source: LiveCaptionSource, name: String, offset: TimeInterval,
+                  changesOnly: Bool = false) {
+        guard isActive, meetingID != nil else { return }
+        var feed = feeds[source] ?? DeviceCaptionFeed(source: source, name: name, offset: offset)
+        feed.name = name
+        feed.offset = offset
+        if changesOnly { feed.update(segments) } else { feed.segments = segments }
+        feeds[source] = feed
+        if sourceNames[source.rawValue] != name { sourceNames[source.rawValue] = name }
+        dirty = true
+        rebuild()
+    }
 
     // MARK: A recording
 
@@ -163,11 +196,18 @@ final class LiveCaptionsController: ObservableObject {
         saving?.cancel()
         saving = nil
         heard = heard.mapValues { $0.map { segment in var segment = segment; segment.isTentative = false; return segment } }
+        feeds = feeds.mapValues { feed in
+            var feed = feed
+            feed.segments = feed.segments.map { segment in var segment = segment; segment.isTentative = false; return segment }
+            return feed
+        }
         rebuild()
         save()
         states = [:]
         segments = []
         heard = [:]
+        feeds = [:]
+        sourceNames = [:]
         meetingID = nil
     }
 
@@ -206,7 +246,8 @@ final class LiveCaptionsController: ObservableObject {
             verdicts[line.id] = (line.text, verdict)
             return verdict
         }
-        if merged != segments { segments = merged }
+        let all = LiveCaptionMix.adding(Array(feeds.values), to: merged)
+        if all != segments { segments = all }
     }
 
     /// Whether the output could echo into the microphone at `time`. Until a route is known, assume it can.
@@ -222,6 +263,8 @@ final class LiveCaptionsController: ObservableObject {
         saving = nil
         captioners = [:]
         heard = [:]
+        feeds = [:]
+        sourceNames = [:]
         states = [:]
         segments = []
         routes = []
@@ -246,7 +289,7 @@ final class LiveCaptionsController: ObservableObject {
     private func save() {
         guard let meetingID, !segments.isEmpty else { return }
         let captions = LiveCaptions(meetingID: meetingID, localeIdentifier: localeIdentifier, segments: segments,
-                                    createdAt: createdAt, updatedAt: Date())
+                                    createdAt: createdAt, updatedAt: Date(), sourceNames: sourceNames.isEmpty ? nil : sourceNames)
         do {
             try store.save(captions)
             dirty = false

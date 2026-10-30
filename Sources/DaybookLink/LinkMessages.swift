@@ -314,10 +314,13 @@ extension LinkCapabilities {
     /// Takes notes and bookmark changes made on the other device during a shared recording (`note`,
     /// `bookmark.change`, and `bookmark` in both directions).
     public static let sharedNotesFeature = "sharedNotes"
+    /// Shows the other device's live captions of a shared recording beside its own (`captions`).
+    public static let liveCaptionsFeature = "liveCaptions"
 
     public var controlsRecorders: Bool { features.contains(Self.recorderControlFeature) }
     public var cascades: Bool { features.contains(Self.cascadeFeature) }
     public var sharesNotes: Bool { features.contains(Self.sharedNotesFeature) }
+    public var showsCaptions: Bool { features.contains(Self.liveCaptionsFeature) }
 }
 
 /// The receiver did what was asked.
@@ -521,6 +524,41 @@ public struct LinkNote: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+/// Live captions the sender is making of a shared recording, for a device recording it too to show
+/// beside its own: the lines that changed since it last sent, by ID. Tentative feedback like every
+/// live caption: never synced, never the transcript.
+public struct LinkCaptions: Codable, Sendable, Equatable {
+    public struct Line: Codable, Sendable, Equatable, Identifiable {
+        public var id: UUID
+        /// Seconds into the sender's recording.
+        public var start: TimeInterval
+        public var end: TimeInterval
+        public var text: String
+        public var isTentative: Bool
+        /// The voice its live speaker model heard ("S2"), and the person it recognized.
+        public var speakerSlot: String?
+        public var speakerName: String?
+        /// Heard by a recorder the sender manages ("Soundcore") rather than its own microphone.
+        public var device: String?
+
+        public init(id: UUID, start: TimeInterval, end: TimeInterval, text: String, isTentative: Bool,
+                    speakerSlot: String? = nil, speakerName: String? = nil, device: String? = nil) {
+            self.id = id; self.start = start; self.end = end; self.text = text; self.isTentative = isTentative
+            self.speakerSlot = speakerSlot; self.speakerName = speakerName; self.device = device
+        }
+    }
+
+    public var conversationID: UUID
+    /// When the sender's recording began, on its clock: where its lines' times count from.
+    public var startedAt: Date
+    public var lines: [Line]
+    public var sentAt: Date
+
+    public init(conversationID: UUID, startedAt: Date, lines: [Line], sentAt: Date = Date()) {
+        self.conversationID = conversationID; self.startedAt = startedAt; self.lines = lines; self.sentAt = sentAt
+    }
+}
+
 /// Live progress of processing on a Mac. Coarse progress also travels through sync.
 public struct LinkProcessingProgress: Codable, Sendable, Equatable {
     public struct Phase: LinkOpenValue {
@@ -603,4 +641,7 @@ public enum LinkMessage: Sendable, Equatable {
     /// version 1: an older build ignores them.
     case note(LinkNote)
     case bookmarkChange(LinkBookmarkChange)
+    /// Live captions of a shared recording, for a device that shows them (`liveCaptionsFeature`).
+    /// Additive within version 1: an older build ignores them.
+    case captions(LinkCaptions)
 }

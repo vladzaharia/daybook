@@ -42,27 +42,10 @@ enum CaptionEcho {
     }
 
     /// Lowercased words without punctuation, accents, or apostrophes ("Let’s" and "lets" match).
-    static func words(_ text: String) -> [String] {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-            .replacingOccurrences(of: "'", with: "")
-            .replacingOccurrences(of: "\u{2019}", with: "")
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
-    }
+    static func words(_ text: String) -> [String] { LiveCaptionMix.words(text) }
 
     /// The longest run of `a`'s words that appears in `b` in the same order (gaps allowed).
-    static func sharedRun(_ a: [String], _ b: [String]) -> Int {
-        guard !a.isEmpty, !b.isEmpty else { return 0 }
-        var previous = [Int](repeating: 0, count: b.count + 1)
-        var current = previous
-        for word in a {
-            for index in 1...b.count {
-                current[index] = word == b[index - 1] ? previous[index - 1] + 1 : max(previous[index], current[index - 1])
-            }
-            swap(&previous, &current)
-        }
-        return previous[b.count]
-    }
+    static func sharedRun(_ a: [String], _ b: [String]) -> Int { LiveCaptionMix.sharedRun(a, b) }
 
     private static func tagged(_ segment: LiveCaptionSegment, _ source: LiveCaptionSource) -> LiveCaptionSegment {
         var segment = segment

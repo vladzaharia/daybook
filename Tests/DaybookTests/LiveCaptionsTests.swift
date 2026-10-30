@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCaptions
 import DaybookCore
+import DaybookLink
 import DaybookTestSupport
 import XCTest
 @testable import Daybook
@@ -160,6 +161,65 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertFalse(CaptionEcho.isEcho(line("we still need legal to sign off on the pricing page", 40, 43), of: call), "too long after")
         XCTAssertEqual(CaptionEcho.words("Let’s go, Priya's 14th!"), ["lets", "go", "priyas", "14th"])
         XCTAssertEqual(CaptionEcho.sharedRun(["a", "b", "c", "d"], ["x", "a", "c", "y", "d"]), 3)
+    }
+
+    // MARK: Every source
+
+    func testOtherDevicesCaptionsJoinThisMacsLabelledAndSavedWithTheirNames() async throws {
+        let rig = rig(route: .headphones)
+        let meetingID = UUID()
+        try await start(rig, meeting: meetingID)
+        rig.you.post([line("Can we start?", 1, 2)])
+        // A recorder that began ten seconds before this Mac, and a phone that began five seconds after it.
+        rig.captions.received([line("From before this Mac recorded.", 1, 3), line("The recorder heard this.", 14, 16)],
+                              from: .device("sim"), name: "Soundcore", offset: -10)
+        rig.captions.received([line("Sent from the phone", 2, 3, tentative: true)], from: .device("phone:x"), name: "iPhone",
+                              offset: 5, changesOnly: true)
+        try await waitUntil("every source") { rig.captions.segments.count == 3 }
+        XCTAssertEqual(rig.captions.segments.map(\.text), ["Can we start?", "The recorder heard this.", "Sent from the phone"])
+        XCTAssertEqual(rig.captions.segments[1].start, 4, accuracy: 0.001, "on this Mac's timeline")
+        XCTAssertEqual(rig.captions.segments.map { rig.captions.label(for: $0.source) }, ["You", "Soundcore", "iPhone"])
+        // Floating Notes: You in the time lane; another device's line names the device before its words.
+        let lines = rig.captions.segments.map { LiveCaptionLabels.line($0, names: rig.captions.sourceNames) }
+        XCTAssertEqual(lines.map(\.source), ["You", nil, nil])
+        XCTAssertEqual(lines.map(\.speaker), [nil, "Soundcore", "iPhone"])
+        var named = rig.captions.segments[1]
+        named.speaker = LiveCaptionSpeaker(slot: "S1", name: "Priya")
+        XCTAssertEqual(LiveCaptionLabels.line(named, names: rig.captions.sourceNames).speaker, "Priya", "a recognized person comes first")
+
+        _ = await rig.recorder.stop()
+        await rig.captions.finish()
+        let saved = try XCTUnwrap(rig.captions.store.captions(for: meetingID))
+        XCTAssertEqual(saved.segments.map(\.isTentative), [false, false, false], "every source's lines kept as heard")
+        XCTAssertEqual(LiveCaptionTurn.turns(saved.segments, names: saved.sourceNames ?? [:]).map(\.label), ["You", "Soundcore", "iPhone"])
+        // Nothing arrives once the recording's captions are done.
+        rig.captions.received([line("Late", 30, 31)], from: .device("sim"), name: "Soundcore", offset: 0)
+        XCTAssertTrue(rig.captions.segments.isEmpty)
+    }
+
+    func testAPairedPhonesCaptionsJoinTheRecordingTheyShare() async throws {
+        let root = self.root.appendingPathComponent("library", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let state = AppState(libraryURL: root, defaults: makeTestDefaults("LiveCaptionsTests.phone"))
+        await state.initialize()
+        let id = UUID(), mic = TapCaptioner()
+        state.captions.makeCaptioner = { $0 == .microphone ? mic : nil }
+        _ = state.captions.prepare(meetingID: id, includesCall: false)
+        state.recordingID = id
+        state.recordingStartedAt = Date(timeIntervalSince1970: 1_000)
+        let phone = UUID()
+        // The phone began four seconds after this Mac (no clock samples here: its clock is taken as is).
+        state.phoneCaptioned(LinkCaptions(conversationID: id, startedAt: Date(timeIntervalSince1970: 1_004), lines: [
+            .init(id: UUID(), start: 1, end: 2, text: "Heard on the phone.", isTentative: false, speakerSlot: "S1", speakerName: "Priya"),
+            .init(id: UUID(), start: 3, end: 4, text: "Heard by its recorder.", isTentative: true, device: "Soundcore"),
+        ]), from: phone)
+        state.phoneCaptioned(LinkCaptions(conversationID: UUID(), startedAt: Date(), lines: [
+            .init(id: UUID(), start: 0, end: 1, text: "Another conversation", isTentative: false)]), from: phone)
+        XCTAssertEqual(state.captions.segments.map(\.text), ["Heard on the phone.", "Heard by its recorder."])
+        XCTAssertEqual(state.captions.segments.first?.start ?? 0, 5, accuracy: 0.001)
+        XCTAssertEqual(state.captions.segments.first?.speaker?.name, "Priya")
+        XCTAssertEqual(state.captions.segments.map { state.captions.label(for: $0.source) }, ["iPhone", "Soundcore"])
+        await state.captions.finish()
     }
 
     // MARK: Never in the recording's way

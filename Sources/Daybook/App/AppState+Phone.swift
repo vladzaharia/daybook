@@ -28,7 +28,8 @@ extension AppState {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         return LinkIdentity(deviceID: id, name: ProcessingRequest.Device.currentName, deviceClass: .mac, appVersion: version,
                             canProcess: false, features: ["recordControl", "processingProgress", LinkCapabilities.recorderHandoffFeature,
-                                                          LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature],
+                                                          LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
+                                                          LinkCapabilities.liveCaptionsFeature],
                             syncDeviceID: sync.deviceID)
     }
 
@@ -143,6 +144,8 @@ extension AppState {
             phoneWroteNote(note, from: phone)
         case .bookmarkChange(let change):
             phoneChangedBookmark(change, from: phone)
+        case .captions(let captions):
+            phoneCaptioned(captions, from: phone)
         case .recordingState(let state):
             phoneReported(state, from: phone)
         case .processingProgress:

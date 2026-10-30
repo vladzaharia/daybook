@@ -101,6 +101,11 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private var subscriptions: Set<AnyCancellable> = []
     /// Labelling saved captions' speakers from their recordings (`labelCaptionSpeakers`).
     @ObservationIgnored private var speakerPass: (id: UUID, task: Task<Void, Never>)?
+    /// Recorders recording along: their live audio's captions join this iPhone's.
+    @ObservationIgnored let recorderCaptions = LiveCaptureCaptions()
+    /// This iPhone's captions going to each Mac recording the same conversation (`shareCaptions`).
+    @ObservationIgnored private var captionShares: [UUID: CaptionShare] = [:]
+    @ObservationIgnored private var captionSharing: Task<Void, Never>?
 
     init(recorder: PhoneRecorder, library: PhoneLibrary, posture: DevicePosture, options: LaunchOptions,
          settings: PhoneSettings? = nil, link: PhoneLink? = nil, devices: PhoneDevices? = nil) {
@@ -179,6 +184,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         library.controller.sync?.$encryption.removeDuplicates().dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.applyBackupExclusion() } }
             .store(in: &subscriptions)
+        // A recorder recording along is captioned from its live audio, beside this iPhone's captions.
+        recorderCaptions.follow(self.devices.hub, conversation: { [weak self] in self?.captions.activeMeetingID }) { [weak self] update in
+            self?.recorderCaptioned(update)
+        }
         // A conversation moved to the Trash takes its live captions with it.
         library.controller.$meetings.map(\.count).removeDuplicates().dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneCaptions() } }
@@ -433,6 +442,60 @@ final class PhoneAppModel: RecordingCommandHandling {
         speakerPass = (id, task)
     }
 
+    // MARK: Captions from every source
+
+    /// A recorder recording along captioned its live audio, which starts with its recording: its lines
+    /// move onto this iPhone's recording by when each began.
+    func recorderCaptioned(_ update: LiveCaptureCaptions.Update) {
+        guard let start = recorder.startedAt else { return }
+        let began = update.startedAt ?? start
+        captions.received(update.segments, from: .device(update.recorderID), name: update.name, offset: began.timeIntervalSince(start))
+    }
+
+    /// While recording, this iPhone's captions (and its recorder's) go to the Macs recording the same
+    /// conversation that show them, a second at a time, over the local link: the Mac's captions then
+    /// have every device's lines (`LinkCaptions`).
+    private func startSharingCaptions() {
+        captionShares = [:]
+        captionSharing?.cancel()
+        captionSharing = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.captionShareInterval)
+                guard !Task.isCancelled else { return }
+                self?.shareCaptions()
+            }
+        }
+    }
+
+    private func stopSharingCaptions() {
+        shareCaptions()
+        captionSharing?.cancel()
+        captionSharing = nil
+        captionShares = [:]
+    }
+
+    static let captionShareInterval: Duration = .seconds(1)
+
+    /// Sends each Mac the lines that changed since it last heard.
+    func shareCaptions() {
+        guard let id = recorder.captureID, let start = recorder.startedAt, captions.activeMeetingID == id else { return }
+        for mac in macsShowingCaptions(id) {
+            var share = captionShares[mac] ?? CaptionShare()
+            let lines = share.changes(captions.segments, names: captions.sourceNames)
+            captionShares[mac] = share
+            guard !lines.isEmpty else { continue }
+            link.sendShared([.captions(LinkCaptions(conversationID: id, startedAt: start, lines: lines))], to: [mac])
+        }
+    }
+
+    /// The connected Macs recording this conversation too that show other devices' captions.
+    func macsShowingCaptions(_ id: UUID) -> [UUID] {
+        link.connectedMacs.filter { mac in
+            mac.showsCaptions && (mac.recording?.takesPart(in: id) == true
+                || multipoint.map { $0.conversationID == id && $0.macs.contains { $0.id == mac.id && $0.state == .recording } } == true)
+        }.map(\.id)
+    }
+
     // MARK: RecordingCommandHandling
 
     func startRecording() async throws {
@@ -478,6 +541,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         // Captions start beside the recording, never in its way.
         let locale = settings.captionLocale
         Task { await self.captions.start(locale: locale) }
+        startSharingCaptions()
         link.sampleClocks()
         // The system requires a Live Activity for a recording started in the background (an intent,
         // a Mac's request); otherwise the setting decides.
@@ -499,6 +563,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         stopIsFromMac = false
         let stopping = recorder.captureID
         flushSharedNotes()
+        stopSharingCaptions()
         var final = activityState()
         final.phase = .saved
         final.frozenElapsed = recorder.pausedAt ?? recorder.elapsedTime
@@ -993,6 +1058,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         endCascade(recording?.id ?? session?.conversationID ?? devices.cascade.conversation?.id, session: session, cascadesUp: false)
         multipoint = nil
         startedFromMac = nil
+        stopSharingCaptions()
         recorder.audioTap = nil
         await captions.finish()
         if let recording { await Task { @MainActor in await self.file(recording, session: session) }.value }

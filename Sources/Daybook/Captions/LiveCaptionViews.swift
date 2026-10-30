@@ -1,5 +1,6 @@
 import DaybookCaptions
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import SwiftUI
 
@@ -14,23 +15,45 @@ extension LiveCaptionSource {
     }
 }
 
+/// How a caption's source is named: You and Call for this Mac's own, the device for another's.
+enum LiveCaptionLabels {
+    static func label(for source: LiveCaptionSource?, names: [String: String]) -> String {
+        guard let source else { return "Captions" }
+        return names[source.rawValue] ?? source.label
+    }
+
+    /// A line as a caption strip draws it: You or Call in the time lane; before the words, the person
+    /// live speakers recognized, else, for another device's line, the device ("Soundcore", "iPhone").
+    static func line(_ segment: LiveCaptionSegment, names: [String: String]) -> CaptionLine {
+        let device = segment.source?.isDevice == true
+        return CaptionLine(id: segment.id, text: segment.text, isTentative: segment.isTentative,
+                           source: device ? nil : segment.source?.label,
+                           speaker: segment.speaker?.name ?? (device ? label(for: segment.source, names: names) : nil))
+    }
+}
+
 /// A run of consecutive captions from one source and voice, read like a turn in the transcript.
 struct LiveCaptionTurn: Identifiable, Equatable {
     var source: LiveCaptionSource?
     /// The voice live speakers heard ("S2"), and its name when it matched someone's voice profile.
     var speaker: LiveCaptionSpeaker?
     var segments: [LiveCaptionSegment]
+    /// The source's name: "You", "Call", or the device that heard it.
+    var sourceLabel: String
     var id: UUID { segments[0].id }
     var start: TimeInterval { segments[0].start }
-    /// The person when live speakers named them, else the source ("You", "Call").
-    var label: String { speaker?.name ?? source?.label ?? "Captions" }
+    /// The person when live speakers named them, else the source ("You", "Call", "Soundcore").
+    var label: String { speaker?.name ?? sourceLabel }
 
-    static func turns(_ segments: [LiveCaptionSegment]) -> [LiveCaptionTurn] {
+    static func turns(_ segments: [LiveCaptionSegment], names: [String: String] = [:]) -> [LiveCaptionTurn] {
         var turns: [LiveCaptionTurn] = []
         for segment in segments where !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let last = turns.last, last.source == segment.source, last.speaker?.slot == segment.speaker?.slot,
                last.speaker?.name == segment.speaker?.name { turns[turns.count - 1].segments.append(segment) }
-            else { turns.append(LiveCaptionTurn(source: segment.source, speaker: segment.speaker, segments: [segment])) }
+            else {
+                turns.append(LiveCaptionTurn(source: segment.source, speaker: segment.speaker, segments: [segment],
+                                             sourceLabel: LiveCaptionLabels.label(for: segment.source, names: names)))
+            }
         }
         return turns
     }
@@ -75,9 +98,9 @@ struct LiveCaptionsSection: View {
     var body: some View {
         Group {
             if isLive {
-                section(segments: captions.recent(Self.liveLines), live: true)
+                section(segments: captions.recent(Self.liveLines), names: captions.sourceNames, live: true)
             } else if let shown = LiveCaptionStore.shown(saved, for: meeting) {
-                section(segments: shown.segments, live: false)
+                section(segments: shown.segments, names: shown.sourceNames ?? [:], live: false)
             }
         }
         .task(id: "\(meeting.id)|\(isRecording)|\(captions.lastSave?.timeIntervalSince1970 ?? 0)|\(meeting.transcripts.count)") {
@@ -85,7 +108,7 @@ struct LiveCaptionsSection: View {
         }
     }
 
-    private func section(segments: [LiveCaptionSegment], live: Bool) -> some View {
+    private func section(segments: [LiveCaptionSegment], names: [String: String], live: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             // The glyph hangs in the margin, so the heading starts on the text's edge.
             MarginRow {
@@ -104,7 +127,7 @@ struct LiveCaptionsSection: View {
                 MarginRow { Text(status).font(TypeStyle.body(scale)).foregroundStyle(Ink.meta) }
                     .padding(.top, Space.s3)
             }
-            ForEach(LiveCaptionTurn.turns(segments)) { turn in
+            ForEach(LiveCaptionTurn.turns(segments, names: names)) { turn in
                 CaptionTurnView(turn: turn, showsTime: !live)
                     .padding(.top, Space.s3)
                     .transition(.opacity)
