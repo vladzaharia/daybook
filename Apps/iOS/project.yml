@@ -81,6 +81,9 @@ targets:
         keychain-access-groups:
           - $(AppIdentifierPrefix)local.daybook.phone
           - $(AppIdentifierPrefix)local.daybook.shared
+        # Joining a Soundcore Work's own network for Wi-Fi Fast Transfer (NEHotspotConfiguration;
+        # docs/direct-soundcore.md, "Wi-Fi Fast Transfer"). Enabled on the App ID by the account owner.
+        com.apple.developer.networking.HotspotConfiguration: true
     info:
       path: DaybookPhone/Resources/Info.plist
       properties:
