@@ -24,7 +24,8 @@ firmware. See [validation](validation.md).
 | Connection | `SoundcoreConnection: DeviceConnection` | The state machine: setup search, remembered recorder, reconnect with backoff, radio and permission changes, idle release, automatic import, Device Details |
 | Parsing | `SoundcorePacket`, `SoundcorePacketBuffer`, `SoundcoreDeviceInfo`, `SoundcoreRecording`, `SoundcoreAudioSlice` | Bounds-checked; malformed input throws, never traps |
 | Audio | `SoundcoreCrypto`, `SoundcoreFileKey`, `SoundcoreOpusDecoder` | Ephemeral P-256 key agreement, HKDF-SHA256, AES-CTR file keys and slices, native Opus to 16 kHz WAV |
-| Simulation | `SimulatedSoundcore`, `SimulatedSoundcoreTransport` (debug builds) | A recorder that speaks the protocol from generated fixtures, with fault injection |
+| Wi‑Fi Fast Transfer | `SoundcoreFastTransfer`, `SoundcoreWebSocket`, `SoundcoreWiFi`, `SoundcoreHotspot` (`SystemSoundcoreHotspot` on iPhone) | The recorder's access point, its WebSocket over TLS, the keep-alive, and falling back to Bluetooth |
+| Simulation | `SimulatedSoundcore`, `SimulatedSoundcoreTransport`, `SimulatedSoundcoreAccessPoint`, `SimulatedSoundcoreHotspot` (debug builds) | A recorder that speaks the protocol from generated fixtures, with fault injection, and its access point on loopback |
 
 ## The connection
 
@@ -189,6 +190,91 @@ can't be read nor Pause sent: a device stopping the recorder ends the live audio
 until the Pause, is then only in the recorder's file, which replaces the live portion). Whether
 firmware accepts commands during a live stream is unverified; Daybook doesn't try.
 
+## Wi‑Fi Fast Transfer (iPhone)
+
+A long recording comes over the recorder's own Wi‑Fi rather than Bluetooth LE: in the official app's
+words, Fast Transfer. Only on iPhone, only with Daybook in the foreground, for recordings at least ten
+minutes long (`SoundcoreTiming.fastTransferMinimum`) while the recorder page's "Fast Transfer for Long
+Recordings" is on (the default, `ConfiguredDevice.fastTransferForLongRecordings`), or for any recording
+the person picks "Import over Wi‑Fi" for (a new recording's menu). Never during Listen Live or another
+app's transfer. The Mac has no hotspot (`SoundcoreWiFiHooks.hotspot` is nil), so it never uses it.
+
+**Unverified on hardware.** The flow is built from community reverse-engineering of the Anker SDK:
+[tacshi/Soundcore's PROTOCOL.md](https://github.com/tacshi/Soundcore/blob/main/PROTOCOL.md) §6.4–6.5 and
+§9, and its Wi‑Fi export service and `beginWifiExport` (read for reference; no code was copied or run).
+It is tested end to end against the simulated recorder only. Until the owner captures a real Fast
+Transfer, treat every byte below as a well-informed guess; any failure falls back to Bluetooth.
+
+1. Over Bluetooth, after the usual key exchange (`2E 01`), whose session key the Wi‑Fi transfer reuses:
+   `1A 05` with an access point name and password Daybook chooses, `[name length][name][password
+   length][password]`. The name is the official app's form, `WiFi-<milliseconds>`; the password is 13
+   random digits (the official app uses the milliseconds again, which anyone could guess from the name).
+   The recorder answers `1A 05` with its IPv4 address, bytes reversed, and its port, little-endian.
+2. Daybook lets Bluetooth go on purpose and waits ten seconds (`accessPointStartup`) for the recorder's
+   network to start. The connection stays "Connected" meanwhile, and a Bluetooth drop then isn't a
+   disconnect.
+3. The iPhone joins the network (`NEHotspotConfiguration`, `joinOnce`: iOS asks the person each time
+   and drops the network when Daybook leaves the foreground), and waits for an address on its subnet.
+4. `wss://<address>:<port>`, three attempts two seconds apart. Daybook writes the opening handshake
+   itself, with the header names, case, and order of the official app's HTTP client (`Upgrade`,
+   `Connection`, `Sec-WebSocket-Key`, `Sec-WebSocket-Version`, `Host`, `Accept-Encoding: gzip`, and its
+   `User-Agent`), because the recorder's parser may match them exactly. It accepts the recorder's
+   self-signed certificate for that connection only. A UDP keep-alive
+   (`soundcore-keep-alive-unicast`) goes to port 32003 every two seconds.
+5. Each recording is asked for as hex text, `08 EE 00 00 00 1A 07 12 00 | offset | id | 1B` (18 bytes,
+   no checksum, the offset always 0), and arrives as the same encrypted `1A 07`/`1A 08`/`1A 0A` frames
+   as over Bluetooth, through the same session and the same checks (`SoundcoreSession.Medium.wifi`).
+   With another recording queued, the Wi‑Fi link waits for it (`fastTransferLinger`), so a batch shares
+   one access point.
+6. To finish: `FINISH`, the WebSocket and keep-alive closed, the network forgotten, Bluetooth back, and
+   `1A 02` to close the access point. Nothing deletes anything (deleting is `1A 10`, never sent).
+
+**Falling back.** Any failure (the recorder refusing or not answering `1A 05`, the join declined or
+failing, the WebSocket not opening or dropping, a slice missing, Daybook leaving the foreground) ends
+Fast Transfer, brings Bluetooth back, and the transfer starts again from the beginning over Bluetooth:
+nothing partial is kept, and it isn't counted as a failed attempt. An unanswered `1A 05` is followed by
+`1A 02` over the link that's still up, in case the recorder opened it anyway. After a failure,
+transfers stay on Bluetooth for 30 minutes (`fastTransferPause`); a join iOS fails at once ("internal
+error", which is what a build without the Hotspot Configuration entitlement gets) keeps this build on
+Bluetooth until the app's build changes or the person turns the preference off and on.
+
+**Recovery.** From `1A 05`'s answer until `1A 02` is sent, the remembered recorder carries
+`accessPointSSID` and `accessPointSince`. Whatever ends Fast Transfer (Disconnect, quitting, a crash,
+Bluetooth not coming back), the next confirmed Bluetooth link sends `1A 02` before anything else and
+clears it. While it's set and the recorder isn't connected, the page says "Fast Transfer didn’t finish"
+("The recording is still on your Soundcore. Connect to turn off its Wi‑Fi.") with Connect. Whether the
+recorder accepts a Bluetooth connection while its access point is open, and whether it closes the
+access point on its own after `FINISH` or a timeout, is unverified.
+
+**What the page says.** The import's line says "Starting Wi‑Fi…" while it sets up and "Over Wi‑Fi. Keep
+Daybook open until it finishes." while it transfers; Device Details' "Fast Transfer" row says how the
+last attempt went ("Over Wi‑Fi, Today, 10:02 AM", or "Back to Bluetooth, …" and why), or "Unavailable in
+this build".
+
+### Owner steps: the Hotspot Configuration entitlement
+
+Joining another network needs the Hotspot Configuration capability. Done (2026-10-29):
+
+1. The account owner enabled **Hotspot Configuration** on the App ID `local.daybook.phone` in the
+   developer portal (Certificates, Identifiers & Profiles › Identifiers). It's also enabled on the Mac's
+   App ID, which Daybook doesn't use: Fast Transfer is iPhone-only.
+2. The entitlement is in the iPhone app's entitlements, from `Apps/iOS/project.yml` (the iPhone target's
+   `entitlements.properties`, which XcodeGen writes to `DaybookPhone/Resources/DaybookPhone.entitlements`):
+   `com.apple.developer.networking.HotspotConfiguration: true`. The widgets and the Mac app don't have it.
+
+Profiles regenerate in the release pipeline; nothing here touches signing. A build without the
+entitlement still works: its first join fails at once and every transfer stays on Bluetooth.
+
+### Verifying it on a recorder
+
+Until then it's unverified. To check it, on an iPhone build with the entitlement, near a charged
+recorder, in the foreground: choose "Import over Wi‑Fi" for one recording, accept iOS's prompt to join
+`WiFi-…`, and keep Daybook open. Then copy Device Details (its "Fast Transfer" row and "Last problem")
+and the `local.daybook.devices` log (`Soundcore` category), and note whether the recorder's light
+changed, whether its Wi‑Fi appeared in Settings › Wi‑Fi, how long the transfer took against Bluetooth,
+and whether Bluetooth came back and the access point closed. A failure at the WebSocket step usually
+means the handshake or TLS differs; a capture of the official app's Fast Transfer would settle it.
+
 ## The recorder's clock
 
 Recording IDs are Unix start times by the recorder's own clock, which nothing keeps right. When the
@@ -204,9 +290,11 @@ measured, and whether it was applied), through `DeviceRecordingStart.clock(of:)`
 
 ## What it never does
 
-No delete, reset, bind or unbind, firmware update, Wi-Fi SoftAP, Classic SPP, or vendor
-account call. The simulator tests assert that only status, list, key exchange, transfer, stop
-transport, and (when asked) record control commands are ever sent.
+No delete, reset, bind or unbind, firmware update, time sync, Classic SPP, or vendor account call.
+The recorder's Wi‑Fi is used only for Fast Transfer, as above. The simulator tests assert that only
+status, list, key exchange, transfer, stop transport, (when asked) record control, and for Fast
+Transfer only opening and closing the access point (`1A 05`, `1A 02`) are ever sent over Bluetooth,
+and over Wi‑Fi only file requests (`1A 07`) and `FINISH` (`SoundcoreSimulatorTests.readOnlyCommands`).
 
 ## Verification
 
@@ -220,6 +308,17 @@ link (no idle release, back without the cooldown, the person's Disconnect, never
 record tried again), live audio saved into a shared recording and the recorder's file becoming the
 same track (identical bytes) or replacing it (different), live audio that goes quiet kept, and what
 live audio costs the link (above).
+
+`SoundcoreFastTransferTests` run Fast Transfer end to end on loopback, against the simulated recorder's
+access point: a TLS WebSocket server with a self-signed certificate made in memory (no keychain), whose
+HTTP parser accepts only the official client's header names exactly, and a UDP listener counting
+keep-alives. They cover a long recording over Wi‑Fi with the Bluetooth key reused and the access point
+closed after, a batch sharing one access point, the link ending between two recordings, short
+recordings staying on Bluetooth unless chosen, the foreground only (and leaving it mid-transfer), a
+build without the entitlement (and not trying again), a declined join, the WebSocket dropping
+mid-file, `1A 05` refused or unanswered, and an access point left open closed on the next connection
+and remembered across a relaunch. `SoundcoreProtocolTests` cover `1A 05`'s payload and reply, the
+18-byte file request, and WebSocket framing at every length form, masked and not.
 
 `SoundcoreSimulatorTests` run the real connection, session, queue, and importer against the
 simulated recorder: setup and remembered reconnection (direct and after a scan), paged listing
@@ -252,4 +351,7 @@ import alongside the phone app: whether the recorder answers a list request whil
 is transferring, and what the list's trailing field names then. Two apps on one link: whether the
 Soundcore app's transfer reaches Daybook as notifications on iOS, whether three quiet seconds is enough
 between its files, whether a request of Daybook's really cuts its transfer off, and whether the recorder
-keeps one audio key for both apps.
+keeps one audio key for both apps. Wi‑Fi Fast Transfer, all of it: `1A 05`'s payload and reply, the
+access point's start time, the WebSocket's TLS and handshake, the file request's last byte, whether
+the keep-alive matters, the recorder accepting Bluetooth while its access point is open, `1A 02`'s
+reply, whether `FINISH` closes the access point, and the throughput.
