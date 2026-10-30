@@ -53,7 +53,7 @@ enum PhotoDemo {
                 return TranscriptSegment(trackID: track.id, start: line.0, end: end, text: line.2, speakerID: line.1)
             }
             // The recording's own transcript too, so it reads as transcribed rather than waiting.
-            meeting.transcripts = [TrackTranscript(trackID: track.id, segments: segments, modelID: "parakeet-tdt-0.6b-v3")]
+            meeting.transcripts = [TrackTranscript(trackID: track.id, segments: segments, modelID: "parakeet/ultra")]
             meeting.unifiedTranscript = segments
             meeting.notes = "Move budget from events to marketing\nPackaging sample by Friday"
             meeting.timedNotes = [TimedNote(time: 100, text: "Move budget from events to marketing"),

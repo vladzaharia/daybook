@@ -199,7 +199,7 @@ enum LibraryDemo {
             if let soundcore {
                 meeting.transcripts.append(TrackTranscript(trackID: soundcore, segments: [
                     TranscriptSegment(trackID: soundcore, start: 30, end: 40, text: "Marketing is about ten percent over.", speakerID: "1")
-                ], modelID: "parakeet-tdt-0.6b-v3"))
+                ], modelID: "parakeet/ultra"))
                 meeting.alignmentReports.append(TrackAlignment(trackID: soundcore, method: .unaligned))
             }
             meeting.notes = "Budget: move events → marketing"
@@ -322,7 +322,7 @@ enum LibraryDemo {
             TranscriptSegment(trackID: track, start: line.0, end: index + 1 < lines.count ? lines[index + 1].0 - 1 : line.0 + 12,
                               text: line.2, speakerID: line.1)
         }
-        meeting.transcripts = [TrackTranscript(trackID: track, segments: segments, modelID: "parakeet-tdt-0.6b-v3")]
+        meeting.transcripts = [TrackTranscript(trackID: track, segments: segments, modelID: "parakeet/ultra")]
         meeting.unifiedTranscript = segments
     }
 }

@@ -185,6 +185,36 @@ final class ModelSelectionTests: XCTestCase {
         XCTAssertEqual(catalog.name(for: "unknown-model"), "unknown-model")
     }
 
+    /// Regression: Info › Processing could show a stored ID ("parakeet-tdt-0.6b-v3", from demo data) instead of
+    /// a name. Every ID a shipped Daybook stored names its catalog model: the first catalog's IDs (v0.1.0,
+    /// before the model system) through the migration table, and every variant key since, with or without the
+    /// revision a job froze.
+    func testEveryIDAShippedVersionStoredNamesItsModel() throws {
+        let legacy = ["whisper-base": "Whisper Base", "whisper-small": "Whisper Small", "whisper-large-turbo": "Whisper Large v3 Turbo",
+                      "qwen-1.5b": "Qwen 2.5 · 1.5B", "qwen-3b": "Qwen 2.5 · 3B", "qwen-7b": "Qwen 2.5 · 7B",
+                      "speaker-community-1": "Community-1 Speaker Detection", "speaker-sortformer-v2.1": "Sortformer 2.1 · Full Precision",
+                      "speaker-sortformer-v2.1-compact": "Sortformer 2.1 · Compact"]
+        for (id, name) in legacy {
+            XCTAssertEqual(catalog.name(for: id), name, id)
+            XCTAssertEqual(catalog.name(for: id), catalog.model(id)?.name, "\(id) is the catalog's own name")
+        }
+        // The variant keys v0.2.0 through v0.4.2 shipped are all still in the catalog.
+        let shipped = ["apple-foundation-models/system", "apple-vision/system", "community-1/offline", "gemma-4/e2b-4bit", "gemma-4/e4b-4bit",
+                       "gemma-4/12b-4bit", "gemma-4/26b-a4b-qat-4bit", "gemma-4/31b-8bit", "nemotron-3-diarization/offline",
+                       "nemotron-3-diarization/compact", "parakeet/ultra", "parakeet/redux", "qwen2.5/1.5b-4bit", "qwen2.5/3b-4bit",
+                       "qwen2.5/7b-4bit", "qwen3.5/4b-4bit", "qwen3.5/9b-4bit", "qwen3.6/35b-a3b-4bit", "sortformer-2.1/compact",
+                       "sortformer-2.1/fp16", "whisper/base", "whisper/small", "whisper/large-v3-turbo"]
+        for key in shipped {
+            let model = try XCTUnwrap(catalog.model(key), key)
+            XCTAssertEqual(catalog.name(for: key), model.name)
+            if let revision = model.latestRevision?.id { XCTAssertEqual(catalog.name(for: "\(key)@\(revision)"), model.name) }
+        }
+        for model in catalog.models {
+            XCTAssertNotEqual(catalog.name(for: model.key), model.key, "\(model.key) has a name")
+            for id in model.legacyIDs { XCTAssertEqual(catalog.name(for: id), model.name, id) }
+        }
+    }
+
     func testProvenanceRoundTripsAndToleratesDamage() throws {
         let provenance = ModelProvenance(family: "whisper", variant: "base", revision: "0f63", engine: "whisperKit",
                                          engineVersion: "1 (WhisperKit 0.18.0)", name: "Whisper Base", repository: "argmaxinc/whisperkit-coreml")
