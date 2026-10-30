@@ -129,9 +129,18 @@ public enum BackgroundAudio {
     }
 
     /// The verdict for one transcript run's passages (in the recording's own time). `protectedSpeakers`
-    /// are labels never judged (speakers the person named). Without an analysis only sound tags count.
+    /// are labels never judged (speakers the person named), and `protectedSegments` passages never
+    /// judged (ones the person corrected). Without an analysis only sound tags count.
     public static func judge(_ segments: [TranscriptSegment], analysis: BackgroundAudioAnalysis?,
-                             protectedSpeakers: Set<String> = [], thresholds: Thresholds = Thresholds()) -> Verdict {
+                             protectedSpeakers: Set<String> = [], protectedSegments: Set<UUID> = [],
+                             thresholds: Thresholds = Thresholds()) -> Verdict {
+        var verdict = judgingEvery(segments, analysis: analysis, protectedSpeakers: protectedSpeakers, thresholds: thresholds)
+        if !protectedSegments.isEmpty { verdict.segments = verdict.segments.filter { !protectedSegments.contains($0.key) } }
+        return verdict
+    }
+
+    private static func judgingEvery(_ segments: [TranscriptSegment], analysis: BackgroundAudioAnalysis?,
+                                     protectedSpeakers: Set<String>, thresholds: Thresholds) -> Verdict {
         var verdict = Verdict()
         for segment in segments where isSoundTag(segment.text) {
             verdict.segments[segment.id] = soundTagKind(segment.text)
@@ -229,18 +238,42 @@ extension Meeting {
         return result
     }
 
-    /// The verdict for each recording's latest transcript run, by track. Speakers the person named
-    /// are never judged.
+    /// The verdict for each recording's latest transcript run, by track. Speakers the person named,
+    /// and passages the person corrected, are never judged.
     public func backgroundVerdicts() -> [UUID: BackgroundAudio.Verdict] {
         let named = Set(revisions.compactMap { $0.field.hasPrefix("speaker:") ? String($0.field.dropFirst(8)) : nil })
+        let corrected = correctedSourcePassageIDs
         let latest = Dictionary(grouping: transcripts, by: \.trackID).compactMapValues { $0.max { $0.createdAt < $1.createdAt } }
         var result: [UUID: BackgroundAudio.Verdict] = [:]
         for (trackID, transcript) in latest {
             let analysis = tracks.first { $0.id == trackID }?.backgroundAudio
-            let verdict = BackgroundAudio.judge(transcript.segments, analysis: analysis, protectedSpeakers: named)
+            let verdict = BackgroundAudio.judge(transcript.segments, analysis: analysis, protectedSpeakers: named, protectedSegments: corrected)
             if !verdict.isEmpty { result[trackID] = verdict }
         }
         return result
+    }
+
+    /// The recordings' passages (transcript segment IDs) behind every passage the person corrected:
+    /// the correction's own passage and the ones fusion made it from. A correction says it's the
+    /// conversation, so it's never left out as background audio, and stays in Version History.
+    var correctedSourcePassageIDs: Set<UUID> {
+        let corrected = Set(revisions.compactMap { $0.field.hasPrefix("segment:") ? UUID(uuidString: String($0.field.dropFirst(8))) : nil })
+        guard !corrected.isEmpty else { return [] }
+        var result = corrected
+        for segment in unifiedTranscript + (backgroundPassages ?? []) where corrected.contains(segment.id) {
+            result.formUnion(segment.provenance.map(\.segmentID))
+        }
+        return result
+    }
+
+    /// Recordings transcribed before Daybook listened for music and TV: each one with a transcript
+    /// run and no current analysis. The Mac listens to them once, when it has nothing else to do
+    /// (AppState+BackgroundAudio.swift), and fuses again without transcribing.
+    public var recordingsAwaitingBackgroundAudio: [RecordingTrack] {
+        let transcribed = Set(transcripts.map(\.trackID))
+        return transcribableTracks.filter {
+            transcribed.contains($0.id) && ($0.backgroundAudio?.version ?? 0) < BackgroundAudioAnalysis.currentVersion
+        }
     }
 
     /// Speakers heard only in passages left out as background audio (a TV's presenter): no one in

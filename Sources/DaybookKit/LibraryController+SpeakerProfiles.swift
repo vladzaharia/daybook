@@ -226,7 +226,8 @@ public final class SpeakerProfileCoordinator {
     }
 
     /// What a reconciliation reads, hashed: speakers, their names, embeddings and identities, renames,
-    /// transcripts, speaker mappings, profiles and voiceprints, and the options.
+    /// transcripts, passages left out as background audio, speaker mappings, profiles and voiceprints,
+    /// and the options.
     static func inputs(_ library: LibraryController, options: SpeakerProfileOptions, skipping: Set<UUID>) -> Int {
         var hasher = Hasher()
         hasher.combine(options.recognizes)
@@ -242,6 +243,7 @@ public final class SpeakerProfileCoordinator {
             for identity in meeting.speakerIdentities ?? [] { hasher.combine(SyncValueText.of(identity)) }
             for revision in meeting.revisions where revision.field.hasPrefix("speaker:") { hasher.combine(revision.id) }
             for run in meeting.transcripts { hasher.combine(run.id); hasher.combine(run.segments.count) }
+            for passage in meeting.backgroundPassages ?? [] { hasher.combine(passage.id) }
             for match in meeting.speakerMatches ?? [] { hasher.combine(match.sourceSpeakerID); hasher.combine(match.targetSpeakerID) }
             for mapping in meeting.fusionSummary?.speakerMappings ?? [] { hasher.combine(mapping.sourceSpeakerID); hasher.combine(mapping.speakerID) }
             hasher.combine(meeting.fusionSummary?.ownerSpeakerID)
