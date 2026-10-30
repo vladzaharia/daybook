@@ -8,7 +8,7 @@ no iCloud account, CloudKit, network, or model downloads.
 
 - **Compaction.** One Mac prunes settings versions that aren't heads and deleted conversations' history at once, and a
   live conversation's history once every device seen in the last 30 days has acknowledged a proposal. The manifest
-  becomes version 3 first. `LibrarySyncCompactionTests` (15): settings pruned while a lagging phone publishes against a
+  becomes version 3 first. `LibrarySyncCompactionTests` (16): settings pruned while a lagging phone publishes against a
   version that's gone and waits for nothing; a conversation's history kept until the phone acknowledges, then pruned up to
   each proposal's root, with later edits merging cleanly; a phone's concurrent edit, slow to reach iCloud, keeping its
   merge base (the phone never acknowledges, nothing of that conversation goes, both changes kept with no conflict); a
@@ -29,7 +29,7 @@ no iCloud account, CloudKit, network, or model downloads.
   0.7 MB after; a new device's first pass 3.56 s before, 1.04 s after. Encrypted: 601 files and 109.3 MB before, 103 files
   and 0.7 MB after; first pass 6.46 s before, 2.09 s after. The ordinary test runs the same at 8 versions and 6
   conversations.
-- **Two devices on a new container.** `LibrarySyncNewContainerTests` (4): a Mac and an iPhone each start an encrypted
+- **Two devices on a new container.** `LibrarySyncNewContainerTests` (5): a Mac and an iPhone each start an encrypted
   library, iCloud brings both markers together, and both settle on the first one started with one marker left, the loser's
   sealed files and key gone, both conversations on both, and nothing more published; the loser's files and key kept
   while a third device still on its key hasn't moved on, then its entries and its republished recording gone, and a stray
@@ -62,6 +62,19 @@ no iCloud account, CloudKit, network, or model downloads.
   identity migration could take another library's identity
   (`SyncDeviceIdentityTests.testTheAppsLibraryNeverAdoptsAnotherLibrarysIdentity`, DaybookKit, which didn't compile against
   the earlier code: it took the latest identity item of any library).
+- **Third review.** A third read confirmed those close their scenarios and found what could be kept forever. Each is fixed
+  with a test: a lost device's presence held a retired key, and a losing library's files and key, back for good (presence
+  older than six months no longer counts: `LibrarySyncSealingTests.testALostDeviceHoldsARetiredKeyBackForSixMonthsAtMost`,
+  `LibrarySyncNewContainerTests.testALostDeviceHoldsTheLoserBackForSixMonthsAtMost`); an iPhone never removed a key while
+  its recordings were only in iCloud (a recording's object is known by its name; only one nothing names is downloaded,
+  on Wi-Fi, to read its header: `testAnIPhoneRemovesARetiredKeyWithoutDownloadingRecordings`); a file sealed with a
+  removed key kept the republish armed for good, and one that was a compaction record didn't hold compaction back (both
+  count for 30 days from when a device first finds them, remembered in its checkpoint:
+  `testAFileSealedWithARemovedKeyCountsForAMonthOnly`); a Mac clock six months ahead compacted alone
+  (`LibrarySyncCompactionTests.testAMacWhoseClockRunsSixMonthsAheadDoesntPruneConversations`: a phone it sees writing
+  says the clock is ahead, while a device lost long ago holds nothing back; set right again, compaction resumes, where
+  a run and a proposal dated in the future had held it back for as long). Forgetting a device by hand in Settings
+  isn't built: presence older than six months no longer holds anything back.
 - **On an iPhone simulator** (a clone of the iPhone 17 Pro, iOS 27.1, a sync folder in the app's container): a plaintext
   library whose Mac was last seen 40 days ago, with a recording only in iCloud (a placeholder). The iPhone encrypted it on
   its own and, as the migrator waiting for that recording, showed "Encrypting · 1 left" with Use Cellular Data below it
@@ -78,9 +91,10 @@ no iCloud account, CloudKit, network, or model downloads.
   `LibrarySyncTests` (a recording kept beside its copy). Settings › Library captured before and after with
   `--sync-demo damaged` (a new demo state).
 
-On this tree, `swift test` passed 1,215 XCTest cases across the eight bundles (one skipped, as before): Captions 8, Core
-399, Devices 101, Intelligence 131, Kit 188, Link 73, Live 30, Mac app 285. `scripts/build-ios.sh --test` on a dedicated
-iPhone 17 Pro simulator clone (iOS 27.1, deleted afterwards) passed all 177. `swift build --build-tests` adds no warnings.
+On this tree, `swift test` passed 1,220 XCTest cases across the eight bundles (one skipped, as before): Captions 8, Core
+404, Devices 101, Intelligence 131, Kit 188, Link 73, Live 30, Mac app 285. `scripts/build-ios.sh --test` on a dedicated
+iPhone 17 Pro simulator clone (iOS 27.1, deleted afterwards) passed all 177 before the third review's fixes, which change
+no iPhone-only code. `swift build --build-tests` adds no warnings.
 
 Still needs the owner's devices:
 

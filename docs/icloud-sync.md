@@ -17,7 +17,7 @@ Daybook keeps a local working library and exchanges changes through a journal in
 - **A new library, once.** A device creates `daybook-sync.json` only when the container holds none *and* iCloud has listed it: the engine is created with `waitsForListing`, and the controller calls `listingGathered()` when its `NSMetadataQuery` finishes its first gather. Until then a pass returns nothing and the status reads "Waiting for iCloud…", so a fresh iPhone or Mac doesn't start a second library beside one it can't see yet.
 - **Two manifests anyway** (two devices launched at once on a new container and each wrote one; iCloud kept a conflict version or a renamed copy such as `daybook-sync 2.json`): every device resolves them the same way, whichever is the file and which the copy. The smallest library ID wins.
   - Plaintext libraries share one journal: the manifest lists the IDs it `supersedes` (an additive field older versions ignore), and a device whose checkpoint belongs to a superseded ID carries it over (with its bases), so it continues from the same heads and publishes nothing again.
-  - New encrypted libraries (every new library is one) can't share a journal: each is sealed with its own key. Two whose `created` dates (an additive field set when a device starts a library) are within a week of each other were started together. The first one started wins, by the clocks of the devices that started them, and of two started the same second, the smallest ID. Every device must reach the same answer from the manifests alone (what each holds differs with what each has downloaded), so this is a way to agree, not a judgment of which holds more, and nothing depends on it being the fuller one: the winner replaces the others (`sealing.replaces`, as after Start Over, and `sealing.rivals`), their devices publish what they hold into it once they have its key, and nothing of a rival's is deleted until that's done. Its files are left alone (not read, not waited for, no warning) until every device that has written presence, at any time (an earlier identity of a reinstalled device aside), holds the winner's key: each has moved on and published what it holds, and what it failed to publish it still holds and publishes on a later pass. Then a rival's entries go as passes find them, and its objects once the winner holds what they hold (a recording republished under the winner's key); one nothing republished stays. Its key leaves iCloud Keychain once nothing in the sync folder is that library's any more. Encrypted libraries that weren't started together, or started over from different ones, still pause sync.
+  - New encrypted libraries (every new library is one) can't share a journal: each is sealed with its own key. Two whose `created` dates (an additive field set when a device starts a library) are within a week of each other were started together. The first one started wins, by the clocks of the devices that started them, and of two started the same second, the smallest ID. Every device must reach the same answer from the manifests alone (what each holds differs with what each has downloaded), so this is a way to agree, not a judgment of which holds more, and nothing depends on it being the fuller one: the winner replaces the others (`sealing.replaces`, as after Start Over, and `sealing.rivals`), their devices publish what they hold into it once they have its key, and nothing of a rival's is deleted until that's done. Its files are left alone (not read, not waited for, no warning) until every device that wrote presence in the last six months (an earlier identity of a reinstalled device aside; a device lost or given away stops counting six months after it was last seen) holds the winner's key: each has moved on and published what it holds, and what it failed to publish it still holds and publishes on a later pass. Then a rival's entries go as passes find them, and its objects once the winner holds what they hold (a recording republished under the winner's key); one nothing republished stays. Its key leaves iCloud Keychain once nothing in the sync folder is that library's any more (objects are checked as for a retired key, below). Encrypted libraries that weren't started together, or started over from different ones, still pause sync.
   - Once the resolved manifest is written, conflict versions are marked resolved and the renamed copies that were read are deleted, so one marker is left. A copy still in iCloud is asked for and resolved on a later pass. Only a conflict version that can't be read stops sync, as before.
 - **Turning sync off** keeps local and iCloud copies, and stays off across launches until Turn On.
 
@@ -322,18 +322,26 @@ isn't carried over, so it's erased from iCloud. The manifest records when the ol
 For at least 30 days the old key stays in iCloud Keychain, so a file sealed with it later (a device that was away) or
 restored from iCloud.com's Data Recovery (which keeps deleted files that long) stays readable and is sealed again, or
 deleted if it's a deleted conversation's. Then it's removed (`removeRetiredKeys`), on whichever device next completes a full
-pass, once every device that has written presence, however long ago, holds the current key (one away for months may hold
-only the old key, with files sealed with it to bring, and it's the one to seal them again; an earlier identity of a
-reinstalled device counts as that device's later one), and nothing in the sync folder
-is still sealed with it: entries, compaction records (sealed again under the current key first), and objects, by their
-headers. On iCloud Keychain that removes it from every device, which finishes the erasing: a copy of the old files Apple
+pass, once every device that wrote presence in the last six months (`KnownSyncDevice.retiredAfter`) holds the current key
+(one away for months may hold only the old key, with files sealed with it to bring, and it's the one to seal them again;
+an earlier identity of a reinstalled device counts as that device's later one; a device lost or given away stops counting
+six months after it was last seen), and nothing in the sync folder is still sealed with it: entries, compaction records
+(sealed again under the current key first), and objects. An object's header says which key sealed it; a recording the
+journal names is known by its name under each key held here, so it isn't downloaded for this (an iPhone keeps most
+recordings only in iCloud). One nothing names is downloaded to read its header, on an iPhone on Wi-Fi only, and let go
+of again. On iCloud Keychain that removes it from every device, which finishes the erasing: a copy of the old files Apple
 might still hold can't be opened with a key that's gone. A file found sealed with a retired key this device doesn't hold is
-never deleted: it's left for a device that holds the key to seal again, not waited for, and not a warning. Its author, if it
-no longer holds the key either, can't read its own entries: when what it last applied of a conversation is gone that way,
-it publishes its copy again, changed or not, merged with what's there or as new when nothing else of it is there (see
-[Compaction](#compaction)). What it remembers of a file sealed with a key it no longer holds vouches for nothing. Remove
-a lost device from the Apple Account before rotating (until then it holds the old key back). There are no
-per-conversation keys: a deletion can't shred one key, so erasing is this coarse step.
+never deleted: it's left for a device that holds the key to seal again, not waited for, and not a warning. For 30 days
+from when a device first finds one (`SyncCheckpoint.heldAside`, `heldAsideWindow`) it counts: it may be what that device
+last applied, and a compaction record among them may list what was pruned, so the compacting Mac doesn't compact. Its
+author, if it no longer holds the key either, can't read its own entries: when what it last applied of a conversation is
+gone that way, it publishes its copy again, changed or not, merged with what's there or as new when nothing else of it is
+there (see [Compaction](#compaction)); it does so on its first full pass after finding them. After 30 days a device that
+still held the key would have sealed it again, so nothing will open it: it stays, and is ignored. What a device remembers
+of a file sealed with a key it no longer holds vouches for nothing. Remove a lost device from the Apple Account before
+rotating, so it doesn't receive the new key. Its presence stays in the sync folder, and holds the old key's removal back
+until it hasn't been seen for six months. There are no per-conversation keys: a deletion can't shred one key, so erasing
+is this coarse step.
 
 **Starting over** (`startOver`, LibrarySyncStartOver.swift; "Start Over…" beside the waiting line on both apps, behind a
 confirmation: "What’s only in iCloud is lost. Conversations on your devices stay and sync again."). When the key is lost
@@ -351,7 +359,8 @@ retirement allows, deletes the rest (a library that started over never wrote pla
 the old library's). For two weeks after the start an iPhone holding a conversation whose recording isn't in the new library
 yet waits for another device to publish it rather than call it missing; a recording that existed only in the old
 library's files is lost, and the iPhone then reports it missing. The old library's keys, if any device still holds one,
-leave iCloud Keychain on the next pass (`removeReplacedLibraryKeys`); so do a losing new library's.
+leave iCloud Keychain on the next pass (`removeReplacedLibraryKeys`); a losing new library's, once nothing of it is left
+(above).
 
 **No separate "reset encryption".** Start Over is the disaster path for a lost key: a new library ID and key, every device's
 copies kept and published again. It isn't offered, and the engine refuses it, while any device may still hold the key,
@@ -498,11 +507,15 @@ its own whenever it next syncs, however long it was away.
   most every six hours. More than eight commit records are consolidated into one. In an encrypted library the records
   are history like the rest: the sealer seals them again under a new key, and an old key isn't retired while one is
   still sealed with it. A record a newer Daybook wrote that this version can't read is a warning, and stops this Mac
-  from compacting. A Mac that sees no other device in the last 30 days, while another that isn't an earlier identity was
-  seen in the last 180 (or a presence record can't be read), prunes no conversation's history: every acknowledgement
-  would pass for want of anyone to give one. That covers devices all away for a while and this Mac's clock running a
-  month or more ahead; six months ahead looks like every other device gone, and a device back after that merges as one
-  away that long does.
+  from compacting. So does a record sealed with a retired key this Mac doesn't hold, for 30 days after it first finds it.
+  A Mac that sees no other device in the last 30 days, while another that isn't an earlier identity was seen in the last
+  180 (or a presence record can't be read), prunes no conversation's history: every acknowledgement would pass for want
+  of anyone to give one. Nor does a Mac whose clock looks more than a week ahead (`clockLooksAhead`): of the devices whose
+  presence it has seen change in the last week by its own clock, even the freshest says it was written more than a week
+  before. What it read is kept in its checkpoint (`presenceSightings`), so a change made while it was off counts. That
+  covers a clock six months ahead, where every other device looks gone; a device whose presence never changes (lost,
+  given away) says nothing about the clock, so it never holds compaction back. Once the clock is set right, a run or a
+  proposal dated after now doesn't hold compaction back either: the proposal is replaced.
 - **Earlier Daybooks.** They'd wait forever for parents that are gone, so before the first commit the manifest becomes
   version 3 (`compactedSchemaVersion`, with `compaction.since`), plaintext or encrypted. Every earlier Daybook stops at it
   with "This library was synced by a newer Daybook (version 3). Update Daybook to sync." and changes nothing (the frozen
