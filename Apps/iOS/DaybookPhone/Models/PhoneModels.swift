@@ -13,7 +13,8 @@ import UIKit
 /// The iPhone runs models for live captions only. Final transcription, speaker analysis, and
 /// summaries stay on the Mac. Models download into a store of their own (`Application
 /// Support/Models`, the Mac's layout and verification, kept out of backups because they can be
-/// downloaded again), over Wi‑Fi unless the person allows cellular. Until they're downloaded, or
+/// downloaded again), over Wi‑Fi unless the person allows cellular, in background sessions that go on
+/// while the app is suspended (`BackgroundModelFetcher`). Until they're downloaded, or
 /// where they can't run, captions come from the system's speech recognizer as before.
 @MainActor
 @Observable
@@ -58,8 +59,17 @@ final class PhoneModels {
     private(set) var failures: [String: String] = [:]
     /// Downloads may use cellular data. Off by default: the models are hundreds of megabytes.
     var allowsCellular: Bool {
-        didSet { defaults.set(allowsCellular, forKey: Keys.cellular); if allowsCellular { resumeWaiting() } }
+        didSet {
+            defaults.set(allowsCellular, forKey: Keys.cellular)
+            (fetcher as? BackgroundModelFetcher)?.allowsCellular = allowsCellular
+            if allowsCellular { resumeWaiting() }
+        }
     }
+
+    /// The app's model downloads: background sessions, so a download goes on while the app is
+    /// suspended or after iOS ends it (`BackgroundModelFetcher`). One per process: iOS hands a relaunched
+    /// app its sessions' events through it (`PhoneAppDelegate`).
+    static let downloads = BackgroundModelFetcher()
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let fetcher: any ModelArtifactFetcher
@@ -73,6 +83,8 @@ final class PhoneModels {
     enum Keys {
         static let selections = "phone.liveModels"
         static let cellular = "phone.liveModels.cellular"
+        /// Models asked for and not finished: they carry on after a relaunch.
+        static let downloading = "phone.liveModels.downloading"
     }
 
     /// The store's folder: Application Support, out of iPhone backups.
@@ -82,7 +94,7 @@ final class PhoneModels {
     }
 
     init(root: URL = PhoneModels.defaultRoot, defaults: UserDefaults, catalog: ModelCatalog = .builtIn,
-         fetcher: any ModelArtifactFetcher = HubSnapshotFetcher(), network: PhoneNetwork = .system,
+         fetcher: any ModelArtifactFetcher = PhoneModels.downloads, network: PhoneNetwork = .system,
          physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory) {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var folder = root
@@ -106,8 +118,12 @@ final class PhoneModels {
         // Models go as soon as a recording ends: an iPhone keeps nothing it isn't using.
         captioners = LiveCaptioners(host: LiveModelHost(idleRelease: .zero, store: store), policy: .iPhone, voices: voices,
                                     vocabulary: vocabulary, conditions: { conditions.current })
+        (fetcher as? BackgroundModelFetcher)?.allowsCellular = allowsCellular
         network.onChange { [weak self] in Task { @MainActor in self?.networkChanged() } }
-        Task { await refresh() }
+        Task {
+            await refresh()
+            await resumeAfterRelaunch()
+        }
     }
 
     // MARK: What live captions use
@@ -170,14 +186,15 @@ final class PhoneModels {
         let key = model.key
         guard tasks[key] == nil, case .available = model.availability(engines: LiveEngines.descriptors, platform: .iOS) else { return }
         failures[key] = nil
+        remember(key, downloading: true)
         guard allowsCellular || network.condition() == .unrestricted else { waiting.insert(key); return }
         waiting.remove(key)
         guard let revision = model.latestRevision, let role = roles.first(where: model.serves) else { return }
         progress[key] = 0
         let store = self.store, fetcher = self.fetcher
         tasks[key] = Task { [weak self] in
-            // A few more seconds to finish if the app goes to the background; a download cut off
-            // resumes from its finished files next time.
+            // The files go on arriving in the background session while the app is suspended; this
+            // asks for time to check and install them if they finish just as the app leaves the screen.
             let background = UIApplication.shared.beginBackgroundTask(withName: "Daybook model download")
             defer { UIApplication.shared.endBackgroundTask(background) }
             do {
@@ -194,6 +211,29 @@ final class PhoneModels {
     func cancel(_ model: CatalogModel) {
         tasks[model.key]?.cancel()
         waiting.remove(model.key)
+        remember(model.key, downloading: false)
+    }
+
+    /// Downloads asked for and not finished, kept so they carry on after iOS ends the app; with
+    /// background sessions, their files may have gone on arriving meanwhile.
+    private func remember(_ key: String, downloading: Bool) {
+        var keys = Set(defaults.stringArray(forKey: Keys.downloading) ?? [])
+        if downloading { keys.insert(key) } else { keys.remove(key) }
+        defaults.set(keys.sorted(), forKey: Keys.downloading)
+    }
+
+    /// After a relaunch: the downloads that were going on carry on, and those the system finished
+    /// while the app was away are verified and installed. The background sessions are made again,
+    /// which reconnects their tasks; each install waits for its files' tasks instead of starting others.
+    func resumeAfterRelaunch() async {
+        var keys = Set(defaults.stringArray(forKey: Keys.downloading) ?? [])
+        if let downloads = fetcher as? BackgroundModelFetcher {
+            for file in await downloads.inFlight() { if let key = store.variantKey(downloading: file) { keys.insert(key) } }
+        }
+        for key in keys.sorted() {
+            guard let model = catalog.model(key), inventory.resolve(key) == nil else { remember(key, downloading: false); continue }
+            download(model)
+        }
     }
 
     /// Removes every revision of `model` and any partial download. A model a recording is using now
@@ -219,7 +259,10 @@ final class PhoneModels {
                 if !allowsCellular, network.condition() != .unrestricted { waiting.insert(key) }
             } else {
                 failures[key] = error.localizedDescription
+                remember(key, downloading: false)
             }
+        } else {
+            remember(key, downloading: false)
         }
         await refresh()
     }
