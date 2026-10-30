@@ -114,7 +114,9 @@ let package = Package(
             "DaybookKit",
             "DaybookCore",
             "DaybookTestSupport",
-            .product(name: "FluidAudio", package: "FluidAudio")
+            .product(name: "FluidAudio", package: "FluidAudio"),
+            // XGrammar, to check the summary schemas against the grammar constrained decoding uses.
+            .product(name: "MLXGuidedGeneration", package: "mlx-swift-lm")
         ]),
         .testTarget(name: "DaybookTests", dependencies: [
             "Daybook",
