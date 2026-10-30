@@ -28,8 +28,7 @@ enum PhotoDemo {
         let start = Date().addingTimeInterval(-3 * 3600)
         let id = state.library.newMeeting(title: title, date: start)
         state.selectedID = id
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Daybook Photo Demo \(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let folder = DemoAudio.newFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let audio = folder.appendingPathComponent("Microphone.wav")
         try? silentWAV(seconds: 600).write(to: audio)
