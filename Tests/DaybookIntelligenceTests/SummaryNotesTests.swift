@@ -13,8 +13,9 @@ final class SummaryNotesTests: XCTestCase {
         let supportsStructuredOutput = false
         private let lock = NSLock()
         private var vocabulary: [String] = [], index: [String: Int] = [:]
-        private var _prompts: [String] = []
+        private var _prompts: [String] = [], _instructions: [String] = []
         var prompts: [String] { lock.withLock { _prompts } }
+        var instructions: [String] { lock.withLock { _instructions } }
         var reply: (String) -> String = { _ in "{}" }
 
         func encode(_ text: String) async -> [Int] {
@@ -29,7 +30,7 @@ final class SummaryNotesTests: XCTestCase {
         }
         func decode(_ tokens: [Int]) async -> String { lock.withLock { tokens.map { vocabulary[$0] }.joined(separator: " ") } }
         func respond(instructions: String, prompt: String, maxTokens: Int) async throws -> String {
-            lock.withLock { _prompts.append(prompt) }
+            lock.withLock { _prompts.append(prompt); _instructions.append(instructions) }
             return reply(prompt)
         }
         func respond(instructions: String, prompt: String, schema: String, maxTokens: Int) async throws -> String {
@@ -39,6 +40,9 @@ final class SummaryNotesTests: XCTestCase {
     }
 
     private let track = UUID()
+
+    /// A prompt with its line breaks and indentation as single spaces, for finding sentences in it.
+    private func flat(_ prompt: String) -> String { prompt.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 
     /// Seven passages over three and a half minutes, three notes (two timed, one written before the
     /// recording), a bare bookmark, and a bookmark with words.
@@ -153,8 +157,14 @@ final class SummaryNotesTests: XCTestCase {
         XCTAssertTrue(final.contains("NOTE N2, written by the user (not spoken): Budget cap is firm at 40k"), "The note sits in the transcript")
         XCTAssertTrue(final.contains("(near N2, B1) Sam: Finance says we can't go over forty thousand."))
         XCTAssertTrue(final.contains("Fold each note into the section it belongs to"))
-        XCTAssertTrue(final.contains("Do not list the notes separately, under a heading of their own, or at the end"))
-        XCTAssertTrue(final.contains("attributed to the user's notes"), "A note the recording doesn't support still goes in")
+        XCTAssertTrue(flat(final).contains("Do not list the notes separately, under a heading of their own, or at the end"))
+        // Each note is compared with what was said: what the conversation says is the conversation's; what only
+        // the note says goes in as the person's, never as said or decided; a conflict is mentioned.
+        XCTAssertTrue(flat(final).contains("What the conversation also says: write it from the conversation, without mentioning the note."))
+        XCTAssertTrue(flat(final).contains(#"write it as the user's, in the section it relates to ("Your notes add that"#))
+        XCTAssertTrue(flat(final).contains("never as something said, decided, or confirmed in the conversation"))
+        XCTAssertTrue(flat(final).contains("What conflicts with what was said: mention the conflict."))
+        XCTAssertTrue(model.instructions.allSatisfy { flat($0).contains("What only the user's notes say is the user's, not the conversation's") })
         XCTAssertTrue(final.contains(#""placement":"written outside the recording""#))
         XCTAssertFalse(final.contains("passages_near_notes_and_bookmarks"), "Nothing was compressed, so nothing is repeated")
 
@@ -178,7 +188,8 @@ final class SummaryNotesTests: XCTestCase {
         let summary = self.summary
         model.reply = { prompt in
             if prompt.contains("Extract ALL explicit agreed tasks") { return #"{"actions":[]}"# }
-            if prompt.contains("Extract concise factual evidence") { return "Routine items were reviewed." }
+            // Long enough that the parts' evidence is compressed once.
+            if prompt.contains("Extract concise factual evidence") { return String(repeating: "Routine items were reviewed. ", count: 700) }
             if prompt.contains("Compress these evidence notes") { return "Routine review." }
             return summary
         }
@@ -187,6 +198,11 @@ final class SummaryNotesTests: XCTestCase {
         let parts = model.prompts.filter { $0.contains("Extract concise factual evidence") }
         XCTAssertGreaterThan(parts.count, 1)
         XCTAssertTrue(parts.allSatisfy { $0.contains("THE USER'S NOTES AND BOOKMARKS, for reference") }, "Every part knows the notes")
+        XCTAssertTrue(parts.allSatisfy { flat($0).contains("anything the note adds that wasn't said, marked as the note's") },
+                      "What only a note says stays the note's through the passes")
+        let compressions = model.prompts.filter { $0.contains("Compress these evidence notes") }
+        XCTAssertFalse(compressions.isEmpty)
+        XCTAssertTrue(compressions.allSatisfy { flat($0).contains("what each note adds, marked as the note's") })
         let withNote = parts.filter { $0.contains("NOTE N4, written by the user (not spoken): Ask legal about item 450") }
         XCTAssertTrue((1...2).contains(withNote.count), "A timed note travels in the part of the transcript it was written in")
         XCTAssertTrue(withNote[0].contains("(near N4) Sam: We went over routine item number 449"))
