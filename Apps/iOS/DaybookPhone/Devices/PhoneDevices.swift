@@ -55,6 +55,11 @@ final class PhoneDevices {
 
     static let restoreIdentifier = "local.daybook.phone.soundcore"
 
+    #if DEBUG
+    /// `--device-simulator`'s recorder, for demos.
+    @ObservationIgnored private(set) var simulatedRecorder: SimulatedSoundcore?
+    #endif
+
     /// How long the Soundcore connection and the handoff wait for things. The app uses the
     /// production values; tests shorten them.
     struct Timing {
@@ -73,6 +78,9 @@ final class PhoneDevices {
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: staging, soundcoreTiming: timing.soundcore)
         weak var weakSelf: PhoneDevices?
+        #if DEBUG
+        var simulator: SimulatedSoundcore?
+        #endif
         switch mode {
         case .live:
             environment.soundcoreTransport = {
@@ -80,6 +88,8 @@ final class PhoneDevices {
                 transport.onRestore = { ids in weakSelf?.didRestore(ids) }
                 return transport
             }
+            // Wi‑Fi Fast Transfer joins the recorder's own network (docs/direct-soundcore.md).
+            environment.soundcoreWiFi.hotspot = SystemSoundcoreHotspot()
         case .inert:
             environment.soundcoreTransport = { InertSoundcoreTransport() }
         case .simulator:
@@ -87,10 +97,19 @@ final class PhoneDevices {
             let recorder = SimulatedSoundcore.demo()
             DeviceHub.demo = DeviceHubDemo(transport: { SimulatedSoundcoreTransport(device: recorder) },
                                            simulatorSuite: "local.daybook.phone.device-simulator")
+            // Fast Transfer against the simulated recorder's access point, on loopback.
+            let wifi = environment.soundcoreWiFi
+            wifi.hotspot = SimulatedSoundcoreHotspot(recorder: recorder)
+            wifi.requiresWiFi = false
+            wifi.keepAlivePort = { [weak recorder] _ in recorder?.accessPoint?.keepAlivePort ?? SoundcoreWiFi.keepAlivePort }
+            simulator = recorder
             #endif
         }
         if let transport { environment.soundcoreTransport = transport }
         hub = DeviceHub(environment: environment)
+        #if DEBUG
+        simulatedRecorder = simulator
+        #endif
         handoff = RecorderHandoff(library: library.controller, devices: hub, deviceClass: .phone, defaults: defaults, timing: timing.handoff)
         let hub = self.hub
         cascade = RecorderCascade(sessions: { hub.sessions })
@@ -144,6 +163,12 @@ final class PhoneDevices {
     }
 
     func shutDown() { hub.shutDown() }
+
+    /// Wi‑Fi Fast Transfer runs only in the foreground: leaving it ends Fast Transfer, and the transfer
+    /// carries on over Bluetooth.
+    func foregroundChanged(_ isForeground: Bool) {
+        hub.environment.soundcoreWiFi.isForeground = isForeground
+    }
 
     /// Background app refresh: a recorder whose wait before the next automatic import ran out while
     /// the app was suspended reaches for the recorder now (`SoundcoreConnection.automaticDueAt`).
@@ -229,8 +254,9 @@ final class PhoneDevices {
     func commitSetup() {
         guard let session = hub.pendingSetup else { return }
         // Its button can start a recording while Daybook is in the background, which a notification
-        // tells the person about: asked now, while they're setting it up.
-        if !LaunchOptions.isTestHost { DeviceNotifications.requestAuthorizationIfNeeded() }
+        // tells the person about: asked now, while they're setting it up. Not for the simulated
+        // recorder (a debug demo), whose prompt would cover its screenshots.
+        if mode == .live, !LaunchOptions.isTestHost { DeviceNotifications.requestAuthorizationIfNeeded() }
         hub.commitSetup()
         followSessions()
         claim(session)

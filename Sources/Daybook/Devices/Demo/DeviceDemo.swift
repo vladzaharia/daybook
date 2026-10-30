@@ -10,7 +10,8 @@ import SwiftUI
 ///
 ///     --device-demo <scenario>
 ///
-/// Scenarios: connected, importing, selected, imported, not-connected, reconnecting, connecting,
+/// Scenarios: connected, importing, other-app (an import waiting for the Soundcore app's transfer),
+/// selected, imported, not-connected, reconnecting, connecting,
 /// error (disconnected during import), integrity, stalled, bluetooth-off, denied, rejected,
 /// live, recording, low-storage, empty, folder (Soundcore through its export folder only),
 /// other (an Other Recorder), other-empty, folder-missing, setup (Add Device), setup-soundcore,
@@ -22,7 +23,7 @@ import SwiftUI
 /// `--device-simulator` instead runs the real Soundcore connection against a simulated recorder
 /// (in a throwaway preferences suite); `--autopilot` then sets it up, connects, and imports on its own.
 enum DeviceDemoScenario: String, CaseIterable {
-    case connected, importing, selected, imported, notConnected = "not-connected", reconnecting, connecting
+    case connected, importing, otherApp = "other-app", selected, imported, notConnected = "not-connected", reconnecting, connecting
     case error, integrity, stalled, bluetoothOff = "bluetooth-off", denied, rejected
     case live, recording, lowStorage = "low-storage", empty, folder, other, otherEmpty = "other-empty"
     case folderMissing = "folder-missing", setup, setupSoundcore = "setup-soundcore", scanning, notFound = "not-found"
@@ -193,6 +194,10 @@ enum DeviceDemo {
             connected()
             session.applyDemo(queue: queueOf(false), phase: .receiving(fraction: 0.64), secondsLeft: 372, failures: [],
                               transferProblem: nil, receivedBytes: 1_843_200)
+        case .otherApp:
+            connected()
+            direct.applyDemoWaitingForOtherApp()
+            session.applyDemo(queue: queueOf(false), phase: .preparing, secondsLeft: nil, failures: [], transferProblem: nil)
         case .notConnected:
             disconnected()
         case .reconnecting:
