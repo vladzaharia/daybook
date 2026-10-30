@@ -209,7 +209,7 @@ private struct DevicePageContent: View {
                             Text("Importing \(current.recording.title)")
                                 .font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.title)
                             Spacer()
-                            Text(session.isWaitingForOtherApp ? "Waiting…" : session.phase?.label ?? "Waiting…")
+                            Text(importLabel)
                                 .font(.subheadline.monospacedDigit()).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
                         // Work in progress: the brand gradient.
@@ -217,7 +217,9 @@ private struct DevicePageContent: View {
                         if session.queue.total > 1 || session.secondsLeft != nil {
                             Text(queueLine).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
-                        if session.kind.method(.direct)?.transport == .bluetoothLE {
+                        if session.fastTransferStage == .transferring {
+                            Text("Over Wi‑Fi. Keep Daybook open until it finishes.").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
+                        } else if session.kind.method(.direct)?.transport == .bluetoothLE {
                             Text("Keep it near this iPhone until it finishes.").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                         }
                     }
@@ -260,6 +262,11 @@ private struct DevicePageContent: View {
                                 .accessibilityLabel("Import \(recording.title)")
                         }
                     }
+                    .contextMenu {
+                        if canImport, session.offersFastTransfer {
+                            Button("Import over Wi‑Fi", systemImage: "wifi") { session.importRecordings([recording], overWiFi: true) }
+                        }
+                    }
                 }
                 if offersImportAll, canImport, new.count > 1, !session.queue.isActive {
                     Button("Import \(new.count) New") { session.importRecordings(new) }
@@ -297,6 +304,12 @@ private struct DevicePageContent: View {
                             get: { session.device.recordsAlongsideMac },
                             set: { value in session.update { $0.alsoRecordsWithMac = value } }))
                     }
+                    if session.hasFastTransfer {
+                        // Over ten minutes: over the recorder's own Wi‑Fi while Daybook is open.
+                        Toggle("Fast Transfer", isOn: Binding(
+                            get: { session.device.usesFastTransfer },
+                            set: { value in session.update { $0.fastTransferForLongRecordings = value } }))
+                    }
                     Toggle("Hand Back to My Mac", isOn: Binding(
                         get: { model.settings.handsRecorderBackToMac },
                         set: { value in
@@ -306,6 +319,13 @@ private struct DevicePageContent: View {
                 }
             }
         }
+    }
+
+    /// "64%", "Starting Wi‑Fi…", or "Waiting…" while another app transfers.
+    private var importLabel: String {
+        if session.isWaitingForOtherApp { return "Waiting…" }
+        if let stage = session.fastTransferStage, stage != .transferring { return stage.label }
+        return session.phase?.label ?? "Waiting…"
     }
 
     private var queueLine: String {

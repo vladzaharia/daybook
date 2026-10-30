@@ -1325,6 +1325,11 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         if problem != nil { lastTechnicalProblem = "The peripheral disconnected unexpectedly." }
         rebuildRecordings()
     }
+
+    /// An import waiting for another app's transfer, for screenshots.
+    public func applyDemoWaitingForOtherApp() {
+        isWaitingForOtherApp = true
+    }
     #endif
 }
 
@@ -1408,9 +1413,12 @@ extension SoundcoreConnection: SoundcoreTransportEvents {
 // MARK: - Wi‑Fi Fast Transfer (iPhone; docs/direct-soundcore.md, "Wi‑Fi Fast Transfer")
 
 extension SoundcoreConnection: SoundcoreFastTransferHost {
-    /// This device can bring recordings over the recorder's Wi‑Fi: it can join networks (the iPhone), and
-    /// this build hasn't found it can't.
-    public var offersFastTransfer: Bool { wifiHooks.hotspot != nil && !fastTransferUnavailableHere }
+    /// This device can join a recorder's network (the iPhone): Fast Transfer's preference applies here.
+    public var joinsRecorderWiFi: Bool { wifiHooks.hotspot != nil }
+
+    /// This device can bring recordings over the recorder's Wi‑Fi now: it can join networks, and this
+    /// build hasn't found it can't.
+    public var offersFastTransfer: Bool { joinsRecorderWiFi && !fastTransferUnavailableHere }
 
     /// The person chose these recordings to come over Wi‑Fi, whatever their length.
     public func requestFastTransfer(_ ids: [String]) {
