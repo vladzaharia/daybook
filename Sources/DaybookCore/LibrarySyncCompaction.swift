@@ -168,6 +168,7 @@ extension LibrarySyncEngine {
                 let (id, bytes) = try readEntry(entry, kind: .compaction)
                 read[entry.path] = CompactionEntry(entry: entry, id: id, record: try SyncCompactionRecord.decode(bytes))
             } catch is SyncReplacedFile { setAside(entry) }
+            catch let held as SyncHeldAsideFile { heldAsideEntries[entry.path] = held.reason }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) { warnings.append(markUnreadable(unreadableKey, error)); unreadable += 1 }
             catch { pending += 1 }
@@ -190,6 +191,11 @@ extension LibrarySyncEngine {
         for id in ids {
             eventCache[id] = nil; snapshotCache[id] = nil; metadataCache[id] = nil; journalLocations[id] = nil
         }
+    }
+
+    /// Whether the sealer leaves an entry alone: a replaced library's, pruned, or held aside.
+    func setAsideFromSealer(_ entry: JournalEntry) -> Bool {
+        replacedEntries.contains(entry.path) || prunedEntryPaths.contains(entry.path) || heldAsideEntries[entry.path] != nil
     }
 
     /// A pruned entry a pass found: left out of what the pass read. A courier's copy goes at once (it would otherwise be

@@ -2,8 +2,8 @@ import XCTest
 @testable import DaybookCore
 
 /// Two devices on a brand-new iCloud container, launched at once: each starts an encrypted library before it can see the
-/// other's, and iCloud keeps both markers (the second as `daybook-sync 2.json`). Every device settles on the same one, the
-/// smallest library ID, deletes the other's marker, files, and key, and publishes what it holds into the winner once.
+/// other's, and iCloud keeps both markers (the second as `daybook-sync 2.json`). Every device settles on the same one and
+/// publishes what it holds into it once; the other's files and key go once every device has moved on.
 final class LibrarySyncNewContainerTests: XCTestCase {
     private var root: URL!
     private var keychain: MemoryLibraryKeyStore!
@@ -51,9 +51,9 @@ final class LibrarySyncNewContainerTests: XCTestCase {
         }
     }
     /// The library each sealed file in `folder` says it belongs to.
-    private func sealedLibraries(_ folder: URL) throws -> Set<UUID> {
+    private func sealedLibraries(_ folder: URL, in directories: [String] = ["Sealed/Events", "Sealed/Metadata", "Sealed/Blobs"]) throws -> Set<UUID> {
         var libraries = Set<UUID>()
-        for directory in ["Sealed/Events", "Sealed/Metadata", "Sealed/Blobs"] {
+        for directory in directories {
             let names = ((try? FileManager.default.contentsOfDirectory(atPath: folder.appendingPathComponent(directory).path)) ?? []).filter { !$0.hasPrefix(".") }
             for name in names {
                 let bytes = try Data(contentsOf: folder.appendingPathComponent("\(directory)/\(name)"))
@@ -98,6 +98,70 @@ final class LibrarySyncNewContainerTests: XCTestCase {
         XCTAssertEqual(Set(settledPhone.meetings.map(\.id)), [fromMac.id, fromPhone.id])
         for result in [settledMac, settledPhone] {
             XCTAssertEqual(result.publishedEvents, 0); XCTAssertEqual(result.warnings, []); XCTAssertEqual(result.pendingDownloads, 0)
+        }
+    }
+
+    /// The library that lost may hold what only a device that hasn't moved on yet has: its files and key stay until every
+    /// device has. Then its entries go, and its objects once the winner holds what they hold; one nothing republished
+    /// stays, and so does its key, until it's gone.
+    func testTheLosersFilesAndKeyStayUntilEveryDeviceHasMovedOn() async throws {
+        let macView = root.appendingPathComponent("Mac view"), phoneView = root.appendingPathComponent("Phone view")
+        let fromMac = Meeting(title: "From the Mac"), fromPhone = Meeting(title: "From the phone")
+        try await pass(try engine("Mac", remote: macView), "Mac", [fromMac])
+        try await pass(try engine("Phone", remote: phoneView, phone: true), "Phone", [fromPhone])
+        let macLibrary = try manifest(macView).libraryID, phoneLibrary = try manifest(phoneView).libraryID
+        let started = [macLibrary: try XCTUnwrap(try manifest(macView).created), phoneLibrary: try XCTUnwrap(try manifest(phoneView).created)]
+        let winner = [macLibrary, phoneLibrary].min { (started[$0]!, $0.uuidString) < (started[$1]!, $1.uuidString) }!
+        let loser = winner == macLibrary ? phoneLibrary : macLibrary
+        let loserView = loser == macLibrary ? macView : phoneView
+        let loserKey = try XCTUnwrap(try keychain.keys(for: loser).first)
+        // A Mac that joined the losing library, with a recording only it holds; and an object of the loser's that nothing
+        // holds or names.
+        let file = root.appendingPathComponent("pad.wav")
+        try Data((0..<4000).map { UInt8(truncatingIfNeeded: $0 &* 7) }).write(to: file)
+        let fromPad = try await MeetingStore(rootURL: local("Pad")).importAudio(from: file, into: Meeting(title: "From the Pad"), source: .microphone)
+        let sha = try XCTUnwrap(fromPad.tracks.first?.sha256)
+        try await pass(try engine("Pad", remote: loserView), "Pad", [fromPad])
+        let padObject = "Sealed/Blobs/\(try XCTUnwrap(loserKey.objectName(.blob, plaintextSHA256: sha)))"
+        XCTAssertTrue(FileManager.default.fileExists(atPath: loserView.appendingPathComponent(padObject).path))
+        let stray = SealedObject.seal(Data("only the loser had this".utf8), kind: .blob, key: loserKey)
+        try stray.bytes.write(to: loserView.appendingPathComponent("Sealed/Blobs/\(stray.name)"))
+
+        try meet(phoneView, into: macView)
+        let mac = try engine("Mac", remote: macView), phone = try engine("Phone", remote: macView, phone: true)
+        for _ in 0..<2 {
+            for result in [try await pass(mac, "Mac"), try await pass(phone, "Phone")] {
+                XCTAssertEqual(result.warnings, []); XCTAssertEqual(result.pendingDownloads, 0)
+            }
+        }
+        XCTAssertEqual(try manifest(macView).libraryID, winner)
+        // The Pad is still on the loser's key: nothing of the loser's goes.
+        XCTAssertEqual(try sealedLibraries(macView, in: ["Sealed/Events"]), [winner, loser])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: macView.appendingPathComponent(padObject).path))
+        XCTAssertFalse(try keychain.keys(for: loser).isEmpty)
+
+        // It moves on, publishing what it holds into the winner; then the loser's entries go, and its recording once the
+        // winner holds it too.
+        let pad = try engine("Pad", remote: macView)
+        for _ in 0..<2 {
+            try await pass(pad, "Pad"); try await pass(mac, "Mac"); try await pass(phone, "Phone")
+        }
+        XCTAssertEqual(try sealedLibraries(macView, in: ["Sealed/Events", "Sealed/Metadata"]), [winner])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: macView.appendingPathComponent(padObject).path))
+        let winnerKey = try XCTUnwrap(try keychain.keys(for: winner).first)
+        let republished = try XCTUnwrap(winnerKey.objectName(.blob, plaintextSHA256: sha))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: macView.appendingPathComponent("Sealed/Blobs/\(republished)").path))
+        // What nothing republished stays, and with it the loser's key.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: macView.appendingPathComponent("Sealed/Blobs/\(stray.name)").path))
+        XCTAssertFalse(try keychain.keys(for: loser).isEmpty)
+        try FileManager.default.removeItem(at: macView.appendingPathComponent("Sealed/Blobs/\(stray.name)"))
+        try await pass(mac, "Mac")
+        XCTAssertEqual(try keychain.keys(for: loser), [])
+        XCTAssertEqual(try sealedLibraries(macView), [winner])
+        for (engine, name) in [(mac, "Mac"), (phone, "Phone"), (pad, "Pad")] {
+            let settled = try await pass(engine, name)
+            XCTAssertEqual(Set(settled.meetings.map(\.id)), [fromMac.id, fromPhone.id, fromPad.id], name)
+            XCTAssertEqual(settled.warnings, [], name); XCTAssertEqual(settled.pendingDownloads, 0, name)
         }
     }
 
