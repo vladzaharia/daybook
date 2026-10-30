@@ -1,5 +1,126 @@
 # Validation record
 
+## Long summaries: every topic, commitment, owner, and sentence (2026-10-30)
+
+The real-model check below found that a long conversation's summary lost topics, commitments, owners,
+and once a sentence. Each had its own cause; all four are fixed in `MeetingSynthesis`
+([model runtime](model-runtime.md), "Summarization"; [templates](templates.md#notes-and-bookmarks)).
+
+**Causes.**
+
+- **Topics.** The 22-minute weekly is read in two parts. The first part's extraction (5,190 tokens of
+  transcript, 1,100-token limit, "at most 650 words") ran into its limit in every run: its reply stops
+  at "### On-Call & Caching\n*", so on-call, caching, security, cloud costs, customer escalations, CI,
+  and single sign-on never reached the final pass (on-call and caching came back only through the
+  verbatim passages near a note and a bookmark). The final pass also kept a long conversation's summary
+  "concise": with every topic in its evidence, it once grouped thirteen into seven sections and left two out.
+- **Commitments.** With the transcript over 5,400 tokens, the action pass read the compressed evidence
+  and quoted it ("Ben to investigate/fix the dashboard spinner…"); none of those paraphrases is in the
+  transcript, so all 18 were rejected and the summary had no actions.
+- **Owners.** An owner was kept only when the quote named them, so "Yes, I'll send the line items today"
+  (Dana) had none: 1 owner across the three short conversations' 14 actions.
+- **Truncation.** No per-section limit and no stop condition: under the grammar a `"` always ends a
+  string, and the model opened a quotation unescaped (the evidence read `a "retry storm."`), so the body
+  ended at "The root cause was a "; in one earlier run the model then wrote the section again in full.
+  Separately, the final pass's 1,800-token limit would have cut a complete summary: the guided loop
+  boosts closing tokens in its last 64, ending whatever string it's in.
+
+**Changes.**
+
+- Long transcripts are split into even parts between passages (the extraction's at most 4,800 tokens,
+  the commitments' 5,400), each starting with the two passages before it. Each extraction is told to
+  cover every topic in order, in terse bullets, and may write its share of the final pass's evidence
+  (900 words each for two parts; 400 to 900); a reply that still runs into its limit is read again in
+  halves (`readWhole`), and compression works the same way. The final pass is told to cover every topic.
+- Commitments are extracted from the transcript itself, one pass per part, and verified against it
+  (`SpokenPassages`): the quote must be there word for word (curly apostrophes, case, timestamps, and
+  whitespace ignored), and a commitment found in two parts is kept once. The task text must stand on its
+  own ("Send the agenda tomorrow", never "it"), and anything later dropped or put on hold is left out.
+- An owner is kept when the quote names them or when they are the quoted passage's speaker (saying "I",
+  or naming no one else); with no owner stated, a speaker saying "I" is the owner. A stated owner the
+  quote doesn't show is dropped, never replaced by the speaker: in "send it to me two weeks before the
+  deadline so I can give comments" Sam says "I", but the task is Alex's (an earlier variant got this
+  wrong). "Unknown speaker" is never an owner.
+- Prose strings in the schemas (title, overview, headings, bodies, action text) can't end in whitespace,
+  so a quotation mark opening after a space can't end them and the escaped one is left. The final pass
+  may write 3,000 tokens and each commitments pass 1,600; a section written again under the same heading
+  is kept once. Since the commitments pass replaces them, the final pass of a model with structured output
+  leaves its own actions empty (prompt and schema).
+- Notes: "Your notes add" is only for what no speaker said ("most notes repeat what was said"); a
+  bookmark's words only name a moment; extraction marks what a note adds as "N1 adds" and conflicts as
+  "N1 conflicts".
+
+**Real model.** The same check as below, the same four conversations, notes, and bookmarks: Gemma 4 26B
+A4B QAT 4-bit from the installed copy, used read-only through a symlink from a scratch models folder with
+its own receipt (the installed folder's listing unchanged afterwards), in a scratch, uncommitted XCTest
+that calls `MeetingSynthesis.generate` with the loaded model and records every pass. Decoding is greedy:
+the old code reproduced run 3 below exactly, and repeated runs of the new code matched each other, so
+the counts below are not sampling noise. "Before" is the committed prompt (run 3 below); "after" is this
+change. The weekly's commitments are scored against 38 in its transcript (someone says they will, or is
+asked and agrees).
+
+| | Before | After |
+| --- | --- | --- |
+| Weekly: topics kept, of 13 (11 when on-call with caching and hiring with documentation count as one) | 8 (6) | 13 (11) |
+| Weekly: commitments kept, of 38 | 0 (18 extracted, every quote a paraphrase) | 36, every one with the right owner |
+| Short conversations: commitments kept, of 14 | 14 | 12 |
+| Short conversations: owners kept | 1 | 11 of 12 (the twelfth has none) |
+| Truncated sections | 1 ("The root cause was a ") | 0 |
+| Notes that only repeat what was said, given "Your notes add" | 3 (exports daily, stack, tell support) | 1 (tell support) |
+| Notes that add something, attributed to the notes | 5 of 6 (Ben may swap: missing) | 5 of 6 ("Launch May 12?" now reads as a question raised) |
+| "Only 2 reqs" against "three approved" | conflict mentioned | conflict mentioned |
+
+Excerpts, after: "The root cause was a retry change deployed that morning; clients retried failed
+requests immediately and without limits, exhausting the connection pool…"; "Aisha needs a swap for the
+week of December 3rd due to an infrastructure conference; your notes suggest asking Ben about a potential
+swap for that week"; sections for security, cloud costs, the three customer escalations, CI, and single
+sign-on; "Send the numbers for the backfill to Tomas tonight (Ravi)" from "I'll send them tonight.";
+"Ship the Safari login fix tomorrow (Ben)" from "Tomorrow, if the review is done today."; "Post in the
+team channel regarding the on-call swap… (Aisha)" from "Aisha, can you post in the team channel? Aisha:
+Sure, I'll post it today."; in the customer interview, neither note that repeats the call is mentioned.
+"Start the design for the new admin pages", which Ben put on hold, is no longer listed.
+
+Still wrong: "your notes add that support needs to be notified" (Tomas said so); the weekly misses Aisha
+joining the cutover call and Mei emailing the offsite details; the launch's actions no longer list
+"Marcus, you own the campaign" or Leo taking the signup page (its Ownership section still has both); the
+1:1's "send it to me two weeks before the deadline" has no owner. A variant that called ownership a
+commitment kept neither and lost the postmortem, so it wasn't kept. Prompt wording still moves single
+notes: one variant ("a note that sums up or lists what someone said") wrote the launch's firm 40k cap as
+fact again and was reverted.
+
+**Time** (debug build, the weekly, interleaved runs at load averages of 17 to 67):
+
+| Pass | Before | After |
+| --- | --- | --- |
+| Extraction, two parts | 79 and 93 s (1,777 tokens written, the first part cut off) | 130 and 136 s (2,721 tokens) |
+| Final | 91 and 86 s (1,171 tokens, 14 actions included) | 115 and 114 s (1,707 tokens, every topic, no actions) |
+| Commitments | 36 and 42 s (one pass, 1,999 tokens in, 607 written) | 123 and 109 s (two passes, 6,453 tokens in, 1,547 written) |
+| Total | 206 and 221 s | 368 and 360 s |
+
+About 150 s more, all of it more text read or written: the topics the first part used to drop (+47 s),
+the final pass writing them (+26 s), and the commitments read from the transcript (+77 s). The prose
+pattern costs nothing measurable: the final pass took 0.075 s per token written before and 0.067 s after,
+prompt included. Leaving the actions to the commitments pass saves the final pass about 550 tokens,
+roughly 35 s: an intermediate run that still wrote them took 132 s for its final pass. The short
+conversations still run one final and one commitments pass; today they took 30 to 82 s each.
+
+**Automated.** `SummaryCompletenessTests` (8; a deterministic model records each pass, XGrammar checks
+the schemas without weights): a part whose reply runs into its limit is read again in halves and parts
+start between passages; the extraction's share of words; a long conversation's commitments checked in
+parts against the transcript, a paraphrase rejected, the final pass's unchecked action replaced, owners
+from the quote and its speaker; parts repeat the two passages before them; owner rules (named, the
+speaker saying "I", a stated owner who is only the speaker, a request, two speakers, a placeholder name,
+"Unknown speaker", a curly apostrophe); a quotation mark after "was a" can't end the body under the new
+schema but could under the old one, and the escaped one can; the final pass's empty actions; a section
+broken off and written again is kept once; a model without structured output still lists actions in the
+summary. `SummaryNotesTests` follow the new prompts; their long conversation now has 2,000 passages whose
+parts write up to their limit, so its evidence is still compressed. `swift test` passed 1,316 XCTest cases
+across the eight bundles (one skipped, as before): Captions 13, Core 422, Devices 119, Intelligence 151,
+Kit 195, Link 74, Live 39, Mac app 303.
+
+**Still to check:** a real meeting of an hour or more (four or more parts, compression), other summary
+models (12B, E4B, Qwen) with the new prompts and schema, and a release build's times.
+
 ## Live captions from every source, and the live follow-ups (2026-10-30)
 
 Live captions now cover every source a recording has, use the library's vocabulary, keep speakers in a
