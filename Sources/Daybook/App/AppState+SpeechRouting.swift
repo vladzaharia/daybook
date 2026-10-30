@@ -11,6 +11,15 @@ struct SpeechRoute: Equatable {
     var transcription: TranscriptionRoute
     var speakerModel: String
     var voiceEmbedder: String?
+
+    /// What routing reads, besides the engines this build has.
+    struct Inputs: Equatable {
+        var catalogRevision: Int
+        var selections: ModelSelections
+        var preferences: ProcessingPreferences
+        var installed: Set<String>
+        var detectSpeakers: Bool
+    }
 }
 
 extension AppState {
@@ -28,9 +37,17 @@ extension AppState {
     }
 
     /// The models a job queued now needs on this Mac (the language check's model is optional).
+    ///
+    /// Worked out once per change of what routes them: each list row and status line asks, through
+    /// `canProcess`, at every redraw, and routing reads the whole catalog.
     var routedRequiredModelIDs: [String] {
+        let inputs = SpeechRoute.Inputs(catalogRevision: catalogRevision, selections: modelSelections, preferences: processingPreferences,
+                                        installed: installedModels, detectSpeakers: detectSpeakers)
+        if let memo = routeMemo, memo.key == inputs { return memo.models }
         let route = speechRoute
-        return [route.transcription.model, summaryModel] + (detectSpeakers ? [route.speakerModel] + [route.voiceEmbedder].compactMap { $0 } : [])
+        let models = [route.transcription.model, summaryModel] + (detectSpeakers ? [route.speakerModel] + [route.voiceEmbedder].compactMap { $0 } : [])
+        routeMemo = (inputs, models)
+        return models
     }
 
     /// A job for `meetingID`, frozen with the routed models, these preferences, and their revisions.

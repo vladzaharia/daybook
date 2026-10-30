@@ -63,6 +63,34 @@ final class SpeechRoutingTests: XCTestCase {
         XCTAssertTrue(state.canProcess)
     }
 
+    func testRoutedModelsAreWorkedOutOncePerChangeOfWhatRoutesThem() throws {
+        let state = try state()
+        state.transcriptionModel = "parakeet/ultra"
+        state.installedModels = ["parakeet/ultra", state.summaryModel, "community-1/offline"]
+        let routed = state.routedRequiredModelIDs
+        XCTAssertEqual(routed, ["parakeet/ultra", state.summaryModel, "community-1/offline"])
+        let kept = try XCTUnwrap(state.routeMemo)
+        XCTAssertTrue(state.canProcess)
+        XCTAssertEqual(state.routeMemo?.key, kept.key, "Every row and status line asks; it's routed once")
+        // Whatever routing reads routes again: speakers, the language, what's installed, the selection, the catalog.
+        state.detectSpeakers = false
+        XCTAssertEqual(state.routedRequiredModelIDs, ["parakeet/ultra", state.summaryModel])
+        state.detectSpeakers = true
+        state.processingPreferences.transcriptionLanguage = "ja"
+        XCTAssertEqual(state.routedRequiredModelIDs.first, "whisper/large-v3-turbo")
+        XCTAssertFalse(state.canProcess, "Japanese needs Whisper downloaded")
+        state.installedModels.insert("whisper/large-v3-turbo")
+        XCTAssertTrue(state.canProcess)
+        state.processingPreferences.transcriptionLanguage = nil
+        state.transcriptionModel = "whisper/large-v3-turbo"
+        XCTAssertEqual(state.routedRequiredModelIDs.first, "whisper/large-v3-turbo")
+        let revision = state.catalogRevision
+        state.modelCatalog = state.modelCatalog
+        XCTAssertEqual(state.catalogRevision, revision + 1)
+        _ = state.routedRequiredModelIDs
+        XCTAssertEqual(state.routeMemo?.key.catalogRevision, revision + 1, "A new catalog routes again")
+    }
+
     func testNemotronJobsGetVoiceProfilesAndLargeGroupsGoToCommunity1() throws {
         let state = try state()
         state.processingPreferences.speakerModelID = "nemotron-3-diarization/offline"
