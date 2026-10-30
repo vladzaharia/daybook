@@ -118,7 +118,11 @@ final class AppState: ObservableObject {
     /// Variant key → the revision a new job freezes (the newest verified one).
     @Published var installedRevisions: [String: String] = [:]
     /// Every model Daybook knows here: built in plus the ones the person added.
-    @Published var modelCatalog: ModelCatalog = .builtIn
+    @Published var modelCatalog: ModelCatalog = .builtIn { didSet { catalogRevision &+= 1 } }
+    /// Bumped whenever the catalog changes: part of the key for the routed models (`routedRequiredModelIDs`).
+    private(set) var catalogRevision = 0
+    /// The routed models and what they were worked out from (AppState+SpeechRouting.swift).
+    var routeMemo: (key: SpeechRoute.Inputs, models: [String])?
     /// The model chosen for each role, by family and variant (docs/models.md).
     @Published var modelSelections: ModelSelections {
         didSet {
