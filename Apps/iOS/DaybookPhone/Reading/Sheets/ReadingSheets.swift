@@ -8,9 +8,10 @@ struct VersionHistoryView: View {
     @ObservedObject var library: LibraryController
     let meetingID: UUID
     private let dismiss = SheetDismiss()
+    @State private var path: [UUID] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if let meeting = library.meeting(meetingID), !meeting.revisions.isEmpty {
                     List {
@@ -41,6 +42,15 @@ struct VersionHistoryView: View {
                             RevisionDetail(library: library, meetingID: meetingID, revision: revision)
                         }
                     }
+                    #if DEBUG
+                    .task {
+                        // `--history-change "Summary written"` opens the newest change with that title, for screenshots.
+                        guard let index = CommandLine.arguments.firstIndex(of: "--history-change"), CommandLine.arguments.indices.contains(index + 1),
+                              let change = meeting.revisions.last(where: { RevisionText.title($0, in: meeting) == CommandLine.arguments[index + 1] })
+                        else { return }
+                        path = [change.id]
+                    }
+                    #endif
                 } else {
                     EmptyPlace(title: "No Changes Yet", systemImage: "clock.arrow.circlepath")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
