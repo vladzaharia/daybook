@@ -6,8 +6,9 @@ import UIKit
 
 /// Debug only: `--demo-library` fills an empty library (use it with `--library <scratch folder>`)
 /// with conversations in every state the reading screens show, for screenshots: transcribed with a
-/// summary, photos, notes, and bookmarks; recorded but not transcribed (with saved live captions);
-/// waiting for a Mac; transcribing; waiting for a recorder's audio; couldn't finish; no speech; audio not on this iPhone; notes only;
+/// summary, photos, notes, bookmarks, and a recorder's recording lined up with it; recorded but not
+/// transcribed (with saved live captions); waiting for a Mac; transcribing; waiting for a recorder's
+/// audio; couldn't finish; no speech; audio not on this iPhone; notes only;
 /// a long title; Personal; a folder with one conversation and an empty one; and one in the Trash.
 /// The audio is generated tone, never a recording. Nothing is written when the library already has
 /// conversations.
@@ -56,7 +57,20 @@ enum DemoLibrary {
         full.highlights = [Highlight(trackID: trackID, time: 14.5, text: "Gate on the conflict fix"), Highlight(trackID: trackID, time: 32)]
         full.tags = ["launch", "beta"]
         full.status = .ready
-        full.revisions = [MeetingRevision(date: now.addingTimeInterval(-5000), field: "notes", oldValue: "Beta date?", newValue: full.notes)]
+        let written = (try? JSONEncoder().encode(full.summary)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        full.revisions = [MeetingRevision(date: now.addingTimeInterval(-5900), field: "summary", oldValue: "", newValue: written),
+                          MeetingRevision(date: now.addingTimeInterval(-5000), field: "notes", oldValue: "Beta date?", newValue: full.notes)]
+        // A Soundcore that recorded along, lined up with this recording by sound.
+        let soundcoreID = UUID()
+        tone(seconds: 38, to: rootURL.appendingPathComponent("Meetings/\(full.id.uuidString)/Originals/REC0042.wav"))
+        full.tracks.append(RecordingTrack(id: soundcoreID, source: .soundcore, relativePath: "Originals/REC0042.wav", fileName: "REC0042.wav",
+                                          createdAt: full.date, duration: 38, offset: 3.4,
+                                          device: DeviceRecordingIdentity(kind: "soundcore.work", serial: "demo-soundcore", recordingID: "42"),
+                                          startedAt: full.date.addingTimeInterval(3.4), alignment: SourceAlignment(method: .audio, offset: 3.4, confidence: 0.92)))
+        full.transcripts.append(TrackTranscript(trackID: soundcoreID, segments: [], modelID: "parakeet/ultra",
+                                                createdAt: now.addingTimeInterval(-6100)))
+        full.alignmentReports = [TrackAlignment(trackID: trackID, method: .reference),
+                                 TrackAlignment(trackID: soundcoreID, method: .audio, offset: 3.4)]
         library.add(full)
         Task {
             for (seconds, hue) in [(16.0, 0.48), (33.0, 0.62)] {

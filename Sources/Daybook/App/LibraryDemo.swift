@@ -175,7 +175,7 @@ enum LibraryDemo {
             meeting.setSummary(MeetingSummary(kind: .general, title: ready,
                 overview: "The launch is on track for two weeks out. Onboarding is done apart from two small QA fixes, the pricing page will lead with the annual plan, and support covers the first week.",
                 sections: [
-                    SummarySection(heading: "Launch checklist", body: "- Onboarding is complete; two QA issues remain in the permissions step.\n- Sam fixes both today."),
+                    SummarySection(heading: "Launch checklist", body: "- Onboarding is complete; two QA issues remain in the permissions step.\n- **Sam** fixes both today."),
                     SummarySection(heading: "Pricing", body: "- The annual plan leads the page.\n- The comparison table changes to match the headline.")
                 ],
                 actionItems: [ActionItem(text: "Fix the two permissions issues QA found", owner: "Sam", completed: true),
