@@ -824,7 +824,9 @@ public enum MeetingSynthesis {
     /// A section's body without the source's own markup copied into it: lines that start as the annotated
     /// transcript's do ("(near N1) Exports ~20 min each", "[02:10] NOTE N1, written by the user…",
     /// "BOOKMARK B1, marked by the user…"), and any "(near N1)" left in a line. Gemma 4 E2B pasted the notes
-    /// and the passages near them into a summary that way, word for word.
+    /// and the passages near them into a summary that way, word for word. The extraction's own way of marking
+    /// what a note adds ("NOTE N2 adds: 'Ben can maybe swap'", which Qwen 3.6 35B A3B carried into a summary)
+    /// reads as the person's notes.
     static func withoutMarkers(_ body: String) -> String {
         let label = #"[NB]\d+(?:, [NB]\d+)*"#
         let marked = try! NSRegularExpression(pattern: #"^\s*(?:[-*•]\s*)?(?:\[[\d:]+\]\s*)?(?:\(near "# + label + #"\)|NOTE N\d+,|BOOKMARK B\d+,)"#)
@@ -832,6 +834,8 @@ public enum MeetingSynthesis {
             marked.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) == nil
         }
         return kept.joined(separator: "\n").replacingOccurrences(of: #"\s*\(near "# + label + #"\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\b(?:NOTE )?N\d+ adds:\s*"#, with: "Your notes add: ", options: .regularExpression)
+            .replacingOccurrences(of: #"\b(?:NOTE )?N\d+ conflicts:\s*"#, with: "Your notes say otherwise: ", options: .regularExpression)
             .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -881,7 +885,9 @@ public enum MeetingSynthesis {
         let transcript = SpokenPassages(source)
         var seenTasks = Set<String>(), seenQuotes = Set<String>()
         let verified = decoded.flatMap(\.actions).compactMap { item -> RestatedCommitments.Item? in
-            let evidence = SpokenPassages.normalized(item.evidence), task = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Qwen 3.5 4B put every quote in quotation marks of its own.
+            let evidence = SpokenPassages.normalized(item.evidence).trimmingCharacters(in: CharacterSet(charactersIn: "\"“” "))
+            let task = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard evidence.count >= 10, let found = transcript.find(evidence), !task.isEmpty,
                   seenQuotes.insert(evidence).inserted, seenTasks.insert(SpokenPassages.normalized(task)).inserted else { return nil }
             return .init(action: ActionItem(text: task, owner: transcript.owner(stated: owner(item.owner), quote: evidence, speaker: found.name)),
