@@ -936,15 +936,50 @@ struct SpokenPassages {
         return name.isEmpty || name.lowercased() == "unknown speaker" ? nil : name
     }
 
-    /// Where `quote` (normalized) is said, with its speaker when one person says all of it; nil when it isn't in the transcript.
+    /// Where `quote` (normalized) is said, with its speaker when one person says all of it; nil when it isn't in the
+    /// transcript. A quote shortened with an ellipsis ("I'll email legal this week. [...] I'll put both questions in the
+    /// same email"), or whose sentences skip what was said between them, is found when each piece is there word for
+    /// word, in order, the gaps between them adding up to no more than 400 characters: the 26B quoted two of a
+    /// three-hour meeting's commitments so ("Diego and I will write the new tracking plan together, by the end of
+    /// February. I'll take the backend and technical events", with Diego's "Yes, end of February." between them).
     func find(_ quote: String) -> Found? {
-        guard let range = text.range(of: quote) else { return nil }
-        let start = text.utf8.distance(from: text.startIndex, to: range.lowerBound)
-        let end = text.utf8.distance(from: text.startIndex, to: range.upperBound)
+        let start: Int, end: Int
+        if let range = text.range(of: quote) {
+            start = text.utf8.distance(from: text.startIndex, to: range.lowerBound)
+            end = text.utf8.distance(from: text.startIndex, to: range.upperBound)
+        } else if let span = pieces(of: quote) {
+            start = text.utf8.distance(from: text.startIndex, to: span.lowerBound)
+            end = text.utf8.distance(from: text.startIndex, to: span.upperBound)
+        } else {
+            return nil
+        }
         guard let first = passages.firstIndex(where: { $0.end > start }) else { return Found(name: nil, passage: passages.count, words: start..<end) }
         let last = passages.firstIndex(where: { $0.end >= end }) ?? first
         let speakers = Set(passages[first...last].map { $0.name?.lowercased() })
         return Found(name: speakers.count == 1 ? passages[first].name : nil, passage: first, words: start..<end)
+    }
+
+    /// Where a quote's pieces (between ellipses, "…", "[...]", and between sentences) are said in order, close
+    /// together; nil for a quote of one piece, or when they aren't.
+    private func pieces(of quote: String) -> Range<String.Index>? {
+        let marked = quote.replacingOccurrences(of: #"\s*[\[(]?\s*(?:\.\.\.|…)\s*[\])]?\s*"#, with: "\u{0}", options: .regularExpression)
+            .replacingOccurrences(of: #"(?<=[.?!])\s+"#, with: "\u{0}", options: .regularExpression)
+        let pieces = marked.components(separatedBy: "\u{0}").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard marked != quote, let first = pieces.first, pieces.contains(where: { $0.count >= 10 }) else { return nil }
+        let length = pieces.reduce(0) { $0 + $1.utf8.count }
+        // From each place the first piece is said, the rest in order after it.
+        var from = text.startIndex
+        while let opening = text.range(of: first, range: from..<text.endIndex) {
+            var last = opening, complete = true
+            for piece in pieces.dropFirst() {
+                guard let range = text.range(of: piece, range: last.upperBound..<text.endIndex) else { complete = false; break }
+                last = range
+            }
+            guard complete else { return nil }
+            if text.utf8.distance(from: opening.lowerBound, to: last.upperBound) <= length + 400 { return opening.lowerBound..<last.upperBound }
+            from = opening.upperBound
+        }
+        return nil
     }
 
     /// The owner a quote shows: of the stated people, those named in the quote or who are its speaker,
