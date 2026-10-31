@@ -150,6 +150,10 @@ final class StructuredOutputTests: XCTestCase {
         let short = try MeetingSynthesis.commitmentsPrompt("[00:01] Mina: I'll send it tomorrow.", parts: 1, brief: true)
         XCTAssertTrue(full.contains("Send the agenda tomorrow"))
         XCTAssertFalse(short.contains("agenda"), "No example a small model could copy as a task")
+        // E2B listed the process a customer described, and a question, as commitments.
+        XCTAssertTrue(short.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            .contains("Do not include suggestions, questions, hypothetical plans, how things are done today, or what someone needs or wants."))
+        XCTAssertTrue(short.contains("proving the assignment: the person saying they will do it, or agreeing to it."))
         for prompt in [full, short] {
             XCTAssertTrue(prompt.contains("never \"it\" or \"that\""))
             XCTAssertTrue(prompt.contains("later dropped or put on hold"))

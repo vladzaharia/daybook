@@ -307,13 +307,18 @@ public enum MeetingSynthesis {
     /// wording with one sentence for what the full prompt spells out: Gemma 4 E2B kept 1 of the 1:1's 6
     /// commitments and 10 of the weekly's 38 with the full prompt, 5 and 17 with this one, while it cost
     /// Gemma 4 E4B and 12B a few (docs/validation.md). It has no example a small model could copy as a task.
+    /// It says the quote is the person taking the task on, and leaves out how things are done today and what
+    /// someone needs: without that, E2B listed 8 for the customer interview's one commitment (the process
+    /// Elena described, a question, what security would want), and with it 1, keeping 19 of the weekly's
+    /// 38 rather than 17 (docs/validation.md, 2026-10-31).
     static func commitmentsPrompt(_ part: String, parts: Int, brief: Bool = false) throws -> String {
         let scope = parts == 1 ? "evidence" : "part of a longer conversation"
         let rules = brief ? """
         Extract ALL explicit agreed tasks and commitments from the following \(scope). A named person saying they will do something
         or being assigned a task is a commitment. Include each concrete task, the stated owner (or null), and an exact short quote from
-        the original source proving the assignment. Copy the quote exactly; do not add timestamps or words. Do not invent tasks.
-        Do not include suggestions, questions, or hypothetical plans. Write each task so it reads on its own, never "it" or "that", and
+        the original source proving the assignment: the person saying they will do it, or agreeing to it. Copy the quote exactly; do not
+        add timestamps or words. Do not invent tasks. Do not include suggestions, questions, hypothetical plans, how things are done today,
+        or what someone needs or wants. Write each task so it reads on its own, never "it" or "that", and
         leave out anything later dropped or put on hold.
         """ : """
         Extract ALL explicit agreed tasks and commitments from the following \(scope).
