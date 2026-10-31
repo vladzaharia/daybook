@@ -255,6 +255,18 @@ final class SummaryRepairTests: XCTestCase {
                                               "Elena found $300 a month too much."])
         // Prose that mentions a note keeps it.
         XCTAssertEqual(MeetingSynthesis.withoutMarkers("Your notes add that the renewal is in March."), "Your notes add that the renewal is in March.")
+        // Qwen 3.6 35B A3B carried the extraction's marking of a note into the weekly's summary.
+        XCTAssertEqual(MeetingSynthesis.withoutMarkers("Ravi could do it but would be two weeks in a row. NOTE N2 adds: 'Ben can maybe swap Dec 3 - ask him after.' Aisha to post in the team channel today."),
+                       "Ravi could do it but would be two weeks in a row. Your notes add: 'Ben can maybe swap Dec 3 - ask him after.' Aisha to post in the team channel today.")
+        XCTAssertEqual(MeetingSynthesis.withoutMarkers("- N3 conflicts: only two reqs, per Mei's email"), "- Your notes say otherwise: only two reqs, per Mei's email")
+    }
+
+    func testAQuoteInItsOwnQuotationMarksIsStillFound() throws {
+        // Qwen 3.5 4B's 1:1: every quote wrapped in quotation marks, so none was found and the summary had no actions.
+        let source = "[00:10] Sam: I'll ask Ines about design time this week.\n[00:20] Alex: That's fair. I'll restructure it for the customer advisory board version."
+        let reply = #"{"actions":[{"text":"Ask Ines about design time this week","owner":"Sam","evidence":"\"I'll ask Ines about design time this week.\""},"#
+            + #"{"text":"Restructure the demo for the advisory board","owner":"Alex","evidence":"“I'll restructure it for the customer advisory board version.”"}]}"#
+        XCTAssertEqual(MeetingSynthesis.verifiedActions(reply, source: source)?.map(\.owner), ["Sam", "Alex"])
     }
 
     func testSectionBulletsWrittenAsAListBecomeBullets() {
