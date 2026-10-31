@@ -1,5 +1,177 @@
 # Validation record
 
+## Long summaries on the other models, and a three-hour meeting (2026-10-31)
+
+The long-summary fixes below (#34) were checked on Gemma 4 26B A4B only. The same check on the catalog's
+other summary models, and on a meeting long enough to compress, found that #34 broke the 12B outright,
+made E2B four times slower, and never finished a three-hour meeting on the 26B. All are fixed
+([model runtime](model-runtime.md), "Summarization"; [models](models.md), "A new MLX language model family").
+
+**Setup.** The same harness, the same four conversations, notes, and bookmarks, scored the same way.
+Gemma 4 12B, E4B, and E2B were downloaded through the app's store (`LocalIntelligenceRuntime.download`)
+into a scratch models folder, every file's SHA-256 or git object ID checked again afterwards, and deleted
+when done; Gemma 4 26B A4B and Qwen 2.5 7B and 1.5B are the installed copies, used read-only through
+symlinks from that folder (the installed folder's listing unchanged afterwards). "Before" is e781d1c,
+"#34" is main with the fixes below (775edde), "now" is this change. Decoding is greedy, so a run repeats
+exactly. The three-hour meeting is synthetic: a mobile team's Q1 planning offsite, 26,022 words in 1,229
+passages (185.8 minutes at 2.5 words a second, 47,832 tokens), 22 topics, 66 commitments (24 in the last
+hour), 25 traps (suggestions nobody took up, tasks put on hold, hypotheticals), 6 notes (2 that repeat
+what was said, 3 that add something, 1 that conflicts), and 3 bookmarks. Its first hour (379 passages,
+8 topics, 20 commitments, 2 notes) is the hour-long meeting.
+
+**What broke with #34, and why.**
+
+- **12B, no summary at all.** Its chat template ends the prompt with an empty thought block when thinking
+  is off; on the weekly's second part it answered with nothing but more of them, `<|channel>thought
+  <channel|>` for 1,800 tokens, which removing thoughts left empty, so the whole summary failed ("The
+  local model returned no summary").
+- **12B, six minutes on a three-minute meeting.** Constrained and greedy, with no repetition penalty, the
+  launch's final pass wrote "Note: The group agreed on the pricing structure." until 2,954 of its 3,000
+  tokens (357 s; before, its limit was 1,800). E2B looped the same way: the weekly's terms ("hit rate",
+  "read load", …) and its commitments ("Fix the checkout test flakiness" thirty times), so the weekly took
+  1,037 s against 263 s before.
+- **E2B, fewer commitments.** The fuller commitments prompt found 1 of the 1:1's 6 (7 listed before) and
+  10 of the weekly's 38; schema and prompt tried separately, the prompt alone made the difference.
+- **E2B pasted notes with their markers** into the customer interview's sections ("(near N1) Exports ~20
+  min each, run daily").
+- **Qwen 2.5 1.5B copied the prompt's example** as a commitment: "Send the agenda tomorrow".
+- **26B, a three-hour meeting never finished.** Eleven parts at "at most 400 words" (800 tokens) ran into
+  their limit 7 times in 25 extraction passes and were read again in halves; compression was allowed to
+  write as much as it read and read cut-off batches again in halves at the same limit, so the evidence
+  grew: 16,500 tokens after extraction, 19,200 after the first round (13 passes, 5 at their limit), 21,100
+  after the second (15 passes). Stopped after 2 h 10 min in the third round, never having reached the
+  final pass (part of that time it shared the GPU with another of these runs, at loads of 25 to 76).
+- **Already broken before, fixed too:** Qwen 2.5 7B wrote a section's bullets as a list of strings in 3 of
+  its 6 short summaries, so the whole reply landed in the overview as raw JSON.
+
+**Changes.**
+
+- A pass whose reply ends in the same stretch of 12 to 2,000 characters four times in a row stops
+  (`MeetingSynthesis.RepetitionGuard`). A constrained reply is cut back to its last complete section,
+  commitment, or term and its JSON closed (`salvagedJSON`); with nothing complete before the loop the pass
+  runs free-form, with its repetition penalty. A free-form reply is cut back to where it began repeating.
+  A JSON reply broken off at its limit keeps its complete sections and commitments the same way.
+- With thinking off, a free-form reply can't open a thought block: the token that would (`<|channel>`,
+  `<think>`) is masked.
+- `engineOptions.commitments: "brief"` (Gemma 4 E2B, Qwen 2.5 1.5B) asks for commitments in the earlier,
+  shorter wording plus one sentence ("Write each task so it reads on its own, never "it" or "that", and
+  leave out anything later dropped or put on hold"), with no example to copy. An install now runs with
+  the catalog's current engine options; its receipt keeps those it was installed with.
+- Budgets follow the context window (`MeetingSynthesis.Budget`): with a known window any pass may write
+  up to 16,384 tokens (less if the prompt leaves less room; `engineOptions.outputTokens` can set less),
+  the final pass reads up to 24,000 tokens of evidence (12,000 with Qwen 2.5's 32K), and a conversation
+  longer than that is read in parts of 12,000 tokens (8,000). What the 26B was tuned on stays: a
+  conversation up to 5,400 tokens is read whole, a longer one up to the evidence budget in parts of 4,800
+  and 900 words, and commitments in parts of 5,400. Reading the weekly whole with commitments in one pass
+  (an intermediate version) lost caching and kept 31 of the 38 commitments (36 in parts). Compression
+  writes at most half of what each pass reads, halves included, so every round shrinks the evidence.
+- Bullets written as a list of strings read as bullets; lines copied from the source with their markers
+  ("(near N1) …", "NOTE N1, …") are left out of the sections.
+
+**Four conversations, per model.** Weekly topics of 13 and commitments of 38 (right owner), the three short
+conversations' commitments of 14 (right owner), notes that only repeat what was said given "Your notes
+add" (of 5; fewer is better), notes that add something attributed to the notes (of 5; in parentheses, how
+many stated as if said), conflicts mentioned (of 2), and the weekly's time with the load average when it
+started. Loads ranged from 16 to 215 across these runs, from other agents' builds and tests and, before
+the owner asked, from two of these runs sharing the GPU; times taken more than about 2× apart in load
+aren't comparable.
+
+| Model | Code | Weekly topics | Weekly commitments | Weekly time (load) | Short commitments | Repeats as "notes add" | Adding notes (as fact) | Conflicts |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 26B A4B | before | 8 | 0 | 206, 221 s (17–67) | 14 (1) | 3 | 5 of 6 | 1 |
+| | #34 | 13 | 36 (36) | 368, 360 s (17–67) | 12 (11) | 1 | 5 (0) | 2 |
+| | now | 13 | 36 (36) | 402 s (56) | 12 (11) | 1 | 5 (0) | 2 |
+| 12B | before | 7 | 0 | 596 s (66) | 9 (0) | 3 | 4 (0) | 2 |
+| | #34 | failed | failed | failed | 11 (9) | 4 | 4 (0) | 1 |
+| | now | 13 | 28 (27) | 409 s (16) | 11 (9) | 3 | 5 (0) | 1 |
+| E4B | before | 5 | 0 | 213 s (45) | 10 (1) | 0 | 0 (0) | 0 |
+| | #34 | 12 | 26 (24) | 320 s (65) | 11 (9) | 0 | 1 (1) | 0 |
+| | now | 12 | 26 (24) | 231 s (55) | 11 (9) | 0 | 1 (1) | 0 |
+| E2B | before | 5 | 5 (4) | 263 s (198) | 10 (2) | 0 | 0 (0) | 2 |
+| | #34 | 7 | 10 (10) | 1,037 s (83) | 6 (4) | 0 | 0 (0) | 1 |
+| | now | 10 | 17 (14) | 318 s (43) | 9 (7) | 0 | 0 (0) | 1 |
+| Qwen 2.5 7B | before | 3 | 0 | 149 s (215) | 9 (3) | 0 | 0 (1) | 0 |
+| | #34 | 12 | 19 (17) | 240 s (111) | 7 (7) | 0 | 0 (2) | 0 |
+| | now | 12 | 19 (17) | 197 s (62) | 7 (7) | 0 | 0 (2) | 0 |
+| Qwen 2.5 1.5B | before | 2 | 0 | 73 s (25) | 2 (0) | 0 | 0 (2) | 0 |
+| | #34 | 6 | 3 (0) | 62 s (31) | 2 (1) | 0 | 0 (2) | 0 |
+| | now | 6 | 0 | 180 s (23) | 4 (2) | 0 | 0 (2) | 0 |
+
+The 26B's before and #34 rows are the section below's runs (its short conversations scored there by hand).
+The 26B, E4B, and Qwen 7B now run #34's passes word for word, only allowed to write more (the token counts
+of every pass match), so their quality is #34's; their time differs only with load. Before these changes
+the 12B and E2B rows were: 12B's weekly failed and its launch took 376 s, now 94 s (the constrained loop
+is stopped at once and the pass runs free-form); E2B's weekly took 1,037 s, now 318 s. Qwen 2.5 1.5B's
+weekly took 644 s with the loop guard looking back 400 characters (its commitments pass copied ten passages
+over and over for 16,384 tokens), 180 s with 2,000.
+
+Also broken, before or #34: Qwen 7B's raw-JSON summaries (3 of 6 short ones before, 1 with #34; none now),
+E2B's pasted markers (1 with #34; none now). The brief commitments wording costs E2B noise in the customer
+interview: 8 listed for its 1 commitment, the process Elena described ("Paste the export into a Google
+Sheet…") and a question ("Walk me through…"), where the full wording listed 1. Qwen 2.5 1.5B is not
+usable for summaries either way: before, #34, and now it misses most topics and commitments, and in the
+launch it wrote that the launch is May 12 (the note's question, not the decision).
+
+**Three-hour meeting.** The 26B, #34 against now, then E4B now. "Kept" commitments match a commitment's
+task; owners in parentheses. Notes: N1 and N6 repeat what was said, N2, N3, N5 add something, N4
+conflicts (marketing's March 3 against the April 7 that was said).
+
+| | 26B, #34 | 26B, now | E4B, now |
+| --- | --- | --- | --- |
+| Passes | 56 before it was stopped, in compression's third round | 15: 5 extraction, final, 9 commitments | 15 |
+| Time | over 2 h 10 min, unfinished | 1,305 s (21.8 min; load 19–50) | 759 s (12.6 min; load 47–58) |
+| Passes at their limit | 20 of 56 | 0 | 0 |
+| Topics, of 22 | – | 22 | 14 |
+| Commitments, of 66 | – | 66 (66), 129 listed | 30 (29), 36 listed |
+| Traps listed, of 25 | – | 0 | 0 |
+| Notes | – | N2, N3 added as the notes'; N4 beside the April 7 that was said, not called a conflict; N1 (repeats) given "Your notes add"; N5 left out | none mentioned |
+| Peak MLX memory (weights included) | – | 15.5 GB | 5.0 GB |
+
+An intermediate version that read commitments in two parts of 24,000 tokens kept 60 of the 66 and listed
+77; in parts of 5,400 it keeps all 66 but lists 129: the recap at the end of the meeting, and the parts'
+overlap, restate most commitments in other words ("Complete the storage spike" after "Spike storage for
+iOS and report back next Thursday"), and each restatement is kept as its own item. Excerpts, now: "Android
+ANR rate is 0.9% of daily sessions (Google's threshold is 0.47%). Target is under 0.4% by March."; "Your
+notes add that the Flagpost quote is only valid until Jan 31."; "Ask Wen on the data team to confirm the
+list of unused events by Friday (Nadia)"; "Write the customer email about the update and send it two weeks
+before March first (Hana)".
+
+**An hour-long meeting** (the offsite's first hour, 26B). #34 and now run the same 8 passes: 4 extraction
+parts of 4,800 tokens, the final pass, and 3 commitments passes. #34's parts, at 742 words and 1,484
+tokens, stayed under their limit, so nothing was read again in halves or compressed. Both keep all 8
+topics and all 20 commitments with their owners (22 listed); N2 is added as the notes' in both, and now
+N1, which repeats what was said, is given "Your notes add" too. Now each part may write 900 words (its
+share of the larger evidence budget, capped at a fifth of what it reads), so it writes 8,223 tokens against
+7,825. Time: 626 s for #34 (load 22 to 40), 994 s now (load 36 to 24, peak MLX memory 15.3 GB); the
+tokens differ by 5% and the rest is load: the same 3,277-token part took 68 s in one run and 281 s in the
+other. An hour-long meeting costs about what it did with #34, 10 to 17 minutes on this loaded Mac; what
+changed is a longer one, which #34 couldn't finish and now takes 22 minutes for three hours.
+
+**Memory.** Gemma 4 keeps full attention in a few layers only (6 KB a token of KV cache for E2B, 16 KB for
+E4B and 12B, 20 KB for 26B A4B, from their configs), so 40,000 tokens take under 1 GB beside the weights:
+the 26B peaked at 15.5 GB of MLX memory and E4B at 5.0 GB on the three-hour meeting, weights included.
+Qwen 2.5 7B takes 56 KB a token, under 2 GB at its whole 32K window. Each tier's models fit their tier
+with 16,384-token passes, so no built-in variant sets `outputTokens`. The iPhone doesn't link
+DaybookIntelligence and summarizes nothing.
+
+**Automated.** `SummaryRepairTests` (16): a reply repeating a sentence, empty thought blocks, or a long
+stretch is stopped and cut back to where it began; ordinary summaries and commitment lists aren't taken
+for loops; a loop in the terms keeps every section; a summary broken off mid-section keeps its complete
+sections; a commitments reply broken off keeps its complete commitments; nothing is salvaged without a
+complete element; bullets as a list; pasted markers left out; the brief prompt for a model marked brief;
+budgets from the context window and the catalog; a long conversation in parts of 12,000 tokens and
+commitments in parts of 5,400; a meeting the evidence budget holds read in the same passes as before;
+compression writing at most half what it reads even when the model writes all it may; a pass never asking
+for more than the window holds. `RuntimeResidencyTests`: an install runs with the catalog's current engine
+options. `StructuredOutputTests`: the models marked brief, and the two prompts. `swift test` passed 1,343 XCTest cases
+across the eight bundles (one skipped, as before): Captions 13, Core 424, Devices 119, Intelligence 169, Kit
+201, Link 74, Live 39, Mac app 304.
+
+**Still to check:** a release build's times on an unloaded Mac (every time here is a debug build on a
+shared, loaded one); real recordings of an hour or more; restatements of a commitment kept once; Qwen 3.5
+4B and 9B, Qwen 3.6 35B A3B, and Gemma 4 31B 8-bit, which weren't run; E2B and E4B on a compact Mac's
+memory and speed.
+
 ## Long summaries: every topic, commitment, owner, and sentence (2026-10-30)
 
 The real-model check below found that a long conversation's summary lost topics, commitments, owners,
