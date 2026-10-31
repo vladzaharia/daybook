@@ -104,20 +104,74 @@ final class SummaryRepairTests: XCTestCase {
 
     // MARK: Brief commitments
 
-    /// Writes a summary and no commitments, recording each prompt.
+    /// Writes a summary and no commitments, recording each prompt and its limit; a word is a token.
     private final class BriefModel: SynthesisModel, @unchecked Sendable {
-        let supportsStructuredOutput = true, briefCommitments: Bool
+        let supportsStructuredOutput = true, briefCommitments: Bool, contextLength: Int?, outputTokens: Int?
         private let lock = NSLock()
-        private var _prompts: [String] = []
-        var prompts: [String] { lock.withLock { _prompts } }
-        init(brief: Bool) { briefCommitments = brief }
+        private var _passes: [(prompt: String, maxTokens: Int)] = []
+        var prompts: [String] { lock.withLock { _passes.map(\.prompt) } }
+        var passes: [(prompt: String, maxTokens: Int)] { lock.withLock { _passes } }
+        init(brief: Bool = false, context: Int? = nil, output: Int? = nil) { briefCommitments = brief; contextLength = context; outputTokens = output }
         func encode(_ text: String) async -> [Int] { text.split(whereSeparator: \.isWhitespace).map { _ in 0 } }
         func decode(_ tokens: [Int]) async -> String { "" }
         func respond(instructions: String, prompt: String, maxTokens: Int) async throws -> String { try await respond(instructions: instructions, prompt: prompt, schema: "", maxTokens: maxTokens) }
         func respond(instructions: String, prompt: String, schema: String, maxTokens: Int) async throws -> String {
-            lock.withLock { _prompts.append(prompt) }
-            return prompt.hasPrefix("Extract ALL") ? #"{"actions":[]}"# : #"{"kind":"general","title":"T","overview":"O.","sections":[],"actionItems":[],"terms":[]}"#
+            lock.withLock { _passes.append((prompt, maxTokens)) }
+            if prompt.hasPrefix("Extract ALL") { return #"{"actions":[]}"# }
+            if prompt.hasPrefix("Extract concise") || prompt.hasPrefix("Compress") { return "Evidence." }
+            return #"{"kind":"general","title":"T","overview":"O.","sections":[],"actionItems":[],"terms":[]}"#
         }
+    }
+
+    /// A conversation of `count` passages of 14 words each.
+    private func transcript(_ count: Int) -> String {
+        (0..<count).map { String(format: "[%02d:%02d] Mei: We went over routine item number %d for the quarterly review today.", $0 / 60, $0 % 60, $0) }
+            .joined(separator: "\n")
+    }
+
+    // MARK: Budgets
+
+    func testALargeContextWindowReadsALongConversationInFewerLongerPasses() async throws {
+        let long = transcript(2_200)   // About 33,000 tokens.
+        let small = BriefModel(), large = BriefModel(context: 262_144)
+        for model in [small, large] {
+            _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: long, notes: "", template: .auto, glossary: [], progress: { _ in })
+        }
+        let parts = { (model: BriefModel) in model.passes.filter { $0.prompt.hasPrefix("Extract concise") } }
+        let commitments = { (model: BriefModel) in model.passes.filter { $0.prompt.hasPrefix("Extract ALL") } }
+        XCTAssertGreaterThanOrEqual(parts(small).count, 7, "Parts of 4,800 tokens")
+        XCTAssertTrue(parts(small).allSatisfy { $0.maxTokens == MeetingSynthesis.extractionWords(parts: parts(small).count) * 2 })
+        XCTAssertEqual(parts(large).count, 3, "Parts of 12,000 tokens")
+        XCTAssertEqual(commitments(large).count, 2, "Commitments in parts of 24,000 tokens")
+        XCTAssertTrue(large.passes.allSatisfy { $0.maxTokens == 16_384 }, "Every pass may write 16,384 tokens; it stops when it's done")
+        XCTAssertEqual(small.passes.last?.maxTokens, MeetingSynthesis.actionTokens)
+        XCTAssertFalse(large.passes.contains { $0.prompt.hasPrefix("Compress") }, "The parts' evidence fits the final pass")
+    }
+
+    func testAPassNeverAsksForMoreThanTheWindowHolds() async throws {
+        // An 8,192-token window with a 5,000-token conversation: the final pass may write what's left.
+        let model = BriefModel(context: 8_192)
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: transcript(350), notes: "", template: .auto, glossary: [], progress: { _ in })
+        let final = try XCTUnwrap(model.passes.first { $0.prompt.hasPrefix("Write a concise summary") })
+        let promptTokens = (MeetingSynthesis.instructions + final.prompt).split(whereSeparator: \.isWhitespace).count
+        XCTAssertEqual(final.maxTokens, 8_192 - promptTokens - 1_024)
+        XCTAssertLessThan(final.maxTokens, MeetingSynthesis.finalTokens)
+    }
+
+    func testBudgetsFollowTheContextWindowAndTheCatalogsLimit() {
+        XCTAssertEqual(MeetingSynthesis.Budget(contextLength: nil), .standard)
+        XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 8_192), .standard)
+        let qwen = MeetingSynthesis.Budget(contextLength: 32_768), gemma = MeetingSynthesis.Budget(contextLength: 262_144)
+        XCTAssertEqual([qwen.evidence, qwen.part, qwen.output], [12_000, 8_000, 16_384])
+        XCTAssertEqual([gemma.evidence, gemma.part, gemma.output], [24_000, 12_000, 16_384])
+        XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 262_144, outputTokens: 8_192).output, 8_192)
+        XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 262_144, outputTokens: 99_999).output, 16_384)
+        // Compression writes at most half what it reads, so every round shrinks the evidence.
+        XCTAssertEqual(gemma.compressionTokens(words: 2_400, reading: 12_000), 6_000)
+        XCTAssertEqual(gemma.compressionTokens(words: 400, reading: 3_000), 1_500)
+        XCTAssertEqual(MeetingSynthesis.Budget.standard.compressionTokens(words: 600, reading: 4_800), 1_200)
+        XCTAssertEqual(gemma.words(parts: 4), 2_400)
+        XCTAssertEqual(gemma.words(parts: 40), 400)
     }
 
     func testAModelMarkedBriefGetsTheShorterCommitmentsPrompt() async throws {

@@ -14,8 +14,9 @@ import MLXVLM
 ///
 /// Version 2 (mlx-swift-lm 3.32.3) adds Gemma 4 (`gemma4`, `gemma4_unified`) and Qwen 3.5/3.6
 /// (`qwen3_5`, `qwen3_5_moe`), constrained JSON output for variants that declare
-/// `structuredOutput`, and the `thinking` engine option (`commitments: "brief"`, read by summaries, asks
-/// the commitments pass in fewer words, for small models). Version 3 serves `imageDescription` too:
+/// `structuredOutput`, and the `thinking` engine option (summaries also read `commitments: "brief"`, which
+/// asks the commitments pass in fewer words, and `outputTokens`, the most a pass may write, below its
+/// default from the context window). Version 3 serves `imageDescription` too:
 /// a variant that declares the role (and `imageInput`) is loaded through MLXVLM to caption photos
 /// (`MLXVisionDescriber`), from the same install that writes summaries.
 public struct MLXLanguageEngine: ModelEngine {
@@ -115,6 +116,8 @@ public struct MLXLanguageEngine: ModelEngine {
         return MLXSummarizer(container: container, structuredOutput: installation.capabilities.structuredOutput == true,
                              chatTemplateContext: Self.chatTemplateContext(engineOptions: installation.engineOptions),
                              briefCommitments: installation.engineOptions["commitments"] == "brief",
+                             contextLength: installation.capabilities.contextLength,
+                             outputTokens: installation.engineOptions["outputTokens"].flatMap(Int.init),
                              loadSeconds: Date().timeIntervalSince(started))
     }
 }
@@ -126,9 +129,10 @@ final class MLXSummarizer: Summarizing, @unchecked Sendable {
     private let loadSeconds: Double
 
     init(container: ModelContainer, structuredOutput: Bool, chatTemplateContext: [String: any Sendable]?, briefCommitments: Bool,
-         loadSeconds: Double) {
+         contextLength: Int?, outputTokens: Int?, loadSeconds: Double) {
         model = MLXSynthesisModel(container: container, supportsStructuredOutput: structuredOutput,
-                                  chatTemplateContext: chatTemplateContext, briefCommitments: briefCommitments)
+                                  chatTemplateContext: chatTemplateContext, briefCommitments: briefCommitments,
+                                  contextLength: contextLength, outputTokens: outputTokens)
         self.loadSeconds = loadSeconds
     }
 
@@ -169,12 +173,17 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
     func resetStatistics() { lock.withLock { _statistics = GenerationStatistics() } }
 
     let briefCommitments: Bool
+    let contextLength: Int?
+    let outputTokens: Int?
 
-    init(container: ModelContainer, supportsStructuredOutput: Bool, chatTemplateContext: [String: any Sendable]?, briefCommitments: Bool = false) {
+    init(container: ModelContainer, supportsStructuredOutput: Bool, chatTemplateContext: [String: any Sendable]?, briefCommitments: Bool = false,
+         contextLength: Int? = nil, outputTokens: Int? = nil) {
         self.container = container
         self.supportsStructuredOutput = supportsStructuredOutput
         self.chatTemplateContext = chatTemplateContext
         self.briefCommitments = briefCommitments
+        self.contextLength = contextLength
+        self.outputTokens = outputTokens
     }
 
     func encode(_ text: String) async -> [Int] { await container.encode(text) }
