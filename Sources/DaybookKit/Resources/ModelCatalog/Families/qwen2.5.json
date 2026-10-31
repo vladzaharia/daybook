@@ -34,7 +34,8 @@
             ]
           },
           "engineOptions": {
-            "architecture": "qwen2"
+            "architecture": "qwen2",
+            "commitments": "brief"
           },
           "supersededBy": "gemma-4/e2b-4bit",
           "homepage": "https://huggingface.co/mlx-community/Qwen2.5-1.5B-Instruct-4bit",

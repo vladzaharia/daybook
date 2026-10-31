@@ -36,11 +36,11 @@ enum SyntheticModels {
     /// One family with one variant and the given revisions.
     static func manifest(family: String = "toy", engine: ModelEngineID = "toyEngine", roles: [ModelRole] = [.transcription],
                          variant: String = "small", name: String = "Toy Small", revisions: [ModelRevisionEntry],
-                         capabilities: ModelCapabilities = .init(), minimumEngineVersion: Int? = nil,
+                         capabilities: ModelCapabilities = .init(), engineOptions: [String: String] = [:], minimumEngineVersion: Int? = nil,
                          license: ModelLicense? = ModelLicense(id: "MIT", name: "MIT License", url: "https://example.com/license", allowsCommercialUse: true)) -> ModelManifest {
         ModelManifest(families: [ModelFamilyEntry(
             id: family, name: "Toy", engine: engine, roles: roles, license: license,
-            variants: [ModelVariantEntry(id: variant, name: name, capabilities: capabilities,
+            variants: [ModelVariantEntry(id: variant, name: name, capabilities: capabilities, engineOptions: engineOptions,
                                          minimumEngineVersion: minimumEngineVersion, revisions: revisions)])])
     }
 

@@ -142,6 +142,22 @@ final class StructuredOutputTests: XCTestCase {
         XCTAssertNil(MLXLanguageEngine.chatTemplateContext(engineOptions: ["architecture": "qwen2"]), "Qwen 2.5 has no thinking flag")
     }
 
+    func testTheSmallestModelsAskForCommitmentsBriefly() throws {
+        // Gemma 4 E2B kept far fewer commitments with the full prompt; the others did as well or better with it.
+        let brief = ModelCatalog.builtIn.models.filter { $0.engineOptions["commitments"] == "brief" }.map(\.key).sorted()
+        XCTAssertEqual(brief, ["gemma-4/e2b-4bit", "qwen2.5/1.5b-4bit"])
+        let full = try MeetingSynthesis.commitmentsPrompt("[00:01] Mina: I'll send it tomorrow.", parts: 1)
+        let short = try MeetingSynthesis.commitmentsPrompt("[00:01] Mina: I'll send it tomorrow.", parts: 1, brief: true)
+        XCTAssertTrue(full.contains("Send the agenda tomorrow"))
+        XCTAssertFalse(short.contains("agenda"), "No example a small model could copy as a task")
+        for prompt in [full, short] {
+            XCTAssertTrue(prompt.contains("never \"it\" or \"that\""))
+            XCTAssertTrue(prompt.contains("later dropped or put on hold"))
+            XCTAssertTrue(prompt.hasSuffix(#"{"recorded_transcript":"[00:01] Mina: I'll send it tomorrow."}"#))
+        }
+        XCTAssertLessThan(short.count, full.count)
+    }
+
     func testEnginesRecordTheUpgradedRuntimes() {
         XCTAssertEqual(MLXLanguageEngine().descriptor.versionString, "3 (mlx-swift-lm 3.32.3)")
         XCTAssertEqual(WhisperKitEngine().descriptor.versionString, "2 (argmax-oss-swift 1.1.1)")

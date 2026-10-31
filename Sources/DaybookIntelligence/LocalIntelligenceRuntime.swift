@@ -422,7 +422,8 @@ public actor LocalIntelligenceRuntime {
 
     private func resolve(_ reference: ModelReference, for role: ModelRole) async throws -> (ModelInstallation, any ModelEngine) {
         let variantKey: String
-        if let model = catalog.model(reference.id) {
+        let listed = catalog.model(reference.id)
+        if let model = listed {
             guard model.serves(role) else { throw LocalIntelligenceError.unsupportedRole(model: reference.id, role: role.rawValue) }
             let availability = model.availability(engines: engines)
             guard availability.isAvailable else { throw LocalIntelligenceError.unavailable(model: model.key, reason: availability.label ?? "") }
@@ -443,7 +444,12 @@ public actor LocalIntelligenceRuntime {
         }
         do { try engine.validate(installed.installation) }
         catch { throw LocalIntelligenceError.modelNotInstalled(reference.id) }
-        return (installed.installation, engine)
+        // Engine options are how the engine runs the files, not the files: the catalog's current ones apply to
+        // an install made before they changed (a receipt keeps those of its day).
+        guard let listed, listed.engineOptions != installed.installation.engineOptions else { return (installed.installation, engine) }
+        var receipt = installed.installation.receipt
+        receipt.engineOptions.merge(listed.engineOptions) { _, current in current }
+        return (ModelInstallation(receipt: receipt, directory: installed.installation.directory), engine)
     }
 
     private func release(_ role: ModelRole) async {

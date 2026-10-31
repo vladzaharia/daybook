@@ -16,6 +16,12 @@ public protocol SynthesisModel: Sendable {
     /// A reply that always parses as JSON matching `schema`. Throws when constrained generation
     /// can't run or finish; the caller then falls back to a free-form reply.
     func respond(instructions: String, prompt: String, schema: String, maxTokens: Int) async throws -> String
+    /// The variant's `engineOptions["commitments"] == "brief"`: the commitments pass asks in fewer words.
+    var briefCommitments: Bool { get }
+}
+
+extension SynthesisModel {
+    public var briefCommitments: Bool { false }
 }
 
 public enum MeetingSynthesis {
@@ -215,7 +221,7 @@ public enum MeetingSynthesis {
             progress(.init(0.93 + 0.06 * Double(index) / Double(parts.count),
                            parts.count == 1 ? "Checking explicit commitments against the source"
                                             : "Checking commitments in part \(index + 1) of \(parts.count)"))
-            let actionPrompt = try commitmentsPrompt(part, parts: parts.count)
+            let actionPrompt = try commitmentsPrompt(part, parts: parts.count, brief: model.briefCommitments)
             actionResponses.append(try await respond(model: model, prompt: actionPrompt, maxTokens: actionTokens, schema: actionSchema))
         }
         var checkedSummary = result.summary
@@ -232,16 +238,29 @@ public enum MeetingSynthesis {
                      rawResponse: response + "\n\nAction verification:\n" + actionResponses.joined(separator: "\n"), warnings: checkedWarnings)
     }
 
-    /// The commitments pass's prompt for one of `parts` parts of the transcript.
-    static func commitmentsPrompt(_ part: String, parts: Int) throws -> String {
-        """
-        Extract ALL explicit agreed tasks and commitments from the following \(parts == 1 ? "evidence" : "part of a longer conversation").
+    /// The commitments pass's prompt for one of `parts` parts of the transcript. `brief` is the earlier
+    /// wording with one sentence for what the full prompt spells out: Gemma 4 E2B kept 1 of the 1:1's 6
+    /// commitments and 10 of the weekly's 38 with the full prompt, 5 and 17 with this one, while it cost
+    /// Gemma 4 E4B and 12B a few (docs/validation.md). It has no example a small model could copy as a task.
+    static func commitmentsPrompt(_ part: String, parts: Int, brief: Bool = false) throws -> String {
+        let scope = parts == 1 ? "evidence" : "part of a longer conversation"
+        let rules = brief ? """
+        Extract ALL explicit agreed tasks and commitments from the following \(scope). A named person saying they will do something
+        or being assigned a task is a commitment. Include each concrete task, the stated owner (or null), and an exact short quote from
+        the original source proving the assignment. Copy the quote exactly; do not add timestamps or words. Do not invent tasks.
+        Do not include suggestions, questions, or hypothetical plans. Write each task so it reads on its own, never "it" or "that", and
+        leave out anything later dropped or put on hold.
+        """ : """
+        Extract ALL explicit agreed tasks and commitments from the following \(scope).
         A named person saying they will do something or being assigned a task is a commitment. For each, write the concrete task as a
         to-do list would: what is to be done, to what, and when if stated, complete on its own, never "it" or "that" (after a request
         for the agenda, "I'll send it tomorrow" gives "Send the agenda tomorrow"). Include the stated owner (or null) and an exact short
         quote from the original source proving the assignment. Copy the quote exactly; do not add timestamps or words. List each
         commitment once, one task per item. Do not invent tasks. Do not include suggestions, questions, hypothetical plans, or anything
         later dropped or put on hold.
+        """
+        return """
+        \(rules)
         Written notes are user context, not spoken quotes; extract recorded commitments only. Highlighted passages still require exact recorded evidence.
         Return only JSON: {"actions":[{"text":"Concrete task","owner":null,"evidence":"Exact source quote"}]}.
         If there are no explicit commitments, return {"actions":[]}.
