@@ -141,6 +141,22 @@ final class ModelManagerTests: XCTestCase {
                        "An added variant joins its family, after the built-in ones")
     }
 
+    func testAModelThatServesNoRoleIsListedOnlyWhileItsHereToRemove() throws {
+        // Qwen 2.5 1.5B since it stopped writing summaries: nothing to download or use, only to remove.
+        let user = ModelManifest(families: [ModelFamilyEntry(id: "whisp", name: "Whisp", engine: .whisperKit, roles: [.transcription], variants: [
+            ModelVariantEntry(id: "old", name: "Whisp Old", roles: [], license: Self.mit,
+                              revisions: [Self.revision("o1", repository: "acme/whisp-old", bytes: 9_000_000)])
+        ])])
+        let absent = makeSnapshot(user: user)
+        XCTAssertEqual(absent.families.first { $0.id == "whisp" }?.rows.map(\.id), ["whisp/tiny", "whisp/big"])
+        XCTAssertFalse(absent.roleChoices.flatMap(\.options).contains { $0.key == "whisp/old" })
+        let here = makeSnapshot(installed: ["whisp/old"], user: user)
+        let row = try XCTUnwrap(here.families.first { $0.id == "whisp" }?.rows.first { $0.id == "whisp/old" })
+        XCTAssertEqual(row.status, .downloaded)
+        XCTAssertTrue(row.usableRoles.isEmpty)
+        XCTAssertFalse(row.canUse)
+    }
+
     // MARK: Generic catalog
 
     func testAMadeUpEngineFamilyAndRoleAppearWithoutCode() throws {

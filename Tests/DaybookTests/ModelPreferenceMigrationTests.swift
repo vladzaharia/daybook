@@ -112,6 +112,39 @@ final class ModelPreferenceMigrationTests: XCTestCase {
         XCTAssertNil(relaunched.modelSelections[.smallTasks])
     }
 
+    func testSomeoneWithOnlyQwen15BIsOfferedAModelThatWritesSummaries() throws {
+        let defaults = defaults()
+        let earlier = ModelSelections([.transcription: "parakeet/ultra", .summarization: "qwen2.5/1.5b-4bit", .diarization: "community-1/offline"])
+        defaults.set(try JSONEncoder().encode(earlier), forKey: "modelSelections")
+        let state = AppState(libraryURL: try library(), defaults: defaults)
+        state.installedModels = ["parakeet/ultra", "qwen2.5/1.5b-4bit", "community-1/offline"]
+        state.replaceRetiredChoices()
+        let expected = try XCTUnwrap(ModelRecommendations.preset(ModelRecommendations.recommendedQuality(catalog: state.modelCatalog),
+                                                                 catalog: state.modelCatalog, engines: state.runtime.engines).model(for: .summarization))
+        XCTAssertEqual(state.summaryModel, expected)
+        XCTAssertTrue(expected.hasPrefix("gemma-4/"))
+        XCTAssertFalse(state.canProcess, "Processing waits for its download rather than running the old model")
+        XCTAssertEqual(state.notice, "Qwen 2.5 · 1.5B no longer works for summaries. Summaries now use \(state.modelCatalog.name(for: expected)): download it in Settings › Models.")
+        XCTAssertEqual(AppState(libraryURL: try library(), defaults: defaults).summaryModel, expected, "Saved")
+
+        // With a model the preset lists already here, that one, with nothing to download.
+        let other = makeTestDefaults("local.daybook.tests.models.installed")
+        other.set(try JSONEncoder().encode(earlier), forKey: "modelSelections")
+        let installed = AppState(libraryURL: try library(), defaults: other)
+        installed.installedModels = ["qwen2.5/1.5b-4bit", "qwen2.5/7b-4bit"]
+        installed.replaceRetiredChoices()
+        XCTAssertEqual(installed.summaryModel, "qwen2.5/7b-4bit")
+        XCTAssertEqual(installed.notice, "Qwen 2.5 · 1.5B no longer works for summaries. Summaries now use Qwen 2.5 · 7B.")
+
+        // The choice from before the model system ("qwen-1.5b") lands in the same place.
+        let legacy = makeTestDefaults("local.daybook.tests.models.legacy")
+        legacy.set("qwen-1.5b", forKey: "summaryModel")
+        let migrated = AppState(libraryURL: try library(), defaults: legacy)
+        XCTAssertEqual(migrated.summaryModel, "qwen2.5/1.5b-4bit")
+        migrated.replaceRetiredChoices()
+        XCTAssertEqual(migrated.summaryModel, expected)
+    }
+
     func testJobsUseTheSmallTasksModelOnlyWhenThisMacCanRunIt() throws {
         let state = AppState(libraryURL: try library(), defaults: defaults())
         state.modelSelections[.smallTasks] = "apple-foundation-models/system"

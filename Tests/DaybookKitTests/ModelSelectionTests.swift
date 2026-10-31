@@ -64,12 +64,14 @@ final class ModelSelectionTests: XCTestCase {
             ["gemma-4/e4b-4bit", "gemma-4/12b-4bit", "gemma-4/12b-4bit"],
             ["gemma-4/e4b-4bit", "gemma-4/26b-a4b-qat-4bit", "gemma-4/26b-a4b-qat-4bit"],
             ["gemma-4/12b-4bit", "gemma-4/26b-a4b-qat-4bit", "gemma-4/31b-8bit"]])
-        // Qwen 2.5 stays in every list, after the newer models, so an installed one can stand in.
+        // Qwen 2.5 3B and 7B stay in every list, after the newer models, so an installed one can stand in; 1.5B, which
+        // misses most of a meeting, never does.
         for tier in DeviceTier.allCases {
             for quality in ModelQuality.allCases {
                 let choices = ModelRecommendations.preset(quality, tier: tier, catalog: catalog).choices[.summarization] ?? []
                 XCTAssertTrue(choices.first?.hasPrefix("gemma-4/") == true, "\(tier) \(quality)")
-                XCTAssertTrue(Set(["qwen2.5/1.5b-4bit", "qwen2.5/3b-4bit", "qwen2.5/7b-4bit"]).isSubset(of: choices), "\(tier) \(quality)")
+                XCTAssertTrue(Set(["qwen2.5/3b-4bit", "qwen2.5/7b-4bit"]).isSubset(of: choices), "\(tier) \(quality)")
+                XCTAssertFalse(choices.contains("qwen2.5/1.5b-4bit"), "\(tier) \(quality)")
                 let firstOlder = choices.firstIndex { $0.hasPrefix("qwen2.5/") } ?? 0
                 XCTAssertTrue(choices[..<firstOlder].allSatisfy { !$0.hasPrefix("qwen2.5/") })
                 XCTAssertTrue(choices[firstOlder...].allSatisfy { $0.hasPrefix("qwen2.5/") }, "\(tier) \(quality): Qwen 2.5 comes last")
@@ -134,6 +136,28 @@ final class ModelSelectionTests: XCTestCase {
 
         let unrelated = selections.removing("sortformer-2.1/fp16", preset: detailed, installed: [])
         XCTAssertTrue(unrelated.changes.isEmpty)
+    }
+
+    func testAChoiceTheCatalogNoLongerOffersForItsRoleMovesToThePresetsModel() throws {
+        // Qwen 2.5 1.5B writes no summaries any more: it missed most topics and commitments, and wrote a note's
+        // question as the decision. Someone who has only it gets the preset's model, which waits for its download.
+        let small = try XCTUnwrap(catalog.model("qwen2.5/1.5b-4bit"))
+        XCTAssertTrue(small.roles.isEmpty)
+        XCTAssertTrue(catalog.models(for: .summarization).allSatisfy { $0.key != small.key }, "Not offered for summaries")
+        XCTAssertEqual(catalog.model("qwen-1.5b")?.key, small.key, "Older results still name it")
+        let quick = ModelRecommendations.preset(.quick, tier: .standard, catalog: catalog)
+        let selections = ModelSelections([.transcription: "parakeet/ultra", .summarization: small.key, .diarization: "community-1/offline"])
+        let alone = selections.replacingRetired(catalog: catalog, preset: quick, installed: ["parakeet/ultra", small.key, "community-1/offline"])
+        XCTAssertEqual(alone.selections[.summarization], "gemma-4/e4b-4bit")
+        XCTAssertEqual(alone.changes, [.switched(role: .summarization, from: small.key, to: "gemma-4/e4b-4bit")])
+        XCTAssertEqual(alone.selections[.transcription], "parakeet/ultra", "Other roles keep their models")
+        // A model the preset lists that's already here comes first.
+        let installed = selections.replacingRetired(catalog: catalog, preset: quick, installed: [small.key, "qwen2.5/7b-4bit"])
+        XCTAssertEqual(installed.selections[.summarization], "qwen2.5/7b-4bit")
+        // Choices the catalog still offers, or doesn't know, stay.
+        let kept = ModelSelections([.summarization: "gemma-4/12b-4bit", .transcription: "someone/else"])
+        XCTAssertEqual(kept.replacingRetired(catalog: catalog, preset: quick, installed: []).selections, kept)
+        XCTAssertTrue(kept.replacingRetired(catalog: catalog, preset: quick, installed: []).changes.isEmpty)
     }
 
     func testRoutingUsesCapabilitiesNotModelIDs() throws {

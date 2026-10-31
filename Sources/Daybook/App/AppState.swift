@@ -524,6 +524,7 @@ final class AppState: ObservableObject {
             }
             modelCatalog = await runtime.catalog
             await refreshInstalledModels()
+            replaceRetiredChoices()
             selectedID = meetings.first?.id
             isReady = true
             speakerProfileCoordinator.start()
@@ -1028,6 +1029,22 @@ final class AppState: ObservableObject {
             return "\(Self.roleTitle(role)) now uses \(modelCatalog.name(for: to))."
         }
         if !switched.isEmpty { notice = switched.joined(separator: " ") }
+    }
+
+    /// A choice the catalog no longer offers for its role (Qwen 2.5 1.5B for summaries) moves to the preset's
+    /// model, installed first; one that isn't downloaded waits for its download, and the notice says where.
+    func replaceRetiredChoices() {
+        let quality = ModelPreset.current(in: self)?.quality ?? ModelRecommendations.recommendedQuality(catalog: modelCatalog)
+        let preset = ModelRecommendations.preset(quality, catalog: modelCatalog, engines: runtime.engines)
+        let result = modelSelections.replacingRetired(catalog: modelCatalog, preset: preset, installed: installedModels)
+        guard result.selections != modelSelections else { return }
+        modelSelections = result.selections
+        post(result.changes.compactMap { change -> String? in
+            guard case .switched(let role, let from, let to) = change else { return nil }
+            let title = Self.roleTitle(role), verb = role == .summarization ? "use" : "uses"
+            let switched = "\(modelCatalog.name(for: from)) no longer works for \(title.lowercased()). \(title) now \(verb) \(modelCatalog.name(for: to))"
+            return installedModels.contains(to) ? switched + "." : switched + ": download it in Settings › Models."
+        })
     }
 
     private static func roleTitle(_ role: ModelRole) -> String {
