@@ -558,14 +558,15 @@ public enum MeetingSynthesis {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Notices a reply stuck repeating itself: the same stretch of 12 to 400 characters four times in a
+    /// Notices a reply stuck repeating itself: the same stretch of 12 to 2,000 characters four times in a
     /// row at its end. Greedy decoding can fall into a loop and stay there until the token limit; under
     /// the grammar, with no repetition penalty, Gemma 4 12B wrote "Note: The group agreed on the pricing
     /// structure." for 2,500 tokens of a 3,000-token final pass, six minutes of a three-minute meeting's
-    /// summary (docs/validation.md). The engine feeds it each piece of a reply and stops the pass once it
+    /// summary, and Qwen 2.5 1.5B copied the same ten passages, 900 characters, over and over for 16,384
+    /// tokens (docs/validation.md). The engine feeds it each piece of a reply and stops the pass once it
     /// loops.
     struct RepetitionGuard {
-        static let shortest = 12, longest = 400, repeats = 4
+        static let shortest = 12, longest = 2_000, repeats = 4
         private(set) var bytes: [UInt8] = []
         private var checked = 0
         /// The length of the stretch the reply repeats, once it loops.

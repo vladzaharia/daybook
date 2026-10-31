@@ -35,6 +35,15 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertLessThanOrEqual(trimmed.count, start.count + 2 * unit.count)
     }
 
+    func testALongStretchCopiedOverAndOverIsALoop() throws {
+        // Qwen 2.5 1.5B's commitments pass on the weekly: ten passages, again and again, for 16,384 tokens.
+        let block = (0..<10).map { #""Speaker \#($0): Passage number \#($0) of the weekly, word for word, as it was said.","# }.joined()
+        XCTAssertGreaterThan(block.count, 700, "Longer than the 400 characters the guard first looked back")
+        let found = try XCTUnwrap(noticed(#"{"actions":[], "evidence": ["# + String(repeating: block, count: 20), size: 7))
+        XCTAssertEqual(found.guard.loop, block.utf8.count)
+        XCTAssertLessThan(found.fed, block.count * 5)
+    }
+
     func testEmptyThoughtBlocksOneAfterAnotherAreALoop() throws {
         // Gemma 4 12B, free-form, answered a part of the weekly with nothing else for 1,800 tokens.
         let found = try XCTUnwrap(noticed(String(repeating: "<|channel>thought\n<channel|>", count: 100)))
