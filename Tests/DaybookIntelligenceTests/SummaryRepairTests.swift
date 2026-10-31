@@ -102,6 +102,35 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertEqual(MeetingSynthesis.verifiedActions(reply, source: source)?.map(\.text), ["Send the backfill numbers to Tomas", "Fix the checkout test flakiness"])
     }
 
+    // MARK: Brief commitments
+
+    /// Writes a summary and no commitments, recording each prompt.
+    private final class BriefModel: SynthesisModel, @unchecked Sendable {
+        let supportsStructuredOutput = true, briefCommitments: Bool
+        private let lock = NSLock()
+        private var _prompts: [String] = []
+        var prompts: [String] { lock.withLock { _prompts } }
+        init(brief: Bool) { briefCommitments = brief }
+        func encode(_ text: String) async -> [Int] { text.split(whereSeparator: \.isWhitespace).map { _ in 0 } }
+        func decode(_ tokens: [Int]) async -> String { "" }
+        func respond(instructions: String, prompt: String, maxTokens: Int) async throws -> String { try await respond(instructions: instructions, prompt: prompt, schema: "", maxTokens: maxTokens) }
+        func respond(instructions: String, prompt: String, schema: String, maxTokens: Int) async throws -> String {
+            lock.withLock { _prompts.append(prompt) }
+            return prompt.hasPrefix("Extract ALL") ? #"{"actions":[]}"# : #"{"kind":"general","title":"T","overview":"O.","sections":[],"actionItems":[],"terms":[]}"#
+        }
+    }
+
+    func testAModelMarkedBriefGetsTheShorterCommitmentsPrompt() async throws {
+        let transcript = "[00:01] Mina: I'll send the agenda tomorrow."
+        for brief in [false, true] {
+            let model = BriefModel(brief: brief)
+            _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: transcript, notes: "", template: .auto, glossary: [],
+                                                    progress: { _ in })
+            let commitments = try XCTUnwrap(model.prompts.last { $0.hasPrefix("Extract ALL") })
+            XCTAssertEqual(commitments, try MeetingSynthesis.commitmentsPrompt(transcript, parts: 1, brief: brief))
+        }
+    }
+
     // MARK: Shapes
 
     func testNotesAndPassagesPastedWithTheirMarkersAreLeftOut() throws {

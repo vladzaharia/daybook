@@ -79,6 +79,43 @@ final class RuntimeResidencyTests: XCTestCase {
         return runtime
     }
 
+    /// Records the engine options each load gets.
+    private struct OptionsEngine: ModelEngine {
+        let log: CallLog
+        var descriptor: ModelEngineDescriptor {
+            ModelEngineDescriptor(id: "toyEngine", name: "Toy", version: 1, runtime: "Toy 1.0", roles: [.transcription],
+                                  platforms: [.macOS, .iOS], residency: .shared)
+        }
+        func validate(_ installation: ModelInstallation) throws {}
+        func proposeAddition(_ request: ModelAdditionRequest, repository: ModelRepositorySnapshot) async throws -> ModelAdditionProposal {
+            throw ModelAdditionError.invalid(["Not in this test."])
+        }
+        func load(_ installation: ModelInstallation, role: ModelRole, progress: @escaping IntelligenceProgressHandler) async throws -> any LoadedModel {
+            log.add(installation.engineOptions.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ","))
+            return GatedEngine.Model(log: log, gate: Gate())
+        }
+    }
+
+    func testAnInstallRunsWithTheCatalogsCurrentEngineOptions() async throws {
+        let log = CallLog(), fetcher = FakeFetcher()
+        let (artifact, contents) = SyntheticModels.artifact("model", repository: "toy/speech", revision: "rev-a", files: [("weights.bin", "weights")])
+        fetcher.add(contents)
+        let revision = ModelRevisionEntry(id: "rev-a", releaseDate: "2026-10-01", artifacts: [artifact])
+        func runtime(_ options: [String: String]) -> LocalIntelligenceRuntime {
+            LocalIntelligenceRuntime(modelsDirectory: root, registry: ModelEngineRegistry([OptionsEngine(log: log)]),
+                                     builtIn: .init(manifest: SyntheticModels.manifest(engine: "toyEngine", variant: "v1", revisions: [revision],
+                                                                                        engineOptions: options)),
+                                     fetcher: fetcher)
+        }
+        try await runtime(["architecture": "toy"]).download(modelID: "toy/v1")
+        // A later catalog changes how the engine runs the same files, as `commitments: "brief"` did for Gemma 4 E2B.
+        let later = runtime(["architecture": "toy", "commitments": "brief"])
+        _ = try await later.transcribe(url: root.appendingPathComponent("a.caf"), model: "toy/v1")
+        XCTAssertEqual(log.calls.first, "architecture=toy,commitments=brief")
+        let receipt = await later.store.inventory().resolve("toy/v1")?.installation.receipt
+        XCTAssertEqual(receipt?.engineOptions, ["architecture": "toy"], "The receipt still says what it was installed with")
+    }
+
     private func waitUntil(_ condition: () async -> Bool) async throws {
         for _ in 0..<300 where !(await condition()) { try await Task.sleep(for: .milliseconds(10)) }
     }

@@ -40,7 +40,8 @@
           },
           "engineOptions": {
             "architecture": "gemma4",
-            "thinking": "off"
+            "thinking": "off",
+            "commitments": "brief"
           },
           "minimumEngineVersion": 2,
           "supersedes": [
