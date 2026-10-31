@@ -8,10 +8,12 @@ import Foundation
 /// like the earlier one) whose task is mostly the earlier task's distinctive words is the same
 /// commitment, and the earlier wording, from when it was made, is kept; so is one that sums up several
 /// earlier ones ("Complete account deletion, refund status, and the kill switches"). Words count by how
-/// few of the meeting's commitments use them, so a verb, a platform, or a number the tasks share ("fix",
-/// "iOS", "five") never makes two of them one.
+/// few of the meeting's commitments use them, so a verb or a platform the tasks share ("fix", "iOS") never
+/// makes two of them one.
 enum RestatedCommitments {
-    /// How much of the shorter task's weight two commitments must share to be one.
+    /// How much of the shorter task's weight two commitments must share to be one. On the three-hour meeting,
+    /// the 26B's restatements came to 0.61 and more, and two different tasks of one owner to 0.55 at most
+    /// ("Build the Android flow in the same sprint", "Build the update screen on Android for version 6.1").
     static let threshold = 0.6
     /// How much of a commitment's weight earlier ones must cover together, each sharing two of its words, for
     /// it to sum them up. On the three-hour meeting, the two that did came to 0.88 and 1; the closest
@@ -63,8 +65,10 @@ enum RestatedCommitments {
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
     }
 
-    /// A task's distinctive words: lowercased, numbers as digits ("five point six" and "5.6" alike), common
-    /// endings removed ("flags", "flag"), without the words any task has (articles, "complete", dates).
+    /// A task's distinctive words: lowercased, versions as digits ("five point six" and "5.6" alike), common
+    /// endings removed ("flags", "flag"), without the words any task has (articles, "complete", dates) or plain
+    /// numbers: with "five", "Fix the five flakiest iOS tests" and "Fix the five critical VoiceOver issues on iOS"
+    /// came within 0.02 of being one.
     static func words(_ task: String) -> Set<String> {
         var tokens: [String] = [], current = ""
         let characters = Array(task.lowercased().replacingOccurrences(of: "\u{2019}", with: "'"))
@@ -89,7 +93,8 @@ enum RestatedCommitments {
                 token = String(token[digits])
             }
             index += 1
-            guard !ignored.contains(token) else { continue }
+            // A count or a day ("five flakiest tests", "the twentieth") says less about the task than a version ("5.7").
+            guard !ignored.contains(token), !token.allSatisfy(\.isNumber) else { continue }
             result.insert(stem(token))
         }
         return result
