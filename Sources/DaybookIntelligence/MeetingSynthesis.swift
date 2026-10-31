@@ -771,7 +771,8 @@ public enum MeetingSynthesis {
     /// recorded transcript, word for word; nil when no response parses. Each keeps its owner only when
     /// the quote shows it: the owner is named in the quote, or is its speaker and the quote names no one
     /// else ("Yes, I'll send the line items today"); with no owner stated, a speaker saying "I" is the
-    /// owner. A commitment found in two parts is kept once.
+    /// owner. A commitment found in two parts, or restated later in other words (`RestatedCommitments`),
+    /// is kept once, and they come in the order they were said.
     static func verifiedActions(_ responses: [String], source: String) -> [ActionItem]? {
         let decoded = responses.compactMap { response -> ActionPayload? in
             if let start = response.firstIndex(of: "{"), let end = response.lastIndex(of: "}"), start <= end,
@@ -782,19 +783,27 @@ public enum MeetingSynthesis {
         guard !decoded.isEmpty else { return nil }
         let transcript = SpokenPassages(source)
         var seenTasks = Set<String>(), seenQuotes = Set<String>()
-        return decoded.flatMap(\.actions).compactMap { item in
+        let verified = decoded.flatMap(\.actions).compactMap { item -> RestatedCommitments.Item? in
             let evidence = SpokenPassages.normalized(item.evidence), task = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard evidence.count >= 10, let speaker = transcript.find(evidence), !task.isEmpty,
+            guard evidence.count >= 10, let found = transcript.find(evidence), !task.isEmpty,
                   seenQuotes.insert(evidence).inserted, seenTasks.insert(SpokenPassages.normalized(task)).inserted else { return nil }
-            return ActionItem(text: task, owner: transcript.owner(stated: owner(item.owner), quote: evidence, speaker: speaker.name))
+            return .init(action: ActionItem(text: task, owner: transcript.owner(stated: owner(item.owner), quote: evidence, speaker: found.name)),
+                         passage: found.passage, quote: found.words)
         }
+        return RestatedCommitments.removing(from: verified)
     }
 }
 
 /// The recorded transcript as passages ("[01:02] Alex: …"), for finding a quoted commitment word for word
 /// and who said it. Timestamps, case, curly apostrophes, and runs of whitespace are ignored on both sides.
 struct SpokenPassages {
-    struct Found { let name: String? }
+    struct Found {
+        let name: String?
+        /// The passage the quote starts in, counted from the transcript's first.
+        var passage = 0
+        /// Where the quote is in the transcript's words.
+        var words: Range<Int> = 0..<0
+    }
     private var text = ""
     /// Each passage's speaker and where its words end in `text` (UTF-8 offsets, ascending).
     private var passages: [(name: String?, end: Int)] = []
@@ -840,10 +849,10 @@ struct SpokenPassages {
         guard let range = text.range(of: quote) else { return nil }
         let start = text.utf8.distance(from: text.startIndex, to: range.lowerBound)
         let end = text.utf8.distance(from: text.startIndex, to: range.upperBound)
-        guard let first = passages.firstIndex(where: { $0.end > start }) else { return Found(name: nil) }
+        guard let first = passages.firstIndex(where: { $0.end > start }) else { return Found(name: nil, passage: passages.count, words: start..<end) }
         let last = passages.firstIndex(where: { $0.end >= end }) ?? first
         let speakers = Set(passages[first...last].map { $0.name?.lowercased() })
-        return Found(name: speakers.count == 1 ? passages[first].name : nil)
+        return Found(name: speakers.count == 1 ? passages[first].name : nil, passage: first, words: start..<end)
     }
 
     /// The owner a quote shows: of the stated people, those named in the quote or who are its speaker,
