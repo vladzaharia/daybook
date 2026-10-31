@@ -303,7 +303,8 @@
           },
           "engineOptions": {
             "architecture": "gemma4",
-            "thinking": "off"
+            "thinking": "off",
+            "noteCheck": "on"
           },
           "minimumEngineVersion": 2,
           "homepage": "https://huggingface.co/mlx-community/gemma-4-26B-A4B-it-qat-4bit",
@@ -394,7 +395,8 @@
           },
           "engineOptions": {
             "architecture": "gemma4",
-            "thinking": "off"
+            "thinking": "off",
+            "noteCheck": "on"
           },
           "minimumEngineVersion": 2,
           "homepage": "https://huggingface.co/mlx-community/gemma-4-31b-it-8bit",

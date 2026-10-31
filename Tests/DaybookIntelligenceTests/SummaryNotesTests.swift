@@ -11,6 +11,7 @@ final class SummaryNotesTests: XCTestCase {
     /// One token per whitespace-separated word, decoded back to the same words; replies from a script.
     private final class WordModel: SynthesisModel, @unchecked Sendable {
         let supportsStructuredOutput = false
+        var checksNotes = false
         private let lock = NSLock()
         private var vocabulary: [String] = [], index: [String: Int] = [:]
         private var _prompts: [String] = [], _instructions: [String] = []
@@ -153,9 +154,8 @@ final class SummaryNotesTests: XCTestCase {
         }
         let notes = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting()),
                                                         template: .auto, glossary: [], progress: { _ in })
-        XCTAssertEqual(model.prompts.count, 3, "Short: the note check, one summary pass, and the commitments pass")
-        XCTAssertTrue(model.prompts[0].hasPrefix("Compare each of the user's notes"))
-        let final = model.prompts[1]
+        XCTAssertEqual(model.prompts.count, 2, "Short: one summary pass and the commitments pass")
+        let final = model.prompts[0]
         XCTAssertTrue(final.contains("NOTE N2, written by the user (not spoken): Budget cap is firm at 40k"), "The note sits in the transcript")
         XCTAssertTrue(final.contains("(near N2, B1) Sam: Finance says we can't go over forty thousand."))
         XCTAssertTrue(final.contains("Fold each note into the section it belongs to"))
@@ -173,9 +173,9 @@ final class SummaryNotesTests: XCTestCase {
         XCTAssertFalse(final.contains("passages_near_notes_and_bookmarks"), "Nothing was compressed, so nothing is repeated")
 
         XCTAssertFalse(final.contains("repeats what was said around it") || flat(final).contains(flat(MeetingSynthesis.repeatingNoteGuidance)),
-                       "A check that can't be read leaves the comparison to the summary, as before")
+                       "Without the catalog's noteCheck, the summary compares every note, as before")
 
-        let actions = model.prompts[2]
+        let actions = model.prompts[1]
         XCTAssertFalse(actions.contains("NOTE N2"), "Commitments are checked against what was said only")
         XCTAssertEqual(notes.summary.actionItems.map(\.text), ["Email the venue"], "A quote from a note isn't evidence of a commitment")
         XCTAssertEqual(notes.summary.actionItems.first?.owner, "Alex")
@@ -183,6 +183,7 @@ final class SummaryNotesTests: XCTestCase {
 
     func testEachNoteIsCheckedAgainstWhatWasSaidAroundItFirst() async throws {
         let model = WordModel()
+        model.checksNotes = true
         let summary = self.summary
         model.reply = { prompt, _ in
             if prompt.hasPrefix("Compare each of the user's notes") {
@@ -216,6 +217,16 @@ final class SummaryNotesTests: XCTestCase {
         XCTAssertTrue(final.contains(#"{"kind":"note","label":"N1","placement""#), "The untimed note isn't checked")
         XCTAssertTrue(flat(final).contains(flat(MeetingSynthesis.repeatingNoteGuidance)))
         XCTAssertTrue(flat(final).contains("What conflicts with what was said: mention the conflict."))
+
+        // A check that can't be read leaves every note to the summary, as before.
+        let unreadable = WordModel()
+        unreadable.checksNotes = true
+        unreadable.reply = { prompt, _ in prompt.contains("Extract ALL explicit agreed tasks") ? #"{"actions":[]}"# : summary }
+        _ = try await MeetingSynthesis.generate(model: unreadable, modelID: "gemma", source: MeetingEvidence.summarySource(meeting()),
+                                                template: .auto, glossary: [], progress: { _ in })
+        XCTAssertEqual(unreadable.prompts.count, 3)
+        XCTAssertTrue(unreadable.prompts[1].contains("NOTE N2, written by the user (not spoken): Budget cap is firm at 40k"))
+        XCTAssertFalse(unreadable.prompts[1].contains("repeats what was said around it"))
     }
 
     func testALongConversationKeepsTheMarkedPassagesThroughCompression() async throws {
