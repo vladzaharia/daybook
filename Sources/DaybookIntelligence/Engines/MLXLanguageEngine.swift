@@ -176,15 +176,24 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
 
     func respond(instructions: String, prompt: String, maxTokens: Int) async throws -> String {
         try Task.checkCancellation()
+        let openers = await thoughtOpeners()
         let session = ChatSession(container, instructions: instructions,
                                   generateParameters: .init(maxTokens: maxTokens, temperature: 0, repetitionPenalty: 1.05,
                                                             repetitionContextSize: 64, prefill: .init(stepSize: 256)),
+                                  components: openers.isEmpty ? .init() : .init(logitProcessorFactory: { SuppressedTokens(openers) }),
                                   additionalContext: chatTemplateContext)
         var response = ""
-        for try await event in session.streamDetails(to: prompt) {
+        // A reply caught in a loop stops there, cut back to where it began (ending the stream ends generation).
+        var repetition = MeetingSynthesis.RepetitionGuard()
+        stream: for try await event in session.streamDetails(to: prompt) {
             try Task.checkCancellation()
             switch event {
-            case .chunk(let piece): response += piece
+            case .chunk(let piece):
+                response += piece
+                if repetition.append(piece) {
+                    response = repetition.trimmed
+                    break stream
+                }
             case .info(let info):
                 lock.withLock {
                     _statistics.passes += 1
@@ -213,6 +222,7 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
             let input = try await model.processor.prepare(
                 input: UserInput(chat: [.system(instructions), .user(prompt)], additionalContext: values?.values))
             var output = ""
+            var repetition = MeetingSynthesis.RepetitionGuard()
             let started = Date()
             let generated = try GuidedGenerationLoop.run(
                 input: input, context: model, constraint: constraint, maxTokens: maxTokens,
@@ -221,7 +231,8 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
                 prefill: .init(stepSize: 256)
             ) { delta in
                 output += delta
-                return !Task.isCancelled
+                // Greedy, without a repetition penalty, a loop lasts to the token limit.
+                return !repetition.append(delta) && !Task.isCancelled
             }
             try Task.checkCancellation()
             let promptTokens = input.text.tokens.size
@@ -231,8 +242,49 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
                 self._statistics.constrainedTokens += promptTokens + generated
                 self._statistics.constrainedSeconds += Date().timeIntervalSince(started)
             }
+            // A loop is cut back to what came before it: its complete sections or commitments. With none, the
+            // caller runs the pass free-form, with its repetition penalty.
+            if repetition.loop != nil {
+                guard let salvaged = MeetingSynthesis.salvagedJSON(repetition.trimmed) else { throw Repetition() }
+                return salvaged
+            }
             return output
         }
+    }
+
+    /// A constrained reply stopped because it was repeating itself.
+    struct Repetition: Error {}
+
+    /// With thinking off, the tokens that open a thought block (Gemma 4's `<|channel>`, Qwen 3's `<think>`),
+    /// found in the tokenizer on first use. Gemma 4 12B's template ends the prompt with an empty thought
+    /// block, and free-form, the model once answered with nothing but more of them until its token limit
+    /// (docs/validation.md); a reply can't open one now. Constrained replies start with the JSON.
+    private var openers: [Int]?
+
+    private func thoughtOpeners() async -> [Int] {
+        if let openers = lock.withLock({ openers }) { return openers }
+        var found: [Int] = []
+        if (chatTemplateContext?["enable_thinking"] as? Bool) == false {
+            found = await container.perform { context in
+                ["<|channel>", "<think>"].compactMap { marker in
+                    context.tokenizer.convertTokenToId(marker).flatMap { context.tokenizer.convertIdToToken($0) == marker ? $0 : nil }
+                }
+            }
+        }
+        lock.withLock { openers = found }
+        return found
+    }
+
+    /// Keeps `tokens` from being sampled.
+    struct SuppressedTokens: LogitProcessor {
+        let tokens: [Int]
+        init(_ tokens: [Int]) { self.tokens = tokens }
+        mutating func prompt(_ prompt: MLXArray) {}
+        func process(logits: MLXArray) -> MLXArray {
+            let indices = MLXArray(tokens.map(UInt32.init))[.newAxis, 0...]
+            return putAlong(logits, indices, values: full(indices.shape, values: -Float.infinity, type: Float.self).asType(logits.dtype), axis: -1)
+        }
+        mutating func didSample(token: MLXArray) {}
     }
 
     private func grammar(for tokenizer: any MLXLMCommon.Tokenizer) throws -> Grammar {
