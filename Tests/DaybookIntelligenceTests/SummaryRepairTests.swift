@@ -259,6 +259,7 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertEqual(MeetingSynthesis.withoutMarkers("Ravi could do it but would be two weeks in a row. NOTE N2 adds: 'Ben can maybe swap Dec 3 - ask him after.' Aisha to post in the team channel today."),
                        "Ravi could do it but would be two weeks in a row. Your notes add: 'Ben can maybe swap Dec 3 - ask him after.' Aisha to post in the team channel today.")
         XCTAssertEqual(MeetingSynthesis.withoutMarkers("- N3 conflicts: only two reqs, per Mei's email"), "- Your notes say otherwise: only two reqs, per Mei's email")
+        XCTAssertEqual(MeetingSynthesis.withoutMarkers("Note N2 suggests Ben might be able to swap on December 3rd."), "Your note suggests Ben might be able to swap on December 3rd.")
     }
 
     func testAQuoteInItsOwnQuotationMarksIsStillFound() throws {

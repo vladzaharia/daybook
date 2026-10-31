@@ -825,8 +825,8 @@ public enum MeetingSynthesis {
     /// transcript's do ("(near N1) Exports ~20 min each", "[02:10] NOTE N1, written by the user…",
     /// "BOOKMARK B1, marked by the user…"), and any "(near N1)" left in a line. Gemma 4 E2B pasted the notes
     /// and the passages near them into a summary that way, word for word. The extraction's own way of marking
-    /// what a note adds ("NOTE N2 adds: 'Ben can maybe swap'", which Qwen 3.6 35B A3B carried into a summary)
-    /// reads as the person's notes.
+    /// what a note adds ("NOTE N2 adds: 'Ben can maybe swap'", which Qwen 3.6 35B A3B carried into a summary),
+    /// and a note named by its label ("Note N2 suggests", Qwen 3.5 9B), read as the person's notes.
     static func withoutMarkers(_ body: String) -> String {
         let label = #"[NB]\d+(?:, [NB]\d+)*"#
         let marked = try! NSRegularExpression(pattern: #"^\s*(?:[-*•]\s*)?(?:\[[\d:]+\]\s*)?(?:\(near "# + label + #"\)|NOTE N\d+,|BOOKMARK B\d+,)"#)
@@ -836,6 +836,7 @@ public enum MeetingSynthesis {
         return kept.joined(separator: "\n").replacingOccurrences(of: #"\s*\(near "# + label + #"\)"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\b(?:NOTE )?N\d+ adds:\s*"#, with: "Your notes add: ", options: .regularExpression)
             .replacingOccurrences(of: #"\b(?:NOTE )?N\d+ conflicts:\s*"#, with: "Your notes say otherwise: ", options: .regularExpression)
+            .replacingOccurrences(of: #"\b(?:NOTE|[Nn]ote) N\d+\b"#, with: "Your note", options: .regularExpression)
             .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
