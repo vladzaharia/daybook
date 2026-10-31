@@ -278,11 +278,12 @@ struct ModelManagerSnapshot {
     // MARK: Library
 
     /// Every model in the catalog, by family. Families follow the pipeline (the first role each
-    /// serves), then their names; models keep their manifest order.
+    /// serves), then their names; models keep their manifest order. A model that serves no role any
+    /// more (Qwen 2.5 1.5B) is listed only while it's on this Mac, to be removed.
     var families: [ModelFamilyGroup] {
         var order: [String] = []
         var grouped: [String: [CatalogModel]] = [:]
-        for model in catalog.models {
+        for model in catalog.models where !model.roles.isEmpty || bytesOnDisk(model) > 0 || status(of: model) != .notDownloaded {
             if grouped[model.familyID] == nil { order.append(model.familyID) }
             grouped[model.familyID, default: []].append(model)
         }

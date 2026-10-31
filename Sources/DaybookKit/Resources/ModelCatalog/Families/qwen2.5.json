@@ -23,7 +23,8 @@
         {
           "id": "1.5b-4bit",
           "name": "Qwen 2.5 · 1.5B",
-          "detail": "Fast. Check details and who said what.",
+          "detail": "No longer writes summaries.",
+          "roles": [],
           "releaseDate": "2024-09-17",
           "recommendedMemoryGB": 8,
           "capabilities": {
@@ -34,8 +35,7 @@
             ]
           },
           "engineOptions": {
-            "architecture": "qwen2",
-            "commitments": "brief"
+            "architecture": "qwen2"
           },
           "supersededBy": "gemma-4/e2b-4bit",
           "homepage": "https://huggingface.co/mlx-community/Qwen2.5-1.5B-Instruct-4bit",

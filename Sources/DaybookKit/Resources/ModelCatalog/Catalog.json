@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "minimumReaderVersion": 1,
-  "catalogVersion": "2026.10.29",
+  "catalogVersion": "2026.10.31",
   "presets": [
     {
       "id": "quick",
@@ -23,7 +23,6 @@
           "gemma-4/12b-4bit",
           "qwen3.5/4b-4bit",
           "qwen3.5/9b-4bit",
-          "qwen2.5/1.5b-4bit",
           "qwen2.5/3b-4bit",
           "qwen2.5/7b-4bit"
         ],
@@ -40,7 +39,6 @@
             "gemma-4/e2b-4bit",
             "gemma-4/e4b-4bit",
             "qwen3.5/4b-4bit",
-            "qwen2.5/1.5b-4bit",
             "qwen2.5/3b-4bit",
             "qwen2.5/7b-4bit"
           ]
@@ -53,7 +51,6 @@
             "gemma-4/26b-a4b-qat-4bit",
             "qwen3.5/4b-4bit",
             "qwen3.5/9b-4bit",
-            "qwen2.5/1.5b-4bit",
             "qwen2.5/3b-4bit",
             "qwen2.5/7b-4bit"
           ]
@@ -67,8 +64,7 @@
             "qwen3.5/9b-4bit",
             "qwen3.5/4b-4bit",
             "qwen2.5/7b-4bit",
-            "qwen2.5/3b-4bit",
-            "qwen2.5/1.5b-4bit"
+            "qwen2.5/3b-4bit"
           ]
         }
       }
@@ -96,8 +92,7 @@
           "qwen3.5/9b-4bit",
           "qwen3.5/4b-4bit",
           "qwen2.5/7b-4bit",
-          "qwen2.5/3b-4bit",
-          "qwen2.5/1.5b-4bit"
+          "qwen2.5/3b-4bit"
         ],
         "smallTasks": [
           "apple-foundation-models/system"
@@ -113,7 +108,6 @@
             "gemma-4/e2b-4bit",
             "qwen3.5/4b-4bit",
             "qwen2.5/3b-4bit",
-            "qwen2.5/1.5b-4bit",
             "qwen2.5/7b-4bit"
           ]
         },
@@ -127,8 +121,7 @@
             "qwen3.5/9b-4bit",
             "qwen3.5/4b-4bit",
             "qwen2.5/7b-4bit",
-            "qwen2.5/3b-4bit",
-            "qwen2.5/1.5b-4bit"
+            "qwen2.5/3b-4bit"
           ]
         },
         "workstation": {
@@ -142,8 +135,7 @@
             "qwen3.5/9b-4bit",
             "qwen3.5/4b-4bit",
             "qwen2.5/7b-4bit",
-            "qwen2.5/3b-4bit",
-            "qwen2.5/1.5b-4bit"
+            "qwen2.5/3b-4bit"
           ]
         }
       }
@@ -172,8 +164,7 @@
           "qwen3.5/9b-4bit",
           "qwen3.5/4b-4bit",
           "qwen2.5/7b-4bit",
-          "qwen2.5/3b-4bit",
-          "qwen2.5/1.5b-4bit"
+          "qwen2.5/3b-4bit"
         ],
         "smallTasks": [
           "apple-foundation-models/system"
@@ -189,8 +180,7 @@
             "gemma-4/e2b-4bit",
             "qwen3.5/4b-4bit",
             "qwen2.5/7b-4bit",
-            "qwen2.5/3b-4bit",
-            "qwen2.5/1.5b-4bit"
+            "qwen2.5/3b-4bit"
           ]
         },
         "large": {
@@ -203,8 +193,7 @@
             "qwen3.5/9b-4bit",
             "qwen3.5/4b-4bit",
             "qwen2.5/7b-4bit",
-            "qwen2.5/3b-4bit",
-            "qwen2.5/1.5b-4bit"
+            "qwen2.5/3b-4bit"
           ]
         },
         "workstation": {
@@ -218,8 +207,7 @@
             "qwen3.5/9b-4bit",
             "qwen3.5/4b-4bit",
             "qwen2.5/7b-4bit",
-            "qwen2.5/3b-4bit",
-            "qwen2.5/1.5b-4bit"
+            "qwen2.5/3b-4bit"
           ]
         }
       }

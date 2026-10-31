@@ -55,6 +55,24 @@ public struct ModelSelections: Codable, Equatable, Sendable {
         }
         return (result, changes)
     }
+
+    /// Roles whose choice no longer serves them in the catalog (Qwen 2.5 1.5B stopped writing summaries: it
+    /// missed most topics and commitments) move to the preset's first installed choice, or to its first
+    /// choice, which then waits for a download like any choice. A key the catalog doesn't know is kept,
+    /// so nothing switches silently.
+    public func replacingRetired(catalog: ModelCatalog, preset: ModelRecommendations.Preset,
+                                 installed: Set<String>) -> (selections: ModelSelections, changes: [Fallback]) {
+        var result = self
+        var changes: [Fallback] = []
+        for role in ModelRole.known {
+            guard let key = self[role], let model = catalog.model(key), !model.serves(role) else { continue }
+            let choices = (preset.choices[role] ?? []).filter { catalog.model($0)?.serves(role) == true }
+            guard let next = choices.first(where: installed.contains) ?? choices.first else { continue }
+            result[role] = next
+            changes.append(.switched(role: role, from: key, to: next))
+        }
+        return (result, changes)
+    }
 }
 
 /// Decisions the pipeline makes from capabilities rather than model IDs.

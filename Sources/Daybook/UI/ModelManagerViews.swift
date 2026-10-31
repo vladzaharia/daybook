@@ -434,7 +434,7 @@ struct ModelDetailsSheet: View {
         Section {
             if let family = Self.unnamedFamily(model) { LabeledContent("Family", value: family) }
             if let released = Self.date(model.variant.releaseDate) { LabeledContent("Released", value: released) }
-            LabeledContent("Used for", value: model.roles.map(\.title).joined(separator: ", "))
+            LabeledContent("Used for", value: model.roles.isEmpty ? "Nothing" : model.roles.map(\.title).joined(separator: ", "))
             LabeledContent("Size", value: model.isSystemModel ? "Included with macOS" : ModelSize.format(model.approximateBytes))
             LabeledContent("Memory", value: "\(model.recommendedMemoryGB) GB or more")
             if !model.capabilities.descriptions.isEmpty {
