@@ -193,6 +193,67 @@ final class SummaryCompletenessTests: XCTestCase {
         }
     }
 
+    func testACommitmentRestatedLaterIsListedOnceInItsFirstWording() throws {
+        // The three-hour meeting's recap, shortened: each person goes over what they took on, in other words.
+        let transcript = """
+        [00:01] Lena: I'll spend two days on a storage spike for iOS and report back next Thursday.
+        [00:05] Oskar: Same for Android, two days, and I'll report back next Thursday too.
+        [00:09] Lena: I'll fix the five flakiest iOS tests in the next sprint.
+        [00:13] Lena: And I'll fix the five critical VoiceOver issues on iOS before the release.
+        [00:17] Diego: I'll fix the content type on the CDN tomorrow morning and verify it with a fresh install.
+        [00:21] Diego: I'll build the account deletion endpoint by February fourteenth.
+        [00:25] Diego: I'll expose the refund status in the bookings API.
+        [00:29] Diego: I'll add kill switches for checkout and search to the config service.
+        [00:33] Lena: Yes, I'll remove Bugnet from the iOS app in five point seven.
+        [00:37] Quinn: I'll fix the flaky iOS tests, and I'll fix the flaky Android tests.
+        [00:41] Mei: Aisha, can you post the swap in the team channel?
+        [00:45] Aisha: Sure, I'll post it today.
+        [09:00] Nadia: Let's go around once more.
+        [09:04] Lena: For me, the storage spike, and Bugnet in five point seven.
+        [09:08] Diego: The CDN tomorrow morning. After that, the big three: account deletion, refund status, and the kill switches.
+        [09:12] Oskar: The storage spike.
+        """
+        func action(_ text: String, _ owner: String, _ evidence: String) -> String { #"{"text":"\#(text)","owner":"\#(owner)","evidence":"\#(evidence)"}"# }
+        // The recap's part comes first, to show the first wording wins wherever a reply lists it.
+        let recap = #"{"actions":["# + [
+            action("Complete the storage spike", "Lena", "For me, the storage spike"),
+            action("Remove Bugnet in five point seven", "Lena", "and Bugnet in five point seven."),
+            action("Fix the CDN tomorrow morning", "Diego", "The CDN tomorrow morning."),
+            action("Complete account deletion, refund status, and the kill switches", "Diego", "the big three: account deletion, refund status, and the kill switches."),
+            action("Complete the Android storage spike", "Oskar", "Oskar: The storage spike."),
+            action("Post the on-call swap in the team channel today", "Aisha", "Sure, I'll post it today."),
+        ].joined(separator: ",") + "]}"
+        let first = #"{"actions":["# + [
+            action("Spike storage for iOS and report back next Thursday", "Lena", "I'll spend two days on a storage spike for iOS and report back next Thursday."),
+            action("Spike storage for Android and report back next Thursday", "Oskar", "Same for Android, two days, and I'll report back next Thursday too."),
+            action("Fix the five flakiest iOS tests in the next sprint", "Lena", "I'll fix the five flakiest iOS tests in the next sprint."),
+            action("Fix the five critical VoiceOver issues on iOS before the release", "Lena", "I'll fix the five critical VoiceOver issues on iOS before the release."),
+            action("Fix the content type on the CDN tomorrow morning and verify it with a fresh install", "Diego", "I'll fix the content type on the CDN tomorrow morning"),
+            action("Build the account deletion endpoint by February fourteenth", "Diego", "I'll build the account deletion endpoint by February fourteenth."),
+            action("Expose the refund status in the bookings API", "Diego", "I'll expose the refund status in the bookings API."),
+            action("Add kill switches for checkout and search to the config service", "Diego", "I'll add kill switches for checkout and search"),
+            action("Remove Bugnet from the iOS app in 5.7", "Lena", "I'll remove Bugnet from the iOS app in five point seven."),
+            action("Fix the flaky iOS tests", "Quinn", "I'll fix the flaky iOS tests"),
+            action("Fix the flaky Android tests", "Quinn", "I'll fix the flaky Android tests."),
+            action("Post the swap in the team channel", "Aisha", "Aisha, can you post the swap in the team channel? [00:45] Aisha: Sure, I'll post it today."),
+        ].joined(separator: ",") + "]}"
+        let actions = try XCTUnwrap(MeetingSynthesis.verifiedActions([recap, first], source: transcript))
+        XCTAssertEqual(actions.map(\.text), [
+            "Spike storage for iOS and report back next Thursday", "Spike storage for Android and report back next Thursday",
+            "Fix the five flakiest iOS tests in the next sprint", "Fix the five critical VoiceOver issues on iOS before the release",
+            "Fix the content type on the CDN tomorrow morning and verify it with a fresh install",
+            "Build the account deletion endpoint by February fourteenth", "Expose the refund status in the bookings API",
+            "Add kill switches for checkout and search to the config service", "Remove Bugnet from the iOS app in 5.7",
+            "Fix the flaky iOS tests", "Fix the flaky Android tests", "Post the swap in the team channel",
+        ], """
+        In the order said: restatements, one summing up three, and the parts' overlap kept once in the first wording; \
+        the same task for two people, two tasks that share "fix", "five", and "iOS", and two listed side by side all kept
+        """)
+        XCTAssertEqual(actions.map(\.owner), ["Lena", "Oskar", "Lena", "Lena", "Diego", "Diego", "Diego", "Diego", "Lena", "Quinn", "Quinn", "Aisha"])
+        XCTAssertEqual(RestatedCommitments.words("Remove Bugnet in five point seven"), RestatedCommitments.words("Remove Bugnet in 5.7"))
+        XCTAssertEqual(RestatedCommitments.words("Complete the stale flag list by Wednesday"), ["stale", "flag", "list"])
+    }
+
     // MARK: Owners
 
     func testTheOwnerIsWhoeverTheQuoteShowsCommitting() throws {
