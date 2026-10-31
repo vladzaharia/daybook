@@ -177,6 +177,22 @@ final class SummaryCompletenessTests: XCTestCase {
         XCTAssertEqual(empty, [])
     }
 
+    func testPartsComeOutEvenWithoutAScrapAtTheEnd() async {
+        // Ten tokens a passage and parts of 110: filled to the limit, 55 passages left a last part of 7 (the
+        // three-hour meeting's 12,000-token parts left one of 828 tokens).
+        let model = WordModel()
+        for count in [55, 30, 43, 71, 90] {
+            let lines = (0..<count).map { String(format: "[%02d:%02d] Mei: one two three four five six seven %d", $0 / 60, $0 % 60, $0) }
+            let parts = await MeetingSynthesis.transcriptParts(lines.joined(separator: "\n"), model: model, tokenLimit: 110)
+            let sizes = parts.map { $0.split(whereSeparator: \.isWhitespace).count + $0.components(separatedBy: "\n").count }
+            XCTAssertTrue(sizes.allSatisfy { $0 <= 110 }, "\(count): \(sizes)")
+            XCTAssertGreaterThanOrEqual(Double(sizes.min() ?? 0), Double(sizes.max() ?? 0) * 0.75, "\(count): \(sizes)")
+            // No more parts than full ones would take: eight new passages each after the first's ten.
+            XCTAssertEqual(parts.count, 1 + (count - 10 + 7) / 8, "\(count)")
+            XCTAssertEqual(Set(parts.flatMap { $0.components(separatedBy: "\n") }), Set(lines), "Every passage, whole")
+        }
+    }
+
     // MARK: Owners
 
     func testTheOwnerIsWhoeverTheQuoteShowsCommitting() throws {
