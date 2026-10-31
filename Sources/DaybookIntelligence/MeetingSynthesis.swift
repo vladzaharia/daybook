@@ -23,12 +23,16 @@ public protocol SynthesisModel: Sendable {
     var contextLength: Int? { get }
     /// The variant's `engineOptions["outputTokens"]`: the most any pass may write, below the default.
     var outputTokens: Int? { get }
+    /// The variant's `engineOptions["noteCheck"] == "on"`: notes are checked against what was said before the summary
+    /// is written (`MeetingSynthesis.notesRepeatingWhatWasSaid`).
+    var checksNotes: Bool { get }
 }
 
 extension SynthesisModel {
     public var briefCommitments: Bool { false }
     public var contextLength: Int? { nil }
     public var outputTokens: Int? { nil }
+    public var checksNotes: Bool { false }
 }
 
 public enum MeetingSynthesis {
@@ -167,7 +171,7 @@ public enum MeetingSynthesis {
         let budget = Budget(contextLength: model.contextLength, outputTokens: model.outputTokens)
         // Each note checked against what was said around it before anything is written: one that adds nothing
         // goes on without its words, so no later pass can give it "Your notes add".
-        let repeating = structured ? try await notesRepeatingWhatWasSaid(source, model: model, budget: budget, progress: progress) : []
+        let repeating = structured && model.checksNotes ? try await notesRepeatingWhatWasSaid(source, model: model, budget: budget, progress: progress) : []
         for index in source.anchors.indices where repeating.contains(source.anchors[index].label) {
             source.anchors[index].repeatsWhatWasSaid = true
         }
@@ -354,8 +358,9 @@ public enum MeetingSynthesis {
     /// what was said "Your notes add" (a three-hour meeting's "Rating drop = mostly the password reset login
     /// loop", said in so many words; docs/validation.md, 2026-10-31). The rest of each note is left to the
     /// summary to compare as before: given the check's own findings as well, the 26B wrote more of them as
-    /// the notes', and wrote one note's email as a fact. Empty when there's no such note or the reply can't
-    /// be read.
+    /// the notes', and wrote one note's email as a fact. Only for a variant the catalog marks `noteCheck: "on"`:
+    /// Gemma 4 E2B found every note repeated what was said, and a note that adds something would lose its
+    /// words. Empty when there's no such note or the reply can't be read.
     static func notesRepeatingWhatWasSaid(_ source: SummarySource, model: any SynthesisModel, budget: Budget,
                                           progress: IntelligenceProgressHandler) async throws -> Set<String> {
         let checked = try await checkedNotes(source, model: model, budget: budget, progress: progress)

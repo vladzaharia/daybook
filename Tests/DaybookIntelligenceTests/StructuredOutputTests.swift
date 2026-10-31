@@ -142,6 +142,13 @@ final class StructuredOutputTests: XCTestCase {
         XCTAssertNil(MLXLanguageEngine.chatTemplateContext(engineOptions: ["architecture": "qwen2"]), "Qwen 2.5 has no thinking flag")
     }
 
+    func testOnlyModelsThatTellARepeatingNoteFromOneThatAddsCheckNotes() {
+        // Asked which notes only repeat what was said, the others called notes that add something repeats too
+        // (E2B 8 of 11, Qwen 2.5 7B every one), and those notes would lose their words.
+        let checking = ModelCatalog.builtIn.models.filter { $0.engineOptions["noteCheck"] == "on" }.map(\.key).sorted()
+        XCTAssertEqual(checking, ["gemma-4/26b-a4b-qat-4bit", "gemma-4/31b-8bit", "qwen3.6/35b-a3b-4bit"])
+    }
+
     func testTheSmallestModelsAskForCommitmentsBriefly() throws {
         // Gemma 4 E2B kept far fewer commitments with the full prompt; the others did as well or better with it.
         let brief = ModelCatalog.builtIn.models.filter { $0.engineOptions["commitments"] == "brief" }.map(\.key).sorted()

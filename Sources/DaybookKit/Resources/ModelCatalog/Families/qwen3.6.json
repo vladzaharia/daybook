@@ -35,7 +35,8 @@
           },
           "engineOptions": {
             "architecture": "qwen3_5_moe",
-            "thinking": "off"
+            "thinking": "off",
+            "noteCheck": "on"
           },
           "minimumEngineVersion": 2,
           "homepage": "https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit",
