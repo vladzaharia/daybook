@@ -153,8 +153,9 @@ final class SummaryNotesTests: XCTestCase {
         }
         let notes = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting()),
                                                         template: .auto, glossary: [], progress: { _ in })
-        XCTAssertEqual(model.prompts.count, 2, "Short: one summary pass and the commitments pass")
-        let final = model.prompts[0]
+        XCTAssertEqual(model.prompts.count, 3, "Short: the note check, one summary pass, and the commitments pass")
+        XCTAssertTrue(model.prompts[0].hasPrefix("Compare each of the user's notes"))
+        let final = model.prompts[1]
         XCTAssertTrue(final.contains("NOTE N2, written by the user (not spoken): Budget cap is firm at 40k"), "The note sits in the transcript")
         XCTAssertTrue(final.contains("(near N2, B1) Sam: Finance says we can't go over forty thousand."))
         XCTAssertTrue(final.contains("Fold each note into the section it belongs to"))
@@ -171,10 +172,50 @@ final class SummaryNotesTests: XCTestCase {
         XCTAssertTrue(final.contains(#""placement":"written outside the recording""#))
         XCTAssertFalse(final.contains("passages_near_notes_and_bookmarks"), "Nothing was compressed, so nothing is repeated")
 
-        let actions = model.prompts[1]
+        XCTAssertFalse(final.contains("repeats what was said around it") || flat(final).contains(flat(MeetingSynthesis.repeatingNoteGuidance)),
+                       "A check that can't be read leaves the comparison to the summary, as before")
+
+        let actions = model.prompts[2]
         XCTAssertFalse(actions.contains("NOTE N2"), "Commitments are checked against what was said only")
         XCTAssertEqual(notes.summary.actionItems.map(\.text), ["Email the venue"], "A quote from a note isn't evidence of a commitment")
         XCTAssertEqual(notes.summary.actionItems.first?.owner, "Alex")
+    }
+
+    func testEachNoteIsCheckedAgainstWhatWasSaidAroundItFirst() async throws {
+        let model = WordModel()
+        let summary = self.summary
+        model.reply = { prompt, _ in
+            if prompt.hasPrefix("Compare each of the user's notes") {
+                return #"{"notes":[{"label":"N2","said":"Sam said finance caps it at forty thousand.","adds":"None","conflicts":""},"#
+                    + #"{"label":"N3","said":"Alex will email the venue.","adds":"","conflicts":"The note says call; Alex said he will email."},"#
+                    + #"{"label":"N9","said":"","adds":"Made up","conflicts":""}]}"#
+            }
+            return prompt.contains("Extract ALL explicit agreed tasks") ? #"{"actions":[]}"# : summary
+        }
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting()),
+                                                template: .auto, glossary: [], progress: { _ in })
+        // One pass over the notes on the timeline, each beside what was said from two minutes before it to 30 s after.
+        let check = model.prompts[0]
+        XCTAssertTrue(check.hasPrefix("Compare each of the user's notes"))
+        XCTAssertTrue(check.contains(#""label":"N2","note":"Budget cap is firm at 40k","passages_around_it":"[00:00] Alex: Thanks for joining"#))
+        XCTAssertTrue(check.contains(#"[01:40] Alex: Pricing next: twelve dollars a seat feels right."}"#), "Within 30 s after the note")
+        XCTAssertFalse(check.contains("Prep: bring last quarter's numbers"), "A note written outside the recording has nothing around it")
+        XCTAssertFalse(check.contains("Pricing decision"), "Bookmarks only name a moment")
+        XCTAssertTrue(flat(check).contains("most notes repeat what was said in a few words, or as a to-do for what was agreed"))
+
+        // A note that adds nothing ("None" is nothing found) goes on without its words, a moment the person marked, so
+        // no "Your notes add" can come of it; the summary compares the others with what was said, as before.
+        let final = try XCTUnwrap(model.prompts.first { $0.hasPrefix("Write a concise summary") })
+        XCTAssertTrue(final.contains(#"[01:18] NOTE N2, written by the user, repeats what was said around it\n"#))
+        XCTAssertTrue(final.contains(#"{"kind":"note","label":"N2","repeats_what_was_said":true,"text":"","time":"01:18"}"#))
+        XCTAssertFalse(final.contains("Budget cap is firm"))
+        XCTAssertTrue(final.contains("(near N2, B1) Sam: Finance says we can't go over forty thousand."), "Its passages still carry more weight")
+        XCTAssertTrue(final.contains("NOTE N3, written by the user (not spoken): Call the venue"))
+        XCTAssertTrue(final.contains(#"{"kind":"note","label":"N3","text":"Call the venue","time":"03:26"}"#), "A note that conflicts, as before")
+        XCTAssertFalse(final.contains("Made up") || final.contains("Alex said he will email"), "The check's own words stay out")
+        XCTAssertTrue(final.contains(#"{"kind":"note","label":"N1","placement""#), "The untimed note isn't checked")
+        XCTAssertTrue(flat(final).contains(flat(MeetingSynthesis.repeatingNoteGuidance)))
+        XCTAssertTrue(flat(final).contains("What conflicts with what was said: mention the conflict."))
     }
 
     func testALongConversationKeepsTheMarkedPassagesThroughCompression() async throws {
@@ -228,7 +269,7 @@ final class SummaryNotesTests: XCTestCase {
         _ = try await MeetingSynthesis.generate(model: model, modelID: "gemma", source: MeetingEvidence.summarySource(meeting()),
                                                 template: .oneOnOne, glossary: [], templateInstructions: "Sections: Wins, Worries, Next",
                                                 progress: { _ in })
-        let final = model.prompts[0]
+        let final = try XCTUnwrap(model.prompts.first { $0.hasPrefix("Write a concise summary") })
         XCTAssertTrue(final.contains("Use the user's selected kind: oneOnOne"))
         XCTAssertTrue(final.contains("Sections: Wins, Worries, Next"))
         XCTAssertTrue(final.contains("Preserve those names"))

@@ -32,6 +32,9 @@ public struct SummarySource: Sendable, Equatable {
         /// around the bookmark, in its own time.
         public var recording: String?
         public var context: [String]
+        /// A note found to repeat what was said around it: passed on without its words, as a moment the
+        /// person marked (`MeetingSynthesis.notesRepeatingWhatWasSaid`).
+        public var repeatsWhatWasSaid = false
     }
 
     /// How far around a note or a bookmark its passages carry more weight. A note is usually written
@@ -90,7 +93,9 @@ public struct SummarySource: Sendable, Equatable {
     public var notesPayload: [[String: Any]] {
         anchors.map { anchor in
             var entry: [String: Any] = ["label": anchor.label, "kind": anchor.kind.rawValue,
-                                        "time": anchor.time.map { TimeLabel.format($0) as Any } ?? NSNull(), "text": anchor.text]
+                                        "time": anchor.time.map { TimeLabel.format($0) as Any } ?? NSNull(),
+                                        "text": anchor.repeatsWhatWasSaid ? "" : anchor.text]
+            if anchor.repeatsWhatWasSaid { entry["repeats_what_was_said"] = true }
             if anchor.kind == .note && anchor.time == nil { entry["placement"] = "written outside the recording" }
             if let recording = anchor.recording { entry["recording"] = recording; entry["context"] = anchor.context }
             return entry
@@ -163,15 +168,30 @@ public struct SummarySource: Sendable, Equatable {
         return output.joined(separator: "\n")
     }
 
+    /// What was said around a note or bookmark on the timeline: the passages from `before` seconds before it
+    /// to `after` seconds after, at most `limit` of them (the nearest), each cut to 600 characters, in order.
+    /// Wider than its window, so a note written a while after what it's about still meets it.
+    public func passages(around anchor: Anchor, before: TimeInterval = 120, after: TimeInterval = 30, limit: Int = 40) -> String {
+        guard let time = anchor.time, anchor.context.isEmpty else { return "" }
+        let near = lines.indices.filter { lines[$0].time >= time - before && lines[$0].time <= time + after }
+            .sorted { abs(lines[$0].time - time) < abs(lines[$1].time - time) }.prefix(limit).sorted()
+        return near.map { index in
+            let line = lines[index]
+            return "[\(TimeLabel.format(line.time))] \(line.speaker): \(line.text.count > 600 ? String(line.text.prefix(600)) + "…" : line.text)"
+        }.joined(separator: "\n")
+    }
+
     static func format(_ line: Line) -> String {
         let near = line.near.isEmpty ? "" : "(near \(line.near.joined(separator: ", "))) "
         return "[\(TimeLabel.format(line.time))] \(near)\(line.speaker): \(line.text)"
     }
 
-    /// A note or bookmark as a line of its own: "[12:04] NOTE N1, written by the user (not spoken): …".
+    /// A note or bookmark as a line of its own: "[12:04] NOTE N1, written by the user (not spoken): …", or, for a
+    /// note that repeats what was said, "[12:04] NOTE N1, written by the user, repeats what was said around it".
     public static func marker(_ anchor: Anchor) -> String {
         let time = anchor.time.map { "[\(TimeLabel.format($0))] " } ?? ""
         switch anchor.kind {
+        case .note where anchor.repeatsWhatWasSaid: return "\(time)NOTE \(anchor.label), written by the user, repeats what was said around it"
         case .note: return "\(time)NOTE \(anchor.label), written by the user (not spoken): \(anchor.text)"
         case .bookmark: return "\(time)BOOKMARK \(anchor.label), marked by the user" + (anchor.text.isEmpty ? "" : ": \(anchor.text)")
         }
