@@ -339,29 +339,53 @@ public enum MeetingSynthesis {
     static func transcriptParts(_ transcript: String, model: any SynthesisModel, tokenLimit: Int) async -> [String] {
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         guard await model.encode(transcript).count > tokenLimit else { return [transcript] }
-        var lines: [(line: String, cost: Int)] = []
-        for line in transcript.components(separatedBy: "\n") { lines.append((line, await model.encode(line).count + 1)) }
-        // Even parts, with a tenth to spare for the passages they repeat, rather than full ones and a scrap.
-        let total = lines.reduce(0) { $0 + $1.cost }, count = (total + tokenLimit - 1) / tokenLimit
-        let target = min(tokenLimit, total / count + total / count / 10)
-        var parts: [String] = [], current: [(line: String, cost: Int)] = [], spent = 0
-        for (line, cost) in lines {
-            if cost > tokenLimit {
-                // One passage longer than a part (a transcript without line breaks): split it by tokens.
-                if !current.isEmpty { parts.append(current.map(\.line).joined(separator: "\n")); current = []; spent = 0 }
-                parts += await chunks(line, model: model, tokenLimit: tokenLimit)
-                continue
-            }
-            if spent + cost > target, current.count > 2 {
-                parts.append(current.map(\.line).joined(separator: "\n"))
-                current = Array(current.suffix(2))
-                spent = current.reduce(0) { $0 + $1.cost }
-            }
-            current.append((line, cost))
-            spent += cost
+        // Each passage with its cost; one longer than a part (a transcript without line breaks) is split by tokens.
+        var lines: [(line: String, cost: Int, pieces: [String]?)] = []
+        for line in transcript.components(separatedBy: "\n") {
+            let cost = await model.encode(line).count + 1
+            lines.append((line, cost, cost > tokenLimit ? await chunks(line, model: model, tokenLimit: tokenLimit) : nil))
         }
-        if !current.isEmpty { parts.append(current.map(\.line).joined(separator: "\n")) }
-        return parts
+        let average = lines.reduce(0) { $0 + $1.cost } / max(1, lines.count)
+        var rest = Array(repeating: 0, count: lines.count + 1)   // What the passages from each one on cost.
+        for index in lines.indices.reversed() { rest[index] = rest[index + 1] + lines[index].cost }
+        // Parts up to `target`; with `count`, each part closes nearest an even share of what's left (counting the
+        // passages each later part repeats), so the parts come out even.
+        func split(target: Int, count: Int? = nil) -> [String] {
+            var parts: [String] = [], current: [(line: String, cost: Int)] = [], spent = 0
+            for (index, (line, cost, pieces)) in lines.enumerated() {
+                if let pieces {
+                    if !current.isEmpty { parts.append(current.map(\.line).joined(separator: "\n")); current = []; spent = 0 }
+                    parts += pieces
+                    continue
+                }
+                var goal = target
+                if let count, count - parts.count > 1 {
+                    let left = count - parts.count
+                    goal = min(target, (spent + rest[index] + 2 * average * (left - 1)) / left)
+                }
+                if current.count > 2, spent + cost > target || spent + cost / 2 > goal {
+                    parts.append(current.map(\.line).joined(separator: "\n"))
+                    current = Array(current.suffix(2))
+                    spent = current.reduce(0) { $0 + $1.cost }
+                }
+                current.append((line, cost))
+                spent += cost
+            }
+            if !current.isEmpty { parts.append(current.map(\.line).joined(separator: "\n")) }
+            return parts
+        }
+        // As few parts as full ones take, in even shares: filled to the limit, a three-hour meeting's 12,000-token
+        // parts left a last one of 828 tokens (docs/validation.md, 2026-10-31).
+        let fewest = split(target: tokenLimit).count
+        let even = split(target: tokenLimit, count: fewest)
+        if even.count <= fewest { return even }
+        // Where the shares can't fall evenly, parts as small as that count allows.
+        var low = 1, high = tokenLimit
+        while low < high {
+            let middle = (low + high) / 2
+            if split(target: middle).count <= fewest { high = middle } else { low = middle + 1 }
+        }
+        return split(target: low)
     }
 
     /// The notes and bookmarks that fit `budget`, in order: notes and bookmarks with words first.
