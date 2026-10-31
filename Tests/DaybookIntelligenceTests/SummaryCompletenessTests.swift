@@ -254,6 +254,27 @@ final class SummaryCompletenessTests: XCTestCase {
         XCTAssertEqual(RestatedCommitments.words("Complete the stale flag list by Wednesday"), ["stale", "flag", "list"])
     }
 
+    func testAQuoteShortenedOrStitchedTogetherIsFoundPieceByPiece() throws {
+        let filler = (0..<12).map { "[01:\(String(format: "%02d", $0))] Mei: We went over routine item number \($0) for the quarterly review today." }
+        let transcript = (["[00:01] Hana: Diego and I will write the new tracking plan together, by the end of February. I'll take the product events.",
+                           "[00:09] Diego: And I'll take the backend events."] + filler + ["[02:00] Hana: I'll send the deck on Friday."]).joined(separator: "\n")
+        func kept(_ evidence: String) -> [String] {
+            let reply = #"{"actions":[{"text":"Write the new tracking plan","owner":"Hana","evidence":"\#(evidence)"}]}"#
+            return (MeetingSynthesis.verifiedActions(reply, source: transcript) ?? []).map { "\($0.text) (\($0.owner ?? "no owner"))" }
+        }
+        // The 26B shortened a three-hour meeting's commitments this way; each piece is there word for word, in order.
+        XCTAssertEqual(kept("Diego and I will write the new tracking plan together [...] I'll take the product events."), ["Write the new tracking plan (Hana)"])
+        XCTAssertEqual(kept("Diego and I will write the new tracking plan together… And I'll take the backend events."), ["Write the new tracking plan (no owner)"],
+                       "Across passages too, where two people speaking show no one owner")
+        XCTAssertEqual(kept("Diego and I will write the new tracking plan..."), ["Write the new tracking plan (Hana)"])
+        XCTAssertEqual(kept("Diego and I will write the new tracking plan together, by the end of February. And I'll take the backend events."),
+                       ["Write the new tracking plan (no owner)"], "Sentences that skip what was said between them")
+        XCTAssertEqual(kept("I'll take the product events. [...] Diego and I will write the new tracking plan"), [], "Out of order")
+        XCTAssertEqual(kept("Diego and I will write the new tracking plan together [...] I'll send the deck on Friday."), [],
+                       "Pieces a dozen passages apart aren't one quote")
+        XCTAssertEqual(kept("Diego and I will write the plan [...] product events"), [], "Each piece word for word")
+    }
+
     // MARK: Owners
 
     func testTheOwnerIsWhoeverTheQuoteShowsCommitting() throws {
