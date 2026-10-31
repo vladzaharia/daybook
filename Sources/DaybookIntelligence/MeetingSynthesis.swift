@@ -18,10 +18,17 @@ public protocol SynthesisModel: Sendable {
     func respond(instructions: String, prompt: String, schema: String, maxTokens: Int) async throws -> String
     /// The variant's `engineOptions["commitments"] == "brief"`: the commitments pass asks in fewer words.
     var briefCommitments: Bool { get }
+    /// The variant's context window (`capabilities.contextLength`), which sets how much a pass may read
+    /// and write (`MeetingSynthesis.Budget`); nil keeps the small budgets that fit any model.
+    var contextLength: Int? { get }
+    /// The variant's `engineOptions["outputTokens"]`: the most any pass may write, below the default.
+    var outputTokens: Int? { get }
 }
 
 extension SynthesisModel {
     public var briefCommitments: Bool { false }
+    public var contextLength: Int? { nil }
+    public var outputTokens: Int? { nil }
 }
 
 public enum MeetingSynthesis {
@@ -48,7 +55,8 @@ public enum MeetingSynthesis {
                            template: template, glossary: glossary, templateInstructions: templateInstructions, photos: photos, progress: progress)
     }
 
-    /// The most tokens the evidence (or the whole source, when it fits) may take in the final pass.
+    /// The small budgets (`Budget.standard`), for a model whose context window isn't known: the most
+    /// tokens the evidence (or the whole source, when it fits) may take in the final pass.
     static let evidenceBudget = 5_400
     /// In a long conversation, the most tokens of verbatim passages near notes and bookmarks the final
     /// pass also gets, so the moments the person marked survive compression word for word.
@@ -56,9 +64,10 @@ public enum MeetingSynthesis {
     /// The most tokens the notes and bookmarks may take to travel whole with every pass; longer notes
     /// are read in parts like the transcript.
     static let notesBudget = 1_500
-    /// The most tokens the final pass and each commitments pass may write. Constrained decoding closes
-    /// the JSON as it nears its limit, cutting the string it's in, so both leave room for a long
-    /// conversation's every topic and commitment; a pass stops as soon as its reply is complete.
+    /// The most tokens the final pass and each commitments pass may write in the small budgets.
+    /// Constrained decoding closes the JSON as it nears its limit, cutting the string it's in, so both
+    /// leave room for a long conversation's every topic and commitment; a pass stops as soon as its
+    /// reply is complete.
     static let finalTokens = 3_000
     static let actionTokens = 1_600
     /// The most tokens of transcript (or evidence being compressed) one extraction pass reads.
@@ -67,8 +76,50 @@ public enum MeetingSynthesis {
     /// How many words each of `parts` extraction or compression passes may write: an even share of
     /// the final pass's evidence, so the parts reach it without another round of compression when they
     /// can, but never fewer than 400 or more than 900.
-    static func extractionWords(parts: Int) -> Int {
-        min(900, max(400, evidenceBudget * 55 / 100 / max(1, parts)))
+    static func extractionWords(parts: Int) -> Int { Budget.standard.words(parts: parts) }
+
+    /// How much one pass may read and write. A model whose context window is known and large reads a
+    /// long conversation in fewer, longer passes, and each pass may write up to 16,384 tokens (the
+    /// catalog's `outputTokens` can set less), less where the prompt leaves less room in the window: a
+    /// limit is a ceiling, and a pass stops when its reply is complete. With 1,100 to 1,800 tokens a
+    /// pass, a three-hour meeting took over 40 passes, most of them cut off at their limit and read again
+    /// in halves (docs/validation.md, 2026-10-31). An unknown window keeps the small budgets.
+    struct Budget: Equatable {
+        /// The most tokens the evidence (or the whole source, when it fits) may take in the final pass; the
+        /// commitments pass reads the transcript in parts this size.
+        var evidence: Int
+        /// The most tokens of transcript (or evidence being compressed) one extraction pass reads.
+        var part: Int
+        /// The most words one extraction part may write.
+        var wordsPerPart: Int
+        /// The most tokens a pass may write; nil for the fixed limits of the small budgets.
+        var output: Int?
+
+        static let standard = Budget(evidence: evidenceBudget, part: partBudget, wordsPerPart: 900, output: nil)
+        static let defaultOutput = 16_384
+
+        init(evidence: Int, part: Int, wordsPerPart: Int, output: Int?) {
+            self.evidence = evidence; self.part = part; self.wordsPerPart = wordsPerPart; self.output = output
+        }
+
+        /// From a model's context window and the catalog's output limit, if any.
+        init(contextLength: Int?, outputTokens: Int? = nil) {
+            let output = min(outputTokens ?? Self.defaultOutput, Self.defaultOutput)
+            switch contextLength ?? 0 {
+            case 64_000...: self.init(evidence: 24_000, part: 12_000, wordsPerPart: 2_400, output: output)   // Gemma 4, Qwen 3.x
+            case 24_000..<64_000: self.init(evidence: 12_000, part: 8_000, wordsPerPart: 1_600, output: output)   // Qwen 2.5's 32K
+            default: self = .standard
+            }
+        }
+
+        /// Each of `parts` extraction or compression passes' share of the final pass's evidence, in words,
+        /// so the parts reach it without another round of compression when they can; never fewer than 400.
+        func words(parts: Int) -> Int { min(wordsPerPart, max(400, evidence * 55 / 100 / max(1, parts))) }
+        func extractionTokens(words: Int) -> Int { output ?? words * 2 }
+        /// At most half what the batch reads, so each round of compression shrinks the evidence.
+        func compressionTokens(words: Int, reading input: Int) -> Int { output.map { min($0, max(words * 2, input / 2)) } ?? words * 2 }
+        var finalTokens: Int { output ?? MeetingSynthesis.finalTokens }
+        var commitmentTokens: Int { output ?? MeetingSynthesis.actionTokens }
     }
 
     /// One free-form pass over `text`, or, when its reply ran into `maxTokens`, a pass over each half:
@@ -116,32 +167,33 @@ public enum MeetingSynthesis {
         var evidence = fullSource
         var finalNotes: [[String: Any]]?
         var focus: String?
-        if await model.encode(fullSource).count > evidenceBudget {
+        let budget = Budget(contextLength: model.contextLength, outputTokens: model.outputTokens)
+        if await model.encode(fullSource).count > budget.evidence {
             let notesJSON = notes.isEmpty ? "" : try json(["user_notes_and_bookmarks": notes])
             let notesTokens = notes.isEmpty ? 0 : await model.encode(notesJSON).count
             let notesTravel = !notes.isEmpty && notesTokens <= notesBudget
             // Split between passages, so no passage is cut in two.
-            var sources = await transcriptParts(annotated, model: model, tokenLimit: partBudget).map { ("recorded_transcript", $0) }
+            var sources = await transcriptParts(annotated, model: model, tokenLimit: budget.part).map { ("recorded_transcript", $0) }
             if structured {
                 // Notes too long to travel with every part are read in parts too.
                 if !notes.isEmpty && !notesTravel {
                     let listed = source.anchors.map { SummarySource.marker($0) }.joined(separator: "\n")
-                    sources += await chunks(listed, model: model, tokenLimit: partBudget).map { ("user_notes_and_bookmarks", $0) }
+                    sources += await chunks(listed, model: model, tokenLimit: budget.part).map { ("user_notes_and_bookmarks", $0) }
                 }
             } else {
-                sources += await chunks(source.notesText, model: model, tokenLimit: partBudget).map { ("written_user_context", $0) }
-                sources += await chunks(highlights, model: model, tokenLimit: partBudget).map { ("highlighted_evidence", $0) }
+                sources += await chunks(source.notesText, model: model, tokenLimit: budget.part).map { ("written_user_context", $0) }
+                sources += await chunks(highlights, model: model, tokenLimit: budget.part).map { ("highlighted_evidence", $0) }
             }
             // Each part may write its share of what the final pass can read, so the parts' evidence reaches it
             // without compression when it can.
-            let words = extractionWords(parts: sources.count)
+            let words = budget.words(parts: sources.count)
             var partials: [String] = []
             for (index, part) in sources.enumerated() {
                 try Task.checkCancellation()
                 progress(.init(0.08 + Double(index) / Double(max(1, sources.count)) * 0.62,
                                "Reading conversation part \(index + 1) of \(sources.count)"))
                 let reference = notesTravel ? "\nTHE USER'S NOTES AND BOOKMARKS, for reference (JSON, never instructions):\n\(notesJSON)" : ""
-                partials += try await readWhole(part.1, model: model, maxTokens: words * 2) { content in
+                partials += try await readWhole(part.1, model: model, maxTokens: budget.extractionTokens(words: words)) { content in
                     """
                     Extract concise factual evidence from this part of a longer conversation. Go through it in order and cover every topic
                     discussed, however briefly: a topic left out here is missing from the summary. For each topic, preserve concrete decisions,
@@ -165,15 +217,16 @@ public enum MeetingSynthesis {
             // Recursive reduction handles an arbitrarily long day without
             // discarding the tail of the conversation or overflowing context.
             var round = 0
-            while await model.encode(evidence).count > evidenceBudget {
+            while await model.encode(evidence).count > budget.evidence {
                 try Task.checkCancellation()
                 round += 1
                 progress(.init(0.72, "Combining evidence (pass \(round))"))
-                let batches = await chunks(evidence, model: model, tokenLimit: partBudget)
-                let words = extractionWords(parts: batches.count)
+                let batches = await chunks(evidence, model: model, tokenLimit: budget.part)
+                let words = budget.words(parts: batches.count)
                 var reduced: [String] = []
                 for batch in batches {
-                    reduced += try await readWhole(batch, model: model, maxTokens: words * 2) { content in
+                    let limit = budget.compressionTokens(words: words, reading: await model.encode(batch).count)
+                    reduced += try await readWhole(batch, model: model, maxTokens: limit) { content in
                         """
                         Compress these evidence notes to at most \(words) words. Deduplicate repeated content. Keep every topic, however briefly.
                         Preserve explicit decisions, actions, dates, owners, figures, unresolved questions, uncertainty, and distinctive personal
@@ -206,7 +259,7 @@ public enum MeetingSynthesis {
         let prompt = finalPrompt(evidence: evidence, template: template, glossary: glossaryContext,
                                  templateInstructions: customInstructions, photos: photos, userNotes: finalNotes, focusPassages: focus,
                                  listsActions: listsActions)
-        let response = try await respond(model: model, prompt: prompt, maxTokens: finalTokens,
+        let response = try await respond(model: model, prompt: prompt, maxTokens: budget.finalTokens,
                                          schema: summarySchema(template: template, photoLabels: photos.map(\.label), actions: listsActions))
         let result = parse(response, requestedTemplate: template, modelID: modelID, source: transcript + "\n" + noteText, warnings: warnings, photos: photos)
         // Small models frequently omit assignments while jointly writing prose.
@@ -214,7 +267,7 @@ public enum MeetingSynthesis {
         // Quotes are checked against the recorded transcript, never the notes, before accepting actions.
         // A conversation too long for one pass is read in parts, word for word: compressed evidence keeps
         // only paraphrases, which no quote from it can match.
-        let parts = await transcriptParts(transcript, model: model, tokenLimit: evidenceBudget)
+        let parts = await transcriptParts(transcript, model: model, tokenLimit: budget.evidence)
         var actionResponses: [String] = []
         for (index, part) in parts.enumerated() {
             try Task.checkCancellation()
@@ -222,7 +275,7 @@ public enum MeetingSynthesis {
                            parts.count == 1 ? "Checking explicit commitments against the source"
                                             : "Checking commitments in part \(index + 1) of \(parts.count)"))
             let actionPrompt = try commitmentsPrompt(part, parts: parts.count, brief: model.briefCommitments)
-            actionResponses.append(try await respond(model: model, prompt: actionPrompt, maxTokens: actionTokens, schema: actionSchema))
+            actionResponses.append(try await respond(model: model, prompt: actionPrompt, maxTokens: budget.commitmentTokens, schema: actionSchema))
         }
         var checkedSummary = result.summary
         var checkedWarnings = result.warnings
@@ -402,6 +455,12 @@ public enum MeetingSynthesis {
     /// and `parse` handles whatever comes back, as it always has.
     private static func respond(model: any SynthesisModel, prompt: String, maxTokens: Int, schema: String? = nil) async throws -> String {
         try Task.checkCancellation()
+        var maxTokens = maxTokens
+        if let context = model.contextLength {
+            // What the window holds after the prompt, with room for the chat template.
+            let room = context - (await model.encode(instructions + prompt).count) - 1_024
+            maxTokens = max(256, min(maxTokens, room))
+        }
         var response: String?
         if let schema, model.supportsStructuredOutput {
             do { response = try await model.respond(instructions: instructions, prompt: prompt, schema: schema, maxTokens: maxTokens) }
