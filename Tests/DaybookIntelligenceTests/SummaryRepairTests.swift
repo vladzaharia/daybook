@@ -107,18 +107,31 @@ final class SummaryRepairTests: XCTestCase {
     /// Writes a summary and no commitments, recording each prompt and its limit; a word is a token.
     private final class BriefModel: SynthesisModel, @unchecked Sendable {
         let supportsStructuredOutput = true, briefCommitments: Bool, contextLength: Int?, outputTokens: Int?
+        /// Extraction and compression write all they may, as the 26B came close to doing.
+        var verbose = false
         private let lock = NSLock()
         private var _passes: [(prompt: String, maxTokens: Int)] = []
         var prompts: [String] { lock.withLock { _passes.map(\.prompt) } }
         var passes: [(prompt: String, maxTokens: Int)] { lock.withLock { _passes } }
         init(brief: Bool = false, context: Int? = nil, output: Int? = nil) { briefCommitments = brief; contextLength = context; outputTokens = output }
-        func encode(_ text: String) async -> [Int] { text.split(whereSeparator: \.isWhitespace).map { _ in 0 } }
-        func decode(_ tokens: [Int]) async -> String { "" }
+        private var vocabulary: [String] = [], index: [String: Int] = [:]
+        func encode(_ text: String) async -> [Int] {
+            lock.withLock {
+                text.split(whereSeparator: \.isWhitespace).map { word in
+                    if let found = index[String(word)] { return found }
+                    vocabulary.append(String(word)); index[String(word)] = vocabulary.count - 1
+                    return vocabulary.count - 1
+                }
+            }
+        }
+        func decode(_ tokens: [Int]) async -> String { lock.withLock { tokens.map { vocabulary[$0] }.joined(separator: " ") } }
         func respond(instructions: String, prompt: String, maxTokens: Int) async throws -> String { try await respond(instructions: instructions, prompt: prompt, schema: "", maxTokens: maxTokens) }
         func respond(instructions: String, prompt: String, schema: String, maxTokens: Int) async throws -> String {
             lock.withLock { _passes.append((prompt, maxTokens)) }
             if prompt.hasPrefix("Extract ALL") { return #"{"actions":[]}"# }
-            if prompt.hasPrefix("Extract concise") || prompt.hasPrefix("Compress") { return "Evidence." }
+            if prompt.hasPrefix("Extract concise") || prompt.hasPrefix("Compress") {
+                return verbose ? String(repeating: "evidence ", count: maxTokens) : "Evidence."
+            }
             return #"{"kind":"general","title":"T","overview":"O.","sections":[],"actionItems":[],"terms":[]}"#
         }
     }
@@ -148,6 +161,22 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertFalse(large.passes.contains { $0.prompt.hasPrefix("Compress") }, "The parts' evidence fits the final pass")
     }
 
+    func testCompressionShrinksTheEvidenceEvenWhenTheModelWritesAllItMay() async throws {
+        let model = BriefModel()
+        model.verbose = true
+        _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: transcript(700), notes: "", template: .auto, glossary: [],
+                                                progress: { _ in })
+        let rounds = model.passes.filter { $0.prompt.hasPrefix("Compress") }
+        XCTAssertFalse(rounds.isEmpty)
+        for pass in rounds {
+            let notes = try XCTUnwrap(pass.prompt.range(of: #"{"evidence_notes":""#).map { pass.prompt[$0.upperBound...] })
+            let reading = notes.split(whereSeparator: \.isWhitespace).count
+            XCTAssertLessThanOrEqual(pass.maxTokens, max(64, reading / 2), "At most half what it reads")
+        }
+        let final = try XCTUnwrap(model.passes.first { $0.prompt.hasPrefix("Write a concise summary") })
+        XCTAssertLessThanOrEqual(final.prompt.components(separatedBy: "evidence ").count - 1, MeetingSynthesis.evidenceBudget)
+    }
+
     func testAPassNeverAsksForMoreThanTheWindowHolds() async throws {
         // An 8,192-token window with a 5,000-token conversation: the final pass may write what's left.
         let model = BriefModel(context: 8_192)
@@ -170,6 +199,7 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertEqual(gemma.compressionTokens(words: 2_400, reading: 12_000), 6_000)
         XCTAssertEqual(gemma.compressionTokens(words: 400, reading: 3_000), 1_500)
         XCTAssertEqual(MeetingSynthesis.Budget.standard.compressionTokens(words: 600, reading: 4_800), 1_200)
+        XCTAssertEqual(MeetingSynthesis.Budget.standard.compressionTokens(words: 900, reading: 1_341), 670)
         XCTAssertEqual(gemma.words(parts: 4), 2_400)
         XCTAssertEqual(gemma.words(parts: 40), 400)
     }
