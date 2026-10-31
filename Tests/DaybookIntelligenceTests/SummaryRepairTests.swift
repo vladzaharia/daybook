@@ -154,11 +154,24 @@ final class SummaryRepairTests: XCTestCase {
         let commitments = { (model: BriefModel) in model.passes.filter { $0.prompt.hasPrefix("Extract ALL") } }
         XCTAssertGreaterThanOrEqual(parts(small).count, 7, "Parts of 4,800 tokens")
         XCTAssertTrue(parts(small).allSatisfy { $0.maxTokens == MeetingSynthesis.extractionWords(parts: parts(small).count) * 2 })
-        XCTAssertEqual(parts(large).count, 3, "Parts of 12,000 tokens")
-        XCTAssertEqual(commitments(large).count, 2, "Commitments in parts of 24,000 tokens")
+        XCTAssertEqual(parts(large).count, 3, "Longer than the final pass's 24,000 tokens: parts of 12,000")
+        XCTAssertTrue(parts(large).allSatisfy { $0.prompt.contains("Use at most 2250 words") })
+        XCTAssertEqual(commitments(large).count, commitments(small).count, "Commitments in parts of 5,400 tokens either way")
         XCTAssertTrue(large.passes.allSatisfy { $0.maxTokens == 16_384 }, "Every pass may write 16,384 tokens; it stops when it's done")
         XCTAssertEqual(small.passes.last?.maxTokens, MeetingSynthesis.actionTokens)
         XCTAssertFalse(large.passes.contains { $0.prompt.hasPrefix("Compress") }, "The parts' evidence fits the final pass")
+    }
+
+    func testAMeetingTheEvidenceBudgetHoldsIsReadAsBefore() async throws {
+        // The weekly's size: parts of 4,800 tokens and 900 words each, as the 26B was tuned on.
+        let weekly = transcript(500)
+        let small = BriefModel(), large = BriefModel(context: 262_144)
+        for model in [small, large] {
+            _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: weekly, notes: "", template: .auto, glossary: [], progress: { _ in })
+        }
+        let prompts = { (model: BriefModel) in model.passes.map(\.prompt) }
+        XCTAssertEqual(prompts(large), prompts(small), "The same passes, only allowed to write more")
+        XCTAssertTrue(prompts(large).contains { $0.contains("Use at most 900 words") })
     }
 
     func testCompressionShrinksTheEvidenceEvenWhenTheModelWritesAllItMay() async throws {
@@ -191,17 +204,19 @@ final class SummaryRepairTests: XCTestCase {
         XCTAssertEqual(MeetingSynthesis.Budget(contextLength: nil), .standard)
         XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 8_192), .standard)
         let qwen = MeetingSynthesis.Budget(contextLength: 32_768), gemma = MeetingSynthesis.Budget(contextLength: 262_144)
-        XCTAssertEqual([qwen.evidence, qwen.part, qwen.output], [12_000, 8_000, 16_384])
-        XCTAssertEqual([gemma.evidence, gemma.part, gemma.output], [24_000, 12_000, 16_384])
+        XCTAssertEqual([qwen.evidence, qwen.longPart, qwen.output], [12_000, 8_000, 16_384])
+        XCTAssertEqual([gemma.evidence, gemma.longPart, gemma.output], [24_000, 12_000, 16_384])
+        XCTAssertEqual([gemma.part(transcript: 30_000), gemma.part(transcript: 10_000), qwen.part(transcript: 13_000)], [12_000, 4_800, 8_000])
         XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 262_144, outputTokens: 8_192).output, 8_192)
         XCTAssertEqual(MeetingSynthesis.Budget(contextLength: 262_144, outputTokens: 99_999).output, 16_384)
         // Compression writes at most half what it reads, so every round shrinks the evidence.
-        XCTAssertEqual(gemma.compressionTokens(words: 2_400, reading: 12_000), 6_000)
+        XCTAssertEqual(gemma.compressionTokens(words: 2_250, reading: 12_000), 6_000)
         XCTAssertEqual(gemma.compressionTokens(words: 400, reading: 3_000), 1_500)
         XCTAssertEqual(MeetingSynthesis.Budget.standard.compressionTokens(words: 600, reading: 4_800), 1_200)
         XCTAssertEqual(MeetingSynthesis.Budget.standard.compressionTokens(words: 900, reading: 1_341), 670)
-        XCTAssertEqual(gemma.words(parts: 4), 2_400)
-        XCTAssertEqual(gemma.words(parts: 40), 400)
+        XCTAssertEqual(gemma.words(parts: 4, reading: 12_000), 2_250)
+        XCTAssertEqual(gemma.words(parts: 2, reading: 4_800), 900)
+        XCTAssertEqual(gemma.words(parts: 40, reading: 12_000), 400)
     }
 
     func testAModelMarkedBriefGetsTheShorterCommitmentsPrompt() async throws {

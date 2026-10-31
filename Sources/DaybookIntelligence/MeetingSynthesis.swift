@@ -76,45 +76,51 @@ public enum MeetingSynthesis {
     /// How many words each of `parts` extraction or compression passes may write: an even share of
     /// the final pass's evidence, so the parts reach it without another round of compression when they
     /// can, but never fewer than 400 or more than 900.
-    static func extractionWords(parts: Int) -> Int { Budget.standard.words(parts: parts) }
+    static func extractionWords(parts: Int) -> Int { Budget.standard.words(parts: parts, reading: partBudget) }
 
-    /// How much one pass may read and write. A model whose context window is known and large reads a
-    /// long conversation in fewer, longer passes, and each pass may write up to 16,384 tokens (the
-    /// catalog's `outputTokens` can set less), less where the prompt leaves less room in the window: a
-    /// limit is a ceiling, and a pass stops when its reply is complete. With 1,100 to 1,800 tokens a
-    /// pass, a three-hour meeting took over 40 passes, most of them cut off at their limit and read again
-    /// in halves (docs/validation.md, 2026-10-31). An unknown window keeps the small budgets.
+    /// How much one pass may read and write. Any pass may write up to 16,384 tokens when the model's
+    /// context window is known (the catalog's `outputTokens` can set less), less where the prompt leaves
+    /// less room in the window: a limit is a ceiling, and a pass stops when its reply is complete. A
+    /// window of 64K tokens or more lets the final pass read up to 24,000 tokens of evidence (Qwen 2.5's
+    /// 32K, 12,000), and a conversation longer than that is read in parts of 12,000 (8,000). With 1,100 to
+    /// 1,800 tokens a pass and 5,400 of evidence, a three-hour meeting took over 50 passes, a third cut off
+    /// at their limit and read again in halves, and compression never got its evidence down to size
+    /// (docs/validation.md, 2026-10-31). What the 26B was tuned on stays: a conversation up to 5,400 tokens
+    /// is read whole, a longer one up to the evidence budget in parts of 4,800, and commitments in parts
+    /// of 5,400 (one pass over the whole weekly kept 31 of its 38, two kept 36). An unknown window keeps
+    /// the small budgets throughout.
     struct Budget: Equatable {
-        /// The most tokens the evidence (or the whole source, when it fits) may take in the final pass; the
-        /// commitments pass reads the transcript in parts this size.
+        /// The most tokens of evidence the final pass reads.
         var evidence: Int
-        /// The most tokens of transcript (or evidence being compressed) one extraction pass reads.
-        var part: Int
-        /// The most words one extraction part may write.
-        var wordsPerPart: Int
+        /// The parts a conversation longer than `evidence` is read in.
+        var longPart: Int
         /// The most tokens a pass may write; nil for the fixed limits of the small budgets.
         var output: Int?
 
-        static let standard = Budget(evidence: evidenceBudget, part: partBudget, wordsPerPart: 900, output: nil)
+        static let standard = Budget(evidence: evidenceBudget, longPart: partBudget, output: nil)
         static let defaultOutput = 16_384
 
-        init(evidence: Int, part: Int, wordsPerPart: Int, output: Int?) {
-            self.evidence = evidence; self.part = part; self.wordsPerPart = wordsPerPart; self.output = output
+        init(evidence: Int, longPart: Int, output: Int?) {
+            self.evidence = evidence; self.longPart = longPart; self.output = output
         }
 
         /// From a model's context window and the catalog's output limit, if any.
         init(contextLength: Int?, outputTokens: Int? = nil) {
             let output = min(outputTokens ?? Self.defaultOutput, Self.defaultOutput)
             switch contextLength ?? 0 {
-            case 64_000...: self.init(evidence: 24_000, part: 12_000, wordsPerPart: 2_400, output: output)   // Gemma 4, Qwen 3.x
-            case 24_000..<64_000: self.init(evidence: 12_000, part: 8_000, wordsPerPart: 1_600, output: output)   // Qwen 2.5's 32K
+            case 64_000...: self.init(evidence: 24_000, longPart: 12_000, output: output)   // Gemma 4, Qwen 3.x
+            case 24_000..<64_000: self.init(evidence: 12_000, longPart: 8_000, output: output)   // Qwen 2.5's 32K
             default: self = .standard
             }
         }
 
+        /// The size of the parts a transcript of `tokens` is read in.
+        func part(transcript tokens: Int) -> Int { tokens > evidence ? longPart : partBudget }
+
         /// Each of `parts` extraction or compression passes' share of the final pass's evidence, in words,
-        /// so the parts reach it without another round of compression when they can; never fewer than 400.
-        func words(parts: Int) -> Int { min(wordsPerPart, max(400, evidence * 55 / 100 / max(1, parts))) }
+        /// so the parts reach it without another round of compression when they can: never fewer than 400,
+        /// or more than about a fifth of what the pass reads (900 words of a 4,800-token part).
+        func words(parts: Int, reading part: Int) -> Int { min(part * 3 / 16, max(400, evidence * 55 / 100 / max(1, parts))) }
         func extractionTokens(words: Int) -> Int { output ?? words * 2 }
         /// At most half what the pass reads, so each round of compression shrinks the evidence: allowed as
         /// much as it read, the 26B wrote 18,000 tokens of a three-hour meeting's evidence from 16,500, then
@@ -172,25 +178,26 @@ public enum MeetingSynthesis {
         var finalNotes: [[String: Any]]?
         var focus: String?
         let budget = Budget(contextLength: model.contextLength, outputTokens: model.outputTokens)
-        if await model.encode(fullSource).count > budget.evidence {
+        if await model.encode(fullSource).count > evidenceBudget {
             let notesJSON = notes.isEmpty ? "" : try json(["user_notes_and_bookmarks": notes])
             let notesTokens = notes.isEmpty ? 0 : await model.encode(notesJSON).count
             let notesTravel = !notes.isEmpty && notesTokens <= notesBudget
             // Split between passages, so no passage is cut in two.
-            var sources = await transcriptParts(annotated, model: model, tokenLimit: budget.part).map { ("recorded_transcript", $0) }
+            let partTokens = budget.part(transcript: await model.encode(annotated).count)
+            var sources = await transcriptParts(annotated, model: model, tokenLimit: partTokens).map { ("recorded_transcript", $0) }
             if structured {
                 // Notes too long to travel with every part are read in parts too.
                 if !notes.isEmpty && !notesTravel {
                     let listed = source.anchors.map { SummarySource.marker($0) }.joined(separator: "\n")
-                    sources += await chunks(listed, model: model, tokenLimit: budget.part).map { ("user_notes_and_bookmarks", $0) }
+                    sources += await chunks(listed, model: model, tokenLimit: partTokens).map { ("user_notes_and_bookmarks", $0) }
                 }
             } else {
-                sources += await chunks(source.notesText, model: model, tokenLimit: budget.part).map { ("written_user_context", $0) }
-                sources += await chunks(highlights, model: model, tokenLimit: budget.part).map { ("highlighted_evidence", $0) }
+                sources += await chunks(source.notesText, model: model, tokenLimit: partTokens).map { ("written_user_context", $0) }
+                sources += await chunks(highlights, model: model, tokenLimit: partTokens).map { ("highlighted_evidence", $0) }
             }
             // Each part may write its share of what the final pass can read, so the parts' evidence reaches it
             // without compression when it can.
-            let words = budget.words(parts: sources.count)
+            let words = budget.words(parts: sources.count, reading: partTokens)
             var partials: [String] = []
             for (index, part) in sources.enumerated() {
                 try Task.checkCancellation()
@@ -225,8 +232,8 @@ public enum MeetingSynthesis {
                 try Task.checkCancellation()
                 round += 1
                 progress(.init(0.72, "Combining evidence (pass \(round))"))
-                let batches = await chunks(evidence, model: model, tokenLimit: budget.part)
-                let words = budget.words(parts: batches.count)
+                let batches = await chunks(evidence, model: model, tokenLimit: partTokens)
+                let words = budget.words(parts: batches.count, reading: partTokens)
                 var reduced: [String] = []
                 for batch in batches {
                     // At most half what each pass reads, halves included, so every round shrinks the evidence.
@@ -272,7 +279,7 @@ public enum MeetingSynthesis {
         // Quotes are checked against the recorded transcript, never the notes, before accepting actions.
         // A conversation too long for one pass is read in parts, word for word: compressed evidence keeps
         // only paraphrases, which no quote from it can match.
-        let parts = await transcriptParts(transcript, model: model, tokenLimit: budget.evidence)
+        let parts = await transcriptParts(transcript, model: model, tokenLimit: evidenceBudget)
         var actionResponses: [String] = []
         for (index, part) in parts.enumerated() {
             try Task.checkCancellation()
