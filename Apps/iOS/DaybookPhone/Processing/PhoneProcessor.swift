@@ -118,7 +118,8 @@ final class PhoneProcessor {
         case summaryDue
         /// Transcribed here; the rest (lining recordings up, fusing, and the summary) is a Mac's.
         case handedBack
-        case failed(String)
+        /// The device's own words, for Details, and the kind every device words it by, set where it was caught.
+        case failed(String, ProcessingRequest.FailureKind)
         case paused(Pause)
         /// Another device holds the request now.
         case lost
@@ -262,7 +263,7 @@ final class PhoneProcessor {
                 }
             }
             if error is CancellationError { return .paused(.background) }
-            return .failed(error.localizedDescription)
+            return .failed(error.localizedDescription, ProcessingRequest.FailureKind(error))
         }
     }
 
@@ -383,8 +384,8 @@ final class PhoneProcessor {
             } else {
                 library.releaseProcessingRequest(requestID, in: id, at: now)
             }
-        case .failed(let reason):
-            library.failProcessingRequest(requestID, in: id, reason: reason, at: now)
+        case .failed(let reason, let kind):
+            library.failProcessingRequest(requestID, in: id, reason: reason, kind: kind, at: now)
         case .paused:
             // The claim stays: this iPhone comes back to it, unless it lapses first and a Mac takes it.
             paused.insert(id)
@@ -503,12 +504,18 @@ final class PhoneProcessor {
     }
 }
 
-enum PhoneProcessingError: LocalizedError {
+enum PhoneProcessingError: LocalizedError, ProcessingFailureClassifying {
     case modelsMissing
 
     var errorDescription: String? {
         switch self {
         case .modelsMissing: return "The models for transcribing on this iPhone aren’t downloaded."
+        }
+    }
+
+    var failureKind: ProcessingRequest.FailureKind {
+        switch self {
+        case .modelsMissing: return .modelsMissing
         }
     }
 }

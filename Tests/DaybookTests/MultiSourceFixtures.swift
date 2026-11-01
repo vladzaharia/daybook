@@ -165,6 +165,7 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
     private var _summarized: [String] = []
     private var _blocked: Set<String> = []
     private var _waiting: Set<String> = []
+    private var failures: [String: Error] = [:]
     private var _photosBlocked = false
     private var _readingPhotos = false
     private var voices: [String: [Float]] = [:]
@@ -191,6 +192,11 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
         let segments = lines.map { RecognizedSegment(start: $0.0, end: $0.0 + 4, text: " " + $0.1, confidence: 0.9, words: []) }
         lock.withLock { scripts[digest] = segments }
     }
+    /// Transcribing the recording throws `error`, as an engine or a fetch would.
+    func fail(_ url: URL, with error: Error) throws {
+        let digest = try AudioDigest.sha256(fileURL: url)
+        lock.withLock { failures[digest] = error }
+    }
     func block(_ url: URL) throws { let digest = try AudioDigest.sha256(fileURL: url); _ = lock.withLock { _blocked.insert(digest) } }
     func unblock(_ url: URL) throws { let digest = try AudioDigest.sha256(fileURL: url); _ = lock.withLock { _blocked.remove(digest) } }
     func isWaiting(on url: URL) -> Bool { (try? AudioDigest.sha256(fileURL: url)).map { digest in lock.withLock { _waiting.contains(digest) } } ?? false }
@@ -204,6 +210,7 @@ final class FakeInference: MeetingInference, @unchecked Sendable {
         // Like the runtime, a blocked transcription ends when its task is cancelled.
         while lock.withLock({ _blocked.contains(digest) }) { try await Task.sleep(for: .milliseconds(10)) }
         try Task.checkCancellation()
+        if let failure = lock.withLock({ failures[digest] }) { throw failure }
         let segments = lock.withLock { () -> [RecognizedSegment] in _transcribed.append(digest); return scripts[digest] ?? [] }
         return RecognitionResult(segments: segments, language: "en", duration: (segments.last?.end ?? 0) + 1)
     }

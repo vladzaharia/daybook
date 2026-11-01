@@ -60,10 +60,21 @@ extension LibraryController {
         change(requestID, in: meetingID) { $0.completed(by: device ?? thisDevice, at: now) }
     }
 
+    /// The work couldn't finish: `reason` is the device's own words, for Details, and `kind` how every device words it
+    /// (nil reads it from `reason`, as for a record written before kinds were stored).
     @discardableResult
-    public func failProcessingRequest(_ requestID: UUID, in meetingID: UUID, reason: String, by device: ProcessingRequest.Device? = nil,
+    public func failProcessingRequest(_ requestID: UUID, in meetingID: UUID, reason: String, kind: ProcessingRequest.FailureKind? = nil,
+                                      by device: ProcessingRequest.Device? = nil, at now: Date = Date()) -> ProcessingRequest? {
+        change(requestID, in: meetingID) { $0.failed(by: device ?? thisDevice, at: now, reason: reason, kind: kind) }
+    }
+
+    /// The work stopped on `error`: its words are the reason, and its kind is set here, where it was caught
+    /// (`FailureKind(_:)`), so rewording it never changes what any device offers.
+    @discardableResult
+    public func failProcessingRequest(_ requestID: UUID, in meetingID: UUID, error: Error, by device: ProcessingRequest.Device? = nil,
                                       at now: Date = Date()) -> ProcessingRequest? {
-        change(requestID, in: meetingID) { $0.failed(by: device ?? thisDevice, at: now, reason: reason) }
+        failProcessingRequest(requestID, in: meetingID, reason: error.localizedDescription, kind: ProcessingRequest.FailureKind(error),
+                              by: device, at: now)
     }
 
     /// Drops claims whose lease ran out, so their requests read as waiting. Returns how many.

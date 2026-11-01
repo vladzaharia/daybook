@@ -120,6 +120,7 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertEqual(failed.outcome?.result, .failed)
         let reason = try XCTUnwrap(failed.outcome?.message)
         XCTAssertEqual(reason, AppError.noSpeech.localizedDescription)
+        XCTAssertEqual(failed.outcome?.failure, .noSpeech, "The kind is stored where the error was caught, not read from its words")
 
         // The phone (no local queue) and this Mac read the same failure, with the Mac's reason.
         let meeting = try XCTUnwrap(rig.meeting(id))
@@ -129,6 +130,40 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertEqual(failure.request?.id, failed.id)
         guard case .failed(let local) = rig.state.processingStatus(for: meeting) else { return XCTFail("The Mac too") }
         XCTAssertEqual(local.reason, reason)
+    }
+
+    /// No speech, said in other words: only its kind says so.
+    private struct Silence: LocalizedError, ProcessingFailureClassifying {
+        var errorDescription: String? { "Nothing was said in this recording." }
+        var failureKind: ProcessingRequest.FailureKind { .noSpeech }
+    }
+
+    func testBehaviorAFailedRequestStoresTheKindOfTheErrorThatStoppedIt() async throws {
+        let rig = try await rig()
+        let evicted = try rig.audio("evicted.wav", frequency: 260)
+        let evictedID = try await rig.waitingConversation("Evicted", audio: evicted, script: [(0, "Planning the offsite.")])
+        let download = AudioFetchError.downloadFailed("The request timed out.")
+        try rig.inference.fail(evicted, with: download)
+        rig.state.library.requestProcessing(evictedID, mode: .newAudio, by: .phone)
+        let quiet = try rig.audio("quiet.wav", frequency: 270)
+        let quietID = try await rig.waitingConversation("Quiet", audio: quiet, script: [(0, "Hello?")])
+        try rig.inference.fail(quiet, with: Silence())
+        rig.state.library.requestProcessing(quietID, mode: .newAudio, by: .phone)
+
+        rig.state.pickUpRequests()
+        try await answered(rig, evictedID)
+        try await answered(rig, quietID)
+        let failed = try XCTUnwrap(request(rig, evictedID))
+        XCTAssertEqual(failed.outcome?.result, .failed)
+        XCTAssertEqual(failed.outcome?.message, download.localizedDescription)
+        XCTAssertEqual(failed.outcome?.failure, .other, "iCloud's own words go behind Details")
+
+        let silent = try XCTUnwrap(request(rig, quietID))
+        XCTAssertEqual(silent.outcome?.failure, .noSpeech)
+        XCTAssertNotEqual(ProcessingRequest.FailureKind(legacyMessage: Silence().localizedDescription), .noSpeech,
+                          "Its words alone wouldn't say so")
+        guard case .failed(let failure) = ProcessingStatus(try XCTUnwrap(rig.meeting(quietID))) else { return XCTFail("Should read as failed") }
+        XCTAssertTrue(failure.isNoSpeech, "Every device words it as no speech, without Try Again")
     }
 
     func testPauseAndCancelGiveTheClaimBack() async throws {

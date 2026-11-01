@@ -803,7 +803,7 @@ final class AppState: ObservableObject {
                 }
                 catch {
                     self.update(id) { $0.status = .failed; $0.errorMessage = error.localizedDescription }
-                    self.finishRequests(of: self.runningJob ?? job, failure: error.localizedDescription)
+                    self.finishRequests(of: self.runningJob ?? job, failure: error)
                     self.reportToPhones(id, phase: .failed, detail: error.localizedDescription)
                 }
                 self.stopClaimHeartbeat()

@@ -303,6 +303,36 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertEqual(reopened.thisDevice.id, "local", "Without a sync folder the replica has no journal identity")
     }
 
+    func testBehaviorAFailedRequestStoresItsErrorsKindWhereItWasCaught() async throws {
+        let library = try await open()
+        let mac = ProcessingRequest.Device(id: "mac", name: "Mac Studio")
+        let now = Date()
+        func fail(_ title: String, with error: Error) throws -> ProcessingRequest.Outcome {
+            let id = library.newMeeting(title: title)
+            library.update(id) { $0.tracks = [RecordingTrack(source: .microphone, relativePath: "Originals/a.m4a", fileName: "a.m4a", sha256: "a")] }
+            let request = try XCTUnwrap(library.requestProcessing(id, mode: .newAudio, at: now))
+            XCTAssertNotNil(library.claimProcessingRequest(request.id, in: id, by: mac, at: now))
+            XCTAssertNotNil(library.failProcessingRequest(request.id, in: id, error: error, by: mac, at: now.addingTimeInterval(1)))
+            return try XCTUnwrap(library.meeting(id)?.processingRequests?.first?.outcome)
+        }
+
+        let silent = try fail("Silence", with: DaybookError.noSpeech)
+        XCTAssertEqual(silent.failure, .noSpeech, "Stored, not read from its words")
+        XCTAssertEqual(silent.message, DaybookError.noSpeech.localizedDescription)
+        let missing = try fail("Not downloaded", with: AudioFetchError.downloadFailed("The request timed out."))
+        XCTAssertEqual(missing.failure, .other, "iCloud's words stay behind Details; it's no missing model")
+        XCTAssertEqual(missing.message, AudioFetchError.downloadFailed("The request timed out.").localizedDescription)
+
+        // A reason without a kind reads its kind from its words, as a record from before kinds were stored does.
+        let id = library.newMeeting(title: "Older")
+        library.update(id) { $0.tracks = [RecordingTrack(source: .microphone, relativePath: "Originals/b.m4a", fileName: "b.m4a", sha256: "b")] }
+        let request = try XCTUnwrap(library.requestProcessing(id, mode: .newAudio, at: now))
+        XCTAssertNotNil(library.failProcessingRequest(request.id, in: id, reason: "No speech was recognized.", by: mac, at: now))
+        let older = try XCTUnwrap(library.meeting(id)?.processingRequests?.first?.outcome)
+        XCTAssertNil(older.failure)
+        XCTAssertEqual(older.failureKind, .noSpeech)
+    }
+
     func testPlacesListTheirConversationsNewestFirst() async throws {
         let library = try await open()
         let older = library.newMeeting(title: "Older", date: Date(timeIntervalSince1970: 1), placement: .personal)

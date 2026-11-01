@@ -159,12 +159,12 @@ extension AppState {
         return claim(request) != nil
     }
 
-    /// The finished job's request is completed (or failed with the reason), along with any other
-    /// open request on the conversation that the work satisfied.
-    func finishRequests(of job: ProcessingJob, failure: String?) {
+    /// The finished job's request is completed (or failed with the error's words and kind), along with
+    /// any other open request on the conversation that the work satisfied.
+    func finishRequests(of job: ProcessingJob, failure: Error?) {
         let id = job.meetingID, me = library.thisDevice, now = Date()
         if let requestID = job.requestID {
-            if let failure { library.failProcessingRequest(requestID, in: id, reason: failure, at: now) }
+            if let failure { library.failProcessingRequest(requestID, in: id, error: failure, at: now) }
             else { library.completeProcessingRequest(requestID, in: id, at: now) }
         }
         guard failure == nil, let meeting = meetings.first(where: { $0.id == id }) else { return }

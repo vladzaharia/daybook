@@ -333,9 +333,9 @@ final class PhoneSummaryPlacement {
                 try Task.checkCancellation()
                 await self?.finished(id, request: claimed.id, output: output, place: place, started: started)
             } catch is CancellationError {
-                self?.stopped(id, request: claimed.id, reason: nil)
+                self?.stopped(id, request: claimed.id, failure: nil)
             } catch {
-                self?.stopped(id, request: claimed.id, reason: error.localizedDescription)
+                self?.stopped(id, request: claimed.id, failure: error)
             }
         }
         running[id] = (claimed.id, task)
@@ -351,11 +351,11 @@ final class PhoneSummaryPlacement {
         try? await library.proposeTerms(output.suggestedTerms, for: id)
     }
 
-    /// Cancelled (given back: a Mac may take it) or failed (with the reason, for Try Again).
-    private func stopped(_ id: UUID, request: UUID, reason: String?) {
+    /// Cancelled (given back: a Mac may take it) or failed (with the error's words and kind, for Try Again).
+    private func stopped(_ id: UUID, request: UUID, failure: Error?) {
         running[id] = nil
         runs[id] = nil
-        if let reason { library.failProcessingRequest(request, in: id, reason: reason, at: clock()) }
+        if let failure { library.failProcessingRequest(request, in: id, error: failure, at: clock()) }
         else { library.releaseProcessingRequest(request, in: id, at: clock()) }
     }
 
