@@ -145,8 +145,10 @@ struct SettingsScreen: View {
     private var storageSummary: String { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
 
     private var modelsSummary: String {
-        let missing = model.models.missingBytes
-        return missing == 0 ? "Live transcription on this iPhone" : "\(ModelsSettingsScreen.size(missing)) to download"
+        let models = model.models
+        let missing = models.missingBytes + (model.settings.processesOnThisIPhone ? models.processingMissingBytes : 0)
+        if missing > 0 { return "\(ModelsSettingsScreen.size(missing)) to download" }
+        return model.processingCapabilities.transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
     }
 
     private var templatesSummary: String {
@@ -467,7 +469,7 @@ struct RecordingSettingsScreen: View {
         @Bindable var settings = model.settings
         Form {
             Section {
-                Toggle("Ask Your Mac to Transcribe", isOn: $settings.requestsTranscription)
+                Toggle("Transcribe Automatically", isOn: $settings.requestsTranscription)
                 Toggle("Recording with Your Mac", isOn: $settings.acceptsMacRecordRequests)
             }
             CaptionSettingsSection()
