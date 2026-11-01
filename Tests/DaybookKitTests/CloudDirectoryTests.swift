@@ -156,7 +156,7 @@ final class CloudDirectoryTests: XCTestCase {
     @MainActor
     func testBehaviorPreferencesAreThisDevicesOwnAndATierGoesBackToItsRecommendation() async throws {
         let defaults = makeTestDefaults()
-        let setup = await CloudSetup.demo(providers: [.anthropic, .openai], defaults: defaults)
+        let setup = CloudSetup.demo(providers: [.anthropic, .openai], defaults: defaults)
         XCTAssertEqual(setup.preferences, CloudSummaryPreferences())
         XCTAssertEqual(setup.resolved?.id, "claude-sonnet-5-5")
         setup.chosenModel = "gpt-6.1-sol"
@@ -186,7 +186,7 @@ final class CloudDirectoryTests: XCTestCase {
 
     @MainActor
     func testBehaviorCostPerHourUsesThePreferredEffort() async throws {
-        let setup = await CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults())
+        let setup = CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults())
         let sonnet = try XCTUnwrap(setup.offers.offer("claude-sonnet-5-5"))
         let medium = try XCTUnwrap(setup.costPerHour(sonnet))
         setup.preferences.effort = .high

@@ -6,10 +6,10 @@ import SwiftUI
 
 /// The Settings panes, restored from `@AppStorage("settingsPane")`.
 enum SettingsPane: String {
-    case general, models, devices, library
+    case general, models, cloud, devices, library
 }
 
-/// Settings (Direction A §5.14): four grouped panes, 600 pt wide, each as tall as its content.
+/// Settings (Direction A §5.14): five grouped panes, 600 pt wide, each as tall as its content.
 struct SettingsView: View {
     @ObservedObject var state: AppState
     @AppStorage("settingsPane") private var pane = SettingsPane.general
@@ -21,6 +21,9 @@ struct SettingsView: View {
             }
             Tab("Models", systemImage: "cpu", value: SettingsPane.models) {
                 ModelSettings(state: state).settingsPane()
+            }
+            Tab("Cloud", systemImage: "cloud", value: SettingsPane.cloud) {
+                CloudSettings(state: state).settingsPane()
             }
             Tab("Devices", systemImage: "waveform.badge.microphone", value: SettingsPane.devices) {
                 DevicesSettingsPane(state: state).settingsPane()

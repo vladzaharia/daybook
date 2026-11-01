@@ -455,6 +455,7 @@ private struct DebugLaunchActions: ViewModifier {
             FloatingNotesDemo.apply(to: state)
             PhotoDemo.apply(to: state)
             LibraryDemo.apply(to: state)
+            CloudSettingsDemo.apply(to: state)
             if let query = LaunchOptions.value(after: "--search") { state.search = query }
             PerfProbe.stage = {
                 guard let id = state.processingID else { return "idle" }

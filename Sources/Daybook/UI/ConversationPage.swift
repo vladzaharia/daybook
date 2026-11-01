@@ -527,10 +527,11 @@ struct Colophon: View {
             VStack(alignment: .leading, spacing: Space.s2) {
                 Rectangle().fill(Ink.faint).frame(width: 24, height: 1).padding(.bottom, Space.s1)
                 if let summary = meeting.summary {
+                    let cloud = summary.cloudProvenance
                     HStack(spacing: 5) {
-                        Image(systemName: "laptopcomputer").font(.system(size: 10))
+                        Image(systemName: cloud == nil ? "laptopcomputer" : "cloud").font(.system(size: 10))
                             .symbolEffect(.bounce, value: summary.createdAt)
-                        Text("Summarized on this Mac · \(state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model)) · \(summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))")
+                        Text("\(cloud?.label ?? "Summarized on this Mac · \(state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))") · \(summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))")
                     }
                 }
                 HStack(spacing: 4) {
