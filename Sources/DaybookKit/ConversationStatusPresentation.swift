@@ -255,7 +255,7 @@ extension ConversationStatusPresentation {
                 let age = now.timeIntervalSince(date)
                 return age <= Self.recent ? nil : "Last seen \(Self.ago(age))"
             case .recording(let name): return "\(name) is recording"
-            case .notProcessing(let name): return "\(name) isn’t set up to transcribe"
+            case .notProcessing(let name): return "\(name) isn’t set up to transcribe. Finish in Daybook › Settings on \(name)."
             case .noMac: return "No Mac has checked in yet. Open Daybook on your Mac."
             }
         }

@@ -167,6 +167,10 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertNil(page(.requested(.device(request)), nil, inputs)?.detail)
         inputs.mac = .noMac
         XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.detail, "No Mac has checked in yet. Open Daybook on your Mac.")
+        // A Mac that isn't set up says where to finish, as the iPhone's Settings does.
+        inputs.mac = .notProcessing("Studio Mac")
+        XCTAssertEqual(page(.requested(.device(request)), nil, inputs)?.detail,
+                       "Studio Mac isn’t set up to transcribe. Finish in Daybook › Settings on Studio Mac.")
         XCTAssertEqual(row(.requested(.device(request)), nil, phone), ConversationRowStatus(kind: .waiting, text: "Waiting for your Mac"))
 
         // A Mac that can take it offers to, once.
