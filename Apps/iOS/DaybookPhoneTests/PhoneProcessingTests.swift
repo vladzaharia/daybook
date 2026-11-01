@@ -187,6 +187,26 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertNil(rig.processor.running, "never picked up again here")
     }
 
+    func testBehaviorTranscribingEverythingAgainHereLeavesTheMacOnlyTheSummary() async throws {
+        let rig = try await rig(summarizes: false)
+        let meeting = try await record(into: rig.library)
+        rig.processor.pickUp()
+        try await waitUntil("the first pass") { outcome(rig, meeting.id) == .handedBack }
+        rig.library.controller.update(meeting.id) { $0.setSummary(MeetingSummary(overview: "From a Mac", modelID: "gemma-4/26b-a4b-qat-4bit")) }
+        try await Task.sleep(for: .milliseconds(5))
+        let again = try XCTUnwrap(rig.library.controller.requestProcessing(meeting.id, mode: .fullRetranscription))
+        rig.processor.pickUp()
+        try await waitUntil("transcribing again") { rig.engine.transcribed.count == 2 && rig.processor.running == nil }
+        let after = try XCTUnwrap(rig.library.controller.meeting(meeting.id))
+        XCTAssertEqual(after.processingRequests?.first { $0.id == again.id }?.outcome?.result, .completed,
+                       "done here: a Mac carrying it out would transcribe everything again")
+        let summarize = try XCTUnwrap(after.openProcessingRequests.first { $0.mode == .summaryOnly }, "the summary is left for a Mac")
+        XCTAssertNil(summarize.activeClaim(at: Date()))
+        rig.processor.pickUp()
+        XCTAssertNil(rig.processor.running)
+        XCTAssertEqual(rig.engine.transcribed.count, 2)
+    }
+
     func testBehaviorAnotherDevicesRecordingIsLeftToIt() async throws {
         let rig = try await rig()
         // A conversation a Mac recorded, synced here without a transcript; Transcribe asked from this iPhone.

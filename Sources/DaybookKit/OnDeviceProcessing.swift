@@ -16,6 +16,8 @@ import Foundation
 ///   Otherwise (a recording made with a Mac, which the Mac lines up by sound) it gives the request back
 ///   for the Mac that has the others, which places, fuses, and summarizes.
 /// - **Summaries** run here when the device can summarize; otherwise the request goes back for a Mac.
+///   Transcribe Everything Again and Identify Speakers Again done here are finished here, and a
+///   Summarize request is left for the Mac instead, so a Mac never does that work again.
 ///
 /// Pure: the app and tests ask it.
 public enum OnDeviceProcessing {
@@ -56,13 +58,16 @@ public enum OnDeviceProcessing {
                 return .transcribe(untranscribed.map(\.id))
             }
             return can.summarizes && fusesHere(meeting) ? .summarize : nil
-        case .fullRetranscription:
-            guard transcribes(can), !tracks.isEmpty, tracks.allSatisfy(device.owns) else { return nil }
-            return .transcribe(tracks.map(\.id))
-        case .speakerRefresh:
-            let transcribed = tracks.filter { track in meeting.transcripts.contains { $0.trackID == track.id } }
-            guard can.findsSpeakers, !transcribed.isEmpty, tracks.allSatisfy(device.owns) else { return nil }
-            return .identifySpeakers(transcribed.map(\.id))
+        case .fullRetranscription, .speakerRefresh:
+            guard !tracks.isEmpty, tracks.allSatisfy(device.owns) else { return nil }
+            // Each recording once: a run made since the request was asked is that recording done.
+            let pending = tracks.filter { track in !meeting.transcripts.contains { $0.trackID == track.id && $0.createdAt >= request.createdAt } }
+            if pending.isEmpty { return can.summarizes && fusesHere(meeting) ? .summarize : nil }
+            if request.mode == .fullRetranscription {
+                return transcribes(can) ? .transcribe(pending.map(\.id)) : nil
+            }
+            let transcribed = pending.filter { track in meeting.transcripts.contains { $0.trackID == track.id } }
+            return can.findsSpeakers && !transcribed.isEmpty ? .identifySpeakers(transcribed.map(\.id)) : nil
         case .summaryOnly:
             return can.summarizes ? .summarize : nil
         }
