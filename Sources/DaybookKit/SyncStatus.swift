@@ -43,9 +43,11 @@ public enum SyncStatus: Equatable, Sendable {
     case accountChanged
     /// The Apple Account changed while syncing through a chosen folder (development builds).
     case folderAccountChanged
-    /// The library this device synced with is gone from iCloud.
+    /// The encrypted library this device synced with is gone from iCloud (someone deleted Daybook's data there). Sync
+    /// waits for the person: `LibrarySyncController.startNewLibrary()` starts a new one.
     case libraryRemoved
-    /// iCloud holds a different library from the one this device synced with.
+    /// iCloud holds a library that isn't encrypted where this device synced an encrypted one. Sync waits for the person:
+    /// `LibrarySyncController.syncWithLibraryInICloud()` syncs with it anyway.
     case newLibrary
     /// The folder this Mac synced through before can't be found.
     case previousFolderMissing

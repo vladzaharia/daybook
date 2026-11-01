@@ -298,22 +298,57 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertEqual(result.meetings[0], changed); XCTAssertGreaterThan(result.pendingUploads, 0)
     }
 
-    func testRemoteIdentityScopesCheckpointsAndCorruptCheckpointStaysBlocked() async throws {
+    func testBehaviorACheckpointThatWontDecodeIsKeptAsideAndSyncCarriesOnAsANewcomer() async throws {
         let a = try engine("A")
         let original = try await publish(Meeting(notes: "Upload to both libraries"), using: a, name: "A")
         let other = root.appendingPathComponent("OtherRemote")
         let differentLibrary = try engine("A", remote: other)
         let fresh = try await differentLibrary.synchronize(meetings: [original])
         XCTAssertEqual(fresh.publishedEvents, 1)
-        let checkpoints = try FileManager.default.contentsOfDirectory(at: local("A").appendingPathComponent("Sync"), includingPropertiesForKeys: nil)
+        let sync = local("A").appendingPathComponent("Sync")
+        let checkpoints = try FileManager.default.contentsOfDirectory(at: sync, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
         XCTAssertEqual(checkpoints.count, 2)
-        for checkpoint in checkpoints { try Data("broken".utf8).write(to: checkpoint) }
+        // Cut short by a power loss: one empty, one truncated.
+        try Data().write(to: checkpoints[0])
+        try Data("{\"heads\":{".utf8).write(to: checkpoints[1])
         let restart = try engine("A")
-        for _ in 0..<2 {
-            do { _ = try await restart.synchronize(meetings: [original]); XCTFail("Ignored corrupt causal history") }
-            catch LibrarySyncError.corruptState { }
+        let carriedOn = try await restart.synchronize(meetings: [original])
+        XCTAssertEqual(carriedOn.meetings.map(\.notes), [original.notes])
+        XCTAssertFalse(carriedOn.meetings[0].revisions.contains { $0.field.hasPrefix("sync:") }, "Identical content merges without conflicts")
+        XCTAssertTrue(carriedOn.warnings.isEmpty, "\(carriedOn.warnings)")
+        try await apply(carriedOn, to: "A", using: restart)
+        // The unreadable record is kept beside, as recovery history; a fresh one took its place.
+        let names = try FileManager.default.contentsOfDirectory(atPath: sync.path)
+        XCTAssertEqual(names.filter { $0.contains(".corrupt-") && $0.hasSuffix(".json") }.count, 1)
+        XCTAssertEqual(names.filter { $0.hasSuffix(".json") && !$0.contains(".corrupt-") }.count, 2)
+        let again = try await restart.synchronize(meetings: carriedOn.meetings)
+        XCTAssertEqual(again.publishedEvents, 0)
+    }
+
+    func testBehaviorAPassThatChangesNothingDoesntWriteTheCheckpoint() async throws {
+        let a = try engine("A"), b = try engine("B")
+        _ = try await publish(Meeting(title: "Quiet"), using: a, name: "A")
+        let pulled = try await b.synchronize(meetings: [])
+        try await apply(pulled, to: "B", using: b)
+        let checkpoint = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: local("B").appendingPathComponent("Sync"), includingPropertiesForKeys: nil)
+            .first { $0.pathExtension == "json" })
+        func identity() throws -> UInt64 {
+            ((try FileManager.default.attributesOfItem(atPath: checkpoint.path))[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
         }
+        let before = try identity()
+        for _ in 0..<3 {
+            let idle = try await b.synchronize(meetings: pulled.meetings)
+            XCTAssertEqual(idle.publishedEvents, 0)
+            try await b.acknowledge(idle.checkpointID)
+        }
+        XCTAssertEqual(try identity(), before, "Rewritten for nothing")
+        // A pass that changes something writes it.
+        _ = try await publish(Meeting(title: "Loud"), using: a, name: "A")
+        let changed = try await b.synchronize(meetings: pulled.meetings)
+        try await apply(changed, to: "B", using: b)
+        XCTAssertNotEqual(try identity(), before)
+        XCTAssertEqual(Set(changed.meetings.map(\.title)), ["Quiet", "Loud"])
     }
 
     func testMetadataConcurrentVersionsRemainUntilCallerMergesAndAcknowledges() async throws {

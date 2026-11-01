@@ -227,18 +227,54 @@ final class LibrarySyncNewContainerTests: XCTestCase {
         XCTAssertEqual(resolved[0], first.libraryID, "the first started, though its ID is the larger")
     }
 
-    /// Two encrypted libraries started a long time apart aren't a race: they can't be merged, and sync pauses.
-    func testLibrariesStartedLongApartStillPause() async throws {
+    /// Two encrypted libraries started a long time apart (a device that found the container empty while offline started
+    /// its own beside one it couldn't see) aren't a reason to stop: the one started first wins, the other's devices
+    /// publish into it, and nothing of the other's goes before every device has moved on.
+    func testBehaviorLibrariesStartedLongApartResolveToTheFirstStarted() async throws {
         let folder = root.appendingPathComponent("Container")
         let mac = try engine("Mac", remote: folder)
-        try await pass(mac, "Mac", [Meeting(title: "Mine")])
-        let other = LibraryKey.generate(libraryID: UUID(), createdBy: "Other", now: Date().addingTimeInterval(-30 * 86_400))
-        var marker = SyncManifest(libraryID: other.libraryID)
+        let mine = try await pass(mac, "Mac", [Meeting(title: "Mine")]).meetings
+        let newer = try manifest(folder).libraryID
+        let older = LibraryKey.generate(libraryID: UUID(), createdBy: "Other", now: Date().addingTimeInterval(-30 * 86_400))
+        try keychain.store(older)
+        var marker = SyncManifest(libraryID: older.libraryID)
         marker.schemaVersion = SyncManifest.sealedSchemaVersion
-        marker.sealing = .init(current: other.idHex, sealedSince: other.createdAt, migrator: "Other", keys: [.init(id: other.idHex, created: other.createdAt)])
-        marker.created = other.createdAt
+        marker.sealing = .init(current: older.idHex, sealedSince: older.createdAt, migrator: "Other", keys: [.init(id: older.idHex, created: older.createdAt)])
+        marker.created = older.createdAt
         try marker.encoded().write(to: folder.appendingPathComponent("daybook-sync 2.json"))
-        do { _ = try await mac.synchronize(meetings: []); XCTFail() } catch LibrarySyncError.manifestConflict {}
-        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("daybook-sync 2.json").path), "nothing is deleted")
+        let moved = try await pass(mac, "Mac", mine)
+        XCTAssertEqual(try manifest(folder).libraryID, older.libraryID)
+        XCTAssertEqual(try manifest(folder).sealing?.rivals, [newer])
+        XCTAssertEqual(moved.meetings.map(\.title), ["Mine"])
+        XCTAssertEqual(moved.publishedEvents, 1, "Published again into the library that won")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("daybook-sync 2.json").path))
+        let settled = try await pass(mac, "Mac", moved.meetings)
+        XCTAssertEqual(settled.publishedEvents, 0); XCTAssertEqual(settled.warnings, [])
+    }
+
+    /// A library encrypted after it began as plaintext holds history from before: it wins over a new one, whichever
+    /// started first by the clocks.
+    func testBehaviorALibraryEncryptedLaterWinsOverANewOne() async throws {
+        let folder = root.appendingPathComponent("Container")
+        let mac = try LibrarySyncEngine(localRoot: local("Mac"), remoteRoot: folder, deviceID: "Mac", replica: SyncReplicaConfiguration(
+            device: SyncDeviceIdentity(deviceClass: .mac, displayName: "Mac", canProcess: true), keyStore: keychain, sealsNewLibrary: false))
+        let mine = try await pass(mac, "Mac", [Meeting(title: "From before")]).meetings
+        try await mac.enableSealing()
+        try await pass(mac, "Mac", mine)
+        let established = try manifest(folder)
+        XCTAssertNil(established.created)
+        // A new library a device started an hour before encryption began here, by its clock.
+        let fresh = LibraryKey.generate(libraryID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, createdBy: "Phone",
+                                        now: try XCTUnwrap(established.sealing?.sealedSince).addingTimeInterval(-3_600))
+        try keychain.store(fresh)
+        var marker = SyncManifest(libraryID: fresh.libraryID)
+        marker.schemaVersion = SyncManifest.sealedSchemaVersion
+        marker.sealing = .init(current: fresh.idHex, sealedSince: fresh.createdAt, migrator: "Phone", keys: [.init(id: fresh.idHex, created: fresh.createdAt)])
+        marker.created = fresh.createdAt
+        try marker.encoded().write(to: folder.appendingPathComponent("daybook-sync 2.json"))
+        let result = try await pass(mac, "Mac", mine)
+        XCTAssertEqual(try manifest(folder).libraryID, established.libraryID)
+        XCTAssertEqual(try manifest(folder).sealing?.rivals, [fresh.libraryID])
+        XCTAssertEqual(result.publishedEvents, 0, "Nothing to publish again: it stayed in its own library")
     }
 }

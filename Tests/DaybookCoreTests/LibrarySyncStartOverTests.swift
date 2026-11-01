@@ -222,18 +222,24 @@ final class LibrarySyncStartOverTests: XCTestCase {
         XCTAssertEqual(Set(try manifest().sealing?.replaces ?? []), [old, mine])
     }
 
-    func testUnrelatedEncryptedLibrariesStillPause() async throws {
+    func testBehaviorAnUnrelatedEncryptedLibraryResolvesAsARival() async throws {
         let mac = try mac()
         try await pass(mac, "Mac")
         try await mac.enableSealing()
         try await pass(mac, "Mac")
-        // An encrypted library that didn't start over from this one can't be merged with it.
+        let synced = await mac.libraryID
+        let library = try XCTUnwrap(synced)
+        // An encrypted library that didn't start over from this one can't be merged with it. Sync doesn't stop: this one,
+        // which holds history from before encryption, wins, and the other is a rival whose devices publish into it.
         let otherKey = LibraryKey.generate(libraryID: UUID(), createdBy: "Other")
         var other = SyncManifest(libraryID: otherKey.libraryID)
         other.schemaVersion = SyncManifest.sealedSchemaVersion
         other.sealing = .init(current: otherKey.idHex, sealedSince: Date(), migrator: "Other", keys: [.init(id: otherKey.idHex, created: otherKey.createdAt)],
                               replaces: [UUID()])
         try other.encoded().write(to: remote.appendingPathComponent("daybook-sync 2.json"))
-        do { _ = try await mac.synchronize(meetings: []); XCTFail() } catch LibrarySyncError.manifestConflict {}
+        _ = try await mac.synchronize(meetings: [])
+        let resolved = try SyncManifest.decode(Data(contentsOf: remote.appendingPathComponent("daybook-sync.json")))
+        XCTAssertEqual(resolved.libraryID, library)
+        XCTAssertEqual(resolved.sealing?.rivals, [otherKey.libraryID])
     }
 }

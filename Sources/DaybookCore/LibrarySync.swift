@@ -42,8 +42,12 @@ public enum LibrarySyncError: LocalizedError, Equatable {
     /// written; local edits wait. Every pass checks the keychain again.
     case keyUnavailable(String)
     /// This device synced an encrypted library here, and the library there now isn't encrypted: sync pauses rather
-    /// than publish plaintext (`SealingMemory`).
+    /// than publish plaintext (`SealingMemory`). The person may sync with it anyway
+    /// (`LibrarySyncController.syncWithLibraryInICloud`).
     case sealingRemoved
+    /// This device synced an encrypted library here, and there's no library there at all any more (someone deleted
+    /// Daybook's data from iCloud): sync pauses until the person starts a new one (`startNewLibrary`).
+    case libraryRemoved
     /// This build can't keep a library key (no keychain group: an unsigned or ad hoc build).
     case keyStoreUnavailable
     /// Start Over was refused: this device holds the library's key, or another device said it did recently.
@@ -65,6 +69,7 @@ public enum LibrarySyncError: LocalizedError, Equatable {
         case .waitingForICloud: return "Waiting for iCloud…"
         case .keyUnavailable: return "Waiting for this library’s key."
         case .sealingRemoved: return "The library in iCloud is no longer encrypted."
+        case .libraryRemoved: return "The library in iCloud was removed."
         case .keyStoreUnavailable: return "This build of Daybook can’t keep encryption keys."
         case .keyAvailable: return "One of your devices has this library’s key. Get the key from it instead."
         case .keyStoreUnreadable: return "Waiting to read this library’s key."
@@ -94,8 +99,10 @@ public actor LibrarySyncEngine {
     var audioCachePolicy: AudioCachePolicy?
     let fm = FileManager.default
     private let decoder = JSONDecoder()
-    private var checkpointURL: URL?
+    private var checkpointURL: URL? { didSet { if checkpointURL != oldValue { savedCheckpoint = nil } } }
     private var basesURL: URL?
+    /// The bytes of the checkpoint as last written here, so an unchanged one isn't written again.
+    private var savedCheckpoint: Data?
     private var mayCreateLibrary: Bool
     var state = SyncCheckpoint()
     var verifiedAssets: [String: VerifiedAsset] = [:]
@@ -821,7 +828,9 @@ public actor LibrarySyncEngine {
         let sealedHere = syncedSealedLibraryHere
         if !sealedHere { try prepareFolders(["Events", "Blobs", "Metadata"]) }
         let manifestURL = remoteRoot.appendingPathComponent("daybook-sync.json")
-        try SyncFiles.available(manifestURL, cloud: cloud)
+        // A manifest listed but not downloaded (a fresh install, or one iOS evicted) is iCloud catching up, not a problem:
+        // its download is asked for, and the metadata query's update starts the next pass.
+        do { try SyncFiles.available(manifestURL, cloud: cloud) } catch is SyncPendingDownload { throw LibrarySyncError.waitingForICloud }
         let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: manifestURL) ?? []
         let copies = manifestCopies()
         let manifest: SyncManifest
@@ -831,9 +840,10 @@ public actor LibrarySyncEngine {
             manifest = try SyncManifest.checked(SyncManifest.decode(SyncFiles.read(manifestURL, below: remoteRoot, cloud: cloud)))
         } else {
             guard mayCreateLibrary else { throw LibrarySyncError.waitingForICloud }
-            // The encrypted library this device synced here is gone: starting a plaintext one in its place would be
-            // a downgrade. The person resets encryption instead.
-            guard !sealedHere else { throw LibrarySyncError.sealingRemoved }
+            // The encrypted library this device synced here is gone (Daybook's data deleted from iCloud). A device that
+            // finds it so doesn't start another on its own (one absent for a moment would make a rival of it): the
+            // person starts a new one (`startNewLibrary`), on whichever device they're at.
+            guard !sealedHere else { throw LibrarySyncError.libraryRemoved }
             manifest = try createLibrary(at: manifestURL)
         }
         // Downgrade defense: a plaintext manifest where this device synced an encrypted library.
@@ -849,11 +859,36 @@ public actor LibrarySyncEngine {
         }
     }
 
-    /// Starts a library: encrypted from the start when `sealsNewLibrary` (its key stored and read back before the
-    /// manifest names it), plaintext without a key store. Another device's manifest written meanwhile is kept instead.
-    private func createLibrary(at manifestURL: URL) throws -> SyncManifest {
+    /// Starts a new encrypted library where the one this device synced was removed from iCloud (`libraryRemoved`): a new
+    /// library ID and key, its key stored and read back before the manifest names it. No checkpoint carries over, so
+    /// this device publishes its library into it as a newcomer would, and every other device does the same once
+    /// iCloud Keychain brings the key. A manifest another device wrote meanwhile is joined instead. Returns the library
+    /// synced now.
+    @discardableResult
+    public func startNewLibrary() throws -> UUID {
+        guard keyStore != nil else { throw LibrarySyncError.keyStoreUnavailable }
+        try SyncFiles.noSymlinks(remoteRoot, below: remoteRoot)
+        try LocalFiles.directory(remoteRoot)
+        let manifestURL = remoteRoot.appendingPathComponent("daybook-sync.json")
+        guard SyncFiles.itemState(manifestURL) == .absent, manifestCopies().isEmpty else {
+            let manifest = try prepareRemote()
+            libraryID = manifest.libraryID
+            return manifest.libraryID
+        }
+        let manifest = try createLibrary(at: manifestURL, encrypted: true)
+        libraryID = manifest.libraryID
+        forgetOtherLibraries(manifest.libraryID)
+        if manifest.isSealed { try prepareFolders(["Sealed", "Sealed/Events", "Sealed/Metadata", "Sealed/Blobs"]) }
+        try? loadSealing(manifest)
+        return manifest.libraryID
+    }
+
+    /// Starts a library: encrypted from the start when `sealsNewLibrary` or `encrypted` (its key stored and read back
+    /// before the manifest names it), plaintext without a key store. Another device's manifest written meanwhile is kept
+    /// instead.
+    private func createLibrary(at manifestURL: URL, encrypted: Bool = false) throws -> SyncManifest {
         var result = SyncManifest(libraryID: UUID())
-        if sealsNewLibrary, let keyStore {
+        if sealsNewLibrary || encrypted, let keyStore {
             let key = LibraryKey.generate(libraryID: result.libraryID, createdBy: deviceID)
             try keyStore.store(key)
             result.schemaVersion = SyncManifest.sealedSchemaVersion
@@ -879,18 +914,13 @@ public actor LibrarySyncEngine {
             .map { remoteRoot.appendingPathComponent($0) }
     }
 
-    /// Two encrypted libraries whose `created` dates are this close were started by two devices at once on a new iCloud
-    /// container (one of them perhaps offline for a while): they resolve to one. Further apart, they're two libraries
-    /// that can't be merged, and sync pauses.
-    static let creationRace: TimeInterval = 7 * 24 * 60 * 60
-
     /// Two devices each started a library here before seeing the other's (iCloud kept both: a conflict version
     /// or a renamed copy). Every device resolves it the same way: the smallest library ID wins, and the manifest
     /// names the others it supersedes, so each device continues from its checkpoint for whichever it had (see
-    /// `loadCheckpoint`). The journal is shared either way; only its identity changes. Two new encrypted libraries
-    /// can't share a journal (each is sealed with its own key): the first one started wins and replaces the others, whose
-    /// devices publish their libraries again into it. Once the resolved manifest is written, the copies iCloud made
-    /// are deleted, so one marker is left.
+    /// `loadCheckpoint`). The journal is shared either way; only its identity changes. Two encrypted libraries can't
+    /// share a journal (each is sealed with its own key): one wins (`rivalOrder`) and replaces the others, whose devices
+    /// publish their libraries again into it once they have its key; nothing of theirs goes before every device has
+    /// moved on. Once the resolved manifest is written, the copies iCloud made are deleted, so one marker is left.
     private func resolveManifest(at url: URL, conflicts: [NSFileVersion], copies: [URL]) throws -> SyncManifest {
         // A version from a newer Daybook is remembered (and refused below), not mistaken for damage.
         var newer: Int?
@@ -933,29 +963,27 @@ public actor LibrarySyncEngine {
         // An encrypted library wins over plaintext ones (whichever ID is smaller): it never becomes plaintext again, and
         // the others' devices carry on in it once they have its key. A library started over (Start Over) gives way to
         // the one that replaced it, and devices that started over from the same library at once resolve like plaintext
-        // libraries: the smallest new ID wins, and replaces the others too. So do new encrypted libraries two devices
-        // started at once (`creationRace`). Two other encrypted libraries can't be merged: sync pauses.
+        // libraries: the smallest new ID wins, and replaces the others too. Any other encrypted libraries that meet (two
+        // devices starting at once on a new container, a device that found the container empty while offline and started
+        // its own, one started over from another library) resolve as rivals (`rivalOrder`).
         let sealed = candidates.filter(\.isSealed)
         let startedOver = Set(sealed.flatMap { $0.sealing?.replaces ?? [] })
         let sealedIDs = Set(sealed.map(\.libraryID)).subtracting(startedOver)
         var rivals = Set<UUID>()
-        // Of new libraries started together, the first one started wins, by the clocks of the devices that started them;
-        // of those started the same second, or started over together, the smallest ID. Every device must reach the same
-        // answer from the manifests alone (counting what each holds would differ with what each has downloaded), so this
-        // is about agreeing, not about which holds more: a rival's files and key go only once every device has moved on
-        // to the winner's key, and its objects only once what they hold is in the winner (`deleteReplacedObjects`).
+        // Every device must reach the same answer from the manifests alone (counting what each holds would differ with
+        // what each has downloaded), so this is about agreeing, not about which holds more: a rival's files and key go
+        // only once every device has moved on to the winner's key, and its objects only once what they hold is in the
+        // winner (`deleteReplacedObjects`).
         var order: (UUID, UUID) -> Bool = { $0.uuidString < $1.uuidString }
-        var startedAtOnce = false
+        var asRivals = false
         if sealedIDs.count > 1 {
             let starts = sealedIDs.map { id in Set(sealed.filter { $0.libraryID == id }.flatMap { $0.sealing?.replaces ?? [] }) }
             let startedOverTogether = starts.allSatisfy({ !$0.isEmpty }) && !starts.dropFirst().reduce(starts[0], { $0.intersection($1) }).isEmpty
-            var created: [UUID: Date] = [:]
-            for id in sealedIDs { created[id] = sealed.filter { $0.libraryID == id }.compactMap(\.created).min() }
-            let dates = created.values
-            let startedTogether = dates.count == sealedIDs.count
-                && dates.max()!.timeIntervalSince(dates.min()!) <= Self.creationRace
-            guard startedOverTogether || startedTogether else { throw LibrarySyncError.manifestConflict }
-            if !startedOverTogether { order = { (created[$0]!, $0.uuidString) < (created[$1]!, $1.uuidString) }; startedAtOnce = true }
+            if !startedOverTogether {
+                let began = Dictionary(uniqueKeysWithValues: sealedIDs.map { id in (id, Self.rivalOrder(sealed.filter { $0.libraryID == id })) })
+                order = { (began[$0]!.0, began[$0]!.1, $0.uuidString) < (began[$1]!.0, began[$1]!.1, $1.uuidString) }
+                asRivals = true
+            }
             rivals = sealedIDs
         }
         guard sealedIDs.isEmpty == sealed.isEmpty,
@@ -976,7 +1004,7 @@ public actor LibrarySyncEngine {
             resolved.schemaVersion = SyncManifest.sealedSchemaVersion
             var sealing = sealings.dropFirst().reduce(sealings[0]) { $0.merged(with: $1) }
             if !replaced.isEmpty { sealing.replaces = SyncManifest.Sealing.union(sealing.replaces, Array(replaced)) }
-            if startedAtOnce, !rivals.isEmpty { sealing.rivals = SyncManifest.Sealing.union(sealing.rivals, Array(rivals)) }
+            if asRivals, !rivals.isEmpty { sealing.rivals = SyncManifest.Sealing.union(sealing.rivals, Array(rivals)) }
             resolved.sealing = sealing
         }
         // The journal of every library that isn't replaced is part of the winner's: if any was compacted, the winner is,
@@ -998,6 +1026,17 @@ public actor LibrarySyncEngine {
         // merged into it), and every device resolves them the same way.
         for copy in readCopies { try? SyncFiles.coordinateDelete(copy, below: remoteRoot) }
         return resolved
+    }
+
+    /// Where an encrypted library stands among rivals that met (`resolveManifest`), from the versions of its manifest:
+    /// smaller goes first. A library encrypted after it began as plaintext holds history from before and comes before
+    /// every new one, the earliest encrypted first (`sealedSince`); new ones (started encrypted, or started over) by when
+    /// they started, by the clocks of the devices that started them. Ties fall to the smallest ID.
+    static func rivalOrder(_ versions: [SyncManifest]) -> (Int, Date) {
+        let sealedSince = versions.compactMap { $0.sealing?.sealedSince }.min() ?? .distantPast
+        if let created = versions.compactMap(\.created).min() { return (1, created) }
+        if versions.contains(where: { $0.sealing?.replaces != nil }) { return (1, sealedSince) }
+        return (0, sealedSince)
     }
 
     /// The library's ID from a manifest the sync folder already holds downloaded, without creating one or waiting.
@@ -1023,8 +1062,8 @@ public actor LibrarySyncEngine {
         let bases = localRoot.appendingPathComponent("Sync/Bases/\(stem)", isDirectory: true)
         try SyncFiles.noSymlinks(bases, below: localRoot)
         basesURL = bases
-        if fm.fileExists(atPath: url.path) {
-            guard var decoded = try? decoder.decode(SyncCheckpoint.self, from: Data(contentsOf: url)) else { throw LibrarySyncError.corruptState }
+        if fm.fileExists(atPath: url.path), let decoded = try readCheckpoint(url, stem: stem, bases: bases) {
+            var decoded = decoded
             if decoded.baseFiles == true {
                 decoded.bases = try loadBases(from: bases)
                 state = decoded; checkpointURL = url
@@ -1052,6 +1091,29 @@ public actor LibrarySyncEngine {
             try? fm.removeItem(at: bases)
             checkpointURL = url
         }
+    }
+    /// Reads the checkpoint at `url`. One that doesn't decode (cut short by a crash or power loss before checkpoints were
+    /// written durably, or damaged since) is moved aside with its bases, kept as recovery history
+    /// (`Sync/<stem>.corrupt-<date>.json`, `Sync/Bases/<stem>.corrupt-<date>`), and nil is returned: this device starts
+    /// from an empty checkpoint and publishes its library again as a newcomer would. Local deletions still reach the
+    /// journal through the Trash, remote ones are in it already, and identical content merges without conflicts. A file
+    /// that can't be read at all (a file error) throws, and is read again next pass.
+    private func readCheckpoint(_ url: URL, stem: String, bases: URL) throws -> SyncCheckpoint? {
+        let data = try Data(contentsOf: url)
+        if let decoded = try? decoder.decode(SyncCheckpoint.self, from: data) { return decoded }
+        let stamp = Self.asideStamp(Date())
+        let sync = url.deletingLastPathComponent()
+        try fm.moveItem(at: url, to: sync.appendingPathComponent("\(stem).corrupt-\(stamp).json"))
+        if fm.fileExists(atPath: bases.path) {
+            try? fm.moveItem(at: bases, to: bases.deletingLastPathComponent().appendingPathComponent("\(stem).corrupt-\(stamp)", isDirectory: true))
+        }
+        return nil
+    }
+    /// A date for a file name: "20261101T143200Z".
+    static func asideStamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
+        return formatter.string(from: date).replacingOccurrences(of: ":", with: "")
     }
     /// Copies this device's checkpoint, and its bases, from one library identity to another when it has none
     /// there yet: the journal is the same, only its identity changed (a move into the container, or a manifest
@@ -1145,13 +1207,21 @@ public actor LibrarySyncEngine {
     static func checkpointStem(libraryID: UUID, deviceID: String) -> String {
         "\(libraryID.uuidString)-\(SyncDigest.sha256(data: Data(deviceID.utf8)).prefix(16))"
     }
+    /// Writes the checkpoint durably (`DurableFiles`: on storage before the rename, so a crash or power loss never leaves
+    /// it cut short), and only when it says something new: a pass that changed nothing writes nothing.
     func saveCheckpoint() throws {
         guard let checkpointURL else { throw LibrarySyncError.corruptState }
         try SyncFiles.noSymlinks(checkpointURL, below: localRoot)
         // Bases live in their own files. Empty inline copies keep the file readable by earlier versions.
         var stored = state
         stored.bases = [:]
-        try LocalFiles.atomicWrite(SyncEncoding.data(stored), to: checkpointURL)
+        // A pending pass that changes nothing needs no record: acknowledging it leaves the checkpoint as it is.
+        if let pending = stored.pending, pending.heads == stored.heads, pending.metadataHeads == stored.metadataHeads,
+           (pending.changedBases ?? [:]).isEmpty, (pending.removedBases ?? []).isEmpty { stored.pending = nil }
+        let bytes = try SyncEncoding.data(stored)
+        if savedCheckpoint == bytes, fm.fileExists(atPath: checkpointURL.path) { return }
+        try DurableFiles.write(bytes, to: checkpointURL)
+        savedCheckpoint = bytes
     }
     private func loadBases(from directory: URL) throws -> [String: Meeting] {
         guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return [:] }
@@ -1164,18 +1234,24 @@ public actor LibrarySyncEngine {
         }
         return bases
     }
+    /// Writes changed bases, then flushes them and their folder to storage at once (`DurableFiles.synchronize`), before
+    /// the checkpoint that names their heads is written.
     private func saveBases(_ keys: [String], removing removed: [String]) throws {
         guard let basesURL else { throw LibrarySyncError.corruptState }
         guard !keys.isEmpty || !removed.isEmpty else { return }
         try SyncFiles.noSymlinks(basesURL, below: localRoot)
         try LocalFiles.directory(basesURL)
+        var written: [URL] = []
         for key in keys {
             guard UUID(uuidString: key) != nil, let base = state.bases[key] else { continue }
-            try LocalFiles.atomicWrite(SyncEncoding.data(base), to: basesURL.appendingPathComponent("\(key).json"))
+            let url = basesURL.appendingPathComponent("\(key).json")
+            try LocalFiles.atomicWrite(SyncEncoding.data(base), to: url)
+            written.append(url)
         }
         for key in removed where UUID(uuidString: key) != nil {
             try? fm.removeItem(at: basesURL.appendingPathComponent("\(key).json"))
         }
+        try DurableFiles.synchronize(written + [basesURL])
     }
     /// After a pass: snapshots the pass used stay (heads, bases of merges), others are read again if needed, and
     /// only the library settings that are heads keep their data.
@@ -1601,9 +1677,9 @@ struct SyncManifest: Codable, Equatable {
     var supersedes: [UUID]?
     /// How an encrypted library (`schemaVersion` 2) is sealed (LibrarySyncSealing.swift). Nil in a plaintext one.
     var sealing: Sealing?
-    /// When a device started this library as a new encrypted one (`createLibrary`). Two such libraries started within
-    /// `creationRace` of each other are two devices starting at once on a new iCloud container, which resolve to one
-    /// (`resolveManifest`). Nil in libraries started earlier, or encrypted later. Additive.
+    /// When a device started this library as a new encrypted one (`createLibrary`): of encrypted libraries that meet in
+    /// one container, the first one started wins (`resolveManifest`, `rivalOrder`). Nil in libraries started earlier, or
+    /// encrypted later. Additive.
     var created: Date?
     /// When the library was first compacted (`schemaVersion` 3, LibrarySyncCompaction.swift). Additive.
     var compaction: Compaction?

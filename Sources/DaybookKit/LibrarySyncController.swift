@@ -1,9 +1,8 @@
 import DaybookCore
 import Foundation
+import Network
 import Observation
-#if os(macOS)
-import Security
-#endif
+import Synchronization
 
 /// Where library sync runs.
 public enum SyncTransport: String, Sendable {
@@ -109,19 +108,25 @@ public struct SyncContainerEnvironment: Sendable {
     /// Which app recorded an account before the app was kept with it: on the Mac the only signed build then,
     /// `local.daybook.app` (signed Mac builds are `local.daybook` now); on the iPhone the app itself.
     public var earlierAccountApp: String?
+    /// Whether the network is up now: an empty listing of the container made offline says nothing about what iCloud
+    /// holds, so a new library waits for one made online (`LibrarySyncController`, "Monitoring"). Tests: always.
+    public var networkReachable: @Sendable () -> Bool
 
     public init(containerIdentifier: String?, hasEntitlement: @escaping @Sendable (String) -> Bool,
                 accountIdentity: @escaping @Sendable () -> Data?, accountSignedIn: @escaping @Sendable () async -> Bool? = { nil },
                 resolveContainer: @escaping @Sendable (String) -> URL?, cloud: SyncCloudFiles = .system,
-                retryInterval: Duration = .seconds(5), appIdentifier: String? = nil, earlierAccountApp: String? = nil) {
+                retryInterval: Duration = .seconds(5), appIdentifier: String? = nil, earlierAccountApp: String? = nil,
+                networkReachable: @escaping @Sendable () -> Bool = { true }) {
         self.containerIdentifier = Self.valid(containerIdentifier)
         self.hasEntitlement = hasEntitlement; self.accountIdentity = accountIdentity; self.accountSignedIn = accountSignedIn
         self.resolveContainer = resolveContainer; self.cloud = cloud; self.retryInterval = retryInterval
-        self.appIdentifier = appIdentifier; self.earlierAccountApp = earlierAccountApp
+        self.appIdentifier = appIdentifier; self.earlierAccountApp = earlierAccountApp; self.networkReachable = networkReachable
     }
 
     public static var system: SyncContainerEnvironment {
         let containerIdentifier = Bundle.main.object(forInfoDictionaryKey: infoKey) as? String
+        // Started now, so it has reported by the time the container's first listing comes back.
+        let network = SyncNetworkPath.shared
         return SyncContainerEnvironment(
             containerIdentifier: containerIdentifier,
             hasEntitlement: { identifier in
@@ -151,7 +156,8 @@ public struct SyncContainerEnvironment: Sendable {
                 #else
                 return Bundle.main.bundleIdentifier
                 #endif
-            }())
+            }(),
+            networkReachable: { network.isSatisfied })
     }
 
     static func valid(_ identifier: String?) -> String? {
@@ -162,10 +168,24 @@ public struct SyncContainerEnvironment: Sendable {
     #if os(macOS)
     /// The `com.apple.developer.ubiquity-container-identifiers` this process is signed with.
     static func signedUbiquityContainers() -> [String] {
-        guard let task = SecTaskCreateFromSelf(nil) else { return [] }
-        return SecTaskCopyValueForEntitlement(task, "com.apple.developer.ubiquity-container-identifiers" as CFString, nil) as? [String] ?? []
+        Entitlements.strings("com.apple.developer.ubiquity-container-identifiers")
     }
     #endif
+}
+
+/// Whether this device's network is up now, from one `NWPathMonitor` started with the first `.system` environment.
+/// Optimistic until the monitor first reports, which it does at once.
+final class SyncNetworkPath: Sendable {
+    static let shared = SyncNetworkPath()
+    private let satisfied = Mutex(true)
+    private let monitor = NWPathMonitor()
+
+    private init() {
+        monitor.pathUpdateHandler = { path in self.satisfied.withLock { $0 = path.status == .satisfied } }
+        monitor.start(queue: DispatchQueue(label: "local.daybook.sync.network", qos: .utility))
+    }
+
+    var isSatisfied: Bool { satisfied.withLock { $0 } }
 }
 
 @MainActor
@@ -251,6 +271,16 @@ public final class LibrarySyncController {
     @ObservationIgnored private var forgetsSealedLibrary = false
     /// iCloud has listed the connected folder once (its metadata query finished gathering).
     private(set) var containerListed = false
+    /// The first listing was empty and made offline: it counts once one has something in it or the network is up
+    /// (`noteListing`).
+    @ObservationIgnored private(set) var listingDeferred = false
+    /// Something here asked for a pass (`requestSync`: an edit saved, a delivery, iCloud's listing changing) since the
+    /// last one started.
+    @ObservationIgnored private var requestedSinceLastPass = false
+    /// When the last pass started.
+    @ObservationIgnored private var lastPassStarted: Date?
+    /// Polls that skipped their pass because it would change nothing (tests).
+    @ObservationIgnored private(set) var pollsSkipped = 0
 
     /// Unsigned and ad hoc development builds can't use the iCloud container. Setting this preference
     /// (`-DaybookDevelopmentFolderSync YES` as a launch argument, or `defaults write`) brings back the folder
@@ -333,7 +363,15 @@ public final class LibrarySyncController {
         guard let folder else { return }
         let transport = self.transport
         stopMonitoring(); engine = nil
-        try? attach(folder, transport: transport, monitorChanges: true)
+        do { try attach(folder, transport: transport, monitorChanges: true) } catch {
+            // Reconnecting failed: sync says so, as a container that can't be attached does, rather than stopping quietly.
+            self.folder = nil; self.transport = .none
+            if transport == .iCloudContainer {
+                iCloud = .containerUnavailable(error.localizedDescription); status = .iCloudUnavailable(details: error.localizedDescription)
+            } else {
+                status = .reconnectFolder(details: error.localizedDescription)
+            }
+        }
     }
 
     /// Whether this build may sync through a chosen folder: only without iCloud, and only when asked for.
@@ -505,6 +543,7 @@ public final class LibrarySyncController {
 
     public func requestSync() {
         guard folder != nil else { return }
+        requestedSinceLastPass = true
         // A request made by the pass a request started (an edit saved meanwhile, a courier delivery) mustn't cancel
         // that pass: it runs again once the pass is over.
         if debounceRunsPass { requestedDuringPass = true; return }
@@ -553,6 +592,7 @@ public final class LibrarySyncController {
         let generation = configurationID
         statusBeforePass = status
         isSyncing = true; status = .syncing
+        requestedSinceLastPass = false; lastPassStarted = Date()
         do {
             let task = Task { try await engine.synchronize(meetings: meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: metadata,
                                                            limits: limits, protecting: protecting, scope: scope) }
@@ -577,6 +617,13 @@ public final class LibrarySyncController {
             // Not a failure: the pass runs again once iCloud has listed the container.
             activeTask = nil; isSyncing = false; pendingReceipt = nil
             status = .waitingForICloud
+            return nil
+        } catch let error as LibrarySyncError where error == .libraryRemoved || error == .sealingRemoved {
+            // The encrypted library this device synced is gone from iCloud, or what's there now isn't encrypted: sync
+            // waits for the person (`startNewLibrary`, `syncWithLibraryInICloud`).
+            activeTask = nil; isSyncing = false; pendingReceipt = nil
+            guard generation == configurationID else { return nil }
+            status = error == .libraryRemoved ? .libraryRemoved : .newLibrary
             return nil
         } catch LibrarySyncError.keyStoreUnreadable {
             // Not a failure, and not a missing key: the keychain can't be read right now (an iPhone not unlocked since it
@@ -723,6 +770,29 @@ public final class LibrarySyncController {
         guard !isSyncing else { throw SyncControllerError.busy }
         try await engine.startOver()
         await noteEncryption(engine)
+        requestSync()
+    }
+
+    /// The library this device synced is gone from iCloud (`status == .libraryRemoved`: someone deleted Daybook's data
+    /// there): starts a new encrypted library in its place ("Start a New Library in iCloud",
+    /// `LibrarySyncEngine.startNewLibrary`). This device publishes its library into it, and every other device does the
+    /// same once it has the key. A library another device started meanwhile is joined instead.
+    public func startNewLibrary() async throws {
+        guard let engine else { throw SyncControllerError.notConnected }
+        guard !isSyncing else { throw SyncControllerError.busy }
+        try await engine.startNewLibrary()
+        await noteEncryption(engine)
+        status = .preparing
+        requestSync()
+    }
+
+    /// iCloud holds a library that isn't encrypted where this device synced an encrypted one (`status == .newLibrary`):
+    /// syncs with it anyway. This device forgets the folder held an encrypted library; the library is encrypted again on
+    /// its own once every device in use can read encrypted libraries.
+    public func syncWithLibraryInICloud() {
+        guard let folder, !isSyncing else { return }
+        LibrarySyncEngine.forgetSealedLibrary(localRoot: localRoot, remoteRoot: folder)
+        status = .preparing
         requestSync()
     }
 
@@ -1223,6 +1293,11 @@ public final class LibrarySyncController {
 
     // MARK: Monitoring
 
+    /// How long the 30-second poll may go without a pass while nothing changed here or in iCloud: time-based work rides
+    /// on passes (the sealer's grace periods, a migrator or claim gone quiet, requests waiting for a device), and the
+    /// status says when sync last checked. The iPhone's own cadence is the same (`PhoneSync.presenceInterval`).
+    static let idlePassInterval: TimeInterval = 10 * 60
+
     private func startMonitoring(_ root: URL) {
         let query = NSMetadataQuery()
         query.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope, NSMetadataQueryUbiquitousDataScope, NSMetadataQueryAccessibleUbiquitousExternalDocumentsScope]
@@ -1232,19 +1307,20 @@ public final class LibrarySyncController {
             let gathered = name == .NSMetadataQueryDidFinishGathering
             observers.append(NotificationCenter.default.addObserver(forName: name, object: query, queue: .main) { [weak self] _ in
                 Task { @MainActor in
-                    if gathered, let engine = self?.engine { await engine.listingGathered(); self?.containerListed = true }
-                    self?.requestSync()
+                    guard let self else { return }
+                    if gathered || self.listingDeferred { await self.noteListing() }
+                    self.requestSync()
                 }
             })
         }
         self.query = query; query.start()
-        // Reconcile after missed metadata events, sleep/wake, or a temporary offline period.
+        // Reconcile after missed metadata events, sleep/wake, or a temporary offline period. The loop holds the controller
+        // only while it acts, so it ends once the controller is gone.
         polling = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
-                await self?.onSyncRequested?()
-                // Presence stays fresh while passes wait (recording, processing): rewritten when it's due.
-                if let engine = self?.engine { try? await engine.refreshPresence() }
+                guard let self else { return }
+                await self.poll()
             }
         }
         // The container has its own account handling (`accountDidChange`). A chosen folder disconnects.
@@ -1253,21 +1329,61 @@ public final class LibrarySyncController {
         observers.append(NotificationCenter.default.addObserver(forName: .NSUbiquityIdentityDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.transport == .folder, !self.isOnSameAccount else { return }
-                if self.activeTask == nil { self.isSyncing = false }
-                self.activeTask?.cancel(); self.configurationID = UUID(); self.pendingReceipt = nil; self.stopMonitoring(); self.engine = nil; self.folder = nil
-                self.transport = .none
+                self.detach()
                 self.defaults.removeObject(forKey: Key.folderBookmark)
                 self.status = .folderAccountChanged
             }
         })
     }
 
+    /// iCloud has listed the container (the query's first gather, or an update after one made offline). An empty listing
+    /// made offline says nothing about what iCloud holds: a device that started a library then would start a second one
+    /// beside one it can't see yet, so it waits until a listing has something in it or the network is up.
+    private func noteListing() async {
+        guard let engine, let query, !containerListed else { listingDeferred = false; return }
+        guard query.resultCount > 0 || environment.networkReachable() else { listingDeferred = true; return }
+        listingDeferred = false
+        await engine.listingGathered()
+        containerListed = true
+    }
+
+    /// The 30-second fallback. Presence stays fresh while passes wait (recording, processing): rewritten when it's due.
+    /// The pass itself is skipped while it would change nothing: the last one finished up to date, nothing here asked
+    /// for one since, it hasn't been `idlePassInterval`, and iCloud's listing hasn't changed (`hasRemoteChanges`, which
+    /// lists without reading).
+    func poll() async {
+        if listingDeferred { await noteListing() }
+        if await mayIdle() { pollsSkipped += 1 } else { await onSyncRequested?() }
+        if let engine { try? await engine.refreshPresence() }
+    }
+
+    /// Whether the poll may skip its pass (`poll`).
+    private func mayIdle(now: Date = Date()) async -> Bool {
+        guard case .upToDate = status, !requestedSinceLastPass, !hasMoreWork, !isSyncing, let engine,
+              let started = lastPassStarted, now.timeIntervalSince(started) < Self.idlePassInterval else { return false }
+        return await !engine.hasRemoteChanges()
+    }
+
     private func stopMonitoring() {
-        polling?.cancel(); polling = nil; debounce?.cancel(); debounce = nil; containerListed = false
+        polling?.cancel(); polling = nil; debounce?.cancel(); debounce = nil; containerListed = false; listingDeferred = false
         debounceRunsPass = false; requestedDuringPass = false
         query?.stop(); query = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
         scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil
+    }
+
+    /// Stops everything the controller started, for good: the pass in flight, monitoring and its timer, a requested
+    /// pass, the container lookup and the move from a chosen folder, the courier, and the account observer. For a
+    /// controller about to be dropped (tests, a library closed); nothing is turned off or forgotten.
+    public func invalidate() {
+        activeTask?.cancel(); configurationID = UUID(); pendingReceipt = nil
+        containerTask?.cancel(); containerTask = nil; migrationTask?.cancel(); migrationTask = nil
+        containerGeneration = UUID()
+        stopMonitoring()
+        stopCourier()
+        if let accountObserver { NotificationCenter.default.removeObserver(accountObserver) }
+        accountObserver = nil
+        engine = nil; folder = nil; transport = .none
     }
 }
 

@@ -74,6 +74,8 @@ extension LibrarySyncEngine {
         fresh.sealing = SyncManifest.Sealing(current: key.idHex, sealedSince: now, migrator: deviceID,
                                              keys: [SyncManifest.Sealing.Key(id: key.idHex, created: key.createdAt, recovery: recovery?.wrap(key))],
                                              replaces: SyncManifest.Sealing.union([manifest.libraryID], manifest.sealing?.replaces))
+        // A new library, from now: of libraries that meet as rivals, it's ordered by when it started (`rivalOrder`).
+        fresh.created = key.createdAt
         let url = remoteRoot.appendingPathComponent("daybook-sync.json")
         var standing: SyncManifest?
         try SyncFiles.coordinateWrite(url, below: remoteRoot) { target in

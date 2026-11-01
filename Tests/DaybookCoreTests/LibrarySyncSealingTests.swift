@@ -204,14 +204,16 @@ final class LibrarySyncSealingTests: XCTestCase {
         let sealed = try Data(contentsOf: url)
         let eventsBefore = files("Events")
 
-        // Replaced by a plaintext manifest of the same library, or of another one, or removed.
+        // Replaced by a plaintext manifest of the same library, or of another one: no longer encrypted. Removed: the library
+        // is gone, and no device starts another on its own (a plaintext one least of all).
         let id = try manifest().libraryID
         for replacement in [try SyncManifest(libraryID: id).encoded(), try SyncManifest(libraryID: UUID()).encoded(), nil] {
             if let replacement { try replacement.write(to: url) } else { try FileManager.default.removeItem(at: url) }
             let restarted = try self.mac()
             do { _ = try await restarted.synchronize(meetings: [Meeting(title: "After")]); XCTFail("Published into a downgraded library") }
-            catch LibrarySyncError.sealingRemoved {}
+            catch let error as LibrarySyncError { XCTAssertEqual(error, replacement == nil ? .libraryRemoved : .sealingRemoved) }
             XCTAssertEqual(files("Events"), eventsBefore)
+            XCTAssertEqual(FileManager.default.fileExists(atPath: url.path), replacement != nil)
         }
         // Another device that never synced it encrypted follows what's there.
         try SyncManifest(libraryID: id).encoded().write(to: url)
@@ -241,11 +243,14 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(merged.migrator, "Other")
         XCTAssertNotNil(try Data(contentsOf: url))
 
-        // A different library's encrypted manifest beside it can't be merged: sync pauses.
+        // A different library's encrypted manifest beside it can't be merged, but it doesn't stop sync either: they resolve
+        // as rivals, and this one, encrypted first, stays.
         var foreign = theirs
         foreign.libraryID = UUID()
         try foreign.encoded().write(to: remote.appendingPathComponent("daybook-sync 3.json"))
-        do { _ = try await mac.synchronize(meetings: []); XCTFail() } catch LibrarySyncError.manifestConflict {}
+        _ = try await mac.synchronize(meetings: [])
+        XCTAssertEqual(try manifest().libraryID, first.libraryID)
+        XCTAssertEqual(try manifest().sealing?.rivals, [foreign.libraryID])
     }
 
     // MARK: Sealed journal

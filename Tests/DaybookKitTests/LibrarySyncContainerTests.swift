@@ -39,7 +39,15 @@ final class LibrarySyncContainerTests: XCTestCase {
         return SyncContainerEnvironment(containerIdentifier: identifier, hasEntitlement: { _ in entitled },
                                         accountIdentity: { account.identity }, accountSignedIn: { account.signedIn },
                                         resolveContainer: { _ in account.container }, cloud: cloud, retryInterval: .milliseconds(20),
-                                        appIdentifier: app, earlierAccountApp: earlierApp)
+                                        appIdentifier: app, earlierAccountApp: earlierApp, networkReachable: { account.online })
+    }
+
+    /// One pass through the controller, acknowledged; nil when it returned nothing to apply.
+    @discardableResult
+    private func pass(_ sync: LibrarySyncController, _ meetings: [Meeting] = []) async throws -> SyncResult? {
+        guard let result = try await sync.synchronize(meetings: meetings, deletedMeetingIDs: [], metadata: Data()) else { return nil }
+        try await sync.acknowledge(result)
+        return result
     }
 
     private func controller(_ environment: SyncContainerEnvironment) -> LibrarySyncController {
@@ -423,6 +431,124 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertFalse(sync.isSyncing)
     }
 
+    func testBehaviorAManifestStillInICloudWaitsWithoutAPause() async throws {
+        let meeting = try await librarySyncedThroughFolder()
+        let cloud = PlaceholderCloud()
+        try cloud.evict(folder.appendingPathComponent("daybook-sync.json"))
+        let sync = controller(environment())
+        sync.replica.cloud = cloud.files
+        try sync.connect(to: folder, monitorChanges: false)
+        let waiting = try await sync.synchronize(meetings: [meeting], deletedMeetingIDs: [], metadata: Data())
+        XCTAssertNil(waiting)
+        XCTAssertEqual(sync.status, .waitingForICloud)
+        XCTAssertNil(sync.status.problem, "A manifest on its way is iCloud catching up, not a pause")
+        XCTAssertEqual(cloud.requests.map { URL(fileURLWithPath: $0).lastPathComponent }, ["daybook-sync.json"])
+        try cloud.deliver(folder.appendingPathComponent("daybook-sync.json"))
+        let next = try await pass(sync, [meeting])
+        XCTAssertNotNil(next)
+        guard case .upToDate = sync.status else { return XCTFail(sync.statusText) }
+    }
+
+    func testBehaviorAnEmptyListingMadeOfflineStartsNoLibrary() async throws {
+        account.online = false
+        let sync = controller(environment())
+        sync.syncDebounce = nil
+        sync.restore()
+        await sync.waitForContainer()
+        XCTAssertEqual(sync.iCloud, .connected)
+        try await waitUntil("the offline listing", state: syncState) { sync.listingDeferred }
+        XCTAssertFalse(sync.containerListed)
+        // Offline, an empty container may be one iCloud hasn't listed yet: no library is started beside one it can't see.
+        _ = try await pass(sync)
+        XCTAssertEqual(sync.status, .waitingForICloud)
+        XCTAssertFalse(fm.fileExists(atPath: journal.appendingPathComponent("daybook-sync.json").path))
+        // Online, the next poll takes the listing, and the library starts.
+        account.online = true
+        await sync.poll()
+        XCTAssertTrue(sync.containerListed)
+        let started = try await pass(sync)
+        XCTAssertNotNil(started)
+        XCTAssertTrue(fm.fileExists(atPath: journal.appendingPathComponent("daybook-sync.json").path))
+    }
+
+    func testBehaviorALibraryRemovedFromICloudOffersANewOneAndAPlaintextOneCanBeJoined() async throws {
+        let sync = controller(environment())
+        sync.replica.keyStore = MemoryLibraryKeyStore()
+        sync.replica.sealsNewLibrary = true
+        sync.encryptsAutomatically = false
+        sync.syncDebounce = nil
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try sync.connect(to: folder, monitorChanges: false)
+        let kept = Meeting(title: "Kept here")
+        let firstPass = try await pass(sync, [kept])
+        let first = try XCTUnwrap(firstPass)
+        let removedID = await sync.libraryID()
+        let removed = try XCTUnwrap(removedID)
+        // Someone deletes Daybook's data from iCloud.
+        for name in try fm.contentsOfDirectory(atPath: folder.path) { try fm.removeItem(at: folder.appendingPathComponent(name)) }
+        let paused = try await pass(sync, first.meetings)
+        XCTAssertNil(paused)
+        XCTAssertEqual(sync.status, .libraryRemoved)
+        XCTAssertEqual(sync.status.problem, .libraryRemoved)
+        XCTAssertFalse(fm.fileExists(atPath: folder.appendingPathComponent("daybook-sync.json").path), "No library starts on its own")
+        // Start a New Library in iCloud: encrypted, and this device publishes its library into it.
+        try await sync.startNewLibrary()
+        let freshPass = try await pass(sync, first.meetings)
+        let fresh = try XCTUnwrap(freshPass)
+        let startedID = await sync.libraryID()
+        let started = try XCTUnwrap(startedID)
+        XCTAssertNotEqual(started, removed)
+        XCTAssertTrue(sync.encryption.isOn)
+        XCTAssertEqual(fresh.meetings.map(\.title), ["Kept here"])
+        XCTAssertGreaterThan(fresh.publishedEvents, 0, "Published again into the new library")
+        XCTAssertNil(sync.status.problem)
+
+        // What's there now is a plaintext library another device started: sync waits for the person, then joins it.
+        let other = try LibrarySyncEngine(localRoot: root.appendingPathComponent("Other"), remoteRoot: root.appendingPathComponent("Elsewhere"),
+                                          deviceID: "Other", replica: SyncReplicaConfiguration(sealsNewLibrary: false))
+        _ = try await other.synchronize(meetings: [])
+        try fm.removeItem(at: folder.appendingPathComponent("daybook-sync.json"))
+        try fm.copyItem(at: root.appendingPathComponent("Elsewhere/daybook-sync.json"), to: folder.appendingPathComponent("daybook-sync.json"))
+        let waiting = try await pass(sync, fresh.meetings)
+        XCTAssertNil(waiting)
+        XCTAssertEqual(sync.status, .newLibrary)
+        XCTAssertEqual(sync.status.problem, .newLibrary)
+        sync.syncWithLibraryInICloud()
+        let joined = try await pass(sync, fresh.meetings)
+        XCTAssertNotNil(joined)
+        XCTAssertNil(sync.status.problem)
+    }
+
+    func testBehaviorThePollSkipsAPassThatWouldChangeNothing() async throws {
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let sync = controller(environment())
+        sync.syncDebounce = nil
+        try sync.connect(to: folder, monitorChanges: false)
+        var passes = 0
+        sync.onSyncRequested = { [weak sync] in
+            passes += 1
+            guard let sync, let result = try? await sync.synchronize(meetings: [], deletedMeetingIDs: [], metadata: Data()) else { return }
+            try? await sync.acknowledge(result)
+        }
+        await sync.poll()
+        XCTAssertEqual(passes, 1, "Nothing synced yet: the poll runs a pass")
+        guard case .upToDate = sync.status else { return XCTFail(sync.statusText) }
+        await sync.poll()
+        XCTAssertEqual(passes, 1, "Up to date, nothing asked for, nothing new in iCloud")
+        XCTAssertEqual(sync.pollsSkipped, 1)
+        // Something here asked for a pass.
+        sync.requestSync()
+        await sync.poll()
+        XCTAssertEqual(passes, 2)
+        await sync.poll()
+        XCTAssertEqual(passes, 2)
+        // Another device wrote to the journal.
+        let other = try LibrarySyncEngine(localRoot: root.appendingPathComponent("Other"), remoteRoot: folder, deviceID: "Other")
+        _ = try await other.synchronize(meetings: [Meeting(title: "From elsewhere")])
+        await sync.poll()
+        XCTAssertEqual(passes, 3)
+    }
+
     func testCancellingAnActivePassReachesTheEngineAndLeavesItReadyToRetry() async throws {
         let meeting = try await librarySyncedThroughFolder()
         let event = try XCTUnwrap(try fm.contentsOfDirectory(at: folder.appendingPathComponent("Events"), includingPropertiesForKeys: nil).first)
@@ -468,8 +594,9 @@ private final class SyncReadGate: @unchecked Sendable {
 /// The test's iCloud account and container.
 private final class FakeAccount: @unchecked Sendable {
     private let lock = NSLock()
-    private var _identity: Data?, _signedIn: Bool?, _container: URL?, _resolved: String?
+    private var _identity: Data?, _signedIn: Bool?, _container: URL?, _resolved: String?, _online = true
     init(identity: Data?, container: URL?) { _identity = identity; _container = container }
+    var online: Bool { get { lock.withLock { _online } } set { lock.withLock { _online = newValue } } }
     var identity: Data? { get { lock.withLock { _identity } } set { lock.withLock { _identity = newValue } } }
     var signedIn: Bool? { get { lock.withLock { _signedIn } } set { lock.withLock { _signedIn = newValue } } }
     var container: URL? {
