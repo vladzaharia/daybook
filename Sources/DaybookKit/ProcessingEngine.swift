@@ -5,8 +5,15 @@ import Foundation
 /// How far processing has got, for a progress line.
 public struct ProcessingProgress: Sendable, Equatable {
     public var fraction: Double
+    /// The engine's own words, for logs and diagnostics. Never read to tell what step it is: that's `stage`.
     public var message: String
-    public init(fraction: Double, message: String) { self.fraction = fraction; self.message = message }
+    /// The step the work is in, set by the engine from the step that reports (`InferenceProcessingEngine`): what
+    /// the page, the list, Floating Notes, a phone, and the request's claim say it's doing. Nil when the report
+    /// doesn't say (reading photos, or an engine that doesn't know): the step before it goes on.
+    public var stage: ProcessingRequest.Stage?
+    public init(fraction: Double, message: String, stage: ProcessingRequest.Stage? = nil) {
+        self.fraction = fraction; self.message = message; self.stage = stage
+    }
 }
 
 public typealias ProcessingProgressHandler = @Sendable (ProcessingProgress) -> Void

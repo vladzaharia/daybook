@@ -7,10 +7,15 @@ import DaybookKit
 
 public struct IntelligenceProgress: Sendable {
     public let fraction: Double
+    /// The engine's own words, for logs and diagnostics. What step it is comes from `stage`, never from these.
     public let message: String
-    public init(_ fraction: Double, _ message: String) {
+    /// The step the work is in, set by whoever knows it: `InferenceProcessingEngine` tags each step's reports.
+    /// Nil when the reporter doesn't say (a runtime reporting inside one step).
+    public let stage: ProcessingRequest.Stage?
+    public init(_ fraction: Double, _ message: String, stage: ProcessingRequest.Stage? = nil) {
         self.fraction = min(1, max(0, fraction.isFinite ? fraction : 0))
         self.message = message
+        self.stage = stage
     }
 }
 
@@ -158,6 +163,20 @@ public enum LocalIntelligenceError: LocalizedError {
         case .invalidSpeakerOutput: return "The local speaker model returned invalid predictions. Try another speaker model."
         case .unsupportedRole(let model, let role): return "\(ModelCatalog.builtIn.name(for: model)) can’t be used for \(role). Choose another model."
         case .unavailable(let model, let reason): return "\(ModelCatalog.builtIn.name(for: model)): \(reason)."
+        }
+    }
+}
+
+extension LocalIntelligenceError: ProcessingFailureClassifying {
+    /// What a failed request records: a model that isn't downloaded is `modelsMissing`; the rest but an unknown model
+    /// are plain sentences that say what to do ("Turn on Apple Intelligence", "Choose another model"), shown as they
+    /// are. A model that runs out of memory throws its engine's own error, which reads as `modelCouldNotStart`.
+    public var failureKind: ProcessingRequest.FailureKind {
+        switch self {
+        case .modelNotInstalled: return .modelsMissing
+        case .busy, .invalidAudio, .emptyResponse, .invalidSpeakerOutput, .invalidTokenizer, .unavailable, .unsupportedRole:
+            return .plainReason
+        case .unknownModel: return .other
         }
     }
 }

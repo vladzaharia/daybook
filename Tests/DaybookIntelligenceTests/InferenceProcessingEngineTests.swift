@@ -65,7 +65,7 @@ final class InferenceProcessingEngineTests: XCTestCase {
         let output = try await engine.transcribe(input(.newAudio), progress: { reported.add($0) })
 
         XCTAssertEqual(inference.calls, ["transcribe whisper-base Daybook", "diarize community-1/offline"])
-        XCTAssertEqual(reported.values.first, ProcessingProgress(fraction: 0.5, message: "Transcribing"))
+        XCTAssertEqual(reported.values.first, ProcessingProgress(fraction: 0.5, message: "Transcribing", stage: .transcribing))
         let run = output.transcript
         XCTAssertEqual(run.modelID, "whisper-base")
         XCTAssertEqual(run.knownOffset, 1.5)

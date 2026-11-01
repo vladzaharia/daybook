@@ -67,8 +67,16 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         self.configuration = configuration
     }
 
+    /// A step's progress handler: each report carries the step it came from, so what the work is doing never
+    /// depends on how a model words its progress. A runtime that names a step itself (`IntelligenceProgress.stage`)
+    /// is taken at its word.
+    static func reporting(_ stage: ProcessingRequest.Stage?, to progress: @escaping ProcessingProgressHandler) -> IntelligenceProgressHandler {
+        { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message, stage: $0.stage ?? stage)) }
+    }
+
     public func transcribe(_ input: TrackProcessingInput, progress: @escaping ProcessingProgressHandler) async throws -> TrackProcessingOutput {
-        let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
+        let transcribing = Self.reporting(.transcribing, to: progress)
+        let identifying = Self.reporting(.identifyingSpeakers, to: progress)
         let result: RecognitionResult
         var transcriptModel = configuration.transcriptionModel.id
         var transcriptProvenance: ModelProvenance?
@@ -93,7 +101,7 @@ public struct InferenceProcessingEngine: ProcessingEngine {
             let routed = try await TranscriptionRouter(inference: inference, model: configuration.transcriptionModel,
                                                        language: configuration.transcriptionLanguage,
                                                        fallback: configuration.languageFallbackModel)
-                .run(url: input.audioURL, glossary: input.vocabulary, progress: report)
+                .run(url: input.audioURL, glossary: input.vocabulary, progress: transcribing)
             result = routed.result
             transcriptModel = routed.model.id
             transcriptProvenance = result.provenance
@@ -104,14 +112,16 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         if configuration.detectSpeakers {
             do {
                 analysis = try await inference.diarize(url: input.audioURL, model: configuration.speakerModel,
-                                                       options: configuration.speakerOptions, progress: report)
+                                                       options: configuration.speakerOptions, progress: identifying)
             } catch is CancellationError { throw CancellationError() }
             catch {
                 if input.mode == .speakerRefresh { throw error }
                 notices.append("Transcription succeeded, but speaker detection failed for \(input.track.fileName): \(error.localizedDescription)")
             }
         }
-        let background = try await backgroundAudio(input, progress: report)
+        // Listening for music and TV sits between finding speakers and their voice profiles, and decides whose
+        // voice gets one: part of identifying speakers when they're found, of transcribing when they aren't.
+        let background = try await backgroundAudio(input, progress: configuration.detectSpeakers ? identifying : transcribing)
         let runID = UUID()
         let segments = TranscriptBuilder.segments(result: result, speakers: analysis, track: input.track, runID: runID)
         // Music, a TV, or radio: its passages stay in the run (fusion leaves them out of the transcript),
@@ -121,7 +131,7 @@ public struct InferenceProcessingEngine: ProcessingEngine {
             // Routing by capability: a diarizer without voice profiles gets them from the embedding model.
             do {
                 let embedded = try await inference.embedVoices(url: input.audioURL, analysis: Self.withoutBackground(found, verdict: verdict,
-                                                               segments: segments, runID: runID), model: embedder, progress: report)
+                                                               segments: segments, runID: runID), model: embedder, progress: identifying)
                 analysis = SpeakerAnalysis(turns: found.turns, embeddings: embedded.embeddings, embeddingModelID: embedded.embeddingModelID,
                                            warnings: embedded.warnings, provenance: embedded.provenance ?? found.provenance,
                                            embeddingProvenance: embedded.embeddingProvenance)
@@ -158,7 +168,7 @@ public struct InferenceProcessingEngine: ProcessingEngine {
     public func voices(_ input: TrackProcessingInput, run: TrackTranscript, protectedSpeakers: Set<String> = [],
                        progress: @escaping ProcessingProgressHandler) async throws -> SpeakerAnalysis? {
         guard let embedder = configuration.voiceEmbeddingModel else { return nil }
-        let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
+        let report = Self.reporting(.identifyingSpeakers, to: progress)
         let turns = run.segments.compactMap { segment -> SpeakerTurn? in
             guard let id = segment.speakerID, segment.end > segment.start else { return nil }
             return SpeakerTurn(speakerID: id, start: segment.start, end: segment.end, confidence: segment.confidence ?? 1)
@@ -210,7 +220,7 @@ public struct InferenceProcessingEngine: ProcessingEngine {
         let source = MeetingEvidence.summarySource(meeting)
         let transcript = source.transcript
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DaybookError.noSpeech }
-        let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
+        let report = Self.reporting(.summarizing, to: progress)
         let notes = source.notesText
         let requestedKind = template?.kind ?? meeting.kind
         let small = try await smallTasks(transcript: transcript, notes: notes, kind: requestedKind, vocabulary: vocabulary, progress: report)
@@ -249,7 +259,8 @@ public struct InferenceProcessingEngine: ProcessingEngine {
                                progress: @escaping ProcessingProgressHandler) async throws -> PhotoProcessingOutput {
         let pending = photos.filter { Self.needsReading($0.photo, captionModel: configuration.photoModel) }
         guard !pending.isEmpty else { return PhotoProcessingOutput() }
-        let report: IntelligenceProgressHandler = { progress(ProcessingProgress(fraction: $0.fraction, message: $0.message)) }
+        // Reading photos isn't a step of its own: the step around it goes on saying what it does.
+        let report = Self.reporting(nil, to: progress)
         let ordered = photos.sorted { $0.photo.capturedAt == $1.photo.capturedAt ? $0.photo.id.uuidString < $1.photo.id.uuidString : $0.photo.capturedAt < $1.photo.capturedAt }
         let pendingIDs = Set(pending.map(\.photo.id))
         let requests = ordered.map { ImageDescriptionRequest(url: $0.url, compareOnly: !pendingIDs.contains($0.photo.id)) }
