@@ -342,10 +342,20 @@ Same system as the Mac (`docs/interface.md`): paper, the Ink scale, Electric Tea
    - *Signing and iCloud container*: both apps get the iCloud capability. The Mac app moves to Xcode-managed signing (an XcodeGen project alongside the iPhone app, with a Developer ID provisioning profile), and Macs on folder sync migrate to the container once. Registering identifiers and the container on the Apple Developer account is done only with the owner's approval.
 3. **Integration and design review** on iPhone Duo and iPhone 18 Pro simulators, plus the Mac.
 
+## Moving to the new app
+
+The iPhone app was `local.daybook.phone`; it's `local.daybook` now, with the Mac app, so one App Store Connect record ships both (docs/release.md, "One bundle ID"). To iOS that's a new app: its files are in a sandbox of its own, and it can't read the old app's.
+
+- **What comes back:** the library, through iCloud (conversations, notes, transcripts, summaries, settings that sync; audio on demand); library and cloud keys, through the shared keychain group and iCloud Keychain; and this iPhone's identity and pairing keys, which the old app kept in `<team>.local.daybook.phone`, a group the new app lists too. So the Mac and the library's other devices see the same iPhone, with its recorders and claims, and pairing isn't needed again.
+- **What doesn't:** recordings the old app hadn't synced yet; live captions (never synced); the list of recordings brought in on the old app (imports and recorder transfers), so the new app leaves their transcription to a Mac; this iPhone's own settings (recording, live captions, Transcribe on This iPhone, backups, the cloud's preferences; the keys stay); downloaded models, which download again on Wi‑Fi; and widgets and controls, which are added again.
+- **Testers:** open the old app and wait until Settings says it's up to date, so every recording has reached iCloud; then delete it, and install the new one from TestFlight. Don't keep both: they would sync as the same iPhone, each with its own library.
+
+The old app could bridge the gap with one last release under `local.daybook.phone`: add the app group `group.local.daybook` to it, and have it write what doesn't sync (recordings not yet uploaded, the brought-in list, its settings) into the group's container, for the new app to read once at its first launch; its models could move there too, saving the download. That needs the group on the old App ID, a release of the old app, and an import in the new one, for a handful of testers. It isn't built: letting the old app finish syncing does the same for what matters.
+
 ## Verification
 
 - `swift test` stays green for the Mac and core, with tests for the kits, the request queue and claims, the sync replica policy, and the link (loopback).
 - iOS: `xcodebuild test` on the iPhone Duo simulator for kit and app logic, the iPhone's processing with the engines' fakes (`PhoneProcessingTests`). Screenshots with `xcrun simctl io <device> screenshot` in both postures and appearances.
 - Still needs a real iPhone Duo and Mac: hinge transitions, background recording across calls and interruptions, Live Activity, Bluetooth with a real Soundcore in the background, local-network pairing, iCloud on-demand downloads, the CloudKit courier (pushes, background sends, cellular), battery and thermals.
 
-Signing: set `DAYBOOK_TEAM_ID` for device builds. Bundle IDs are `local.daybook.app` (Mac, unsandboxed), `local.daybook.phone` (the iPhone app, and the Mac's sandboxed App Store build in the same record: docs/release.md, "Mac on TestFlight"), and `local.daybook.phone.widgets`, with app group `group.local.daybook.phone` and iCloud container `iCloud.local.daybook` (iCloud Documents and CloudKit). Both app IDs also need Push Notifications, for the courier (`docs/release.md`, "One-time setup").
+Signing: set `DAYBOOK_TEAM_ID` for device builds. The app is `local.daybook`, the same bundle ID as the Mac app (one App Store Connect record ships both: docs/release.md, "One bundle ID"), its widgets `local.daybook.widgets`, with app group `group.local.daybook` and iCloud container `iCloud.local.daybook` (iCloud Documents and CloudKit). The App ID also needs Push Notifications, for the courier, and Hotspot.

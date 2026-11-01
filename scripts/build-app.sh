@@ -19,8 +19,8 @@
 #   scripts/build-app.sh --app-store      the Mac App Store and TestFlight build: --sandbox, exported with the
 #                                         app-store-connect method to build/macOS/AppStore (a .pkg) instead of
 #                                         Developer ID; nothing goes to dist/. Add --upload to send it to App Store
-#                                         Connect, where it joins the iPhone app's record (docs/release.md,
-#                                         "Mac on TestFlight").
+#                                         Connect, where it's the macOS platform of the app the iPhone app is
+#                                         too (docs/release.md, "One bundle ID").
 #   scripts/build-app.sh --sandbox-rehearsal
 #                                         ad hoc, bundle ID local.daybook.rehearsal (or
 #                                         $DAYBOOK_REHEARSAL_BUNDLE_ID), with a manifest that moves

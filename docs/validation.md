@@ -71,55 +71,59 @@ the iPhone's status sheet (`--device-simulator --device-autopilot`) with the tap
 shows the latest buffer's level), a real iPhone's levels over Wi-Fi during a call (latency, and how a busy link drops
 them), the packaged app's close button and band on macOS 15 and 26 as well as 27, and VoiceOver reading the meter rows.
 
-## One app on both platforms: the Mac's App Store build as local.daybook.phone (2026-11-01)
+## One app on both platforms: one bundle ID, local.daybook (2026-11-01)
 
-Universal purchase needs the Mac app's App Store build to share the iPhone app's bundle ID, so sandboxed signed Mac
-builds now run as `local.daybook.phone` (docs/research/one-bundle.md, docs/release.md "Mac on TestFlight",
-docs/sandbox.md "Changing bundle ID").
+The iPhone app and every signed Mac build now share one bundle ID, `local.daybook`, so one App Store Connect record ships
+both (universal purchase): docs/research/one-bundle.md, docs/release.md "One bundle ID", docs/sandbox.md "One bundle ID",
+docs/iphone.md "Moving to the new app".
 
 **What changed.**
 
-- `Apps/macOS/Config/Signing.xcconfig`: signed builds are `local.daybook.app` unsandboxed and `local.daybook.phone`
-  with `DAYBOOK_SANDBOX = YES`. `scripts/build-app.sh --app-store` archives that build and exports it for App Store
-  Connect (`--upload` sends it). `Resources/container-migration.plist` moves `local.daybook.app.plist` under the new name.
-  The Mac's Info.plist has `ITSAppUsesNonExemptEncryption` false.
-- The app: `AppIdentity`; `SingleInstance` counts `local.daybook.phone` running `Daybook`; `SandboxMigration` finds the
-  old library for it; `LegacyLibraryReturn` takes the library and preferences back out of either container, the one that
-  changed last.
-- Sync: the recorded iCloud account keeps the app that recorded it (`syncICloudAccountApp`). Another app's token (iCloud's
-  token is per app) is the same account when the container's manifest names a library this device has a checkpoint for
-  (`LibrarySyncEngine.holdsJournal`); anything else pauses as before.
-- Checks: `check-mac-app.sh --kind signed-sandbox` expects `local.daybook.phone` and the renaming manifest; `mac-export.sh`
-  and the manual Developer ID export take the archived app's bundle ID; `asc-testflight.sh --platform MAC_OS`.
-- Not changed: `release.yml` (a proposal is in the research doc), the default Developer ID release, the iPhone app.
+- **IDs.** iPhone `local.daybook`, widgets `local.daybook.widgets`, tests `local.daybook.tests`, app group
+  `group.local.daybook`; Mac Developer ID and App Store builds `local.daybook`, ad hoc `local.daybook.adhoc`, rehearsal
+  `local.daybook.rehearsal…`. Keychain groups: `<team>.local.daybook` first on both, then `<team>.local.daybook.app` (Mac)
+  or `<team>.local.daybook.phone` (iPhone), then `<team>.local.daybook.shared`.
+- **The Mac, in place.** `PreferencesCarryOver` copies the `local.daybook.app` domain into `local.daybook`'s once at
+  launch, before anything reads a setting, when the new domain shows no earlier use; the old domain is only read.
+  `AppIdentity` counts `local.daybook` (running `Daybook`), earlier releases, ad hoc builds, and rehearsals as the Mac app;
+  `SandboxMigration` and `LegacyLibraryReturn` know both IDs' libraries and containers. The App Store build's manifest
+  moves the library, `${BundleId}.plist`, and `local.daybook.app.plist` (under its own name) into the container.
+- **Sync.** The recorded iCloud account keeps its app; another app's token is the same account when the container's
+  manifest names this library (`LibrarySyncEngine.journalOwnership`). Review fix: a manifest still in iCloud is asked for
+  and sync keeps "Connecting to iCloud…", instead of pausing as for another account; it pauses when the manifest names
+  another library, or none turns up within 24 checks.
+- **Scripts.** `build-app.sh --app-store [--upload]`; `check-mac-app.sh`, `check-ios-archive.sh`, `mac-export.sh`, and
+  `asc-testflight.sh --platform MAC_OS` follow the IDs. The Mac's Info.plist answers export compliance.
+- **Not changed:** `release.yml` and `ci.yml` (refused to this session; the exact diff is in the research doc).
 
 **How it was verified.**
 
-- A sandboxed probe app, ad hoc, under its own bundle ID (`local.daybook.research.manifest1`), with a manifest moving a
-  library folder under another name and `local.daybook.research.source.plist` to `${BundleId}.plist`: on its first launch
-  on macOS 27.0, both moved, and `UserDefaults.standard` in the sandboxed app read the moved values. Sources gone; the
-  container's protected metadata file remains (29 KB).
-- `xcodebuild -showBuildSettings` on the generated Mac project: signed unsandboxed is `local.daybook.app` with
-  `Daybook.entitlements` and no manifest; signed sandboxed is `local.daybook.phone` with `Daybook-Sandbox.entitlements` and
-  `container-migration.plist`; ad hoc and rehearsal keep their own IDs.
-- New tests: `SandboxMigrationTests.testTheAppStoreBuildTakesTheLibraryFromTheUnsandboxedApp`,
-  `LibraryMoveTests.testTheLibraryComesBackFromTheAppStoreBuild`, `testWithTwoContainersTheNewerLibraryComesBack`,
-  `SingleInstanceTests` (the App Store build counts, the iPhone app on a Mac doesn't),
-  `LibrarySyncContainerTests.testAnotherAppsAccountCarriesOverWhenTheContainerHoldsThisLibrary` and
-  `testAnotherAppsAccountWithAnotherLibraryOrTheSameAppPauses`. `swift test`: 1,527 tests, 1 skipped, 0 failures.
-  `scripts/ci/tests/run-tests.sh --require-all`: 346 passed (with `--app-store`, `--upload`, the sandboxed bundle ID in
-  `check-mac-app.sh` and `package-mac.sh`, the renaming manifest, and `--platform`). `scripts/build-app.sh --debug
-  --ad-hoc` builds and passes `check-mac-app.sh --kind adhoc` (icon, `default.metallib`, the export-compliance key);
-  `scripts/build-ios.sh --test` on an iPhone 18 Pro clone: 227 tests, 0 failures.
-- Prototypes (research, commit `d0f1033`): one XcodeGen spec including both apps built the Mac target ad hoc and the
+- Probes, ad hoc and sandboxed under bundle IDs of their own, on macOS 27.0: a manifest moved a library and a
+  preferences file under another name, and `UserDefaults.standard` read it (`local.daybook.research.manifest1`); a manifest
+  listing an absent preferences file skipped it and moved the rest, and the sandboxed app read a domain moved under its
+  own name with `persistentDomain(forName:)` and `UserDefaults(suiteName:)` (`local.daybook.research.manifest2`).
+- `xcodebuild -showBuildSettings`: signed Mac builds are `local.daybook` with `Daybook.entitlements`, or with
+  `Daybook-Sandbox.entitlements` and the manifest when sandboxed; ad hoc `local.daybook.adhoc`; rehearsal
+  `local.daybook.rehearsal`; iPhone `local.daybook`, `local.daybook.widgets`, `local.daybook.tests`.
+- Tests: `PreferencesCarryOverTests` (four), `SingleInstanceTests`, `SandboxMigrationTests.testTheAppStoreBuildTakesTheLibraryFromAnEarlierRelease`,
+  `LibraryMoveTests.testTheLibraryComesBackFromAnEarlierSandboxedBuild` and `testWithTwoContainersTheNewerLibraryComesBack`,
+  `LibrarySyncContainerTests.testAnotherAppsAccountCarriesOverWhenTheContainerHoldsThisLibrary`,
+  `testAnotherAppsAccountWaitsForTheManifestInsteadOfPausing`, and `testAnotherAppsAccountWithAnotherLibraryOrTheSameAppPauses`.
+  `swift test`: 1,542 tests, 1 skipped, 0 failures. `scripts/ci/tests/run-tests.sh --require-all`: 348 passed (the IDs in
+  every check, an iPhone archive under the old ID refused, `--app-store`, the manifest, `--platform`).
+  `./scripts/build-app.sh --debug --ad-hoc` builds `local.daybook.adhoc` and passes `check-mac-app.sh --kind adhoc`.
+  `scripts/build-ios.sh --test` on an iPhone 18 Pro clone: 229 tests, 0 failures.
+- The proposed `release.yml` and `ci.yml` changes apply cleanly (`git apply --check`) and pass `actionlint`.
+- Prototypes (research, commit `1939cc5`): one XcodeGen spec including both apps built the Mac target ad hoc and the
   iPhone app for the Simulator; a single multiplatform target built for both after SDK-conditional bundle ID and
-  Info.plist and an excluded resource; the Mac's App Store kind built unsigned as `local.daybook.phone` with the manifest.
+  Info.plist and an excluded resource.
 
-**Still needs the owner or hardware.** The App Store Connect and portal steps (docs/release.md, "Mac on TestFlight"); a
-signed `--app-store` build's first launch on a real library (the manifest's rename on the real preferences, the keychain
-group in a Mac App Store profile, the iCloud account carrying over without "the account changed", the iPhone reconnecting
-without pairing again); the first upload (icon and privacy-manifest findings, if any); and the App Sandbox's own checks
-(docs/sandbox.md).
+**Still needs the owner or hardware.** The portal and App Store Connect steps, in order (docs/release.md, "One bundle ID");
+until they're done and `release.yml` changes, a tagged release fails (docs/release.md, "Known blockers"). Then: a signed
+Developer ID build's first launch over a real `local.daybook.app` install (settings, devices, the iPhone reconnecting
+without pairing again, sync without "the iCloud account changed"); the new iPhone app on a phone that ran the old one
+(the library back through iCloud, the Mac recognizing it); a Mac App Store profile's keychain groups; the first uploads
+(icon and privacy-manifest findings, if any); and the App Sandbox's own checks (docs/sandbox.md).
 
 ## Upgrade: a better model redoes a conversation's step, and every step after it (2026-10-31)
 
