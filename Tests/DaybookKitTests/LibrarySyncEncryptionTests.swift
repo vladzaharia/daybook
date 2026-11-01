@@ -226,6 +226,66 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         XCTAssertFalse(keptForged)
     }
 
+    func testBehaviorAGrantIsKeptOnlyWhenItAnswersARequestFromThePeerAsked() async throws {
+        let mac = try await device("Mac", phone: false, role: .receive, keys: MemoryLibraryKeyStore())
+        await pass(mac)
+        try await mac.sync.enableEncryption()
+        await pass(mac)
+        let phoneKeys = MemoryLibraryKeyStore()
+        let phone = try await device("Phone", phone: true, role: .send, keys: phoneKeys)
+        _ = await phone.library.synchronize()
+        XCTAssertEqual(phone.sync.encryption, .waitingForKey)
+        let asking = await phone.sync.keyRequest()
+        let waiting = try XCTUnwrap(asking)
+        let libraryID = waiting.libraryID
+        let probe = LinkLibraryKeyRequest(libraryID: libraryID, keyIDs: [waiting.keyID])
+        let grants = await mac.sync.libraryKeyGrants(for: probe, peerLibraryID: libraryID)
+        let grant = try XCTUnwrap(grants.first)
+
+        // Nobody asked: a paired device pushing the key, even the right one, isn't kept.
+        let unasked = await phone.sync.accept(grant)
+        XCTAssertFalse(unasked)
+        XCTAssertTrue(try phoneKeys.keys(for: libraryID).isEmpty)
+
+        // Asked of one Mac, a grant from another paired device isn't kept; from the Mac asked, it is.
+        let asked = UUID(), other = UUID()
+        let request = await phone.sync.libraryKeyRequest()
+        XCTAssertNotNil(request)
+        phone.sync.noteKeyRequested(from: asked)
+        let fromOther = await phone.sync.accept(grant, from: other)
+        XCTAssertFalse(fromOther)
+        let withoutPeer = await phone.sync.accept(grant)
+        XCTAssertFalse(withoutPeer, "A request that named its peer takes only that peer's grant")
+        let fromAsked = await phone.sync.accept(grant, from: asked)
+        XCTAssertTrue(fromAsked)
+        XCTAssertEqual(try phoneKeys.keys(for: libraryID).map(\.idHex), [grant.keyID])
+        // Answered, the request is closed: the same grant again isn't taken.
+        let again = await phone.sync.accept(grant, from: asked)
+        XCTAssertFalse(again)
+        await pass(phone)
+        XCTAssertTrue(phone.sync.encryption.isOn)
+    }
+
+    func testBehaviorAKeychainThatCantBeReadYetWaitsWithoutAProblem() async throws {
+        let keys = MemoryLibraryKeyStore()
+        let mac = try await device("Mac", phone: false, role: .receive, keys: keys)
+        await pass(mac)
+        try await mac.sync.enableEncryption()
+        await pass(mac)
+        // An iPhone not unlocked since it started: its keychain refuses, the key in it notwithstanding.
+        let phone = try await device("Phone", phone: true, role: .send, keys: keys)
+        keys.fail(with: .keychain(-25308))
+        let applied = await phone.library.synchronize()
+        XCTAssertNil(applied)
+        XCTAssertEqual(phone.sync.status, .keyStoreUnreadable)
+        XCTAssertNil(phone.sync.status.problem)
+        XCTAssertNotEqual(phone.sync.encryption, .waitingForKey, "It isn't waiting for a key it holds")
+        XCTAssertFalse(phone.sync.mayStartOverEncryption)
+        keys.fail(with: nil)
+        await pass(phone)
+        XCTAssertTrue(phone.sync.encryption.isOn)
+    }
+
     func testARecoveryKeyFromSettingsOpensTheLibraryElsewhere() async throws {
         let mac = try await device("Mac", phone: false, role: .receive, keys: MemoryLibraryKeyStore())
         await pass(mac)

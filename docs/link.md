@@ -446,8 +446,10 @@ the iPhone, a connected iPhone on the Mac), which sends `libraryKey.request` wit
 ID. The other device sends one `libraryKey.grant` per key it holds of those asked for, and only when the asker's
 capabilities name the same library as its own and the request does too (`LinkLibraryKeyRequest.grants`); every session
 is with a paired device, and the session is encrypted with the pairing's key. It then says so ("Sent this library’s key
-to Alex’s iPhone."). The receiver keeps a granted key only when its ID matches its bytes and the library is its own, and
-syncs at once. Both types are additive within version 1: an older build ignores them, and the asker keeps waiting for
+to Alex’s iPhone."). The receiver keeps a granted key only when it answers a request it made in the last ten minutes (to
+that device, `LibrarySyncController.noteKeyRequested(from:)`), its ID matches its bytes, the library is its own, and the
+library's manifest lists the key while the receiver doesn't hold it yet (`LibrarySyncEngine.acceptKey`); then it syncs at
+once. A key nobody asked for, or one the manifest doesn't name, is never kept. Both types are additive within version 1: an older build ignores them, and the asker keeps waiting for
 iCloud Keychain. There's no Mac-to-Mac path; two Macs rely on iCloud Keychain or a recovery key.
 
 ## Tests

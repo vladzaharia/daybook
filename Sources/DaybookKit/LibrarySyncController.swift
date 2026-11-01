@@ -219,6 +219,8 @@ public final class LibrarySyncController {
     public private(set) var mayStartOverEncryption = false
     /// The libraries whose plaintext courier files were dropped once they were found encrypted.
     @ObservationIgnored private var courierSealedLibraries = Set<UUID>()
+    /// Library keys this device asked paired devices for, still open (LibraryKeyExchange.swift).
+    @ObservationIgnored var keyRequests: [LibraryKeyRequestRecord] = []
     @ObservationIgnored private var activeTask: Task<SyncResult, Error>?
     @ObservationIgnored private var pendingReceipt: UUID?
     /// Where sync stood before the pass in flight, which is still true if that pass is cancelled.
@@ -576,6 +578,13 @@ public final class LibrarySyncController {
             activeTask = nil; isSyncing = false; pendingReceipt = nil
             status = .waitingForICloud
             return nil
+        } catch LibrarySyncError.keyStoreUnreadable {
+            // Not a failure, and not a missing key: the keychain can't be read right now (an iPhone not unlocked since it
+            // started). Nothing changed; the next pass reads it again.
+            activeTask = nil; isSyncing = false; pendingReceipt = nil
+            guard generation == configurationID else { return nil }
+            status = .keyStoreUnreadable
+            return nil
         } catch LibrarySyncError.keyUnavailable {
             // Not a failure either: the library is encrypted and its key hasn't reached this device. Every pass checks
             // the keychain again; local edits wait.
@@ -736,10 +745,14 @@ public final class LibrarySyncController {
         return await engine.heldKeys()
     }
 
-    /// A key a paired device sent: kept when it's this library's, and a pass runs. True when kept.
+    /// A key a paired device sent, kept only when it answers a request this device made (`libraryKeyRequest`, to `peer`
+    /// when `noteKeyRequested(from:)` named one) and the library's manifest lists it while this device doesn't hold it
+    /// (`LibrarySyncEngine.acceptKey`). A pass runs. True when kept.
     @discardableResult
-    public func acceptKey(_ material: Data, keyID: Data, libraryID: UUID) async -> Bool {
-        guard let engine, (try? await engine.acceptKey(material, keyID: keyID, libraryID: libraryID)) == true else { return false }
+    public func acceptKey(_ material: Data, keyID: Data, libraryID: UUID, from peer: UUID? = nil) async -> Bool {
+        guard let engine, answersKeyRequest(keyID: keyID, libraryID: libraryID, from: peer),
+              (try? await engine.acceptKey(material, keyID: keyID, libraryID: libraryID)) == true else { return false }
+        keyRequests.removeAll { $0.libraryID == libraryID }
         requestSync()
         return true
     }
@@ -1078,7 +1091,7 @@ public final class LibrarySyncController {
                 status = .migrating(outcome.progress)
             case .failure(let error):
                 if error is CancellationError { return false }
-                status = .migrationPaused(details: error.localizedDescription)
+                status = error as? LibrarySyncError == .keyStoreUnreadable ? .keyStoreUnreadable : .migrationPaused(details: error.localizedDescription)
             }
             do { try await Task.sleep(for: environment.retryInterval) } catch { return false }
         }

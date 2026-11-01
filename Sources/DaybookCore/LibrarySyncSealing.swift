@@ -59,6 +59,9 @@ extension SyncManifest {
         /// Whether `id` (hex) is a key this library retired.
         func isRetired(_ id: String) -> Bool { retired?.contains { $0.id == id } == true && !keys.contains { $0.id == id } }
 
+        /// Whether `id` (hex) is a key of this library: one it lists, or one it retired (kept until `removeRetiredKeys`).
+        func lists(_ id: String) -> Bool { keys.contains { $0.id == id } || retired?.contains { $0.id == id } == true }
+
         /// The key current among `keys`: the newest, by creation and then ID, so every device picks the same one.
         static func newest(_ keys: [Key]) -> Key? { keys.max { ($0.created, $0.id) < ($1.created, $1.id) } }
 
@@ -266,18 +269,31 @@ extension LibrarySyncEngine {
 
     /// The keys this device holds for an encrypted library, or `keyUnavailable` when it lacks the current one. Read
     /// again on every pass, so a key iCloud Keychain (or another device) brings is picked up at once.
+    ///
+    /// The keyring holds only the keys the manifest names (current, or retired and kept until `removeRetiredKeys`): a key
+    /// that reached the keychain some other way opens nothing. A keychain that can't be read right now (an iPhone not
+    /// unlocked since it started, a passing Security error) is `keyStoreUnreadable`, never "no key": nothing about the
+    /// library changes, and the next pass reads it again.
     func loadSealing(_ manifest: SyncManifest) throws {
-        manifestChecked = true
         guard manifest.isSealed, let description = manifest.sealing else {
             sealing = nil; waitingForKey = nil; waitingSealing = nil
+            manifestChecked = true
             return
         }
         // Seen encrypted once, never published to in plaintext: remembered even before the key arrives.
         try rememberSealed(manifest.libraryID)
         var held: [Data: LibraryKey] = [:]
         if let keyStore {
-            for key in (try? keyStore.keys(for: manifest.libraryID)) ?? [] where key.libraryID == manifest.libraryID { held[key.id] = key }
+            let stored: [LibraryKey]
+            do { stored = try keyStore.keys(for: manifest.libraryID) } catch {
+                // An encrypted library this device can't open yet says nothing private in presence meanwhile.
+                keyStoreUnreadable = sealing == nil
+                throw LibrarySyncError.keyStoreUnreadable
+            }
+            keyStoreUnreadable = false
+            for key in stored where key.libraryID == manifest.libraryID && description.lists(key.idHex) { held[key.id] = key }
         }
+        manifestChecked = true
         guard let currentID = SealedFormat.data(hex: description.current), let current = held[currentID] else {
             sealing = nil; waitingForKey = description.current; waitingSealing = description
             throw LibrarySyncError.keyUnavailable(description.current)
@@ -296,7 +312,8 @@ extension LibrarySyncEngine {
         guard SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
               let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)) else { return false }
         try? loadSealing(manifest)
-        return true
+        // An encrypted library whose keychain couldn't be read yet is still unknown: nothing private is said.
+        return manifestChecked
     }
 
     /// Records that this device synced an encrypted library in this sync folder (`SealingMemory`).

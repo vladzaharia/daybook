@@ -146,19 +146,34 @@ extension LibrarySyncEngine {
         return recovered
     }
 
-    /// Stores a key another device sent (the local link) when it's one of this library's keys. True when stored.
+    /// Stores a key another device sent (the local link) when it's one this library's manifest lists and this device
+    /// doesn't hold yet: the current key it waits for, or one a rotation added that hasn't reached it. A key the manifest
+    /// doesn't name is never kept, so a paired device can't push one of its choosing into iCloud Keychain. True when stored.
     public func acceptKey(_ material: Data, keyID: Data, libraryID: UUID) throws -> Bool {
         guard let keyStore else { throw LibrarySyncError.keyStoreUnavailable }
         guard libraryID == self.libraryID, let key = try? LibraryKey(libraryID: libraryID, material: material, createdAt: Date(), createdBy: "link"),
-              key.id == keyID else { return false }
+              key.id == keyID, let listed = manifestSealing(), listed.keys.contains(where: { $0.id == key.idHex }) else { return false }
+        guard try !keyStore.keys(for: libraryID).contains(where: { $0.id == key.id }) else { return false }
         try keyStore.store(key)
         return true
     }
 
-    /// The keys this device holds for its library, to send to a paired device that's waiting for one.
+    /// The keys this device holds for its library that its manifest lists (current, or retired and still kept), to send to a
+    /// paired device that's waiting for one.
     public func heldKeys() -> [LibraryKey] {
-        guard let libraryID, let keyStore else { return [] }
-        return (try? keyStore.keys(for: libraryID)) ?? []
+        guard let libraryID, let keyStore, let listed = manifestSealing() else { return [] }
+        return ((try? keyStore.keys(for: libraryID)) ?? []).filter { listed.lists($0.idHex) }
+    }
+
+    /// The encrypted library's description as its manifest says now: read again when it's downloaded (a rotation may have
+    /// added a key since the last pass), else as the last pass read it. Nil for a plaintext library, or before any pass.
+    func manifestSealing() -> SyncManifest.Sealing? {
+        let url = remoteRoot.appendingPathComponent("daybook-sync.json")
+        if SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
+           let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)), manifest.libraryID == libraryID {
+            return manifest.isSealed ? manifest.sealing : nil
+        }
+        return sealing?.manifest ?? waitingSealing
     }
 
     /// Replaces the current key with a new one (this device becomes the migrator). Everything live is sealed again

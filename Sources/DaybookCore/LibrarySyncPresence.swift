@@ -145,7 +145,7 @@ extension LibrarySyncEngine {
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
         else if let waitingForKey { record.key = SyncDeviceKeyState(state: .waiting, id: waitingForKey); record.displayName = ""; record.activity = nil }
-        else if !known { record.displayName = ""; record.activity = nil }
+        else if !known || keyStoreUnreadable { record.displayName = ""; record.activity = nil }
         let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
         let url = directory.appendingPathComponent(SyncPresenceFiles.fileName(for: deviceID))
         let existing = SyncFiles.itemState(url) == .local ? (try? SyncFiles.read(url, below: remoteRoot, cloud: cloud)).flatMap(SyncPresenceFiles.decode) : nil

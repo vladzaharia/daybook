@@ -228,7 +228,8 @@ unlock (a locked iPhone's background pass needs it), in the keychain group both 
 Its value is `{key, libraryID, keyID, createdAt, createdBy}`. Each app lists its own group first, so items stored without
 a group (pairing keys, the device ID) stay where they were. Unsigned and ad hoc builds have no group, so they can't open
 an encrypted library (they can't sync at all). A key reaches a device three ways: iCloud Keychain; a paired device over
-the local link (docs/link.md, "Library keys"); or a recovery key, 128 random bits shown as seven groups of four Crockford
+the local link, only in answer to a request this device made and only a key the manifest lists that it doesn't hold yet
+(docs/link.md, "Library keys"); or a recovery key, 128 random bits shown as seven groups of four Crockford
 base32 characters (two of them check characters), which the manifest keeps each key wrapped with (AES-GCM under
 HKDF-SHA256(recovery key, library ID, "DBSEAL1 recovery"), bound to the key's ID and library).
 
@@ -269,6 +270,10 @@ devices on a new container, [above](#the-icloud-container)). A compacted library
 ([Compaction](#compaction)), which Daybook 0.4 stops at in turn.
 
 **On a pass.** The engine reads the manifest, then the keychain (every pass, so a key that arrives is picked up at once).
+Only keys the manifest names open anything (current ones, and retired ones until they're removed): a key that reached the
+keychain some other way opens nothing and is never granted on. A keychain that can't be read right now (an iPhone not
+unlocked since it started, a passing Security error) isn't a missing key: the pass stops with `keyStoreUnreadable`
+("Waiting to read this library’s key."), changes nothing, says nothing in presence, and the next pass reads it again.
 Without the current key it reads and writes nothing (`keyUnavailable`): local recording and editing go on, the courier
 still takes deliveries, presence says it's waiting, and the status says "Waiting for this library’s key." (on the Mac,
 "Turn on iCloud Keychain, or get the key from another device.") with Get Key from (a paired device), Enter Recovery

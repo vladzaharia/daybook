@@ -48,6 +48,9 @@ public enum LibrarySyncError: LocalizedError, Equatable {
     case keyStoreUnavailable
     /// Start Over was refused: this device holds the library's key, or another device said it did recently.
     case keyAvailable
+    /// The keychain that holds the library's keys can't be read right now (an iPhone not unlocked since it started, a
+    /// passing Security error). Nothing was read or written; the next pass tries again. Not "no key".
+    case keyStoreUnreadable
     public var errorDescription: String? {
         switch self {
         case .unsafeLocation: return "The sync folder must be separate from the local library and cannot contain symbolic links."
@@ -64,6 +67,7 @@ public enum LibrarySyncError: LocalizedError, Equatable {
         case .sealingRemoved: return "The library in iCloud is no longer encrypted."
         case .keyStoreUnavailable: return "This build of Daybook can’t keep encryption keys."
         case .keyAvailable: return "One of your devices has this library’s key. Get the key from it instead."
+        case .keyStoreUnreadable: return "Waiting to read this library’s key."
         }
     }
 
@@ -141,6 +145,8 @@ public actor LibrarySyncEngine {
     var waitingSealing: SyncManifest.Sealing?
     /// A manifest has been read (a pass, or presence looking first), so `sealing` and `waitingForKey` say what it is.
     var manifestChecked = false
+    /// The library is encrypted and the keychain couldn't be read to open it (`LibrarySyncError.keyStoreUnreadable`).
+    var keyStoreUnreadable = false
     /// Sealed entries already opened, by path: the entry ID (SHA-256 of the plaintext record) each holds, and its key.
     var sealedNames: [String: String] = [:]
     var sealedKeys: [String: Data] = [:]
@@ -239,7 +245,8 @@ public actor LibrarySyncEngine {
         // An encrypted library whose key isn't here: nothing is read or written (the library never receives plaintext
         // from this device), and local edits wait. Presence says this device is waiting for the key.
         do { try loadSealing(manifest) } catch {
-            if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
+            // A keychain that can't be read yet says nothing: the device isn't waiting for a key it may well hold.
+            if !Task.isCancelled, error as? LibrarySyncError != .keyStoreUnreadable { try? writePresence(now: Date(), force: false) }
             throw error
         }
         try loadCheckpoint(libraryID: manifest.libraryID, superseding: manifest.supersedes ?? [])

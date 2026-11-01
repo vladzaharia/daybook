@@ -126,8 +126,10 @@ public actor LibrarySyncMigration {
         // An encrypted destination: its current key seals what's copied. The source must be plaintext.
         sealingKey = nil
         if case .found(let manifest) = destinationManifest, let sealing = manifest.sealing {
-            guard let id = LibraryKey.id(hex: sealing.current),
-                  let key = (try? keyStore?.keys(for: manifest.libraryID))??.first(where: { $0.id == id }) else {
+            let held: [LibraryKey]
+            // A keychain that can't be read right now isn't a missing key: the move waits and tries again.
+            do { held = try keyStore?.keys(for: manifest.libraryID) ?? [] } catch { throw LibrarySyncError.keyStoreUnreadable }
+            guard let id = LibraryKey.id(hex: sealing.current), let key = held.first(where: { $0.id == id }) else {
                 throw LibrarySyncError.keyUnavailable(sealing.current)
             }
             sealingKey = key

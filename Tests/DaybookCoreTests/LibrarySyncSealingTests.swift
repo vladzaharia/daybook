@@ -320,6 +320,82 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(ready?.displayName, "Pocket")
     }
 
+    func testBehaviorOnlyAKeyTheManifestListsAndThisDeviceLacksIsAccepted() async throws {
+        let mac = try mac()
+        try await pass(mac, "Mac")
+        let key = try await mac.enableSealing()
+        let phoneKeys = MemoryLibraryKeyStore()
+        let phone = try phone(keys: phoneKeys)
+        do { _ = try await phone.synchronize(meetings: []); XCTFail() } catch LibrarySyncError.keyUnavailable {}
+        // A key of this library's ID that the manifest doesn't list, however well formed, isn't kept.
+        let rogue = LibraryKey.generate(libraryID: key.libraryID, createdBy: "Rogue")
+        let keptRogue = try await phone.acceptKey(rogue.materialBytes, keyID: rogue.id, libraryID: key.libraryID)
+        XCTAssertFalse(keptRogue)
+        // Nor is another library's, or one whose ID doesn't match its bytes.
+        let foreign = LibraryKey.generate(libraryID: UUID(), createdBy: "Elsewhere")
+        let keptForeign = try await phone.acceptKey(foreign.materialBytes, keyID: foreign.id, libraryID: foreign.libraryID)
+        XCTAssertFalse(keptForeign)
+        let keptMismatch = try await phone.acceptKey(rogue.materialBytes, keyID: key.id, libraryID: key.libraryID)
+        XCTAssertFalse(keptMismatch)
+        XCTAssertTrue(try phoneKeys.keys(for: key.libraryID).isEmpty)
+        // The key it waits for is; once held, the same grant again stores nothing.
+        let kept = try await phone.acceptKey(key.materialBytes, keyID: key.id, libraryID: key.libraryID)
+        XCTAssertTrue(kept)
+        let again = try await phone.acceptKey(key.materialBytes, keyID: key.id, libraryID: key.libraryID)
+        XCTAssertFalse(again)
+        XCTAssertEqual(try phoneKeys.keys(for: key.libraryID).map(\.id), [key.id])
+    }
+
+    func testBehaviorAKeyTheManifestDoesntListOpensNothingAndIsNeverGranted() async throws {
+        let mac = try mac()
+        let real = try await pass(mac, "Mac", [Meeting(title: "Real")]).meetings[0]
+        let key = try await mac.enableSealing()
+        try await pass(mac, "Mac", [real])
+        // A key the manifest never listed reached the keychain anyway (pushed by a paired device), and a conversation
+        // sealed with it was dropped into the sync folder.
+        let rogue = LibraryKey.generate(libraryID: key.libraryID, createdBy: "Rogue")
+        try keychain.store(rogue)
+        let forged = Meeting(title: "Forged under a rogue key")
+        let record = SyncEventRecord(meetingID: forged.id, deviceID: "Mac", sequence: 99, parents: [], snapshot: forged, deleted: false, assets: [])
+        let sealed = SealedObject.seal(try SyncEncoding.data(record), kind: .event, key: rogue)
+        try sealed.bytes.write(to: remote.appendingPathComponent("Sealed/Events/\(sealed.name)"))
+        for (engine, name) in [(mac, "Mac"), (try phone(), "Phone")] {
+            let result = try await engine.synchronize(meetings: try await MeetingStore(rootURL: local(name)).list())
+            XCTAssertEqual(result.meetings.map(\.title), [real.title], name)
+            try await apply(result, to: name, using: engine)
+            // And a device that's asked for the library's keys never hands it on.
+            let granted = await engine.heldKeys().map(\.id)
+            XCTAssertEqual(granted, [key.id], name)
+        }
+    }
+
+    func testBehaviorAKeychainThatCantBeReadIsNotAMissingKey() async throws {
+        let mac = try mac()
+        let kept = try await pass(mac, "Mac", [Meeting(title: "Kept")]).meetings
+        let key = try await mac.enableSealing()
+        try await pass(mac, "Mac", kept)
+        let phoneKeys = MemoryLibraryKeyStore([key])
+        let phone = try phone(keys: phoneKeys)
+        // Before the iPhone's first unlock its keychain refuses: the pass waits, says nothing about the key, and writes
+        // nothing private.
+        phoneKeys.fail(with: .keychain(-25308))
+        do { _ = try await phone.synchronize(meetings: []); XCTFail("Synced without reading the keychain") }
+        catch LibrarySyncError.keyStoreUnreadable {}
+        let waiting = await phone.waitingForKey
+        XCTAssertNil(waiting)
+        let mayStartOver = await phone.mayStartOver()
+        XCTAssertFalse(mayStartOver)
+        try await phone.publishPresence()
+        let seen = try await mac.knownDevices().first { $0.id == "Phone" }
+        XCTAssertNil(seen?.keyState, "It doesn't say it's waiting for a key it holds")
+        XCTAssertNil(seen?.displayName)
+        try assertNoPlaintext()
+        // Unlocked, the next pass reads it.
+        phoneKeys.fail(with: nil)
+        let result = try await pass(phone, "Phone")
+        XCTAssertEqual(result.meetings.map(\.title), ["Kept"])
+    }
+
     func testARecoveryKeyOpensTheLibraryOnADeviceWithoutIt() async throws {
         let mac = try mac()
         try await pass(mac, "Mac", [Meeting(title: "Kept")])
