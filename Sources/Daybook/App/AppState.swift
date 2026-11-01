@@ -77,7 +77,10 @@ final class AppState {
     }
     var notice: String? {
         get { library.notice }
-        set { library.notice = newValue }
+        set {
+            library.notice = newValue
+            if newValue == nil { noticeAction = nil }
+        }
     }
     var isReady = false
     /// A library in the wrong place for this build (docs/sandbox.md): the library doesn't open until the person decides.
@@ -88,6 +91,14 @@ final class AppState {
     var movedLibrary: MovedLibrary?
     /// Said once the library opens (`LaunchCheck`).
     var launchNotice: String?
+    /// The library notice's button and the message it belongs to (`post(_:action:)`).
+    private var noticeAction: (message: String, action: LibraryNoticeAction)?
+    /// Recordings this Mac's capture ended on its own (a microphone that failed, sleep, a disk that couldn't keep up),
+    /// by conversation: the recorder's one sentence for why. What was recorded is saved either way.
+    private(set) var unexpectedStops: [UUID: String] = [:]
+
+    /// The reason is said; the person has seen it.
+    func dismissUnexpectedStop(_ id: UUID) { unexpectedStops[id] = nil }
     var processingID: UUID?
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
@@ -366,6 +377,10 @@ final class AppState {
         }
         recorder.onUnexpectedStop = { [weak self] result in
             guard let self else { return }
+            // Why it stopped, in the recorder's one sentence, for the conversation's page to say.
+            if let id = self.recordingID ?? UUID(uuidString: result.directory.lastPathComponent) {
+                self.unexpectedStops[id] = self.recorder.lastError ?? RecordingController.unexpectedStopSentence
+            }
             Task { await self.finishCapture(result) }
         }
         wireDevices()
@@ -556,6 +571,11 @@ final class AppState {
         return searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
     }
     var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty || !searchTokens.isEmpty }
+
+    /// Returns once the library is open and the app ready (`isReady`); at once when it is already.
+    func whenReady() async {
+        await ObservationWatch.until { [weak self] in self?.isReady != false }
+    }
 
     func initialize() async {
         guard !isReady else { return }
@@ -1032,6 +1052,27 @@ final class AppState {
         notice = lines.suffix(5).joined(separator: "\n")
     }
 
+    /// Adds `message` to the library notice with `action` as a text button at its end (Undo, Show, Show in Finder).
+    /// The button stays while the notice still says `message`, and goes with it.
+    func post(_ message: String, action: LibraryNoticeAction) {
+        post([message])
+        noticeAction = (message, action)
+    }
+
+    /// The library notice's button, while the notice still says what it came with.
+    var shownNoticeAction: LibraryNoticeAction? {
+        guard let noticeAction, let notice, notice.components(separatedBy: "\n").contains(noticeAction.message) else { return nil }
+        return noticeAction.action
+    }
+
+    /// Runs the notice's button, and the notice goes.
+    func performNoticeAction() {
+        guard let action = shownNoticeAction else { return }
+        notice = nil
+        noticeAction = nil
+        action.perform()
+    }
+
     func setOffset(_ id: UUID, trackID: UUID, seconds: Double?) { library.setOffset(id, trackID: trackID, seconds: seconds) }
 
     func download(_ modelID: String) {
@@ -1419,3 +1460,10 @@ struct ImportSidecar {
 
 /// The library's errors, shared with the devices that import into it.
 typealias AppError = DaybookError
+
+/// A text button the library notice offers with what it says (`AppState.post(_:action:)`): Undo, Show, Show in Finder.
+struct LibraryNoticeAction {
+    /// The button's words, a verb: "Undo", "Show", "Show in Finder".
+    let title: String
+    let perform: @MainActor () -> Void
+}

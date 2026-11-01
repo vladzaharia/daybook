@@ -5,6 +5,13 @@ import DaybookKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension FocusedValues {
+    /// The conversation the library window's page shows (`LibraryView`): the selected one, or on a device's page the
+    /// conversation of the imported recording it shows. Nil with none, or with several selected. For menus and other
+    /// windows that act on what the person is looking at.
+    @Entry var shownConversation: UUID?
+}
+
 /// The main window: places, the conversation list, and the page, with an optional inspector.
 struct LibraryView: View {
     @Bindable var state: AppState
@@ -63,6 +70,7 @@ struct LibraryView: View {
         .onChange(of: state.place) { _, _ in reconcileSelection() }
         .onChange(of: state.visibleMeetings.map(\.id)) { _, _ in reconcileSelection() }
         .environment(\.readingScale, CGFloat(state.readingScale))
+        .focusedSceneValue(\.shownConversation, toolbarMeeting?.id)
         .tint(DaybookStyle.accent)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0; adaptColumns() }
         .onChange(of: inspectorPresented) { _, _ in adaptColumns() }

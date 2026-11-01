@@ -67,7 +67,9 @@ final class RecordingController {
         guard let manifest else { return 0 }
         return max(0, environment.hostTime() - manifest.hostTimeSeconds)
     }
-    /// Called after an unexpected stop (device failure, revoked permission, sleep).
+    /// What an unexpected stop says when its cause isn't one of Daybook's own (`lastError` has it then).
+    static let unexpectedStopSentence = "Recording stopped unexpectedly. What was recorded is saved."
+    /// Called after an unexpected stop (device failure, revoked permission, sleep), with `lastError` saying why.
     /// The partial recording is complete and safe to import at this point.
     @ObservationIgnored var onUnexpectedStop: ((CaptureResult) -> Void)?
     /// Copies each source's live audio to captions (`LiveCaptionsController.prepare`). Set before
@@ -292,7 +294,7 @@ final class RecordingController {
 
     private func captureFailed(_ error: Error) {
         guard state == .recording || state == .starting else { return }
-        let message = CapturedTrackRole.speaksPlainly(error) ? error.localizedDescription : "Recording stopped unexpectedly. What was recorded is saved."
+        let message = CapturedTrackRole.speaksPlainly(error) ? error.localizedDescription : Self.unexpectedStopSentence
         lastError = message
         if state == .starting { return }
         warn(message, error: error)

@@ -417,7 +417,8 @@ private final class DockMenuItem: NSMenuItem {
 /// Debug-only launch arguments that open a specific surface, so every screen can be captured
 /// without clicking: `--place work|personal|all|device|device:<name>|folder:<name>`, `--select <title>`,
 /// `--page transcript`, `--inspector`, `--open-settings <pane>`, `--open-window <id>`,
-/// `--show-notes`, `--show-setup`, `--simulate-recording <title> [--demo-captions]`, `--library-demo`.
+/// `--show-notes`, `--show-setup`, `--simulate-recording <title> [--demo-captions]`, `--library-demo`,
+/// `--notice <text> --notice-action <title>`.
 private struct DebugLaunchActions: ViewModifier {
     let state: AppState
     @Environment(\.openWindow) private var openWindow
@@ -454,6 +455,10 @@ private struct DebugLaunchActions: ViewModifier {
             PhotoDemo.apply(to: state)
             LibraryDemo.apply(to: state)
             CloudSettingsDemo.apply(to: state)
+            // `--notice <text> --notice-action <title>`: the library notice with its text link.
+            if let notice = LaunchOptions.value(after: "--notice"), let title = LaunchOptions.value(after: "--notice-action") {
+                state.post(notice, action: LibraryNoticeAction(title: title) {})
+            }
             if let query = LaunchOptions.value(after: "--search") { state.search = query }
             PerfProbe.stage = {
                 guard let id = state.processingID else { return "idle" }

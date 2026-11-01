@@ -419,6 +419,8 @@ private struct RowMenu: View {
 // MARK: - Notices and drop targets
 
 /// One library-wide notice at the top of the list column; the newest wins.
+/// The library's notice, with its one action as a text link when it has one (Undo, Show, Show in Finder:
+/// `AppState.post(_:action:)`).
 private struct LibraryNotice: View {
     let state: AppState
     var body: some View {
@@ -426,8 +428,15 @@ private struct LibraryNotice: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 // Information, not an action: the glyph stays quiet rather than taking the accent.
                 Image(systemName: "info.circle.fill").symbolRenderingMode(.hierarchical).foregroundStyle(.secondary)
+                // The words take the room the link and the close button leave, which keep theirs at the trailing edge.
                 Text(notice).font(TypeStyle.status).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let action = state.shownNoticeAction {
+                    Button(action.title) { withAnimation(.easeOut(duration: 0.2)) { state.performNoticeAction() } }
+                        .buttonStyle(.daybookLink)
+                        .font(TypeStyle.status)
+                        .fixedSize()
+                }
                 Button { withAnimation(.easeOut(duration: 0.2)) { state.notice = nil } } label: { Image(systemName: "xmark") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .accessibilityLabel("Dismiss")

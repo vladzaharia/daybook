@@ -604,45 +604,10 @@ struct DeviceMoreMenu: View {
     let state: AppState
     let session: DeviceSession
     @Bindable var browser: DeviceBrowser
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Menu {
-            let primary = session.primary
-            let offer = DeviceMenuOffer(session)
-            // Refresh Status and Device Settings… are every device's, so they stay and dim; the
-            // rest is offered only when it applies.
-            Button("Refresh Status") { primary?.refresh() }
-                .disabled(primary?.state.isConnected != true || session.queue.current != nil || primary?.isRefreshing == true)
-            if offer.recordControl || offer.listenLive { Divider() }
-            if offer.recordControl, let control = session.direct as? any RecordControlConnection {
-                if session.status?.isRecording == true {
-                    Button("Pause Recording on \(session.kind.shortName)") { control.pauseRecording() }
-                        .disabled(control.recordCommandPending)
-                } else {
-                    Button("Start Recording on \(session.kind.shortName)") { control.startRecording() }
-                        .disabled(control.recordCommandPending)
-                }
-            }
-            if offer.listenLive, let live = session.direct as? any LiveListeningConnection {
-                Button(live.live.isListening ? "Stop Listening" : "Listen Live") {
-                    if live.live.isListening { live.stopListening() } else { browser.selection = [.recordingNow]; live.startListening() }
-                }
-            }
-            Divider()
-            if offer.details {
-                Button("Device Details…") { browser.showingDetails = true }
-            }
-            if offer.disconnect {
-                Button("Disconnect") { session.disconnect(.direct) }
-            } else if offer.connect {
-                Button("Connect") { session.connect() }
-            }
-            if offer.handoff {
-                RecorderHandoffMenuItems(state: state, session: session)
-            }
-            Divider()
-            Button("Device Settings…") { DeviceActions.openSettings(openSettings) }
+            DeviceMoreMenuContent(state: state, session: session)
         } label: {
             Label("More", systemImage: "ellipsis")
         }
@@ -651,6 +616,54 @@ struct DeviceMoreMenu: View {
         .popover(isPresented: $browser.showingDetails, arrowEdge: .bottom) {
             DeviceDetailsView(session: session, browser: browser)
         }
+    }
+}
+
+/// The More menu's items, built from the device's capabilities (`DeviceMenuOffer`): the toolbar's More menu, and any
+/// other menu for the device, show the same ones.
+struct DeviceMoreMenuContent: View {
+    let state: AppState
+    let session: DeviceSession
+    @Environment(\.openSettings) private var openSettings
+
+    private var browser: DeviceBrowser { session.browser }
+
+    var body: some View {
+        let primary = session.primary
+        let offer = DeviceMenuOffer(session)
+        // Refresh Status and Device Settings… are every device's, so they stay and dim; the
+        // rest is offered only when it applies.
+        Button("Refresh Status") { primary?.refresh() }
+            .disabled(primary?.state.isConnected != true || session.queue.current != nil || primary?.isRefreshing == true)
+        if offer.recordControl || offer.listenLive { Divider() }
+        if offer.recordControl, let control = session.direct as? any RecordControlConnection {
+            if session.status?.isRecording == true {
+                Button("Pause Recording on \(session.kind.shortName)") { control.pauseRecording() }
+                    .disabled(control.recordCommandPending)
+            } else {
+                Button("Start Recording on \(session.kind.shortName)") { control.startRecording() }
+                    .disabled(control.recordCommandPending)
+            }
+        }
+        if offer.listenLive, let live = session.direct as? any LiveListeningConnection {
+            Button(live.live.isListening ? "Stop Listening" : "Listen Live") {
+                if live.live.isListening { live.stopListening() } else { browser.selection = [.recordingNow]; live.startListening() }
+            }
+        }
+        Divider()
+        if offer.details {
+            Button("Device Details…") { browser.showingDetails = true }
+        }
+        if offer.disconnect {
+            Button("Disconnect") { session.disconnect(.direct) }
+        } else if offer.connect {
+            Button("Connect") { session.connect() }
+        }
+        if offer.handoff {
+            RecorderHandoffMenuItems(state: state, session: session)
+        }
+        Divider()
+        Button("Device Settings…") { DeviceActions.openSettings(openSettings) }
     }
 }
 
