@@ -90,7 +90,7 @@ final class PhoneSummaryPlacement {
     }
 
     /// "this iPhone" in the countdown's words.
-    static let thisDeviceWords = "this iPhone"
+    nonisolated static let thisDeviceWords = "this iPhone"
 
     // MARK: What this iPhone offers
 
