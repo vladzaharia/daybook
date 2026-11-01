@@ -8,10 +8,29 @@ import XCTest
 /// and waiting for the library to open.
 @MainActor
 final class AppStateHooksTests: XCTestCase {
-    private func state() async -> AppState {
-        let state = AppState(libraryURL: makeTemporaryFolder("DaybookHooks"), defaults: makeTestDefaults("local.daybook.tests.hooks"))
+    private func state(capture: CaptureEnvironment = .live) async -> AppState {
+        let state = AppState(libraryURL: makeTemporaryFolder("DaybookHooks"), defaults: makeTestDefaults("local.daybook.tests.hooks"),
+                             capture: capture)
         await state.initialize()
         return state
+    }
+
+    /// Records into a conversation's own staging folder, as `startRecording` does, with the state's fake capture.
+    private func recording(_ state: AppState, prepare: (URL) throws -> Void = { _ in }) async throws -> UUID {
+        let id = state.newMeeting(title: "Interview")
+        state.recordingID = id
+        let directory = makeTemporaryFolder("DaybookHooksCapture").appendingPathComponent(id.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try prepare(directory)
+        try await state.recorder.start(in: directory, includeSystemAudio: false)
+        XCTAssertEqual(state.recorder.state, .recording)
+        return id
+    }
+
+    private static func fakeCapture(_ microphone: FakeCaptureSource) -> CaptureEnvironment {
+        CaptureEnvironment(microphoneAuthorization: { true }, makeMicrophone: { microphone }, systemAudio: FakeSystemAudio(),
+                           currentRoute: { AudioOutputRoute(kind: .speakers, deviceName: "Speakers", transport: nil) },
+                           observeRoutes: { _ in nil }, hostTime: { 100 })
     }
 
     func testBehaviorANoticesActionShowsWhileItsWordsDoAndRunsOnce() async throws {
@@ -67,19 +86,37 @@ final class AppStateHooksTests: XCTestCase {
     }
 
     func testBehaviorARecordingThatStopsOnItsOwnKeepsWhyForItsConversation() async throws {
-        let state = await state()
-        let id = state.newMeeting(title: "Interview")
-        state.recordingID = id
-        let directory = makeTemporaryFolder("DaybookHooksCapture").appendingPathComponent(id.uuidString, isDirectory: true)
-        let result = CaptureResult(id: UUID(), startedAt: Date(timeIntervalSinceNow: -60), endedAt: Date(), tracks: [], warnings: [],
-                                   directory: directory)
-        state.recorder.onUnexpectedStop?(result)
-        XCTAssertEqual(state.unexpectedStops[id], RecordingController.unexpectedStopSentence,
-                       "The recorder's one sentence; its own words when the cause is one of Daybook's")
+        let microphone = FakeCaptureSource(method: "microphone")
+        let state = await state(capture: Self.fakeCapture(microphone))
+        let id = try await recording(state)
+        // The system's words aren't the person's: the recorder says it in its own sentence.
+        microphone.send(.failed(FakeError(message: "kAudioHardwareNotRunningError")))
+        try await waitUntil("the stop to be kept") { state.unexpectedStops[id] != nil }
+        XCTAssertEqual(state.unexpectedStops[id], RecordingController.unexpectedStopSentence)
         try await waitUntil("the capture to finish") { state.recordingID == nil }
         XCTAssertEqual(state.unexpectedStops[id], RecordingController.unexpectedStopSentence, "Kept once the recording is filed")
         state.dismissUnexpectedStop(id)
         XCTAssertNil(state.unexpectedStops[id])
+        await state.flush()
+    }
+
+    /// A full disk stops the track and then fails the recording's details too: why it stopped is still what's kept.
+    func testBehaviorWhyARecordingStoppedOutlastsItsDetailsNotBeingSaved() async throws {
+        let microphone = FakeCaptureSource(method: "microphone")
+        let state = await state(capture: Self.fakeCapture(microphone))
+        let id = try await recording(state) { directory in
+            // A folder where capture-result.json goes: saving the details fails, as on a full disk.
+            try FileManager.default.createDirectory(at: directory.appendingPathComponent("capture-result.json/kept", isDirectory: true),
+                                                    withIntermediateDirectories: true)
+            XCTAssertThrowsError(try CaptureJSON.persist(["probe": 1], at: directory.appendingPathComponent("capture-result.json")))
+        }
+        let why = PCMTrackWriterError.diskBacklog.localizedDescription
+        microphone.send(.failed(PCMTrackWriterError.diskBacklog))
+        try await waitUntil("the stop to be kept") { state.unexpectedStops[id] != nil }
+        XCTAssertEqual(state.unexpectedStops[id], why)
+        XCTAssertEqual(state.recorder.lastError, why, "The details not being saved doesn't replace why it stopped")
+        try await waitUntil("the capture to finish") { state.recordingID == nil }
+        XCTAssertEqual(state.unexpectedStops[id], why)
         await state.flush()
     }
 

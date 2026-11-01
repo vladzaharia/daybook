@@ -67,11 +67,11 @@ final class RecordingController {
         guard let manifest else { return 0 }
         return max(0, environment.hostTime() - manifest.hostTimeSeconds)
     }
-    /// What an unexpected stop says when its cause isn't one of Daybook's own (`lastError` has it then).
+    /// What an unexpected stop says when its cause isn't one of Daybook's own.
     static let unexpectedStopSentence = "Recording stopped unexpectedly. What was recorded is saved."
-    /// Called after an unexpected stop (device failure, revoked permission, sleep), with `lastError` saying why.
-    /// The partial recording is complete and safe to import at this point.
-    @ObservationIgnored var onUnexpectedStop: ((CaptureResult) -> Void)?
+    /// Called after an unexpected stop (device failure, revoked permission, sleep) with the partial recording,
+    /// complete and safe to import, and one sentence saying why it stopped.
+    @ObservationIgnored var onUnexpectedStop: ((CaptureResult, String) -> Void)?
     /// Copies each source's live audio to captions (`LiveCaptionsController.prepare`). Set before
     /// `start`; it's read once when a recording starts and dropped when it ends.
     @ObservationIgnored var captionTap: CaptureCaptionTap?
@@ -300,7 +300,7 @@ final class RecordingController {
         warn(message, error: error)
         state = .stopping
         Task {
-            if let result = await finishCapture() { onUnexpectedStop?(result) }
+            if let result = await finishCapture() { onUnexpectedStop?(result, message) }
         }
     }
 
@@ -372,8 +372,9 @@ final class RecordingController {
             let completed = CaptureResult(id: manifest.id, startedAt: manifest.startedAt, endedAt: Date(), tracks: tracks,
                                           warnings: Array(Set(warnings)).sorted(), directory: directory,
                                           systemAudio: systemAudioCapture, outputRoutes: routeEvents.isEmpty ? nil : routeEvents)
+            // A full disk fails both the track and this; why the recording stopped is the error to keep.
             do { try CaptureJSON.persist(completed, at: directory.appendingPathComponent("capture-result.json")) }
-            catch { lastError = "The audio is saved, but its recording details couldn’t be." }
+            catch { lastError = lastError ?? "The audio is saved, but its recording details couldn’t be." }
             lastResult = completed
             result = completed
         }

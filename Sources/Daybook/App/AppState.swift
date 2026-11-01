@@ -200,7 +200,7 @@ final class AppState {
     let recorderHandoff: RecorderHandoff
     /// Several recordings of one conversation: multipoint recording, matching, and enhancement.
     let sources: MultiSourceCoordinator
-    let recorder = RecordingController()
+    let recorder: RecordingController
     /// Live captions while this Mac records (You and Call), and their setting and language.
     let captions: LiveCaptionsController
     /// The input levels iPhones recording along send, for Floating Notes' meters (App/PhoneLevels.swift).
@@ -305,9 +305,11 @@ final class AppState {
     @ObservationIgnored private var visibleMemo: (place: LibraryPlace, revision: Int, meetings: [Meeting])?
     let searchMemo = LibrarySearchMemo()
 
-    init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard) {
+    /// `capture` is this Mac's microphone and call audio; tests pass fakes.
+    init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard, capture: CaptureEnvironment = .live) {
         // Where the library is, before anything here writes preferences or sync resolves its identity (docs/sandbox.md).
         let launch = Self.launchCheck(library: libraryURL, defaults: defaults)
+        recorder = RecordingController(environment: capture)
         let storedPreferences = defaults.data(forKey: "processingPreferences").flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
         var processingPreferences = storedPreferences ?? .init()
         let selections = Self.loadModelSelections(defaults: defaults, speakerModel: storedPreferences?.speakerModelID)
@@ -375,11 +377,11 @@ final class AppState {
             guard let self, self.recordingWasAutomatic else { return }
             Task { await self.stopRecording(manual: false) }
         }
-        recorder.onUnexpectedStop = { [weak self] result in
+        recorder.onUnexpectedStop = { [weak self] result, reason in
             guard let self else { return }
             // Why it stopped, in the recorder's one sentence, for the conversation's page to say.
             if let id = self.recordingID ?? UUID(uuidString: result.directory.lastPathComponent) {
-                self.unexpectedStops[id] = self.recorder.lastError ?? RecordingController.unexpectedStopSentence
+                self.unexpectedStops[id] = reason
             }
             Task { await self.finishCapture(result) }
         }
