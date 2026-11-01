@@ -29,7 +29,8 @@ extension AppState {
         return LinkIdentity(deviceID: id, name: ProcessingRequest.Device.currentName, deviceClass: .mac, appVersion: version,
                             canProcess: false, features: ["recordControl", "processingProgress", LinkCapabilities.recorderHandoffFeature,
                                                           LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
-                                                          LinkCapabilities.liveCaptionsFeature, LinkCapabilities.summaryPlacementFeature],
+                                                          LinkCapabilities.liveCaptionsFeature, LinkCapabilities.liveLevelsFeature,
+                                                          LinkCapabilities.summaryPlacementFeature],
                             syncDeviceID: sync.deviceID)
     }
 
@@ -146,6 +147,8 @@ extension AppState {
             phoneChangedBookmark(change, from: phone)
         case .captions(let captions):
             phoneCaptioned(captions, from: phone)
+        case .levels(let levels):
+            phoneLevelled(levels, from: phone)
         case .recordingState(let state):
             phoneReported(state, from: phone)
         case .processingProgress:

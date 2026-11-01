@@ -124,6 +124,7 @@ enum WireMessage: Equatable {
         case .app(.note): return "note"
         case .app(.bookmarkChange): return "bookmark.change"
         case .app(.captions): return "captions"
+        case .app(.levels): return "levels"
         case .app(.summaryChoice): return "processing.choice"
         case .recordRequest: return "record.request"
         case .recordReply: return "record.reply"
@@ -197,6 +198,7 @@ enum LinkWire {
         case .app(.note(let body)): return try pack(body)
         case .app(.bookmarkChange(let body)): return try pack(body)
         case .app(.captions(let body)): return try pack(body)
+        case .app(.levels(let body)): return try pack(body)
         case .app(.summaryChoice(let body)): return try pack(body)
         case .recordRequest(let body): return try pack(body)
         case .recordReply(let body): return try pack(body)
@@ -236,6 +238,7 @@ enum LinkWire {
         case "note": message = .app(.note(try body(LinkNote.self)))
         case "bookmark.change": message = .app(.bookmarkChange(try body(LinkBookmarkChange.self)))
         case "captions": message = .app(.captions(try body(LinkCaptions.self)))
+        case "levels": message = .app(.levels(try body(LinkLevels.self)))
         case "processing.choice": message = .app(.summaryChoice(try body(LinkSummaryChoice.self)))
         case "record.request": message = .recordRequest(try body(LinkRecordRequest.self))
         case "record.reply": message = .recordReply(try body(LinkRecordReply.self))

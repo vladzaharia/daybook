@@ -118,6 +118,8 @@ final class PhoneRecorder {
     @ObservationIgnored private let journalHealth = JournalHealth()
 
     static let silentMicrophoneSeconds: TimeInterval = 3
+    /// Between level readings while recording (`onLevel`).
+    static let levelInterval: TimeInterval = 1.0 / 15
     /// The pause message when iOS gives no reason (a call, Siri, an alarm).
     static let unspecifiedInterruption = "A call or another app interrupted the recording."
     /// `lastError` when the journal can't be written, before the system's reason.
@@ -650,7 +652,7 @@ final class PhoneRecorder {
 
     private func startTimers() {
         stopTimers()
-        let meter = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
+        let meter = Timer(timeInterval: Self.levelInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateLevels() }
         }
         let journal = Timer(timeInterval: 5, repeats: true) { [weak self] _ in

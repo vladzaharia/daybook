@@ -23,6 +23,7 @@ final class LinkWireTests: XCTestCase {
             .app(.captions(LinkCaptions(conversationID: id, startedAt: t0, lines: [
                 .init(id: id, start: 1.5, end: 3, text: "Heard on the phone.", isTentative: false, speakerSlot: "S2", speakerName: "Priya"),
                 .init(id: UUID(), start: 3.5, end: 4, text: "and by its recorder", isTentative: true, device: "Soundcore")], sentAt: t0))),
+            .app(.levels(LinkLevels(conversationID: id, values: [0, 0.42, 1], interval: 0.0625, sentAt: t0))),
             .app(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .failed, fraction: nil, macName: "M",
                                                             detail: "Out of space"))),
             .app(.processingNudge(LinkProcessingNudge(requestID: UUID(), meetingID: id, mode: .transcribe, requestedAt: t0))),
@@ -73,6 +74,25 @@ final class LinkWireTests: XCTestCase {
                                         features: [LinkCapabilities.sharedNotesFeature]).showsCaptions, "an older Mac is never sent captions")
         let frame = try LinkWire.encode(.app(.captions(LinkCaptions(conversationID: UUID(), startedAt: t0, lines: []))), version: 1)
         XCTAssertTrue(String(decoding: frame, as: UTF8.self).contains(#""type":"captions""#), "a type an older build reads as unknown")
+    }
+
+    /// An iPhone's input level (docs/link.md): only for a Mac that lists `liveLevels`, a type an older build
+    /// ignores, and read safely whatever a peer puts in it.
+    func testBehaviorLevelsAreAFeatureOlderBuildsIgnoreAndAreReadSafely() throws {
+        XCTAssertTrue(LinkCapabilities(deviceClass: .mac, name: "Studio Mac", appVersion: "0.5", libraryID: nil, canProcess: false,
+                                       features: [LinkCapabilities.liveLevelsFeature]).showsLevels)
+        XCTAssertFalse(LinkCapabilities(deviceClass: .mac, name: "Older Mac", appVersion: "0.4", libraryID: nil, canProcess: false,
+                                        features: [LinkCapabilities.liveCaptionsFeature]).showsLevels, "an older Mac is never sent levels")
+        let id = UUID()
+        let frame = try LinkWire.encode(.app(.levels(LinkLevels(conversationID: id, values: [0.5]))), version: 1)
+        XCTAssertTrue(String(decoding: frame, as: UTF8.self).contains(#""type":"levels""#), "a type an older build reads as unknown")
+
+        let many = (0..<50).map { _ in "2" }.joined(separator: ",")
+        let odd = try LinkWire.decode(Data(#"{"v":1,"type":"levels","body":{"conversationID":"\#(id.uuidString)","values":[-1,0.25,\#(many)],"interval":0}}"#.utf8))
+        guard case .app(.levels(let levels)) = odd.message else { return XCTFail("\(odd)") }
+        XCTAssertEqual(levels.values.count, LinkLevels.maximumValues, "a long message is cut")
+        XCTAssertEqual(Array(levels.values.prefix(3)), [0, 0.25, 1], "readings kept to 0…1")
+        XCTAssertEqual(levels.interval, 1.0 / 15, accuracy: 0.0001, "a nonsense interval reads as the meters' own")
     }
 
     func testUnknownTypesDecodeAsUnknownAndBrokenKnownTypesThrow() throws {

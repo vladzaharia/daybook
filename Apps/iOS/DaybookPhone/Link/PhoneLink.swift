@@ -35,6 +35,8 @@ final class PhoneLink {
         var sharesNotes = false
         /// It shows this iPhone's live captions of a shared recording beside its own (`liveCaptionsFeature`).
         var showsCaptions = false
+        /// It draws this iPhone's input level during a shared recording beside its own meters (`liveLevelsFeature`).
+        var showsLevels = false
         /// The synced library it has open, from its capabilities.
         var libraryID: UUID?
         /// What it does for other devices with its models, from its capabilities; nil from an earlier Daybook,
@@ -333,6 +335,19 @@ final class PhoneLink {
 
     @ObservationIgnored private var sharedSend: Task<Void, Never>?
 
+    /// Sends this iPhone's input level to the Macs that draw it. Levels go on their own, never queued
+    /// behind captions or notes: while one is still on its way, the next is dropped (the Mac's meter
+    /// holds), so a slow link never delivers them late.
+    func sendLevels(_ levels: LinkLevels, to macIDs: [UUID]) {
+        guard levelSend == nil, !macIDs.isEmpty else { return }
+        levelSend = Task { [weak self, client] in
+            for mac in macIDs { try? await client.send(.levels(levels), to: mac) }
+            self?.levelSend = nil
+        }
+    }
+
+    @ObservationIgnored private var levelSend: Task<Void, Never>?
+
     /// What the Mac managing a recorder last said about it, and that Mac's name; nil once too old to say.
     func recorderReport(kind: String, serial: String?, now: Date = Date()) -> (mac: String, state: LinkRecorderState)? {
         macs.flatMap { mac in mac.recorders.filter { $0.describes(kind: kind, serial: serial) }.map { (mac.name, $0) } }
@@ -395,6 +410,7 @@ final class PhoneLink {
                 mac.cascades = peer.capabilities.cascades
                 mac.sharesNotes = peer.capabilities.sharesNotes
                 mac.showsCaptions = peer.capabilities.showsCaptions
+                mac.showsLevels = peer.capabilities.showsLevels
                 mac.processing = peer.capabilities.processing.map(ProcessingCapabilities.init)
                 mac.placesSummaries = peer.capabilities.placesSummaries
             }
@@ -437,8 +453,8 @@ final class PhoneLink {
         case .bookmark, .note, .bookmarkChange:
             // While a Mac records a conversation with this iPhone, its notes and bookmarks show here too.
             onSharedNotes?(message, macID)
-        case .processingNudge, .captions, .summaryChoice:
-            // A Mac's captions stay on the Mac; this iPhone shows its own. Choices go the other way.
+        case .processingNudge, .captions, .levels, .summaryChoice:
+            // A Mac's captions stay on the Mac; this iPhone shows its own. Levels and choices go the other way.
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             onHandoffMessage?(message, macID)

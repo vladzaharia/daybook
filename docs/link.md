@@ -179,6 +179,7 @@ can copy the tags, but it can't complete TLS without the key.
 | `bookmark.change` | `LinkBookmarkChange` | both | a shared bookmark's label changed, or it was deleted; changed-at |
 | `note` | `LinkNote` | both | a paragraph written, edited, or deleted during a shared recording: its anchor ID, text, the time its writer files it at, made-at, changed-at |
 | `captions` | `LinkCaptions` | iPhone → Mac | the live captions an iPhone makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the phone), and when its recording began on its clock; only to a Mac recording the same conversation that lists `liveCaptions` |
+| `levels` | `LinkLevels` | iPhone → Mac | an iPhone's input level during a shared recording, for the Mac's meters: its meter's readings since it last sent (0…1, oldest first, `interval` apart, at most 30), about five times a second; only to a Mac recording the same conversation that lists `liveLevels`, and never queued behind other messages (one still on its way drops the next) |
 | `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail; while a summary counts down, phase `summaryCountdown` with `countdown` (seconds left as sent, whether Use the Cloud is on offer); in the cloud, `cloudModel` (both optional) |
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
 | `processing.choice` | `LinkSummaryChoice` | phone → Mac | the person's choice for a summary the Mac counts down to: `useCloud` or `startNow`, the meeting, sent-at; only to a Mac listing `summaryPlacement` (docs/multipoint.md, "Where summaries run") |
@@ -265,7 +266,9 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
   recordings on its own, reads `cascade` and `sharedConversationID`, and accepts a stop from a device
   recording a conversation with it. `sharedNotes`: it takes `note`, `bookmark.change`, and `bookmark` in
   both directions. Both apps list both. `liveCaptions` (the Mac lists it): it shows another device's
-  `captions` of a shared recording beside its own; an older Mac is never sent them.
+  `captions` of a shared recording beside its own; an older Mac is never sent them. `liveLevels` (the
+  Mac lists it): it draws another device's input level (`levels`) beside its own meters; an older Mac
+  is never sent them, and a Mac shows an older iPhone, which sends none, with a flat meter.
 - **Cascading start.** `LinkRecordRequest.cascade` says what started the requester's recording
   (`person`, `recorder`, `automatic`, or another `device`; an open value), whether the requester records
   the conversation itself (`requesterRecords`; false for an iPhone whose recorder records while it
@@ -484,6 +487,11 @@ the test process, and nothing is advertised.
   features; what an older build sends still reads the same (no `cascade`: chosen by the person, and
   standalone without timing; missing and unknown fields); the new types read as unknown types by a
   build that doesn't know them, and over a session both ways.
+- **Levels:** a round trip of `levels`, the feature, the type an older build reads as unknown, and a body read
+  safely (readings kept to 0…1, at most 30, a nonsense interval read as 1/15 s)
+  (`LinkWireTests.testBehaviorLevelsAreAFeatureOlderBuildsIgnoreAndAreReadSafely`). Over a session: an iPhone
+  recording along sends its level to a Mac that lists `liveLevels` and none to one that doesn't
+  (`CascadingRecordingTests` on the iPhone); the Mac plays them back a reading a tick (`FloatingNotesMetersTests`).
 - **Library keys:** a request and its grant over a loopback session, only the keys asked for; nothing for a device of
   another library, or without one (`LinkLibraryKeyTests`).
 - **Where summaries run:** round trips of capabilities with `processing`, a countdown and a cloud model in
