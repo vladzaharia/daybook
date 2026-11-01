@@ -58,13 +58,14 @@ final class ProblemWordsTests: XCTestCase {
     }
 
     func testASyncProblemIsASentenceWithItsReasonForDetails() {
-        let paused = SyncProblemWords.split("Sync paused: The operation couldn’t be completed. (NSPOSIXErrorDomain error 28.)")
+        let paused = SyncProblem.failure(details: "The operation couldn’t be completed. (NSPOSIXErrorDomain error 28.)")
         XCTAssertEqual(paused.text, "Sync is paused.")
         XCTAssertEqual(paused.details, "The operation couldn’t be completed. (NSPOSIXErrorDomain error 28.)")
-        let open = SyncProblemWords.split("Couldn’t open iCloud: not signed in")
-        XCTAssertEqual(open.text, "Couldn’t open iCloud.")
+        let open = SyncProblem.iCloudUnavailable(details: "not signed in")
+        XCTAssertEqual(open.text, "Couldn’t connect to iCloud.")
         XCTAssertEqual(open.details, "not signed in")
-        XCTAssertEqual(SyncProblemWords.split("Apple Account needs attention").text, "Apple Account needs attention")
-        XCTAssertNil(SyncProblemWords.split("Apple Account needs attention").details)
+        XCTAssertEqual(SyncProblem.folderAccountChanged.text, "Apple Account changed · reconnect the intended iCloud folder")
+        XCTAssertNil(SyncProblem.folderAccountChanged.details)
+        XCTAssertNil(SyncProblem.failure(details: "").details, "No empty Details")
     }
 }

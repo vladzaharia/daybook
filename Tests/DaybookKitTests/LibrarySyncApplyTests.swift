@@ -46,7 +46,7 @@ final class LibrarySyncApplyTests: XCTestCase {
     @discardableResult
     private func sync(_ library: LibraryController, protecting: UUID? = nil, file: StaticString = #filePath, line: UInt = #line) async -> SyncApplied? {
         let applied = await library.synchronize(protecting: protecting)
-        XCTAssertEqual(applied?.acknowledged, true, library.sync?.status ?? "", file: file, line: line)
+        XCTAssertEqual(applied?.acknowledged, true, library.sync?.statusText ?? "", file: file, line: line)
         return applied
     }
 
@@ -259,7 +259,7 @@ final class LibrarySyncApplyTests: XCTestCase {
         let deadline = ContinuousClock.now + timeout * scale
         while !condition() {
             guard ContinuousClock.now < deadline else {
-                throw TimedOut(description: "Timed out waiting for \(what) (\(controllers.map(\.status).joined(separator: "; ")))")
+                throw TimedOut(description: "Timed out waiting for \(what) (\(controllers.map(\.statusText).joined(separator: "; ")))")
             }
             try await Task.sleep(for: .milliseconds(10))
         }

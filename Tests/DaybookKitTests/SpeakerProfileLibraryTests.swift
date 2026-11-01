@@ -52,7 +52,7 @@ final class SpeakerProfileLibraryTests: XCTestCase {
     private func sync(_ library: LibraryController, file: StaticString = #filePath, line: UInt = #line) async -> SyncApplied? {
         await library.flush()
         let applied = await library.synchronize()
-        XCTAssertEqual(applied?.acknowledged, true, library.sync?.status ?? "", file: file, line: line)
+        XCTAssertEqual(applied?.acknowledged, true, library.sync?.statusText ?? "", file: file, line: line)
         return applied
     }
 

@@ -79,7 +79,7 @@ final class LibrarySyncEncryptionTests: XCTestCase {
     @discardableResult
     private func pass(_ device: Device, file: StaticString = #filePath, line: UInt = #line) async -> SyncApplied? {
         let applied = await device.library.synchronize()
-        XCTAssertEqual(applied?.acknowledged, true, device.sync.status, file: file, line: line)
+        XCTAssertEqual(applied?.acknowledged, true, device.sync.statusText, file: file, line: line)
         return applied
     }
 
@@ -202,7 +202,7 @@ final class LibrarySyncEncryptionTests: XCTestCase {
         let applied = await phone.library.synchronize()
         XCTAssertNil(applied)
         XCTAssertEqual(phone.sync.encryption, .waitingForKey)
-        XCTAssertEqual(phone.sync.status, "Waiting for this library’s key.")
+        XCTAssertEqual(phone.sync.status, .waitingForKey)
 
         // Over the local link: the phone asks, the Mac sends the key only to a device of its library.
         let asked = await phone.sync.libraryKeyRequest()

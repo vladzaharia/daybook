@@ -89,7 +89,7 @@ extension FloatingStatusInputs {
         // A recording that failed has nothing to process; the panel says what happened instead.
         if let meeting, !isRecording, inputs.phase != .stopped { inputs.work = work(for: meeting, state: state) }
         inputs.queue = queue(state)
-        inputs.syncProblem = syncProblem(state.sync.status)
+        inputs.syncProblem = syncProblem(state.sync.status.problem)
         #if DEBUG
         FloatingNotesDemo.adjust(&inputs, meeting: meeting)
         #endif
@@ -191,22 +191,21 @@ extension FloatingStatusInputs {
         return queue
     }
 
-    /// A paused or failed sync, in the words Settings › Library uses. The system's own words stay in Settings, behind
-    /// Details: here a reason is given only when it's one of Daybook's.
-    static func syncProblem(_ status: String) -> String? {
-        guard status.hasPrefix("Sync paused") || status.hasPrefix("Couldn") || status.hasPrefix("Reconnect")
-                || status.hasPrefix("Apple Account") else { return nil }
-        guard let colon = status.range(of: ": ") else { return status }
-        let reason = String(status[colon.upperBound...])
-        if status.hasPrefix("Sync paused") {
-            return ownReasons.contains(reason) ? "iCloud sync is paused: " + reason : "iCloud sync is paused."
+    /// What needs the person about sync, in a line that names iCloud sync (the panel has no section saying so). The
+    /// system's own words stay in Settings, behind Details.
+    static func syncProblem(_ problem: SyncProblem?) -> String? {
+        switch problem {
+        case nil: return nil
+        case .failure: return "iCloud sync is paused."
+        case .accountChanged: return "iCloud sync is paused: the iCloud account changed"
+        case .previousFolderAccessLost: return "iCloud sync is paused: choose the folder this Mac synced through again"
+        case .previousFolderMissing: return "iCloud sync is paused: the folder this Mac synced through can’t be found"
+        case .libraryRemoved: return "iCloud sync is paused: the library in iCloud was removed"
+        case .newLibrary: return "iCloud sync is paused: iCloud holds a different library"
+        case .migrationPaused: return "Moving to iCloud is paused."
+        case .storageFull, .folderAccountChanged, .iCloudUnavailable, .reconnectFolder, .couldNotUseFolder: return problem?.text
         }
-        return String(status[..<colon.lowerBound]) + "."
     }
-
-    /// Reasons the sync controller gives in its own words.
-    private static let ownReasons: Set<String> = ["the iCloud account changed", "choose the folder this Mac synced through again",
-                                                  "the folder this Mac synced through can’t be found"]
 }
 
 // MARK: - The input device

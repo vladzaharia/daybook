@@ -87,10 +87,14 @@ struct SyncSettingsView: View {
             }
         }
         switch shown.iCloud {
-        case .migrating(let progress) where progress.total > 0:
-            ProgressView(value: Double(progress.completed), total: Double(max(progress.total, 1)))
-                .progressViewStyle(.brand(width: nil))
-                .accessibilityLabel("Moving your library to iCloud")
+        case .migrating(let progress):
+            if progress.total > 0 {
+                ProgressView(value: Double(progress.completed), total: Double(max(progress.total, 1)))
+                    .progressViewStyle(.brand(width: nil))
+                    .accessibilityLabel("Moving your library to iCloud")
+            }
+            // A move that stopped on an error says so in place; it tries again on its own.
+            if let problem = shown.problem { ProblemLine(text: problem.text, details: problem.details) }
         case .connected:
             connectedRows(shown)
         case .waitingForKey:
@@ -229,8 +233,8 @@ struct SyncShown {
     var isSyncing = false
     var pendingDownloads = 0
     var lastSync: Date?
-    /// The controller's status line, which carries a paused or failed pass.
-    var status = ""
+    /// What needs the person, from the controller's status: a paused or failed pass, a move to iCloud that stopped.
+    var problem: SyncProblem?
     var warnings: [String] = []
     var migration: SyncMigrationRecord?
     var encryption: EncryptionShown = .unavailable
@@ -248,7 +252,7 @@ struct SyncShown {
         isSyncing = sync.isSyncing
         pendingDownloads = sync.pendingDownloads
         lastSync = sync.lastSync
-        status = sync.status
+        problem = sync.status.problem
         warnings = sync.warnings
         migration = sync.migrationRecord
         encryption = EncryptionShown(sync.encryption)
@@ -281,7 +285,7 @@ struct SyncShown {
     var isBusy: Bool {
         switch iCloud {
         case .checking: return true
-        case .migrating(let progress): return progress.total == 0
+        case .migrating(let progress): return progress.total == 0 && problem == nil
         case .connected: return isSyncing
         default: return false
         }
@@ -299,13 +303,6 @@ struct SyncShown {
             ? date.formatted(date: .omitted, time: .shortened)
             : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
         return problem == nil ? "Up to date · \(time)" : "Last synced \(time)"
-    }
-
-    /// A paused or failed pass, in place: what happened, with the reason behind Details.
-    var problem: (text: String, details: String?)? {
-        guard status.hasPrefix("Sync paused") || status.hasPrefix("Couldn") || status.hasPrefix("Reconnect")
-                || status.hasPrefix("Apple Account") else { return nil }
-        return SyncProblemWords.split(status)
     }
 
     var remainingMigration: String? {
@@ -341,22 +338,12 @@ enum EncryptionShown: Equatable {
     var isOn: Bool { if case .on = self { return true } else { return false } }
 }
 
-/// "Sync paused: <the system's words>" as a sentence, with the words for Details.
-enum SyncProblemWords {
-    static func split(_ status: String) -> (text: String, details: String?) {
-        guard let range = status.range(of: ": ") else { return (status, nil) }
-        let head = String(status[..<range.lowerBound]), reason = String(status[range.upperBound...])
-        let text = head == "Sync paused" ? "Sync is paused." : head + "."
-        return (text, reason.isEmpty ? nil : reason)
-    }
-}
-
 // MARK: - Demos
 
 #if DEBUG
 /// Debug-only: `--sync-demo <state>` shows Settings › Library's iCloud Sync section in that state, without iCloud, for
 /// screenshots. Its buttons still act on the real (unconnected) controller. States: checking, off, signed-out,
-/// drive-off, unavailable, moving, on, syncing, downloading, paused, warning, damaged, account, folder-lost, folder-missing,
+/// drive-off, unavailable, moving, moving-paused, on, syncing, downloading, paused, warning, damaged, account, folder-lost, folder-missing,
 /// waiting, waiting-many (two iPhones with long names), encrypted, no-recovery-key, encrypting, dev-folder.
 @MainActor
 enum SyncSettingsDemo {
@@ -383,10 +370,16 @@ enum SyncSettingsDemo {
             var progress = SyncMigrationProgress()
             progress.total = 412; progress.completed = 157
             return SyncShown(iCloud: .migrating(progress))
+        case "moving-paused":
+            var progress = SyncMigrationProgress()
+            progress.total = 412; progress.completed = 157
+            var shown = SyncShown(iCloud: .migrating(progress))
+            shown.problem = .migrationPaused(details: "The operation couldn’t be completed. No space left on device.")
+            return shown
         case "on": return connected()
         case "syncing": return connected { $0.isSyncing = true }
         case "downloading": return connected { $0.pendingDownloads = 3 }
-        case "paused": return connected { $0.status = "Sync paused: The operation couldn’t be completed. No space left on device." }
+        case "paused": return connected { $0.problem = .failure(details: "The operation couldn’t be completed. No space left on device.") }
         case "warning": return connected { $0.warnings = [SyncWarningWords.unsavedChange + ": The file “events-0042.json” couldn’t be saved."] }
         case "damaged":
             return connected {

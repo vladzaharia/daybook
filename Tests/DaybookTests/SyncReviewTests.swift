@@ -24,7 +24,7 @@ final class SyncReviewTests: XCTestCase {
         var scheduled = 0
         state.sync.onSyncRequested = { scheduled += 1 }
         await state.synchronizeLibrary()
-        XCTAssertFalse(state.sync.status.contains("paused"), state.sync.status)
+        XCTAssertNil(state.sync.status.problem, state.sync.statusText)
         let meetingURL = local.appendingPathComponent("Meetings/\(id)/meeting.json")
         let metadataURL = local.appendingPathComponent("library.json")
         let meetingDate = try meetingURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate

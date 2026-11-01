@@ -226,15 +226,18 @@ final class FloatingNotesStatusTests: XCTestCase {
     }
 
     func testSyncSpeaksOnlyWhenItIsAProblem() {
-        XCTAssertNil(FloatingStatusInputs.syncProblem("Up to date"))
-        XCTAssertNil(FloatingStatusInputs.syncProblem("iCloud sync is off"))
-        XCTAssertEqual(FloatingStatusInputs.syncProblem("Sync paused: the iCloud account changed"),
+        XCTAssertNil(FloatingStatusInputs.syncProblem(SyncStatus.upToDate(at: Date()).problem))
+        XCTAssertNil(FloatingStatusInputs.syncProblem(SyncStatus.off.problem))
+        XCTAssertEqual(FloatingStatusInputs.syncProblem(SyncStatus.accountChanged.problem),
                        "iCloud sync is paused: the iCloud account changed")
         // The system's words stay in Settings, behind Details.
-        XCTAssertEqual(FloatingStatusInputs.syncProblem("Sync paused: The file “x” couldn’t be opened because you don’t have permission."),
+        XCTAssertEqual(FloatingStatusInputs.syncProblem(SyncStatus.failure(details: "The file “x” couldn’t be opened because you don’t have permission.").problem),
                        "iCloud sync is paused.")
-        XCTAssertEqual(FloatingStatusInputs.syncProblem("Couldn’t connect iCloud: The operation couldn’t be completed. (NSCocoaErrorDomain error 4.)"),
-                       "Couldn’t connect iCloud.")
+        XCTAssertEqual(FloatingStatusInputs.syncProblem(SyncStatus.iCloudUnavailable(details: "The operation couldn’t be completed. (NSCocoaErrorDomain error 4.)").problem),
+                       "Couldn’t connect to iCloud.")
+        // A move into iCloud that stopped is said too; it used to be missed.
+        XCTAssertEqual(FloatingStatusInputs.syncProblem(SyncStatus.migrationPaused(details: "No space left on device.").problem),
+                       "Moving to iCloud is paused.")
         let inputs = recording { $0.syncProblem = "iCloud sync is paused: the iCloud account changed" }
         XCTAssertEqual(FloatingStatus.chips(inputs).last?.label, "Not syncing")
     }

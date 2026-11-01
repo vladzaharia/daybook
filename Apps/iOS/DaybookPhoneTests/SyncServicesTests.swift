@@ -346,7 +346,7 @@ extension XCTestCase {
     /// One pass on a test Mac's library, which must apply and acknowledge.
     func assertPass(_ library: LibraryController, file: StaticString = #filePath, line: UInt = #line) async {
         let applied = await library.synchronize()
-        XCTAssertEqual(applied?.acknowledged, true, library.sync?.status ?? "", file: file, line: line)
+        XCTAssertEqual(applied?.acknowledged, true, library.sync?.statusText ?? "", file: file, line: line)
     }
 
     /// A Mac with models: an eager replica that writes presence.

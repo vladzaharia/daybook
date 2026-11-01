@@ -43,7 +43,7 @@ final class PhoneSync {
     /// Changes being sent in the pass running now.
     private(set) var changesInFlight = 0
     private(set) var lastSynced: Date?
-    /// Why the last pass couldn't finish, in the controller's words.
+    /// Why the last pass couldn't finish, in the system's words (`SyncProblem.details`, else its sentence).
     private(set) var lastError: String?
     private(set) var pendingUploads = 0
     private(set) var pendingDownloads = 0
@@ -219,8 +219,8 @@ final class PhoneSync {
             lastReceived = applied.changed
             passes += 1
             onApplied?(applied)
-        } else if controller.status.hasPrefix(Self.pausedPrefix) {
-            lastError = String(controller.status.dropFirst(Self.pausedPrefix.count))
+        } else if let problem = controller.status.problem {
+            lastError = problem.details ?? problem.text
         }
         // Edits made while the pass ran weren't in it: another pass follows right away.
         if applied?.hasEditsAfterThisPass == true { rerun = rerun ?? .edit }
@@ -228,8 +228,6 @@ final class PhoneSync {
         await refreshDevices()
         scheduleContinuation()
     }
-
-    private static let pausedPrefix = "Sync paused: "
 
     /// A bounded pass that left work continues a second later, while the app is in front.
     private func scheduleContinuation() {

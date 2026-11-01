@@ -40,13 +40,26 @@ final class SyncSettingsWordsTests: XCTestCase {
 
     func testAProblemIsSaidOnceUnderTheRowWhichKeepsOnlyTheLastSync() {
         let now = Date()
-        let paused = connected { $0.lastSync = now; $0.status = "Sync paused: No space left on device." }
+        let paused = connected { $0.lastSync = now; $0.problem = SyncStatus.failure(details: "No space left on device.").problem }
         XCTAssertEqual(paused.problem?.text, "Sync is paused.")
         XCTAssertEqual(paused.problem?.details, "No space left on device.")
         XCTAssertEqual(paused.headline, "Last synced \(now.formatted(date: .omitted, time: .shortened))")
         XCTAssertFalse(paused.headline.localizedCaseInsensitiveContains("sync is paused"))
-        XCTAssertEqual(connected { $0.status = "Couldn’t open iCloud: not signed in" }.headline, "Not synced yet")
-        XCTAssertNil(connected { $0.status = "Connected · preparing sync" }.problem)
+        XCTAssertEqual(connected { $0.problem = .iCloudUnavailable(details: "not signed in") }.headline, "Not synced yet")
+        XCTAssertNil(connected { $0.problem = SyncStatus.preparing.problem }.problem)
+    }
+
+    func testAMoveToICloudThatStoppedSaysSoInsteadOfSpinning() {
+        var progress = SyncMigrationProgress()
+        var paused = SyncShown(iCloud: .migrating(progress))
+        paused.problem = SyncStatus.migrationPaused(details: "No space left on device.").problem
+        XCTAssertEqual(paused.problem?.text, "Moving to iCloud is paused.")
+        XCTAssertEqual(paused.problem?.details, "No space left on device.")
+        XCTAssertFalse(paused.isBusy, "A paused move doesn't spin")
+        XCTAssertTrue(SyncShown(iCloud: .migrating(progress)).isBusy)
+        progress.total = 412; progress.completed = 157
+        paused.iCloud = .migrating(progress)
+        XCTAssertEqual(paused.headline, "Moving to iCloud · 157 of 412 files")
     }
 
     func testOnlyICloudDriveOffNeedsAFooterAndOnlyASyncingLibraryCanBeTurnedOff() {

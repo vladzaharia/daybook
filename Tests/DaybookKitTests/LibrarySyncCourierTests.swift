@@ -80,7 +80,7 @@ final class LibrarySyncCourierTests: XCTestCase {
     @discardableResult
     private func pass(_ library: LibraryController, file: StaticString = #filePath, line: UInt = #line) async -> SyncApplied? {
         let applied = await library.synchronize()
-        XCTAssertEqual(applied?.acknowledged, true, library.sync?.status ?? "", file: file, line: line)
+        XCTAssertEqual(applied?.acknowledged, true, library.sync?.statusText ?? "", file: file, line: line)
         return applied
     }
 
