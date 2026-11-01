@@ -124,8 +124,8 @@ public enum DaybookPalette {
         public static let findHighlight = DaybookShade(light: 0xFFE14D, dark: 0xE6C229, lightContrast: 0xFFD60A, darkContrast: 0xFFD60A)
         /// A search match's words: dark in both appearances, on `findHighlight`.
         public static let onFind = DaybookShade(light: 0x1A1917, dark: 0x1A1917, lightContrast: 0x000000, darkContrast: 0x000000)
-        /// Warning words on the 9% warning wash (an attention chip): `warning` a step darker in Light Mode,
-        /// where the wash takes it under 4.5:1.
+        /// Warning words on a warning wash (an attention chip, a problem box's title): `warning` a step
+        /// darker in Light Mode, where the 8–9% wash takes it under 4.5:1.
         public static let onAttention = DaybookShade(light: 0x9C4706, dark: 0xFFB054, lightContrast: 0x8A3F00, darkContrast: 0xFFC37A)
 
         /// The inks above by name.
@@ -180,9 +180,9 @@ public enum DaybookPalette {
     /// The system's quaternary fill: chips, the meter's resting bars, the timeline's track.
     public static let quietFill = Color.platformQuaternaryFill
     /// Something that needs the person: Ink.warning on a 9% wash (the pause box, problem chips).
-    public static let attentionFill = Ink.warning.opacity(0.09)
+    public static let attentionFill = DaybookWash.attention.color
     /// An accent wash behind text in `Ink.onWash`: tag chips, tinted buttons (14%).
-    public static let accentWash = accent.opacity(0.14)
+    public static let accentWash = DaybookWash.accent.color
 
     /// Speaker inks, assigned by first appearance (`Shade.speakers`).
     public static let speakerInks: [Color] = Shade.speakers.map(\.color)
@@ -290,16 +290,73 @@ public enum DaybookContrast {
         }
         return channel(16) << 16 | channel(8) << 8 | channel(0)
     }
+
+    /// The opaque colour a wash makes over `paper` in an appearance. The quiet fill is the system's
+    /// quaternary fill as both platforms draw it: rgba(116, 116, 128, 0.08) in Light, rgba(118, 118, 128,
+    /// 0.18) in Dark.
+    public static func flattened(_ wash: DaybookWash, over paper: UInt32, dark: Bool, increasedContrast: Bool) -> UInt32 {
+        switch wash {
+        case .none:
+            return paper
+        case .quiet:
+            return composite(dark ? 0x767680 : 0x747480, opacity: dark ? 0.18 : 0.08, over: paper)
+        case .tint(let shade, let light, let darkOpacity):
+            return composite(shade.hex(dark: dark, increasedContrast: increasedContrast), opacity: dark ? darkOpacity : light, over: paper)
+        }
+    }
+
+    /// Words in `pair.ink` on `pair.wash` laid over the paper, in an appearance.
+    public static func ratio(_ pair: DaybookInkPair, dark: Bool, increasedContrast: Bool) -> Double {
+        let paper = DaybookPalette.Shade.paper.hex(dark: dark, increasedContrast: increasedContrast)
+        return ratio(pair.ink.hex(dark: dark, increasedContrast: increasedContrast),
+                     flattened(pair.wash, over: paper, dark: dark, increasedContrast: increasedContrast))
+    }
+}
+
+/// What sits behind words in a chip or a box, as values the token tests can lay over paper.
+public enum DaybookWash: Hashable, Sendable {
+    /// Nothing: the words are on the paper.
+    case none
+    /// The system's quaternary fill (`DaybookPalette.quietFill`).
+    case quiet
+    /// A shade at an opacity in Light Mode and another in Dark.
+    case tint(DaybookShade, light: Double, dark: Double)
+
+    /// The 14% accent wash: tag chips, tinted buttons.
+    public static let accent = DaybookWash.tint(DaybookPalette.Shade.accent, light: 0.14, dark: 0.14)
+    /// The 9% warning wash: an attention chip, the pause box.
+    public static let attention = DaybookWash.tint(DaybookPalette.Shade.warning, light: 0.09, dark: 0.09)
+
+    /// The wash as SwiftUI draws it, following the appearance.
+    public var color: Color {
+        switch self {
+        case .none: return .clear
+        case .quiet: return DaybookPalette.quietFill
+        case .tint(let shade, let light, let dark):
+            return light == dark ? shade.color.opacity(light) : Color(shade: shade, opacity: light, darkOpacity: dark)
+        }
+    }
+}
+
+/// Words and the wash they sit on: what a chip or a box draws, and what the token tests hold to 4.5:1.
+public struct DaybookInkPair: Hashable, Sendable {
+    public let ink: DaybookShade
+    public let wash: DaybookWash
+
+    public init(ink: DaybookShade, wash: DaybookWash) {
+        self.ink = ink
+        self.wash = wash
+    }
 }
 
 // MARK: - Platform colours
 
 extension Color {
-    init(shade: DaybookShade) {
+    init(shade: DaybookShade, opacity: Double = 1, darkOpacity: Double = 1) {
         #if canImport(AppKit)
-        self.init(nsColor: shade.nsColor)
+        self.init(nsColor: NSColor.daybookShade(shade, opacity: opacity, darkOpacity: darkOpacity))
         #elseif canImport(UIKit)
-        self.init(uiColor: shade.uiColor)
+        self.init(uiColor: UIColor.daybookShade(shade, opacity: opacity, darkOpacity: darkOpacity))
         #endif
     }
 
@@ -328,12 +385,15 @@ extension NSColor {
                   blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
     }
 
-    fileprivate static func daybookShade(_ shade: DaybookShade) -> NSColor {
+    /// The shade, following the appearance; at an opacity (another in Dark Mode) for a wash.
+    fileprivate static func daybookShade(_ shade: DaybookShade, opacity: Double = 1, darkOpacity: Double = 1) -> NSColor {
         NSColor(name: nil) { appearance in
             let match = appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
             let isDark = match == .darkAqua || match == .accessibilityHighContrastDarkAqua
             let contrast = match == .accessibilityHighContrastAqua || match == .accessibilityHighContrastDarkAqua || DaybookShade.forcesContrast
-            return NSColor(rgb: shade.hex(dark: isDark, increasedContrast: contrast))
+            let color = NSColor(rgb: shade.hex(dark: isDark, increasedContrast: contrast))
+            let alpha = isDark ? darkOpacity : opacity
+            return alpha < 1 ? color.withAlphaComponent(alpha) : color
         }
     }
 }
@@ -344,10 +404,14 @@ extension UIColor {
                   blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
     }
 
-    fileprivate static func daybookShade(_ shade: DaybookShade) -> UIColor {
+    /// The shade, following the traits; at an opacity (another in Dark Mode) for a wash.
+    fileprivate static func daybookShade(_ shade: DaybookShade, opacity: Double = 1, darkOpacity: Double = 1) -> UIColor {
         UIColor { traits in
-            UIColor(daybookRGB: shade.hex(dark: traits.userInterfaceStyle == .dark,
-                                          increasedContrast: traits.accessibilityContrast == .high || DaybookShade.forcesContrast))
+            let isDark = traits.userInterfaceStyle == .dark
+            let color = UIColor(daybookRGB: shade.hex(dark: isDark,
+                                                      increasedContrast: traits.accessibilityContrast == .high || DaybookShade.forcesContrast))
+            let alpha = isDark ? darkOpacity : opacity
+            return alpha < 1 ? color.withAlphaComponent(alpha) : color
         }
     }
 }

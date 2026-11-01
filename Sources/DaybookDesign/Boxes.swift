@@ -22,7 +22,6 @@ public struct AttentionBox<Actions: View>: View {
     private let compact: Bool
     private let actions: Actions
     @State private var width: CGFloat = AttentionBoxLayout.stackBelow
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.daybookDensity) private var density
 
@@ -51,12 +50,12 @@ public struct AttentionBox<Actions: View>: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
                         .font(titleFont)
-                        .foregroundStyle(kind == .problem ? DaybookPalette.Ink.warning : DaybookPalette.Ink.body)
+                        .foregroundStyle(AttentionBoxLayout.title(for: kind).ink.color)
                         .fixedSize(horizontal: false, vertical: true)
                     if let message {
                         Text(message)
                             .font(messageFont)
-                            .foregroundStyle(DaybookPalette.Ink.secondary)
+                            .foregroundStyle(AttentionBoxLayout.message(for: kind).ink.color)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -72,7 +71,7 @@ public struct AttentionBox<Actions: View>: View {
         .padding(compact ? 10 : DaybookSpacing.s3)
         // Stacked or not, the box spans its column, so boxes and lines share both edges.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(fill, in: DaybookRadius.shape(DaybookRadius.box))
+        .background(AttentionBoxLayout.wash(for: kind).color, in: DaybookRadius.shape(DaybookRadius.box))
         .overlay {
             if contrast == .increased {
                 DaybookRadius.shape(DaybookRadius.box).strokeBorder(kind == .problem ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta, lineWidth: 1)
@@ -96,14 +95,6 @@ public struct AttentionBox<Actions: View>: View {
         }
     }
 
-    private var fill: Color {
-        switch kind {
-        case .problem: return DaybookPalette.Ink.warning.opacity(scheme == .dark ? 0.12 : 0.08)
-        case .accent: return DaybookPalette.accent.opacity(0.08)
-        case .info: return DaybookPalette.quietFill
-        }
-    }
-
     private var glyphFont: Font {
         density == .touch ? .subheadline : .system(size: compact ? 12 : 15)
     }
@@ -122,6 +113,26 @@ public enum AttentionBoxLayout {
 
     public static func stacks(width: CGFloat, compact: Bool, density: DaybookDensity) -> Bool {
         compact || density == .panel || width < stackBelow
+    }
+
+    /// A kind's wash: warning at 8% (12% in Dark Mode), accent at 8%, or the quiet fill.
+    public static func wash(for kind: AttentionKind) -> DaybookWash {
+        switch kind {
+        case .problem: return .tint(DaybookPalette.Shade.warning, light: 0.08, dark: 0.12)
+        case .accent: return .tint(DaybookPalette.Shade.accent, light: 0.08, dark: 0.08)
+        case .info: return .quiet
+        }
+    }
+
+    /// A box's title on its wash: a problem's in the warning ink that keeps 4.5:1 there
+    /// (`Ink.onAttention`), the rest in body ink.
+    public static func title(for kind: AttentionKind) -> DaybookInkPair {
+        DaybookInkPair(ink: kind == .problem ? DaybookPalette.Shade.onAttention : DaybookPalette.Shade.body, wash: wash(for: kind))
+    }
+
+    /// A box's message on its wash, in secondary ink.
+    public static func message(for kind: AttentionKind) -> DaybookInkPair {
+        DaybookInkPair(ink: DaybookPalette.Shade.secondary, wash: wash(for: kind))
     }
 
     public static func symbol(for kind: AttentionKind) -> String {

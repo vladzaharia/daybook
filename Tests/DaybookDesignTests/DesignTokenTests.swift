@@ -18,10 +18,9 @@ final class DesignTokenTests: XCTestCase {
         DaybookContrast.ratio(ink.hex(dark: dark, increasedContrast: more), surface(dark, more))
     }
 
-    /// The quaternary system fill both platforms put under chips and cards, flattened onto paper:
-    /// rgba(116, 116, 128, 0.08) in Light, rgba(118, 118, 128, 0.18) in Dark.
+    /// The quaternary system fill both platforms put under chips and cards, flattened onto paper.
     private func quietFill(over paper: UInt32, dark: Bool) -> UInt32 {
-        DaybookContrast.composite(dark ? 0x767680 : 0x747480, opacity: dark ? 0.18 : 0.08, over: paper)
+        DaybookContrast.flattened(.quiet, over: paper, dark: dark, increasedContrast: false)
     }
 
     // MARK: Values
@@ -131,11 +130,66 @@ final class DesignTokenTests: XCTestCase {
 
     func testWarningWordsOnTheWarningWashKeepFourAndAHalf() {
         for appearance in appearances {
-            let paper = Shade.paper.hex(dark: appearance.dark, increasedContrast: appearance.contrast)
-            let wash = DaybookContrast.composite(Shade.warning.hex(dark: appearance.dark, increasedContrast: appearance.contrast), opacity: 0.09, over: paper)
-            let ratio = DaybookContrast.ratio(Shade.onAttention.hex(dark: appearance.dark, increasedContrast: appearance.contrast), wash)
+            let ratio = DaybookContrast.ratio(DaybookInkPair(ink: Shade.onAttention, wash: .attention), dark: appearance.dark,
+                                              increasedContrast: appearance.contrast)
             XCTAssertGreaterThanOrEqual(ratio, 4.5, "Attention chip, \(appearance.name)")
         }
+        // The reason for the token: warning ink falls under 4.5:1 on the light wash.
+        XCTAssertLessThan(DaybookContrast.ratio(DaybookInkPair(ink: Shade.warning, wash: .attention), dark: false, increasedContrast: false), 4.5)
+    }
+
+    func testEveryChipKindKeepsFourAndAHalfOnItsWash() {
+        let tones: [StatusTone] = [.calm, .working, .linked, .recording, .attention]
+        let kinds: [DaybookChip.Kind] = [.tag, .fact, .owner(nil)] + Shade.speakers.indices.map { .owner($0) } + tones.map { .status($0) }
+        for kind in kinds {
+            for filled in [true, false] {
+                let colors = DaybookChip.colors(kind, filled: filled)
+                if !filled { XCTAssertEqual(colors.wash, .none, "\(kind) without its capsule") }
+                for appearance in appearances {
+                    let ratio = DaybookContrast.ratio(colors, dark: appearance.dark, increasedContrast: appearance.contrast)
+                    XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(kind)\(filled ? "" : " without its capsule"), \(appearance.name)")
+                }
+            }
+        }
+        // Red words on the quiet fill fall under 4.5:1, so a recording chip's red is its dot's.
+        XCTAssertEqual(DaybookChip.colors(.status(.recording)).ink, Shade.secondary)
+        XCTAssertLessThan(DaybookContrast.ratio(DaybookInkPair(ink: Shade.record, wash: .quiet), dark: false, increasedContrast: false), 4.5)
+        XCTAssertEqual(DaybookChip.colors(.status(.attention)).ink, Shade.onAttention)
+    }
+
+    func testABoxsWordsKeepFourAndAHalfOnItsWash() {
+        for kind in [AttentionKind.problem, .accent, .info] {
+            for appearance in appearances {
+                for (part, pair) in [("title", AttentionBoxLayout.title(for: kind)), ("message", AttentionBoxLayout.message(for: kind))] {
+                    let ratio = DaybookContrast.ratio(pair, dark: appearance.dark, increasedContrast: appearance.contrast)
+                    XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(kind) box's \(part), \(appearance.name)")
+                }
+            }
+        }
+        // A problem's title was warning ink, under 4.5:1 on its light wash.
+        let problem = AttentionBoxLayout.wash(for: .problem)
+        XCTAssertLessThan(DaybookContrast.ratio(DaybookInkPair(ink: Shade.warning, wash: problem), dark: false, increasedContrast: false), 4.5)
+    }
+
+    func testAWashResolvesToItsOpacityInEachAppearance() {
+        func rgba(_ color: Color, _ appearance: NSAppearance.Name) -> (UInt32, CGFloat) {
+            var value: (UInt32, CGFloat) = (0, 0)
+            NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
+                guard let srgb = NSColor(color).usingColorSpace(.sRGB) else { return }
+                let r = UInt32((srgb.redComponent * 255).rounded()), g = UInt32((srgb.greenComponent * 255).rounded())
+                value = (r << 16 | g << 8 | UInt32((srgb.blueComponent * 255).rounded()), srgb.alphaComponent)
+            }
+            return value
+        }
+        let problem = rgba(AttentionBoxLayout.wash(for: .problem).color, .aqua)
+        XCTAssertEqual(problem.0, Shade.warning.light)
+        XCTAssertEqual(problem.1, 0.08, accuracy: 0.001)
+        let dark = rgba(AttentionBoxLayout.wash(for: .problem).color, .darkAqua)
+        XCTAssertEqual(dark.0, Shade.warning.dark)
+        XCTAssertEqual(dark.1, 0.12, accuracy: 0.001)
+        XCTAssertEqual(rgba(DaybookPalette.attentionFill, .aqua).1, 0.09, accuracy: 0.001)
+        XCTAssertEqual(rgba(DaybookPalette.accentWash, .darkAqua).0, Shade.accent.dark)
+        XCTAssertEqual(rgba(DaybookPalette.accentWash, .darkAqua).1, 0.14, accuracy: 0.001)
     }
 
     func testFilledLabelsKeepFourAndAHalfOnTheirFills() {
