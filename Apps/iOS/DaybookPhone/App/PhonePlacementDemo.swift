@@ -21,7 +21,7 @@ import Foundation
 enum PhonePlacementDemo {
     static let scenario = LaunchOptions.value(after: "--placement-demo", in: CommandLine.arguments)
     static let title = "Weekly product sync"
-    static let sonnet = CloudModel(provider: .anthropic, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", tier: .balanced,
+    nonisolated static let sonnet = CloudModel(provider: .anthropic, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", tier: .balanced,
                                    inputPrice: 2, outputPrice: 10, priceIsEstimated: false, contextTokens: 200_000, rank: 1)
 
     /// A cloud that offers Claude Sonnet 5.5 and never finishes.
