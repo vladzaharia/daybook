@@ -778,6 +778,8 @@ final class AppState: ObservableObject {
                 let job = self.processingQueue.removeFirst(), id = job.meetingID
                 // Never run a request another device holds, or one that finished elsewhere meanwhile.
                 guard self.mayRun(job) else { continue }
+                // Each job starts from nothing: no figure, and no step until the engine names one.
+                self.processingProgress = IntelligenceProgress(0, "Starting")
                 self.processingID = id
                 self.runningJob = job
                 self.claimsLost.remove(id)
@@ -865,12 +867,14 @@ final class AppState: ObservableObject {
         meeting.hasUntranscribedTranscribableAudio ? .newAudio : .summaryOnly
     }
 
-    /// This Mac's queue, as `ProcessingStatus` reads it.
+    /// This Mac's queue, as `ProcessingStatus` reads it: the running job's step is the one the engine reports
+    /// (`ProcessingProgress.stage`), or summarizing from when the conversation is marked so.
     var processingQueueState: ProcessingStatus.LocalQueue {
-        let message = processingProgress.message.lowercased()
+        let stage = processingProgress.stage
         return ProcessingStatus.LocalQueue(running: processingID, fraction: processingProgress.fraction,
-                                           identifyingSpeakers: message.contains("speaker") || message.contains("sortformer"),
-                                           queued: queuedIDs, paused: pausedIDs, awaitingModels: awaitingModels, canProcess: canProcess)
+                                           identifyingSpeakers: stage == .identifyingSpeakers,
+                                           queued: queuedIDs, paused: pausedIDs, awaitingModels: awaitingModels, canProcess: canProcess,
+                                           stage: stage)
     }
 
     /// The one status the list, the conversation page, and device pages show (shared with the iPhone).
@@ -903,7 +907,7 @@ final class AppState: ObservableObject {
         let terms = glossary.filter { $0.approved || $0.sourceMeetingIDs.contains(id) }.map(\.term)
         update(id) { $0.status = .transcribing; $0.errorMessage = nil }
         let activity = processingActivity
-        let progress: ProcessingProgressHandler = { value in activity.report(IntelligenceProgress(value.fraction, value.message)) }
+        let progress: ProcessingProgressHandler = { value in activity.report(IntelligenceProgress(value.fraction, value.message, stage: value.stage)) }
         let matching = options.matchSpeakersAcrossSources
             ? SpeakerMatchingConfiguration(minimumSimilarity: options.speakerMatchThreshold, minimumMargin: options.speakerMatchMargin) : nil
         if request.mode != .summaryOnly {
@@ -931,6 +935,7 @@ final class AppState: ObservableObject {
         let transcript = MeetingEvidence.transcript(before)
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }
         update(id) { $0.status = .summarizing }
+        processingActivity.enter(.summarizing)
         renewRunningClaim(force: false)
         reportToPhones(id)
         let template = template(for: request, meeting: before)

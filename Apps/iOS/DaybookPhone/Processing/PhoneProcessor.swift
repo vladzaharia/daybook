@@ -292,7 +292,7 @@ final class PhoneProcessor {
                 let output = try await engine.transcribe(
                     TrackProcessingInput(meetingID: id, track: track, audioURL: url, mode: mode, previousTranscript: previous, vocabulary: vocabulary),
                     progress: { [weak self] update in
-                        Task { @MainActor in self?.progressed(base + share * min(1, max(0, update.fraction)), message: update.message) }
+                        Task { @MainActor in self?.progressed(base + share * min(1, max(0, update.fraction)), stage: update.stage) }
                     })
                 try Task.checkCancellation()
                 library.update(id) { $0.apply(output, matching: matching, allowSameSource: previous != nil) }
@@ -321,7 +321,7 @@ final class PhoneProcessor {
             ?? library.resolvedTemplate(for: meeting)
         let started = Date()
         let output = try await summarizer.summarize(meeting, template: template, vocabulary: vocabulary(for: id)) { [weak self] fraction in
-            Task { @MainActor in self?.progressed(fraction, message: nil) }
+            Task { @MainActor in self?.progressed(fraction, stage: nil) }
         }
         try Task.checkCancellation()
         // With where it ran ("Summarized on this iPhone"), unless another device's summary arrived meanwhile.
@@ -403,13 +403,12 @@ final class PhoneProcessor {
         if case .paused(let reason) = outcome { pause = reason } else { pickUp() }
     }
 
-    private func progressed(_ fraction: Double, message: String?) {
+    /// A report from the engine, in the step it names (`ProcessingProgress.stage`; nil goes on with the step before).
+    /// Once the summary starts, a late report from transcription doesn't take it back.
+    private func progressed(_ fraction: Double, stage: ProcessingRequest.Stage?) {
         guard var current = running else { return }
         current.fraction = fraction
-        if let message, current.stage != .summarizing {
-            let speakers = message.lowercased().contains("speaker")
-            current.stage = speakers ? .identifyingSpeakers : .transcribing
-        }
+        if let stage, current.stage != .summarizing { current.stage = stage }
         let changedStage = current.stage != running?.stage
         running = current
         continued.report(fraction: fraction, title: changedStage ? Self.title(current.stage) : nil)
@@ -425,14 +424,8 @@ final class PhoneProcessor {
         renew(force: true)
     }
 
-    /// What the system's progress shows.
-    static func title(_ stage: ProcessingRequest.Stage) -> String {
-        switch stage {
-        case .transcribing: return "Transcribing"
-        case .identifyingSpeakers: return "Identifying speakers"
-        case .summarizing: return "Summarizing"
-        }
-    }
+    /// What the system's progress shows: the step's verb, as every status says it.
+    static func title(_ stage: ProcessingRequest.Stage) -> String { ProcessingWords.verb(stage) }
 
     // MARK: Claims
 

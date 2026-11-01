@@ -94,6 +94,54 @@ final class WindowInvalidationTests: XCTestCase {
         await state.flush()
     }
 
+    func testAReportThatNamesNoStepKeepsTheStepBefore() async throws {
+        let activity = ActivityProgress(IntelligenceProgress(0, "Ready"), interval: 0.01)
+        activity.report(IntelligenceProgress(0.5, "Making voice profiles", stage: .identifyingSpeakers))
+        for _ in 0..<100 where activity.value.stage == nil { try await Task.sleep(for: .milliseconds(5)) }
+        activity.report(IntelligenceProgress(0.6, "Reading photos"))
+        for _ in 0..<100 where activity.value.message != "Reading photos" { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(activity.value.stage, .identifyingSpeakers, "reading photos goes on in the step before it")
+        XCTAssertTrue(ActivityProgress.isVisibleChange(from: IntelligenceProgress(0.5, "Working", stage: .transcribing),
+                                                       to: IntelligenceProgress(0.5, "Working", stage: .identifyingSpeakers)),
+                      "the page names the step, so a new one redraws it")
+        activity.enter(.summarizing)
+        XCTAssertEqual(activity.value.stage, .summarizing)
+        XCTAssertEqual(activity.value.fraction, 0.6)
+        activity.set(IntelligenceProgress(0, "Starting"))
+        XCTAssertNil(activity.value.stage, "a new job has no step until the engine names one")
+    }
+
+    func testTheStepIsTheOneTheEngineReportsNeverItsWords() async throws {
+        let root = makeTemporaryFolder("DaybookWindow")
+        let defaults = makeTestDefaults("local.daybook.tests.window")
+        let state = AppState(libraryURL: root, defaults: defaults)
+        await state.initialize()
+        let id = state.newMeeting(title: "Roadmap review")
+        state.update(id) { $0.status = .transcribing }
+        state.processingID = id
+        func stage() throws -> ProcessingRequest.Stage? {
+            guard case .processing(let progress) = state.processingStatus(for: try XCTUnwrap(state.meetings.first { $0.id == id })) else { return nil }
+            return progress.stage
+        }
+        func floating() -> FloatingStatusInputs.Queue.Stage? {
+            FloatingStatusInputs.make(state, meeting: nil, afterStop: false, inputDevice: nil).queue.running
+        }
+        state.processingProgress = IntelligenceProgress(0.6, "Making voice profiles", stage: .identifyingSpeakers)
+        XCTAssertEqual(try stage(), .identifyingSpeakers, "voice profiles are part of finding speakers, whatever the words")
+        XCTAssertEqual(state.runningStage, .identifyingSpeakers, "and so is the claim")
+        XCTAssertEqual(floating(), .identifyingSpeakers, "and Floating Notes")
+        state.processingProgress = IntelligenceProgress(0.2, "Loading the speaker-aware transcription model", stage: .transcribing)
+        XCTAssertEqual(try stage(), .transcribing, "a word about speakers doesn't make it finding them")
+        XCTAssertEqual(floating(), .transcribing)
+        // Marked summarizing, it says so at once, before the summary reports.
+        state.update(id) { $0.status = .summarizing }
+        state.processingActivity.enter(.summarizing)
+        XCTAssertEqual(try stage(), .summarizing)
+        XCTAssertEqual(floating(), .summarizing)
+        state.processingID = nil
+        await state.flush()
+    }
+
     func testOnlyTheLibraryAndTheDeviceListRedrawTheWindow() async throws {
         let root = makeTemporaryFolder("DaybookWindow")
         let defaults = makeTestDefaults("local.daybook.tests.window")

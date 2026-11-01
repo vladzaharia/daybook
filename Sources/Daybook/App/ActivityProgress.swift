@@ -1,3 +1,4 @@
+import DaybookCore
 import DaybookIntelligence
 import Foundation
 import SwiftUI
@@ -6,9 +7,10 @@ import SwiftUI
 /// thread, as often as they like (a download reports per network chunk); it reaches the main actor
 /// at most ten times a second, the latest value winning, in one hop. Views that draw it observe this
 /// object (`ActivityReader`), so nothing else in the window redraws, and they redraw only when what
-/// they show changes: the percent or the message. A report that moves a bar by less than a percent
-/// is kept (`value` is always the latest) without a redraw. `onChange` tells `AppState` of every
-/// delivery, which renews the request's claim and tells connected iPhones.
+/// they show changes: the percent, the message, or the step. A report that moves a bar by less than
+/// a percent is kept (`value` is always the latest) without a redraw. A report that names no step
+/// (reading photos) keeps the step before it. `onChange` tells `AppState` of every delivery, which
+/// renews the request's claim and tells connected iPhones.
 @MainActor
 final class ActivityProgress: ObservableObject {
     /// Never reports: what a view observes when the activity it would show isn't its own (a list row
@@ -32,7 +34,7 @@ final class ActivityProgress: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, let latest = self.throttle.take() else { return }
-                self.apply(latest)
+                self.apply(latest.continuing(self.value.stage))
             }
         }
     }
@@ -43,6 +45,12 @@ final class ActivityProgress: ObservableObject {
         apply(progress)
     }
 
+    /// At once, on the main actor: the work moves on to `stage` before any report from it says so (this Mac marks a
+    /// conversation summarizing before its countdown). Reports still in flight from the step before are dropped.
+    func enter(_ stage: ProcessingRequest.Stage) {
+        set(IntelligenceProgress(value.fraction, value.message, stage: stage))
+    }
+
     private func apply(_ progress: IntelligenceProgress) {
         let visible = Self.isVisibleChange(from: value, to: progress)
         if visible { objectWillChange.send() }
@@ -50,9 +58,9 @@ final class ActivityProgress: ObservableObject {
         onChange(visible)
     }
 
-    /// What progress views show: a whole percent and the message.
+    /// What progress views show: a whole percent, the message, and the step it names.
     nonisolated static func isVisibleChange(from old: IntelligenceProgress, to new: IntelligenceProgress) -> Bool {
-        Int(new.fraction * 100) != Int(old.fraction * 100) || new.message != old.message
+        Int(new.fraction * 100) != Int(old.fraction * 100) || new.message != old.message || new.stage != old.stage
     }
 
     /// The latest report and whether a delivery is already on its way.
@@ -69,7 +77,7 @@ final class ActivityProgress: ObservableObject {
         /// when one is already scheduled.
         func offer(_ progress: IntelligenceProgress) -> TimeInterval? {
             lock.withLock {
-                pending = progress
+                pending = progress.continuing(pending?.stage)
                 guard !scheduled else { return nil }
                 scheduled = true
                 return max(0, interval - Date().timeIntervalSince(lastDelivery))
@@ -103,4 +111,11 @@ struct ActivityReader<Content: View>: View {
     }
 
     var body: some View { content() }
+}
+
+extension IntelligenceProgress {
+    /// The report, in `stage` when it names none itself: the step before it goes on.
+    func continuing(_ stage: ProcessingRequest.Stage?) -> IntelligenceProgress {
+        self.stage != nil || stage == nil ? self : IntelligenceProgress(fraction, message, stage: stage)
+    }
 }

@@ -172,10 +172,13 @@ extension FloatingStatusInputs {
     @MainActor
     private static func queue(_ state: AppState) -> Queue {
         var queue = Queue()
-        if let id = state.processingID, let meeting = state.meetings.first(where: { $0.id == id }) {
-            let message = state.processingProgress.message.lowercased()
-            queue.running = meeting.status == .summarizing ? .summarizing
-                : message.contains("speaker") || message.contains("sortformer") ? .identifyingSpeakers : .transcribing
+        if let id = state.processingID, state.meetings.contains(where: { $0.id == id }) {
+            // The step the page and the claim say (`AppState.runningStage`), never guessed from the engine's words.
+            switch state.runningStage {
+            case .transcribing: queue.running = .transcribing
+            case .identifyingSpeakers: queue.running = .identifyingSpeakers
+            case .summarizing: queue.running = .summarizing
+            }
             queue.fraction = state.processingProgress.fraction
             switch state.placements[id]?.phase {
             case .countingDown(_, let until)?: queue.countdown = until

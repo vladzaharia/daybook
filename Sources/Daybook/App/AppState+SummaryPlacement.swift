@@ -117,7 +117,7 @@ extension AppState {
             if cloud.keys[model.provider] != nil {
                 let output = try await cloudSummarizer.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model,
                                                                      effort: cloud.preferences.effort) { fraction in
-                    progress(ProcessingProgress(fraction: fraction, message: "Summarizing with \(model.name)"))
+                    progress(ProcessingProgress(fraction: fraction, message: "Summarizing with \(model.name)", stage: .summarizing))
                 }
                 return PlacedSummary(output: output, place: place, meeting: meeting, started: started)
             }
