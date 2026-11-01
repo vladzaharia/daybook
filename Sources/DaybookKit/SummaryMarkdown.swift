@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// A summary section's Markdown, split as both apps draw it: paragraphs, list items ("-", "*", "•", "1.", "1)"),
 /// and headings. The iPhone's tap-through to evidence indexes these same lines, so one parser serves the page, the
@@ -48,15 +49,14 @@ public enum SummaryMarkdown {
     private static let cache = BlockCache()
 
     /// A small memo of recent sources, safe from any thread. A summary's sections are few; it's emptied when full.
-    private final class BlockCache: @unchecked Sendable {
-        private let lock = NSLock()
-        private var entries: [String: [Block]] = [:]
+    private final class BlockCache: Sendable {
+        private let entries = Mutex<[String: [Block]]>([:])
         private let limit = 256
 
-        func value(for source: String) -> [Block]? { lock.withLock { entries[source] } }
+        func value(for source: String) -> [Block]? { entries.withLock { $0[source] } }
 
         func store(_ blocks: [Block], for source: String) {
-            lock.withLock {
+            entries.withLock { entries in
                 if entries.count >= limit { entries.removeAll(keepingCapacity: true) }
                 entries[source] = blocks
             }

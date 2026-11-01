@@ -1,5 +1,6 @@
 import DaybookCore
 import Foundation
+import Synchronization
 
 /// Finds the passage a summary line came from, so tapping or clicking a next step, a summary bullet, or a bookmark
 /// opens the transcript at its evidence, on both apps. Summaries don't store their sources, so this matches words:
@@ -89,7 +90,7 @@ public struct SummaryEvidenceIndex: Sendable {
     private static let cache = IndexCache()
 
     /// The last few conversations' indexes, safe from any thread.
-    private final class IndexCache: @unchecked Sendable {
+    private final class IndexCache: Sendable {
         private struct Key: Hashable {
             var id: UUID
             var updatedAt: Date
@@ -107,16 +108,15 @@ public struct SummaryEvidenceIndex: Sendable {
                 content = hasher.finalize()
             }
         }
-        private let lock = NSLock()
-        private var entries: [Key: SummaryEvidenceIndex] = [:]
+        private let entries = Mutex<[Key: SummaryEvidenceIndex]>([:])
 
         func index(for meeting: Meeting) -> SummaryEvidenceIndex {
             let key = Key(meeting)
-            if let hit = lock.withLock({ entries[key] }) { return hit }
+            if let hit = entries.withLock({ $0[key] }) { return hit }
             let index = SummaryEvidenceIndex(meeting)
-            lock.withLock {
+            entries.withLock { entries in
                 // One version per conversation, and only a few conversations.
-                entries = entries.filter { $0.key.id != meeting.id }
+                entries = entries.filter { $0.key.id != key.id }
                 if entries.count >= 8 { entries.removeAll() }
                 entries[key] = index
             }
