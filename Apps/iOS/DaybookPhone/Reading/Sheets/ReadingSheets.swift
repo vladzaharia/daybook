@@ -149,7 +149,7 @@ private struct RevisionDetail: View {
 
     /// While a Mac is rewriting this conversation, a restore would be overwritten.
     private func isLocked(_ meeting: Meeting) -> Bool {
-        if case .processing = ProcessingStatus(meeting) { return true }
+        if case .processing = ProcessingStatus.phone(meeting) { return true }
         return false
     }
 

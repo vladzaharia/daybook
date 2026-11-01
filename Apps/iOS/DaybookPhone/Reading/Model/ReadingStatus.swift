@@ -2,15 +2,17 @@ import DaybookKit
 import Foundation
 
 /// What the page and the list say about a conversation's processing, from DaybookKit's
-/// `ProcessingStatus` (docs/iphone.md, "Processing on the Mac"). The phone never processes, so
-/// every working state names the Mac doing the work, and nothing ever fakes progress.
+/// `ProcessingStatus` (docs/iphone.md, "Processing on the Mac" and "Processing on this iPhone"). Work
+/// on a Mac names the Mac; work here says "on this iPhone"; nothing ever fakes progress.
 ///
 /// | Status | Page | Row |
 /// |---|---|---|
 /// | Recorded | "Not transcribed yet" + Transcribe | "Not transcribed yet" + teal dot |
 /// | Transcribed | "Not summarized yet" + Summarize | the preview |
 /// | Requested | "Waiting for your Mac" (+ "Last seen 2 h ago") | "Waiting for your Mac" + clock |
-/// | Processing | "Transcribing on Studio · 40%" + gradient bar | same words + a 2 pt gradient line |
+/// | Waiting here | "Waiting on this iPhone" | the same |
+/// | Paused here | "Paused" + why ("Continues when Daybook is open") | "Paused" |
+/// | Processing | "Transcribing on Studio · 40%" (or "on this iPhone") + gradient bar | same words + a 2 pt gradient line |
 /// | Couldn't finish | a box with the Mac's reason, Try Again, Details | "Couldn't finish" + warning |
 /// | Waiting for a recording | "Waiting for audio from Alex's iPhone" | "Waiting for iPhone audio" + clock |
 /// | Done | nothing | the preview |
@@ -44,8 +46,13 @@ struct StatusPresentation: Equatable {
     var actions: [Action] = []
 
     /// The page's status, or nil when there's nothing to say.
-    static func page(_ status: ProcessingStatus, meeting: Meeting, sighting: MacSighting?, now: Date = Date()) -> StatusPresentation? {
+    static func page(_ status: ProcessingStatus, meeting: Meeting, sighting: MacSighting?, pause: PhoneProcessor.Pause? = nil,
+                     now: Date = Date()) -> StatusPresentation? {
         switch status {
+        case .requested(.queued):
+            return StatusPresentation(kind: .line, symbol: "clock", title: "Waiting on this iPhone")
+        case .requested(.paused):
+            return StatusPresentation(kind: .line, symbol: "pause.circle", title: "Paused", detail: pause.map(pausedLine))
         case .recorded:
             // The fix is one tap away: ask your Mac (the request waits for one if none is around).
             return StatusPresentation(kind: .line, symbol: "waveform", title: "Not transcribed yet",
@@ -60,7 +67,7 @@ struct StatusPresentation: Equatable {
             return StatusPresentation(kind: .line, symbol: "clock", title: waitingTitle(mode),
                                       detail: MacSighting.line(sighting, now: now))
         case .processing(let progress):
-            return StatusPresentation(kind: .line, symbol: "desktopcomputer", title: workingTitle(progress),
+            return StatusPresentation(kind: .line, symbol: progress.device == nil ? "iphone" : "desktopcomputer", title: workingTitle(progress),
                                       progress: progress.fraction, isWorking: progress.fraction == nil)
         case .failed(let failure):
             let silent = FriendlyError.isNoSpeech(failure.reason)
@@ -84,6 +91,8 @@ struct StatusPresentation: Equatable {
     static func row(_ status: ProcessingStatus) -> RowStatus? {
         switch status {
         case .recorded: return RowStatus(kind: .notTranscribed, text: "Not transcribed yet")
+        case .requested(.queued): return RowStatus(kind: .waiting, text: "Waiting on this iPhone")
+        case .requested(.paused): return RowStatus(kind: .waiting, text: "Paused")
         case .requested(let waiting):
             if case .device(let request) = waiting { return RowStatus(kind: .waiting, text: waitingTitle(request.mode)) }
             return RowStatus(kind: .waiting, text: "Waiting for your Mac")
@@ -101,6 +110,17 @@ struct StatusPresentation: Equatable {
         case .summaryOnly: return "Waiting for your Mac to summarize again"
         case .speakerRefresh: return "Waiting for your Mac to identify speakers again"
         case .fullRetranscription: return "Waiting for your Mac to transcribe everything again"
+        }
+    }
+
+    /// Why work on this iPhone is paused, and when it goes on.
+    static func pausedLine(_ pause: PhoneProcessor.Pause) -> String {
+        switch pause {
+        case .recording: return "Continues after the recording"
+        case .background: return "Continues when Daybook is open"
+        case .heat: return "Continues when iPhone cools down"
+        case .lowPowerMode: return "Continues when Low Power Mode is off"
+        case .lowBattery: return "Continues when iPhone is charging"
         }
     }
 

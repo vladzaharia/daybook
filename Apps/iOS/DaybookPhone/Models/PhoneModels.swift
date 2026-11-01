@@ -1,5 +1,6 @@
 import DaybookCaptions
 import DaybookCore
+import DaybookIntelligence
 import DaybookKit
 import DaybookLive
 import DaybookModelStore
@@ -7,19 +8,22 @@ import Foundation
 import Observation
 import UIKit
 
-/// The iPhone's live models (docs/iphone.md, "Live transcription"): which models live captions use,
-/// downloading and removing them, and the captioner a recording gets.
+/// The iPhone's models: those that process its own recordings (docs/iphone.md, "Processing on this
+/// iPhone": transcription, speakers, voice profiles, and summaries where it has the memory) and those
+/// live captions use ("Live transcription"). Which model each role uses, downloading and removing them,
+/// what this iPhone can do with them (`capabilities`), the engine and summarizer a processing job gets,
+/// and the captioner a recording gets.
 ///
-/// The iPhone runs models for live captions only. Final transcription, speaker analysis, and
-/// summaries stay on the Mac. Models download into a store of their own (`Application
-/// Support/Models`, the Mac's layout and verification, kept out of backups because they can be
-/// downloaded again), over Wi‑Fi unless the person allows cellular, in background sessions that go on
-/// while the app is suspended (`BackgroundModelFetcher`). Until they're downloaded, or
-/// where they can't run, captions come from the system's speech recognizer as before.
+/// Models download into a store of their own (`Application Support/Models`, the Mac's layout and
+/// verification, kept out of backups because they can be downloaded again), over Wi‑Fi unless the
+/// person allows cellular, in background sessions that go on while the app is suspended
+/// (`BackgroundModelFetcher`). Until the live models are downloaded, or where they can't run, captions
+/// come from the system's speech recognizer as before; until the processing models are, recordings
+/// wait for a Mac as before.
 @MainActor
 @Observable
 final class PhoneModels {
-    /// One live model's state on this iPhone.
+    /// One model's state on this iPhone.
     enum Status: Equatable {
         case notDownloaded
         /// Queued until Wi‑Fi (cellular downloads are off).
@@ -41,6 +45,16 @@ final class PhoneModels {
 
     let store: ModelStore
     let catalog: ModelCatalog
+    /// The processing engines (DaybookIntelligence): what the processing models need to run here.
+    let registry: ModelEngineRegistry
+    /// Loads processing models for a job, over the same store, and lets them go after it.
+    let runtime: LocalIntelligenceRuntime
+    /// How much this iPhone can take on, from its memory.
+    let tier: PhoneTier
+    /// The most memory iOS lets Daybook use: what a summary model must fit in (`PhoneMemory`).
+    let memoryLimit: UInt64
+    /// Language models run here: never in the simulator, whose graphics MLX can't use.
+    let runsLanguageModels: Bool
     /// Live captions' captioners, with the models they share and the voices they recognize.
     let captioners: LiveCaptioners
     /// Battery, heat, and whether the app is in front, for live captions' backing off.
@@ -71,6 +85,8 @@ final class PhoneModels {
     /// app its sessions' events through it (`PhoneAppDelegate`).
     static let downloads = BackgroundModelFetcher()
 
+    /// Models were downloaded, removed, or chosen: what this iPhone can process may have changed.
+    @ObservationIgnored var changed: (() -> Void)?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let fetcher: any ModelArtifactFetcher
     @ObservationIgnored private let network: PhoneNetwork
@@ -95,7 +111,8 @@ final class PhoneModels {
 
     init(root: URL = PhoneModels.defaultRoot, defaults: UserDefaults, catalog: ModelCatalog = .builtIn,
          fetcher: any ModelArtifactFetcher = PhoneModels.downloads, network: PhoneNetwork = .system,
-         physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory) {
+         physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory, memoryLimit: UInt64? = nil,
+         runsLanguageModels: Bool = PhoneMemory.runsLanguageModels) {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var folder = root
         var values = URLResourceValues()
@@ -104,6 +121,11 @@ final class PhoneModels {
         let store = ModelStore(root: root)
         self.store = store
         self.catalog = catalog
+        registry = .standard
+        runtime = LocalIntelligenceRuntime(modelsDirectory: root, store: store)
+        tier = PhoneTier(physicalMemory: physicalMemory)
+        self.memoryLimit = memoryLimit ?? PhoneMemory.limit() ?? AppMemoryLimit.estimate(physicalMemory: physicalMemory, increasedLimit: false)
+        self.runsLanguageModels = runsLanguageModels
         self.defaults = defaults
         self.fetcher = fetcher
         self.network = network
@@ -126,31 +148,55 @@ final class PhoneModels {
         }
     }
 
-    // MARK: What live captions use
+    // MARK: Which models
 
     /// The live roles this iPhone offers, in order.
     var roles: [ModelRole] { ModelRole.live }
 
-    /// The model `role` uses: the person's choice, else the catalog's iPhone default.
-    func choice(for role: ModelRole) -> CatalogModel? {
-        LiveModelChoices.choice(for: role, selections: selections, platform: .iOS, catalog: catalog,
-                                engines: LiveEngines.descriptors).flatMap { catalog.model($0) }
+    /// The roles this iPhone processes its own recordings with, in order: transcription, speakers,
+    /// voice profiles (shared with live captions), and summaries.
+    var processingRoles: [ModelRole] { PhoneProcessingModels.roles }
+
+    /// Every engine this build has: the processing engines, and the live ones they don't cover.
+    var engines: [ModelEngineDescriptor] {
+        let processing = registry.descriptors
+        return processing + LiveEngines.descriptors.filter { live in !processing.contains { $0.id == live.id } }
     }
 
-    /// Every model that can serve `role` here, in catalog order.
+    /// The model `role` uses: the person's choice, else the catalog's default for this iPhone. A live
+    /// role's from the live defaults; a processing role's from this iPhone's tier (a summary model
+    /// only where one fits in memory).
+    func choice(for role: ModelRole) -> CatalogModel? {
+        let key: String?
+        if ModelRole.live.contains(role) {
+            key = LiveModelChoices.choice(for: role, selections: selections, platform: .iOS, catalog: catalog, engines: LiveEngines.descriptors)
+        } else {
+            key = PhoneProcessingModels.choice(for: role, selections: selections, tier: tier, memoryLimit: memoryLimit,
+                                               catalog: catalog, engines: engines)
+        }
+        return key.flatMap { catalog.model($0) }
+    }
+
+    /// Every model that can serve `role` here, in catalog order (a processing role's, the catalog's
+    /// iPhone choices).
     func options(for role: ModelRole) -> [CatalogModel] {
-        catalog.models(for: role).filter { $0.availability(engines: LiveEngines.descriptors, platform: .iOS).isAvailable }
+        if ModelRole.live.contains(role) {
+            return catalog.models(for: role).filter { $0.availability(engines: LiveEngines.descriptors, platform: .iOS).isAvailable }
+        }
+        return PhoneProcessingModels.options(for: role, catalog: catalog, engines: engines).compactMap { catalog.model($0) }
     }
 
     func select(_ key: String, for role: ModelRole) {
         selections[role] = key
         if let data = try? JSONEncoder().encode(selections) { defaults.set(data, forKey: Keys.selections) }
         resolve()
+        changed?()
     }
 
     func status(of model: CatalogModel) -> Status {
-        let availability = model.availability(engines: LiveEngines.descriptors, platform: .iOS)
+        let availability = model.availability(engines: engines, platform: .iOS)
         if let label = availability.label { return .unavailable(label) }
+        if model.serves(.summarization), !runsLanguageModels { return .unavailable("Not available in Simulator") }
         if !fits(model) { return .unavailable("Needs an iPhone with more memory") }
         if inventory.resolve(model.key) != nil { return .downloaded }
         if let fraction = progress[model.key] { return .downloading(fraction) }
@@ -159,8 +205,19 @@ final class PhoneModels {
         return .notDownloaded
     }
 
-    /// The chosen models not yet on this iPhone that can run here, and their download size.
-    var missing: [CatalogModel] {
+    /// The chosen live models not yet on this iPhone that can run here.
+    var missing: [CatalogModel] { missing(in: roles) }
+
+    var missingBytes: Int64 { missing.reduce(0) { $0 + $1.approximateBytes } }
+
+    /// The chosen processing models for transcribing here (transcription, speakers, voice profiles)
+    /// not yet on this iPhone. The summary model is downloaded on its own: it's gigabytes.
+    var processingMissing: [CatalogModel] { missing(in: [.transcription, .diarization, .speakerEmbedding]) }
+
+    var processingMissingBytes: Int64 { processingMissing.reduce(0) { $0 + $1.approximateBytes } }
+
+    /// The chosen models for `roles` not yet on this iPhone that can run here.
+    func missing(in roles: [ModelRole]) -> [CatalogModel] {
         var seen = Set<String>()
         return roles.compactMap(choice(for:)).filter { model in
             guard seen.insert(model.key).inserted else { return false }
@@ -170,8 +227,6 @@ final class PhoneModels {
             }
         }
     }
-
-    var missingBytes: Int64 { missing.reduce(0) { $0 + $1.approximateBytes } }
 
     /// What the chosen live models take on disk.
     var bytesOnDisk: Int64 { inventory.revisions.reduce(0) { $0 + $1.bytes } }
@@ -184,12 +239,17 @@ final class PhoneModels {
     /// Wi‑Fi returns. Interrupted downloads resume with the files they hadn't finished.
     func download(_ model: CatalogModel) {
         let key = model.key
-        guard tasks[key] == nil, case .available = model.availability(engines: LiveEngines.descriptors, platform: .iOS) else { return }
+        guard tasks[key] == nil, case .available = model.availability(engines: engines, platform: .iOS) else { return }
         failures[key] = nil
         remember(key, downloading: true)
         guard allowsCellular || network.condition() == .unrestricted else { waiting.insert(key); return }
         waiting.remove(key)
-        guard let revision = model.latestRevision, let role = roles.first(where: model.serves) else { return }
+        guard let revision = model.latestRevision else { return }
+        // A processing model is checked by its engine, as on the Mac (Community-1, which live captions
+        // share, the same way); a live model by what live captions load.
+        let engine = processingRoles.contains(where: model.serves) ? registry.engine(model.engine) : nil
+        guard engine != nil || roles.contains(where: model.serves) else { return }
+        let liveRole = roles.first(where: model.serves)
         progress[key] = 0
         let store = self.store, fetcher = self.fetcher
         tasks[key] = Task { [weak self] in
@@ -199,7 +259,10 @@ final class PhoneModels {
             defer { UIApplication.shared.endBackgroundTask(background) }
             do {
                 try await store.install(model, revision: revision, fetcher: fetcher,
-                                        validate: { try LiveEngines.validate($0, role: role) },
+                                        validate: { installation in
+                                            if let engine { try await engine.verifyNewInstallation(installation) }
+                                            else if let liveRole { try LiveEngines.validate(installation, role: liveRole) }
+                                        },
                                         progress: { fraction, _ in Task { @MainActor in self?.progress[key] = fraction } })
                 await self?.finished(key, error: nil)
             } catch {
@@ -248,6 +311,7 @@ final class PhoneModels {
     func refresh() async {
         inventory = await store.inventory()
         resolve()
+        changed?()
     }
 
     private func finished(_ key: String, error: Error?) async {
@@ -282,10 +346,13 @@ final class PhoneModels {
 
     // MARK: Captioning
 
-    /// Whether this iPhone has the memory a live model suggests. The voice-profile model is exempt:
-    /// its suggestion is for the Mac's whole-recording speaker analysis, and live captions load only
-    /// its small embedding models.
+    /// Whether this iPhone has the memory a model needs. A live recognizer or speaker model: the memory
+    /// it suggests. A summary model: its measured peak within what iOS lets Daybook use
+    /// (`PhoneProcessingModels.fits`), and only where language models run at all. Speech and speaker
+    /// models fit every iPhone; the voice-profile model too (its suggestion is for the Mac's
+    /// whole-recording speaker analysis, and live captions load only its small embedding models).
     func fits(_ model: CatalogModel) -> Bool {
+        if model.serves(.summarization) { return runsLanguageModels && PhoneProcessingModels.fits(model, memoryLimit: memoryLimit) }
         guard model.serves(.liveTranscription) || model.serves(.liveDiarization) else { return true }
         return LiveModelChoices.fitsMemory(model, physicalMemory: physicalMemory)
     }

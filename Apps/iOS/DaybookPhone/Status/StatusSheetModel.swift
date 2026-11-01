@@ -447,6 +447,9 @@ enum StatusSheetModel {
                 continue
             }
             switch ProcessingStatus(meeting, now: now) {
+            case .processing(let progress) where progress.device?.id == thisDevice:
+                // This iPhone's own work (docs/iphone.md, "Processing on this iPhone"), not a Mac's.
+                break
             case .processing(let progress):
                 let verb: String
                 switch progress.stage {

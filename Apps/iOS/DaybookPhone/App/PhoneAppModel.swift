@@ -35,7 +35,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     let levels = LevelHistory()
     /// Tentative on-device captions while recording (never the transcript).
     let captions: LiveCaptionsController
-    /// The models live captions run on this iPhone, when downloaded (Settings › Models).
+    /// The models live captions run on this iPhone, and those that process its recordings, when
+    /// downloaded (Settings › Models).
     let models: PhoneModels
     /// Cloud summaries' keys, models, and this iPhone's preferences (Settings › Cloud; docs/cloud.md). Made when first used,
     /// so a launch that never opens Settings never reads the keychain; tests keep keys in memory.
@@ -46,6 +47,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         if LaunchOptions.isTestHost { return CloudSetup(keys: MemoryCloudKeyStore(), defaults: Self.testDefaults()) }
         return CloudSetup(keys: KeychainCloudKeyStore.system, defaults: .standard)
     }()
+    /// Processing this iPhone's own recordings with those models (docs/iphone.md, "Processing on this iPhone").
+    let processor: PhoneProcessor
     /// One line for the person, when something needs saying: what happened, in plain words.
     private(set) var notice: String? {
         didSet { noticeDetails = nil; noticeFix = nil }
@@ -116,6 +119,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// This iPhone's captions going to each Mac recording the same conversation (`shareCaptions`).
     @ObservationIgnored private var captionShares: [UUID: CaptionShare] = [:]
     @ObservationIgnored private var captionSharing: Task<Void, Never>?
+    /// Heat, power, and battery changes the processor backs off for.
+    @ObservationIgnored private var processingObservers: [NSObjectProtocol] = []
 
     init(recorder: PhoneRecorder, library: PhoneLibrary, posture: DevicePosture, options: LaunchOptions,
          settings: PhoneSettings? = nil, link: PhoneLink? = nil, devices: PhoneDevices? = nil) {
@@ -145,6 +150,20 @@ final class PhoneAppModel: RecordingCommandHandling {
                                  // Tests never download, nor reach the system's background sessions.
                                  fetcher: LaunchOptions.isTestHost ? HubSnapshotFetcher() : PhoneModels.downloads)
         self.models = models
+        let audio = self.audio
+        processor = PhoneProcessor(library: library.controller, services: PhoneProcessor.Services(
+            engine: { [weak models] in models?.processingEngine() },
+            summarizer: { [weak models] in models?.summarizer() },
+            capabilities: { [weak models, weak settings] in
+                models?.capabilities(enabled: settings?.processesOnThisIPhone ?? false)
+                    ?? ProcessingCapabilities(transcribes: false, findsSpeakers: false, summarizes: false)
+            },
+            owns: { [weak library] in library?.ownsTrack ?? { _ in false } },
+            // Its own recordings are kept here until iCloud has them; one that went back since comes down again.
+            audio: { track, id in try await audio.localAudio(for: track, in: id, progress: { _ in }) },
+            release: { [weak models] in await models?.releaseProcessingModels() }),
+            // The system's continued-processing task, never in tests.
+            continued: ContinuedProcessing(scheduler: LaunchOptions.isTestHost || options.isRunningTests ? nil : SystemContinuedProcessingScheduler()))
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models))
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
@@ -167,6 +186,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             self?.publish()
             // A pass may have made a folder an encrypted library keeps out of backups.
             self?.applyBackupExclusion()
+            // Work another device took over stops here; new work starts.
+            self?.processor.reconcileClaims()
         }
         self.link.recordRequestHandler = { [weak self] mac, request in
             await self?.answer(mac, request) ?? .refused(LinkRecordRefusal(reason: .unsupported))
@@ -204,6 +225,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         library.controller.$meetings.map(\.count).removeDuplicates().dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneCaptions() } }
             .store(in: &subscriptions)
+        wireProcessing()
     }
 
     /// Which captioner a recording gets: the live models when they're downloaded (`PhoneModels`:
@@ -322,7 +344,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// conversation").
     func processingLine(for meeting: Meeting, now: Date = Date()) -> String? {
         if let live = liveProgress[meeting.id] { return live.line }
-        switch ProcessingStatus(meeting, now: now) {
+        switch ProcessingStatus.phone(meeting, now: now) {
         case .processing(let progress):
             let verb: String
             switch progress.stage {
@@ -331,7 +353,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             case .transcribing: verb = "Transcribing"
             }
             let percent = progress.fraction.map { " · \(Int(($0 * 100).rounded(.down)))%" } ?? ""
-            return "\(verb) on \(progress.device?.name ?? "your Mac")\(percent)"
+            // No device: this iPhone's own work (`ProcessingStatus.phone`).
+            return "\(verb) on \(progress.device?.name ?? "this iPhone")\(percent)"
         case .requested(.device):
             let presence = macPresence
             if case .connected(let name) = presence, let mac = link.connectedMacs.first(where: { $0.name == name }) {
@@ -349,6 +372,10 @@ final class PhoneAppModel: RecordingCommandHandling {
             return failure.device.map { "\($0.name) couldn’t finish" } ?? "Couldn’t finish"
         case .awaitingRecordings(let recordings):
             return ProcessingStatus.awaitingLine(recordings)
+        case .requested(.queued):
+            return "Waiting on this iPhone"
+        case .requested(.paused):
+            return processor.pause.map(StatusPresentation.pausedLine) ?? "Paused"
         case .requested, .done:
             return nil
         }
@@ -406,6 +433,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     func scenePhaseChanged(_ phase: ScenePhase) {
         isForeground = phase == .active
         sync.isForeground = isForeground
+        processor.conditions.screen = phase == .active ? .active : phase == .inactive ? .inactive : .background
         devices.foregroundChanged(isForeground)
         DeviceNotifications.isInForeground = { [weak self] in self?.isForeground ?? false }
         switch phase {
@@ -435,13 +463,14 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// recording itself (`LiveSpeakerPass`), once the app is in front and not recording. Leaving the
     /// screen stops it; it starts over next time.
     func labelCaptionSpeakers() {
-        guard isForeground, !recorder.isActive, speakerPass == nil else { return }
+        // Processing this iPhone's recordings goes first: one heavy job at a time.
+        guard isForeground, !recorder.isActive, speakerPass == nil, !processor.isBusy else { return }
         let waiting = captions.waitingForSpeakers()
         guard !waiting.isEmpty else { return }
         let id = UUID()
         let task = Task { [weak self] in
             for saved in waiting {
-                guard let self, !Task.isCancelled, self.isForeground, !self.recorder.isActive else { break }
+                guard let self, !Task.isCancelled, self.isForeground, !self.recorder.isActive, !self.processor.isBusy else { break }
                 guard let meeting = self.library.controller.meeting(saved.meetingID), meeting.showsLiveCaptions,
                       let track = meeting.tracks.first(where: { $0.id == saved.trackID }),
                       let url = try? await self.library.audioURL(for: track, in: meeting.id),
@@ -452,6 +481,38 @@ final class PhoneAppModel: RecordingCommandHandling {
             if self?.speakerPass?.id == id { self?.speakerPass = nil }
         }
         speakerPass = (id, task)
+    }
+
+    // MARK: Processing this iPhone's recordings
+
+    /// What this iPhone can do with its own models now, for the summary step and other devices.
+    var processingCapabilities: ProcessingCapabilities { models.capabilities(enabled: settings.processesOnThisIPhone) }
+
+    /// The processor's ties to the rest of the app: which recordings it may claim as they're filed, the
+    /// models changing, the speaker pass giving way, and the heat, power, and battery it backs off for.
+    private func wireProcessing() {
+        PhoneProcessor.current = processor
+        let processor = self.processor, models = self.models
+        library.processesHere = { [weak self] in self?.processor.device }
+        models.changed = { [weak processor] in processor?.pickUp() }
+        processor.services.willStart = { [weak self] in
+            self?.speakerPass?.task.cancel()
+            self?.speakerPass = nil
+        }
+        processor.services.changed = { [weak self] in
+            self?.publish()
+            if self?.processor.isBusy == false { self?.labelCaptionSpeakers() }
+        }
+        let conditions = models.conditions
+        let read: @Sendable (Notification) -> Void = { [weak processor] _ in
+            // After the conditions' own observers have read the battery.
+            Task { @MainActor in processor?.conditions.live = conditions.current }
+        }
+        for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange,
+                     UIDevice.batteryLevelDidChangeNotification, UIDevice.batteryStateDidChangeNotification] {
+            processingObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main, using: read))
+        }
+        processor.conditions.live = conditions.current
     }
 
     // MARK: Captions from every source
@@ -531,6 +592,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
         let id = requestedID ?? UUID()
         let recordingID = UUID()
+        // Processing pauses first: a recording never waits for it, or shares the iPhone with it.
+        processor.conditions.isRecording = true
         let title = requestedTitle ?? "Conversation at \(Date().formatted(date: .omitted, time: .shortened))"
         // Staged by the recording's own ID: the conversation may hold an earlier one still being filed.
         let directory = library.stagingURL.appendingPathComponent(recordingID.uuidString, isDirectory: true)
@@ -544,6 +607,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         } catch {
             multipoint = nil
             recorder.audioTap = nil
+            processor.conditions.isRecording = recorder.isActive
             await captions.finish()
             sayStartFailed(error)
             publish()
@@ -1027,6 +1091,7 @@ final class PhoneAppModel: RecordingCommandHandling {
                 details: failures.map { "\($0.name): \($0.reason)" }.joined(separator: "\n"))
         }
         sync.synchronizeFinishing(.filed)
+        processor.pickUp()
         publish()
     }
 
@@ -1034,6 +1099,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     private func filedElsewhere(_ filed: PhoneLibrary.Filed) {
         if let request = filed.request { link.nudge(request) }
         sync.synchronizeFinishing(.filed)
+        processor.pickUp()
         publish()
     }
 
@@ -1055,6 +1121,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             if recording.recovered { notice = "Recovered a recording Daybook was making when it quit." }
             if let request = filed.request { link.nudge(request) }
             if !options.isRunningTests { sync.synchronizeFinishing(.filed) }
+            // Transcribed here when this iPhone has the models (it claimed the request as it filed it).
+            processor.pickUp()
         } catch {
             say("Couldn’t add the recording to your library. It’s saved and will be added next time Daybook opens.", details: error.localizedDescription)
         }
@@ -1103,6 +1171,8 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     private func recorderChanged() {
         if !recorder.isCapturing { levels.reset() }
+        // Processing never runs beside a recording.
+        processor.conditions.isRecording = recorder.isActive
         updateActivity()
         sendRecordingState(force: true)
         publish()

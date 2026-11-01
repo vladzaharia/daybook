@@ -110,18 +110,18 @@ struct SummaryPage: View {
 
     private var status: StatusPresentation? {
         let sighting = sightingOverride ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id)
-        return StatusPresentation.page(ProcessingStatus(meeting), meeting: meeting, sighting: sighting)
+        return StatusPresentation.page(ProcessingStatus.phone(meeting), meeting: meeting, sighting: sighting, pause: PhoneProcessor.current?.pause)
     }
 
     /// Recorded and nothing asked yet: two pages say so on the transcript's page, with Transcribe.
     private var isRecordedOnly: Bool {
-        if case .recorded = ProcessingStatus(meeting) { return true }
+        if case .recorded = ProcessingStatus.phone(meeting) { return true }
         return false
     }
 
     /// Summarize Again: the old summary steps back while the new one is written.
     private var isResummarizing: Bool {
-        if case .processing(let progress) = ProcessingStatus(meeting), progress.stage == .summarizing { return true }
+        if case .processing(let progress) = ProcessingStatus.phone(meeting), progress.stage == .summarizing { return true }
         return false
     }
 
@@ -451,7 +451,7 @@ private struct Colophon: View {
         .padding(.top, PhoneStyle.Space.s7)
     }
 
-    private var isPending: Bool { ProcessingStatus(meeting).isPending }
+    private var isPending: Bool { ProcessingStatus.phone(meeting).isPending }
 
     private var templateTitle: String {
         if let template = library.resolvedTemplate(for: meeting) { return template.name }

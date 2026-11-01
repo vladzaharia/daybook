@@ -114,7 +114,7 @@ struct ReprocessMenu: View {
     let meeting: Meeting
 
     static func isAvailable(for meeting: Meeting) -> Bool {
-        !meeting.tracks.isEmpty && !ProcessingStatus(meeting).isPending
+        !meeting.tracks.isEmpty && !ProcessingStatus.phone(meeting).isPending
     }
 
     var body: some View {
