@@ -46,13 +46,15 @@ enum SandboxMigration {
     }
 
     /// The library folder an unsandboxed build of this app used, by bundle ID: the app's real library for the app
-    /// (`local.daybook.app`, and `local.daybook.phone`, which sandboxed signed builds use: `AppIdentity`), the rehearsal's
-    /// synthetic one for `local.daybook.app.rehearsal…`, and none for anything else (ad hoc builds never look at a library
-    /// outside their own container).
+    /// (`local.daybook`, and `local.daybook.app` before it: `AppIdentity`), the rehearsal's synthetic one for
+    /// `local.daybook.rehearsal…` (or `local.daybook.app.rehearsal…`), and none for anything else (ad hoc builds never
+    /// look at a library outside their own container).
     static func legacyFolderName(bundleIdentifier: String?) -> String? {
         guard let bundleIdentifier else { return nil }
-        if bundleIdentifier == AppIdentity.unsandboxed || bundleIdentifier == AppIdentity.sandboxed { return LibraryLocation.appFolder }
-        if bundleIdentifier.hasPrefix("local.daybook.app.rehearsal") { return "Daybook Rehearsal" }
+        if bundleIdentifier == AppIdentity.current || bundleIdentifier == AppIdentity.earlier { return LibraryLocation.appFolder }
+        if bundleIdentifier.hasPrefix(AppIdentity.rehearsalPrefix) || bundleIdentifier.hasPrefix(AppIdentity.earlier + ".rehearsal") {
+            return "Daybook Rehearsal"
+        }
         return nil
     }
 
@@ -64,8 +66,10 @@ enum SandboxMigration {
 
     /// Settings only an earlier launch writes. Read before this launch writes any.
     static func preferencesShowPriorUse(_ defaults: UserDefaults) -> Bool {
-        ["onboardingCompleted", ReplicaIdentity.Key.deviceID, "modelSelections", "processingPreferences"].contains { defaults.object(forKey: $0) != nil }
+        priorUseKeys.contains { defaults.object(forKey: $0) != nil }
     }
+
+    static let priorUseKeys = ["onboardingCompleted", ReplicaIdentity.Key.deviceID, "modelSelections", "processingPreferences"]
 
     static let outcomeKey = "sandboxMigration"
     /// Preferences said there was a library, none was at the old place, and the person chose to start fresh.

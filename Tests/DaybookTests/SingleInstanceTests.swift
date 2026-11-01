@@ -9,21 +9,26 @@ final class SingleInstanceTests: XCTestCase {
     }
 
     func testEveryBuildOfDaybookCountsAndOtherAppsDont() {
-        XCTAssertTrue(SingleInstance.isDaybook(bundleID: "local.daybook.app", executableName: "Daybook"))
+        XCTAssertTrue(SingleInstance.isDaybook(bundleID: "local.daybook", executableName: "Daybook"), "the release and the App Store build")
+        XCTAssertTrue(SingleInstance.isDaybook(bundleID: "local.daybook.adhoc", executableName: "Daybook"))
+        XCTAssertTrue(SingleInstance.isDaybook(bundleID: "local.daybook.rehearsal2", executableName: "Daybook"))
+        XCTAssertTrue(SingleInstance.isDaybook(bundleID: "local.daybook.app", executableName: "Daybook"), "an earlier release")
         XCTAssertTrue(SingleInstance.isDaybook(bundleID: "local.daybook.app.adhoc", executableName: "Daybook"))
         XCTAssertTrue(SingleInstance.isDaybook(bundleID: "local.daybook.app.rehearsal2", executableName: "Daybook"))
         XCTAssertTrue(SingleInstance.isDaybook(bundleID: nil, executableName: "Daybook"), "swift run")
-        XCTAssertTrue(SingleInstance.isDaybook(bundleID: "local.daybook.phone", executableName: "Daybook"), "the App Store build")
-        XCTAssertFalse(SingleInstance.isDaybook(bundleID: "local.daybook.phone", executableName: "DaybookPhone"), "the iPhone app on a Mac")
+        XCTAssertFalse(SingleInstance.isDaybook(bundleID: "local.daybook", executableName: "DaybookPhone"), "the iPhone app on a Mac")
+        XCTAssertFalse(SingleInstance.isDaybook(bundleID: "local.daybook.widgets", executableName: "DaybookPhoneWidgets"))
+        XCTAssertFalse(SingleInstance.isDaybook(bundleID: "local.daybook.phone", executableName: "DaybookPhone"), "the earlier iPhone app")
         XCTAssertFalse(SingleInstance.isDaybook(bundleID: "local.daybook.sandboxprobe", executableName: "Daybook"))
+        XCTAssertFalse(SingleInstance.isDaybook(bundleID: "local.daybook.research.manifest1", executableName: "Probe"))
         XCTAssertFalse(SingleInstance.isDaybook(bundleID: "local.daybook.application", executableName: "Daybook"))
         XCTAssertFalse(SingleInstance.isDaybook(bundleID: "com.apple.Notes", executableName: "Notes"))
         XCTAssertFalse(SingleInstance.isDaybook(bundleID: nil, executableName: "daybook-helper"))
     }
 
     func testALaterCopyGivesWayToTheEarliestAndTheFirstGoesOn() {
-        let release = copy(100, "local.daybook.app", launched: 10)
-        let adhoc = copy(200, "local.daybook.app.adhoc", launched: 20)
+        let release = copy(100, "local.daybook", launched: 10)
+        let adhoc = copy(200, "local.daybook.adhoc", launched: 20)
         let unbundled = copy(300, nil, launched: 30)
         let notes = copy(50, "com.apple.Notes", executable: "Notes", launched: 1)
         let running = [notes, release, adhoc, unbundled]

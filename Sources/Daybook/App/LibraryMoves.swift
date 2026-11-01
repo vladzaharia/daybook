@@ -48,9 +48,8 @@ enum LibraryContents {
 /// sandboxed app kept, so going back to an unsandboxed release loses nothing. Nothing is ever deleted: a library already
 /// here that's older is set aside under a new name first.
 ///
-/// The sandboxed builds (the App Store's, and Developer ID with the sandbox) run under the iPhone app's bundle ID, so
-/// their container is `local.daybook.phone`'s, not this app's (`AppIdentity`); a container under the app's own ID is
-/// looked at too.
+/// The app's container is `local.daybook`'s, the bundle ID every signed build shares (`AppIdentity`); the container of a
+/// sandboxed build from before it, `local.daybook.app`'s, is looked at too.
 enum LegacyLibraryReturn {
     struct Plan: Equatable {
         /// The sandboxed app's library, in its container.
