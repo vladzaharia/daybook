@@ -55,7 +55,10 @@ final class CloudKeyStoreTests: XCTestCase {
         private let lock = NSLock()
         private var items: [[String: Any]] = []
         private(set) var added: [[String: Any]] = []
+        private(set) var updated: [[String: Any]] = []
         private(set) var deleted: [[String: Any]] = []
+        /// What a write answers instead of writing: a locked device, a missing entitlement.
+        var failure: OSStatus?
 
         private func matches(_ item: [String: Any], _ query: [String: Any]) -> Bool {
             item[kSecAttrService as String] as? String == query[kSecAttrService as String] as? String
@@ -72,9 +75,20 @@ final class CloudKeyStoreTests: XCTestCase {
 
         func add(_ attributes: [String: Any]) -> OSStatus {
             lock.withLock {
+                if let failure { return failure }
                 guard !items.contains(where: { matches($0, attributes) }) else { return errSecDuplicateItem }
                 items.append(attributes)
                 added.append(attributes)
+                return errSecSuccess
+            }
+        }
+
+        func update(_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus {
+            lock.withLock {
+                if let failure { return failure }
+                updated.append(query)
+                guard items.contains(where: { matches($0, query) }) else { return errSecItemNotFound }
+                for index in items.indices where matches(items[index], query) { items[index].merge(attributes) { _, new in new } }
                 return errSecSuccess
             }
         }
@@ -107,13 +121,31 @@ final class CloudKeyStoreTests: XCTestCase {
         XCTAssertEqual(item[kSecAttrAccessible as String] as? String, kSecAttrAccessibleAfterFirstUnlock as String)
         XCTAssertEqual(item[kSecAttrLabel as String] as? String, "Daybook Anthropic API key")
 
-        // Replacing removes the old item first; removing matches synchronized items too.
+        // Replacing changes the item in place; removing matches synchronized items too.
         try store.store(try XCTUnwrap(CloudAPIKey(anthropic.replacingOccurrences(of: "gDAA", with: "hEBB"))), for: .anthropic)
         XCTAssertEqual(try store.key(for: .anthropic)?.masked, "sk-ant-…hEBB")
+        XCTAssertEqual(keychain.added.count, 1, "Replaced, not added again")
+        XCTAssertTrue(keychain.deleted.isEmpty, "Nothing removed on the way")
+        XCTAssertEqual(keychain.updated.last?[kSecAttrSynchronizable as String] as? String, kSecAttrSynchronizableAny as String)
         try store.removeKey(for: .anthropic)
         XCTAssertNil(try store.key(for: .anthropic))
         XCTAssertEqual(keychain.deleted.last?[kSecAttrSynchronizable as String] as? String, kSecAttrSynchronizableAny as String)
         XCTAssertNoThrow(try store.removeKey(for: .openai), "Removing a key that isn't there is fine")
+    }
+
+    func testBehaviorAReplacementTheKeychainRefusesLeavesTheOldKeyEverywhere() throws {
+        let keychain = FakeKeychain()
+        let store = KeychainCloudKeyStore(accessGroup: "48H7CLBV8Y.local.daybook.shared", keychain: keychain)
+        let key = try XCTUnwrap(CloudAPIKey(anthropic))
+        try store.store(key, for: .anthropic)
+
+        keychain.failure = errSecInteractionNotAllowed
+        XCTAssertThrowsError(try store.store(try XCTUnwrap(CloudAPIKey(anthropic.replacingOccurrences(of: "gDAA", with: "hEBB"))), for: .anthropic)) {
+            XCTAssertEqual($0 as? CloudKeyStoreError, .keychain(errSecInteractionNotAllowed))
+        }
+        XCTAssertTrue(keychain.deleted.isEmpty, "A synced removal would have taken it from every device")
+        keychain.failure = nil
+        XCTAssertEqual(try store.key(for: .anthropic), key, "The working key stays")
     }
 
     #if os(macOS)

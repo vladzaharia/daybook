@@ -87,12 +87,17 @@ public final class MemoryCloudKeyStore: CloudKeyStore, @unchecked Sendable {
 protocol CloudKeychain: Sendable {
     func copyMatching(_ query: [String: Any], _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
     func add(_ attributes: [String: Any]) -> OSStatus
+    /// Changes `attributes` of the items `query` matches.
+    func update(_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus
     func delete(_ query: [String: Any]) -> OSStatus
 }
 
 struct SystemCloudKeychain: CloudKeychain {
     func copyMatching(_ query: [String: Any], _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus { SecItemCopyMatching(query as CFDictionary, result) }
     func add(_ attributes: [String: Any]) -> OSStatus { SecItemAdd(attributes as CFDictionary, nil) }
+    func update(_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus {
+        SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    }
     func delete(_ query: [String: Any]) -> OSStatus { SecItemDelete(query as CFDictionary) }
 }
 
@@ -160,15 +165,22 @@ public final class KeychainCloudKeyStore: CloudKeyStore, @unchecked Sendable {
         return (result as? Data).flatMap { String(data: $0, encoding: .utf8) }.flatMap(CloudAPIKey.init)
     }
 
-    /// Replaces the provider's key, then reads it back: a key that can't be read back isn't kept.
+    /// Replaces the provider's key in place, or adds it when there's none, then reads it back: a key that can't be
+    /// read back isn't kept. The old key is never removed first: removing a synchronizable item removes it on every
+    /// device, so a write that failed would leave none anywhere. A failed write leaves the old key working.
     public func store(_ key: CloudAPIKey, for provider: CloudProvider) throws {
-        try removeKey(for: provider)
-        var item = query(provider)
-        if synchronizes { item[kSecAttrSynchronizable as String] = true }
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        item[kSecAttrLabel as String] = Self.label(provider)
-        item[kSecValueData as String] = Data(key.secret.utf8)
-        let status = keychain.add(item)
+        let secret = Data(key.secret.utf8)
+        var existing = query(provider)
+        if synchronizes { existing[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny }
+        var status = keychain.update(existing, [kSecValueData as String: secret, kSecAttrLabel as String: Self.label(provider)])
+        if status == errSecItemNotFound {
+            var item = query(provider)
+            if synchronizes { item[kSecAttrSynchronizable as String] = true }
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            item[kSecAttrLabel as String] = Self.label(provider)
+            item[kSecValueData as String] = secret
+            status = keychain.add(item)
+        }
         guard status == errSecSuccess else { throw CloudKeyStoreError.keychain(status) }
         guard try self.key(for: provider) == key else { throw CloudKeyStoreError.notKept }
     }

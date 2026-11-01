@@ -122,8 +122,9 @@ One key per provider, in iCloud Keychain (`KeychainCloudKeyStore`): a generic-pa
 `local.daybook.cloud-key`, account `anthropic` or `openai`, label "Daybook Anthropic API key", synchronizable,
 readable after first unlock, in the keychain group both apps share (`<team>.local.daybook.shared`, where library keys
 live; `KeychainLibraryKeyStore.sharedGroup()`). A key added on the Mac reaches the iPhone; removing one removes it
-everywhere (Settings says so). A Mac build without the shared group (unsigned development builds) keeps keys in its
-login keychain, unsynced.
+everywhere (Settings says so). Replacing a key changes its item in place (`SecItemUpdate`, an add only when there's
+none), never a removal first: a removal reaches every device, so a write that failed would leave no key anywhere. A
+Mac build without the shared group (unsigned development builds) keeps keys in its login keychain, unsynced.
 
 A key is never logged, synced through the library, written to preferences, or shown in full: `CloudAPIKey`'s
 description, debug description, and mirror are the masked form ("sk-ant-…gDAA"), and provider error messages are
