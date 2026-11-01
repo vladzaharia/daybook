@@ -27,6 +27,16 @@ final class CloudKeyStoreTests: XCTestCase {
         }
     }
 
+    func testBehaviorAKeysPrefixNamesItsProviderOnlyWhenItIsRecognizable() throws {
+        XCTAssertEqual(try XCTUnwrap(CloudAPIKey(anthropic)).issuer, .anthropic)
+        XCTAssertEqual(try XCTUnwrap(CloudAPIKey("sk-ant-admin01-abcdefghijklmnop")).issuer, .anthropic)
+        XCTAssertEqual(try XCTUnwrap(CloudAPIKey(openai)).issuer, .openai)
+        XCTAssertEqual(try XCTUnwrap(CloudAPIKey("sk-svcacct-abcdefghijklmnop")).issuer, .openai)
+        XCTAssertEqual(try XCTUnwrap(CloudAPIKey("sk-admin-abcdefghijklmnop")).issuer, .openai)
+        XCTAssertNil(try XCTUnwrap(CloudAPIKey("sk-abcdefghijklmnop")).issuer, "An older OpenAI key carries no kind")
+        XCTAssertNil(try XCTUnwrap(CloudAPIKey("test-key")).issuer)
+    }
+
     func testBehaviorAPastedKeyIsTrimmedAndAnEmptyOneIsNone() {
         XCTAssertEqual(CloudAPIKey("  \(openai)\n")?.secret, openai)
         XCTAssertNil(CloudAPIKey("   "))

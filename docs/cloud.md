@@ -129,7 +129,10 @@ A key is never logged, synced through the library, written to preferences, or sh
 description, debug description, and mirror are the masked form ("sk-ant-…gDAA"), and provider error messages are
 masked too (`CloudError.scrubbed`). Adding a key checks it first with the provider's model list: it's kept only when
 the provider accepts it ("This key works"), else the reason ("Anthropic didn’t accept this key.") with the provider's
-words behind Details.
+words behind Details. A key goes only to its own provider: one whose prefix names the other (`sk-ant-` in OpenAI's
+field; `sk-proj-`, `sk-svcacct-`, or `sk-admin-` in Anthropic's; `CloudAPIKey.issuer`) is refused before anything is
+sent, with "This is an Anthropic key." or "This is an OpenAI key." A key with no recognizable prefix is the provider's
+to judge.
 
 ## Discovery
 

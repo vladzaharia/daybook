@@ -17,6 +17,15 @@ public struct CloudAPIKey: Equatable, Sendable, CustomStringConvertible, CustomD
     /// The key's kind and its last four characters: "sk-ant-…gDAA", "sk-proj-…x9Qa".
     public var masked: String { Self.mask(secret) }
 
+    /// The provider the key's prefix names: `sk-ant-` is Anthropic's; `sk-proj-`, `sk-svcacct-`, and `sk-admin-` are
+    /// OpenAI's. Nil for any other shape (an older OpenAI key, a key from a future format), which only its provider
+    /// can judge.
+    public var issuer: CloudProvider? {
+        if secret.hasPrefix("sk-ant-") { return .anthropic }
+        if ["sk-proj-", "sk-svcacct-", "sk-admin-"].contains(where: secret.hasPrefix) { return .openai }
+        return nil
+    }
+
     public var description: String { masked }
     public var debugDescription: String { "CloudAPIKey(\(masked))" }
     public var customMirror: Mirror { Mirror(self, children: ["masked": masked]) }

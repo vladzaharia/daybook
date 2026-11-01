@@ -154,6 +154,34 @@ final class CloudDirectoryTests: XCTestCase {
     }
 
     @MainActor
+    func testBehaviorAKeyForTheOtherProviderIsRefusedBeforeAnyRequest() async throws {
+        let server = FakeCloudServer()
+        serve(server)
+        let keys = MemoryCloudKeyStore()
+        var client = CloudClient(session: server.session, endpoints: CloudEndpoints(base: server.base))
+        client.wait = { _ in }
+        let setup = CloudSetup(keys: keys, client: client, defaults: makeTestDefaults())
+
+        var kept = await setup.addKey(anthropicKey.secret, for: .openai)
+        XCTAssertFalse(kept)
+        XCTAssertEqual(setup.checks[.openai], .failed(message: "This is an Anthropic key.", details: ""))
+        for openAIKey in ["sk-proj-TESTtestTESTtestTEST-x9Qa", "sk-svcacct-TESTtestTESTtestTEST-x9Qa", "sk-admin-TESTtestTESTtestTEST-x9Qa"] {
+            kept = await setup.addKey(openAIKey, for: .anthropic)
+            XCTAssertFalse(kept, openAIKey)
+            XCTAssertEqual(setup.checks[.anthropic], .failed(message: "This is an OpenAI key.", details: ""), openAIKey)
+        }
+        XCTAssertTrue(server.requests.isEmpty, "Neither key went anywhere: \(server.requests.map(\.path))")
+        XCTAssertEqual(keys.providersWithKeys(), [])
+        XCTAssertFalse(setup.isSetUp)
+
+        // A key whose prefix names no provider is the provider's to judge.
+        kept = await setup.addKey("sk-TESTtestTESTtestTESTtest-x9Qa", for: .openai)
+        XCTAssertTrue(kept)
+        XCTAssertEqual(server.requests.first?.header("Authorization"), "Bearer sk-TESTtestTESTtestTESTtest-x9Qa")
+        XCTAssertNil(server.requests.first?.header("x-api-key"))
+    }
+
+    @MainActor
     func testBehaviorPreferencesAreThisDevicesOwnAndATierGoesBackToItsRecommendation() async throws {
         let defaults = makeTestDefaults()
         let setup = CloudSetup.demo(providers: [.anthropic, .openai], defaults: defaults)

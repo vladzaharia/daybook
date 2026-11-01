@@ -80,11 +80,17 @@ public final class CloudSetup {
         if current != offers { offers = current }
     }
 
-    /// Checks `text` as a key with the provider's model list and keeps it only when the provider accepts it.
+    /// Checks `text` as a key with the provider's model list and keeps it only when the provider accepts it. A key
+    /// whose prefix names the other provider is refused before anything is sent, so it never reaches a company it
+    /// doesn't belong to.
     @discardableResult
     public func addKey(_ text: String, for provider: CloudProvider) async -> Bool {
         guard let key = CloudAPIKey(text) else {
             checks[provider] = .failed(message: "Paste the whole key, with nothing around it.", details: "")
+            return false
+        }
+        if let issuer = key.issuer, issuer != provider {
+            checks[provider] = .failed(message: "This is an \(CloudError.providerName(issuer)) key.", details: "")
             return false
         }
         checks[provider] = .checking
