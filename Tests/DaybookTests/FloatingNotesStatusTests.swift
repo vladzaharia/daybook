@@ -250,6 +250,62 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertTrue(FloatingStatus.chips(inputs, including: []).isEmpty)
     }
 
+    // MARK: Meters
+
+    func testBehaviorOneMeterPerSourceTheRecordingHasNow() {
+        XCTAssertTrue(FloatingStatus.meters(FloatingStatusInputs()).isEmpty, "nothing recording, no meters")
+        let microphone = FloatingStatus.meters(recording())
+        XCTAssertEqual(microphone.map(\.source), [.microphone], "computer audio off: the microphone alone")
+        XCTAssertEqual(microphone.first?.symbol, "mic")
+        XCTAssertEqual(microphone.first?.name, "Microphone")
+
+        var recorder = soundcore(), late = soundcore(), refused = soundcore()
+        recorder.along = .recording
+        late.id = "late"
+        late.along = .starting
+        refused.id = "refused"
+        refused.along = .unavailable
+        var along = phone(), idle = phone()
+        along.along = .alreadyRecording
+        along.activity = .recording
+        idle.id = "idle"
+        let inputs = recording {
+            $0.includesCall = true
+            $0.call = .detected
+            $0.recorders = [recorder, late, refused, soundcore()]
+            $0.phones = [along, idle]
+        }
+        let meters = FloatingStatus.meters(inputs)
+        XCTAssertEqual(meters.map(\.source), [.microphone, .call, .recorder("sc"), .recorder("late"), .phone("ph")],
+                       "in the chips' order; a recorder that didn't start, and devices only connected, have none")
+        XCTAssertEqual(meters.map(\.symbol), ["mic", "waveform", "recordingtape", "recordingtape", "iphone"], "the chips' glyphs")
+        XCTAssertEqual(meters.map(\.name), ["Microphone", "Call audio", "Soundcore Work", "Soundcore Work", "Alex’s iPhone"])
+        XCTAssertEqual(meters.map(\.isRecording), [true, true, true, false, true], "one still starting rests")
+        XCTAssertEqual(Set(meters.map(\.id)).count, meters.count)
+    }
+
+    func testBehaviorMetersKeepTheirWarningsAndAPausedPhoneRests() {
+        var along = phone()
+        along.along = .recording
+        along.activity = .paused
+        let inputs = recording {
+            $0.microphoneSilent = true
+            $0.includesCall = true
+            $0.call = .missing
+            $0.phones = [along]
+        }
+        let meters = FloatingStatus.meters(inputs)
+        XCTAssertEqual(meters[0].warning, FloatingStatus.microphoneSilentHelp)
+        XCTAssertEqual(meters[1].warning, FloatingStatus.callMissingHelp)
+        XCTAssertFalse(meters[1].isRecording, "a call that isn't captured rests")
+        XCTAssertNil(meters[2].warning)
+        XCTAssertFalse(meters[2].isRecording, "a paused iPhone rests")
+        // Saving: the same rows, while the panel says Saving.
+        var saving = inputs
+        saving.phase = .saving
+        XCTAssertEqual(FloatingStatus.meters(saving).count, 3)
+    }
+
     // MARK: Home and multipoint
 
     func testHomeLinesListRecordersPhonesThenTheQueue() {

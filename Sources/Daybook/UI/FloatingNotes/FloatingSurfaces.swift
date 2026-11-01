@@ -11,7 +11,7 @@ import SwiftUI
 
 // MARK: - Recording
 
-/// While recording: the title, the red clock beside You and Call meters, your notes with their
+/// While recording: the title, the red clock beside a meter for each source, your notes with their
 /// times, live captions, and large Bookmark and Stop. What else records this conversation is in the
 /// chips above, at every size. Compact: the clock and meters, one caption line, and the controls.
 struct RecordingSurface: View {
@@ -43,7 +43,7 @@ struct RecordingSurface: View {
                 PanelTitleField(state: state, meeting: meeting)
                 HStack(alignment: .center, spacing: 14) {
                     clock(size: 34)
-                    PanelMeters(levels: levels, inputs: inputs, showsCall: state.includeComputerAudio, height: 17)
+                    PanelMeters(levels: levels, inputs: inputs, stack: .full)
                 }
             }
             .padding(.horizontal, FloatingLayout.inset)
@@ -65,7 +65,7 @@ struct RecordingSurface: View {
         Group {
             HStack(alignment: .center, spacing: 12) {
                 clock(size: 26)
-                PanelMeters(levels: levels, inputs: inputs, showsCall: state.includeComputerAudio, height: 10)
+                PanelMeters(levels: levels, inputs: inputs, stack: .compact)
             }
             .padding(.horizontal, FloatingLayout.inset)
             .padding(.top, context.band + 6)
@@ -118,38 +118,93 @@ struct RecordingSurface: View {
     }
 }
 
-/// "You" and "Call", each a rolling meter in the iPhone's style. Two sources, so a muted
-/// microphone or a call that isn't being captured shows up during the call, not afterwards. The
-/// meters read the trails themselves, so only they redraw as levels arrive.
+/// One rolling meter per source the recording has now, in the iPhone's style: the microphone, the
+/// call, and each recorder and iPhone recording along (`FloatingStatus.meters`). Each is labelled with
+/// its chip's glyph, its name in the tooltip and for VoiceOver, so a muted microphone, a call that
+/// isn't being captured, or a device that hears nothing shows up during the call, not afterwards. They
+/// share the meter area (`MeterStack`). The meters read the trails themselves, so only they redraw as
+/// levels arrive.
 private struct PanelMeters: View {
     let levels: PanelLevels
     let inputs: FloatingStatusInputs
-    let showsCall: Bool
-    let height: CGFloat
+    let stack: MeterStack
 
     var body: some View {
-        let live = inputs.phase == .recording
-        VStack(spacing: height > 10 ? 6 : 4) {
-            meter("You", levels.you, live: live, warning: inputs.microphoneSilent,
-                  height: showsCall ? height : height * 2 + 6)
-            if showsCall {
-                meter("Call", levels.call, live: live && inputs.call != .missing, warning: inputs.call == .missing, height: height)
+        let meters = FloatingStatus.meters(inputs)
+        let row = stack.rowHeight(meters.count), gap = stack.gap(meters.count)
+        VStack(spacing: gap) {
+            ForEach(meters) { meter in
+                MeterRow(meter: meter, trail: levels.trail(meter.source),
+                         isLive: inputs.phase == .recording && meter.isRecording && levels.heard.contains(meter.source),
+                         height: row, glyph: stack.glyphSize(row: row, gap: gap))
             }
         }
         .frame(maxWidth: .infinity)
+        .onChange(of: meters.map(\.source), initial: true) { _, sources in levels.follow(sources) }
+    }
+}
+
+/// A source's glyph and its meter. Resting (flat and grey) while it isn't recording, or before its
+/// levels arrive.
+private struct MeterRow: View {
+    let meter: FloatingMeter
+    let trail: LevelTrail
+    let isLive: Bool
+    let height: CGFloat
+    let glyph: CGFloat
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: meter.symbol)
+                .font(.system(size: glyph, weight: .medium))
+                .foregroundStyle(meter.warning != nil ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
+                // The row's height, whatever the glyph's: rows share the area exactly.
+                .frame(width: 16, height: height)
+                .accessibilityHidden(true)
+            RollingLevelMeter(trail: trail, isLive: isLive, metrics: .panel, accessibilityLabel: "\(meter.name) level")
+                .frame(height: height)
+                .accessibilityHint(meter.warning ?? "")
+        }
+        .help(meter.warning ?? meter.name)
+    }
+}
+
+/// How the meters share their area. One source takes it all; more split it, down to a minimum row,
+/// the area growing to keep that; past the most the area may take, the rows thin instead (to a
+/// floor), so many sources still leave the notes their room.
+struct MeterStack: Equatable {
+    /// The height one source takes, and two share.
+    var area: CGFloat
+    /// Between two rows; more rows sit closer.
+    var gap: CGFloat
+    var tightGap: CGFloat
+    var minimumRow: CGFloat
+    var maximumArea: CGFloat
+    var floorRow: CGFloat
+
+    /// Beside the 34 pt clock.
+    static let full = MeterStack(area: 40, gap: 6, tightGap: 4, minimumRow: 10, maximumArea: 56, floorRow: 4)
+    /// Beside the 26 pt clock, compact.
+    static let compact = MeterStack(area: 24, gap: 4, tightGap: 3, minimumRow: 8, maximumArea: 42, floorRow: 3)
+
+    func gap(_ count: Int) -> CGFloat { count > 2 ? tightGap : gap }
+
+    func rowHeight(_ count: Int) -> CGFloat {
+        guard count > 1 else { return area }
+        let gaps = gap(count) * CGFloat(count - 1)
+        let shared = (area - gaps) / CGFloat(count)
+        if shared >= minimumRow { return shared }
+        if CGFloat(count) * minimumRow + gaps <= maximumArea { return minimumRow }
+        return max(floorRow, (maximumArea - gaps) / CGFloat(count))
     }
 
-    private func meter(_ label: String, _ trail: LevelTrail, live: Bool, warning: Bool, height: CGFloat) -> some View {
-        HStack(spacing: 6) {
-            Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(warning ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
-                .frame(width: 24, alignment: .trailing)
-                .help(warning ? (label == "You" ? FloatingStatus.microphoneSilentHelp : FloatingStatus.callMissingHelp) : "")
-            RollingLevelMeter(trail: trail, isLive: live, metrics: .panel, accessibilityLabel: "\(label) level")
-                .frame(height: height)
-        }
+    /// The whole stack's height.
+    func height(_ count: Int) -> CGFloat {
+        count == 0 ? 0 : rowHeight(count) * CGFloat(count) + gap(count) * CGFloat(count - 1)
     }
+
+    /// A row's glyph: 10 pt, smaller when the rows are too close for it.
+    func glyphSize(row: CGFloat, gap: CGFloat) -> CGFloat { max(7, min(10, row + gap - 2)) }
 }
 
 /// The live captions under the notes: the newest lines, You or Call in the time lane. Observes the

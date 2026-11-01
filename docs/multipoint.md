@@ -414,7 +414,8 @@ never asks for the microphone for it.
 
 The device that manages a recorder recording along with a shared recording saves the recorder's audio
 into the conversation as it records, from the stream Listen Live uses (`DeviceSession.captureLive`),
-and captions it, beside the device's own captions (docs/capture.md, "Every source"). When the recording stops, the
+and captions it, beside the device's own captions (docs/capture.md, "Every source"), and Floating Notes meters it from
+the same audio. When the recording stops, the
 recorder's audio is already in the conversation (in the library within a fraction of a second of the
 stop, against minutes to transfer the file afterwards), so multipoint processing has every source at
 once. It's a live portion: its recording ID ends with `~live`, it joins the conversation as a source

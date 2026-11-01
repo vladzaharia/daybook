@@ -169,7 +169,7 @@ struct FloatingNotesView: View {
         #if DEBUG
         synthetic = FloatingNotesDemo.syntheticLevels && !state.recorder.isRecording
         #endif
-        model.levels.run(state.recordingID != nil, monitor: state.recorder.levels, synthetic: synthetic)
+        model.levels.run(state.recordingID != nil, readers: .live(state), synthetic: synthetic)
     }
 
     // MARK: Keyboard

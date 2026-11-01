@@ -117,6 +117,8 @@ struct FloatingStatusInputs: Equatable {
     var duration: TimeInterval?
     var inputDevice: String?
     var microphoneSilent = false
+    /// Computer audio is part of this recording (Settings › General), so it has a Call meter.
+    var includesCall = false
     var call: CallAudio = .off
     var recorders: [Recorder] = []
     var phones: [Phone] = []
@@ -160,6 +162,35 @@ struct FloatingChip: Identifiable, Equatable {
         case .processing: return "processing"
         case .queue: return "queue"
         case .sync: return "sync"
+        }
+    }
+}
+
+/// One of the recording's rolling meters: a source it has right now, labelled with the glyph its chip
+/// uses, its name in the tooltip and for VoiceOver.
+struct FloatingMeter: Identifiable, Equatable {
+    enum Source: Hashable {
+        case microphone, call
+        /// A recorder recording along, by its device session's ID.
+        case recorder(String)
+        /// A paired iPhone recording along, by its device session's ID (the link's device ID).
+        case phone(String)
+    }
+
+    var source: Source
+    var symbol: String
+    var name: String
+    /// What's wrong with it, with the fix: its glyph turns warning ink and this is its tooltip.
+    var warning: String?
+    /// Recording now. A paused iPhone's meter, or one still starting, rests.
+    var isRecording = true
+
+    var id: String {
+        switch source {
+        case .microphone: return "microphone"
+        case .call: return "call"
+        case .recorder(let id): return "recorder-\(id)"
+        case .phone(let id): return "phone-\(id)"
         }
     }
 }
@@ -350,6 +381,35 @@ enum FloatingStatus {
         guard let line = queueLine(queue, now: now) else { return nil }
         return FloatingChip(target: .queue, symbol: "desktopcomputer", label: line.text, shortLabel: line.shortText, tone: line.tone,
                             progress: line.progress, detail: line.text)
+    }
+
+    // MARK: Meters
+
+    /// The recording's meters, one per source it has now: the microphone, call audio when it's
+    /// included, then each recorder and each iPhone recording along, in the chips' order. A source
+    /// whose levels haven't arrived (an iPhone that doesn't send them, a recorder before its audio)
+    /// keeps its row, flat.
+    static func meters(_ inputs: FloatingStatusInputs) -> [FloatingMeter] {
+        guard inputs.phase == .recording || inputs.phase == .saving else { return [] }
+        var meters = [FloatingMeter(source: .microphone, symbol: "mic", name: "Microphone",
+                                    warning: inputs.microphoneSilent ? microphoneSilentHelp : nil)]
+        if inputs.includesCall {
+            let missing = inputs.call == .missing
+            meters.append(FloatingMeter(source: .call, symbol: "waveform", name: "Call audio", warning: missing ? callMissingHelp : nil,
+                                        isRecording: !missing))
+        }
+        let along: Set<CompanionRecording.State> = [.starting, .recording, .alreadyRecording, .stopping]
+        for recorder in inputs.recorders {
+            guard let state = recorder.along, along.contains(state) else { continue }
+            meters.append(FloatingMeter(source: .recorder(recorder.id), symbol: recorder.symbol, name: recorder.name,
+                                        isRecording: state != .starting))
+        }
+        for phone in inputs.phones {
+            guard let state = phone.along, along.contains(state) else { continue }
+            meters.append(FloatingMeter(source: .phone(phone.id), symbol: "iphone", name: phone.name,
+                                        isRecording: state != .starting && phone.activity != .paused))
+        }
+        return meters
     }
 
     // MARK: Lines
