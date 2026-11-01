@@ -10,11 +10,17 @@
 #                                         the app runs and keeps sync off. Combine with --debug. Bundle ID
 #                                         local.daybook.app.adhoc, so it never uses the app's container.
 #   scripts/build-app.sh --sandbox        Release, signed: run in the App Sandbox (Daybook-Sandbox.entitlements)
-#                                         and embed the container migration manifest, so the first launch MOVES
-#                                         ~/Library/Application Support/Daybook into local.daybook.app's container,
-#                                         once and for good (docs/sandbox.md). Also DAYBOOK_SANDBOX=1. Needs a
-#                                         team; refuses --debug and --ad-hoc. Without it signed builds aren't
-#                                         sandboxed.
+#                                         as local.daybook.phone, the iPhone app's bundle ID, and embed the
+#                                         container migration manifest, so the first launch MOVES
+#                                         ~/Library/Application Support/Daybook (and the preferences) into that
+#                                         container, once and for good (docs/sandbox.md). Also DAYBOOK_SANDBOX=1.
+#                                         Needs a team; refuses --debug and --ad-hoc. Without it signed builds
+#                                         aren't sandboxed and stay local.daybook.app.
+#   scripts/build-app.sh --app-store      the Mac App Store and TestFlight build: --sandbox, exported with the
+#                                         app-store-connect method to build/macOS/AppStore (a .pkg) instead of
+#                                         Developer ID; nothing goes to dist/. Add --upload to send it to App Store
+#                                         Connect, where it joins the iPhone app's record (docs/release.md,
+#                                         "Mac on TestFlight").
 #   scripts/build-app.sh --sandbox-rehearsal
 #                                         ad hoc, bundle ID local.daybook.app.rehearsal (or
 #                                         $DAYBOOK_REHEARSAL_BUNDLE_ID), with a manifest that moves
@@ -61,7 +67,7 @@
 #                             keychain is used instead when there is one. Refused outside release.yml on
 #                             GitHub Actions (AGENTS.md).
 #   DAYBOOK_DEVELOPER_ID_PROFILE
-#                             UUID of an installed Developer ID profile for local.daybook.app
+#                             UUID of an installed Developer ID profile for the archived app's bundle ID
 #                             (scripts/ci/asc-profile.sh). The export then signs manually with the
 #                             keychain's Developer ID Application identity and that profile, and doesn't
 #                             ask for cloud signing, which a team API key can't use for Developer ID.
@@ -83,6 +89,8 @@ case "${DAYBOOK_SANDBOX:-}" in
     ""|0|NO|no|false) ;;
     *) echo "DAYBOOK_SANDBOX is 1 or 0, not ${DAYBOOK_SANDBOX}." >&2; exit 2 ;;
 esac
+app_store=0
+upload=0
 generate_only=0
 resolve_only=0
 archive_only=0
@@ -98,6 +106,8 @@ while (( $# )); do
         --ad-hoc) signing=local ;;
         --sandbox-rehearsal) signing=rehearsal ;;
         --sandbox) sandbox=1 ;;
+        --app-store) app_store=1; sandbox=1 ;;
+        --upload) upload=1 ;;
         --allow-provisioning-updates) provisioning=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration) ;;
         --generate-only) generate_only=1 ;;
         --resolve-only) resolve_only=1 ;;
@@ -133,6 +143,10 @@ if (( archive_only + export_only + resolve_only + generate_only > 1 )); then
 fi
 if (( archive_only || export_only )) && [[ "$configuration" == Debug ]]; then
     echo "--archive-only and --export-only are for Release builds; drop --debug." >&2
+    exit 2
+fi
+if (( upload && ! app_store )); then
+    echo "--upload sends the App Store build to App Store Connect; add --app-store." >&2
     exit 2
 fi
 
@@ -188,17 +202,17 @@ if [[ "$signing" == local || "$signing" == rehearsal ]]; then
     echo "Signing ad hoc: no team, so this build has no iCloud entitlements and keeps sync off."
 fi
 if (( sandbox )); then
-    # Only a signed Release build may run sandboxed as local.daybook.app: its first launch creates the app's container
+    # Only a signed Release build may run sandboxed as local.daybook.phone: its first launch creates the app's container
     # and moves the real library into it, once. A development build must never be the one that does (docs/sandbox.md).
     if [[ "$signing" != signed ]]; then
-        echo "--sandbox is for signed builds (DAYBOOK_TEAM_ID). Ad hoc builds are always sandboxed, as local.daybook.app.adhoc." >&2
+        echo "--sandbox and --app-store are for signed builds (DAYBOOK_TEAM_ID). Ad hoc builds are always sandboxed, as local.daybook.app.adhoc." >&2
         exit 2
     fi
     if [[ "$configuration" == Debug ]]; then
-        echo "--sandbox is for Release builds: a Debug build must never create local.daybook.app's container." >&2
+        echo "--sandbox and --app-store are for Release builds: a Debug build must never create the app's container." >&2
         exit 2
     fi
-    echo "App Sandbox: this build's first launch moves ~/Library/Application Support/Daybook into its container (docs/sandbox.md)."
+    echo "App Sandbox, as local.daybook.phone: this build's first launch moves ~/Library/Application Support/Daybook into its container (docs/sandbox.md)."
 fi
 rehearsal_id="${DAYBOOK_REHEARSAL_BUNDLE_ID:-local.daybook.app.rehearsal}"
 if [[ "$signing" == rehearsal ]]; then
@@ -236,6 +250,28 @@ else
         echo "Archive: $archive"
         exit 0
     fi
+    if (( app_store )); then
+        # The Mac App Store and TestFlight: re-signed for distribution (Apple Distribution, and the installer certificate
+        # for the .pkg) with the App Store profile. Xcode picks them, or with the API key's -allowProvisioningUpdates
+        # (release.yml only) makes them. The App Store sets the iCloud and push environments to Production itself.
+        export_dir="$work_dir/AppStore"
+        export_options="$work_dir/ExportOptions.plist"
+        /bin/rm -rf "${export_dir:?}"
+        /bin/rm -f "${export_options:?}"
+        plutil -create xml1 "$export_options"
+        plutil -insert method -string app-store-connect "$export_options"
+        if (( upload )); then destination="upload"; else destination="export"; fi
+        plutil -insert destination -string "$destination" "$export_options"
+        plutil -insert signingStyle -string automatic "$export_options"
+        plutil -insert teamID -string "$team" "$export_options"
+        plutil -insert uploadSymbols -bool YES "$export_options"
+        # The pipeline sets the version and build number; App Store Connect must not change them.
+        plutil -insert manageAppVersionAndBuildNumber -bool NO "$export_options"
+        xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
+            -exportOptionsPlist "$export_options" ${provisioning[@]+"${provisioning[@]}"}
+        if (( upload )); then echo "Uploaded $archive to App Store Connect."; else echo "App Store export: $export_dir"; fi
+        exit 0
+    fi
     if [[ "$signing" == signed ]]; then
         # Re-sign for distribution outside the App Store with Developer ID and its provisioning profile,
         # which carries the iCloud container. Xcode picks (or, with -allowProvisioningUpdates, creates) it.
@@ -258,7 +294,9 @@ else
             plutil -insert signingStyle -string manual "$export_options"
             plutil -insert signingCertificate -string "Developer ID Application" "$export_options"
             plutil -insert provisioningProfiles -dictionary "$export_options"
-            plutil -insert "provisioningProfiles.local\\.daybook\\.app" -string "$DAYBOOK_DEVELOPER_ID_PROFILE" "$export_options"
+            # The archived app's bundle ID: local.daybook.app, or local.daybook.phone with --sandbox.
+            bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$archive/Products/Applications/Daybook.app/Contents/Info.plist")"
+            plutil -insert "provisioningProfiles.${bundle_id//./\\.}" -string "$DAYBOOK_DEVELOPER_ID_PROFILE" "$export_options"
             export_provisioning=()
         else
             plutil -insert signingStyle -string automatic "$export_options"

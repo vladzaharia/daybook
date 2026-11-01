@@ -4,9 +4,12 @@
 # with a JWT from scripts/ci/asc-jwt.sh. No fastlane, no Ruby.
 #
 #   scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --version 1.4.0 --build 1057 \
-#       [--group "Daybook testers"] [--notes-file notes.txt] [--locale en-US] [--timeout 3600]
+#       [--group "Daybook testers"] [--notes-file notes.txt] [--locale en-US] [--timeout 3600] [--platform IOS]
 #   scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --version 1.4.0 \
-#       --find-build "1057 1057.2" [--uploaded-after 2026-10-24T20:11:08Z]
+#       --find-build "1057 1057.2" [--uploaded-after 2026-10-24T20:11:08Z] [--platform IOS]
+#
+# --platform is IOS (the default) or MAC_OS: one app record holds both apps (universal purchase), and each
+# platform has its own versions and builds there.
 #
 # --find-build only looks: it prints found=<build number> for the newest of those builds of --version
 # that App Store Connect already has and that didn't fail processing (found= when there's none), and
@@ -22,7 +25,7 @@
 #
 # Steps:
 #   1. GET  /v1/apps?filter[bundleId]=...                         the app record
-#   2. GET  /v1/builds?filter[app]&filter[version]&filter[preReleaseVersion.version]&...platform=IOS
+#   2. GET  /v1/builds?filter[app]&filter[version]&filter[preReleaseVersion.version]&...platform=<--platform>
 #      until processingState is VALID (FAILED or INVALID stops with an error, as does --timeout)
 #   3. What to Test: PATCH the build's betaBuildLocalization for --locale, or POST one
 #   4. GET  /v1/betaGroups?filter[app]&filter[name]  then  POST /v1/betaGroups/{id}/relationships/builds
@@ -44,6 +47,7 @@ locale="en-US"
 timeout=3600
 find_builds=""
 uploaded_after=""
+platform=IOS
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 fail() { echo "asc-testflight.sh: $*" >&2; exit 1; }
@@ -60,12 +64,14 @@ while [[ $# -gt 0 ]]; do
         --timeout) timeout="${2-}"; shift ;;
         --find-build) find_builds="${2-}"; shift ;;
         --uploaded-after) uploaded_after="${2-}"; shift ;;
+        --platform) platform="${2-}"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "unknown option: $1" ;;
     esac
     shift
 done
 
+[[ "$platform" == IOS || "$platform" == MAC_OS ]] || fail "--platform is IOS or MAC_OS"
 if [[ -n "$find_builds" ]]; then
     [[ -n "$bundle_id" && -n "$version" ]] || { usage >&2; fail "--bundle-id and --version are required"; }
     [[ "$find_builds" =~ ^[0-9.]+( [0-9.]+)*$ ]] || fail "--find-build takes build numbers separated by spaces"
@@ -144,7 +150,7 @@ note "app $bundle_id is $app_id"
 # --find-build: look, report, and stop.
 if [[ -n "$find_builds" ]]; then
     query="/v1/builds?filter%5Bapp%5D=$app_id&filter%5Bversion%5D=$(uri "${find_builds// /,}")"
-    query+="&filter%5BpreReleaseVersion.version%5D=$(uri "$version")&filter%5BpreReleaseVersion.platform%5D=IOS"
+    query+="&filter%5BpreReleaseVersion.version%5D=$(uri "$version")&filter%5BpreReleaseVersion.platform%5D=$platform"
     query+="&fields%5Bbuilds%5D=version,processingState,uploadedDate,expired&sort=-uploadedDate&limit=50"
     request GET "$query"
     expect 200
@@ -175,7 +181,7 @@ fi
 
 # 2. Wait for processing.
 query="/v1/builds?filter%5Bapp%5D=$app_id&filter%5Bversion%5D=$(uri "$build")"
-query+="&filter%5BpreReleaseVersion.version%5D=$(uri "$version")&filter%5BpreReleaseVersion.platform%5D=IOS"
+query+="&filter%5BpreReleaseVersion.version%5D=$(uri "$version")&filter%5BpreReleaseVersion.platform%5D=$platform"
 query+="&fields%5Bbuilds%5D=version,processingState,usesNonExemptEncryption,expired&limit=1"
 deadline=$(( $(date +%s) + timeout ))
 build_id=""

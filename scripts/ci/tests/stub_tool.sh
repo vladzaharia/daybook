@@ -11,6 +11,7 @@
 #                              A DMG's submission (ID 2222…) follows STUB_NOTARY_DMG when that's set.
 #   STUB_PLIST_VERSION, STUB_PLIST_BUILD
 #                              CFBundleShortVersionString and CFBundleVersion of the apps it makes
+#   STUB_BUNDLE_ID             their CFBundleIdentifier (default local.daybook.app)
 #   STUB_IDENTITY=1            security find-identity lists a Developer ID Application identity
 #   STUB_DEVELOPMENT_IDENTITY=1  ... and an Apple Development one
 #   STUB_XCODE_VERSION, STUB_XCODE_BUILD
@@ -42,7 +43,7 @@ make_app() {
     mkdir -p "$app/Contents/MacOS"
     printf '#!/bin/sh\n' > "$app/Contents/MacOS/$2"
     plutil -create xml1 "$app/Contents/Info.plist" 2>/dev/null || printf '<plist/>\n' > "$app/Contents/Info.plist"
-    plutil -insert CFBundleIdentifier -string local.daybook.app "$app/Contents/Info.plist" 2>/dev/null || true
+    plutil -insert CFBundleIdentifier -string "${STUB_BUNDLE_ID:-local.daybook.app}" "$app/Contents/Info.plist" 2>/dev/null || true
     plutil -insert CFBundleShortVersionString -string "${STUB_PLIST_VERSION:-1.4.0}" "$app/Contents/Info.plist" 2>/dev/null || true
     plutil -insert CFBundleVersion -string "${STUB_PLIST_BUILD:-1057}" "$app/Contents/Info.plist" 2>/dev/null || true
 }
