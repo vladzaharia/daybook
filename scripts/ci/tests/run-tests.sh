@@ -201,6 +201,14 @@ expect_fail "unknown group fails" env ASC_API_BASE="http://127.0.0.1:$port" ASC_
     DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
     "$ci/asc-testflight.sh" --bundle-id local.daybook.phone --version 1.4.0 --build 1057 --group "Nobody"
 expect_fail "missing key fails" env -u DAYBOOK_ASC_KEY_PATH "$ci/asc-testflight.sh" --bundle-id x --version 1.0.0 --build 1
+: > "$log"
+expect_ok "the Mac's build in the same app record" env ASC_API_BASE="http://127.0.0.1:$port" ASC_POLL_SECONDS=0 \
+    DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
+    "$ci/asc-testflight.sh" --bundle-id local.daybook.phone --version 1.4.0 --build 1057 --platform MAC_OS
+expect_eq "is looked for among the macOS builds" "MAC_OS" \
+    "$(jq -r 'select(.path == "/v1/builds") | .query["filter[preReleaseVersion.platform]"][0]' "$log" | sort -u)"
+expect_fail "--platform is IOS or MAC_OS" env DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
+    "$ci/asc-testflight.sh" --bundle-id local.daybook.phone --version 1.4.0 --build 1057 --platform VISION_OS
 find_build() {
     ASC_API_BASE="http://127.0.0.1:$port" DAYBOOK_ASC_KEY_PATH="$key" DAYBOOK_ASC_KEY_ID=ABC123DEFG DAYBOOK_ASC_ISSUER_ID="$issuer" \
         "$ci/asc-testflight.sh" --bundle-id local.daybook.phone --version 1.4.0 "$@" 2>"$work/find.err"
@@ -535,6 +543,23 @@ if macos; then
     expect_ok "and says the first launch moves the library" grep -q "moves ~/Library/Application Support/Daybook" "$work/build-app.out"
     expect_ok "DAYBOOK_SANDBOX=1 is the same" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y DAYBOOK_SANDBOX=1 -- --archive-only
     expect_ok "(DAYBOOK_SANDBOX=YES again)" grep -q -- 'DAYBOOK_SANDBOX=YES' <<< "$(xcb ' archive ')"
+    rm -rf "$mac_repo/dist"
+    expect_ok "--app-store: the Mac App Store and TestFlight build" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --app-store \
+        --marketing-version 1.4.0 --build-number 1057
+    expect_ok "is the sandboxed signed build" grep -q -- 'DAYBOOK_SIGNING=signed .*DAYBOOK_SANDBOX=YES .*CURRENT_PROJECT_VERSION=1057' <<< "$(xcb ' archive ')"
+    expect_eq "exported for App Store Connect, to build/macOS/AppStore" "app-store-connect export automatic false" \
+        "$(plutil -extract method raw "$export_options") $(plutil -extract destination raw "$export_options") $(plutil -extract signingStyle raw "$export_options") $(plutil -extract manageAppVersionAndBuildNumber raw "$export_options")"
+    expect_ok "(the export path)" grep -q -- "-exportPath $mac_repo/build/macOS/AppStore " <<< "$(xcb '-exportArchive')"
+    expect_eq "with no iCloud environment of its own: the App Store sets Production" "" \
+        "$(plutil -extract iCloudContainerEnvironment raw "$export_options" 2>/dev/null || true)"
+    expect_ok "and nothing in dist/" test ! -e "$mac_repo/dist/Daybook.app"
+    expect_ok "--app-store --upload sends it to App Store Connect" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" -- \
+        --app-store --upload --export-only
+    expect_eq "(destination upload, with the key)" "upload 1" \
+        "$(plutil -extract destination raw "$export_options") $(xcb '-exportArchive' | grep -c -- '-allowProvisioningUpdates -authenticationKeyPath')"
+    expect_fail "--upload is for --app-store" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --upload
+    expect_fail "--app-store needs a team" build_app -- --app-store
+    expect_fail "and a Release build" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --app-store --debug
     expect_fail "a sandboxed Debug build could create the app's container" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --sandbox --debug
     expect_fail "--sandbox needs a team" build_app -- --sandbox
     expect_fail "and isn't for ad hoc builds" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y -- --sandbox --ad-hoc
@@ -551,6 +576,10 @@ if macos; then
     expect_eq "the export signs manually, without the key" "" "$(xcb '-exportArchive' | grep -- '-authenticationKey' || true)"
     expect_eq "manual export options" "manual 01234567-89ab-cdef-0123-456789abcdef" \
         "$(plutil -extract signingStyle raw "$export_options") $(plutil -extract 'provisioningProfiles.local\.daybook\.app' raw "$export_options")"
+    expect_ok "a sandboxed one with its profile" build_app DAYBOOK_TEAM_ID=48H7CLBV8Y "${asc_vars[@]}" STUB_BUNDLE_ID=local.daybook.phone \
+        DAYBOOK_DEVELOPER_ID_PROFILE=01234567-89ab-cdef-0123-456789abcdef -- --sandbox
+    expect_eq "names the profile for local.daybook.phone" "01234567-89ab-cdef-0123-456789abcdef" \
+        "$(plutil -extract 'provisioningProfiles.local\.daybook\.phone' raw "$export_options")"
     expect_ok "packages are fetched at the pinned versions" build_app -- --resolve-only
     expect_eq "and nothing is built" "xcodebuild -resolvePackageDependencies" "$(grep '^xcodebuild' "$work/stub.log" | cut -d' ' -f1-2)"
     expect_ok "resolution is held to Package.resolved" grep -q -- '-onlyUsePackageVersionsFromResolvedFile' <<< "$(xcb resolvePackageDependencies)"
@@ -626,15 +655,23 @@ if macos; then
     expect_fail "a signed build with a manifest" \
         check_app --app "$(fake_app signed-manifest local.daybook.app "$resources/Daybook.entitlements" "$resources/container-migration.plist")" --kind signed
     sandbox_ent="$resources/Daybook-Sandbox.entitlements"
-    app="$(fake_app signed-sandbox local.daybook.app "$sandbox_ent" "$resources/container-migration.plist")"
+    app="$(fake_app signed-sandbox local.daybook.phone "$sandbox_ent" "$resources/container-migration.plist")"
     expect_ok "the sandboxed signed entitlements and the manifest make a sandboxed release" check_app --app "$app" --kind signed-sandbox
     expect_fail "which isn't the default signed build" check_app --app "$app" --kind signed
+    expect_fail "a sandboxed release under the unsandboxed app's bundle ID" \
+        check_app --app "$(fake_app signed-sandbox-app-id local.daybook.app "$sandbox_ent" "$resources/container-migration.plist")" --kind signed-sandbox
+    expect_ok "is refused for its bundle ID" grep -q "bundle ID is 'local.daybook.app', expected local.daybook.phone" "$work/check-app.out"
     expect_fail "a sandboxed release without the manifest" \
-        check_app --app "$(fake_app signed-sandbox-bare local.daybook.app "$sandbox_ent")" --kind signed-sandbox
+        check_app --app "$(fake_app signed-sandbox-bare local.daybook.phone "$sandbox_ent")" --kind signed-sandbox
     expect_fail "a sandboxed release with the rehearsal's manifest" \
-        check_app --app "$(fake_app signed-sandbox-rehearsal local.daybook.app "$sandbox_ent" "$resources/container-migration-rehearsal.plist")" --kind signed-sandbox
+        check_app --app "$(fake_app signed-sandbox-rehearsal local.daybook.phone "$sandbox_ent" "$resources/container-migration-rehearsal.plist")" --kind signed-sandbox
     expect_fail "a sandboxed release with a temporary exception" \
-        check_app --app "$(fake_app signed-sandbox-exception local.daybook.app "$local_ent" "$resources/container-migration.plist")" --kind signed-sandbox
+        check_app --app "$(fake_app signed-sandbox-exception local.daybook.phone "$local_ent" "$resources/container-migration.plist")" --kind signed-sandbox
+    # shellcheck disable=SC2016 # the manifest's own variables, never expanded here
+    plutil -replace Move -json '["${ApplicationSupport}/Daybook","${Library}/Preferences/${BundleId}.plist"]' \
+        -o "$work/same-name-manifest.plist" "$resources/container-migration.plist"
+    expect_fail "a manifest that looks for preferences under the new bundle ID" \
+        check_app --app "$(fake_app signed-sandbox-same-name local.daybook.phone "$sandbox_ent" "$work/same-name-manifest.plist")" --kind signed-sandbox
     # Daybook-Sandbox.entitlements is Daybook.entitlements plus the App Sandbox's keys, nothing else: a key added to one
     # (keychain access groups, say) has to be added to the other.
     entitlement_keys() { plutil -p "$1" | sed -n 's/^  "\([^"]*\)" =>.*/\1/p' | sort; }
@@ -799,12 +836,16 @@ if macos; then
         --sandbox --output "$work/notary-out" --state-dir "$work/state"
     mkdir -p "$work/pkg/Daybook.app/Contents/Resources"
     cp "$ci/../../Resources/container-migration.plist" "$work/pkg/Daybook.app/Contents/Resources/"
+    expect_fail "a sandboxed release under the unsandboxed app's bundle ID" notarize STUB_NOTARY=accepted \
+        STUB_ENTITLEMENTS="$work/sandboxed.entitlements" -- --sandbox --output "$work/notary-out" --state-dir "$work/state"
+    plutil -replace CFBundleIdentifier -string local.daybook.phone "$work/pkg/Daybook.app/Contents/Info.plist"
     expect_ok "a sandboxed release with the manifest" notarize STUB_NOTARY=accepted STUB_ENTITLEMENTS="$work/sandboxed.entitlements" -- \
         --sandbox --output "$work/notary-out" --state-dir "$work/state"
     rm -rf "$work/notary-out" "$work/state"
     expect_fail "but not as an ordinary release" notarize STUB_NOTARY=accepted STUB_ENTITLEMENTS="$work/sandboxed.entitlements" -- \
         --output "$work/notary-out" --state-dir "$work/state"
     rm -f "$work/pkg/Daybook.app/Contents/Resources/container-migration.plist"
+    plutil -replace CFBundleIdentifier -string local.daybook.app "$work/pkg/Daybook.app/Contents/Info.plist"
 else
     skip "package-mac.sh (macOS only)"
 fi
