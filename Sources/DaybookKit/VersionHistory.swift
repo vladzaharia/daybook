@@ -91,6 +91,10 @@ public enum RevisionText {
             return "Passage at \(TimeLabel.short(segment.start))" + (meeting.speakerName(segment.speakerID).map { " · \($0)" } ?? "")
         }
         if kind(revision) == "speaker" { return "\(revision.oldValue) → \(revision.newValue)" }
+        if let bookmark = revision.bookmark {
+            let time = "Bookmark at \(TimeLabel.short(meeting.alignedTime(for: bookmark) ?? bookmark.time))"
+            return bookmark.text.isEmpty ? time : "\(time) · \(bookmark.text)"
+        }
         return title(revision, in: meeting)
     }
 
@@ -118,12 +122,9 @@ public enum RevisionText {
             if value.hasPrefix("applied:") { return "Applied to a passage in the new transcript" }
         }
         if case .bookmark = RevisionField(rawValue: field) {
-            // The entry keeps the whole bookmark; its time and words show.
+            // The entry keeps the whole bookmark: its words show, and its time is in the subject.
             if value == MeetingRevision.bookmarkRemoved { return "Deleted" }
-            if let bookmark = MeetingRevision.bookmark(from: value) {
-                let time = "Bookmark at \(TimeLabel.short(bookmark.time))"
-                return bookmark.text.isEmpty ? time : "\(time) · \(bookmark.text)"
-            }
+            if let bookmark = MeetingRevision.bookmark(from: value) { return bookmark.text }
         }
         return value
     }

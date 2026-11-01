@@ -157,7 +157,8 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertEqual(deletion.kind, .bookmark(bookmark.id))
         XCTAssertEqual(deletion.bookmark, named, "The whole bookmark: its recording, time, and words")
         XCTAssertEqual(RevisionText.title(deletion, in: meeting), "Bookmark deleted")
-        XCTAssertEqual(RevisionText.readable(deletion.oldValue, field: deletion.field), "Bookmark at 1:23 · Pricing")
+        XCTAssertEqual(RevisionText.subject(deletion, in: meeting), "Bookmark at 1:23 · Pricing")
+        XCTAssertEqual(RevisionText.readable(deletion.oldValue, field: deletion.field), "Pricing")
         XCTAssertEqual(RevisionText.readable(deletion.newValue, field: deletion.field), "Deleted")
 
         XCTAssertTrue(RevisionRestore.canRestore(deletion, in: meeting))
