@@ -371,7 +371,9 @@ final class PhoneProcessor {
             // This iPhone's part is done; the summary is the placement's (a countdown, then here, a Mac, or the cloud).
             let request = library.meeting(id)?.processingRequests?.first { $0.id == requestID }
             library.completeProcessingRequest(requestID, in: id, at: now)
-            summaryDue = (request?.templateID, request.map { $0.mode != .newAudio } ?? false)
+            // Asked for (Transcribe Everything Again, Identify Speakers Again) starts at once; an upgrade's is due like new
+            // audio's and counts down while the cloud is on offer (docs/multipoint.md, "Upgrade").
+            summaryDue = (request?.templateID, request.map { $0.mode != .newAudio && $0.upgrade == nil } ?? false)
         case .handedBack:
             let request = library.meeting(id)?.processingRequests?.first { $0.id == requestID }
             if let request, request.mode == .fullRetranscription || request.mode == .speakerRefresh {

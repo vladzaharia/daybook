@@ -216,6 +216,10 @@ struct StatusView: View {
             Button(choice.title) { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.semibold))
         case .stopSummary:
             Button("Stop") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
+        case .upgrade:
+            Button("Upgrade") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.semibold))
+        case .dismissUpgrade:
+            Button("Dismiss") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
         }
     }
 }
