@@ -506,7 +506,7 @@ struct AboutScreen: View {
                 .accessibilityElement(children: .combine)
             }
             Section("Privacy") {
-                Text("Recordings, notes, and transcripts stay on your devices and in your iCloud.")
+                Text("Recordings, notes, and transcripts stay on your devices and in your iCloud. A summary goes to a cloud model only when you choose one.")
                     .font(.subheadline)
                     .foregroundStyle(PhoneStyle.Ink.body)
             }
