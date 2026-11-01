@@ -343,7 +343,9 @@ enum StatusSheetInputs {
         inputs.recorders = devices.sessions.map { recorder($0, model: model) }
         inputs.mac = model.macPresence
         inputs.liveProgress = model.liveProgress.values.sorted { $0.receivedAt > $1.receivedAt }
-        inputs.queue = StatusSheetModel.queue(meetings: library.meetings, liveProgress: model.liveProgress, thisDevice: library.thisDevice.id)
+        inputs.queue = StatusSheetModel.queue(meetings: library.meetings, liveProgress: model.liveProgress, thisDevice: library.thisDevice.id,
+                                              planners: model.placement.planners, runs: model.placement.runs,
+                                              cloudOffered: model.placement.cloudOffer != nil)
         inputs.syncLine = model.sync.statusLine
         switch model.sync.connection {
         case .checking: inputs.syncTone = .checking
@@ -1070,15 +1072,25 @@ private struct QueueRow: View {
     let entry: StatusQueueEntry
     let macName: String?
     @State private var showingDetails = false
+    @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
         StatusRow {
             VStack(alignment: .leading, spacing: 3) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.title).font(.subheadline).foregroundStyle(PhoneStyle.Ink.body).lineLimit(2)
+                    if entry.countdownUntil != nil {
+                        // A summary's countdown, a second at a time.
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(entry.line(under: macName, at: context.date).keepingSeparators)
+                                .foregroundStyle(PhoneStyle.Ink.secondary).monospacedDigit()
+                        }
+                        .font(.footnote)
+                    } else {
                     Text("\(Text(entry.line(under: macName).keepingSeparators).foregroundStyle(entry.failed ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary))\(Text(entry.requestedHere ? " · Requested from this iPhone" : "").foregroundStyle(PhoneStyle.Ink.meta))")
                         .font(.footnote)
                         .fixedSize(horizontal: false, vertical: true)
+                    }
                     if let detail = entry.detail {
                         Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1092,6 +1104,16 @@ private struct QueueRow: View {
                     Button("Details") { showingDetails = true }
                         .buttonStyle(.daybookLink)
                         .font(.footnote.weight(.semibold))
+                }
+                // Where its summary runs: Use the Cloud, Start Now, Wait for a Mac.
+                if !entry.actions.isEmpty {
+                    HStack(spacing: PhoneStyle.Space.s4) {
+                        ForEach(entry.actions, id: \.self) { action in
+                            Button(action.title) { model.placement.perform(action, for: entry.id) }
+                                .buttonStyle(.daybookLink)
+                                .font(.footnote.weight(.semibold))
+                        }
+                    }
                 }
             }
         }

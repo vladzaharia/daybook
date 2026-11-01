@@ -30,10 +30,17 @@ struct ConversationRow: View {
                 : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 6))
             layout {
                 Text(timeLabel).foregroundStyle(.primary).monospacedDigit()
-                Text(status?.text ?? RowPreview.text(for: meeting))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(dynamicType.isAccessibilitySize ? 3 : 2)
-                    .contentTransition(.opacity)
+                if let status, status.countdownUntil != nil {
+                    // A summary's countdown, a second at a time.
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(status.text(at: context.date)).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                    }
+                } else {
+                    Text(status?.text ?? RowPreview.text(for: meeting))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(dynamicType.isAccessibilitySize ? 3 : 2)
+                        .contentTransition(.opacity)
+                }
             }
             .font(.subheadline)
             if let tags = meeting.tags, !tags.isEmpty {

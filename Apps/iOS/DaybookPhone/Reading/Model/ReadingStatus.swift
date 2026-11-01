@@ -33,6 +33,10 @@ struct StatusPresentation: Equatable {
         case details(String)
         /// Clears the conversation's message.
         case dismiss
+        /// Where its summary runs: Use the Cloud, Start Now, Wait for a Mac (`PhoneSummaryPlacement.perform`).
+        case placement(SummaryPlacementPlanner.Action)
+        /// Stops a summary running here or in the cloud.
+        case stopSummary
     }
 
     var kind: Kind
@@ -44,6 +48,8 @@ struct StatusPresentation: Equatable {
     /// Shows a small spinner: something is running with no figure to show.
     var isWorking = false
     var actions: [Action] = []
+    /// A countdown runs out then: the title changes every second (`TimelineView`).
+    var countdownUntil: Date?
 
     /// The page's status, or nil when there's nothing to say.
     static func page(_ status: ProcessingStatus, meeting: Meeting, sighting: MacSighting?, pause: PhoneProcessor.Pause? = nil,
@@ -85,6 +91,49 @@ struct StatusPresentation: Equatable {
             guard let message = meeting.errorMessage, !message.isEmpty else { return nil }
             return StatusPresentation(kind: .info, symbol: "info.circle.fill", title: message, actions: [.dismiss])
         }
+    }
+
+    /// Where a conversation's summary runs, when that's what there is to say (docs/multipoint.md, "Where
+    /// summaries run"), in the Mac's words with "this iPhone": this iPhone's own countdown or wait, a summary
+    /// running here or in the cloud, a Mac's countdown over the link (with the choices sent to it), or a
+    /// Summarize request still waiting for a Mac while the cloud is on offer. Nil otherwise.
+    static func placement(_ planner: SummaryPlacementPlanner?, run: SummaryPlace?, live: LiveProgress?, status: ProcessingStatus,
+                          cloudOffered: Bool, sighting: MacSighting? = nil, now: Date = Date()) -> StatusPresentation? {
+        if let run {
+            let title = "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: PhoneSummaryPlacement.thisDeviceWords))"
+            return StatusPresentation(kind: .line, symbol: nil, title: title, isWorking: true, actions: [.stopSummary])
+        }
+        if let planner, let title = planner.line(at: now, thisDevice: PhoneSummaryPlacement.thisDeviceWords) {
+            return StatusPresentation(kind: .line, symbol: "clock", title: title,
+                                      detail: planner.phase == .waitingForMac ? MacSighting.line(sighting, now: now) : nil,
+                                      actions: planner.actions.map(Action.placement), countdownUntil: planner.deadline)
+        }
+        if let live, live.isCountingDown {
+            return StatusPresentation(kind: .line, symbol: "clock", title: live.line(at: now),
+                                      actions: live.placementActions.map(Action.placement), countdownUntil: live.countdownUntil)
+        }
+        if let live, live.phase == .summarizing, live.cloudModel != nil {
+            return StatusPresentation(kind: .line, symbol: nil, title: live.line(at: now), isWorking: true)
+        }
+        if cloudOffered, case .requested(.device(let request)) = status, request.mode == .summaryOnly {
+            return StatusPresentation(kind: .line, symbol: "clock", title: "Waiting for a Mac to summarize",
+                                      detail: MacSighting.line(sighting, now: now), actions: [.placement(.useCloud)])
+        }
+        return nil
+    }
+
+    /// The row's words for the same, when there are any: "Summarizing in 12 s", "Waiting for a Mac to summarize".
+    static func placementRow(_ planner: SummaryPlacementPlanner?, run: SummaryPlace?, live: LiveProgress?, now: Date = Date()) -> RowStatus? {
+        if let run {
+            return RowStatus(kind: .processing, text: "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: PhoneSummaryPlacement.thisDeviceWords))")
+        }
+        if let planner, let text = planner.shortLine(at: now) {
+            return RowStatus(kind: .waiting, text: text, countdownUntil: planner.deadline)
+        }
+        if let live, live.isCountingDown {
+            return RowStatus(kind: .waiting, text: live.brief(at: now), countdownUntil: live.countdownUntil)
+        }
+        return nil
     }
 
     /// The row's words and glyph when a conversation isn't ready; nil when everything is fine.
@@ -143,6 +192,14 @@ struct RowStatus: Equatable {
     var kind: Kind
     var text: String
     var fraction: Double?
+    /// A summary's countdown runs out then: the row counts down to it ("Summarizing in 12 s").
+    var countdownUntil: Date?
+
+    /// The words at a moment: a countdown's seconds move with it.
+    func text(at now: Date) -> String {
+        guard let until = countdownUntil else { return text }
+        return "Summarizing in \(max(1, Int(until.timeIntervalSince(now).rounded(.up)))) s"
+    }
 }
 
 /// When a Mac was last heard from, for "Last seen 2 h ago". The library carries the evidence: a

@@ -111,6 +111,7 @@ struct ConversationMoreMenu: View {
 /// Only what can be asked for now: nothing without a recording or while a request is pending.
 struct ReprocessMenu: View {
     @ObservedObject var library: LibraryController
+    @Environment(\.summaryPlacement) private var placement
     let meeting: Meeting
 
     static func isAvailable(for meeting: Meeting) -> Bool {
@@ -137,7 +138,8 @@ struct ReprocessMenu: View {
     }
 
     private func request(_ mode: ProcessingRequest.Mode) {
-        library.requestProcessing(meeting.id, mode: mode)
+        if mode == .summaryOnly { library.summarize(meeting.id, placement: placement) }
+        else { library.requestProcessing(meeting.id, mode: mode) }
     }
 }
 

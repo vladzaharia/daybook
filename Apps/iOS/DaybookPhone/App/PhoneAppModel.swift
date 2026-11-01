@@ -49,6 +49,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     }()
     /// Processing this iPhone's own recordings with those models (docs/iphone.md, "Processing on this iPhone").
     let processor: PhoneProcessor
+    /// Where this iPhone's summaries run, with the countdown before them (docs/multipoint.md, "Where summaries run").
+    let placement: PhoneSummaryPlacement
     /// One line for the person, when something needs saying: what happened, in plain words.
     private(set) var notice: String? {
         didSet { noticeDetails = nil; noticeFix = nil }
@@ -164,6 +166,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             release: { [weak models] in await models?.releaseProcessingModels() }),
             // The system's continued-processing task, never in tests.
             continued: ContinuedProcessing(scheduler: LaunchOptions.isTestHost || options.isRunningTests ? nil : SystemContinuedProcessingScheduler()))
+        let sync = self.sync, link = self.link
+        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices },
+                                          defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard)
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models))
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
@@ -184,6 +189,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         sync.protectedConversation = { [weak self] in self?.recorder.captureID }
         sync.onApplied = { [weak self] _ in
             self?.publish()
+            // What a Mac did may stop a summary here, or end a countdown it has taken.
+            self?.placement.syncApplied()
             // A pass may have made a folder an encrypted library keeps out of backups.
             self?.applyBackupExclusion()
             // Work another device took over stops here; new work starts.
@@ -267,7 +274,13 @@ final class PhoneAppModel: RecordingCommandHandling {
         }, send: { message, mac in try await link.send(message, to: mac) })
         handoff.handsBackAutomatically = settings.handsRecorderBackToMac
         link.onHandoffMessage = { message, mac in handoff.receive(message, from: mac) }
-        link.onMacsChanged = { DispatchQueue.main.async { handoff.peersChanged() } }
+        link.onMacsChanged = { [weak self] in
+            DispatchQueue.main.async {
+                handoff.peersChanged()
+                // A Mac that comes or goes changes where a summary can go.
+                self?.placement.refresh()
+            }
+        }
     }
 
     private func pruneCaptions() {
@@ -449,6 +462,8 @@ final class PhoneAppModel: RecordingCommandHandling {
                 await link.updateLibrary(libraryID)
             }
         case .background:
+            // A countdown can't run in the background: each one's default happens now.
+            placement.leftForeground()
             // Out of sight it stops; it starts over the next time the app is in front.
             speakerPass?.task.cancel()
             speakerPass = nil

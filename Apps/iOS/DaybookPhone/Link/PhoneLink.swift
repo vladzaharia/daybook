@@ -37,6 +37,13 @@ final class PhoneLink {
         var showsCaptions = false
         /// The synced library it has open, from its capabilities.
         var libraryID: UUID?
+        /// What it does for other devices with its models, from its capabilities; nil from an earlier Daybook,
+        /// which says only `canProcess`.
+        var processing: ProcessingCapabilities?
+        /// It shows its summary countdowns here and takes this iPhone's choice (`summaryPlacementFeature`).
+        var placesSummaries = false
+        /// It can take a summary this iPhone sends it.
+        var summarizes: Bool { processing?.summarizes ?? canProcess }
         /// The recorders it manages, as it last said, on this iPhone's clock; kept after it disconnects,
         /// for as long as that can be trusted (`LinkRecorderState.lifetime`).
         var recorders: [LinkRecorderState] = []
@@ -110,6 +117,8 @@ final class PhoneLink {
     @ObservationIgnored var onMacRecordingState: ((UUID, LinkRecordingState) -> Void)?
     /// A Mac wrote a note or made or changed a bookmark while it records a conversation with this iPhone.
     @ObservationIgnored var onSharedNotes: ((LinkMessage, UUID) -> Void)?
+    /// A Mac's live progress on a conversation (its summary's countdown among them).
+    @ObservationIgnored var onLiveProgress: ((LiveProgress) -> Void)?
 
     /// A Mac's word on its recorder lasts this long; it repeats it every 15 s while recording.
     static let recordingStateLifetime: TimeInterval = 45
@@ -289,6 +298,12 @@ final class PhoneLink {
         Task { try? await client.send(.processingNudge(nudge)) }
     }
 
+    /// The person's choice here for a summary a Mac counts down to: Use the Cloud or Start Now, sent to that Mac.
+    func sendSummaryChoice(_ choice: LinkSummaryChoice.Choice, for meetingID: UUID, to macID: UUID) {
+        guard macs.contains(where: { $0.id == macID && $0.isConnected }) else { return }
+        Task { try? await client.send(.summaryChoice(LinkSummaryChoice(meetingID: meetingID, choice: choice)), to: macID) }
+    }
+
     func sendRecordingState(_ state: LinkRecordingState) {
         guard !connectedMacs.isEmpty else { return }
         Task { try? await client.send(.recordingState(state)) }
@@ -380,6 +395,8 @@ final class PhoneLink {
                 mac.cascades = peer.capabilities.cascades
                 mac.sharesNotes = peer.capabilities.sharesNotes
                 mac.showsCaptions = peer.capabilities.showsCaptions
+                mac.processing = peer.capabilities.processing.map(ProcessingCapabilities.init)
+                mac.placesSummaries = peer.capabilities.placesSummaries
             }
             onMacsChanged?()
             if case .connected = event { onMacConnected?(peer.deviceID) }
@@ -400,13 +417,14 @@ final class PhoneLink {
     private func receive(_ message: LinkMessage, from macID: UUID) {
         switch message {
         case .processingProgress(let progress):
-            let live = LiveProgress(progress)
+            let live = LiveProgress(progress, from: macID)
             if live.isFinished {
                 liveProgress[progress.meetingID] = live.phase == .failed ? live : nil
                 onProcessingFinished?(progress.meetingID)
             } else {
                 liveProgress[progress.meetingID] = live
             }
+            onLiveProgress?(live)
         case .recordingState(let state):
             var heard = state
             let clock = macs.first(where: { $0.id == macID })?.clock
@@ -419,8 +437,8 @@ final class PhoneLink {
         case .bookmark, .note, .bookmarkChange:
             // While a Mac records a conversation with this iPhone, its notes and bookmarks show here too.
             onSharedNotes?(message, macID)
-        case .processingNudge, .captions:
-            // A Mac's captions stay on the Mac; this iPhone shows its own.
+        case .processingNudge, .captions, .summaryChoice:
+            // A Mac's captions stay on the Mac; this iPhone shows its own. Choices go the other way.
             break
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             onHandoffMessage?(message, macID)
