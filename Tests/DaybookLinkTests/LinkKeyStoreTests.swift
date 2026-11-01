@@ -105,6 +105,72 @@ final class LinkKeyStoreTests: XCTestCase {
         XCTAssertNil(try store.record(for: phone.deviceID))
     }
 
+    func testBehaviorAPairingThatCantBeReadIsListedApartAndTheOthersKeepWorking() throws {
+        let keychain = FakeKeychain()
+        let phone = record("Pocket iPhone", pairedAt: Date(timeIntervalSince1970: 100))
+        keychain.seed(phone, in: .dataProtection)
+        let damagedID = UUID(), pairedAt = Date(timeIntervalSince1970: 50)
+        keychain.seedDamaged(Data(#"{"deviceID":"older shape"}"#.utf8), account: damagedID, label: "Daybook link: Spare iPhone",
+                             createdAt: pairedAt, in: .dataProtection)
+        let store = store(keychain)
+
+        XCTAssertEqual(try store.records(), [phone], "one item that can't be read never hides the others")
+        XCTAssertNil(try store.record(for: damagedID))
+        XCTAssertEqual(try store.record(for: phone.deviceID), phone)
+        let damaged = try XCTUnwrap(store.damagedDevices().first)
+        XCTAssertEqual(damaged.deviceID, damagedID)
+        XCTAssertEqual(damaged.name, "Spare iPhone", "named by its item's label")
+        XCTAssertEqual(damaged.pairedAt, pairedAt)
+        XCTAssertTrue(damaged.isDamaged)
+        XCTAssertEqual(try store.pairedDevices().map(\.deviceID), [phone.deviceID, damagedID])
+        XCTAssertEqual(try store.pairedDevices().map(\.isDamaged), [false, true])
+
+        // Unpairing removes it by its account, without reading it.
+        try store.remove(deviceID: damagedID)
+        XCTAssertEqual(try store.damagedDevices(), [])
+        XCTAssertEqual(try store.records(), [phone])
+    }
+
+    func testBehaviorPairingAgainReplacesADamagedItem() throws {
+        let keychain = FakeKeychain()
+        let id = UUID()
+        keychain.seedDamaged(Data("not json".utf8), account: id, label: nil, createdAt: Date(), in: .dataProtection)
+        let store = store(keychain)
+        XCTAssertEqual(try store.damagedDevices().map(\.name), [""], "no label: no name, which the apps fill in")
+
+        let again = record("Pocket iPhone", id: id)
+        try store.save(again)
+        XCTAssertEqual(try store.records(), [again])
+        XCTAssertEqual(try store.damagedDevices(), [])
+    }
+
+    func testBehaviorADamagedLoginItemMovesAsItIsUnlessAReadableOneIsThere() throws {
+        let keychain = FakeKeychain()
+        let alone = UUID(), shadowed = UUID()
+        let raw = Data(#"{"shape":"older"}"#.utf8)
+        keychain.seedDamaged(raw, account: alone, label: "Daybook link: Spare iPhone", createdAt: Date(), in: .login)
+        keychain.seedDamaged(raw, account: shadowed, label: "Daybook link: Old iPhone", createdAt: Date(), in: .login)
+        let readable = record("Pocket iPhone", id: shadowed)
+        keychain.seed(readable, in: .dataProtection)
+        let store = store(keychain)
+
+        XCTAssertEqual(try store.location(), .dataProtection, "an item that can't be read doesn't stop the move")
+        XCTAssertTrue(keychain.items(in: .login).isEmpty)
+        XCTAssertEqual(keychain.items(in: .dataProtection)[alone.uuidString]?.data, raw, "moved as it is, to be listed and unpaired")
+        XCTAssertEqual(try store.records(), [readable], "a readable pairing wins over one that can't be read")
+        XCTAssertEqual(try store.damagedDevices().map(\.name), ["Spare iPhone"])
+    }
+
+    func testBehaviorAKeychainFailureStillThrows() throws {
+        let keychain = FakeKeychain()
+        keychain.dataProtectionAvailable = false
+        keychain.failLoginReads = true
+        let store = store(keychain)
+        XCTAssertThrowsError(try store.records()) { error in
+            XCTAssertEqual(error as? LinkKeyStoreError, .keychain(errSecInteractionNotAllowed))
+        }
+    }
+
     func testSavingFallsBackWhenTheDataProtectionKeychainRefusesTheEntitlement() throws {
         let keychain = FakeKeychain()
         keychain.dataProtectionWritesNeedEntitlement = true
@@ -125,6 +191,8 @@ final class FakeKeychain: LinkKeychain, @unchecked Sendable {
         var data: Data
         var accessible: String?
         var synchronizable: Bool?
+        var label: String?
+        var createdAt = Date()
     }
 
     private let lock = NSLock()
@@ -132,14 +200,22 @@ final class FakeKeychain: LinkKeychain, @unchecked Sendable {
     var dataProtectionAvailable = true
     var dataProtectionWritesNeedEntitlement = false
     var failDataProtectionWrites = false
+    /// The login keychain refuses reads, as a locked keychain does.
+    var failLoginReads = false
 
     func items(in location: KeychainLinkKeyStore.Location) -> [String: Item] { lock.withLock { store[location] ?? [:] } }
 
     func seed(_ record: LinkPairingRecord, in location: KeychainLinkKeyStore.Location) {
         let item = Item(service: "local.daybook.link", data: try! JSONEncoder().encode(record),
                         accessible: location == .dataProtection ? kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String : nil,
-                        synchronizable: false)
+                        synchronizable: false, label: "Daybook link: \(record.name)")
         lock.withLock { store[location, default: [:]][record.deviceID.uuidString] = item }
+    }
+
+    /// An item this build can't read (another build's record shape, or damage), as `label` names it.
+    func seedDamaged(_ data: Data, account: UUID, label: String?, createdAt: Date, in location: KeychainLinkKeyStore.Location) {
+        let item = Item(service: "local.daybook.link", data: data, accessible: nil, synchronizable: false, label: label, createdAt: createdAt)
+        lock.withLock { store[location, default: [:]][account.uuidString] = item }
     }
 
     private func location(_ query: [String: Any]) -> KeychainLinkKeyStore.Location {
@@ -158,6 +234,7 @@ final class FakeKeychain: LinkKeychain, @unchecked Sendable {
     func copyMatching(_ query: [String: Any], _ result: inout CFTypeRef?) -> OSStatus {
         let location = location(query)
         if location == .dataProtection, !dataProtectionAvailable { return errSecMissingEntitlement }
+        if location == .login, failLoginReads { return errSecInteractionNotAllowed }
         return lock.withLock {
             let found = matches(query, in: location)
             guard let first = found.first else { return errSecItemNotFound }
@@ -165,7 +242,11 @@ final class FakeKeychain: LinkKeychain, @unchecked Sendable {
             if (query[kSecReturnData as String] as? Bool) == true {
                 result = first.1.data as CFData
             } else if all {
-                result = found.map { [kSecAttrAccount as String: $0.0] } as CFArray
+                result = found.map { account, item -> [String: Any] in
+                    var attributes: [String: Any] = [kSecAttrAccount as String: account, kSecAttrCreationDate as String: item.createdAt]
+                    if let label = item.label { attributes[kSecAttrLabel as String] = label }
+                    return attributes
+                } as CFArray
             } else {
                 result = [kSecAttrAccount as String: first.0] as CFDictionary
             }
@@ -185,7 +266,8 @@ final class FakeKeychain: LinkKeychain, @unchecked Sendable {
             guard store[location]?[account] == nil else { return errSecDuplicateItem }
             store[location, default: [:]][account] = Item(service: service, data: data,
                                                           accessible: attributes[kSecAttrAccessible as String] as? String,
-                                                          synchronizable: attributes[kSecAttrSynchronizable as String] as? Bool)
+                                                          synchronizable: attributes[kSecAttrSynchronizable as String] as? Bool,
+                                                          label: attributes[kSecAttrLabel as String] as? String)
             return errSecSuccess
         }
     }
@@ -202,6 +284,7 @@ final class FakeKeychain: LinkKeychain, @unchecked Sendable {
             for (account, var item) in found {
                 if let data = attributes[kSecValueData as String] as? Data { item.data = data }
                 if let accessible = attributes[kSecAttrAccessible as String] as? String { item.accessible = accessible }
+                if let label = attributes[kSecAttrLabel as String] as? String { item.label = label }
                 store[location]?[account] = item
             }
             return errSecSuccess
