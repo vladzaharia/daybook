@@ -112,12 +112,16 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
     let smallTasksModelID: String?
     /// Optional photo captions; nil uses built-in Apple Vision.
     let photoModelID: String?
+    /// Set when the job redoes a step with a better model ("Upgrade", docs/multipoint.md): asked for here, or by the
+    /// request it carries. Its summary goes through the placement with its countdown, or straight to the cloud when
+    /// the cloud was the better model.
+    let upgrade: ProcessingRequest.Upgrade?
 
     init(id: UUID = UUID(), meetingID: UUID, createdAt: Date = Date(), mode: Mode = .newAudio,
          transcriptionModelID: String, summaryModelID: String, detectSpeakers: Bool = true,
          preferences: ProcessingPreferences = .init(), requestID: UUID? = nil, templateID: String? = nil,
          revisions: [String: String]? = nil, voiceEmbeddingModelID: String? = nil, languageFallbackModelID: String? = nil,
-         smallTasksModelID: String? = nil, photoModelID: String? = nil) {
+         smallTasksModelID: String? = nil, photoModelID: String? = nil, upgrade: ProcessingRequest.Upgrade? = nil) {
         self.id = id; self.meetingID = meetingID; self.createdAt = createdAt; self.mode = mode
         self.transcriptionModelID = transcriptionModelID; self.summaryModelID = summaryModelID
         self.detectSpeakers = detectSpeakers; self.preferences = preferences.normalized
@@ -127,6 +131,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
         self.languageFallbackModelID = languageFallbackModelID
         self.smallTasksModelID = smallTasksModelID
         self.photoModelID = photoModelID
+        self.upgrade = upgrade
     }
 
     /// The same job, carrying out `request`.
@@ -135,7 +140,7 @@ struct ProcessingJob: Codable, Equatable, Identifiable, Sendable {
                       summaryModelID: summaryModelID, detectSpeakers: detectSpeakers, preferences: preferences,
                       requestID: request.id, templateID: request.templateID ?? templateID, revisions: revisions,
                       voiceEmbeddingModelID: voiceEmbeddingModelID, languageFallbackModelID: languageFallbackModelID,
-                      smallTasksModelID: smallTasksModelID, photoModelID: photoModelID)
+                      smallTasksModelID: smallTasksModelID, photoModelID: photoModelID, upgrade: request.upgrade ?? upgrade)
     }
 
     /// The models the job runs, each with the revision it froze.
