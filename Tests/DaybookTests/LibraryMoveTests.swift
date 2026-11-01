@@ -9,7 +9,7 @@ import XCTest
 @MainActor
 final class LibraryMoveTests: XCTestCase {
     private var home: URL!
-    private let bundleID = "local.daybook.app"
+    private let bundleID = "local.daybook"
     private var library: URL { home.appendingPathComponent("Library/Application Support/Daybook", isDirectory: true) }
     private var container: URL {
         home.appendingPathComponent("Library/Containers/\(bundleID)/Data/Library/Application Support/Daybook", isDirectory: true)
@@ -60,13 +60,13 @@ final class LibraryMoveTests: XCTestCase {
         XCTAssertNil(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: defaults), "done")
     }
 
-    /// The App Store build keeps the library in `local.daybook.phone`'s container (the iPhone app's bundle ID), with its
-    /// preferences named after that ID: going back to the Developer ID release brings both back.
-    func testTheLibraryComesBackFromTheAppStoreBuild() throws {
-        let store = home.appendingPathComponent("Library/Containers/local.daybook.phone/Data", isDirectory: true)
+    /// A sandboxed build from before the one bundle ID kept the library in `local.daybook.app`'s container, with its
+    /// preferences named after that ID: the release (`local.daybook`) brings both back.
+    func testTheLibraryComesBackFromAnEarlierSandboxedBuild() throws {
+        let store = home.appendingPathComponent("Library/Containers/local.daybook.app/Data", isDirectory: true)
         let storeLibrary = store.appendingPathComponent("Library/Application Support/Daybook", isDirectory: true)
-        let storePreferences = store.appendingPathComponent("Library/Preferences/local.daybook.phone.plist")
-        try writeLibrary(at: storeLibrary, meeting: "from the App Store build")
+        let storePreferences = store.appendingPathComponent("Library/Preferences/local.daybook.app.plist")
+        try writeLibrary(at: storeLibrary, meeting: "from the earlier build")
         try FileManager.default.createDirectory(at: storePreferences.deletingLastPathComponent(), withIntermediateDirectories: true)
         XCTAssertTrue((["onboardingCompleted": true, "syncDeviceID": "store"] as NSDictionary).write(to: storePreferences, atomically: true))
         let defaults = makeTestDefaults()
@@ -76,7 +76,7 @@ final class LibraryMoveTests: XCTestCase {
         XCTAssertEqual(plan.containerPreferences, storePreferences)
         try LegacyLibraryReturn.perform(plan, defaults: defaults)
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: library.appendingPathComponent("Meetings/from the App Store build/meeting.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: library.appendingPathComponent("Meetings/from the earlier build/meeting.json").path))
         XCTAssertTrue(defaults.bool(forKey: "onboardingCompleted"))
         XCTAssertEqual(defaults.string(forKey: "syncDeviceID"), "store")
         XCTAssertNil(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: defaults), "done")
@@ -85,12 +85,12 @@ final class LibraryMoveTests: XCTestCase {
     /// A library in both containers (a sandboxed build under each bundle ID ran): the one that changed last comes back,
     /// and the other stays where it is.
     func testWithTwoContainersTheNewerLibraryComesBack() throws {
-        let storeLibrary = home.appendingPathComponent("Library/Containers/local.daybook.phone/Data/Library/Application Support/Daybook",
+        let earlierLibrary = home.appendingPathComponent("Library/Containers/local.daybook.app/Data/Library/Application Support/Daybook",
                                                        isDirectory: true)
         try writeLibrary(at: container, meeting: "older", date: Date(timeIntervalSinceNow: -86_400))
-        try writeLibrary(at: storeLibrary, meeting: "newer")
+        try writeLibrary(at: earlierLibrary, meeting: "newer")
         var plan = try XCTUnwrap(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: makeTestDefaults()))
-        XCTAssertEqual(plan.container, storeLibrary)
+        XCTAssertEqual(plan.container, earlierLibrary)
 
         try writeLibrary(at: container, meeting: "newest", date: Date(timeIntervalSinceNow: 60))
         plan = try XCTUnwrap(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: makeTestDefaults()))
@@ -142,9 +142,9 @@ final class LibraryMoveTests: XCTestCase {
         guard case .returnFromContainer(let plan)? = check.offer else { return XCTFail("\(check)") }
         XCTAssertEqual(plan.container, container)
         // A build under another bundle ID never takes a library into the app's place.
-        let rehearsal = home.appendingPathComponent("Library/Containers/local.daybook.app.rehearsal/Data/Library/Application Support/Daybook")
+        let rehearsal = home.appendingPathComponent("Library/Containers/local.daybook.rehearsal/Data/Library/Application Support/Daybook")
         try writeLibrary(at: rehearsal, meeting: "rehearsal")
-        XCTAssertEqual(AppState.launchCheck(library: library, bundleIdentifier: "local.daybook.app.rehearsal", defaults: makeTestDefaults(),
+        XCTAssertEqual(AppState.launchCheck(library: library, bundleIdentifier: "local.daybook.rehearsal", defaults: makeTestDefaults(),
                                             sandboxed: false, priorUse: true, home: home), .init())
     }
 

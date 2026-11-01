@@ -38,6 +38,8 @@ enum DaybookEntry {
         #endif
         // Before anything opens the library, syncs, or listens: one copy at a time.
         SingleInstance.ensureOnlyCopy()
+        // Before anything reads a setting: the earlier bundle ID's preferences, once (docs/sandbox.md, "One bundle ID").
+        PreferencesCarryOver.atLaunch()
         DaybookApp.main()
     }
 }

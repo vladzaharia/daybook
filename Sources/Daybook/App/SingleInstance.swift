@@ -1,10 +1,10 @@
 import AppKit
 import Foundation
 
-/// One copy of Daybook at a time on this Mac, whichever build it is: the release (`local.daybook.app`), the App Store
-/// build (`local.daybook.phone`, `AppIdentity`), an ad hoc or rehearsal build (`local.daybook.app.…`), or the unbundled
-/// `swift run` binary. Two copies would open the library, sync, listen for the iPhone, hold the recorder, and record calls
-/// side by side.
+/// One copy of Daybook at a time on this Mac, whichever build it is: the release or the App Store build
+/// (`local.daybook`), an earlier release (`local.daybook.app`), an ad hoc or rehearsal build, or the unbundled `swift run`
+/// binary (`AppIdentity.isMacApp`). Two copies would open the library, sync, listen for the iPhone, hold the recorder,
+/// and record calls side by side.
 ///
 /// A copy that finds an earlier one, before it starts anything, brings that one forward and quits. Copies that start
 /// at the same moment agree on the earlier start (then the lower process ID), so exactly one stays.
@@ -18,10 +18,7 @@ enum SingleInstance {
     }
 
     static func isDaybook(bundleID: String?, executableName: String?) -> Bool {
-        guard let bundleID else { return executableName == AppIdentity.executable }
-        // The sandboxed builds share the iPhone app's bundle ID; the iPhone app itself, run on a Mac, isn't this app.
-        if bundleID == AppIdentity.sandboxed { return executableName == AppIdentity.executable }
-        return bundleID == AppIdentity.unsandboxed || bundleID.hasPrefix(AppIdentity.unsandboxed + ".")
+        AppIdentity.isMacApp(bundleID: bundleID, executableName: executableName)
     }
 
     /// The copy this one gives way to: the earliest other copy that started before it. Nil when this one is first.
