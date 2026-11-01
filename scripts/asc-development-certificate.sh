@@ -119,8 +119,10 @@ check_password="$(openssl rand -hex 16)"
 security_stdin "create-keychain -p $(sec_arg "$check_password") $(sec_arg "$check")" || fail "couldn't make a keychain to check the .p12"
 security_stdin "import $(sec_arg "$work/development.p12") -k $(sec_arg "$check") -f pkcs12 -P $(sec_arg "$(cat "$work/password")")" \
     || fail "macOS couldn't import the .p12"
-security find-identity -p codesigning "$check" | grep -q '"Apple Development' \
-    || fail "the .p12 has no Apple Development identity"
+# Read in full before matching: piped into grep -q, security can still be writing its count line when grep
+# exits, and pipefail then reports SIGPIPE as no identity.
+identities="$(security find-identity -p codesigning "$check")" || fail "macOS couldn't list the .p12's identities"
+grep -q '"Apple Development' <<< "$identities" || fail "the .p12 has no Apple Development identity"
 security delete-keychain "$check" 2>/dev/null || true
 
 # 4. The secrets and the variable.
