@@ -36,12 +36,25 @@ public struct CloudProvenance: Equatable, Sendable {
                         engineVersion: provider == .anthropic ? "Messages API \(CloudClient.anthropicVersion)" : "Responses API", name: name)
     }
 
+    /// Its keys in `ProcessingSettings.parameters`, which the summary placement shares (`MeetingSummary.placed`).
+    public enum Key {
+        public static let provider = "cloudProvider"
+        /// The provider's model ID.
+        public static let model = "cloudModel"
+        public static let effort = "effort"
+        public static let inputTokens = "inputTokens"
+        public static let outputTokens = "outputTokens"
+        public static let estimatedCost = "estimatedCostUSD"
+        public static let priceIsEstimated = "priceIsEstimated"
+        public static let sentBy = "sentBy"
+    }
+
     public var parameters: [String: String] {
-        var values = ["cloudProvider": provider.rawValue, "cloudModel": model, "effort": effort.rawValue,
-                      "inputTokens": String(inputTokens), "outputTokens": String(outputTokens)]
-        if let estimatedCost { values["estimatedCostUSD"] = String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), estimatedCost) }
-        if priceIsEstimated { values["priceIsEstimated"] = "true" }
-        if let sentBy { values["sentBy"] = sentBy }
+        var values = [Key.provider: provider.rawValue, Key.model: model, Key.effort: effort.rawValue,
+                      Key.inputTokens: String(inputTokens), Key.outputTokens: String(outputTokens)]
+        if let estimatedCost { values[Key.estimatedCost] = String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), estimatedCost) }
+        if priceIsEstimated { values[Key.priceIsEstimated] = "true" }
+        if let sentBy { values[Key.sentBy] = sentBy }
         return values
     }
 
@@ -50,14 +63,27 @@ public struct CloudProvenance: Equatable, Sendable {
         guard let settings, let model = settings.model, model.engine == Self.engine, let provider = CloudProvider(rawValue: model.family) else { return nil }
         let parameters = settings.parameters
         self.init(provider: provider, model: model.variant, name: model.name ?? model.variant,
-                  effort: parameters["effort"].flatMap(CloudEffort.init(rawValue:)) ?? .medium,
-                  inputTokens: parameters["inputTokens"].flatMap(Int.init) ?? 0, outputTokens: parameters["outputTokens"].flatMap(Int.init) ?? 0,
-                  estimatedCost: parameters["estimatedCostUSD"].flatMap(Double.init), priceIsEstimated: parameters["priceIsEstimated"] == "true",
-                  sentBy: parameters["sentBy"])
+                  effort: parameters[Key.effort].flatMap(CloudEffort.init(rawValue:)) ?? .medium,
+                  inputTokens: parameters[Key.inputTokens].flatMap(Int.init) ?? 0, outputTokens: parameters[Key.outputTokens].flatMap(Int.init) ?? 0,
+                  estimatedCost: parameters[Key.estimatedCost].flatMap(Double.init), priceIsEstimated: parameters[Key.priceIsEstimated] == "true",
+                  sentBy: parameters[Key.sentBy])
     }
 
     /// "Summarized with Claude Sonnet 5.5".
     public var label: String { "Summarized with \(name)" }
+
+    /// What it used, for the inspector: "12,700 tokens · $0.05" ("about $0.05" when the price was estimated); nil
+    /// when the summary didn't record it.
+    public var usage: String? {
+        let tokens = inputTokens + outputTokens
+        var parts: [String] = []
+        if tokens > 0 { parts.append("\(tokens.formatted()) tokens") }
+        if let estimatedCost {
+            let cost = CloudCost.format(estimatedCost)
+            parts.append(priceIsEstimated && !cost.hasPrefix("under") ? "about \(cost)" : cost)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }
 
 extension MeetingSummary {

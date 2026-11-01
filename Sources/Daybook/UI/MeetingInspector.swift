@@ -140,9 +140,21 @@ struct MeetingInspector: View {
         }
         if let summary = meeting.summary {
             let origin = summary.origin
-            LabeledContent("Summary", value: origin.cloudModel ?? state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))
-                .help([origin.colophon(thisDeviceID: state.library.thisDevice.id, thisDevice: AppState.thisDeviceWords, unknown: AppState.thisDeviceWords),
-                       summary.createdAt.formatted(date: .abbreviated, time: .shortened)].joined(separator: " · "))
+            let help = [origin.colophon(thisDeviceID: state.library.thisDevice.id, thisDevice: AppState.thisDeviceWords, unknown: AppState.thisDeviceWords),
+                        summary.createdAt.formatted(date: .abbreviated, time: .shortened)].joined(separator: " · ")
+            if let cloud = summary.cloudProvenance {
+                // A cloud model's: what it used and cost, from its provenance.
+                LabeledContent {
+                    Text(cloud.name)
+                } label: {
+                    Text("Summary")
+                    if let usage = cloud.usage { Text(usage) }
+                }
+                .help(help)
+            } else {
+                LabeledContent("Summary", value: state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))
+                    .help(help)
+            }
         }
         HStack {
             if !meeting.tracks.isEmpty { ReprocessMenu(state: state, meeting: meeting).fixedSize() }

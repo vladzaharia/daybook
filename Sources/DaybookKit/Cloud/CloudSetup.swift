@@ -17,13 +17,25 @@ public final class CloudSetup {
     }
 
     /// Each provider's key, masked, for the providers that have one.
-    public private(set) var keys: [CloudProvider: String] = [:]
-    public private(set) var checks: [CloudProvider: Check] = [:]
-    public private(set) var offers: [CloudOffer] = []
-    public private(set) var isRefreshing = false
-    public var preferences: CloudSummaryPreferences {
-        didSet { if preferences != oldValue { preferences.save(to: defaults) } }
+    public private(set) var keys: [CloudProvider: String] = [:] {
+        didSet { if keys != oldValue { onChange?() } }
     }
+    public private(set) var checks: [CloudProvider: Check] = [:]
+    public private(set) var offers: [CloudOffer] = [] {
+        didSet { if offers != oldValue { onChange?() } }
+    }
+    public private(set) var isRefreshing = false
+    /// This device's preferences, and the one place they're read and written (UserDefaults, `cloudSummaryPreferences`).
+    public var preferences: CloudSummaryPreferences {
+        didSet {
+            guard preferences != oldValue else { return }
+            preferences.save(to: defaults)
+            onChange?()
+        }
+    }
+    /// What a summary may use changed: a key, the models offered, or the preferences. Each app's summary placement
+    /// follows it, so a countdown reacts at once (docs/multipoint.md, "Where summaries run").
+    @ObservationIgnored public var onChange: (() -> Void)?
 
     @ObservationIgnored public let directory: CloudDirectory
     @ObservationIgnored private let store: any CloudKeyStore
@@ -50,6 +62,22 @@ public final class CloudSetup {
         isRefreshing = true
         offers = fetches ? await directory.offers(refresh: true) : await directory.currentOffers()
         isRefreshing = false
+    }
+
+    /// Reads the keys again, and the models kept for them, before a summary is placed. No provider is asked, except
+    /// once for a key this device has never listed (one added on another device, which iCloud Keychain brought here).
+    public func reload() async {
+        reloadKeys()
+        guard isSetUp else {
+            if !offers.isEmpty { offers = [] }
+            return
+        }
+        var unlisted = false
+        for provider in CloudProvider.allCases where keys[provider] != nil {
+            if await directory.listing(provider) == nil { unlisted = true }
+        }
+        let current = fetches && unlisted ? await directory.offers() : await directory.currentOffers()
+        if current != offers { offers = current }
     }
 
     /// Checks `text` as a key with the provider's model list and keeps it only when the provider accepts it.

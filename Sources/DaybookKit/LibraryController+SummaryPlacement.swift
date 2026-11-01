@@ -46,10 +46,10 @@ extension Meeting {
 /// Where a summary ran, as its provenance says.
 public struct SummaryOrigin: Equatable, Sendable {
     /// The device that ran it, or sent it to the cloud (its sync replica ID). Nil for summaries made before
-    /// Daybook recorded it: those were made on a Mac.
+    /// Daybook recorded it: those were made on a Mac, or in the cloud without the placement (`--cloud-check`).
     public var deviceID: String?
     public var deviceName: String?
-    /// The cloud model's name, for a summary made in the cloud.
+    /// The cloud model's name ("Claude Sonnet 5.5"), for any summary a cloud model wrote.
     public var cloudModel: String?
 
     public init(deviceID: String? = nil, deviceName: String? = nil, cloudModel: String? = nil) {
@@ -68,23 +68,25 @@ public struct SummaryOrigin: Equatable, Sendable {
 }
 
 extension MeetingSummary {
-    /// Provenance keys (`processingSettings.parameters`).
+    /// Provenance keys (`processingSettings.parameters`). A cloud summary's own (`cloudProvider`, `cloudModel` as the
+    /// provider's model ID, `effort`, the tokens, the cost, `sentBy`) are `CloudProvenance`'s, the same keys.
     enum PlacementKey {
         static let device = "summarizedBy"
         static let deviceName = "summarizedByName"
         static let place = "place"
-        static let cloudModel = "cloudModel"
-        static let cloudProvider = "cloudProvider"
         /// Followed by a role's name: "model.transcription", "model.summarization".
         static let modelPrefix = "model."
     }
 
-    /// Where it ran.
+    /// Where it ran. A cloud summary names its model from its cloud provenance, whether or not it was placed.
     public var origin: SummaryOrigin {
         let parameters = processingSettings?.parameters ?? [:]
         return SummaryOrigin(deviceID: parameters[PlacementKey.device], deviceName: parameters[PlacementKey.deviceName],
-                             cloudModel: parameters[PlacementKey.place] == "cloud" ? parameters[PlacementKey.cloudModel] : nil)
+                             cloudModel: cloudProvenance?.name)
     }
+
+    /// Whether a cloud model wrote it.
+    public var isFromCloud: Bool { cloudProvenance != nil }
 
     /// The model behind each role, by role name, as recorded with it.
     public var modelsByRole: [String: String] {
@@ -95,8 +97,10 @@ extension MeetingSummary {
         return result
     }
 
-    /// The same summary with where it ran recorded: the device that ran it (or sent it to the cloud), the
-    /// cloud model, and the model for each role behind it (`inputs`, plus its own as `summarization`).
+    /// The same summary with where it ran recorded: the device that ran it (or sent it to the cloud), and the model
+    /// for each role behind it (`inputs`, plus its own as `summarization`). A cloud summary keeps the provenance the
+    /// cloud wrote (`CloudProvenance`: the model, effort, tokens, cost); one that came without it (a stand-in, or a
+    /// summary made before) gets the model it was sent to, so every cloud summary names its model the same way.
     public func placed(_ place: SummaryPlace, by device: ProcessingRequest.Device, inputs: [String: String]) -> MeetingSummary {
         var summary = self
         var settings = summary.processingSettings ?? ProcessingSettings(modelID: modelID, createdAt: createdAt)
@@ -105,10 +109,16 @@ extension MeetingSummary {
         switch place {
         case .cloud(let model):
             settings.parameters[PlacementKey.place] = "cloud"
-            settings.parameters[PlacementKey.cloudModel] = model.name
-            settings.parameters[PlacementKey.cloudProvider] = model.provider.rawValue
-            if settings.modelID.isEmpty { settings.modelID = model.id }
-            if summary.modelID.isEmpty { summary.modelID = model.id }
+            if CloudProvenance(settings) == nil {
+                let provenance = CloudProvenance(provider: model.provider, model: model.id, name: model.name, effort: .medium,
+                                                 inputTokens: 0, outputTokens: 0, estimatedCost: nil)
+                settings.model = provenance.modelProvenance
+                settings.modelID = provenance.modelID
+                summary.modelID = provenance.modelID
+                settings.parameters[CloudProvenance.Key.provider] = model.provider.rawValue
+                settings.parameters[CloudProvenance.Key.model] = model.id
+            }
+            if settings.parameters[CloudProvenance.Key.sentBy] == nil { settings.parameters[CloudProvenance.Key.sentBy] = device.name }
         case .thisDevice, .mac:
             settings.parameters[PlacementKey.place] = "local"
         }

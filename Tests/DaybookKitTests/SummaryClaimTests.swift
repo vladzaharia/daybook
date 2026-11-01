@@ -79,8 +79,9 @@ final class SummaryClaimTests: XCTestCase {
         let applied = try XCTUnwrap(library.meeting(id)?.summary)
         XCTAssertEqual(applied.origin, SummaryOrigin(deviceID: library.thisDevice.id, deviceName: library.thisDevice.name, cloudModel: "Claude Sonnet 5.5"))
         XCTAssertEqual(applied.modelsByRole, ["transcription": "parakeet/v3", "diarization": "community-1/offline",
-                                              "summarization": "claude-sonnet-5-5"])
+                                              "summarization": "anthropic/claude-sonnet-5-5"])
         XCTAssertEqual(applied.processingSettings?.parameters["cloudProvider"], "anthropic")
+        XCTAssertEqual(applied.processingSettings?.parameters["cloudModel"], "claude-sonnet-5-5", "The provider's model ID, as the cloud writes it")
         XCTAssertEqual(library.meeting(id)?.status, .ready)
 
         // The Mac's summary lands after this device began another: the Mac's is kept.
@@ -113,6 +114,74 @@ final class SummaryClaimTests: XCTestCase {
         XCTAssertEqual(SummaryOrigin().colophon(thisDeviceID: "me", thisDevice: "this Mac", unknown: "this Mac"), "Summarized on this Mac",
                        "Summaries from before it was recorded were made on a Mac")
         XCTAssertEqual(MeetingSummary(overview: "Old").origin, SummaryOrigin())
+    }
+
+    // MARK: One provenance for a cloud summary
+
+    /// A cloud summary as `CloudSummarizer` writes it: the model's provenance (engine "cloud"), the effort, tokens, cost,
+    /// and the device that sent it.
+    private func fromTheCloud(sentBy: String? = "Pocket iPhone") -> MeetingSummary {
+        let provenance = CloudProvenance(provider: .anthropic, model: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", effort: .high,
+                                         inputTokens: 9_800, outputTokens: 2_900, estimatedCost: 0.0486, sentBy: sentBy)
+        var summary = MeetingSummary(title: "Planning", overview: "From the cloud", modelID: provenance.modelID)
+        var parameters = provenance.parameters
+        parameters["templateID"] = "auto"
+        summary.processingSettings = ProcessingSettings(modelID: provenance.modelID, parameters: parameters, model: provenance.modelProvenance)
+        return summary
+    }
+
+    func testBehaviorAPlacedCloudSummaryKeepsTheCloudsProvenanceAndAddsWhereItRan() async throws {
+        let library = try await open()
+        let id = transcribed(library)
+        XCTAssertTrue(library.applyPlacedSummary(fromTheCloud(), to: id, place: .cloud(sonnet), started: Date()))
+        let applied = try XCTUnwrap(library.meeting(id)?.summary)
+        // The cloud's.
+        let cloud = try XCTUnwrap(applied.cloudProvenance)
+        XCTAssertEqual(cloud.model, "claude-sonnet-5-5")
+        XCTAssertEqual(cloud.effort, .high)
+        XCTAssertEqual(cloud.inputTokens, 9_800)
+        XCTAssertEqual(cloud.outputTokens, 2_900)
+        XCTAssertEqual(cloud.estimatedCost ?? 0, 0.0486, accuracy: 1e-9)
+        XCTAssertEqual(cloud.sentBy, "Pocket iPhone", "The cloud's own word for who sent it stays")
+        XCTAssertEqual(applied.modelID, "anthropic/claude-sonnet-5-5")
+        XCTAssertEqual(applied.processingSettings?.parameters["templateID"], "auto")
+        // The placement's.
+        XCTAssertEqual(applied.origin, SummaryOrigin(deviceID: library.thisDevice.id, deviceName: library.thisDevice.name, cloudModel: "Claude Sonnet 5.5"))
+        XCTAssertEqual(applied.processingSettings?.parameters["place"], "cloud")
+        XCTAssertEqual(applied.modelsByRole["summarization"], "anthropic/claude-sonnet-5-5")
+        XCTAssertEqual(applied.origin.colophon(thisDeviceID: library.thisDevice.id, thisDevice: "this iPhone", unknown: "your Mac"),
+                       "Summarized with Claude Sonnet 5.5")
+    }
+
+    func testBehaviorACloudSummaryWithoutTheCloudsProvenanceGetsTheModelItWasSentTo() {
+        let device = ProcessingRequest.Device(id: "me", name: "Pocket iPhone")
+        let placed = MeetingSummary(overview: "From a stand-in", modelID: "").placed(.cloud(sonnet), by: device, inputs: [:])
+        let cloud = placed.cloudProvenance
+        XCTAssertEqual(cloud?.provider, .anthropic)
+        XCTAssertEqual(cloud?.model, "claude-sonnet-5-5")
+        XCTAssertEqual(cloud?.name, "Claude Sonnet 5.5")
+        XCTAssertEqual(cloud?.sentBy, "Pocket iPhone")
+        XCTAssertNil(cloud?.usage, "Nothing it used is known")
+        XCTAssertEqual(placed.modelID, "anthropic/claude-sonnet-5-5")
+        XCTAssertEqual(placed.origin.cloudModel, "Claude Sonnet 5.5")
+        XCTAssertEqual(placed.processingSettings?.parameters["cloudModel"], "claude-sonnet-5-5")
+    }
+
+    func testBehaviorACloudSummaryMadeWithoutThePlacementStillSaysWhichModel() {
+        // `--cloud-check`, or a summary written before the placement: no device, but the cloud's provenance.
+        let summary = fromTheCloud(sentBy: nil)
+        XCTAssertEqual(summary.origin, SummaryOrigin(cloudModel: "Claude Sonnet 5.5"))
+        XCTAssertTrue(summary.isFromCloud)
+        XCTAssertEqual(summary.origin.colophon(thisDeviceID: "mac", thisDevice: "this Mac", unknown: "this Mac"), "Summarized with Claude Sonnet 5.5")
+        XCTAssertEqual(summary.cloudProvenance?.usage, "\(12_700.formatted()) tokens · $0.05")
+        var estimated = summary
+        estimated.processingSettings?.parameters["priceIsEstimated"] = "true"
+        XCTAssertEqual(estimated.cloudProvenance?.usage, "\(12_700.formatted()) tokens · about $0.05")
+        // A local summary is no cloud's.
+        let local = MeetingSummary(overview: "Here", modelID: "gemma-4/e4b-4bit").placed(.thisDevice, by: mac, inputs: [:])
+        XCTAssertNil(local.cloudProvenance)
+        XCTAssertNil(local.origin.cloudModel)
+        XCTAssertFalse(local.isFromCloud)
     }
 
     // MARK: Reachable Macs

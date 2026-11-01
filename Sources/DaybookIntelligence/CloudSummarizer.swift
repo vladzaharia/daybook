@@ -120,6 +120,20 @@ public struct CloudSummarizer: CloudSummarizing {
     }
 }
 
+extension CloudSummarizing {
+    /// The summary as a summary step applies it: with the suggested vocabulary and warnings when the cloud says
+    /// them (`CloudSummarizer.summary`), the summary alone from another `CloudSummarizing` (a test's fake).
+    public func summaryOutput(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String], model: CloudModel, effort: CloudEffort,
+                              progress: @escaping @Sendable (Double) -> Void) async throws -> SummaryProcessingOutput {
+        if let cloud = self as? CloudSummarizer {
+            let result = try await cloud.summary(meeting, template: template, vocabulary: vocabulary, model: model, effort: effort, progress: progress)
+            return SummaryProcessingOutput(summary: result.summary, suggestedTerms: result.suggestedTerms, warnings: result.warnings)
+        }
+        let summary = try await summarize(meeting, template: template, vocabulary: vocabulary, model: model, effort: effort, progress: progress)
+        return SummaryProcessingOutput(summary: summary)
+    }
+}
+
 /// Passes progress on only when it moves by a percent or more, and never backwards: a reply streams in
 /// hundreds of pieces a second.
 private final class ProgressGate: @unchecked Sendable {
