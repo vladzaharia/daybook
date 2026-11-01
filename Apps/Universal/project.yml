@@ -1,0 +1,150 @@
+# RESEARCH PROTOTYPE (docs/research/one-bundle.md). Nothing builds, tests, or releases from this file; the
+# shipping projects are still Apps/macOS/project.yml and Apps/iOS/project.yml.
+#
+# One XcodeGen spec for both apps, to see what a single project for TestFlight and the App Store would take:
+#
+#   - Option (a), universal purchase: it includes the two existing specs unchanged, so the Mac target `Daybook`
+#     and the iPhone targets keep their own sources and settings, and gives the Mac a `store` signing kind
+#     (Config/Mac.xcconfig) whose bundle ID is the iPhone's, local.daybook.phone, with the App Sandbox and a
+#     container migration manifest (container-migration-store.plist).
+#   - Option (b), one multiplatform target: `DaybookOne`, whose supported destinations are iPhone and Mac, built
+#     from the same sources with destination filters and SDK-conditional settings (Config/One.xcconfig).
+#
+# Generate and build with Apps/Universal/build-research.sh (ad hoc, unsigned, or simulator builds only). The
+# generated DaybookUniversal.xcodeproj is ignored by git.
+#
+# Never launch a `store` build: a sandboxed app run once as local.daybook.phone creates that container on this Mac,
+# and macOS then never runs the migration manifest for the real app here (docs/sandbox.md).
+include:
+  - path: ../macOS/project.yml
+  - path: ../iOS/project.yml
+
+name: DaybookUniversal
+
+options:
+  bundleIdPrefix: local.daybook
+  # Both specs create intermediate groups. Merged, the iPhone's folders (../iOS/…) and the repository's (../../…) give
+  # XcodeGen two parents for one "Apps" group, and Xcode refuses the project ("a member of more than one group").
+  createIntermediateGroups: false
+  deploymentTarget:
+    macOS: "15.0"
+    iOS: "26.0"
+
+# The two specs' project-level settings collide when merged (the later include wins): ENABLE_USER_SCRIPT_SANDBOXING
+# (Mac NO, iPhone YES), MARKETING_VERSION (0.1.0 and 0.1), and the project's xcconfig (each app's own
+# Config/Signing.xcconfig). Each app gets its own back at the target level below.
+configFiles:
+  Debug: Config/Phone.xcconfig
+  Release: Config/Phone.xcconfig
+
+targets:
+  Daybook:
+    configFiles:
+      Debug: Config/Mac.xcconfig
+      Release: Config/Mac.xcconfig
+    settings:
+      base:
+        # The notices script reads package checkouts outside the project.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        MARKETING_VERSION: "0.1.0"
+
+  DaybookPhone:
+    settings:
+      base:
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        MARKETING_VERSION: "0.1"
+
+  DaybookPhoneWidgets:
+    settings:
+      base:
+        MARKETING_VERSION: "0.1"
+
+  # Option (b): one target, two platforms. Each platform compiles only its own app's sources (destinationFilters), so
+  # this is the two apps behind one target name, not shared code: the shared code is already the Swift package.
+  DaybookOne:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    configFiles:
+      Debug: Config/One.xcconfig
+      Release: Config/One.xcconfig
+    sources:
+      - path: ../../Sources/Daybook
+        destinationFilters: [macOS]
+      - path: ../../Resources/Assets.xcassets
+        destinationFilters: [macOS]
+      - path: ../iOS/DaybookPhone
+        destinationFilters: [iOS]
+        # The iPhone spec names these through `info` and `entitlements`, so XcodeGen leaves them out of its resources;
+        # here they come in through build settings, and the Info.plist would be copied over the processed one
+        # ("Multiple commands produce …/DaybookOne.app/Info.plist").
+        excludes:
+          - Resources/Info.plist
+          - Resources/DaybookPhone.entitlements
+      - path: ../iOS/Shared
+        destinationFilters: [iOS]
+    dependencies:
+      - package: Daybook
+        product: DaybookCore
+      - package: Daybook
+        product: DaybookKit
+      - package: Daybook
+        product: DaybookIntelligence
+      - package: Daybook
+        product: DaybookLink
+      - package: Daybook
+        product: DaybookDevices
+        destinationFilters: [macOS]
+      - package: Daybook
+        product: DaybookDesign
+        destinationFilters: [macOS]
+      - package: Daybook
+        product: DaybookCaptions
+        destinationFilters: [iOS]
+      - package: Daybook
+        product: DaybookLive
+        destinationFilters: [iOS]
+      - package: Daybook
+        product: DaybookModelStore
+        destinationFilters: [iOS]
+      - target: DaybookPhoneWidgets
+        embed: true
+        codeSign: true
+        destinationFilters: [iOS]
+    postCompileScripts:
+      - name: Generate app icon (Mac)
+        # The Mac's icon script, as in Apps/macOS/project.yml; build phases have no destination filter, so it checks.
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          if [[ "${PLATFORM_NAME}" != macosx ]]; then exit 0; fi
+          iconset="${DERIVED_FILE_DIR}/Daybook.iconset"
+          /bin/rm -rf "${iconset:?}"
+          /usr/bin/env -u SDKROOT -u MACOSX_DEPLOYMENT_TARGET xcrun --sdk macosx swift "${DAYBOOK_ROOT}/scripts/make-icon.swift" "${iconset}"
+          mkdir -p "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          iconutil -c icns "${iconset}" -o "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Daybook.icns"
+    settings:
+      base:
+        PRODUCT_NAME: DaybookOne
+        PRODUCT_MODULE_NAME: DaybookOne
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_PREVIEWS: NO
+        ENABLE_DEBUG_DYLIB: NO
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # XcodeGen writes these two at the target level for a multiplatform target (the bundle ID from bundleIdPrefix
+        # and the name, and the first Info.plist it finds in the sources, the iPhone's, for both SDKs). Target settings
+        # beat One.xcconfig, so the SDK-conditional values have to be here.
+        PRODUCT_BUNDLE_IDENTIFIER: local.daybook.phone
+        "PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]": $(DAYBOOK_BUNDLE_ID)
+        INFOPLIST_FILE: $(DAYBOOK_ROOT)/Apps/iOS/DaybookPhone/Resources/Info.plist
+        "INFOPLIST_FILE[sdk=macosx*]": $(DAYBOOK_ROOT)/Resources/Info.plist
+
+schemes:
+  DaybookOne:
+    build:
+      targets:
+        DaybookOne: all
+    run:
+      config: Debug
+    archive:
+      config: Release

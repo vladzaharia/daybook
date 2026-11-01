@@ -1,0 +1,21 @@
+// RESEARCH PROTOTYPE (docs/research/one-bundle.md): option (b), one target for both platforms (DaybookOne).
+//
+// The Mac's settings (Mac.xcconfig, with its DAYBOOK_SIGNING kinds), then everything the two apps set differently,
+// conditioned on the SDK. That's most of what makes each app what it is: bundle ID, Info.plist, entitlements,
+// signing, icon, hardened runtime, device family.
+#include "Mac.xcconfig"
+
+// The bundle ID and Info.plist are conditioned in project.yml: XcodeGen sets both at the target level, above this file.
+
+CODE_SIGN_ENTITLEMENTS[sdk=iphone*] = $(DAYBOOK_ROOT)/Apps/iOS/DaybookPhone/Resources/DaybookPhone.entitlements
+CODE_SIGN_STYLE[sdk=iphone*] = Automatic
+CODE_SIGN_IDENTITY[sdk=iphone*] = Apple Development
+DEVELOPMENT_TEAM[sdk=iphone*] = $(DAYBOOK_TEAM_ID)
+
+ENABLE_HARDENED_RUNTIME[sdk=macosx*] = YES
+COMBINE_HIDPI_IMAGES[sdk=macosx*] = YES
+ASSETCATALOG_COMPILER_APPICON_NAME[sdk=macosx*] =
+ASSETCATALOG_COMPILER_APPICON_NAME[sdk=iphone*] = AppIcon
+TARGETED_DEVICE_FAMILY = 1
+MARKETING_VERSION[sdk=macosx*] = 0.1.0
+MARKETING_VERSION[sdk=iphone*] = 0.1

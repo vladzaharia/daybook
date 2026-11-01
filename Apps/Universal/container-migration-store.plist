@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- RESEARCH PROTOTYPE (docs/research/one-bundle.md): the manifest a Mac App Store build under local.daybook.phone
+     would carry. Resources/container-migration.plist moves ${Library}/Preferences/${BundleId}.plist, which here would
+     be local.daybook.phone.plist, a file the unsandboxed app never wrote. The preferences it did write are
+     local.daybook.app.plist, so they move under the new name, as the rehearsal's manifest moves a folder under another
+     name. The library's folder is named Daybook, not after the bundle ID, so it moves as before. -->
+<plist version="1.0"><dict>
+<key>Move</key>
+<array>
+    <string>${ApplicationSupport}/Daybook</string>
+    <array>
+        <string>${Library}/Preferences/local.daybook.app.plist</string>
+        <string>${Library}/Preferences/${BundleId}.plist</string>
+    </array>
+</array>
+</dict></plist>

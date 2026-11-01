@@ -1,0 +1,21 @@
+// RESEARCH PROTOTYPE (docs/research/one-bundle.md): the Mac target's settings in Apps/Universal.
+//
+// Everything Apps/macOS/Config/Signing.xcconfig has, plus a fourth DAYBOOK_SIGNING kind:
+//
+//     store     the Mac App Store and TestFlight build: the iPhone's bundle ID (universal purchase needs one bundle ID
+//               on both platforms), always in the App Sandbox (Daybook-Sandbox.entitlements, unchanged: it already has
+//               iCloud, push, and the keychain groups), and a container migration manifest that also renames the
+//               preferences, since their file is named after the bundle ID.
+//
+// Only an App Store export (method app-store-connect) would sign it for real; Apps/Universal/build-research.sh builds
+// it unsigned, to read what it produces. It is never launched (see project.yml).
+#include "../../macOS/Config/Signing.xcconfig"
+
+DAYBOOK_BUNDLE_ID_store = local.daybook.phone
+DAYBOOK_CODE_SIGN_STYLE_store = Automatic
+DAYBOOK_CODE_SIGN_IDENTITY_store = Apple Development
+DAYBOOK_DEVELOPMENT_TEAM_store = $(DAYBOOK_TEAM_ID)
+DAYBOOK_ENTITLEMENTS_store_NO = $(DAYBOOK_ROOT)/Resources/Daybook-Sandbox.entitlements
+DAYBOOK_ENTITLEMENTS_store_YES = $(DAYBOOK_ROOT)/Resources/Daybook-Sandbox.entitlements
+DAYBOOK_MIGRATION_MANIFEST_store_NO = $(DAYBOOK_ROOT)/Apps/Universal/container-migration-store.plist
+DAYBOOK_MIGRATION_MANIFEST_store_YES = $(DAYBOOK_ROOT)/Apps/Universal/container-migration-store.plist
