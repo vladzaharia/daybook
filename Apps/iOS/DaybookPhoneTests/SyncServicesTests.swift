@@ -55,7 +55,7 @@ final class SyncServicesTests: XCTestCase {
         guard case .seen(let name, let seen) = presence else { return XCTFail("expected the Mac's presence, got \(presence)") }
         XCTAssertEqual(name, "Studio Mac")
         XCTAssertEqual(presence.waitingLine(now: seen.addingTimeInterval(60)), "Waiting for Studio Mac")
-        XCTAssertEqual(presence.waitingLine(now: seen.addingTimeInterval(2 * 3_600 + 5)), "Waiting for your Mac · last seen 2 h ago")
+        XCTAssertEqual(presence.waitingLine(now: seen.addingTimeInterval(2 * 3_600 + 5)), "Waiting for your Mac · Last seen 2 h ago")
 
         // Nothing changed on either side: the timer's check lists the journal and runs no pass.
         let passes = phone.sync.passes

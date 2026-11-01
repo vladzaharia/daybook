@@ -1,5 +1,6 @@
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import XCTest
 @testable import DaybookPhone
 
@@ -167,7 +168,7 @@ final class LinkServicesTests: XCTestCase {
         try await waitUntil("finished") { finished == meeting }
         XCTAssertNil(link.liveProgress[meeting], "finished work leaves the live list; sync brings the result")
 
-        await link.unpair(mac.id)
+        try await link.unpair(mac.id)
         XCTAssertTrue(link.macs.isEmpty)
         try await waitUntil("the Mac forgets the phone", timeout: 5) {
             ((try? mac.store.records()) ?? []).isEmpty
@@ -745,6 +746,147 @@ final class LinkServicesTests: XCTestCase {
         guard case .accepted = reply.outcome else { return XCTFail("an existing pairing keeps its behavior, got \(reply.outcome)") }
         _ = try await mac.service.request(LinkRecordRequest(action: .stop, conversationID: conversation), from: link.deviceID)
         try await waitUntil("stopped") { !model.recorder.isActive }
+    }
+
+    // MARK: Pairings the keychain won't give, and what a Mac's page says
+
+    /// A key store whose keychain refuses to list on cue, as one does before the first unlock.
+    final class FlakyKeyStore: LinkKeyStore, @unchecked Sendable {
+        private let lock = NSLock()
+        private let stored = MemoryLinkKeyStore()
+        private var _failsListing = false
+        var failsListing: Bool { get { lock.withLock { _failsListing } } set { lock.withLock { _failsListing = newValue } } }
+
+        func records() throws -> [LinkPairingRecord] { try stored.records() }
+        func damagedDevices() throws -> [LinkPairedDevice] {
+            if failsListing { throw LinkKeyStoreError.keychain(errSecInteractionNotAllowed) }
+            return try stored.damagedDevices()
+        }
+        func save(_ record: LinkPairingRecord) throws { try stored.save(record) }
+        func remove(deviceID: UUID) throws { try stored.remove(deviceID: deviceID) }
+    }
+
+    func testBehaviorAPairedMacsReadThatFailsKeepsTheMacsAndIsTriedAgain() async throws {
+        let mac = try await makeMac()
+        let store = FlakyKeyStore()
+        let link = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
+                             keyStore: store, configuration: .loopback())
+        addTeardownBlock { await link.setActivity(.background) }
+        link.pairedRetryDelay = .milliseconds(50)
+        let code = await mac.service.beginPairing()
+        await link.start()
+        _ = try await link.pair(with: mac.endpoint, code: code.digits)
+        try await waitUntil("connected") { link.macs.first?.isConnected == true }
+
+        // A read that fails (a keychain that won't list) keeps the Mac and what it said.
+        store.failsListing = true
+        try await link.unpair(UUID())
+        XCTAssertTrue(link.pairedReadFailed)
+        XCTAssertEqual(link.macs.map(\.id), [mac.id], "the Mac stays paired")
+        XCTAssertTrue(link.macs.first?.isConnected == true)
+        // The next try reads it again.
+        store.failsListing = false
+        try await waitUntil("read again") { !link.pairedReadFailed }
+        XCTAssertEqual(link.macs.map(\.id), [mac.id])
+    }
+
+    func testBehaviorAPairedMacStartingUpWhileTheKeychainRefusesConnectsOnceItReads() async throws {
+        let mac = try await makeMac()
+        let store = FlakyKeyStore()
+        let first = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
+                              keyStore: store, configuration: .loopback())
+        let code = await mac.service.beginPairing()
+        await first.start()
+        _ = try await first.pair(with: mac.endpoint, code: code.digits)
+        await first.setActivity(.background)
+
+        // The app launches before the keychain lists: no Mac yet, and it tries again.
+        store.failsListing = true
+        let link = PhoneLink(identity: PhoneLink.identity(installation: first.deviceID.uuidString, name: "Test iPhone", libraryID: nil),
+                             keyStore: store, configuration: .loopback())
+        addTeardownBlock { await link.setActivity(.background) }
+        link.pairedRetryDelay = .milliseconds(50)
+        link.use(mac.endpoint, for: mac.id)
+        await link.start()
+        XCTAssertTrue(link.macs.isEmpty)
+        XCTAssertTrue(link.pairedReadFailed)
+        store.failsListing = false
+        try await waitUntil("connected once read") { link.macs.first?.isConnected == true }
+    }
+
+    func testBehaviorSendsToAMacArriveInTheOrderTheyreMade() async throws {
+        let mac = try await makeMac()
+        let inbox = MacInbox(mac.service.events())
+        let link = makeLink()
+        try await pair(link, with: mac)
+        let conversation = UUID()
+        let phases: [LinkRecordingState.Phase] = (0..<30).map { $0.isMultiple(of: 2) ? .stopping : .idle }
+        for phase in phases { link.sendRecordingState(LinkRecordingState(phase: phase, conversationID: conversation)) }
+        await link.sendsSettled()
+        try await waitUntil("every state") { inbox.states.count == phases.count }
+        XCTAssertEqual(inbox.states.map(\.phase), phases, "a stop's stopping never arrives after its idle")
+    }
+
+    func testBehaviorStopOnAMacStopsItWhenItStopsForPages() async throws {
+        let id = UUID()
+        let store = MemoryLinkKeyStore()
+        let service = LinkService(identity: LinkIdentity(deviceID: id, name: "Studio Mac", deviceClass: .mac, appVersion: "2.0", canProcess: true,
+                                                         features: [LinkCapabilities.pageStopFeature]),
+                                  keyStore: store, configuration: .loopback())
+        try await service.start()
+        addTeardownBlock { await service.stop() }
+        let listening = await service.port
+        let port = try XCTUnwrap(listening)
+        let mac = Mac(service: service, id: id, endpoint: LinkEndpoint(host: "127.0.0.1", port: port), store: store)
+        let recorder = await recordingMac(mac)
+        let link = makeLink()
+        try await pair(link, with: mac)
+        XCTAssertTrue(link.macs.first?.stopsForPages == true)
+
+        // The Mac records a conversation of its own and says so.
+        let conversation = UUID()
+        _ = await recorder.handle(LinkRecordRequest(action: .start, conversationID: conversation))
+        try await service.send(.recordingState(LinkRecordingState(phase: .recording, conversationID: conversation, startedAt: Date())))
+        try await waitUntil("its recording") { link.macs.first?.isRecording == true }
+
+        let problem = await link.stopRecording(on: id)
+        XCTAssertNil(problem)
+        let stops = await recorder.stops
+        XCTAssertEqual(stops.map(\.conversationID), [conversation])
+        XCTAssertEqual(stops.first?.standalone, true, "a page's stop")
+        XCTAssertTrue(link.stopsInFlight.isEmpty)
+    }
+
+    func testBehaviorAMacsPageSaysWhatKeepsItFromConnectingAndWhenItWasLastSeen() {
+        let now = Date()
+        var mac = PhoneLink.Mac(id: UUID(), name: "Studio Mac", pairedAt: now, state: .failed(.authenticationFailed))
+        XCTAssertEqual(mac.problem, .notRecognized)
+        XCTAssertEqual(mac.stateLine, PairingWords.needsPairingAgain)
+        mac.state = .failed(.incompatibleVersion(peerVersions: 0...0))
+        XCTAssertEqual(mac.problem, .incompatible(peerVersions: 0...0))
+        XCTAssertEqual(mac.stateLine, "Update Daybook on Studio Mac to connect.", "says which side is older")
+        mac.state = .idle
+        mac.lastConnectedAt = now.addingTimeInterval(-3_600)
+        XCTAssertNil(mac.problem)
+        XCTAssertEqual(mac.stateLine(now: now), "Not connected · \(RecorderStatusWords.lastSeen(now.addingTimeInterval(-3_600), now: now))")
+        mac.isDamaged = true
+        XCTAssertEqual(mac.problem, .damaged)
+        XCTAssertEqual(mac.stateLine, PairingWords.needsPairingAgain)
+    }
+
+    func testBehaviorPairingListsAMacOfAnotherLibraryLastAndSaysWhenItCantLook() {
+        let link = makeLink()
+        let office = PhoneLink.PairingCandidate(id: "Office iMac", name: "Office iMac", endpoint: LinkEndpoint(host: "192.0.2.10", port: 7000),
+                                                isPairing: true, isPaired: false, sharesLibrary: true)
+        link.applyDemo(macs: [], candidates: [office])
+        XCTAssertEqual(link.candidates.map(\.name), ["Office iMac", "Home Mac mini"])
+        let other = try? XCTUnwrap(link.candidates.last)
+        XCTAssertEqual(other?.usesAnotherLibrary, true)
+        XCTAssertEqual(other?.line, PairingWords.usesAnotherLibrary)
+        XCTAssertEqual(link.candidates.first?.line, PairingWords.showingACode)
+        link.applyDemo(discovery: .localNetworkDenied)
+        XCTAssertEqual(link.discovery, .localNetworkDenied)
+        XCTAssertTrue(link.candidates.isEmpty)
     }
 
     func testAChoiceBelongsToOnePairingAndSurvivesARelaunch() throws {

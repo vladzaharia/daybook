@@ -53,12 +53,6 @@ enum MacPresence: Equatable, Sendable {
         return devices.hasPeersWithoutPresence ? .olderMac : .noMac
     }
 
-    /// "Studio Mac is recording", while a Mac's presence says it's recording (and hasn't expired), for the places
-    /// that show presence; nil otherwise. A recording Mac keeps its presence fresh, so it also reads as just seen.
-    static func recordingLine(devices: [KnownSyncDevice], now: Date = Date()) -> String? {
-        devices.recordingMac(at: now).map { "\($0.displayName ?? "Your Mac") is recording" }
-    }
-
     var macName: String? {
         switch self {
         case .connected(let name), .seen(let name, _), .recording(let name, _), .notProcessing(let name, _): return name
@@ -75,7 +69,8 @@ enum MacPresence: Equatable, Sendable {
         }
     }
 
-    /// The line under a conversation that waits for a Mac: "Waiting for your Mac · last seen 2 h ago".
+    /// The line under a conversation that waits for a Mac: "Waiting for your Mac · Last seen 2 h ago". "Last seen"
+    /// is how every device's absence is dated, on both apps (`RecorderStatusWords.lastSeen`).
     func waitingLine(now: Date = Date()) -> String {
         switch self {
         case .checking: return "Waiting for your Mac"
@@ -84,7 +79,7 @@ enum MacPresence: Equatable, Sendable {
         case .seen(let name, let date):
             let age = now.timeIntervalSince(date)
             if age < Self.recentlySeen { return "Waiting for \(name)" }
-            return "Waiting for your Mac · last seen \(Self.age(age))"
+            return "Waiting for your Mac · Last seen \(Self.age(age))"
         case .recording(let name, _): return "Waiting for \(name), which is recording"
         case .notProcessing(let name, _): return "Waiting for \(name) to transcribe"
         case .olderMac: return "Waiting for your Mac"
@@ -99,8 +94,7 @@ enum MacPresence: Equatable, Sendable {
         case .unavailable(let reason): return reason
         case .connected(let name): return "\(name) is connected."
         case .seen(let name, let date):
-            let age = now.timeIntervalSince(date)
-            return age < Self.recentlySeen ? "\(name) synced just now." : "\(name) last synced \(Self.age(age))."
+            return "\(name) · Last seen \(Self.age(now.timeIntervalSince(date)))"
         case .recording(let name, _): return "\(name) is recording."
         case .notProcessing(let name, _):
             return "\(name) isn’t set up to transcribe. Finish in Daybook › Settings on \(name)."

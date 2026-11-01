@@ -1,7 +1,9 @@
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import Foundation
 import Observation
+import os
 
 /// The phone's end of DaybookLink (docs/link.md): pairing with a Mac by the code shown in its
 /// Settings, keeping a connection to each paired Mac through the link's lifecycle, and what travels
@@ -49,23 +51,43 @@ final class PhoneLink {
         /// The recorders it manages, as it last said, on this iPhone's clock; kept after it disconnects,
         /// for as long as that can be trusted (`LinkRecorderState.lifetime`).
         var recorders: [LinkRecorderState] = []
+        /// It stops what it records when this iPhone's page for it asks (`LinkCapabilities.pageStopFeature`).
+        var stopsForPages = false
+        /// Its pairing is here but can't be read: it can't connect until it's paired again.
+        var isDamaged = false
 
         var isConnected: Bool { state == .connected }
         var isRecording: Bool { recording?.phase == .recording || recording?.phase == .paused || recording?.phase == .starting }
 
-        /// "Connected", "Looking for it…", "Not on this network", "Pair again on your Mac".
-        var stateLine: String {
+        /// What keeps it from connecting, for its page: a pairing to make again, or a Daybook to update.
+        var problem: PeerPage.Problem? {
+            if isDamaged { return .damaged }
+            guard case .failed(let reason) = state else { return nil }
+            switch reason {
+            case .authenticationFailed, .notPaired: return .notRecognized
+            case .incompatibleVersion(let versions): return .incompatible(peerVersions: versions)
+            default: return nil
+            }
+        }
+
+        /// "Connected", "Looking for it…", "Last seen today, 3:25 AM", "Needs pairing again".
+        var stateLine: String { stateLine(now: Date()) }
+
+        func stateLine(now: Date) -> String {
+            if isDamaged { return PairingWords.needsPairingAgain }
             switch state {
             case .connected: return "Connected"
             case .connecting: return "Connecting…"
             case .searching: return "Looking for it on this network…"
             case .waitingToRetry: return "Not reachable right now · trying again"
             case .waitingForNetwork: return "Waiting for Wi‑Fi"
-            case .suspended, .idle: return lastConnectedAt.map { "Last connected \(MacPresence.age(Date().timeIntervalSince($0)))" } ?? "Not connected"
+            case .suspended, .idle:
+                return lastConnectedAt.map { "Not connected · \(RecorderStatusWords.lastSeen($0, now: now))" } ?? "Not connected"
             case .failed(let reason):
                 switch reason {
-                case .authenticationFailed, .notPaired: return "This Mac doesn’t recognize this iPhone anymore. Pair again."
-                case .incompatibleVersion: return "Update Daybook on this iPhone or the Mac to connect."
+                case .authenticationFailed, .notPaired: return PairingWords.needsPairingAgain
+                case .incompatibleVersion(let versions):
+                    return PairingWords.update(name, here: PairingWords.here(.iPhone), peerVersions: versions)
                 default: return "Couldn’t connect"
                 }
             }
@@ -75,9 +97,11 @@ final class PhoneLink {
     private(set) var macs: [Mac] = []
     /// Macs on this network, while the pairing screen browses.
     private(set) var discovered: [LinkDiscoveredMac] = []
+    /// Whether Macs can be found: browsing, not, or refused the Local Network permission.
+    private(set) var discovery: LinkDiscoveryState = .idle
     @ObservationIgnored private var demoCandidates: [PairingCandidate]?
 
-    /// A Mac the pairing screen offers.
+    /// A Mac the pairing screen lists.
     struct PairingCandidate: Identifiable, Equatable {
         var id: String
         var name: String
@@ -87,16 +111,33 @@ final class PhoneLink {
         var isPaired: Bool
         /// It has this iPhone's library open.
         var sharesLibrary: Bool?
+        /// It has another library open (another Apple ID, or another library) and isn't paired here: listed,
+        /// dimmed, so it can be told from no Mac at all, but not offered.
+        var usesAnotherLibrary = false
+        /// The paired Mac it is, by its link ID.
+        var pairedMacID: UUID?
+
+        /// What its row says.
+        var line: String {
+            if usesAnotherLibrary { return PairingWords.usesAnotherLibrary }
+            if isPaired { return PairingWords.alreadyPaired }
+            return isPairing ? PairingWords.showingACode : PairingWords.notShowingACode
+        }
     }
 
-    /// Macs to pair with, showing a code first.
+    /// Macs to pair with, showing a code first; Macs of another library last.
     var candidates: [PairingCandidate] {
         if let demoCandidates { return demoCandidates }
         return discovered.map {
             PairingCandidate(id: $0.id, name: $0.serviceName, endpoint: $0.endpoint, isPairing: $0.isPairing,
-                             isPaired: $0.pairedDeviceID != nil, sharesLibrary: $0.sharesLibrary)
+                             isPaired: $0.pairedDeviceID != nil, sharesLibrary: $0.sharesLibrary,
+                             usesAnotherLibrary: $0.usesAnotherLibrary, pairedMacID: $0.pairedDeviceID)
         }
-        .sorted { ($0.isPairing ? 0 : 1, $0.name) < ($1.isPairing ? 0 : 1, $1.name) }
+        .sorted { (Self.rank($0), $0.name) < (Self.rank($1), $1.name) }
+    }
+
+    private static func rank(_ candidate: PairingCandidate) -> Int {
+        candidate.usesAnotherLibrary ? 2 : candidate.isPairing ? 0 : 1
     }
     private(set) var isBrowsing = false
     /// Live processing progress from connected Macs, by conversation.
@@ -144,7 +185,8 @@ final class PhoneLink {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
         return LinkIdentity(deviceID: UUID(uuidString: installation) ?? UUID(), name: name, deviceClass: .iPhone,
                             appVersion: version, libraryID: libraryID, canProcess: false,
-                            features: ["recordControl", "bookmarks", LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature,
+                            features: [LinkCapabilities.recordControlFeature, LinkCapabilities.bookmarksFeature,
+                                       LinkCapabilities.recorderHandoffFeature, LinkCapabilities.recorderControlFeature,
                                        LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature],
                             syncDeviceID: syncDeviceID)
     }
@@ -168,7 +210,7 @@ final class PhoneLink {
             await self?.answer(peer, request) ?? .refused(LinkRecordRefusal(reason: .unsupported))
         }
         reloadPaired()
-        for mac in macs { try? await client.connect(to: mac.id, via: endpoints[mac.id]) }
+        await connectPaired()
         pruning = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
@@ -178,10 +220,18 @@ final class PhoneLink {
         }
     }
 
-    /// Scene phase and recording decide how hard the link works (docs/link.md, "Lifecycle").
+    /// Keeps a connection to every paired Mac whose pairing can be read.
+    private func connectPaired() async {
+        for mac in macs where !mac.isDamaged { try? await client.connect(to: mac.id, via: endpoints[mac.id]) }
+    }
+
+    /// Scene phase and recording decide how hard the link works (docs/link.md, "Lifecycle"). Coming to the
+    /// foreground reads the pairings again when the last read failed.
     func setActivity(_ activity: LinkActivity) async {
         await client.setActivity(activity)
-        if activity == .foreground { await client.systemDidWake() }
+        guard activity == .foreground else { return }
+        if pairedReadFailed { await retryPaired() }
+        await client.systemDidWake()
     }
 
     /// The library's identity changed (first sync): Bonjour tags and the Mac's view follow it.
@@ -220,8 +270,10 @@ final class PhoneLink {
     /// Loopback addresses (tests) are kept; Bonjour results are looked up again each time.
     private func endpointIsFixed(_ endpoint: LinkEndpoint) -> Bool { endpoint.description.hasPrefix("127.0.0.1") }
 
-    func unpair(_ macID: UUID) async {
-        try? await client.unpair(macID)
+    /// Forgets a Mac on both sides (it hears it when it's connected). Throws when the keychain refuses: the
+    /// pairing is still there.
+    func unpair(_ macID: UUID) async throws {
+        try await client.unpair(macID)
         endpoints[macID] = nil
         reloadPaired()
     }
@@ -232,7 +284,7 @@ final class PhoneLink {
         case .invalidCode: return "Type the six digits shown on your Mac."
         case .codeAlreadyUsed: return "That code was already tried. Type the code your Mac shows now, or close and reopen pairing there for a new one."
         case .codeRejected: return "That code didn’t match. Your Mac now shows a new code; try that one."
-        case .notPairing: return "The Mac isn’t showing a code. On your Mac, open Daybook › Settings › Devices and add your iPhone."
+        case .notPairing: return "The Mac isn’t showing a code. \(PairingWords.onTheMac)"
         case .busy: return "Another device is pairing with this Mac. Try again in a minute."
         case .timedOut: return "Pairing took too long. Try again with the code your Mac shows now."
         case .tooManyAttempts: return "Too many tries. On your Mac, close and reopen pairing for a new code."
@@ -278,7 +330,7 @@ final class PhoneLink {
                 case .permissionDenied: return "\(mac) isn’t allowed to record. Check its Privacy settings."
                 case .storageFull: return "\(mac) is out of space."
                 case .busy: return "\(mac) is busy. Try again in a moment."
-                case .declined: return "\(mac) declined to record."
+                case .declined: return PairingWords.declined(mac, here: PairingWords.here(.iPhone))
                 case .notRecording: return "\(mac) isn’t recording this conversation."
                 default: return "\(mac) can’t record with this iPhone."
                 }
@@ -297,18 +349,21 @@ final class PhoneLink {
         }
         let nudge = LinkProcessingNudge(requestID: request.id, meetingID: request.meetingID, mode: mode, requestedAt: request.createdAt)
         guard !connectedMacs.isEmpty else { return }
-        Task { try? await client.send(.processingNudge(nudge)) }
+        enqueue(.nudges) { try? await $0.send(.processingNudge(nudge)) }
     }
 
     /// The person's choice here for a summary a Mac counts down to: Use the Cloud or Start Now, sent to that Mac.
     func sendSummaryChoice(_ choice: LinkSummaryChoice.Choice, for meetingID: UUID, to macID: UUID) {
         guard macs.contains(where: { $0.id == macID && $0.isConnected }) else { return }
-        Task { try? await client.send(.summaryChoice(LinkSummaryChoice(meetingID: meetingID, choice: choice)), to: macID) }
+        let message = LinkMessage.summaryChoice(LinkSummaryChoice(meetingID: meetingID, choice: choice))
+        enqueue(.choices) { try? await $0.send(message, to: macID) }
     }
 
+    /// What this iPhone is recording, to every connected Mac, in the order it changes (a stop's `.stopping`, then
+    /// `.idle`, never the other way round).
     func sendRecordingState(_ state: LinkRecordingState) {
         guard !connectedMacs.isEmpty else { return }
-        Task { try? await client.send(.recordingState(state)) }
+        enqueue(.recordingState) { try? await $0.send(.recordingState(state)) }
     }
 
     /// Sends to one connected Mac (a recorder handoff's request, answer, or release).
@@ -316,24 +371,46 @@ final class PhoneLink {
         try await client.send(message, to: macID)
     }
 
+    /// A bookmark made here, to every connected Mac, in order with the notes and bookmark changes after it.
     func sendBookmark(_ bookmark: LinkBookmark) {
         guard !connectedMacs.isEmpty else { return }
-        Task { try? await client.send(.bookmark(bookmark)) }
+        enqueue(.notes) { try? await $0.send(.bookmark(bookmark)) }
     }
 
     /// Notes and bookmark changes for the Macs recording a conversation with this iPhone, in order.
     func sendShared(_ messages: [LinkMessage], to macIDs: [UUID]) {
         guard !messages.isEmpty, !macIDs.isEmpty else { return }
-        let previous = sharedSend
-        sharedSend = Task { [client] in
-            await previous?.value
+        enqueue(.notes) { client in
             for mac in macIDs {
                 for message in messages { try? await client.send(message, to: mac) }
             }
         }
     }
 
-    @ObservationIgnored private var sharedSend: Task<Void, Never>?
+    /// Messages that must arrive in the order they were made, one chain each.
+    enum SendChannel: Hashable {
+        case recordingState
+        /// Bookmarks, notes, and bookmark changes: a change never overtakes the bookmark it changes.
+        case notes
+        case nudges
+        case choices
+    }
+
+    @ObservationIgnored private var sends: [SendChannel: Task<Void, Never>] = [:]
+
+    /// Runs `send` once the channel's earlier sends are done, so they go out in the order they were made.
+    private func enqueue(_ channel: SendChannel, _ send: @escaping @Sendable (LinkClient) async -> Void) {
+        let previous = sends[channel], client = client
+        sends[channel] = Task {
+            await previous?.value
+            await send(client)
+        }
+    }
+
+    /// Every send made so far has gone (tests).
+    func sendsSettled() async {
+        for task in sends.values { await task.value }
+    }
 
     /// Sends this iPhone's input level to the Macs that draw it. Levels go on their own, never queued
     /// behind captions or notes: while one is still on its way, the next is dropped (the Mac's meter
@@ -354,6 +431,27 @@ final class PhoneLink {
             .filter { $0.1.summary(now: now) != nil }
             .max { $0.1.asOf < $1.1.asOf }
     }
+
+    /// Stop on <Mac>, from its page: asks it to stop what it's recording (a page's stop, which a Mac listing
+    /// `pageStopFeature` takes when this iPhone can start recording on it). Nil when it stopped; otherwise why not.
+    func stopRecording(on macID: UUID) async -> String? {
+        guard let mac = macs.first(where: { $0.id == macID }), let conversation = mac.recording?.conversationID else { return nil }
+        stopsInFlight.insert(macID)
+        defer { stopsInFlight.remove(macID) }
+        do {
+            let reply = try await client.request(LinkRecordRequest(action: .stop, conversationID: conversation, standalone: true), from: macID)
+            switch reply.outcome {
+            case .accepted: return nil
+            case .refused(let refusal) where refusal.reason == .notRecording: return nil
+            case .refused(let refusal): return RecordRequestFailure.refused(refusal).message(mac: mac.name)
+            }
+        } catch {
+            return RecordRequestFailure.unreachable.message(mac: mac.name)
+        }
+    }
+
+    /// Macs a page's stop is on its way to.
+    private(set) var stopsInFlight: Set<UUID> = []
 
     /// Fresh clock samples from every connected Mac (at the start of a recording).
     func sampleClocks() {
@@ -376,12 +474,23 @@ final class PhoneLink {
     func use(_ endpoint: LinkEndpoint, for macID: UUID) { endpoints[macID] = endpoint }
 
     #if DEBUG
-    /// Debug demos: Macs and progress for screenshots, with nothing on the network.
+    /// Debug demos: Macs and progress for screenshots, with nothing on the network. Macs to pair with come with
+    /// one that has another library open, as a Mac signed in to another Apple ID shows.
     func applyDemo(macs: [Mac], candidates: [PairingCandidate] = [], progress: [LiveProgress] = []) {
         self.macs = macs
-        demoCandidates = candidates
+        demoCandidates = candidates.isEmpty ? [] : candidates + [
+            PairingCandidate(id: "Home Mac mini", name: "Home Mac mini", endpoint: LinkEndpoint(host: "192.0.2.11", port: 7000),
+                             isPairing: false, isPaired: false, sharesLibrary: false, usesAnotherLibrary: true)
+        ]
         liveProgress = Dictionary(progress.map { ($0.meetingID, $0) }, uniquingKeysWith: { a, _ in a })
+        discovery = .searching
         started = true
+    }
+
+    /// Debug demos: finding Macs in a state (Local Network refused).
+    func applyDemo(discovery: LinkDiscoveryState) {
+        self.discovery = discovery
+        demoCandidates = []
     }
     #endif
 
@@ -391,6 +500,9 @@ final class PhoneLink {
         switch event {
         case .discovered(let found):
             discovered = found
+        case .discovery(let state):
+            guard demoCandidates == nil else { return }
+            discovery = state
         case .paired, .unpaired:
             reloadPaired()
         case .connectionState(let id, let state):
@@ -413,6 +525,7 @@ final class PhoneLink {
                 mac.showsLevels = peer.capabilities.showsLevels
                 mac.processing = peer.capabilities.processing.map(ProcessingCapabilities.init)
                 mac.placesSummaries = peer.capabilities.placesSummaries
+                mac.stopsForPages = peer.capabilities.stopsForPages
             }
             onMacsChanged?()
             if case .connected = event { onMacConnected?(peer.deviceID) }
@@ -425,7 +538,7 @@ final class PhoneLink {
             onMacsChanged?()
         case .received(let message, let from):
             receive(message, from: from)
-        case .pairingCode, .pairingFailed, .discovery:
+        case .pairingCode, .pairingFailed:
             break
         }
     }
@@ -485,14 +598,56 @@ final class PhoneLink {
         }
     }
 
+    /// Reads the paired Macs from the keychain, a pairing that can't be read among them. A read that fails keeps
+    /// the Macs it had (and what they last said), and tries again later: after `pairedRetryDelay` (doubling),
+    /// when the app comes to the foreground, and at the next start.
     private func reloadPaired() {
-        let paired = (try? keyStore.records().map(\.device)) ?? []
+        let paired: [LinkPairedDevice]
+        do {
+            paired = try keyStore.pairedDevices()
+        } catch {
+            Self.log.error("Couldn’t read the paired Macs: \(String(describing: error), privacy: .public)")
+            pairedReadFailed = true
+            schedulePairedRetry()
+            return
+        }
+        pairedReadFailed = false
+        pairedRetries = 0
+        pairedRetry?.cancel(); pairedRetry = nil
         let previous = Dictionary(macs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         macs = paired.sorted { $0.pairedAt < $1.pairedAt }.map { device in
-            var mac = previous[device.deviceID] ?? Mac(id: device.deviceID, name: device.name, pairedAt: device.pairedAt)
-            mac.name = previous[device.deviceID]?.name ?? device.name
+            let name = device.name.isEmpty ? PairingWords.unnamed(.mac) : device.name
+            var mac = previous[device.deviceID] ?? Mac(id: device.deviceID, name: name, pairedAt: device.pairedAt)
+            mac.name = previous[device.deviceID]?.name ?? name
+            mac.isDamaged = device.isDamaged
             return mac
         }
+    }
+
+    /// The last read of the paired Macs failed (the keychain didn't allow it).
+    private(set) var pairedReadFailed = false
+    /// How long after a failed read the paired Macs are read again, at first.
+    @ObservationIgnored var pairedRetryDelay: Duration = .seconds(5)
+    @ObservationIgnored private var pairedRetry: Task<Void, Never>?
+    @ObservationIgnored private var pairedRetries = 0
+    private static let log = Logger(subsystem: "local.daybook", category: "link")
+
+    private func schedulePairedRetry() {
+        guard pairedRetry == nil else { return }
+        let delay = pairedRetryDelay * (1 << min(pairedRetries, 6))
+        pairedRetries += 1
+        pairedRetry = Task { [weak self] in
+            guard (try? await Task.sleep(for: delay)) != nil, let self else { return }
+            self.pairedRetry = nil
+            await self.retryPaired()
+        }
+    }
+
+    /// Reads the paired Macs again and, once they're read, connects to them.
+    private func retryPaired() async {
+        reloadPaired()
+        guard !pairedReadFailed, started else { return }
+        await connectPaired()
     }
 
     private func update(_ id: UUID, _ change: (inout Mac) -> Void) {

@@ -87,14 +87,17 @@ public struct PairingView<Choice: View, Code: View>: View {
 
     private var leadingPage: some View {
         VStack(alignment: .leading, spacing: DaybookSpacing.s5) {
-            header
+            // The glyph is the right page's while it has no code to show.
+            header(showsGlyph: trailingShowsCode)
             if !isPaired { choice.daybookTransition(.opacity) }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
+    private var trailingShowsCode: Bool { !isPaired && showsCode }
+
     @ViewBuilder private var trailingPage: some View {
-        if !isPaired, showsCode {
+        if trailingShowsCode {
             VStack(alignment: .leading, spacing: DaybookSpacing.s5) { code }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .daybookTransition(.opacity)
@@ -105,9 +108,11 @@ public struct PairingView<Choice: View, Code: View>: View {
         }
     }
 
-    private var header: some View {
+    private var header: some View { header(showsGlyph: true) }
+
+    private func header(showsGlyph: Bool) -> some View {
         VStack(alignment: alignment, spacing: DaybookSpacing.s2) {
-            glyph(size: density == .touch ? 40 : 30)
+            if showsGlyph { glyph(size: density == .touch ? 40 : 30) }
             HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
                 if isPaired { DoneMark().font(titleFont) }
                 Text(paired.map(PairingWords.paired(with:)) ?? PairingWords.title(on: role.deviceClass))

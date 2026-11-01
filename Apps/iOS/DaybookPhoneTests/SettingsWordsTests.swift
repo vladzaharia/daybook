@@ -23,7 +23,7 @@ final class SettingsWordsTests: XCTestCase {
         // A Mac that syncs the library but isn't paired here has no row, so the footer names it.
         XCTAssertEqual(MacsSection.footer(.seen(name: "Office iMac", lastSeen: now.addingTimeInterval(-7_200)),
                                           pairedNames: paired, now: now),
-                       "Office iMac last synced 2 h ago.")
+                       "Office iMac · Last seen 2 h ago")
         // Something to do is always said.
         XCTAssertEqual(MacsSection.footer(.noMac, pairedNames: []), "No Mac has synced this library yet. Open Daybook on your Mac.")
         XCTAssertEqual(MacsSection.footer(.notProcessing(name: "Studio Mac", lastSeen: now), pairedNames: paired, now: now),

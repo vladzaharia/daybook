@@ -1,4 +1,7 @@
+import DaybookDesign
+import DaybookKit
 import DaybookLink
+import DaybookUI
 import SwiftUI
 
 /// Settings › Macs: paired Macs and how each is doing, and Pair with Your Mac.
@@ -15,7 +18,7 @@ struct MacsSection: View {
                 showingPairing = true
             } label: {
                 // The Mac's instructions name this item, so it's always the same words.
-                SettingsActionLabel(title: "Pair with Your Mac…", systemImage: "plus")
+                SettingsActionLabel(title: PairingWords.pairWithMac, systemImage: "plus")
             }
         } header: {
             Text("Macs")
@@ -44,7 +47,8 @@ struct MacRow: View {
 
     var body: some View {
         SettingsRow(title: mac.name, detail: mac.rowLine(recordingBySync: recordingBySync), systemImage: "desktopcomputer",
-                    tone: mac.isConnected ? .active : .neutral)
+                    tone: mac.isConnected ? .active : mac.problem != nil ? .attention : .neutral,
+                    detailNeedsAttention: mac.problem != nil)
     }
 }
 
@@ -59,43 +63,28 @@ extension PhoneLink.Mac {
     }
 }
 
-/// One paired Mac: the same header as a recorder's page, then what it may do here, its facts, and
-/// Unpair.
+/// One paired Mac: the page both apps show for a paired Daybook (`PeerDevicePage`), as the Mac's page for this
+/// iPhone does. Its header, what keeps it from connecting with Pair Again…, what it's recording with Stop on it,
+/// the recorders it manages, whether it can start recording here, its facts, and Unpair.
 struct MacDetailScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.settingsPages) private var pages
     let macID: UUID
-    @State private var confirmingUnpair = false
+    @State private var pairingAgain = false
+    /// Why the last Stop on it didn't stop it.
+    @State private var stopProblem: String?
+    @State private var unpairFailed = false
 
     var body: some View {
         if let mac = model.link.macs.first(where: { $0.id == macID }) {
-            Form {
-                Section {
-                    DevicePageHeader(systemImage: "desktopcomputer", isActive: mac.isConnected, title: mac.name,
-                                     status: mac.rowLine(recordingBySync: model.isRecordingBySync(mac)))
-                        .devicePageHeaderRow()
-                }
-                Section {
-                    Toggle("Can Start Recording", isOn: Binding(
-                        get: { model.settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) },
-                        set: { model.settings.setMacMayStartRecording($0, for: mac.id, pairedAt: mac.pairedAt) }))
-                }
-                Section {
-                    // Whether it transcribes is known once it has connected.
-                    if mac.canProcess {
-                        LabeledContent("Transcribes", value: "Yes")
-                    } else if mac.isConnected {
-                        LabeledContent("Transcribes", value: "Not set up")
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                PeerDevicePage(PeerPage(facts(mac, now: context.date), here: PairingWords.here(.iPhone), now: context.date),
+                               actions: actions(mac)) {
+                    if let stopProblem {
+                        Section { ProblemLine(text: stopProblem) }
                     }
-                    if let version = mac.appVersion { LabeledContent("Daybook", value: version) }
-                    LabeledContent("Paired", value: mac.pairedAt.formatted(date: .abbreviated, time: .omitted))
-                    if let clock = mac.clock {
-                        LabeledContent("Clock", value: clockLine(clock))
-                    }
-                }
-                Section {
-                    Button("Unpair This Mac…", role: .destructive) { confirmingUnpair = true }
+                    SettingsScrollEndMarker()
                 }
             }
             .settingsScrollEnd()
@@ -105,41 +94,76 @@ struct MacDetailScreen: View {
                 // The header names the Mac; the bar stays quiet (the back button still names it).
                 ToolbarItem(placement: .principal) { Text("") }
             }
-            .confirmationDialog("Unpair \(mac.name)?", isPresented: $confirmingUnpair, titleVisibility: .visible) {
-                Button("Unpair", role: .destructive) {
-                    Task {
-                        await model.link.unpair(macID)
-                        model.settings.forgetMacRecordDecision(macID)
-                        // On the open Duo's right page there's nothing to go back to.
-                        if let pages { pages.leave() } else { dismiss() }
-                    }
-                }
+            .pairingSheet(isPresented: $pairingAgain, preselect: macID)
+            .onChange(of: mac.recording?.conversationID) { _, _ in stopProblem = nil }
+            .alert(PairingWords.couldntUnpair(mac.name), isPresented: $unpairFailed) {
+                Button("OK", role: .cancel) {}
             } message: {
-                Text("Recording together and live progress stop until you pair again.")
+                Text(PairingWords.couldntUnpairMessage)
             }
         } else {
             ContentUnavailableView("Not Paired", systemImage: "desktopcomputer")
         }
     }
 
-    /// "In step (±4 ms)" or "12 ms ahead (±4 ms)": how the recordings will line up.
-    private func clockLine(_ clock: LinkClockEstimate) -> String {
-        let offset = Int((clock.offset * 1000).rounded()), uncertainty = max(1, Int((clock.uncertainty * 1000).rounded()))
-        if abs(offset) <= uncertainty { return "In step (±\(uncertainty) ms)" }
-        return "\(abs(offset)) ms \(offset > 0 ? "ahead" : "behind") (±\(uncertainty) ms)"
+    /// What its page says, from the link, the library, and this iPhone's recorder.
+    private func facts(_ mac: PhoneLink.Mac, now: Date) -> PeerPage.Facts {
+        let recording = mac.isRecording ? mac.recording : nil
+        let conversation = recording?.conversationID
+        let activity: PeerFacts.Activity = recording?.phase == .paused ? .paused
+            : recording != nil || model.isRecordingBySync(mac, now: now) ? .recording : .idle
+        // Stop is taken when it stops for a page, or when this iPhone records that conversation with it.
+        let recordsTogether = conversation != nil && model.recorder.isActive && model.recorder.captureID == conversation
+        return PeerPage.Facts(
+            id: mac.id.uuidString, name: mac.name, kind: .mac, isConnected: mac.isConnected, activity: activity,
+            lastSeen: mac.lastConnectedAt,
+            recordingSince: recording?.startedAt.map { mac.clock?.localDate(fromPeer: $0) ?? $0 },
+            conversationTitle: conversation.flatMap { model.library.controller.meeting($0)?.title },
+            canStop: mac.stopsForPages || recordsTogether,
+            recorders: mac.recorders,
+            // Whether it transcribes is known once it has connected.
+            transcribes: mac.canProcess ? true : mac.isConnected ? false : nil,
+            appVersion: mac.appVersion, pairedAt: mac.pairedAt, problem: mac.problem)
+    }
+
+    private func actions(_ mac: PhoneLink.Mac) -> PeerPageActions {
+        PeerPageActions(
+            stop: {
+                Task { stopProblem = await model.link.stopRecording(on: mac.id) }
+            },
+            stopPending: model.link.stopsInFlight.contains(mac.id),
+            pairAgain: { pairingAgain = true },
+            canStartRecording: mac.isDamaged ? nil : Binding(
+                get: { model.settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) },
+                set: { model.settings.setMacMayStartRecording($0, for: mac.id, pairedAt: mac.pairedAt) }),
+            unpair: {
+                Task {
+                    do {
+                        try await model.link.unpair(macID)
+                    } catch {
+                        unpairFailed = true
+                        return
+                    }
+                    model.settings.forgetMacRecordDecision(macID)
+                    // On the open Duo's right page there's nothing to go back to.
+                    if let pages { pages.leave() } else { dismiss() }
+                }
+            })
     }
 }
 
 extension View {
     /// Pair with Your Mac: a sheet in the hand. Open, a sheet would be a card across the crease (as
     /// the status panel avoids, docs/iphone.md), so pairing takes the display as two pages instead.
-    func pairingSheet(isPresented: Binding<Bool>) -> some View {
-        modifier(PairingPresentation(isPresented: isPresented))
+    /// - Parameter preselect: A paired Mac to pair again (Pair Again… on its page), chosen once it's found.
+    func pairingSheet(isPresented: Binding<Bool>, preselect: UUID? = nil) -> some View {
+        modifier(PairingPresentation(isPresented: isPresented, preselect: preselect))
     }
 }
 
 private struct PairingPresentation: ViewModifier {
     @Binding var isPresented: Bool
+    let preselect: UUID?
     @Environment(\.surfaceStyle) private var surface
     /// How it was shown, kept until it's dismissed, so a fold doesn't start pairing over.
     @State private var shownAsPages: Bool?
@@ -148,10 +172,10 @@ private struct PairingPresentation: ViewModifier {
         let asPages = shownAsPages ?? (surface != .pocket)
         content
             .sheet(isPresented: Binding(get: { isPresented && !asPages }, set: { if !$0 { isPresented = false } })) {
-                PairingSheet()
+                PairingSheet(preselect: preselect)
             }
             .fullScreenCover(isPresented: Binding(get: { isPresented && asPages }, set: { if !$0 { isPresented = false } })) {
-                PairingSheet(asPages: true)
+                PairingSheet(asPages: true, preselect: preselect)
             }
             .onChange(of: isPresented) { _, shown in shownAsPages = shown ? asPages : nil }
     }
@@ -169,22 +193,28 @@ private struct KeepsPairInReach: ViewModifier {
     }
 }
 
-/// Pair with a Mac: choose it, then type the six digits it shows. The code proves you can see the Mac's
-/// screen; nothing else is needed (docs/link.md, "Pairing"). No Mac is chosen for you, and the code
-/// boxes appear only once one is, so a code always goes to the Mac that shows it.
+/// Pair with a Mac: the shared pairing screen (`PairingView`) as the iPhone takes part. Choose the Mac, then type
+/// the six digits it shows. The code proves you can see the Mac's screen; nothing else is needed (docs/link.md,
+/// "Pairing"). No Mac is chosen for you (unless you came to pair one again), and the code boxes appear only once
+/// one is, so a code always goes to the Mac that shows it.
 ///
 /// Over the whole open iPhone Duo it's two pages: the Macs on the left, the code on the right, at the
 /// top where the keyboard can't cover it.
 struct PairingSheet: View {
     var asPages = false
+    /// A paired Mac to pair again, chosen once it's on the list.
+    var preselect: UUID?
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.surfaceStyle) private var surface
+    @Environment(\.openURL) private var openURL
     @State private var selection: String?
     @State private var code = ""
     @State private var pairing = false
     @State private var error: String?
     @State private var paired: String?
+    /// Looked for `PairingWords.noMacFoundAfter` without finding a Mac to offer.
+    @State private var lookedAWhile = false
     @FocusState private var codeFocused: Bool
     private let tileColumn = SettingsTileWidth()
 
@@ -193,31 +223,17 @@ struct PairingSheet: View {
             Group {
                 // Folded shut while shown, it's one column again.
                 if asPages, surface != .pocket {
-                    CreaseSplit {
-                        page {
-                            heading(showsMark: false)
-                            if paired == nil { macList }
-                        }
-                    } trailing: {
-                        if paired != nil || selectedMac != nil || error != nil {
-                            page { outcome }
-                        } else {
-                            // Until a Mac is chosen the left page says what to do, so this one shows only the mark.
-                            mark.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                    }
+                    pairingView(pages: { leading, trailing in
+                        AnyView(CreaseSplit { page { leading } } trailing: { page { trailing } })
+                    })
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            VStack(alignment: .leading, spacing: PhoneStyle.Space.s5) {
-                                heading(showsMark: true)
-                                if paired == nil { macList }
-                                outcome
-                            }
-                            .padding(PhoneStyle.Space.s5)
-                            .id(Self.column)
-                            .frame(maxWidth: 520, alignment: .leading)
-                            .frame(maxWidth: .infinity)
+                            pairingView(pages: nil)
+                                .padding(PhoneStyle.Space.s5)
+                                .id(Self.column)
+                                .frame(maxWidth: 520, alignment: .leading)
+                                .frame(maxWidth: .infinity)
                         }
                         // The system shows only the field under the boxes; bring up all of them (they're
                         // at the foot of the column).
@@ -246,13 +262,19 @@ struct PairingSheet: View {
                 if model.options.openSettings == "pairing" {
                     selection = model.link.candidates.first?.id
                     try? await Task.sleep(for: .milliseconds(100))   // after choosing clears the code
-                    code = "482 9"; codeFocused = false
+                    code = "4829"; codeFocused = false
                 }
             }
+            .task {
+                try? await Task.sleep(for: PairingWords.noMacFoundAfter)
+                lookedAWhile = true
+            }
             .onDisappear { Task { await model.link.stopBrowsing() } }
+            .onAppear { choosePreselected(model.link.candidates) }
             .onChange(of: model.link.candidates) { _, candidates in
                 // The chosen Mac left the network: choose again.
-                if let selection, !candidates.contains(where: { $0.id == selection }) { self.selection = nil }
+                if let selection, !candidates.contains(where: { $0.id == selection && !$0.usesAnotherLibrary }) { self.selection = nil }
+                choosePreselected(candidates)
             }
             .onChange(of: selection) { _, chosen in
                 // A code belongs to one Mac; choosing another starts over, ready to type.
@@ -265,46 +287,11 @@ struct PairingSheet: View {
 
     private static let column = "column"
 
-    /// One of the two pages: a column clear of the crease.
-    private func page(@ViewBuilder _ content: () -> some View) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: PhoneStyle.Space.s5, content: content)
-                .padding(.vertical, PhoneStyle.Space.s5)
-                .pageColumn()
-        }
-    }
-
-    private var mark: some View {
-        Image(systemName: "macbook.and.iphone")
-            .font(.system(size: 40, weight: .light))
-            .foregroundStyle(PhoneStyle.accent)
-            .accessibilityHidden(true)
-    }
-
-    private func heading(showsMark: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if showsMark { mark }
-            Text("Pair with Your Mac")
-                .font(PhoneStyle.Typeface.title(.title))
-                .foregroundStyle(PhoneStyle.Ink.title)
-            Text("On your Mac, open Daybook › Settings › Devices and add your iPhone.")
-                .font(.callout)
-                .foregroundStyle(PhoneStyle.Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    /// Paired; or the code for the chosen Mac, and what went wrong.
-    @ViewBuilder private var outcome: some View {
-        if let paired {
-            Label("Paired with \(paired)", systemImage: "checkmark.circle.fill")
-                .font(.headline)
-                .foregroundStyle(PhoneStyle.Ink.link)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            if let mac = selectedMac {
-                codeEntry(for: mac)
-            }
+    private func pairingView(pages: ((AnyView, AnyView) -> AnyView)?) -> some View {
+        PairingView(role: .entersCode, paired: paired, problem: error, showsCode: selectedMac != nil || error != nil, pages: pages) {
+            macList
+        } code: {
+            if let mac = selectedMac { codeEntry(for: mac) }
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.subheadline)
@@ -314,87 +301,100 @@ struct PairingSheet: View {
         }
     }
 
-    private var digits: String { code.filter(\.isNumber) }
-    private var selectedMac: PhoneLink.PairingCandidate? { selection.flatMap { id in model.link.candidates.first { $0.id == id } } }
-    private var canPair: Bool { digits.count == 6 && selectedMac != nil && !pairing }
+    /// One of the two pages: a column clear of the crease.
+    private func page(@ViewBuilder _ content: () -> some View) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: PhoneStyle.Space.s5, content: content)
+                .padding(.vertical, PhoneStyle.Space.s5)
+                .pageColumn()
+        }
+    }
+
+    private var selectedMac: PhoneLink.PairingCandidate? {
+        selection.flatMap { id in model.link.candidates.first { $0.id == id && !$0.usesAnotherLibrary } }
+    }
+    private var canPair: Bool { code.filter(\.isNumber).count == LinkProtocol.pairingCodeDigits && selectedMac != nil && !pairing }
+
+    /// Pair Again… on a Mac's page chooses that Mac once it's found.
+    private func choosePreselected(_ candidates: [PhoneLink.PairingCandidate]) {
+        guard selection == nil, paired == nil, let preselect,
+              let mac = candidates.first(where: { $0.pairedMacID == preselect }) else { return }
+        selection = mac.id
+    }
 
     private var macList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            PairingHeading(text: "Macs on This Wi‑Fi")
-            VStack(spacing: 0) {
-                let candidates = model.link.candidates
-                if candidates.isEmpty {
-                    HStack(spacing: SettingsMetrics.gap) {
-                        ProgressView().frame(width: tileColumn.value)
-                        Text("Looking for Macs…")
-                            .font(.subheadline)
-                            .foregroundStyle(PhoneStyle.Ink.secondary)
+            PairingHeading(text: PairingWords.macsOnThisNetwork)
+            let candidates = model.link.candidates
+            if model.link.discovery == .localNetworkDenied {
+                // Without Local Network, iOS shows Daybook no Mac at all: say so, with where to allow it.
+                ProblemLine(text: PairingWords.allowLocalNetwork) {
+                    Button(PairingWords.openSettings) {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                     }
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                ForEach(candidates) { mac in
-                    Button { selection = mac.id } label: {
+                .font(.subheadline)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+                VStack(spacing: 0) {
+                    if candidates.isEmpty {
                         HStack(spacing: SettingsMetrics.gap) {
-                            SettingsRow(title: mac.name, detail: mac.isPaired ? "Paired" : mac.isPairing ? "Showing a code" : "Not showing a code",
-                                        systemImage: "desktopcomputer")
-                            Spacer(minLength: 0)
-                            if selection == mac.id {
-                                Image(systemName: "checkmark").foregroundStyle(PhoneStyle.accent).fontWeight(.semibold)
-                                    .accessibilityHidden(true)
-                            }
+                            ProgressView().frame(width: tileColumn.value)
+                            Text(PairingWords.lookingForMacs)
+                                .font(.subheadline)
+                                .foregroundStyle(PhoneStyle.Ink.secondary)
                         }
                         .padding(14)
-                        .contentShape(Rectangle())
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selection == mac.id ? .isSelected : [])
-                    if mac.id != candidates.last?.id {
-                        Divider().padding(.leading, 14 + tileColumn.value + SettingsMetrics.gap)
+                    ForEach(candidates) { mac in
+                        candidateRow(mac)
+                        if mac.id != candidates.last?.id {
+                            Divider().padding(.leading, 14 + tileColumn.value + SettingsMetrics.gap)
+                        }
                     }
                 }
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                if lookedAWhile, !candidates.contains(where: { !$0.usesAnotherLibrary }) {
+                    Text(PairingWords.noMacFound)
+                        .font(.footnote)
+                        .foregroundStyle(PhoneStyle.Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .daybookTransition(.opacity)
+                }
             }
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+    }
+
+    /// A Mac on the network: chosen with a checkmark; one with another library open, dimmed and not offered.
+    private func candidateRow(_ mac: PhoneLink.PairingCandidate) -> some View {
+        Button { selection = mac.id } label: {
+            HStack(spacing: SettingsMetrics.gap) {
+                SettingsRow(title: mac.name, detail: mac.line, systemImage: "desktopcomputer")
+                Spacer(minLength: 0)
+                if selection == mac.id {
+                    Image(systemName: "checkmark").foregroundStyle(PhoneStyle.accent).fontWeight(.semibold)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(mac.usesAnotherLibrary)
+        .opacity(mac.usesAnotherLibrary ? 0.45 : 1)
+        .accessibilityAddTraits(selection == mac.id ? .isSelected : [])
     }
 
     private func codeEntry(for mac: PhoneLink.PairingCandidate) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            PairingHeading(text: "Code on \(mac.name)")
-            ZStack {
-                // The real field, nearly invisible under the boxes: VoiceOver and the keyboard use it.
-                TextField("", text: $code)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .focused($codeFocused)
-                    .opacity(0.02)
-                    .accessibilityLabel("Code on \(mac.name)")
-                    .accessibilityValue(digits.isEmpty ? "Empty" : digits.map(String.init).joined(separator: " "))
-                    .onChange(of: code) { _, value in
-                        let filtered = String(value.filter(\.isNumber).prefix(6))
-                        if filtered != value { code = filtered }
-                        error = nil
-                    }
-                HStack(spacing: 8) {
-                    ForEach(0..<6, id: \.self) { index in
-                        let characters = Array(digits)
-                        Text(index < characters.count ? String(characters[index]) : "")
-                            .font(.system(size: 30, weight: .medium).monospacedDigit())
-                            .foregroundStyle(PhoneStyle.Ink.title)
-                            .frame(maxWidth: .infinity, minHeight: 60)
-                            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(index == characters.count && codeFocused ? PhoneStyle.accent : Color.clear, lineWidth: 2))
-                        if index == 2 { Text("–").foregroundStyle(.tertiary) }
-                    }
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { codeFocused = true }
+            PairingHeading(text: PairingWords.code(on: mac.name))
+            PairingCodeEntry(code: $code, label: PairingWords.code(on: mac.name), focus: $codeFocused)
+                .onChange(of: code) { _, _ in error = nil }
             if pairing {
-                HStack(spacing: 8) { ProgressView(); Text("Pairing…").foregroundStyle(PhoneStyle.Ink.secondary) }
+                HStack(spacing: 8) { ProgressView(); Text(PairingWords.pairing).foregroundStyle(PhoneStyle.Ink.secondary) }
             }
         }
     }
@@ -404,9 +404,10 @@ struct PairingSheet: View {
         pairing = true
         defer { pairing = false }
         do {
-            let device = try await model.link.pair(with: mac.endpoint, code: digits)
+            let device = try await model.link.pair(with: mac.endpoint, code: code.filter(\.isNumber))
             paired = device.name
             code = ""
+            codeFocused = false
         } catch {
             self.error = PhoneLink.message(for: error)
             code = ""
@@ -414,14 +415,14 @@ struct PairingSheet: View {
     }
 }
 
-/// A heading over pairing's groups, as the status sheet's: a generic label, never filler.
+/// A heading over pairing's groups, as Settings' section headings read: a generic label, never filler, in the
+/// iPhone's title case.
 private struct PairingHeading: View {
     let text: String
     var body: some View {
-        Text(text)
+        Text(SettingsWords.titleCased(text))
             .font(.footnote.weight(.semibold))
             .foregroundStyle(PhoneStyle.Ink.secondary)
-            .textCase(.uppercase)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
     }
