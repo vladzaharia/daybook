@@ -212,6 +212,83 @@ something; a check that takes "tell support" after "Who needs to know about that
 notes in a long meeting, and Qwen 3.5's topics (4B) and notes (4B, 9B); how much each model's commitments move with
 where the parts split.
 
+## Cloud summaries (2026-10-31)
+
+Summaries can run on Anthropic's or OpenAI's models with the person's own key ([cloud](cloud.md)): a catalog of family
+rules and measured models, OpenRouter's prices over a bundled snapshot, keys in iCloud Keychain, discovery of the
+models a key reaches, a summarizer that reuses the local pipeline's prompt, schema, and checks in one pass, and
+Settings › Cloud on the Mac and the iPhone. No real API was called: there were no keys for this work.
+
+**Measurements the catalog is built on.** The lead's runs on 2026-10-31 (the synthetic offsite's first 15, 30, 60, 120,
+and 186 minutes, one request each with a measuring prompt that asked for commitments with quotes; `max_tokens` 32,000,
+64,000 for the 186-minute runs). Output tokens include reasoning.
+
+| Model | Low, 60 min | Medium: 15 / 30 / 60 / 120 / 186 min | High, 60 min | Medium hour's cost |
+| --- | --- | --- | --- | --- |
+| Claude Opus 5.5 | 8,137 | 4,168 / 6,796 / 11,627 / 17,849 / 23,934 | 15,042 | $0.312 |
+| Claude Sonnet 5.5 | 5,345 | 2,276 / 3,361 / 4,875 / 10,917 / 10,434 | 8,377 | $0.089 |
+| Claude Haiku 5.5 | 10,100 | 3,538 / 6,220 / 11,336 / 18,822 / 28,402* | 20,795 | $0.008 |
+| GPT-6 Astra | 5,219 | 1,886 / 3,462 / 5,501 / 8,734 / 12,297 | 11,105 | $0.413 |
+| GPT-6.1 Sol | 4,591 | 2,049 / 2,997 / 5,228 / 8,132 / 11,838 | 8,317 | $0.080 |
+| GPT-6.1 Terra | 3,235 | 1,941 / 2,656 / 3,648 / 5,710 / 7,970 | 5,027 | $0.032 |
+
+\* Haiku's 186-minute run in the series stopped at its 32,000-token limit; this is the 64,000-token run's 28,402. That
+cut-off is why the summarizer raises a reply's limit once when it's reached. Input: Claude counted 311 tokens a minute of
+conversation, OpenAI 214 (2.8 and 4.1 characters a token). On the 186-minute offsite, scored with the summary harness's
+scorer: topics 22 of 22 for all six; commitments with the right owner Opus 66, Sonnet 66, Haiku 64, Astra 62, Sol 61,
+Terra 62 of 66, listing 76, 76, 75, 89, 88, and 82; notes handled right (by hand) Opus 4, Sonnet 3, Haiku 3, Astra 5,
+Sol 6, Terra 6 of 6. `summaryQuality` (docs/cloud.md, "Summary quality") gives 95, 94, 92, 93, 94, 95, and Gemma 4 26B
+A4B 90 and E4B 53 from the three-hour meeting above.
+
+**Changes.**
+
+- `CloudInterfaces.swift` as the plan has it (with `ProcessingCapabilities.models`), the same in all three branches.
+- `CloudCatalog.json` (version 1) and `CloudPrices.json`, 73 Anthropic and OpenAI models from OpenRouter's list of
+  2026-10-31, without `:batch`, with prices, long-prompt rates, limits, and efforts. Made with:
+
+      python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); keep=[]
+      for m in d["data"]:
+          if not m["id"].startswith(("anthropic/","openai/")) or m["id"].endswith(":batch"): continue
+          p=m.get("pricing") or {}; e={"id":m["id"],"name":m.get("name"),"context_length":m.get("context_length"),
+            "pricing":{k:p[k] for k in ("prompt","completion","input_cache_read") if k in p},
+            "top_provider":{"max_completion_tokens":(m.get("top_provider") or {}).get("max_completion_tokens")},
+            "supported_parameters":[x for x in m.get("supported_parameters") or [] if x in ("structured_outputs","reasoning","response_format")]}
+          if p.get("overrides"): e["pricing"]["overrides"]=[{k:o[k] for k in ("min_prompt_tokens","prompt","completion") if k in o} for o in p["overrides"]]
+          if m.get("reasoning"): e["reasoning"]={k:m["reasoning"].get(k) for k in ("supported_efforts","default_effort")}
+          keep.append(e)
+      json.dump({"source":"https://openrouter.ai/api/v1/models","fetched":"<date>","data":keep},open(sys.argv[2],"w"),indent=1)' models.json CloudPrices.json
+
+- Keys: `KeychainCloudKeyStore`, synchronizable, in `<team>.local.daybook.shared`; `CloudAPIKey` prints only its masked
+  form. Discovery: `CloudDirectory`; OpenRouter is asked only once a key is set, then at most daily.
+- `CloudSummarizer`: `MeetingSynthesis.finalPrompt` gains `quotesActions` and `findsWhatNotesAdd` (both off for local
+  models, whose prompts are unchanged; the local summary tests pass as before), `CloudSynthesis.schema` mirrors
+  `summarySchema` for structured outputs, and action items go through `verifiedActions`.
+- Settings › Cloud on both apps; the colophon reads "Summarized with Claude Sonnet 5.5"; `--cloud-check` (debug).
+
+**Verified here.**
+
+- 57 new tests, against a URLProtocol server that answers as Anthropic, OpenAI, and OpenRouter (`FakeCloudServer`):
+  `CloudCatalogTests` 12, `CloudKeyStoreTests` 7, `CloudClientTests` 18, `CloudDirectoryTests` 8, `CloudSummarizerTests`
+  12; and one on the iPhone (`SettingsWordsTests`, the Settings row's words). They check each request as sent (headers, effort, adaptive thinking, the schema in its order, `store: false`,
+  the fallback), both streams, refusals, the length cap raised once, 429 with `retry-after`, a limit longer than a
+  minute not waited for, out of credit, overloaded streams and 529s tried twice more, offline at once, a dropped
+  connection tried again, keys masked in Details, the keychain items' attributes (with a fake keychain), the offers
+  and recommendations, estimates within 25% of the measured hours, provenance and cost, and that a commitment whose
+  quote nobody said, or that quotes a note, is dropped.
+- `--cloud-check` against a local fake server (`DAYBOOK_CLOUD_BASE_URL`) for both providers on the harness's `launch`
+  fixture: the key check, the model list, OpenRouter, the streamed summary, the invented commitment dropped, tokens and
+  cost printed, and the run written in the scorer's format.
+- Settings › Cloud's states in light and dark on the Mac (`--cloud-demo`), the Add Key sheet with a refused key, and the
+  colophon before and after; Settings › Cloud on an iPhone 17 Pro simulator clone.
+
+**Still needs the owner's keys and devices.**
+
+- One real run per provider with `--cloud-check` (the lead's): that both accept the requests as sent (our schema under
+  Anthropic's `output_config.format` and OpenAI's strict `json_schema`; `fallbacks: "default"` with its beta header on
+  this account, which falls back to a plain request if refused), the tokens and cost against the estimates, and whether
+  the notes findings fix Claude Sonnet 5.5's and Haiku 5.5's note attribution on the offsite (3 of 6 before).
+- A key added on a signed Mac reaching a signed iPhone through iCloud Keychain, and removed from both.
+
 ## Long summaries on the other models, and a three-hour meeting (2026-10-31)
 
 The long-summary fixes below (#34) were checked on Gemma 4 26B A4B only. The same check on the catalog's

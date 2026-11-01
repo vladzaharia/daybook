@@ -34,7 +34,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
 
    System blue never appears in content: text links use `.buttonStyle(.daybookLink)`.
 5. **Nothing a person reads on paper goes below 4.5:1.** Only placeholders and disabled text (`Ink.faint`) are exempt. Chrome never puts a time, a control, or a preview in `.tertiary`.
-6. **Facts, not slogans.** Privacy and provenance appear where a reader expects them. "Summarized on this Mac" sits at the foot of the page, and the full statement is in Settings › Library.
+6. **Facts, not slogans.** Privacy and provenance appear where a reader expects them. "Summarized on this Mac" (or, for a cloud summary, "Summarized with Claude Sonnet 5.5", with a cloud glyph) sits at the foot of the page, and the full statement is in Settings › Library.
 7. **Say what's happening, not how it works.** No subtitle, footer, notice, or empty state explains mechanics: sync, iCloud, the Wi‑Fi link, where audio travels, which model runs where, or what Daybook never does. Keep status values, a next step that matters, a problem and its fix in one short sentence, and a destructive action's consequence; prefer a label to a sentence, and explanation belongs only in Welcome.
 
 ## Window structure
@@ -74,7 +74,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
   - **Keys:** ⌘D bookmark, ⇧⌘R stop (or record), ⌘O open in Daybook, ⌘W hide (the recording continues), ⌘+ / ⌘− / ⌘0 text size. There is no Esc binding, so a stray Escape during a call does nothing.
   - **Accessibility:** under Reduce Motion the meters stop scrolling (their bars light from the left up to the level), the clock fades rather than rolls, and surfaces fade. Increase Contrast uses the Ink scale's contrast values and outlines the chips, controls, and Stop; it and Reduce Transparency drop the neon glows.
 - **Menu bar extra:** a standard menu (`.menuBarExtraStyle(.menu)`). Its label is a symbol only, because a ticking text label re-lays out the status item every second. Personal conversations are never named in it.
-- **Settings** has four panes: General, Models, Devices, and Library.
+- **Settings** has five panes: General, Models, Cloud, Devices, and Library.
   - **Models** is the model manager ([models.md](models.md#the-model-manager)), a grouped form generated from the catalog:
     - Quality: Quick, Balanced, and Detailed as radio rows, each with its models, size, and memory, and this Mac's recommendation marked; Custom appears when the choices match none.
     - A section per role (Transcription with its language rows, Speakers with the speaker settings, Summaries with titles and tags), each with a model pop-up whose items carry their state underneath.
@@ -84,6 +84,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
     - Details, Add Model, and Acknowledgements are sheets. Removal is an alert that states what it frees and what each role will use.
     - What the chosen speaker model can't do (matching voices across recordings, a number of speakers) isn't offered, rather than shown dimmed.
   - **Library** is the library's location, iCloud Sync, and the privacy statement. iCloud Sync is one row saying where sync stands with its one action ("Up to date · 11:42 AM", Sync Now); a problem follows it once, in place (`ProblemLine`); then encryption and this Mac's preference. Turn Off Sync… and Erase Deleted Conversations from iCloud… sit under the group.
+  - **Cloud** is cloud summaries ([cloud](cloud.md#settings)): Keys (each provider's masked key with Replace… and Remove…, or Add Key…, whose sheet checks the key before keeping it, a refused one as a `ProblemLine`), then, once a key is set, Summaries (Use the cloud: Offer First, Always, or Never; Countdown, 15 or 30 seconds, while it offers first) and, unless Never, Quality: Best, Balanced, and Economy as radio rows like Models' presets, each with its recommended model and "About $0.09 an hour"; Model (Recommended or one of the tier's, with its cost when chosen); Effort as a segmented control of what the model takes. The pane's one footer line is "Sends the transcript and notes, never audio." Removing a key is an alert that says it's removed from your other devices too.
   - A problem anywhere in Settings or its sheets is a `ProblemLine`: the warning glyph, one sentence in the label colour, Details…, and its actions, which move under a long sentence.
   - The About Daybook panel's credits carry the same acknowledgements.
 - **Vocabulary**, **Summary Templates**, and **Speaker Profiles** are separate single windows. Speaker Profiles lists each profile with its voiceprints (where each came from: Named, Confirmed, or Learned, with the conversation and date; each removable), Forget Learned Voiceprints, the conversations it labels, rename, Merge Into (in the profile's menu and beside Delete Profile, confirmed first: "Merge Vladimir into Vlad?"), and delete. A rename to another profile's name stays typed, with "Another profile is called Vlad." and Merge Into Vlad beside it.
@@ -199,7 +200,11 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --place work|personal|all|device|device:<name>|folder:<name>
   --select "<conversation title>"     --page transcript     --inspector
   --search "<query>"                  --sheet history|timing|corrections
-  --open-settings general|models|devices|library
+  --open-settings general|models|cloud|devices|library
+  --cloud-demo none|anthropic|both|never|failed|summary
+                                      Settings › Cloud with in-memory keys and the catalog's models (no network,
+                                      no keychain); failed opens Add Key with a refused key; summary (with
+                                      --library-demo) makes the ready conversation's summary a cloud one
   --open-window vocabulary|templates|speaker-profiles|welcome
   --show-notes   --show-setup (Add Device)
   --device-demo <scenario>            device surfaces with an inert transport; see devices.md
