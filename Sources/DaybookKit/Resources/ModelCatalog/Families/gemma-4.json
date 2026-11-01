@@ -30,6 +30,9 @@
           ],
           "releaseDate": "2026-04-02",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "summarization": 25
+          },
           "capabilities": {
             "contextLength": 131072,
             "memoryGB": 3.2,
@@ -121,6 +124,9 @@
           ],
           "releaseDate": "2026-04-02",
           "recommendedMemoryGB": 16,
+          "quality": {
+            "summarization": 53
+          },
           "capabilities": {
             "contextLength": 131072,
             "memoryGB": 5.0,
@@ -207,6 +213,9 @@
           "detail": "Best for most conversations.",
           "releaseDate": "2026-06-03",
           "recommendedMemoryGB": 16,
+          "quality": {
+            "summarization": 60
+          },
           "capabilities": {
             "contextLength": 262144,
             "structuredOutput": true,
@@ -296,6 +305,9 @@
           "detail": "Detailed and fast.",
           "releaseDate": "2026-04-02",
           "recommendedMemoryGB": 32,
+          "quality": {
+            "summarization": 90
+          },
           "capabilities": {
             "contextLength": 262144,
             "structuredOutput": true,
@@ -388,6 +400,9 @@
           "detail": "Most careful. Slowest.",
           "releaseDate": "2026-04-02",
           "recommendedMemoryGB": 64,
+          "quality": {
+            "summarization": 94
+          },
           "capabilities": {
             "contextLength": 262144,
             "structuredOutput": true,

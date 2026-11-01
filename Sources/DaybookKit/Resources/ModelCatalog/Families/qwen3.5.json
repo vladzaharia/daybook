@@ -26,6 +26,9 @@
           "detail": "Fast. Many languages.",
           "releaseDate": "2026-02-27",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "summarization": 45
+          },
           "capabilities": {
             "contextLength": 262144,
             "structuredOutput": true,
@@ -117,6 +120,9 @@
           "detail": "Balanced. Many languages.",
           "releaseDate": "2026-02-27",
           "recommendedMemoryGB": 16,
+          "quality": {
+            "summarization": 65
+          },
           "capabilities": {
             "contextLength": 262144,
             "structuredOutput": true,

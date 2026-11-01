@@ -83,6 +83,10 @@ public struct CatalogModel: Identifiable, Equatable, Sendable {
 
     public func serves(_ role: ModelRole) -> Bool { roles.contains(role) }
 
+    /// How good it is at `role`, 0–100 (docs/models.md, "Quality ranks"); nil when the catalog doesn't rank it. A model
+    /// that no longer serves a role keeps its rank there, so the results it made can still be compared.
+    public func quality(for role: ModelRole) -> Int? { variant.quality[role.rawValue] }
+
     /// Provided by the operating system (Apple Foundation Models): nothing to download or remove.
     public var isSystemModel: Bool { variant.systemProvided }
 

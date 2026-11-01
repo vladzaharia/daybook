@@ -26,6 +26,9 @@
           "detail": "Fastest. Best for clear audio.",
           "releaseDate": "2022-09-26",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "transcription": 60
+          },
           "capabilities": {
             "wordTimestamps": true,
             "wordConfidence": true,
@@ -206,6 +209,9 @@
           "detail": "More accurate, with moderate memory use.",
           "releaseDate": "2022-09-26",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "transcription": 70
+          },
           "capabilities": {
             "wordTimestamps": true,
             "wordConfidence": true,
@@ -386,6 +392,9 @@
           "detail": "Most accurate on difficult audio and accents.",
           "releaseDate": "2024-10-01",
           "recommendedMemoryGB": 16,
+          "quality": {
+            "transcription": 85
+          },
           "capabilities": {
             "wordTimestamps": true,
             "wordConfidence": true,

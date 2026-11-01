@@ -26,6 +26,9 @@
           "detail": "Fastest large model. Many languages.",
           "releaseDate": "2026-04-15",
           "recommendedMemoryGB": 32,
+          "quality": {
+            "summarization": 87
+          },
           "capabilities": {
             "contextLength": 262144,
             "structuredOutput": true,
