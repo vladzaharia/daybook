@@ -86,7 +86,7 @@ extension LibraryController {
         updateMetadata { metadata in
             var profiles = metadata.speakerProfiles ?? []
             profiles.removeAll { $0.id == record.id }
-            profiles.append(LibraryValue(id: record.id, value: profile, modifiedAt: now))
+            profiles.append(.edit(record.id, value: profile, replacing: record, at: now))
             metadata.speakerProfiles = profiles.sorted { $0.id < $1.id }
         }
         return true
@@ -118,8 +118,9 @@ extension LibraryController {
         let members = metadata.speakerProfileMerges.members(of: profile.id)
         updateMetadata { metadata in
             var profiles = metadata.speakerProfiles ?? []
+            let stored = profiles.first { $0.id == profile.id.uuidString }
             profiles.removeAll { $0.id == profile.id.uuidString }
-            profiles.append(LibraryValue(id: profile.id.uuidString, value: nil, modifiedAt: now))
+            profiles.append(.edit(profile.id.uuidString, value: nil, replacing: stored, at: now))
             metadata.speakerProfiles = profiles.sorted { $0.id < $1.id }
             Self.retireVoiceprints(in: &metadata, at: now) { members.contains($0.profileID) }
         }
@@ -154,7 +155,7 @@ extension LibraryController {
         guard var prints = metadata.voiceprints else { return }
         for index in prints.indices {
             guard let print = prints[index].value, matches(print) else { continue }
-            prints[index] = LibraryValue(id: print.id, value: nil, modifiedAt: now)
+            prints[index] = .edit(print.id, value: nil, replacing: prints[index], at: now)
         }
         metadata.voiceprints = prints
     }

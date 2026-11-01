@@ -404,7 +404,9 @@ extension SpeakerProfileReconciler {
             if let existing = existingProfileID(named: name) { return existing }
             let id = SpeakerProfile.id(forName: name)
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            profiles[id.uuidString] = LibraryValue(id: id.uuidString, value: SpeakerProfile(id: id, name: trimmed, createdAt: now), modifiedAt: now)
+            // After a deletion marker the ID may already have (a profile of the same name, deleted).
+            profiles[id.uuidString] = .edit(id.uuidString, value: SpeakerProfile(id: id, name: trimmed, createdAt: now),
+                                            replacing: profiles[id.uuidString], at: now)
             changedProfileIDs.insert(id.uuidString)
             merges = SpeakerProfileMerges(Array(profiles.values))
             return id
@@ -490,7 +492,7 @@ extension SpeakerProfileReconciler {
 
         private mutating func retire(_ id: String) {
             guard voiceprints[id]?.value != nil else { return }
-            voiceprints[id] = LibraryValue(id: id, value: nil, modifiedAt: now)
+            voiceprints[id] = .edit(id, value: nil, replacing: voiceprints[id], at: now)
             changedVoiceprintIDs.insert(id)
         }
 

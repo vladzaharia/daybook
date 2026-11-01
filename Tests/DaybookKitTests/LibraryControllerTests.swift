@@ -186,6 +186,53 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertEqual(reopened.metadata.vocabulary.first?.value?.unknownFields["pronunciation"], .string("newer"))
     }
 
+    /// Settings another device wrote with its clock ten minutes fast, then edited here: each edit is stamped after
+    /// what it replaced, so merging that device's copy again keeps the edits, deletions included.
+    func testBehaviorASettingsEditWinsOverAnEarlierOneFromAClockThatRunsAhead() async throws {
+        let ahead = Date().addingTimeInterval(600)
+        let folder = LibraryFolder(name: "Clients"), term = GlossaryTerm(term: "Kubernetes")
+        let template = SummaryTemplate(id: "custom-retro", name: "Retro", instructions: "Keep it short.")
+        let owner = RecorderOwnership(kind: "soundcore.work", serial: "S1", ownerID: "mac", ownerName: "Mac", ownerClass: .mac, claimedAt: ahead)
+        let handoff = RecorderHandoffRecord(kind: "soundcore.work", serial: "S1", ownerID: "mac", ownerName: "Mac", requesterID: "phone",
+                                            requesterName: "iPhone", requesterClass: .phone, requestedAt: ahead)
+        var received = LibraryMetadata()
+        received.folders = [LibraryValue(id: folder.id.uuidString, value: folder, modifiedAt: ahead)]
+        received.templates = [LibraryValue(id: template.id, value: template, modifiedAt: ahead)]
+        received.vocabulary = [LibraryValue(id: term.id.uuidString, value: term, modifiedAt: ahead)]
+        received.recorders = [LibraryValue(id: owner.id, value: owner, modifiedAt: ahead)]
+        received.handoffs = [LibraryValue(id: handoff.recorderID, value: handoff, modifiedAt: ahead)]
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try JSONEncoder().encode(received).write(to: root.appendingPathComponent("library.json"))
+        let library = try await open()
+
+        library.saveFolder(LibraryFolder(id: folder.id, name: "Customers"))
+        library.saveTemplate(SummaryTemplate(id: template.id, name: "Retro", instructions: "Five bullets."))
+        library.removeGlossaryTerm(term.id)
+        library.claimRecorder(kind: "soundcore.work", serial: "S1", deviceClass: .phone, by: .init(id: "phone", name: "iPhone"))
+        var answered = handoff
+        answered.phase = .released
+        library.saveRecorderHandoff(answered)
+        var merged = library.metadata.merging(received)
+        XCTAssertEqual(merged.folders.first?.value?.name, "Customers")
+        XCTAssertEqual(merged.templates.first?.value?.instructions, "Five bullets.")
+        XCTAssertEqual(merged.vocabulary.first?.isDeletion, true)
+        XCTAssertEqual(merged.recorders?.first?.value?.ownerID, "phone")
+        XCTAssertEqual(merged.handoffs?.first?.value?.phase, .released)
+        XCTAssertGreaterThan(try XCTUnwrap(library.metadata.folders.first?.modifiedAt), ahead)
+
+        // Deleting what was just edited is later again.
+        let edited = library.metadata
+        library.removeFolder(folder.id)
+        library.removeTemplate(template.id)
+        library.releaseRecorder(kind: "soundcore.work", serial: "S1")
+        library.clearRecorderHandoff(kind: "soundcore.work", serial: "S1")
+        merged = library.metadata.merging(edited).merging(received)
+        XCTAssertEqual(merged.folders.first?.isDeletion, true)
+        XCTAssertEqual(merged.templates.first?.isDeletion, true)
+        XCTAssertEqual(merged.recorders?.first?.isDeletion, true)
+        XCTAssertEqual(merged.handoffs?.first?.isDeletion, true)
+    }
+
     func testTheTrashKeepsAConversationAndCanGiveItBack() async throws {
         let library = try await open()
         let id = library.newMeeting(title: "Keep me")

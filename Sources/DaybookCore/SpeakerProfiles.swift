@@ -354,7 +354,7 @@ extension LibraryMetadata {
               let record = speakerProfiles?[index], var profile = record.value else { return false }
         profile.mergedInto = target
         // Later than the record it replaces, whatever this device's clock says.
-        speakerProfiles?[index] = LibraryValue(id: record.id, value: profile, modifiedAt: max(now, record.modifiedAt.addingTimeInterval(0.001)))
+        speakerProfiles?[index] = .edit(record.id, value: profile, replacing: record, at: now)
         return true
     }
 }

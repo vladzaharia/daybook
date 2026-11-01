@@ -27,6 +27,25 @@ final class LibraryMetadataTests: XCTestCase {
         XCTAssertEqual(result, result.merging(oldDevice))
     }
 
+    func testBehaviorAnEditIsStampedAfterTheValueItReplacesWhenThisClockIsBehind() throws {
+        let folder = LibraryFolder(name: "Work")
+        let stored = LibraryValue(id: folder.id.uuidString, value: folder, modifiedAt: later)
+        let renamed = LibraryValue.edit(folder.id.uuidString, value: LibraryFolder(id: folder.id, name: "Projects"), replacing: stored, at: earlier)
+        XCTAssertEqual(renamed.modifiedAt, later.addingTimeInterval(0.001))
+        var mine = LibraryMetadata(), theirs = LibraryMetadata()
+        mine.folders = [renamed]; theirs.folders = [stored]
+        XCTAssertEqual(mine.merging(theirs).folders.first?.value?.name, "Projects")
+        XCTAssertEqual(theirs.merging(mine).folders.first?.value?.name, "Projects")
+
+        let deleted = LibraryValue.edit(folder.id.uuidString, value: nil, replacing: renamed, at: earlier)
+        XCTAssertTrue(deleted.isDeletion)
+        XCTAssertGreaterThan(deleted.modifiedAt, renamed.modifiedAt)
+
+        let now = later.addingTimeInterval(60)
+        XCTAssertEqual(LibraryValue.edit(folder.id.uuidString, value: folder, replacing: stored, at: now).modifiedAt, now, "A clock ahead of the stamp is used as it is")
+        XCTAssertEqual(LibraryValue<LibraryFolder>.edit("new", value: folder, replacing: nil, at: earlier).modifiedAt, earlier)
+    }
+
     func testIntentionalRecreationAfterDeletionWins() {
         let folder = LibraryFolder(name: "Restored")
         var deleted = LibraryMetadata(), recreated = LibraryMetadata()

@@ -488,13 +488,17 @@ public final class LibraryController {
 
     // MARK: Folders and templates
 
+    // Each edit of a synced setting is stamped after the one it replaces (`LibraryValue.edit`), so a later edit
+    // here wins over an earlier one from a device whose clock runs ahead.
+
     public func saveFolder(_ folder: LibraryFolder) {
         let name = folder.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        var value = Self.keepingNewerFields(folder, of: metadata.folders.first { $0.id == folder.id.uuidString }?.value)
+        let stored = metadata.folders.first { $0.id == folder.id.uuidString }
+        var value = Self.keepingNewerFields(folder, of: stored?.value)
         value.name = name
         metadata.folders.removeAll { $0.id == folder.id.uuidString }
-        metadata.folders.append(.init(id: folder.id.uuidString, value: value))
+        metadata.folders.append(.edit(folder.id.uuidString, value: value, replacing: stored))
         persistMetadata()
     }
 
@@ -517,21 +521,24 @@ public final class LibraryController {
 
     /// Removes a folder; its conversations stay in the library, outside any folder.
     public func removeFolder(_ id: UUID) {
+        let stored = metadata.folders.first { $0.id == id.uuidString }
         metadata.folders.removeAll { $0.id == id.uuidString }
-        metadata.folders.append(.init(id: id.uuidString, value: nil)); persistMetadata()
+        metadata.folders.append(.edit(id.uuidString, value: nil, replacing: stored)); persistMetadata()
         for meeting in meetings where meeting.folderID == id { update(meeting.id) { $0.folderID = nil } }
     }
 
     public func saveTemplate(_ template: SummaryTemplate) {
-        var value = Self.keepingNewerFields(template, of: metadata.templates.first { $0.id == template.id }?.value)
+        let stored = metadata.templates.first { $0.id == template.id }
+        var value = Self.keepingNewerFields(template, of: stored?.value)
         value.updatedAt = Date()
         metadata.templates.removeAll { $0.id == value.id }
-        metadata.templates.append(.init(id: value.id, value: value)); persistMetadata()
+        metadata.templates.append(.edit(value.id, value: value, replacing: stored)); persistMetadata()
     }
 
     public func removeTemplate(_ id: String) {
+        let stored = metadata.templates.first { $0.id == id }
         metadata.templates.removeAll { $0.id == id }
-        metadata.templates.append(.init(id: id, value: nil)); persistMetadata()
+        metadata.templates.append(.edit(id, value: nil, replacing: stored)); persistMetadata()
     }
 
     // MARK: Recorder ownership
@@ -552,8 +559,9 @@ public final class LibraryController {
         let record = RecorderOwnership(kind: kind, serial: serial, ownerID: owner.id, ownerName: owner.name,
                                        ownerClass: deviceClass, claimedAt: now)
         var recorders = metadata.recorders ?? []
+        let stored = recorders.first { $0.id == record.id }
         recorders.removeAll { $0.id == record.id }
-        recorders.append(.init(id: record.id, value: record, modifiedAt: now))
+        recorders.append(.edit(record.id, value: record, replacing: stored, at: now))
         metadata.recorders = recorders
         persistMetadata()
         return record
@@ -562,12 +570,13 @@ public final class LibraryController {
     /// Nobody manages the recorder any more (a deletion marker, so it syncs). With `onlyIfOwnedBy`,
     /// only when that device is the owner, so removing a recorder here never undoes another
     /// device's claim.
-    public func releaseRecorder(kind: String, serial: String, onlyIfOwnedBy deviceID: String? = nil) {
+    public func releaseRecorder(kind: String, serial: String, onlyIfOwnedBy deviceID: String? = nil, at now: Date = Date()) {
         guard let current = recorderOwner(kind: kind, serial: serial) else { return }
         if let deviceID, current.ownerID != deviceID { return }
         var recorders = metadata.recorders ?? []
+        let stored = recorders.first { $0.id == current.id }
         recorders.removeAll { $0.id == current.id }
-        recorders.append(.init(id: current.id, value: nil))
+        recorders.append(.edit(current.id, value: nil, replacing: stored, at: now))
         metadata.recorders = recorders
         persistMetadata()
     }
@@ -587,8 +596,9 @@ public final class LibraryController {
         var value = record
         value.updatedAt = now
         var handoffs = metadata.handoffs ?? []
+        let stored = handoffs.first { $0.id == value.recorderID }
         handoffs.removeAll { $0.id == value.recorderID }
-        handoffs.append(.init(id: value.recorderID, value: value, modifiedAt: now))
+        handoffs.append(.edit(value.recorderID, value: value, replacing: stored, at: now))
         metadata.handoffs = handoffs
         persistMetadata()
     }
@@ -599,8 +609,9 @@ public final class LibraryController {
         guard let current = recorderHandoff(kind: kind, serial: serial) else { return }
         if let onlyID, current.id != onlyID { return }
         var handoffs = metadata.handoffs ?? []
+        let stored = handoffs.first { $0.id == current.recorderID }
         handoffs.removeAll { $0.id == current.recorderID }
-        handoffs.append(.init(id: current.recorderID, value: nil, modifiedAt: now))
+        handoffs.append(.edit(current.recorderID, value: nil, replacing: stored, at: now))
         metadata.handoffs = handoffs
         persistMetadata()
     }
@@ -633,14 +644,16 @@ public final class LibraryController {
     }
 
     private func persistGlossary() {
-        let ids = Set(glossary.map { $0.id.uuidString })
+        let ids = Set(glossary.map { $0.id.uuidString }), now = Date()
         for index in metadata.vocabulary.indices where !ids.contains(metadata.vocabulary[index].id) && metadata.vocabulary[index].value != nil {
-            metadata.vocabulary[index].value = nil; metadata.vocabulary[index].modifiedAt = Date()
+            metadata.vocabulary[index] = .edit(metadata.vocabulary[index].id, value: nil, replacing: metadata.vocabulary[index], at: now)
         }
         for term in glossary {
             if let index = metadata.vocabulary.firstIndex(where: { $0.id == term.id.uuidString }) {
-                if metadata.vocabulary[index].value != term { metadata.vocabulary[index] = .init(id: term.id.uuidString, value: term) }
-            } else { metadata.vocabulary.append(.init(id: term.id.uuidString, value: term)) }
+                if metadata.vocabulary[index].value != term {
+                    metadata.vocabulary[index] = .edit(term.id.uuidString, value: term, replacing: metadata.vocabulary[index], at: now)
+                }
+            } else { metadata.vocabulary.append(.edit(term.id.uuidString, value: term, replacing: nil, at: now)) }
         }
         persistMetadata()
         persistGlossaryFile()

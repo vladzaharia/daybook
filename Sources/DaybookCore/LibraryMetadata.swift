@@ -63,6 +63,16 @@ public struct LibraryValue<Value: Codable & Equatable & Sendable>: Codable, Equa
         if let unreadableValue { try values.encode(unreadableValue, forKey: .value) } else { try values.encodeIfPresent(value, forKey: .value) }
         try unknownFields.encode(to: encoder)
     }
+
+    /// This device's edit of an item: a new value, or nil to delete it, replacing `stored` (what the library holds
+    /// for `id` now, a deletion marker included; nil for a new item). It's stamped `now`, or just after `stored`
+    /// when this device's clock is behind that stamp, so an edit made after the one it replaces always wins the
+    /// merge (`LibraryMetadata.merge` keeps the later `modifiedAt`), however far another device's clock runs ahead.
+    /// Only edits made on two devices at once fall back to their clocks. Like any new version of the item, it
+    /// carries none of the keys a newer Daybook wrote beside the stored value: they described that version.
+    public static func edit(_ id: String, value: Value?, replacing stored: LibraryValue?, at now: Date = Date()) -> LibraryValue {
+        LibraryValue(id: id, value: value, modifiedAt: stored.map { max(now, $0.modifiedAt.addingTimeInterval(0.001)) } ?? now)
+    }
 }
 
 /// Which device manages a recorder over Bluetooth (docs/iphone.md, "One Bluetooth owner per recorder").
