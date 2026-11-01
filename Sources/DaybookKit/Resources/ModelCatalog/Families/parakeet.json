@@ -27,6 +27,9 @@
           "homepage": "https://huggingface.co/FluidInference/parakeet-ultra-coreml",
           "releaseDate": "2026-09-22",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "transcription": 90
+          },
           "capabilities": {
             "wordTimestamps": true,
             "wordConfidence": true,
@@ -184,6 +187,9 @@
           "homepage": "https://huggingface.co/FluidInference/parakeet-redux-coreml",
           "releaseDate": "2026-09-22",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "transcription": 80
+          },
           "capabilities": {
             "wordTimestamps": true,
             "wordConfidence": true,

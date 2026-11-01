@@ -74,6 +74,10 @@ public struct ModelVariantEntry: Equatable, Sendable {
     /// When the upstream model was published, "2024-09-17".
     public var releaseDate: String?
     public var recommendedMemoryGB: Int?
+    /// How good it is at each role it serves (`ModelRole.rawValue` → 0–100; docs/models.md, "Quality ranks"), for
+    /// "Upgrade" offers: comparable within a role, and for summaries on the cloud catalog's `summaryQuality` scale.
+    /// Empty when unranked: a result it made offers no upgrade.
+    public var quality: [String: Int]
     public var capabilities: ModelCapabilities
     /// Engine-specific settings, such as Sortformer's "precision" or an MLX "architecture".
     public var engineOptions: [String: String]
@@ -91,12 +95,13 @@ public struct ModelVariantEntry: Equatable, Sendable {
 
     public init(id: String, name: String, detail: String? = nil, engine: ModelEngineID? = nil, roles: [ModelRole]? = nil,
                 license: ModelLicense? = nil, homepage: String? = nil, releaseDate: String? = nil, recommendedMemoryGB: Int? = nil,
-                capabilities: ModelCapabilities = .init(), engineOptions: [String: String] = [:], minimumAppVersion: String? = nil,
+                quality: [String: Int] = [:], capabilities: ModelCapabilities = .init(), engineOptions: [String: String] = [:], minimumAppVersion: String? = nil,
                 minimumEngineVersion: Int? = nil, supersedes: [String] = [], supersededBy: String? = nil,
                 systemProvided: Bool = false, revisions: [ModelRevisionEntry] = []) {
         self.id = id; self.name = name; self.detail = detail; self.engine = engine; self.roles = roles
         self.license = license; self.homepage = homepage; self.releaseDate = releaseDate
-        self.recommendedMemoryGB = recommendedMemoryGB; self.capabilities = capabilities; self.engineOptions = engineOptions
+        self.recommendedMemoryGB = recommendedMemoryGB; self.quality = quality; self.capabilities = capabilities
+        self.engineOptions = engineOptions
         self.minimumAppVersion = minimumAppVersion; self.minimumEngineVersion = minimumEngineVersion
         self.supersedes = supersedes; self.supersededBy = supersededBy; self.systemProvided = systemProvided
         self.revisions = revisions
@@ -493,7 +498,7 @@ extension ModelFamilyEntry: Codable {
 
 extension ModelVariantEntry: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, name, detail, engine, roles, license, homepage, releaseDate, recommendedMemoryGB, capabilities, engineOptions
+        case id, name, detail, engine, roles, license, homepage, releaseDate, recommendedMemoryGB, quality, capabilities, engineOptions
         case minimumAppVersion, minimumEngineVersion, supersedes, supersededBy, systemProvided, revisions
     }
 
@@ -508,6 +513,8 @@ extension ModelVariantEntry: Codable {
         homepage = try? values.decodeIfPresent(String.self, forKey: .homepage)
         releaseDate = try? values.decodeIfPresent(String.self, forKey: .releaseDate)
         recommendedMemoryGB = try? values.decodeIfPresent(Int.self, forKey: .recommendedMemoryGB)
+        // Ranks outside 0–100 are dropped one by one; a map that can't be read at all leaves the model unranked.
+        quality = ((try? values.decodeIfPresent([String: Int].self, forKey: .quality)) ?? [:]).filter { (0...100).contains($0.value) }
         capabilities = (try? values.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities)) ?? .init()
         engineOptions = (try? values.decodeIfPresent([String: String].self, forKey: .engineOptions)) ?? [:]
         minimumAppVersion = try? values.decodeIfPresent(String.self, forKey: .minimumAppVersion)
@@ -537,6 +544,7 @@ extension ModelVariantEntry: Codable {
         try values.encodeIfPresent(homepage, forKey: .homepage)
         try values.encodeIfPresent(releaseDate, forKey: .releaseDate)
         try values.encodeIfPresent(recommendedMemoryGB, forKey: .recommendedMemoryGB)
+        if !quality.isEmpty { try values.encode(quality, forKey: .quality) }
         if capabilities != .init() { try values.encode(capabilities, forKey: .capabilities) }
         if !engineOptions.isEmpty { try values.encode(engineOptions, forKey: .engineOptions) }
         try values.encodeIfPresent(minimumAppVersion, forKey: .minimumAppVersion)

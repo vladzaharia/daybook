@@ -26,6 +26,9 @@
           "detail": "Smaller download. At most 4 speakers; no voice matching.",
           "releaseDate": "2025-10-22",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "diarization": 77
+          },
           "capabilities": {
             "maxSpeakers": 4,
             "expectedSpeakerCount": false,
@@ -89,6 +92,9 @@
           "detail": "Better on noisy audio. At most 4 speakers; no voice matching.",
           "releaseDate": "2025-10-22",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "diarization": 79
+          },
           "capabilities": {
             "maxSpeakers": 4,
             "expectedSpeakerCount": false,

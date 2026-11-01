@@ -27,6 +27,9 @@
           "roles": [],
           "releaseDate": "2024-09-17",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "summarization": 10
+          },
           "capabilities": {
             "contextLength": 32768,
             "structuredOutput": false,
@@ -115,6 +118,9 @@
           "detail": "Balanced quality and speed.",
           "releaseDate": "2024-09-17",
           "recommendedMemoryGB": 16,
+          "quality": {
+            "summarization": 20
+          },
           "capabilities": {
             "contextLength": 32768,
             "structuredOutput": false,
@@ -210,6 +216,9 @@
           "detail": "Best for nuanced conversations.",
           "releaseDate": "2024-09-16",
           "recommendedMemoryGB": 16,
+          "quality": {
+            "summarization": 30
+          },
           "capabilities": {
             "contextLength": 32768,
             "structuredOutput": false,

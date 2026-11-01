@@ -27,6 +27,10 @@
           "detail": "Any number of speakers. Remembers voices across recordings.",
           "releaseDate": "2025-04-15",
           "recommendedMemoryGB": 8,
+          "quality": {
+            "diarization": 85,
+            "speakerEmbedding": 85
+          },
           "capabilities": {
             "voiceEmbeddings": {
               "space": "fluid-community1-embedding-df2625ac79a7ac6b",
