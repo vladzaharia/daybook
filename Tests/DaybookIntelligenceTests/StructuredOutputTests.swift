@@ -153,8 +153,8 @@ final class StructuredOutputTests: XCTestCase {
         // Gemma 4 E2B kept far fewer commitments with the full prompt; the others did as well or better with it.
         let brief = ModelCatalog.builtIn.models.filter { $0.engineOptions["commitments"] == "brief" }.map(\.key).sorted()
         XCTAssertEqual(brief, ["gemma-4/e2b-4bit"], "Qwen 2.5 1.5B writes no summaries any more")
-        let full = try MeetingSynthesis.commitmentsPrompt("[00:01] Mina: I'll send it tomorrow.", parts: 1)
-        let short = try MeetingSynthesis.commitmentsPrompt("[00:01] Mina: I'll send it tomorrow.", parts: 1, brief: true)
+        let full = MeetingSynthesis.commitmentsPrompt("[00:01] Mina: I'll send it tomorrow.", parts: 1)
+        let short = MeetingSynthesis.commitmentsPrompt("[00:01] Mina: I'll send it tomorrow.", parts: 1, brief: true)
         XCTAssertTrue(full.contains("Send the agenda tomorrow"))
         XCTAssertFalse(short.contains("agenda"), "No example a small model could copy as a task")
         // E2B listed the process a customer described, and a question, as commitments.

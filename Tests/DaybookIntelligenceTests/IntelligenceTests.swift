@@ -100,7 +100,7 @@ final class IntelligenceTests: XCTestCase {
     }
 
     func testCustomSummaryPreferencesAndHighlightsPreserveSourceSeparation() {
-        let prompt = MeetingSynthesis.finalPrompt(evidence: #"{"highlighted_evidence":"[1:30] Discussed rest","written_user_context":"[1:32] My own reflection"}"#,
+        let prompt = MeetingSynthesis.finalPrompt(evidence: .extracted("[1:30] Discussed rest\n[1:32] My own reflection"),
                                                   template: .therapy, glossary: [], templateInstructions: "Use a Reflections section")
         XCTAssertTrue(prompt.contains("Use a Reflections section"))
         XCTAssertTrue(prompt.contains("extra factual detail"))

@@ -254,7 +254,7 @@ final class CloudSummarizerTests: XCTestCase {
         let source = MeetingEvidence.summarySource(meeting())
         let built = CloudSynthesis.prompt(source: source, template: .auto, glossary: ["Flagpost"], templateInstructions: nil, provider: .anthropic)
         XCTAssertTrue(built.findsWhatNotesAdd)
-        let local = MeetingSynthesis.finalPrompt(evidence: "{}", template: .auto, glossary: [])
+        let local = MeetingSynthesis.finalPrompt(evidence: .extracted(""), template: .auto, glossary: [])
         // The local rules all stay.
         for rule in ["Cover every topic the evidence discusses", "\"Your notes add\" is only for this.",
                      "Include every explicitly assigned or agreed task in actionItems.", "Suggest up to 12 distinctive names"] {

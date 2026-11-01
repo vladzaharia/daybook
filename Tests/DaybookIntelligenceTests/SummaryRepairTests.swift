@@ -235,7 +235,7 @@ final class SummaryRepairTests: XCTestCase {
             _ = try await MeetingSynthesis.generate(model: model, modelID: "m", transcript: transcript, notes: "", template: .auto, glossary: [],
                                                     progress: { _ in })
             let commitments = try XCTUnwrap(model.prompts.last { $0.hasPrefix("Extract ALL") })
-            XCTAssertEqual(commitments, try MeetingSynthesis.commitmentsPrompt(transcript, parts: 1, brief: brief))
+            XCTAssertEqual(commitments, MeetingSynthesis.commitmentsPrompt(transcript, parts: 1, brief: brief))
         }
     }
 

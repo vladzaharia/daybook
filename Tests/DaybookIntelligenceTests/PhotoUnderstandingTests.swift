@@ -431,7 +431,7 @@ final class PhotoUnderstandingTests: XCTestCase {
         XCTAssertTrue(model.schemas.first?.contains(#""enum":["P1","P2"]"#) == true)
 
         // Without photos, the prompt says nothing about them.
-        let plain = MeetingSynthesis.finalPrompt(evidence: "{}", template: .auto, glossary: [])
+        let plain = MeetingSynthesis.finalPrompt(evidence: .extracted(""), template: .auto, glossary: [])
         XCTAssertFalse(plain.contains("photo"))
     }
 }

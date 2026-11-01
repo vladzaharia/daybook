@@ -33,8 +33,8 @@ extension MeetingSynthesis {
 /// commitments that pass lists checked against the transcript as the commitments pass's are, and each note's
 /// findings asked for before the summary. Photo captions stay on the device, so photos are placed by time afterwards.
 public enum CloudSynthesis {
-    /// The custom instructions' share of the prompt, as the local pipeline bounds them (700 tokens).
-    static let templateTokens = 700
+    /// The custom instructions' share of the prompt, as the local pipeline bounds them.
+    static let templateTokens = MeetingSynthesis.Limits.instructionTokens
 
     public struct Prompt: Equatable, Sendable {
         public var instructions: String
@@ -57,19 +57,12 @@ public enum CloudSynthesis {
         let limit = Int(Double(templateTokens) * catalog.provider(provider).charactersPerToken)
         if custom.count > limit {
             custom = String(custom.prefix(limit))
-            warnings.append("Only the first 700 tokens of the custom summary instructions were used.")
+            warnings.append("Only the first \(templateTokens) tokens of the custom summary instructions were used.")
         }
         let structured = source.isStructured
-        var evidence: [String: Any] = ["recorded_transcript": source.annotatedTranscript]
-        if structured {
-            if !source.anchors.isEmpty { evidence["user_notes_and_bookmarks"] = source.notesPayload }
-        } else {
-            evidence["written_user_context"] = source.notesText
-            evidence["highlighted_evidence"] = source.highlightText ?? ""
-        }
         let findings = structured && source.anchors.contains { $0.kind == .note && !$0.text.isEmpty }
-        let prompt = MeetingSynthesis.finalPrompt(evidence: json(evidence), template: template,
-                                                  glossary: glossary.prefix(80).map { String($0.prefix(200)) },
+        let prompt = MeetingSynthesis.finalPrompt(evidence: .conversation(SourcePayload(source)), template: template,
+                                                  glossary: MeetingSynthesis.Limits.glossary(glossary),
                                                   templateInstructions: custom, listsActions: true, quotesActions: true, findsWhatNotesAdd: findings)
         let noteText = structured ? source.anchors.map(\.text).joined(separator: "\n") : source.notesText
         return Prompt(instructions: MeetingSynthesis.instructions, prompt: prompt, schema: schema(template: template, noteFindings: findings),
@@ -132,12 +125,8 @@ public enum CloudSynthesis {
         }
         guard let start = reply.firstIndex(of: "{"), let end = reply.lastIndex(of: "}"), start <= end,
               let decoded = try? JSONDecoder().decode(Reply.self, from: Data(reply[start...end].utf8)) else { return nil }
-        let actions: [[String: Any]] = decoded.actionItems.map { ["text": $0.text, "owner": $0.owner as Any? ?? NSNull(), "evidence": $0.evidence ?? ""] }
-        return json(["actions": actions])
-    }
-
-    static func json(_ object: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else { return "{}" }
-        return String(decoding: data, as: UTF8.self)
+        return SynthesisJSON.string(QuotedActions(actions: decoded.actionItems.map {
+            QuotedActions.Action(text: $0.text, owner: $0.owner, evidence: $0.evidence ?? "")
+        }))
     }
 }
