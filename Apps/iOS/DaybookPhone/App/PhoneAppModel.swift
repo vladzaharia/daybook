@@ -430,6 +430,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         if let path = options.importFile { await importFiles([URL(fileURLWithPath: path)]) }
         if options.deviceAutopilot { runDeviceAutopilot() }
         if options.handoffDemo != nil || options.demoLiveCaptions || options.demoTransfer != nil { runStatusDemo() }
+        #if DEBUG
+        if PhonePlacementDemo.scenario != nil { Task { await PhonePlacementDemo.apply(to: self) } }
+        #endif
         if options.startRecording, !recorder.isActive {
             try? await startRecording()
             runDemoScript()
