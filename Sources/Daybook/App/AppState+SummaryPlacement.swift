@@ -15,7 +15,7 @@ import Foundation
 /// that arrives while this Mac summarizes is kept rather than replaced.
 extension AppState {
     /// "this Mac" in the countdown's words.
-    static let thisDeviceWords = "this Mac"
+    nonisolated static let thisDeviceWords = "this Mac"
 
     func wireSummaryPlacements() {
         placements.onChange = { [weak self] id in self?.reportSummaryPlacement(id) }

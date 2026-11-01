@@ -187,6 +187,25 @@ final class FloatingNotesStatusTests: XCTestCase {
         XCTAssertEqual(FloatingStatus.workChip(.failed("It ran out of memory."))?.tone, .attention)
     }
 
+    /// Where a summary runs (docs/multipoint.md, "Where summaries run"): its countdown in the chip and the home's
+    /// line for this Mac, a second at a time, and the cloud at work.
+    func testBehaviorASummarysCountdownAndTheCloudShowInTheChipAndTheHome() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let countdown = FloatingStatus.workChip(.summaryCountdown(until: now.addingTimeInterval(11.2), cloud: true), now: now)
+        XCTAssertEqual(countdown?.label, "Summarizing in 12 s")
+        XCTAssertEqual(countdown?.shortLabel, "12 s")
+        XCTAssertEqual(countdown?.detail, "Summarizing on this Mac in 12 s", "The menu's first line says it whole")
+        XCTAssertEqual(countdown?.tone, .calm)
+        XCTAssertEqual(FloatingStatus.workChip(.summarizingWith("Claude Sonnet 5.5"))?.label, "Summarizing with Claude Sonnet 5.5")
+        var queue = FloatingStatusInputs.Queue(running: .summarizing, waiting: 1)
+        queue.countdown = now.addingTimeInterval(5)
+        XCTAssertEqual(FloatingStatus.queueLine(queue, now: now)?.text, "Summarizing in 5 s · 1 waiting")
+        XCTAssertEqual(FloatingStatus.queueLine(queue, now: now.addingTimeInterval(2))?.text, "Summarizing in 3 s · 1 waiting")
+        queue.countdown = nil
+        queue.cloudModel = "Claude Sonnet 5.5"
+        XCTAssertEqual(FloatingStatus.queueLine(queue, now: now)?.text, "Summarizing with Claude Sonnet 5.5 · 1 waiting")
+    }
+
     func testWorkChipShowsOnceTheConversationIsNotRecording() {
         var inputs = recording { $0.work = .transcribing(0.4) }
         XCTAssertFalse(FloatingStatus.chips(inputs).contains { $0.target == .processing })

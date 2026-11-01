@@ -40,9 +40,11 @@ struct ConversationList: View {
                     ForEach(group.meetings) { meeting in
                         // Only the row being processed follows its progress; the others watch an activity that never moves.
                         ActivityReader(processing: state.processingID == meeting.id ? state.processingActivity : nil) {
-                            ConversationRow(meeting: meeting, status: RowStatus(state: state, meeting: meeting),
-                                            timeLabel: RowDate.format(meeting.date, group: group.title),
-                                            selected: selection.wrappedValue.contains(meeting.id))
+                            PlacementReader(placements: state.placements) {
+                                ConversationRow(meeting: meeting, status: RowStatus(state: state, meeting: meeting),
+                                                timeLabel: RowDate.format(meeting.date, group: group.title),
+                                                selected: selection.wrappedValue.contains(meeting.id))
+                            }
                         }
                             .tag(meeting.id)
                             .draggable(meeting.id.uuidString)
@@ -176,13 +178,24 @@ struct RowStatus {
     let text: String?
     /// How far processing has got, for the row's progress line.
     var fraction: Double = 0
+    /// A summary's countdown runs out then: the row counts down to it ("Summarizing in 12 s").
+    var countdown: Date?
     /// The text without its percent: the line fades when what it says changes, not at every percent.
-    var phrase: String? { kind == .processing ? text?.components(separatedBy: " · ").first : text }
+    var phrase: String? {
+        if countdown != nil { return "Summarizing in" }
+        return kind == .processing ? text?.components(separatedBy: " · ").first : text
+    }
 
-    /// Recording is this Mac's own state; everything else reads from `ProcessingStatus`, which the
-    /// conversation page and the iPhone share.
+    /// Recording is this Mac's own state; a summary being placed says where it runs; everything else reads
+    /// from `ProcessingStatus`, which the conversation page and the iPhone share.
     @MainActor init(state: AppState, meeting: Meeting) {
         if state.recordingID == meeting.id { kind = .recording; text = "Recording now"; return }
+        if let planner = state.placements[meeting.id], let line = planner.shortLine(at: Date()) {
+            countdown = planner.deadline
+            if case .started(.cloud) = planner.phase { kind = .processing; fraction = state.processingProgress.fraction } else { kind = .waiting }
+            text = line
+            return
+        }
         switch state.processingStatus(for: meeting) {
         case .processing(let progress):
             kind = .processing
@@ -225,10 +238,18 @@ struct ConversationRow: View {
             // Apple Notes' list: the date reads first, the preview recedes but stays legible.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(timeLabel).foregroundStyle(.primary)
-                Text(status.text ?? preview)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .contentTransition(.opacity)
+                if let until = status.countdown {
+                    // A summary's countdown, a second at a time.
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(SummaryPlacementPlanner.rowLine(until: until, at: context.date))
+                            .foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                    }
+                } else {
+                    Text(status.text ?? preview)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .contentTransition(.opacity)
+                }
             }
             .font(TypeStyle.rowDetail)
             .animation(.easeOut(duration: 0.2), value: status.phrase)

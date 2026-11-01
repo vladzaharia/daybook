@@ -33,6 +33,11 @@ final class FloatingStatusFeed: ObservableObject {
             state.recorder.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             state.processingActivity.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             state.sources.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            // A summary's countdown: when it begins, changes, or ends, and each second while it runs.
+            state.placements.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
+            Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+                .filter { [weak state] _ in state?.placements.undecided.isEmpty == false }
+                .map { _ in () }.eraseToAnyPublisher(),
             // Every session's own changes: battery, connection, recording, imports.
             state.devices.$sessions
                 .map { sessions in Publishers.MergeMany(sessions.map { $0.objectWillChange.map { _ in () } }).eraseToAnyPublisher() }
@@ -130,6 +135,13 @@ extension FloatingStatusInputs {
 
     @MainActor
     static func work(for meeting: Meeting, state: AppState) -> Work? {
+        if let planner = state.placements[meeting.id] {
+            switch planner.phase {
+            case .countingDown(_, let until): return .summaryCountdown(until: until, cloud: planner.cloud != nil)
+            case .started(.cloud(let model)): return .summarizingWith(model.name)
+            default: break
+            }
+        }
         switch state.processingStatus(for: meeting) {
         case .processing(let progress):
             if let device = progress.device {
@@ -163,6 +175,11 @@ extension FloatingStatusInputs {
             queue.running = meeting.status == .summarizing ? .summarizing
                 : message.contains("speaker") || message.contains("sortformer") ? .identifyingSpeakers : .transcribing
             queue.fraction = state.processingProgress.fraction
+            switch state.placements[id]?.phase {
+            case .countingDown(_, let until)?: queue.countdown = until
+            case .started(.cloud(let model))?: queue.cloudModel = model.name
+            default: break
+            }
         }
         queue.waiting = state.processingQueue.count
         queue.awaitingModels = state.awaitingModels.count

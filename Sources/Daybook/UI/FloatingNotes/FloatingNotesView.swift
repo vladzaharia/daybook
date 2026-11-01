@@ -399,7 +399,12 @@ private struct ChipMenuItems: View {
             }
         case .processing:
             if let meeting {
-                if state.processingID == meeting.id {
+                if let planner = state.placements[meeting.id], !planner.actions.isEmpty {
+                    // Where its summary runs: Use the Cloud, Start Now.
+                    ForEach(planner.actions, id: \.self) { action in
+                        Button(action.title) { state.chooseSummaryPlacement(action, for: meeting.id) }
+                    }
+                } else if state.processingID == meeting.id {
                     Button("Pause Transcription") { state.pauseProcessing(meeting.id) }
                 } else if state.pausedIDs.contains(meeting.id) || (meeting.status == .failed && !FriendlyError.isNoSpeech(meeting.errorMessage ?? "")) {
                     Button(meeting.status == .failed ? "Try Again" : "Resume Transcription") {
@@ -412,7 +417,12 @@ private struct ChipMenuItems: View {
                 Button("Open Settings…") { openSettingsPane(.models) }
             }
         case .queue:
-            if let id = state.processingID {
+            if let id = state.processingID, let planner = state.placements[id], !planner.actions.isEmpty {
+                ForEach(planner.actions, id: \.self) { action in
+                    Button(action.title) { state.chooseSummaryPlacement(action, for: id) }
+                }
+                Button("Open in Daybook") { PanelContext.openInDaybook(state: state, id: id) }
+            } else if let id = state.processingID {
                 Button("Pause Transcription") { state.pauseProcessing(id) }
                 Button("Open in Daybook") { PanelContext.openInDaybook(state: state, id: id) }
             }

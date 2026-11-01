@@ -242,6 +242,8 @@ struct ConversationStatus: View {
     let meeting: Meeting
     /// What the recorders recording along are doing ("Soundcore Work is recording too").
     @ObservedObject private var sources: MultiSourceCoordinator
+    /// A summary's countdown, and the cloud at work.
+    @ObservedObject private var placements: SummaryPlacements
     @AppStorage(SettingsPaneKey.storageKey) private var settingsPane = "general"
     @Environment(\.openSettings) private var openSettings
     @State private var showingDetails = false
@@ -250,6 +252,7 @@ struct ConversationStatus: View {
         self.state = state
         self.meeting = meeting
         sources = state.sources
+        placements = state.placements
     }
 
     var body: some View {
@@ -264,6 +267,9 @@ struct ConversationStatus: View {
     @ViewBuilder private var content: some View {
         if state.recordingID == meeting.id {
             if let status = state.sources.recorders.status { line(symbol: "dot.radiowaves.left.and.right") { Text(status) } }
+        } else if let planner = placements[meeting.id], planner.line(at: Date(), thisDevice: AppState.thisDeviceWords) != nil {
+            // Where the summary runs: the countdown, or the cloud at work (SummaryPlacementViews.swift).
+            line(symbol: nil) { PlacementStatusLine(state: state, meetingID: meeting.id, planner: planner) }
         } else {
             switch state.processingStatus(for: meeting) {
             case .failed(let failure) where !failure.reason.isEmpty:
@@ -527,11 +533,10 @@ struct Colophon: View {
             VStack(alignment: .leading, spacing: Space.s2) {
                 Rectangle().fill(Ink.faint).frame(width: 24, height: 1).padding(.bottom, Space.s1)
                 if let summary = meeting.summary {
-                    let cloud = summary.cloudProvenance
                     HStack(spacing: 5) {
-                        Image(systemName: cloud == nil ? "laptopcomputer" : "cloud").font(.system(size: 10))
+                        Image(systemName: summary.origin.cloudModel == nil ? "laptopcomputer" : "cloud").font(.system(size: 10))
                             .symbolEffect(.bounce, value: summary.createdAt)
-                        Text("\(cloud?.label ?? "Summarized on this Mac · \(state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))") · \(summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))")
+                        Text(colophonLine(summary))
                     }
                 }
                 HStack(spacing: 4) {
@@ -564,6 +569,16 @@ struct Colophon: View {
             .foregroundStyle(Ink.meta)
         }
         .padding(.top, Space.s7)
+    }
+
+    /// "Summarized on this Mac · Gemma 4 E4B · 31 Oct, 10:02", "Summarized on Studio Mac · …", or
+    /// "Summarized with Claude Sonnet 5.5 · 31 Oct, 10:02".
+    private func colophonLine(_ summary: MeetingSummary) -> String {
+        let origin = summary.origin
+        let place = origin.colophon(thisDeviceID: state.library.thisDevice.id, thisDevice: AppState.thisDeviceWords, unknown: AppState.thisDeviceWords)
+        let date = summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        if origin.cloudModel != nil { return "\(place) · \(date)" }
+        return "\(place) · \(state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model)) · \(date)"
     }
 
     private var templateTitle: String {

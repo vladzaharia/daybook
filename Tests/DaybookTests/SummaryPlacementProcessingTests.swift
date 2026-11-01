@@ -118,6 +118,26 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertNil(rig.state.placements[id], "Ended with the job")
     }
 
+    func testBehaviorTheCountdownShowsWhereProcessingStatusShows() async throws {
+        let rig = try await rig(seconds: 30)
+        let id = try await conversation(rig, "Shown", frequency: 330)
+        rig.state.enqueue(id)
+        try await countingDown(rig, id)
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let row = RowStatus(state: rig.state, meeting: meeting)
+        XCTAssertEqual(row.kind, .waiting)
+        XCTAssertNotNil(row.countdown, "The row counts down")
+        XCTAssertEqual(row.text?.hasPrefix("Summarizing in "), true)
+        guard case .summaryCountdown(_, let cloud)? = FloatingStatusInputs.work(for: meeting, state: rig.state) else {
+            return XCTFail("Floating Notes shows the countdown")
+        }
+        XCTAssertTrue(cloud)
+        XCTAssertNotNil(rig.state.placementProgress(id)?.countdown, "and so do phones")
+        rig.state.chooseSummaryPlacement(.startNow, for: id)
+        try await rig.processed(id)
+        XCTAssertNil(RowStatus(state: rig.state, meeting: try XCTUnwrap(rig.meeting(id))).countdown)
+    }
+
     func testBehaviorStartNowSkipsTheRestOfTheCountdown() async throws {
         let rig = try await rig(seconds: 30)
         let id = try await conversation(rig, "Start now", frequency: 340)

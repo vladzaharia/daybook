@@ -126,6 +126,8 @@ struct MeetingInspector: View {
     }
 
     @ViewBuilder private func processing(_ meeting: Meeting) -> some View {
+        // A summary's countdown, with its choices, or the cloud at work.
+        PlacementInspectorRow(state: state, meetingID: meeting.id)
         if let run = meeting.transcripts.max(by: { $0.createdAt < $1.createdAt }) {
             LabeledContent("Transcribed", value: state.modelCatalog.name(for: run.modelID, provenance: run.processingSettings?.model))
                 .help(run.createdAt.formatted(date: .abbreviated, time: .shortened))
@@ -137,8 +139,10 @@ struct MeetingInspector: View {
             LabeledContent("Speakers", value: "Not identified")
         }
         if let summary = meeting.summary {
-            LabeledContent("Summary", value: state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))
-                .help(summary.createdAt.formatted(date: .abbreviated, time: .shortened))
+            let origin = summary.origin
+            LabeledContent("Summary", value: origin.cloudModel ?? state.modelCatalog.name(for: summary.modelID, provenance: summary.processingSettings?.model))
+                .help([origin.colophon(thisDeviceID: state.library.thisDevice.id, thisDevice: AppState.thisDeviceWords, unknown: AppState.thisDeviceWords),
+                       summary.createdAt.formatted(date: .abbreviated, time: .shortened)].joined(separator: " · "))
         }
         HStack {
             if !meeting.tracks.isEmpty { ReprocessMenu(state: state, meeting: meeting).fixedSize() }
