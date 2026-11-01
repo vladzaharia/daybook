@@ -389,6 +389,32 @@ final class PhoneLibraryTests: XCTestCase {
         } catch {}
     }
 
+    /// What became of a stopped recording, for the surfaces that say so: Stop, and a recording that stops on its own.
+    func testBehaviorAStoppedRecordingSaysWhereItWent() async throws {
+        let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
+        let rig = RecorderRig()
+        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        XCTAssertNil(model.lastFiling)
+        try await model.startRecording()
+        rig.pump(2)
+        try await model.stopRecording()
+        let first = try XCTUnwrap(model.lastFiledID)
+        guard case .saved(let id, let at)? = model.lastFiling else { return XCTFail("\(String(describing: model.lastFiling))") }
+        XCTAssertEqual(id, first)
+        XCTAssertLessThan(abs(at.timeIntervalSinceNow), 60)
+
+        // One that stops on its own (the encoder failed, say) is filed and says so too.
+        try await model.startRecording()
+        rig.pump(2)
+        let recording = await rig.recorder.stop()
+        rig.recorder.onUnexpectedStop?(recording)
+        try await waitUntil("the second recording to be filed") { model.lastFiledID != first }
+        try await waitUntil("where it went") { if case .saved(let id, _)? = model.lastFiling { return id != first } else { return false } }
+        guard case .saved(let second, _)? = model.lastFiling else { return XCTFail() }
+        XCTAssertEqual(second, model.lastFiledID)
+    }
+
     func testRecordingIntoANewNoteFilesIntoItAfterItsNotes() async throws {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         try await library.reload()

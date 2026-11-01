@@ -65,6 +65,17 @@ final class PhoneAppModel: RecordingCommandHandling {
     private(set) var isFiling = false
     /// The conversation filed last, for the interface to point at.
     private(set) var lastFiledID: UUID?
+    /// How the recording this iPhone stopped last was filed, set as Stop (or a recording that stopped on its own)
+    /// finishes: saved into a conversation, or why it couldn't be.
+    private(set) var lastFiling: Filing?
+
+    /// Where a stopped recording went (`lastFiling`).
+    enum Filing: Equatable {
+        /// Saved into this conversation, then.
+        case saved(UUID, Date)
+        /// Not added to the library; the sentence says why and what happens to it.
+        case failed(String)
+    }
     /// Files being imported from Files or the share sheet.
     private(set) var importing = 0
     /// The conversation imported last.
@@ -737,19 +748,22 @@ final class PhoneAppModel: RecordingCommandHandling {
         let clocks = link.peerClocks { mac in session?.macs.first(where: { $0.id == mac.id })?.startedAt ?? mac.recording?.startedAt }
         // Finishing and filing must complete even if the caller is cancelled (an intent that timed
         // out, a view that went away): an unstructured task doesn't inherit cancellation.
-        await Task { @MainActor in
+        let filing = await Task { @MainActor () -> Filing? in
             guard var recording = await self.recorder.stop() else {
+                var filing: Filing?
                 if let reason = self.recorder.lastError {
-                    self.say("Couldn’t finish the recording. It’s kept, and Daybook tries again the next time it opens.", details: reason)
+                    self.say(Self.notFinished, details: reason)
+                    filing = .failed(Self.notFinished)
                 }
                 self.publish()
-                return
+                return filing
             }
             if !clocks.isEmpty { recording.capture.peerClocks = clocks }
             self.recorder.audioTap = nil
             await self.captions.finish()
-            await self.file(recording, session: session)
+            return await self.file(recording, session: session)
         }.value
+        if let filing { lastFiling = filing }
         stopMacsStartedHere(session)
         endCascade(stopping, session: session, cascadesUp: cascadesUp)
         multipoint = nil
@@ -1192,13 +1206,16 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     // MARK: Filing and recovery
 
-    private func file(_ recording: PhoneRecording, session: MultipointSession? = nil) async {
+    @discardableResult
+    private func file(_ recording: PhoneRecording, session: MultipointSession? = nil) async -> Filing {
         let join = join(for: recording, session: session)
+        let filing: Filing
         // A Mac's conversation that hasn't synced here yet: one pass first, so this files into its copy.
         if join != nil, library.controller.meeting(recording.id) == nil, sync.isConnected { await sync.synchronize(.filed) }
         do {
             let filed = try await library.fileRecording(recording, join: join, requestTranscription: settings.requestsTranscription)
             lastFiledID = filed.meeting.id
+            filing = .saved(filed.meeting.id, Date())
             let identity = PhoneDevice.identity(recordingID: recording.recordingID, installation: library.installationID)
             if let track = filed.meeting.tracks.first(where: { $0.device == identity }) {
                 captions.attach(trackID: track.id, meetingID: filed.meeting.id)
@@ -1211,10 +1228,15 @@ final class PhoneAppModel: RecordingCommandHandling {
             // Transcribed here when this iPhone has the models (it claimed the request as it filed it).
             processor.pickUp()
         } catch {
-            say("Couldn’t add the recording to your library. It’s saved and will be added next time Daybook opens.", details: error.localizedDescription)
+            say(Self.notFiled, details: error.localizedDescription)
+            filing = .failed(Self.notFiled)
         }
         publish()
+        return filing
     }
+
+    static let notFinished = "Couldn’t finish the recording. It’s kept, and Daybook tries again the next time it opens."
+    static let notFiled = "Couldn’t add the recording to your library. It’s saved and will be added next time Daybook opens."
 
     private func finishUnexpectedly(_ recording: PhoneRecording?) async {
         var final = activityState()
@@ -1228,7 +1250,11 @@ final class PhoneAppModel: RecordingCommandHandling {
         stopSharingCaptions()
         recorder.audioTap = nil
         await captions.finish()
-        if let recording { await Task { @MainActor in await self.file(recording, session: session) }.value }
+        if let recording {
+            lastFiling = await Task { @MainActor in await self.file(recording, session: session) }.value
+        } else {
+            lastFiling = .failed(Self.notFinished)
+        }
         say("Recording stopped. Everything up to then is saved.", details: recorder.lastError)
         publish()
     }

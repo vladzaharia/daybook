@@ -176,6 +176,7 @@ Apps/iOS            (Xcode, via XcodeGen)
 ```
 
 - **One kind of model.** The shared controllers (DaybookKit's library, sync, handoff, and placements; DaybookDevices' hub, sessions, and connections) are `@Observable`, as the phone's own models and the player are. A view reads them directly, through the app model or not, and redraws for what it reads: a Listen Live caption redraws the caption strip, never the device list. Nothing mirrors them or counts their changes; what isn't a view follows them with `ObservationWatch`.
+- **After Stop.** `PhoneAppModel.lastFiling` says where the recording went once Stop (or a recording that stopped on its own) has filed it: `.saved(conversation, when)`, or `.failed(sentence)` when it couldn't be added yet (it's kept and added the next time Daybook opens).
 - **Processing seam.**
   - `ProcessingEngine` (in DaybookKit) takes a meeting and its transcribable tracks and returns transcripts, speakers, and a summary. Both apps implement it with DaybookIntelligence's `InferenceProcessingEngine`: the Mac's queue, and on the phone `PhoneProcessor` for its own recordings ("Processing on this iPhone").
   - Without the processing models, the phone's requests wait for a Mac as they always did.
