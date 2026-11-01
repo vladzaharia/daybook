@@ -101,8 +101,8 @@ final class FloatingNotesWindow {
 
     /// The window itself: a floating, non-activating panel on every Space and over full-screen apps.
     static func floatingPanel() -> FloatingNotesPanel {
-        // A full title bar, not `.utilityWindow`: its 28 pt band and standard close button hold the
-        // status bar. No toolbar, so the window keeps the smaller corner radius.
+        // A full title bar, not `.utilityWindow`: its band (28 or 32 pt, by the system) and standard
+        // close button hold the status bar. No toolbar, so the window keeps the smaller corner radius.
         let panel = FloatingNotesPanel(contentRect: NSRect(origin: .zero, size: FloatingLayout.defaultSize),
                                        styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                                        backing: .buffered, defer: false)
@@ -126,6 +126,27 @@ final class FloatingNotesWindow {
 final class FloatingNotesPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// The close button's centre line, from the top of the window: the title band's, which is taller
+    /// than the system's title bar (`FloatingLayout.bandRoom`). Nil leaves it where AppKit puts it.
+    var closeButtonCenter: CGFloat? {
+        didSet { placeCloseButton() }
+    }
+
+    /// AppKit puts the title bar's buttons back on every resize, so close returns to the band's centre
+    /// line each layout pass, before anything is drawn.
+    override func layoutIfNeeded() {
+        super.layoutIfNeeded()
+        placeCloseButton()
+    }
+
+    private func placeCloseButton() {
+        guard let center = closeButtonCenter, let button = standardWindowButton(.closeButton), let superview = button.superview else { return }
+        let rect = button.convert(button.bounds, to: nil)
+        let delta = center - (frame.height - rect.midY)
+        guard abs(delta) >= 0.5 else { return }
+        button.setFrameOrigin(NSPoint(x: button.frame.minX, y: button.frame.minY + (superview.isFlipped ? delta : -delta)))
+    }
 }
 
 /// The panel's sizes and the grid its content keeps, in points.
@@ -138,6 +159,10 @@ enum FloatingLayout {
     static let compactBelow: CGFloat = 380
     /// The height the Compact button snaps to.
     static let compactHeight: CGFloat = 212
+
+    /// The title band is this much taller than the system's title bar, so the phase and the chips
+    /// have room above and below them; the close button moves down to its centre line.
+    static let bandRoom: CGFloat = 4
 
     /// Every left and right edge of content.
     static let inset: CGFloat = 16
@@ -159,10 +184,11 @@ enum FloatingLayout {
 @MainActor
 final class PanelChrome: NSResponder, ObservableObject {
     @Published var isHovering = false
-    /// The title-bar band's height: the status bar is centred in it.
-    @Published var band: CGFloat = 28
+    /// The title band's height: the system's title bar and `FloatingLayout.bandRoom`. The status bar
+    /// is centred in it, and content starts below it.
+    @Published var band: CGFloat = 28 + FloatingLayout.bandRoom
     /// The close button's centre line, from the top of the window.
-    @Published var buttonCenter: CGFloat = 14
+    @Published var buttonCenter: CGFloat = (28 + FloatingLayout.bandRoom) / 2
     /// The close button's leading inset, which the Compact button's trailing inset mirrors.
     @Published var buttonInset: CGFloat = 8
     /// The close button's width, so the status bar starts clear of it.
@@ -191,15 +217,18 @@ final class PanelChrome: NSResponder, ObservableObject {
     }
 
     func measure(_ panel: NSPanel) {
-        let band = panel.frame.height - panel.contentLayoutRect.height
-        if band > 0, band != self.band { self.band = band }
+        let titleBar = panel.frame.height - panel.contentLayoutRect.height
+        let band = titleBar + FloatingLayout.bandRoom
+        if titleBar > 0, band != self.band { self.band = band }
+        // Close sits on the taller band's centre line, as Compact does.
+        if titleBar > 0 { (panel as? FloatingNotesPanel)?.closeButtonCenter = band / 2 }
         if let button = panel.standardWindowButton(.closeButton) {
             let rect = button.convert(button.bounds, to: nil)
             let center = panel.frame.height - rect.midY, inset = rect.minX
             if center > 0, center != buttonCenter { buttonCenter = center }
             if inset > 0, inset != buttonInset { buttonInset = inset }
             if rect.width > 0, rect.width != buttonWidth { buttonWidth = rect.width }
-        } else if band > 0 {
+        } else if titleBar > 0 {
             buttonCenter = band / 2
         }
         if NSMouseInRect(NSEvent.mouseLocation, panel.frame, false) { setHovering(true) }
