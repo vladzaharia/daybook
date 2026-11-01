@@ -95,6 +95,11 @@ public enum LibrarySyncError: LocalizedError, Equatable {
 public actor LibrarySyncEngine {
     /// Sync's diagnostics (Console: subsystem `local.daybook`, category `sync`): what failed and is tried again later.
     static let log = Logger(subsystem: "local.daybook", category: "sync")
+    /// The engine runs on a queue of its own: a pass waits on the disk and on iCloud's file coordination (whole-file
+    /// copies, hashing, sealing, fsync), which Swift's cooperative threads, sized to the cores and shared with inference
+    /// and the interface's tasks, must never do. Isolation is unchanged.
+    private let queue = DispatchSerialQueue(label: "local.daybook.sync.engine", qos: .utility)
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
     public nonisolated let localRoot: URL
     public nonisolated let remoteRoot: URL
     public nonisolated let deviceID: String
@@ -142,6 +147,12 @@ public actor LibrarySyncEngine {
     /// When this device ID first wrote its presence, from its own record (`SyncDeviceRecord.firstSeen`).
     var presenceFirstSeen: Date?
     nonisolated let installation: String?
+    /// A random ID for this app's own installation on this device (`SyncDeviceRecord.appInstallation`): two apps that
+    /// share the device's identity through the keychain (the iPhone app kept beside the one that replaced it) differ in it.
+    nonisolated let appInstallation: String?
+    /// When another installation of Daybook on this device last wrote this device's presence after this one did, by its
+    /// record (`writePresence`). Nil: none seen.
+    public internal(set) var otherInstallationWrote: Date?
     /// What this device is doing, for its presence record (`publishActivity`).
     var activity: SyncDeviceActivity?
     /// Another device writes presence under this device ID: this one should take a new identity.
@@ -234,11 +245,12 @@ public actor LibrarySyncEngine {
     /// `listingGathered()` says iCloud has listed what's there, so a fresh device doesn't start a second library
     /// beside one it can't see yet.
     /// `installation` (a random ID for this installation) goes in the presence record, so two devices that share a
-    /// device ID can tell (`sharesIdentity`).
+    /// device ID can tell (`sharesIdentity`); `appInstallation` (this app's own), so two apps on one device sharing its
+    /// identity can (`otherInstallationWrote`).
     public init(localRoot: URL, remoteRoot: URL, deviceID: String, replica: SyncReplicaConfiguration = SyncReplicaConfiguration(),
-                waitsForListing: Bool = false, installation: String? = nil) throws {
+                waitsForListing: Bool = false, installation: String? = nil, appInstallation: String? = nil) throws {
         mayCreateLibrary = !waitsForListing
-        self.installation = installation
+        self.installation = installation; self.appInstallation = appInstallation
         self.localRoot = localRoot.standardizedFileURL
         self.remoteRoot = remoteRoot.standardizedFileURL
         self.deviceID = deviceID

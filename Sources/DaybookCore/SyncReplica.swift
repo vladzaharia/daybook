@@ -417,28 +417,10 @@ public enum AudioFetchError: LocalizedError, Equatable {
     }
 }
 
-/// SHA-256 with CryptoKit. Produces exactly the same lowercase hex as `AudioDigest`, much faster, which
-/// matters for journal hashing and audio verification on a phone.
+/// SHA-256 for sync: journal entries, audio, and object names, as lowercase hex. One streamed implementation,
+/// `AudioDigest`'s, stopping when the calling task is cancelled.
 enum SyncDigest {
-    static func sha256(data: Data) -> String { hex(SHA256.hash(data: data)) }
-    static func sha256(fileURL: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        // Each read is autoreleased: drained a chunk at a time, hashing a long recording takes a megabyte, not its size.
-        while try autoreleasepool(invoking: { () throws -> Bool in
-            guard let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty else { return false }
-            try Task.checkCancellation()
-            hasher.update(data: bytes)
-            return true
-        }) {}
-        return hex(hasher.finalize())
-    }
-    static func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
-        let digits = Array("0123456789abcdef")
-        var result = ""
-        result.reserveCapacity(64)
-        for byte in digest { result.append(digits[Int(byte >> 4)]); result.append(digits[Int(byte & 0x0f)]) }
-        return result
-    }
+    static func sha256(data: Data) -> String { AudioDigest.sha256(data: data) }
+    static func sha256(fileURL: URL) throws -> String { try AudioDigest.sha256(fileURL: fileURL) { Task.isCancelled } }
+    static func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 { digest.lowercaseHex }
 }

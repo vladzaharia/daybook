@@ -220,6 +220,9 @@ public final class LibrarySyncController {
     public private(set) var deviceID: String
     /// A random ID for this installation, in the presence record.
     public private(set) var installation: String
+    /// A random ID for this app on this device, kept in its own preferences (`Key.appInstallation`): apps that share the
+    /// device's identity through the keychain differ in it.
+    public let appInstallation: String
     private let identityStore: SyncDeviceIdentityStore
     /// Another device writes presence under this device ID; a new identity is taken once the pass ends.
     private var needsNewIdentity = false
@@ -315,6 +318,10 @@ public final class LibrarySyncController {
         static let identityStored = "syncDeviceIDInKeychain"
         /// When the last pass was acknowledged.
         static let lastCompleted = "syncLastCompleted"
+        /// A random ID for this app's own installation, in its own preferences (`LibrarySyncEngine.appInstallation`).
+        static let appInstallation = "syncAppInstallation"
+        /// When another installation of Daybook on this device last wrote this device's presence (`warning`).
+        static let otherInstallationWrote = "syncOtherInstallationWrote"
     }
 
     /// `identityStore` defaults to this device's keychain (`SyncDeviceIdentityStore.keychain(for:)`).
@@ -325,7 +332,12 @@ public final class LibrarySyncController {
         self.identityStore = store
         let identity = Self.resolveIdentity(store: store, defaults: defaults, localRoot: localRoot)
         deviceID = identity.deviceID; installation = identity.installation
+        if let stored = defaults.string(forKey: Key.appInstallation) { appInstallation = stored } else {
+            appInstallation = UUID().uuidString
+            defaults.set(appInstallation, forKey: Key.appInstallation)
+        }
         lastSync = defaults.object(forKey: Key.lastCompleted) as? Date
+        warning = Self.otherInstallationWarning(defaults.object(forKey: Key.otherInstallationWrote) as? Date, now: Date())
         migrationRecord = defaults.data(forKey: Key.migration).flatMap { try? JSONDecoder().decode(SyncMigrationRecord.self, from: $0) }
         let usable = environment.containerIdentifier.map(environment.hasEntitlement) ?? false
         iCloud = usable ? .checking : .unavailableInThisBuild
@@ -513,7 +525,8 @@ public final class LibrarySyncController {
         if url.startAccessingSecurityScopedResource() { scopedURL = url }
         // In the container, a fresh device waits for iCloud's first listing before it starts a library of its own.
         do { engine = try LibrarySyncEngine(localRoot: localRoot, remoteRoot: url, deviceID: deviceID, replica: replica,
-                                            waitsForListing: transport == .iCloudContainer && monitorChanges, installation: installation) }
+                                            waitsForListing: transport == .iCloudContainer && monitorChanges, installation: installation,
+                                            appInstallation: appInstallation) }
         catch { scopedURL?.stopAccessingSecurityScopedResource(); scopedURL = nil; throw error }
         folder = url; self.transport = transport; status = .preparing; configurationID = UUID()
         encryption = replica.keyStore == nil ? .unavailable : .off
@@ -612,6 +625,7 @@ public final class LibrarySyncController {
             try Task.checkCancellation()
             guard generation == configurationID else { isSyncing = false; return nil }
             if await engine.sharesIdentity { needsNewIdentity = true }
+            await noteOtherInstallation(engine)
             await noteEncryption(engine)
             handToCourier(result.writtenFiles, engine: engine)
             pendingReceipt = result.checkpointID
@@ -1029,6 +1043,13 @@ public final class LibrarySyncController {
         await TaskWaiter.wait(for: sends)
     }
 
+    /// The app came to the front: a courier that's off because the account couldn't be checked when it started (an
+    /// iPhone woken in the background soon after it started) tries again now.
+    public func resumeCourier() {
+        guard let courier, let start = courierStart else { return }
+        Task { await start.value; await courier.reconnect() }
+    }
+
     /// Asks the courier for what other devices sent (a push arrived).
     public func fetchCourier() {
         guard let courier, let start = courierStart else { return }
@@ -1412,7 +1433,31 @@ public final class LibrarySyncController {
     func poll() async {
         if listingDeferred { await noteListing() }
         if await mayIdle() { pollsSkipped += 1 } else { await onSyncRequested?() }
-        if let engine { try? await engine.refreshPresence() }
+        if let engine {
+            try? await engine.refreshPresence()
+            await noteOtherInstallation(engine)
+        }
+    }
+
+    /// How long after another installation of Daybook on this device last synced as it the warning stays: it may run
+    /// only now and then (opened, or woken in the background), and once it's deleted, the warning goes after this long.
+    static let otherInstallationWindow: TimeInterval = 24 * 60 * 60
+
+    /// Notes another installation of Daybook syncing as this device (`LibrarySyncEngine.otherInstallationWrote`), kept
+    /// across launches, and says so in `warning` while it's recent.
+    private func noteOtherInstallation(_ engine: LibrarySyncEngine) async {
+        var seen = defaults.object(forKey: Key.otherInstallationWrote) as? Date
+        if let wrote = await engine.otherInstallationWrote, wrote > (seen ?? .distantPast) {
+            seen = wrote
+            defaults.set(wrote, forKey: Key.otherInstallationWrote)
+        }
+        let next = Self.otherInstallationWarning(seen, now: Date())
+        if warning != next { warning = next }
+    }
+
+    static func otherInstallationWarning(_ seen: Date?, now: Date) -> SyncWarning? {
+        guard let seen, now.timeIntervalSince(seen) < otherInstallationWindow else { return nil }
+        return .otherInstallation
     }
 
     /// Whether the poll may skip its pass (`poll`).

@@ -52,6 +52,9 @@ public struct SyncMigrationOutcome: Sendable {
 ///   sealed under its current key as it's copied, nothing in plaintext, and no presence; without that key the move
 ///   waits (`keyUnavailable`).
 public actor LibrarySyncMigration {
+    /// A queue of its own, so whole-file copies, hashing, and sealing never wait on the disk on Swift's cooperative threads.
+    private let queue = DispatchSerialQueue(label: "local.daybook.sync.migration", qos: .utility)
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
     public nonisolated let source: URL
     public nonisolated let destination: URL
     let localRoot: URL

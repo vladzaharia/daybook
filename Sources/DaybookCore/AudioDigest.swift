@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 /// SHA-256 of recordings and photos as lowercase hex, streamed through CryptoKit so long recordings
-/// are never loaded into memory. The same digests `SyncDigest` makes.
+/// are never loaded into memory. Sync's digests (`SyncDigest`) are these.
 public enum AudioDigest {
     public static func sha256(fileURL: URL) throws -> String {
         try sha256(fileURL: fileURL) { Task.isCancelled }
@@ -14,25 +14,21 @@ public enum AudioDigest {
         try await BlockingFileWork.sha256(fileURL)
     }
 
-    /// The same, checking `isCancelled` between chunks (work on a dispatch queue has no task to check).
+    /// The same, checking `isCancelled` between chunks (work on a dispatch queue has no task to check). Each read is
+    /// autoreleased and drained a chunk at a time, so hashing a long recording takes a megabyte of memory, not its size,
+    /// on a queue whose pool would otherwise drain only when the whole file is done.
     static func sha256(fileURL: URL, isCancelled: () -> Bool) throws -> String {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty {
+        while try autoreleasepool(invoking: { () throws -> Bool in
+            guard let bytes = try handle.read(upToCount: 1_048_576), !bytes.isEmpty else { return false }
             if isCancelled() { throw CancellationError() }
             hasher.update(data: bytes)
-        }
-        return hex(hasher.finalize())
+            return true
+        }) {}
+        return hasher.finalize().lowercaseHex
     }
 
-    public static func sha256(data: Data) -> String { hex(SHA256.hash(data: data)) }
-
-    private static func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
-        let digits = Array("0123456789abcdef")
-        var result = ""
-        result.reserveCapacity(64)
-        for byte in digest { result.append(digits[Int(byte >> 4)]); result.append(digits[Int(byte & 0x0f)]) }
-        return result
-    }
+    public static func sha256(data: Data) -> String { SHA256.hash(data: data).lowercaseHex }
 }

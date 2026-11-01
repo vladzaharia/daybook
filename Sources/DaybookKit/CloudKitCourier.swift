@@ -1,9 +1,6 @@
 import CloudKit
 import DaybookCore
 import Foundation
-#if os(macOS)
-import Security
-#endif
 
 /// The courier over CloudKit (docs/icloud-sync.md, "Courier (CloudKit)"): a `CKSyncEngine` on the private database
 /// of the app's container, with custom zones `Courier` (a plaintext library's files) and `SealedCourier` (an encrypted
@@ -13,6 +10,10 @@ import Security
 /// of storage with a growing delay, deletes what a Mac stored and anything older than seven days, and turns itself
 /// off quietly when CloudKit can't be used.
 public actor CloudKitCourier: SyncCourier {
+    /// A queue of its own: the outbox copies files up to 50 MB as it takes them, which Swift's cooperative threads must
+    /// never wait on.
+    private let queue = DispatchSerialQueue(label: "local.daybook.sync.courier", qos: .utility)
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
     public static let zoneName = "Courier"
     /// An encrypted library's files travel in a zone of their own, which earlier versions never read or clear.
     public static let sealedZoneName = "SealedCourier"
@@ -41,6 +42,14 @@ public actor CloudKitCourier: SyncCourier {
     private var refusals = 0
     private var retryTask: Task<Void, Never>?
     private var accountObserver: (any NSObjectProtocol)?
+    /// The account couldn't be checked, or was temporarily unavailable: another try is scheduled (`reconnectDelay`).
+    private var offForNow = false
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectDelay = CloudKitCourier.firstReconnect
+    /// The first wait before checking the account again after it couldn't be checked; each try doubles it, up to
+    /// `maxReconnect`.
+    static let firstReconnect: TimeInterval = 60
+    static let maxReconnect: TimeInterval = 60 * 60
 
     /// A courier for this app, or nil when this build isn't signed for CloudKit with the container (development and ad
     /// hoc builds, tests). Creating a `CKContainer` without the entitlement stops the app, so nothing here touches
@@ -56,10 +65,8 @@ public actor CloudKitCourier: SyncCourier {
     /// and the app never creates a courier in tests.
     static func isEntitled(for identifier: String) -> Bool {
         #if os(macOS)
-        guard let task = SecTaskCreateFromSelf(nil) else { return false }
-        func strings(_ key: String) -> [String] { SecTaskCopyValueForEntitlement(task, key as CFString, nil) as? [String] ?? [] }
-        return strings("com.apple.developer.icloud-services").contains("CloudKit")
-            && strings("com.apple.developer.icloud-container-identifiers").contains(identifier)
+        return Entitlements.strings("com.apple.developer.icloud-services").contains("CloudKit")
+            && Entitlements.strings("com.apple.developer.icloud-container-identifiers").contains(identifier)
         #else
         return true
         #endif
@@ -84,10 +91,21 @@ public actor CloudKitCourier: SyncCourier {
     public func stop() async {
         stopped = true
         retryTask?.cancel(); retryTask = nil
+        reconnectTask?.cancel(); reconnectTask = nil; offForNow = false
+        if let accountObserver { NotificationCenter.default.removeObserver(accountObserver) }
+        accountObserver = nil
         if let engine { await engine.cancelOperations() }
         engine = nil
         availability = .unavailable("Sync is off")
         publish()
+    }
+
+    /// The app came to the front: a courier that's off because the account couldn't be checked tries again now, rather
+    /// than waiting out its backoff.
+    public func reconnect() async {
+        guard offForNow, engine == nil, !stopped else { return }
+        reconnectDelay = Self.firstReconnect
+        await retryConnect()
     }
 
     public func send(_ files: [CourierOutgoingFile]) async {
@@ -152,21 +170,22 @@ public actor CloudKitCourier: SyncCourier {
 
     // MARK: Connecting
 
-    /// Checks the account and creates the engine. Without an account (or while it can't be determined) the courier
-    /// stays off and tries again when the account changes.
+    /// Checks the account and creates the engine. Without an account, or with iCloud restricted, the courier stays off
+    /// and tries again when the account changes. While the account can't be checked or is temporarily unavailable (an
+    /// iPhone woken in the background soon after it started, before CloudKit can answer), it tries again on its own,
+    /// after a minute and then twice as long each time up to an hour (`nextReconnectDelay`), and when the app comes to
+    /// the front (`reconnect`).
     private func connect() async {
         let container = CKContainer(identifier: containerIdentifier)
         let account: CKAccountStatus
-        do { account = try await container.accountStatus() } catch { return turnOff(error.localizedDescription) }
+        do { account = try await container.accountStatus() } catch { return turnOffForNow(error.localizedDescription) }
         guard !stopped, engine == nil else { return }
-        switch account {
+        switch Self.answer(account) {
         case .available: break
-        case .noAccount: return turnOff("No iCloud account")
-        case .restricted: return turnOff("iCloud is restricted on this device")
-        case .temporarilyUnavailable: return turnOff("iCloud is temporarily unavailable")
-        case .couldNotDetermine: return turnOff("The iCloud account couldn’t be checked")
-        @unknown default: return turnOff("The iCloud account couldn’t be checked")
+        case .off(let reason): return turnOff(reason)
+        case .offForNow(let reason): return turnOffForNow(reason)
         }
+        offForNow = false; reconnectTask?.cancel(); reconnectTask = nil; reconnectDelay = Self.firstReconnect
         var configuration = CKSyncEngine.Configuration(database: container.privateCloudDatabase,
                                                        stateSerialization: loadState(), delegate: self)
         configuration.automaticallySync = true
@@ -180,9 +199,57 @@ public actor CloudKitCourier: SyncCourier {
     }
 
     private func turnOff(_ reason: String) {
+        offForNow = false; reconnectTask?.cancel(); reconnectTask = nil
         availability = .unavailable(reason)
         outbox.dropAllWaiting(now: Date())
         outbox.save()
+        publish()
+    }
+
+    /// Off for a reason that passes (`connect`): iCloud Drive carries everything meanwhile, and the account is checked
+    /// again after `reconnectDelay`.
+    private func turnOffForNow(_ reason: String) {
+        turnOff(reason)
+        guard !stopped else { return }
+        offForNow = true
+        let delay = reconnectDelay
+        reconnectDelay = Self.nextReconnectDelay(after: delay)
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            await self?.retryConnect()
+        }
+    }
+
+    /// How the courier takes an account status.
+    enum AccountAnswer: Equatable {
+        case available
+        /// Off until the account changes: no account, or iCloud restricted.
+        case off(String)
+        /// Off until it's checked again, on its own (`turnOffForNow`).
+        case offForNow(String)
+    }
+
+    static func answer(_ status: CKAccountStatus) -> AccountAnswer {
+        switch status {
+        case .available: return .available
+        case .noAccount: return .off("No iCloud account")
+        case .restricted: return .off("iCloud is restricted on this device")
+        case .temporarilyUnavailable: return .offForNow("iCloud is temporarily unavailable")
+        case .couldNotDetermine: return .offForNow("The iCloud account couldn’t be checked")
+        @unknown default: return .offForNow("The iCloud account couldn’t be checked")
+        }
+    }
+
+    /// The wait after `delay` before the next try: twice as long, up to `maxReconnect`.
+    static func nextReconnectDelay(after delay: TimeInterval) -> TimeInterval { min(delay * 2, maxReconnect) }
+
+    private func retryConnect() async {
+        reconnectTask?.cancel(); reconnectTask = nil
+        guard engine == nil, !stopped else { return }
+        availability = .checking
+        publish()
+        await connect()
         publish()
     }
 

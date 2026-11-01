@@ -138,6 +138,14 @@ public protocol SyncCourier: AnyObject, Sendable {
     /// The library became encrypted: drops plaintext files still waiting, and deletes those this device knows are on the
     /// server (docs/icloud-sync.md, "Encryption").
     func forgetPlaintext() async
+    /// The app came to the front: a courier that's off for a reason that may have passed (the account couldn't be
+    /// checked) tries again now.
+    func reconnect() async
+}
+
+extension SyncCourier {
+    /// Couriers that never go off for a passing reason have nothing to try again.
+    public func reconnect() async {}
 }
 
 // MARK: - The outbox

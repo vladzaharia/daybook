@@ -201,6 +201,8 @@ public enum SyncProblem: Equatable, Sendable {
 /// Something worth knowing about sync that doesn't stop it (`LibrarySyncController.warning`). The surface that shows
 /// one words it.
 public enum SyncWarning: Equatable, Sendable {
-    /// Another installation was syncing as this device (one was copied from the other). This one syncs as a new device.
+    /// Another installation of Daybook on this device syncs as it too, sharing its identity through the keychain: the
+    /// iPhone app kept beside the one that replaced it. Both claim the same work, so the person deletes the older one.
+    /// Said while the other one synced in the last day (`LibrarySyncController.otherInstallationWindow`).
     case otherInstallation
 }

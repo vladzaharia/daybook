@@ -38,6 +38,9 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// What it does with its own models for other devices (`SyncDeviceCapabilities`). Additive: earlier versions
     /// write none, and are read as unknown.
     var capabilities: SyncDeviceCapabilities?
+    /// A random ID for the app that wrote it, on this device. Two apps sharing the device's identity through the keychain
+    /// (the iPhone app kept beside the one that replaced it) write the same `installation` and differ here. Additive.
+    var appInstallation: String?
 
     init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
          installation: String? = nil, activity: SyncDeviceActivity? = nil) {
@@ -47,7 +50,7 @@ struct SyncDeviceRecord: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
-        case features, key, sealed, compaction, firstSeen, capabilities
+        case features, key, sealed, compaction, firstSeen, capabilities, appInstallation
     }
 
     init(from decoder: Decoder) throws {
@@ -69,6 +72,7 @@ struct SyncDeviceRecord: Codable, Equatable {
         compaction = (try? values.decodeIfPresent(String.self, forKey: .compaction)) ?? nil
         firstSeen = (try? values.decodeIfPresent(Date.self, forKey: .firstSeen)) ?? nil
         capabilities = (try? values.decodeIfPresent(SyncDeviceCapabilities.self, forKey: .capabilities)) ?? nil
+        appInstallation = (try? values.decodeIfPresent(String.self, forKey: .appInstallation)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -141,6 +145,7 @@ extension LibrarySyncEngine {
         record.features = [Self.sealingFeature, Self.compactionFeature]
         record.compaction = state.compactionAck
         record.capabilities = device.capabilities
+        record.appInstallation = appInstallation
         // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
@@ -149,6 +154,14 @@ extension LibrarySyncEngine {
         let directory = remoteRoot.appendingPathComponent(SyncPresenceFiles.directory, isDirectory: true)
         let url = directory.appendingPathComponent(SyncPresenceFiles.fileName(for: deviceID))
         let existing = SyncFiles.itemState(url) == .local ? (try? SyncFiles.read(url, below: remoteRoot, cloud: cloud)).flatMap(SyncPresenceFiles.decode) : nil
+        // Another Daybook on this device wrote this device's record since this one last did (every record this one writes
+        // carries its `appInstallation`): the iPhone app kept beside the one that replaced it, both syncing as this device.
+        // The person is told (`LibrarySyncController.warning`). One with another `installation` is another device sharing
+        // the ID (copied from this one), which takes a new identity instead (`sharesIdentity`, below).
+        if let appInstallation, let existing, existing.deviceID == deviceID, existing.installation == installation,
+           existing.appInstallation != appInstallation, presenceWritten != nil {
+            otherInstallationWrote = min(existing.lastSeen, now)
+        }
         // When this device ID began: kept from its record, or now for a record that never said.
         if presenceFirstSeen == nil, existing != nil || SyncFiles.itemState(url) == .absent {
             presenceFirstSeen = existing.flatMap { $0.deviceID == deviceID ? $0.firstSeen : nil } ?? now

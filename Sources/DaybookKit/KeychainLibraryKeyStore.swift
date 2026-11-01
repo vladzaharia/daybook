@@ -9,7 +9,7 @@ import Security
 ///
 /// Both apps list their own group first in `keychain-access-groups`, so items stored without a group (the link's
 /// pairing keys, the sync device ID) stay where they were; only library keys name the shared group.
-public final class KeychainLibraryKeyStore: LibraryKeyStore, @unchecked Sendable {
+public final class KeychainLibraryKeyStore: LibraryKeyStore, Sendable {
     public static let service = "local.daybook.library-key"
     public static let label = "Daybook library key"
     /// Info.plist key naming the shared group on iPhone (`$(AppIdentifierPrefix)local.daybook.shared`). The Mac reads it
@@ -27,9 +27,7 @@ public final class KeychainLibraryKeyStore: LibraryKeyStore, @unchecked Sendable
 
     static func sharedGroup() -> String? {
         #if os(macOS)
-        if let task = SecTaskCreateFromSelf(nil),
-           let groups = SecTaskCopyValueForEntitlement(task, "keychain-access-groups" as CFString, nil) as? [String],
-           let group = groups.first(where: isSharedGroup) { return group }
+        if let group = Entitlements.strings("keychain-access-groups").first(where: isSharedGroup) { return group }
         #endif
         return (Bundle.main.object(forInfoDictionaryKey: sharedGroupInfoKey) as? String).flatMap { isSharedGroup($0) ? $0 : nil }
     }
@@ -83,11 +81,13 @@ public final class KeychainLibraryKeyStore: LibraryKeyStore, @unchecked Sendable
 
     public func remove(keyID: Data, libraryID: UUID) throws {
         var query = base
-        query[kSecAttrAccount as String] = "\(libraryID.uuidString):\(keyID.map { String(format: "%02x", $0) }.joined())"
+        query[kSecAttrAccount as String] = Self.account(libraryID: libraryID, keyID: keyID)
         query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw LibraryKeyStoreError.keychain(status) }
     }
 
-    static func account(_ key: LibraryKey) -> String { "\(key.libraryID.uuidString):\(key.idHex)" }
+    /// `<library ID>:<key ID in lowercase hex>`, one spelling for storing, reading, and removing.
+    static func account(_ key: LibraryKey) -> String { account(libraryID: key.libraryID, keyID: key.id) }
+    static func account(libraryID: UUID, keyID: Data) -> String { "\(libraryID.uuidString):\(keyID.lowercaseHex)" }
 }

@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -12,9 +13,7 @@ final class AudioDigestTests: XCTestCase {
     }
 
     func testMatchesTheEarlierImplementationAcrossChunkBoundaries() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Digest-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
+        let folder = makeTemporaryFolder("Digest")
         var generator = SystemRandomNumberGenerator()
         // Lengths around the 64-byte block, the 56-byte padding edge, and the 1 MiB read chunk.
         for length in [0, 1, 55, 56, 63, 64, 65, 119, 120, 1_048_575, 1_048_576, 1_048_577, 2_500_003] {
@@ -26,6 +25,24 @@ final class AudioDigestTests: XCTestCase {
             try bytes.write(to: file)
             XCTAssertEqual(try AudioDigest.sha256(fileURL: file), expected, "\(length) bytes streamed")
         }
+    }
+
+    /// Sync hashes with the same streamed implementation (each chunk autoreleased as it's read), which stops between
+    /// chunks once the caller is cancelled.
+    func testBehaviorSyncAndAudioDigestsAreOneStreamedHashThatStopsWhenCancelled() async throws {
+        let file = makeTemporaryFolder("Digest").appendingPathComponent("long.bin")
+        try Data(repeating: 7, count: 3 * 1_048_576 + 5).write(to: file)
+        XCTAssertEqual(try SyncDigest.sha256(fileURL: file), try AudioDigest.sha256(fileURL: file))
+        XCTAssertEqual(SyncDigest.sha256(data: Data("abc".utf8)), AudioDigest.sha256(data: Data("abc".utf8)))
+        XCTAssertEqual(SyncDigest.hex([0x00, 0xff, 0x1a]), "00ff1a")
+        let cancelled = Task { () throws -> String in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try SyncDigest.sha256(fileURL: file)
+        }
+        do { _ = try await cancelled.value; XCTFail("Hashed on after cancellation") } catch is CancellationError {}
+        var checks = 0
+        XCTAssertThrowsError(try AudioDigest.sha256(fileURL: file) { checks += 1; return checks > 1 }) { XCTAssertTrue($0 is CancellationError) }
+        XCTAssertEqual(checks, 2, "Checked between chunks")
     }
 }
 

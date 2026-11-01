@@ -76,6 +76,21 @@ final class SimulatedICloud: @unchecked Sendable {
     }
 }
 
+/// Cancels a task from a callback that may run before the task is known (then as soon as it is).
+private final class CancelHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<URL, Error>?
+    private var cancelled = false
+    func set(_ task: Task<URL, Error>) {
+        let now = lock.withLock { () -> Bool in self.task = task; return cancelled }
+        if now { task.cancel() }
+    }
+    func cancel() {
+        let task = lock.withLock { () -> Task<URL, Error>? in cancelled = true; return self.task }
+        task?.cancel()
+    }
+}
+
 private final class Recorder<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [Value] = []
@@ -334,13 +349,15 @@ final class LibrarySyncReplicaTests: XCTestCase {
             XCTFail("Fetch didn't time out")
         } catch AudioFetchError.notUploadedYet { }
 
-        // Cancelled midway through the copy: no partial file in the library.
+        // Cancelled midway through the copy (which runs off Swift's cooperative threads): no partial file in the library.
         try cloud.deliver(object)
+        let handle = CancelHandle()
         let copying = Task {
             try await phone.fetchAudio(for: track, in: meeting.id, options: fast) { progress in
-                if progress.phase == .copying { withUnsafeCurrentTask { $0?.cancel() } }
+                if progress.phase == .copying { handle.cancel() }
             }
         }
+        handle.set(copying)
         do { _ = try await copying.value; XCTFail("Copy ignored cancellation") } catch is CancellationError { }
         XCTAssertFalse(FileManager.default.fileExists(atPath: localAudio("Phone", meeting.id, track).path))
         XCTAssertEqual(temporaryFiles("Phone", meeting.id), [])

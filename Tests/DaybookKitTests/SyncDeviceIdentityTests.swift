@@ -126,6 +126,38 @@ final class SyncDeviceIdentityTests: XCTestCase {
         XCTAssertEqual(after?.published, 0, "it continues from the same place instead of publishing everything again")
     }
 
+    /// The iPhone app kept beside the one that replaced it: both read the device's identity from the keychain (the same
+    /// device ID and installation), each with its own preferences. The newer one notices the other syncing as this
+    /// device and says so; once the other stops, the warning goes after a day.
+    func testBehaviorAnotherAppSyncingAsThisDeviceIsNoticed() async throws {
+        let shared = StoredSyncIdentity(deviceID: "iphone", installation: "shared-installation")
+        let newDefaults = try defaults()
+        let newApp = controller(root.appendingPathComponent("New"), newDefaults, .memory(shared))
+        let oldApp = controller(root.appendingPathComponent("Old"), try defaults(), .memory(shared))
+        XCTAssertNotEqual(newApp.appInstallation, oldApp.appInstallation)
+        let newLibrary = LibraryController(rootURL: root.appendingPathComponent("New"), sync: newApp)
+        let oldLibrary = LibraryController(rootURL: root.appendingPathComponent("Old"), sync: oldApp)
+        try await newLibrary.load(); try await oldLibrary.load()
+        try newApp.connect(to: container, monitorChanges: false)
+        let alone = await newLibrary.synchronize()
+        XCTAssertEqual(alone?.acknowledged, true)
+        XCTAssertNil(newApp.warning, "Nobody else syncs as this device yet")
+        try oldApp.connect(to: container, monitorChanges: false)
+        // Both keep this device's ID: they share the installation, so neither takes a new one.
+        for library in [oldLibrary, newLibrary] {
+            let applied = await library.synchronize()
+            XCTAssertEqual(applied?.acknowledged, true)
+        }
+        XCTAssertEqual(newApp.deviceID, "iphone"); XCTAssertEqual(oldApp.deviceID, "iphone")
+        XCTAssertEqual(newApp.warning, .otherInstallation)
+        // Remembered across launches, for a day after the other one last synced.
+        let relaunched = controller(root.appendingPathComponent("New"), newDefaults, .memory(shared))
+        XCTAssertEqual(relaunched.warning, .otherInstallation)
+        XCTAssertEqual(relaunched.appInstallation, newApp.appInstallation)
+        XCTAssertEqual(LibrarySyncController.otherInstallationWarning(Date(), now: Date()), .otherInstallation)
+        XCTAssertNil(LibrarySyncController.otherInstallationWarning(Date().addingTimeInterval(-LibrarySyncController.otherInstallationWindow - 1), now: Date()))
+    }
+
     func testOfTwoDevicesSharingAnIdentityOneTakesANewOne() async throws {
         // Both were cloned before identities moved to the keychain: same device ID, different installations.
         let sharedA = SyncDeviceIdentityStore.memory(StoredSyncIdentity(deviceID: "cloned", installation: "a-installation"))
@@ -142,6 +174,7 @@ final class SyncDeviceIdentityTests: XCTestCase {
         }
         XCTAssertEqual(a.deviceID, "cloned", "the smaller installation keeps the identity")
         XCTAssertNotEqual(b.deviceID, "cloned", "the other takes a new one")
+        XCTAssertNil(a.warning, "Another device, not another app on this one"); XCTAssertNil(b.warning)
         XCTAssertEqual(sharedB.read()?.deviceID, b.deviceID)
         XCTAssertNotNil(b.folder, "and syncs on with it")
         let applied = await libraryB.synchronize()

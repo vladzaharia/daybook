@@ -1,3 +1,4 @@
+import CloudKit
 import DaybookCore
 import DaybookTestSupport
 import Foundation
@@ -307,6 +308,22 @@ final class LibrarySyncCourierTests: XCTestCase {
         // This process isn't signed for CloudKit, so the real courier is never created (nothing touches CloudKit).
         XCTAssertNil(CloudKitCourier.ifEntitled(containerIdentifier: "iCloud.test.daybook", directory: root, deviceID: "Mac"))
         XCTAssertNil(CloudKitCourier.ifEntitled(containerIdentifier: nil, directory: root, deviceID: "Mac"))
+    }
+
+    /// CloudKit's courier stays off for good only without an account or with iCloud restricted; an account that couldn't
+    /// be checked (an iPhone woken soon after it started) or was temporarily unavailable is checked again on its own, a
+    /// minute later and then twice as long each time, up to an hour, and when the app comes to the front.
+    func testBehaviorTheCloudKitCourierTriesAgainWhenTheAccountCouldntBeChecked() {
+        XCTAssertEqual(CloudKitCourier.answer(.available), .available)
+        for status in [CKAccountStatus.noAccount, .restricted] {
+            guard case .off = CloudKitCourier.answer(status) else { return XCTFail("\(status)") }
+        }
+        for status in [CKAccountStatus.couldNotDetermine, .temporarilyUnavailable] {
+            guard case .offForNow = CloudKitCourier.answer(status) else { return XCTFail("\(status)") }
+        }
+        var delay = CloudKitCourier.firstReconnect, waits: [TimeInterval] = []
+        for _ in 0..<9 { waits.append(delay); delay = CloudKitCourier.nextReconnectDelay(after: delay) }
+        XCTAssertEqual(waits, [60, 120, 240, 480, 960, 1920, 3600, 3600, 3600])
     }
 
     func testCourierFilesOlderThanSevenDaysAreDeletedByAnyDevice() async throws {

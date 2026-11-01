@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import Synchronization
 
 /// This device's identity in the sync journal (`LibrarySyncController.deviceID`) and a random ID for this
 /// installation, which tells two devices apart if they ever share a device ID.
@@ -112,7 +113,7 @@ public struct SyncDeviceIdentityStore: Sendable {
     }
 
     static func account(_ libraryKey: String) -> String {
-        "identity-" + SHA256.hash(data: Data(libraryKey.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        "identity-" + SHA256.hash(data: Data(libraryKey.utf8)).prefix(8).lowercaseHex
     }
 
     /// An identity keychain item, as `adoptable` weighs it.
@@ -138,11 +139,13 @@ public struct SyncDeviceIdentityStore: Sendable {
 
     /// Kept in memory, for tests that play several devices in one process.
     public static func memory(_ initial: StoredSyncIdentity? = nil) -> SyncDeviceIdentityStore {
-        final class Box: @unchecked Sendable { let lock = NSLock(); var value: StoredSyncIdentity? }
-        let box = Box()
-        box.value = initial
-        return SyncDeviceIdentityStore(read: { box.lock.withLock { box.value } },
-                                       write: { identity in box.lock.withLock { box.value = identity }; return true })
+        final class Box: Sendable {
+            let value: Mutex<StoredSyncIdentity?>
+            init(_ value: StoredSyncIdentity?) { self.value = Mutex(value) }
+        }
+        let box = Box(initial)
+        return SyncDeviceIdentityStore(read: { box.value.withLock { $0 } },
+                                       write: { identity in box.value.withLock { $0 = identity }; return true })
     }
 
     /// Nothing can be stored: the identity lives in preferences, as before (tests that choose a device ID there).

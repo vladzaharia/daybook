@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 // Where a library's keys live (docs/icloud-sync.md, "Encryption"). In the apps, iCloud Keychain
 // (`KeychainLibraryKeyStore` in DaybookKit), which carries a key to every device signed in to the account, end to end
@@ -64,38 +65,42 @@ public struct LibraryKeyRecord: Codable, Equatable, Sendable {
 
 /// Keys kept in memory. Share one between replicas to play iCloud Keychain carrying a key everywhere; give each its own
 /// to play a device the key hasn't reached.
-public final class MemoryLibraryKeyStore: LibraryKeyStore, @unchecked Sendable {
-    private let lock = NSLock()
-    private var held: [UUID: [Data: LibraryKey]] = [:]
-    private var failure: LibraryKeyStoreError?
+public final class MemoryLibraryKeyStore: LibraryKeyStore, Sendable {
+    private struct State {
+        var held: [UUID: [Data: LibraryKey]] = [:]
+        var failure: LibraryKeyStoreError?
+    }
+    private let state: Mutex<State>
 
     public init(_ keys: [LibraryKey] = []) {
-        for key in keys { held[key.libraryID, default: [:]][key.id] = key }
+        var initial = State()
+        for key in keys { initial.held[key.libraryID, default: [:]][key.id] = key }
+        state = Mutex(initial)
     }
 
     public func keys(for libraryID: UUID) throws -> [LibraryKey] {
-        try lock.withLock {
-            if let failure { throw failure }
-            return held[libraryID].map { Array($0.values).sorted { $0.idHex < $1.idHex } } ?? []
+        try state.withLock { state in
+            if let failure = state.failure { throw failure }
+            return state.held[libraryID].map { Array($0.values).sorted { $0.idHex < $1.idHex } } ?? []
         }
     }
 
     public func store(_ key: LibraryKey) throws {
-        try lock.withLock {
-            if let failure { throw failure }
-            held[key.libraryID, default: [:]][key.id] = key
+        try state.withLock { state in
+            if let failure = state.failure { throw failure }
+            state.held[key.libraryID, default: [:]][key.id] = key
         }
     }
 
     public func remove(keyID: Data, libraryID: UUID) throws {
-        lock.withLock { _ = held[libraryID]?.removeValue(forKey: keyID) }
+        state.withLock { _ = $0.held[libraryID]?.removeValue(forKey: keyID) }
     }
 
     /// Makes every call fail as a keychain that refuses would (nil: work again). Tests.
-    public func fail(with error: LibraryKeyStoreError?) { lock.withLock { failure = error } }
+    public func fail(with error: LibraryKeyStoreError?) { state.withLock { $0.failure = error } }
 
     /// Every key held, for any library. Tests.
-    public var allKeys: [LibraryKey] { lock.withLock { held.values.flatMap(\.values) } }
+    public var allKeys: [LibraryKey] { state.withLock { $0.held.values.flatMap(\.values) } }
 }
 
 // MARK: Recovery key

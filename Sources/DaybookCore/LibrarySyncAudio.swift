@@ -143,36 +143,45 @@ extension LibrarySyncEngine {
         }
     }
 
-    /// Runs off the actor so a long copy doesn't hold up sync passes. Copies and hashes in one pass; a sealed object is
-    /// opened on the way (progress in plaintext bytes), and one that doesn't open returns "".
+    /// Runs off the actor, and off Swift's cooperative threads (`BlockingFileWork`), so a long copy neither holds up sync
+    /// passes nor pins a thread the rest of the app's async work needs. Copies and hashes in one pass, each chunk
+    /// autoreleased as it goes; a sealed object is opened on the way (progress in plaintext bytes), and one that doesn't
+    /// open returns "". Cancelling the caller stops a plaintext copy between chunks; either way the caller checks for
+    /// cancellation before installing anything.
     private nonisolated func copyVerifying(_ remote: URL, of object: RemoteObject, below root: URL, to temporary: URL, expected: String,
                                            totalBytes: Int64?, progress: (@Sendable (AudioFetchProgress) -> Void)?) async throws -> String {
         if case .sealed = object {
             do {
-                return try copyPlaintext(remote, of: object, below: root, libraryID: nil, to: temporary, expected: expected) { done, total in
-                    progress?(AudioFetchProgress(phase: .copying, completedBytes: done, totalBytes: total))
+                return try await BlockingFileWork.run { _ in
+                    try self.copyPlaintext(remote, of: object, below: root, libraryID: nil, to: temporary, expected: expected) { done, total in
+                        progress?(AudioFetchProgress(phase: .copying, completedBytes: done, totalBytes: total))
+                    }
                 }
             } catch is SyncKeyPending { throw AudioFetchError.keyUnavailable }
         }
-        return try SyncFiles.coordinateRead(remote, below: root) { source in
-            guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
-                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: temporary.path])
+        return try await BlockingFileWork.run { isCancelled in
+            try SyncFiles.coordinateRead(remote, below: root) { source in
+                guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                    throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: temporary.path])
+                }
+                let input = try FileHandle(forReadingFrom: source)
+                defer { try? input.close() }
+                let output = try FileHandle(forWritingTo: temporary)
+                defer { try? output.close() }
+                var hasher = SHA256()
+                var copied: Int64 = 0
+                while try autoreleasepool(invoking: { () throws -> Bool in
+                    guard let chunk = try input.read(upToCount: 512 * 1024), !chunk.isEmpty else { return false }
+                    if isCancelled() { throw CancellationError() }
+                    hasher.update(data: chunk)
+                    try output.write(contentsOf: chunk)
+                    copied += Int64(chunk.count)
+                    progress?(AudioFetchProgress(phase: .copying, completedBytes: copied, totalBytes: totalBytes))
+                    return true
+                }) {}
+                try output.synchronize()
+                return hasher.finalize().lowercaseHex
             }
-            let input = try FileHandle(forReadingFrom: source)
-            defer { try? input.close() }
-            let output = try FileHandle(forWritingTo: temporary)
-            defer { try? output.close() }
-            var hasher = SHA256()
-            var copied: Int64 = 0
-            while let chunk = try input.read(upToCount: 512 * 1024), !chunk.isEmpty {
-                try Task.checkCancellation()
-                hasher.update(data: chunk)
-                try output.write(contentsOf: chunk)
-                copied += Int64(chunk.count)
-                progress?(AudioFetchProgress(phase: .copying, completedBytes: copied, totalBytes: totalBytes))
-            }
-            try output.synchronize()
-            return SyncDigest.hex(hasher.finalize())
         }
     }
 
