@@ -296,22 +296,23 @@ final class PhoneSync {
 
     // MARK: Status
 
-    /// One line, true right now.
+    /// One line, true right now. A state the Mac's iCloud row also shows is said in the same words (`SyncStatus.shortText`).
     var statusLine: String {
         switch connection {
-        case .checking: return "Checking iCloud…"
+        case .checking: return SyncStatus.connecting.shortText
         case .unavailable(let reason): return reason
         case .connected:
-            if encryption == .waitingForKey { return LibrarySyncError.keyUnavailable("").localizedDescription }
-            if isSyncing { return changesInFlight > 0 ? "Syncing \(Self.changes(changesInFlight))" : "Syncing…" }
+            if encryption == .waitingForKey { return SyncStatus.waitingForKey.shortText }
+            if isSyncing { return changesInFlight > 0 ? "Syncing \(Self.changes(changesInFlight))" : SyncStatus.syncing.shortText }
             // The reason is the system's words; Settings shows it behind Details.
-            if lastError != nil { return "Sync paused" }
-            if pendingUploads > 0 { return "Uploading \(pendingUploads) \(pendingUploads == 1 ? "item" : "items") to iCloud" }
+            if let lastError { return SyncStatus.failure(details: lastError).shortText }
+            if pendingUploads > 0 { return SyncStatus.exchanged(uploads: pendingUploads, downloads: 0).shortText }
             if let line = courierLine() { return line }
             if hasMoreWork { return "Syncing… more to come" }
             if localChanges > 0 { return "\(Self.changes(localChanges).capitalizedFirst) waiting to sync" }
-            if pendingDownloads > 0 { return "Waiting for iCloud to download \(pendingDownloads) \(pendingDownloads == 1 ? "item" : "items")" }
-            return lastSynced == nil ? "Waiting to sync" : "Up to date"
+            if pendingDownloads > 0 { return SyncStatus.exchanged(uploads: 0, downloads: pendingDownloads).shortText }
+            guard let lastSynced else { return SyncStatus.preparing.shortText }
+            return SyncStatus.upToDate(at: lastSynced).shortText
         }
     }
 

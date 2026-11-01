@@ -72,7 +72,7 @@ final class SyncStatusTests: XCTestCase {
         XCTAssertTrue(SyncStatus.applying.isPassRunning)
         XCTAssertFalse(SyncStatus.upToDate(at: Date()).isPassRunning)
         XCTAssertEqual(SyncStatus.exchanged(uploads: 1, downloads: 3).shortText, "Uploading 1 item to iCloud")
-        XCTAssertEqual(SyncStatus.exchanged(uploads: 0, downloads: 3).shortText, "Waiting for iCloud to download 3 items")
+        XCTAssertEqual(SyncStatus.exchanged(uploads: 0, downloads: 3).shortText, "Waiting for iCloud to download 3 items…")
     }
 
     func testAProblemKeepsTheSystemsWordsForDetails() {

@@ -85,7 +85,7 @@ final class SyncServicesTests: XCTestCase {
         let phone = try await makePhone(container, keyStore: phoneKeys)
         await phone.sync.synchronize(.launch)
         XCTAssertEqual(phone.sync.encryption, .waitingForKey)
-        XCTAssertEqual(phone.sync.statusLine, "Waiting for this library’s key.")
+        XCTAssertEqual(phone.sync.statusLine, "Waiting for this library’s key", "As the Mac's iCloud row says it")
         XCTAssertFalse(phone.sync.isUpToDate)
         XCTAssertTrue(phone.library.conversations.isEmpty)
 

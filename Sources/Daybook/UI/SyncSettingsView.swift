@@ -264,20 +264,22 @@ struct SyncShown {
     /// Syncing through iCloud or a folder: Turn Off Sync… applies.
     var isConnected: Bool { folder != nil && (isFolderTransport || iCloud == .connected) }
 
-    /// The iCloud row's value: one phrase for where sync stands.
+    /// The iCloud row's value: one phrase for where sync stands, in the words the iPhone's sync line uses
+    /// (`SyncStatus.shortText`).
     var headline: String {
         switch iCloud {
-        case .checking: return "Checking…"
+        case .checking: return SyncStatus.connecting.shortText
         case .connected: return connectedStatus
-        case .waitingForKey: return "Waiting for this library’s key"
-        case .iCloudDriveOff: return "iCloud Drive is off"
-        case .signedOut: return "Signed out"
-        case .migrating(let progress):
-            return progress.total > 0 ? "Moving to iCloud · \(progress.completed) of \(progress.total) files" : "Moving to iCloud…"
-        case .accountChanged, .previousFolderMissing, .previousFolderAccessLost: return "Paused"
-        case .containerUnavailable: return "Not available right now"
-        case .turnedOff: return "Off"
-        case .unavailableInThisBuild: return "Not available in this build"
+        case .waitingForKey: return SyncStatus.waitingForKey.shortText
+        case .iCloudDriveOff: return SyncStatus.iCloudDriveOff.shortText
+        case .signedOut: return SyncStatus.signedOut.shortText
+        case .migrating(let progress): return SyncStatus.migrating(progress).shortText
+        case .accountChanged: return SyncStatus.accountChanged.shortText
+        case .previousFolderMissing: return SyncStatus.previousFolderMissing.shortText
+        case .previousFolderAccessLost: return SyncStatus.previousFolderAccessLost.shortText
+        case .containerUnavailable(let reason): return SyncStatus.iCloudUnavailable(details: reason).shortText
+        case .turnedOff: return SyncStatus.off.shortText
+        case .unavailableInThisBuild: return SyncStatus.unavailableInThisBuild.shortText
         }
     }
 
@@ -294,15 +296,13 @@ struct SyncShown {
     /// The copy deck's sync states: Up to date · 11:42 AM, Syncing…, Waiting for iCloud to download 3 items…. With a
     /// problem, the line under the row says what's wrong, so the row says only when sync last finished.
     var connectedStatus: String {
-        if isSyncing { return "Syncing…" }
-        if pendingDownloads > 0 {
-            return "Waiting for iCloud to download \(pendingDownloads) \(pendingDownloads == 1 ? "item" : "items")…"
-        }
-        guard let date = lastSync else { return problem == nil ? "Waiting to sync" : "Not synced yet" }
+        if isSyncing { return SyncStatus.syncing.shortText }
+        if pendingDownloads > 0 { return SyncStatus.exchanged(uploads: 0, downloads: pendingDownloads).shortText }
+        guard let date = lastSync else { return problem == nil ? SyncStatus.preparing.shortText : "Not synced yet" }
         let time = Calendar.current.isDateInToday(date)
             ? date.formatted(date: .omitted, time: .shortened)
             : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
-        return problem == nil ? "Up to date · \(time)" : "Last synced \(time)"
+        return problem == nil ? "\(SyncStatus.upToDate(at: date).shortText) · \(time)" : "Last synced \(time)"
     }
 
     var remainingMigration: String? {

@@ -204,7 +204,7 @@ struct StatusInputs: Equatable {
     /// Live progress over the link, newest first.
     var liveProgress: [LiveProgress] = []
     var queue: [StatusQueueEntry] = []
-    var syncLine = "Checking iCloud…"
+    var syncLine = SyncStatus.connecting.shortText
     var syncTone: SyncTone = .checking
     var hostsRecordButton = false
     var hasLiveCaptions = false

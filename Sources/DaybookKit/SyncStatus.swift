@@ -2,8 +2,8 @@ import DaybookCore
 import Foundation
 
 /// Where library sync stands on this device, as `LibrarySyncController.status` publishes it. Both apps read the case,
-/// never its words: `text` is the controller's sentence (logs, tests, and leftover readers), `shortText` a phrase for a
-/// status line, and `problem` what needs the person, if anything.
+/// never its words: `text` is the controller's sentence (logs, tests, and leftover readers), `shortText` the phrase both
+/// apps' status lines say for it, and `problem` what needs the person, if anything.
 public enum SyncStatus: Equatable, Sendable {
     /// Sync is off on this device: turned off, or never connected.
     case off
@@ -97,7 +97,8 @@ public enum SyncStatus: Equatable, Sendable {
         }
     }
 
-    /// A phrase for a status line, in the words both apps use.
+    /// The phrase for a status line: the Mac's iCloud row in Settings › Library (`SyncShown.headline`) and the iPhone's
+    /// sync line (`PhoneSync.statusLine`) say it for the same state, so the two apps word it alike.
     public var shortText: String {
         switch self {
         case .off: return "Off"
@@ -111,7 +112,7 @@ public enum SyncStatus: Equatable, Sendable {
         case .waitingForKey, .keyStoreUnreadable: return "Waiting for this library’s key"
         case .exchanged(let uploads, let downloads):
             if uploads > 0 { return "Uploading \(uploads) \(uploads == 1 ? "item" : "items") to iCloud" }
-            if downloads > 0 { return "Waiting for iCloud to download \(downloads) \(downloads == 1 ? "item" : "items")" }
+            if downloads > 0 { return "Waiting for iCloud to download \(downloads) \(downloads == 1 ? "item" : "items")…" }
             return "Up to date"
         case .upToDate: return "Up to date"
         case .migrating(let progress):
@@ -195,14 +196,9 @@ public enum SyncProblem: Equatable, Sendable {
     }
 }
 
-/// Something worth knowing about sync that doesn't stop it (`LibrarySyncController.warning`).
+/// Something worth knowing about sync that doesn't stop it (`LibrarySyncController.warning`). The surface that shows
+/// one words it.
 public enum SyncWarning: Equatable, Sendable {
     /// Another installation was syncing as this device (one was copied from the other). This one syncs as a new device.
     case otherInstallation
-
-    public var text: String {
-        switch self {
-        case .otherInstallation: return "Another copy of Daybook was syncing as this device. This one now syncs as a device of its own."
-        }
-    }
 }
