@@ -47,8 +47,8 @@ enum CloudCheck {
             return 2
         }
         let effort = value("--effort").flatMap(CloudEffort.init(rawValue:)) ?? .medium
-        let meeting: Meeting
-        do { meeting = try self.meeting(at: fixtureURL, id: value("--fixture")) }
+        let meeting: Meeting, fixtureID: String?
+        do { (meeting, fixtureID) = try self.meeting(at: fixtureURL, id: value("--fixture")) }
         catch {
             print("The fixture couldn’t be read: \(error.localizedDescription)")
             return 1
@@ -112,7 +112,7 @@ enum CloudCheck {
         if !result.warnings.isEmpty { print("Warnings:\n" + result.warnings.map { "- \($0)" }.joined(separator: "\n")) }
         if let output = value("--output") {
             let run: [String: Any] = [
-                "fixture": value("--fixture") ?? fixtureURL.deletingPathExtension().lastPathComponent, "model": provenance.modelID,
+                "fixture": fixtureID ?? fixtureURL.deletingPathExtension().lastPathComponent, "model": provenance.modelID,
                 "seconds": seconds, "cost": provenance.estimatedCost ?? 0, "effort": provenance.effort.rawValue,
                 "passes": [["in": provenance.inputTokens, "out": provenance.outputTokens, "seconds": seconds]],
                 "title": result.summary.title, "overview": result.summary.overview,
@@ -143,14 +143,14 @@ enum CloudCheck {
     }
 
     /// The fixture as a conversation: passages at 2.5 words a second, notes and bookmarks at the passages they name;
-    /// or a `meeting.json` as it is.
-    static func meeting(at url: URL, id: String?) throws -> Meeting {
+    /// or a `meeting.json` as it is. Also the fixture's id, which names the run for the harness's scorer.
+    static func meeting(at url: URL, id: String?) throws -> (Meeting, String?) {
         let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()
-        if let meeting = try? decoder.decode(Meeting.self, from: data) { return meeting }
+        if let meeting = try? decoder.decode(Meeting.self, from: data) { return (meeting, nil) }
         let iso = JSONDecoder()
         iso.dateDecodingStrategy = .iso8601
-        if let meeting = try? iso.decode(Meeting.self, from: data) { return meeting }
+        if let meeting = try? iso.decode(Meeting.self, from: data) { return (meeting, nil) }
         let fixtures: [Fixture]
         if let list = try? decoder.decode([Fixture].self, from: data) { fixtures = list } else { fixtures = [try decoder.decode(Fixture.self, from: data)] }
         guard let fixture = id.map({ id in fixtures.first { $0.id == id } }) ?? fixtures.first else {
@@ -175,7 +175,7 @@ enum CloudCheck {
         meeting.highlights = (fixture.bookmarks ?? []).compactMap { mark in
             segment(mark.during).map { Highlight(time: $0.start + 1, text: mark.text.isEmpty ? "Marked moment" : mark.text) }
         }
-        return meeting
+        return (meeting, fixture.id)
     }
 }
 #endif
