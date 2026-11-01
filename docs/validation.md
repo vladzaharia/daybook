@@ -1,5 +1,217 @@
 # Validation record
 
+## Restated commitments, notes that repeat what was said, and the unchecked models (2026-10-31)
+
+The section below left six things open: a three-hour meeting's summary listed 129 actions for its 66 commitments,
+Gemma 4 E2B listed a customer's process and a question as commitments, a note that only repeats what was said still
+got "Your notes add", splitting a long meeting left a last part of 828 tokens, four catalog models had never run the
+new pipeline, and Qwen 2.5 1.5B stood in for summaries it couldn't write. All six are handled here
+([model runtime](model-runtime.md), "Summarization"; [templates](templates.md#notes-and-bookmarks);
+[models](models.md#selection-updates-and-provenance)).
+
+**Setup.** The same harness, conversations, notes, bookmarks, and scoring as below, against main with #35 (39b89e3) as
+"before". Gemma 4 E2B, E4B, 12B, and 31B 8-bit, Qwen 3.5 4B and 9B, and Qwen 3.6 35B A3B were downloaded through the
+app's store (`LocalIntelligenceRuntime.download`) into a scratch models folder, every file's SHA-256 or git object ID
+checked again afterwards (75 files), and deleted when done; Gemma 4 26B A4B and Qwen 2.5 7B are the installed copies,
+used read-only through symlinks (the installed folder's listing unchanged afterwards). Decoding is greedy, so a pass
+repeats exactly given the same prompt. Besides whole summaries, two scratch tests ran one kind of pass alone: the
+commitments passes (to compare prompts and splits) and the note check (to compare models). The commitments passes
+read only the transcript, so where only they changed after a whole run, they were run again alone and their actions
+put with that run's summary; where only the reading of replies changed (quotes, restatements, markers), the saved
+replies were read again by the final code. Loads are the load average when a run started; other agents' builds and
+tests shared the Mac.
+
+**Changes.**
+
+- **Restated commitments** (`RestatedCommitments`). Commitments are listed in the order they were said, and a later
+  one with the same owner whose task is mostly an earlier one's distinctive words (0.6 of the shorter task's weight)
+  is the same commitment, kept once in its first wording; so is one that sums up several earlier ones (0.75 of its
+  weight, each sharing two of its words: "Complete account deletion, refund status, and the kill switches"). A word
+  weighs more the fewer of the meeting's commitments use it, so "fix" or "iOS" alone never make two tasks one;
+  versions count alike in words and digits ("five point seven", "5.7"), plain numbers and dates don't count, and two
+  commitments quoted from different words of one passage, listed side by side, are never one. On the 26B's
+  three-hour meeting, the restatements merged scored 0.61 and more, and the closest two different tasks of one owner
+  0.55 ("Build the Android flow in the same sprint", "Build the update screen on Android for version 6.1").
+- **Quotes.** A quote shortened with an ellipsis ("[...]", "…"), or whose sentences skip what was said between them,
+  counts when each piece is there word for word, in order, with at most 400 characters between them; a quote in its
+  own quotation marks counts without them.
+- **Even parts.** A long conversation is still read in as few parts as full ones would take, but each closes nearest
+  an even share of what's left. The commitments passes keep #35's parts, evened out only where those leave a part
+  under half the size of another.
+- **Notes that repeat what was said** (`noteCheck: "on"`: Gemma 4 26B A4B and 31B 8-bit, Qwen 3.6 35B A3B). Before
+  anything is written, one pass compares each note on the timeline with what was said from two minutes before it to
+  30 seconds after (what the passages say about it, what the note adds, where it conflicts). A note that adds nothing
+  and conflicts with nothing goes on to every pass without its words (`NOTE N1, written by the user, repeats what was
+  said around it`), so none can give it "Your notes add"; its passages still carry more weight. The summary compares
+  the rest as before. On the other models the check called notes that add something repeats, so they don't run it.
+- **Markers in a summary.** The extraction's "NOTE N2 adds: …" reads "Your notes add: …", and "Note N2 suggests"
+  reads "Your note suggests".
+- **Gemma 4 E2B's brief commitments prompt** says the quote is the person taking the task on ("the person saying they
+  will do it, or agreeing to it") and leaves out "how things are done today, or what someone needs or wants".
+- **Qwen 2.5 1.5B serves no role** (`roles: []`, catalog 2026.10.31), below.
+
+**Restated commitments, on the 26B.** The three-hour meeting's 66 commitments are 76 people's: ten were each taken
+on by two people, one per platform ("Spike storage for iOS" for Lena, "Spike storage for Android" for Oskar), and
+both stay. The recap at the end restates most of them ("Complete the storage spike", "Release Bugnet in five point
+seven", "Complete account deletion, refund status, and the kill switches"), and the parts' overlap repeats a few.
+
+| | Before | Now |
+| --- | --- | --- |
+| Three-hour meeting: actions listed | 129 | 90 |
+| Three-hour meeting: commitments kept (owners right), of 66 | 66 (66) | 66 (66) |
+| Weekly: actions listed, commitments kept (owners), of 38 | 43, 36 (36) | 43, 36 (36) |
+| Short conversations: actions listed, commitments kept (owners), of 14 | 12, 12 (11) | 12, 12 (11) |
+
+The commitments passes' prompts and parts are #35's, so these are #35's replies, read by today's code: nothing
+distinct was merged anywhere, and the weekly and short conversations, with few restatements, list what they did. What's
+left of the 90 is the 76 people's commitments, sub-tasks said on their own ("Include the consent question in the
+email to legal", "Write automated tests for anonymization on the backend"), a few commitments the fixture doesn't
+count ("Pair with Oskar one day a week on the iOS integration"), and restatements with no distinctive words in common
+with the first time ("Start the Kotlin spike in February" for "Lead the four-week spike on the fare rules module",
+"Complete the Lingo Bridge contract by the twentieth" for "Sign the translation contract by January 20th"). With even
+parts (an intermediate version), the 26B quoted the tracking plan as Hana's sentence and Diego's next, leaving out his
+"Yes, end of February." between them, so that commitment was rejected; quotes stitched from nearby sentences, or
+shortened with an ellipsis ("I'll email legal about the attribution SDK's data sharing this week. [...] Yes, I'll put
+both questions in the same email to legal."), now count.
+
+**Parts.** The three-hour meeting is read in five parts of 10,215 to 10,254 tokens, where it was four of 12,000 and
+one of 828. The commitments passes keep #35's split, only evened out where it leaves a part under half another's
+(none of these conversations): split evenly, the weekly's two commitments parts moved by a passage, and the weekly
+commitments each model kept moved too, by up to 13 and in both directions.
+
+| Weekly commitments kept, of 38 | 26B | 31B 8-bit | Qwen 3.6 35B | Qwen 3.5 9B | Qwen 3.5 4B | E2B |
+| --- | --- | --- | --- | --- | --- | --- |
+| #35's split (now) | 36 | 36 | 34 | 29 | 25 | 18 |
+| Even split | 35 | 36 | 33 | 35 | 38 | 13 |
+
+Where the parts split matters more than which split it is; #35's is the one the 26B and E2B were tuned on, and it
+gives the presets' models (E2B, 26B, 31B) 90 of their 114 against 84.
+
+**Notes that repeat what was said.** The note check alone, on every model, over the 18 notes on a timeline in the
+four conversations and the three-hour meeting: 7 repeat what was said and 11 add something or conflict. "Passed on"
+are repeating notes the check found; "lost" are notes that add something it would have passed on without their words.
+
+| Model | Repeats passed on, of 7 | Notes that add, lost, of 11 | Time (four conversations and the meeting) | `noteCheck` |
+| --- | --- | --- | --- | --- |
+| Gemma 4 31B 8-bit | 7 | 0 | 210 s | on |
+| Gemma 4 26B A4B | 5 | 0 | 82 s | on |
+| Qwen 3.6 35B A3B | 3 | 0 | 131 s | on |
+| Gemma 4 12B | 5 | 2 | 87 s | off |
+| Qwen 3.5 9B | 4 | 2 | 96 s | off |
+| Gemma 4 E4B | 6 | 4 | 65 s | off |
+| Qwen 3.5 4B | 6 | 6 | 77 s | off |
+| Gemma 4 E2B | 6 | 8, and 4 notes not checked | 31 s | off |
+| Qwen 2.5 7B | 7 | 11 | 38 s | off |
+
+On the 26B the check adds 9 to 25 s to a conversation's summary. Its summaries, before and now: in the four
+conversations, one note that repeats what was said is still given "Your notes add" (the weekly's "tell support": the
+conversation says only who needs to know, and the check takes the to-do as the note's own), and all five notes that add
+something are written as the person's, none as fact. In the three-hour meeting, "Rating drop = mostly the password
+reset login loop" no longer gets "Your notes add that this drop is mostly due to the password reset login loop";
+"Account deletion has to be in the app (Apple)" is still not attributed; N2 and N3 are added as the notes', N4
+(marketing's March 3) stands beside the April 7 that was said, and N5 (Quinn sounds burned out) is still left out.
+The 31B gives no repeating note "Your notes add" in any conversation. An intermediate version also gave the summary
+the check's findings for the other notes ("adds", "conflicts", and "'Your notes add' is only for a note's adds"): the
+26B then gave two repeating notes "Your notes add" ("Your notes add that these exports are run daily"), wrote Dana's
+email as a fact, and attributed four of five adding notes, so the summary compares those notes itself, as before.
+Other wordings of the check ("everything the passages say about what the note mentions", "what the note would tell
+someone who had read the passages") found fewer repeats on the 26B, or lost three notes that add something.
+
+**Gemma 4 E2B's commitments.** The commitments passes alone, on #35's split: listed, then kept (owners right).
+
+| Prompt | Customer interview (1) | Launch (7) | 1:1 (6) | Weekly (38) |
+| --- | --- | --- | --- | --- |
+| #35's brief prompt | 8 listed, 1 (1) | 4, 3 (3) | 6, 5 (3) | 18, 17 (14) |
+| Plus "a commitment is something a person agrees to do after this conversation" | 2, 1 (1) | 6, 4 (4) | 6, 5 (3) | 34, 19 (16) |
+| Plus "how things are done today, or what someone needs or wants" | 1, 1 (1) | 5, 4 (4) | 6, 5 (3) | 22, 15 (14) |
+| That and "the person saying they will do it, or agreeing to it" | 1, 1 (1) | 5, 4 (4) | 6, 5 (3) | 29, 19 (17) |
+| The same, as committed (one line break moved) | 1, 1 (1) | 5, 3 (3) | 6, 5 (3) | 26, 18 (16) |
+
+The customer interview's 8 were the process Elena described ("Paste the export into a Google Sheet that has all our
+formulas", "Copy the summary into a Notion page"), a question ("Walk me through what a normal morning looks like"),
+what security would want ("Review for security", "Ensure single sign-on with Okta"), and a wish ("Flag exceptions
+automatically"); now only Jordan's "Put together a short proposal for a one-month pilot and send it by Friday".
+
+**The models nobody had checked.** Weekly topics of 13 and commitments of 38 (owners right), the short conversations'
+commitments of 14, notes that repeat given "Your notes add" (of 5), notes that add something attributed to the notes
+(of 5; in parentheses, how many written as if said), conflicts mentioned (of 2), the weekly's time with the load when
+it started, and peak MLX memory, weights included. The 26B and E2B rows are this change, for comparison.
+
+| Model | Weekly topics | Weekly commitments | Short commitments | Repeats as "notes add" | Adding notes (as fact) | Conflicts | Weekly time (load) | Peak memory |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Gemma 4 31B 8-bit | 13 | 36 (35) | 11 (10) | 0 | 5 (0) | 2 | 1,760 s (11, then 87) | 34.6 GB |
+| Gemma 4 26B A4B | 13 | 36 (36) | 12 (11) | 1 | 5 (0) | 2 | 629 s (81) | 15.3 GB |
+| Qwen 3.6 35B A3B | 13 | 34 (33) | 11 (10) | 0 | 3 (1) | 2 | 502 s (20) | 20.2 GB |
+| Qwen 3.5 9B | 13 | 29 (29) | 10 (9) | 2 | 3 (4) | 2 | 449 s (8) | 6.0 GB |
+| Qwen 3.5 4B | 9 | 25 (23) | 11 (9) | 0 | 0 (3) | 1 | 273 s (15) | 3.3 GB |
+| Gemma 4 E2B | 13 | 18 (16) | 9 (7) | 0 | 0 (0) | 2 | 256 s (4) | 3.0 GB |
+
+The short conversations took 171 to 194 s each on the 31B, 66 to 85 s on Qwen 3.6, 29 to 39 s on Qwen 3.5, and 23 to
+24 s on E2B. What each model needed:
+
+- **Gemma 4 31B 8-bit** (workstation Detailed) needed nothing: every topic, 36 of the weekly's commitments, and every
+  note handled right. It's by far the slowest, 29 minutes for the weekly; its second commitments pass alone took 679 s
+  while another agent's tests raised the load from 11 to 87.
+- **Qwen 3.5 4B** put every quote in quotation marks of its own (`"\"I'll ask Ines about design time this week.\""`),
+  so no quote was found: no actions for the 1:1 at all. Quotes are now read without their own quotation marks: 11 of
+  the short conversations' 14. It keeps 9 of the weekly's 13 topics, and writes three of the notes' additions as said
+  ("Dana confirmed the $40k limit via email this morning").
+- **Qwen 3.6 35B A3B** carried the extraction's marking into the weekly's summary ("NOTE N2 adds: 'Ben can maybe swap
+  Dec 3 - ask him after.'"), which now reads "Your notes add: …". It checks notes (`noteCheck: "on"`).
+- **Qwen 3.5 9B** named a note by its label ("Note N2 suggests Ben might be able to swap"), which now reads "Your note
+  suggests…". It still writes most of what only the notes say as said, once as a speaker's ("Sam observed that Alex
+  seemed tired, noting this was the third late night"), and gives two repeating notes "Your notes add"; no catalog
+  setting changes that, and no preset chooses it first.
+
+**The three-hour meeting on the larger models.** Topics of 22, commitments of 66 (owners right), traps listed (of 25),
+and the notes.
+
+| | Gemma 4 26B A4B | Qwen 3.6 35B A3B | Gemma 4 31B 8-bit |
+| --- | --- | --- | --- |
+| Passes | 16: note check, 5 parts, final, 9 commitments | 15: note check, 4 parts, final, 9 commitments | 16: note check, 5 parts, final, 9 commitments |
+| Time (load) | 1,751 s, 29 min (53, then 40) | 1,189 s, 20 min (11) | 6,391 s, 1 h 47 min (59; other agents' work took it as high as 286 on the way) |
+| Topics | 22 | 22 | 22 |
+| Commitments (owners), actions listed | 66 (66), 90 | 66 (66), 81 | 66 (66), 83 |
+| Traps listed | 0 | 0 | 0 |
+| Notes | N1, which repeats, no longer "Your notes add"; N2, N3 as the notes'; N4 beside the April 7 said; N5 left out | N3, N4, N5 written as fact ("The Flagpost quote is only valid until Jan 31."); N2 left out | Every note right: N1 and N6, which repeat, not attributed; N2, N3, N5 as the notes'; N4 beside the April 7 said ("though your notes add that marketing targets March 3") |
+| Peak MLX memory | 15.5 GB | 20.6 GB | 35.7 GB |
+
+The 31B, the workstation's Detailed preset, keeps everything in the three-hour meeting and handles every note right,
+at a cost: its final pass alone took 761 s, and each part 477 to 811 s, on a Mac other agents kept busy. The 26B and
+Qwen 3.6 keep every topic and commitment too, at a quarter and a fifth of the time. Qwen 3.6's three notes written as
+fact come from its final pass (the parts' evidence has them as the notes': "NOTE N3 states the Flagpost quote is only
+valid until Jan 31"), and no catalog setting changes that; it's an alternate on large and workstation Macs, after
+every Gemma 4 model.
+
+**Qwen 2.5 1.5B.** It serves no role now (`roles: []`, catalog 2026.10.31): with every prompt and budget tried in the
+section below it missed most topics and commitments of the weekly and wrote the launch's question ("Launch May 12?")
+as the date decided. It's out of every summarization list, so it never stands in when another model is removed, and
+it serves no other role (it's text only; small tasks run on Apple Foundation Models or the summary model). Someone who
+chose it, or whose choice from before the model system ("qwen-1.5b") maps to it, moves at launch to the preset's first
+installed choice, or its first choice, with "Qwen 2.5 · 1.5B no longer works for summaries. Summaries now use Gemma 4
+· 26B A4B: download it in Settings › Models." (on this Mac's tier); processing waits for the download rather than
+running the old model, and a job queued with it fails with "can't be used for summaries". Settings › Models lists it
+only while it's on the Mac, to be removed ("Used for: Nothing"); summaries made with it still name it.
+
+**Automated.** `SummaryCompletenessTests`: restatements merged, one summing up three, the parts' overlap kept once in
+the first wording, while the same task for two people, two tasks sharing "fix" and "iOS", and two listed side by side
+stay; quotes shortened with an ellipsis or stitched from nearby sentences, and rejected out of order or far apart;
+even parts with no scrap, and the commitments' tuned parts evened out only for a scrap. `SummaryNotesTests`: the
+check's prompt and passages, a repeating note passed on without its words with its passages still marked, the others
+and an unreadable check left as before, and no check without `noteCheck`. `SummaryRepairTests`: a leaked note marker
+or label read as the notes', a quote in its own quotation marks found. `StructuredOutputTests`: the brief prompt's new
+sentences, the models marked brief, and the models that check notes. `ModelSelectionTests`,
+`ModelPreferenceMigrationTests`, `ModelManagerTests`: Qwen 2.5 1.5B in no list, a choice of it (installed alone,
+beside Qwen 2.5 7B, or from "qwen-1.5b") moved with its notice, and the library hiding a model that serves nothing
+unless it's on the Mac. `swift test` passed 1,352 XCTest cases across the eight bundles (one skipped, as before):
+Captions 13, Core 424, Devices 119, Intelligence 175, Kit 202, Link 74, Live 39, Mac app 306.
+
+**Still to check:** a release build's times on an unloaded Mac; real recordings of an hour or more; the 12B, E4B, and
+E2B still give repeating notes "Your notes add" where they did, since their own check would lose notes that add
+something; a check that takes "tell support" after "Who needs to know about that? Support, mainly" as said; Qwen 3.6's
+notes in a long meeting, and Qwen 3.5's topics (4B) and notes (4B, 9B); how much each model's commitments move with
+where the parts split.
+
 ## Long summaries on the other models, and a three-hour meeting (2026-10-31)
 
 The long-summary fixes below (#34) were checked on Gemma 4 26B A4B only. The same check on the catalog's
