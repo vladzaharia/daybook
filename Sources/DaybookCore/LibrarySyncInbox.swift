@@ -141,6 +141,13 @@ extension LibrarySyncEngine {
         if libraryID == nil { libraryID = existingLibraryID() }
         guard let root = inboxRoot(), let libraryID else { return .waitingForLibrary }
         guard sender == libraryID else { return .rejected("\(file.path) belongs to another library.") }
+        // An encrypted library takes only sealed files by courier: nothing authenticates a plaintext one, and a device that
+        // wrote one before it saw the manifest uploads it through iCloud Drive anyway. Before a pass has read the manifest,
+        // it's read here (as presence does), so a plaintext file never slips in ahead of the first pass.
+        if !file.isSealed, !manifestChecked { _ = checkManifestForPresence() }
+        guard file.isSealed || (sealing == nil && waitingForKey == nil && !syncedSealedLibraryHere) else {
+            return .rejected("\(file.path) isn’t sealed, and this library is encrypted.")
+        }
         let remote = remoteRoot.appendingPathComponent(file.path)
         try SyncFiles.noSymlinks(remote, below: remoteRoot)
         if SyncFiles.itemState(remote) == .local { return .alreadyHave }
@@ -199,6 +206,12 @@ extension LibrarySyncEngine {
                     try? fm.removeItem(at: url)
                 } else if !directory.hasPrefix("Sealed/"), sealing != nil, sealedCounterpartExists(name, in: directory) {
                     // A plaintext delivery in an encrypted library, sealed since (the sealer read it): not needed.
+                    try? fm.removeItem(at: url)
+                } else if directory == "Events" || directory == "Metadata", sealing?.plaintextNeedsVouching == true,
+                          let id = SyncJournalFile.address(of: name, in: directory),
+                          !(directory == "Events" ? eventCache[id] != nil : metadataCache[id] != nil) {
+                    // One the library doesn't vouch for was never applied here (`admitPlaintext`): iCloud Drive brings its
+                    // author's copy, if it has one.
                     try? fm.removeItem(at: url)
                 } else {
                     if state == .absent, let arrived = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,

@@ -157,8 +157,13 @@ extension LibrarySyncEngine {
     func readCompaction(warnings: inout [String]) throws -> Int {
         var read: [String: CompactionEntry] = [:]
         var pending = 0, unreadable = 0, heldBack = 0
-        let entries = try compactionEntries()
-        compactionPaths = Set(entries.map(\.path))
+        let listed = try compactionEntries()
+        compactionPaths = Set(listed.map(\.path))
+        // A plaintext record in an encrypted library whose plaintext needs vouching for counts only when it's sealed too, or
+        // this process read it when it was history: a commit nothing authenticates could otherwise prune any entry.
+        let entries = sealing?.plaintextNeedsVouching == true
+            ? listed.filter { $0.isSealed || compactionRecords[$0.path] != nil || hasSealedCounterpart($0.name, kind: .compaction) }
+            : listed
         for entry in entries {
             try Task.checkCancellation()
             if let known = compactionRecords[entry.path] { read[entry.path] = known; continue }

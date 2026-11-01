@@ -260,23 +260,23 @@ public actor LibrarySyncEngine {
         var failedPublications = Set<UUID>()
         var events: [String: SyncEventHeader] = [:]
         var metadata: [String: SyncMetadataRecord] = [:]
-        let eventEntries = try journalEntries(.event), metadataEntries = try journalEntries(.metadata)
-        for entry in eventEntries {
+        let listedEvents = try journalEntries(.event), listedMetadata = try journalEntries(.metadata)
+        func readEvent(_ entry: JournalEntry) throws {
             try Task.checkCancellation()
             // An entry's ID is its name when plaintext; a sealed one's is known once it has been opened.
             let name = entry.isSealed ? sealedNames[entry.path] : entry.name
-            if let name, prunedIDs.contains(name) { setAsidePruned(entry); continue }
-            if let name, let cached = eventCache[name], !sealedWithKeyGone(entry) { events[name] = cached; continue }
+            if let name, prunedIDs.contains(name) { setAsidePruned(entry); return }
+            if let name, let cached = eventCache[name], !sealedWithKeyGone(entry) { events[name] = cached; return }
             let unreadableKey = entry.isSealed ? entry.path : entry.name
-            if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); unreadJournalFiles += 1; continue }
-            guard budget.admitJournalRead() else { continue }
+            if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); unreadJournalFiles += 1; return }
+            guard budget.admitJournalRead() else { return }
             do {
                 let (hash, bytes) = try readEntry(entry, kind: .event)
-                if prunedIDs.contains(hash) { setAsidePruned(entry); continue }
+                if prunedIDs.contains(hash) { setAsidePruned(entry); return }
                 // Where to read its snapshot again: preferably sealed under the current key, which outlives the rest.
                 if entry.isSealed, journalLocations[hash] == nil || sealedKeys[entry.path] == sealing?.current.id { journalLocations[hash] = entry.url }
                 // The same entry, sealed and from before (or under two keys), is one entry.
-                if let cached = eventCache[hash] { events[hash] = cached; continue }
+                if let cached = eventCache[hash] { events[hash] = cached; return }
                 try requireSupportedVersion(bytes)
                 let event = try decoder.decode(SyncEventRecord.self, from: bytes)
                 guard event.schemaVersion == 1, event.parents.allSatisfy(SyncFiles.isHash),
@@ -295,11 +295,26 @@ public actor LibrarySyncEngine {
             }
             catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.unreadHistory, error)); pendingDownloads += 1; unreadJournalFiles += 1 }
         }
-        let metadataRead = try readMetadata(metadataEntries, budget: &budget, warnings: &warnings)
+        // An encrypted library whose plaintext from before is retired (or that never held any) takes a plaintext entry only
+        // when something it vouches for names it (`admitPlaintext`); anything else in `Events/` or `Metadata/` is left alone.
+        let eventEntries: [JournalEntry]
+        if sealing?.plaintextNeedsVouching == true {
+            let sealedEvents = listedEvents.filter(\.isSealed)
+            for entry in sealedEvents { try readEvent(entry) }
+            let ownHeads = Set(state.heads.values.joined()).union((state.pending?.heads ?? [:]).values.joined())
+            let vouchedEvents = try admitPlaintext(listedEvents.filter { !$0.isSealed }, kind: .event,
+                                                   vouched: ownHeads.union(events.keys).union(events.values.flatMap(\.parents)),
+                                                   read: { for entry in $0 { try readEvent(entry) } }, parents: { events[$0]?.parents })
+            eventEntries = sealedEvents + vouchedEvents
+        } else {
+            for entry in listedEvents { try readEvent(entry) }
+            eventEntries = listedEvents
+        }
+        let (metadataRead, metadataEntries) = try readSettings(listedMetadata, budget: &budget, warnings: &warnings)
         metadata = metadataRead.records
         metadataIncomplete = metadataRead.incomplete
         // Held-aside files no longer in the sync folder are forgotten.
-        let listed = Set((eventEntries + metadataEntries).map(\.path)).union(compactionPaths)
+        let listed = Set((listedEvents + listedMetadata).map(\.path)).union(compactionPaths)
         if let heldAside = state.heldAside {
             let kept = heldAside.filter { listed.contains($0.key) }
             state.heldAside = kept.isEmpty ? nil : kept
@@ -587,7 +602,7 @@ public actor LibrarySyncEngine {
         try saveAudioIndexIfNeeded()
         // Courier deliveries the sync folder now holds, downloaded and identical, aren't needed any more.
         pruneCourierInbox()
-        let listing = Set((eventEntries + metadataEntries).map(\.path)).union(compactionPaths).subtracting(replacedEntries).union(ownJournalWrites)
+        let listing = Set((listedEvents + listedMetadata).map(\.path)).union(compactionPaths).subtracting(replacedEntries).union(ownJournalWrites)
         settledJournalListing = pendingDownloads == 0 && budget.deferred == 0 ? listing : nil
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
@@ -596,6 +611,24 @@ public actor LibrarySyncEngine {
             deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
             pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
             changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred, writtenFiles: written)
+    }
+
+    /// Reads the library settings versions the sync folder lists, and returns them with the entries read: in an encrypted
+    /// library whose plaintext needs vouching for, the sealed ones and the plaintext ones it vouches for (`admitPlaintext`).
+    private func readSettings(_ listed: [JournalEntry], budget: inout SyncPassBudget, warnings: inout [String])
+        throws -> (read: (records: [String: SyncMetadataRecord], incomplete: Bool, downloading: Int), entries: [JournalEntry]) {
+        guard sealing?.plaintextNeedsVouching == true else { return (try readMetadata(listed, budget: &budget, warnings: &warnings), listed) }
+        let sealed = listed.filter(\.isSealed)
+        var read = try readMetadata(sealed, budget: &budget, warnings: &warnings)
+        let own = Set(state.metadataHeads).union(state.pending?.metadataHeads ?? [])
+        let vouched = own.union(read.records.keys).union(read.records.values.flatMap(\.parents))
+        let plaintext = try admitPlaintext(listed.filter { !$0.isSealed }, kind: .metadata, vouched: vouched, read: { batch in
+            let more = try readMetadata(batch, budget: &budget, warnings: &warnings)
+            read.records.merge(more.records) { first, _ in first }
+            read.incomplete = read.incomplete || more.incomplete
+            read.downloading += more.downloading
+        }, parents: { read.records[$0]?.parents })
+        return (read, sealed + plaintext)
     }
 
     /// Reads the library settings versions, first-time reads within `budget`.
@@ -658,7 +691,7 @@ public actor LibrarySyncEngine {
         var budget = SyncPassBudget(limits)
         var warnings = earlier
         var pendingDownloads = compactionPending, published = 0
-        let read = try readMetadata(try journalEntries(.metadata), budget: &budget, warnings: &warnings)
+        let read = try readSettings(try journalEntries(.metadata), budget: &budget, warnings: &warnings).read
         var metadata = read.records
         pendingDownloads += read.downloading
         if let libraryMetadata, SyncDigest.sha256(data: libraryMetadata) != state.metadataSubmittedHash {
@@ -1164,6 +1197,8 @@ public actor LibrarySyncEngine {
     func cacheCounts() -> (headers: Int, snapshots: Int, metadataData: Int) {
         (eventCache.count, snapshotCache.count, metadataCache.values.filter { !$0.data.isEmpty }.count)
     }
+    /// The IDs of the events this engine has read (tests).
+    func journalEventIDs() -> [String] { eventCache.keys.sorted() }
     private func hash<T: Encodable>(_ value: T) throws -> String { SyncDigest.sha256(data: try SyncEncoding.data(value)) }
     /// A journal entry (or the library settings in one) that declares a schema newer than this version reads.
     private func requireSupportedVersion(_ bytes: Data) throws {

@@ -181,7 +181,7 @@ iCloud Drive can take minutes to hours to move a file between devices, and longe
 
 **Receiving into the engine.** A Mac's courier hands each fetched file to `LibrarySyncEngine.receiveCourierFile(_:libraryID:contents:)` while CloudKit's copy is still in its staging area. The engine:
 
-1. accepts only an `Events/`, `Metadata/`, or `Blobs/` path named by the SHA-256 it came with, for the library this replica syncs (`waitingForLibrary` until a pass has read the manifest; the file stays on the courier);
+1. accepts only an `Events/`, `Metadata/`, or `Blobs/` path named by the SHA-256 it came with, for the library this replica syncs (`waitingForLibrary` until a pass has read the manifest; the file stays on the courier), and only a sealed one for an encrypted library;
 2. reports `alreadyHave` when the sync folder holds the file downloaded, or the inbox holds it;
 3. otherwise checks the size, copies it while checking its SHA-256, and moves it into `Sync/Inbox/<library ID>/<path>`. A file that doesn't match is `rejected` and discarded.
 
@@ -207,8 +207,10 @@ means a new library. Builds that can't keep a key (unsigned and ad hoc, without 
 
 - **What it protects.** The library's content at rest in iCloud without Advanced Data Protection, and from someone who
   has the Apple Account's password but no trusted device's passcode (iCloud Keychain is end-to-end encrypted). The
-  courier's CloudKit records hold only sealed bytes. Tampering is detected: every sealed file is authenticated, and a
-  manifest replaced by a plaintext one pauses sync on every device that synced the library encrypted.
+  courier's CloudKit records hold only sealed bytes. Tampering is detected: every sealed file is authenticated, a
+  manifest replaced by a plaintext one pauses sync on every device that synced the library encrypted, and once the
+  plaintext from before is retired (or in a library that started encrypted) a plaintext file someone drops into the
+  sync folder is ignored: it's history only when something sealed names it (`admitPlaintext`, below).
 - **What it doesn't.** An Apple Account together with a trusted device's passcode; a compromised device; the Mac's
   working library and Time Machine (FileVault and an encrypted backup do that); the iPhone's iCloud Backup when the
   person includes the encrypted library in it (Storage › Include in iPhone Backups, off by default for an encrypted
@@ -309,8 +311,13 @@ cellular is allowed, a pass starts, and a download arriving makes the next cheap
 iCloud reports it uploaded, another device holds the key or a recovery key was saved, and a week has passed since
 encryption began. Then `Events/`, `Metadata/`, and `Blobs/` are emptied (the folders stay), plaintext presence records
 are deleted, and the manifest records `legacyRetired`. Only files a pass read and accounted for are deleted; an object
-nothing it read names is left alone. Plaintext that reappears later (Data Recovery, a stale device) is sealed if it's live
-and deleted. Until then, an iPhone keeps originals it recorded rather than evict them. A device that was away across
+nothing it read names is left alone. After that (and from the start in a library that never held plaintext: a new one,
+one that started over, or a rival started at once), a plaintext entry is history only when the library vouches for it
+(`admitPlaintext`): its sealed counterpart is here (restored by Data Recovery: it's deleted), this device applied it or
+something it applied names it (its own late write, from a pass that ran on the manifest from before encryption: its
+author seals it), or this process read it while it was history. Anything else in `Events/`, `Metadata/`, or
+`Compaction/` is left alone: not read, applied, sealed, waited for, or deleted, so a file anyone with write access to the
+container drops there changes nothing, and an author's late upload isn't lost before it seals it. Until then, an iPhone keeps originals it recorded rather than evict them. A device that was away across
 retirement and still has a deleted conversation applies the deletion (its parents are gone, not on their way) or, if it
 changed the conversation meanwhile, keeps it as a new one. An on-demand replica publishes a recording it doesn't hold by
 reference only to an object in the sync folder; one the journal names but that isn't there waits.
@@ -393,7 +400,8 @@ bring it, no recovery key): Start Over.
 Daybook 0.3.0 and earlier never fetch or clear. A sealed file's name isn't its bytes' SHA-256: the inbox accepts
 `Sealed/{Events,Metadata,Blobs}/<name>` with the SHA-256 of the bytes that travel, checks that the header names this
 library and the folder's kind, and prunes a delivery once the sync folder's copy has the same bytes. It's opened when it's
-read. Files the sealer writes are history every device has, so the courier doesn't carry them.
+read. A plaintext delivery for an encrypted library is refused: nothing authenticates it, and its author uploads it through
+iCloud Drive anyway. Files the sealer writes are history every device has, so the courier doesn't carry them.
 
 **Presence** in an encrypted library keeps its plaintext essentials (device ID and class, whether it can process, audio
 policy, last seen, installation) and adds `features` (`["sealed-1", "compact-1"]`, in every library) and `key` (`{"state": "ready" |

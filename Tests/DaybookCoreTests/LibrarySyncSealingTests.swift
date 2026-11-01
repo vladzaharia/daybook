@@ -22,10 +22,10 @@ final class LibrarySyncSealingTests: XCTestCase {
         keychain = MemoryLibraryKeyStore()
     }
 
-    private func mac(_ name: String = "Mac", keys: MemoryLibraryKeyStore? = nil) throws -> LibrarySyncEngine {
+    private func mac(_ name: String = "Mac", keys: MemoryLibraryKeyStore? = nil, startsEncrypted: Bool = false) throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(
             audioPolicy: .eager, device: SyncDeviceIdentity(deviceClass: .mac, displayName: "Studio Mac", canProcess: true),
-            cloud: cloud.files, keyStore: keys ?? keychain, sealsNewLibrary: false))
+            cloud: cloud.files, keyStore: keys ?? keychain, sealsNewLibrary: startsEncrypted))
     }
     private func phone(_ name: String = "Phone", keys: MemoryLibraryKeyStore? = nil, budget: UInt64? = nil) throws -> LibrarySyncEngine {
         try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote, deviceID: name, replica: SyncReplicaConfiguration(
@@ -558,31 +558,126 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertTrue(files("Events").isEmpty)
     }
 
-    func testStaleLegacyWritesAndRestoredFilesAreSealed() async throws {
-        let mac = try mac(), phone = try phone()
-        try await pass(mac, "Mac")
+    /// Plaintext journal entries written by an engine of the version 1 format as `deviceID` (anyone can write one: the
+    /// format is public), copied into the sync folder's `Events/` and `Metadata/`. Returns their names.
+    @discardableResult
+    private func plantPlaintext(_ meetings: [Meeting], settings: Data? = nil, as deviceID: String) async throws -> [String] {
+        let scratch = root.appendingPathComponent("Scratch-\(UUID().uuidString)")
+        let legacy = try LegacyLibrarySyncEngine(localRoot: local("Planter-\(UUID().uuidString)"), remoteRoot: scratch, deviceID: deviceID)
+        _ = try await legacy.synchronize(meetings: meetings, libraryMetadata: settings)
+        var planted: [String] = []
+        for folder in ["Events", "Metadata"] {
+            try FileManager.default.createDirectory(at: remote.appendingPathComponent(folder), withIntermediateDirectories: true)
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: scratch.appendingPathComponent(folder).path)) ?? [] {
+                try FileManager.default.copyItem(at: scratch.appendingPathComponent("\(folder)/\(name)"), to: remote.appendingPathComponent("\(folder)/\(name)"))
+                planted.append("\(folder)/\(name)")
+            }
+        }
+        return planted
+    }
+
+    func testBehaviorPlaintextPlantedInALibraryThatStartedEncryptedIsNeitherAppliedNorSealed() async throws {
+        let mac = try self.mac(startsEncrypted: true), phone = try self.phone()
+        let real = try await pass(mac, "Mac", [Meeting(title: "Real")]).meetings[0]
         try await pass(phone, "Phone")
+        let started = try manifest()
+        XCTAssertNotNil(started.sealing); XCTAssertNil(started.sealing?.legacyRetired, "Never retired: it never held plaintext")
+        let sealedBefore = files("Sealed/Events") + files("Sealed/Metadata")
+        // Someone who can write the iCloud container drops a well-formed conversation, as the Mac, and new settings.
+        let planted = try await plantPlaintext([Meeting(title: "Zanzibar, forged")], settings: Data(#"{"folders":["Forged"]}"#.utf8), as: "Mac")
+        XCTAssertEqual(planted.count, 2)
+        // And a commit pruning the real conversation's history.
+        let eventIDs = await mac.journalEventIDs()
+        let realEvent = try XCTUnwrap(eventIDs.first)
+        let commit = try SyncEncoding.data(SyncCompactionRecord(deviceID: "Mac", createdAt: Date(), pruned: [realEvent]))
+        try FileManager.default.createDirectory(at: remote.appendingPathComponent("Compaction"), withIntermediateDirectories: true)
+        try commit.write(to: remote.appendingPathComponent("Compaction/\(SyncDigest.sha256(data: commit)).json"))
+        for (engine, name) in [(phone, "Phone"), (mac, "Mac"), (try self.phone("Fresh"), "Fresh")] {
+            let result = try await pass(engine, name, try await MeetingStore(rootURL: local(name)).list())
+            XCTAssertEqual(result.meetings.map(\.title), [real.title], name)
+            XCTAssertEqual(result.metadataVersions.filter { String(decoding: $0, as: UTF8.self).contains("Forged") }, [], name)
+            XCTAssertEqual(result.warnings, [], name)
+            XCTAssertEqual(result.pendingDownloads, 0, name)
+        }
+        // Nothing sealed it, and it's left where it was (its author, were there one, could still seal it).
+        XCTAssertEqual(files("Sealed/Events") + files("Sealed/Metadata"), sealedBefore)
+        for path in planted { XCTAssertTrue(FileManager.default.fileExists(atPath: remote.appendingPathComponent(path).path), path) }
+        // It isn't a change to look at again either.
+        let changed = await phone.hasRemoteChanges()
+        XCTAssertFalse(changed)
+    }
+
+    func testBehaviorADevicesOwnLatePlaintextStillAppliesThereAndItsSealerSealsIt() async throws {
+        let mac = try mac(), phone = try phone()
+        try await pass(mac, "Mac", [Meeting(title: "Shared")])
+        try await pass(phone, "Phone")
+        // The iPhone edits it on a manifest from before encryption (offline): its entry reaches iCloud only after the Mac
+        // has encrypted the library and retired the plaintext.
+        let before = Set(files("Events"))
+        let onPhone = try await MeetingStore(rootURL: local("Phone")).list()
+        var edited = try XCTUnwrap(onPhone.first)
+        edited.setNotes("Written offline")
+        let offline = try await pass(phone, "Phone", [edited])
+        XCTAssertEqual(offline.publishedEvents, 1)
+        let late = try XCTUnwrap(Set(files("Events")).subtracting(before).first)
+        let lateURL = remote.appendingPathComponent("Events/\(late)")
+        try cloud.withhold(lateURL)
         let start = Date()
         await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace * 2) }
         try await mac.enableSealing(recovery: RecoveryKey.generate())
-        try await pass(mac, "Mac")
-        try await pass(mac, "Mac")
+        let onMac = try await MeetingStore(rootURL: local("Mac")).list()
+        let macCopy = try XCTUnwrap(onMac.first)
+        try await pass(mac, "Mac", [macCopy])
+        try await pass(mac, "Mac", [macCopy])
         XCTAssertNotNil(try manifest().sealing?.legacyRetired)
-        // A plaintext entry appears afterwards (a pass that began before the manifest changed, or one restored from
-        // iCloud.com's Data Recovery): it's read, sealed, and deleted.
-        let late = Meeting(title: "Zanzibar after the switch")
-        let legacy = try LegacyLibrarySyncEngine(localRoot: local("Late"), remoteRoot: root.appendingPathComponent("Scratch"), deviceID: "Mac")
-        _ = try await legacy.synchronize(meetings: [late])
-        for name in try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Scratch/Events").path) {
-            try FileManager.default.copyItem(at: root.appendingPathComponent("Scratch/Events/\(name)"), to: remote.appendingPathComponent("Events/\(name)"))
-        }
-        let seen = try await pass(phone, "Phone")
-        XCTAssertEqual(seen.meetings.map(\.title), [late.title])
-        try await pass(mac, "Mac")
+        try cloud.deliver(lateURL)
+
+        // The Mac doesn't vouch for it yet.
+        let early = try await pass(mac, "Mac", [macCopy])
+        XCTAssertEqual(early.meetings.map(\.notes), [macCopy.notes])
+        // The iPhone does (it's what it applied): it keeps its edit and seals the entry.
+        let phoneNow = try await MeetingStore(rootURL: local("Phone")).list()
+        let phoneCopy = try XCTUnwrap(phoneNow.first)
+        let own = try await pass(phone, "Phone", [phoneCopy])
+        XCTAssertEqual(own.meetings.map(\.notes), ["Written offline"])
+        XCTAssertEqual(own.publishedEvents, 0)
+        let key = try XCTUnwrap(try keychain.keys(for: try manifest().libraryID).first)
+        XCTAssertTrue(files("Sealed/Events").contains(try XCTUnwrap(key.objectName(.event, plaintextSHA256: String(late.dropLast(5))))))
+        // Sealed, it's history everywhere, and its plaintext goes.
+        let after = try await pass(mac, "Mac", [macCopy])
+        XCTAssertEqual(after.meetings.map(\.notes), ["Written offline"])
+        try await pass(mac, "Mac", after.meetings)
+        XCTAssertFalse(files("Events").contains(late))
+    }
+
+    func testPlaintextAfterRetirementCountsOnlyWhenTheLibraryVouchesForIt() async throws {
+        let mac = try mac(), phone = try phone()
+        let kept = try await pass(mac, "Mac", [Meeting(title: "Kept")]).meetings[0]
+        try await pass(phone, "Phone")
+        let restored = try XCTUnwrap(files("Events").first)
+        let restoredBytes = try Data(contentsOf: remote.appendingPathComponent("Events/\(restored)"))
+        let start = Date()
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace * 2) }
+        try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac", [kept])
+        try await pass(mac, "Mac", [kept])
+        XCTAssertNotNil(try manifest().sealing?.legacyRetired)
         XCTAssertTrue(files("Events").isEmpty)
+        // A plaintext entry appears afterwards, naming the Mac as its author: nothing vouches for it, so no device reads it,
+        // the Mac's sealer doesn't seal it, and it stays.
+        let planted = try await plantPlaintext([Meeting(title: "Zanzibar after the switch")], as: "Mac")
+        for (engine, name) in [(phone, "Phone"), (mac, "Mac")] {
+            let seen = try await pass(engine, name, try await MeetingStore(rootURL: local(name)).list())
+            XCTAssertEqual(seen.meetings.map(\.title), [kept.title], name)
+        }
+        XCTAssertEqual(files("Sealed/Events").count, 1)
+        for path in planted { XCTAssertTrue(FileManager.default.fileExists(atPath: remote.appendingPathComponent(path).path), path) }
+        // One restored from iCloud.com's Data Recovery, whose sealed counterpart is here, is history: read, and deleted.
+        try restoredBytes.write(to: remote.appendingPathComponent("Events/\(restored)"))
+        try await pass(mac, "Mac", [kept])
+        XCTAssertFalse(files("Events").contains(restored), "A restored file whose sealed copy is here goes")
         let after = try await pass(try self.phone("Fresh"), "Fresh")
-        XCTAssertEqual(after.meetings.map(\.title), [late.title])
-        try assertNoPlaintext()
+        XCTAssertEqual(after.meetings.map(\.title), [kept.title])
     }
 
     func testRotationReSealsLiveContentAndErasesDeletedConversations() async throws {
@@ -711,13 +806,14 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertTrue(result.meetings.isEmpty)
     }
 
-    func testAPlaintextDeliveryIsNeverWrittenIntoAnEncryptedLibrary() async throws {
+    func testAPlaintextDeliveryIsNeverTakenForAnEncryptedLibrary() async throws {
         let mac = try mac(), other = try self.mac("Other")
         try await pass(mac, "Mac")
         try await pass(other, "Other")
         let key = try await mac.enableSealing()
         try await pass(other, "Other")
-        // A phone still on a plaintext pass sent an entry by courier before it saw the manifest.
+        // A phone still on a plaintext pass sent an entry by courier before it saw the manifest. Nothing authenticates a
+        // plaintext file, so it's refused: nothing goes in either inbox, or into the sync folder.
         let staging = root.appendingPathComponent("StaleFolder")
         let legacy = try LegacyLibrarySyncEngine(localRoot: local("Stale"), remoteRoot: staging, deviceID: "Stale")
         _ = try await legacy.synchronize(meetings: [Meeting(title: "Zanzibar, late")])
@@ -729,22 +825,20 @@ final class LibrarySyncSealingTests: XCTestCase {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try bytes.write(to: url)
             let delivery = try await engine.receiveCourierFile(file, libraryID: key.libraryID, contents: url)
-            XCTAssertEqual(delivery, .stored)
+            if case .rejected = delivery {} else { XCTFail("Took a plaintext delivery for an encrypted library: \(delivery)") }
+            let waiting = await engine.courierInboxCount()
+            XCTAssertEqual(waiting, 0)
         }
-        // A device that isn't the migrator reads it, and a day later still doesn't write it into the sync folder.
-        let seen = try await pass(other, "Other")
-        XCTAssertEqual(seen.meetings.map(\.title), ["Zanzibar, late"])
         await other.pruneCourierInbox(now: Date().addingTimeInterval(LibrarySyncEngine.courierPromotionDelay * 2))
         XCTAssertTrue(files("Events").isEmpty)
-        // The migrator seals it; then both inbox copies go, and nothing plaintext ever reached the sync folder.
+        // The phone's own copy arrives through iCloud Drive before the plaintext from before is retired: it's history, a
+        // device reads it, and the migrator seals it.
+        try bytes.write(to: remote.appendingPathComponent("Events/\(name)"))
+        let seen = try await pass(other, "Other")
+        XCTAssertEqual(seen.meetings.map(\.title), ["Zanzibar, late"])
         try await pass(mac, "Mac")
         let sealedName = try XCTUnwrap(key.objectName(.event, plaintextSHA256: String(name.dropLast(5))))
         XCTAssertTrue(files("Sealed/Events").contains(sealedName))
-        await other.pruneCourierInbox(now: Date().addingTimeInterval(LibrarySyncEngine.courierPromotionDelay * 2))
-        let left = await mac.courierInboxCount(), otherLeft = await other.courierInboxCount()
-        XCTAssertEqual(left, 0); XCTAssertEqual(otherLeft, 0)
-        XCTAssertTrue(files("Events").isEmpty)
-        try assertNoPlaintext()
     }
 
     func testAnOldKeysFilesStayUntilEveryRecentDeviceHoldsTheNewKey() async throws {

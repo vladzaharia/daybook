@@ -161,8 +161,15 @@ struct SealingState {
     /// Every key this device holds for the library, by ID.
     var keys: [Data: LibraryKey]
     var current: LibraryKey
+    /// The library was encrypted from its start (a new library, one that started over, or a rival started at once), with no
+    /// plaintext library's journal merged into it: it never held plaintext history.
+    var startedEncrypted = false
 
     var keyring: SealedObject.Keyring { { [keys] in keys[$0] } }
+    /// Whether a plaintext journal file is this library's history only when something authenticated names it: the plaintext
+    /// from before was retired, or there never was any (`LibrarySyncEngine.admitPlaintext`). Until then a plaintext file is
+    /// history from before encryption, which the sealer seals.
+    var plaintextNeedsVouching: Bool { manifest.legacyRetired != nil || startedEncrypted }
     /// Held keys, the current one first: where an object may be sealed.
     var readingOrder: [LibraryKey] { [current] + keys.values.filter { $0.id != current.id }.sorted { $0.idHex < $1.idHex } }
     /// A key the manifest saved a recovery wrap for: the current one.
@@ -276,7 +283,8 @@ extension LibrarySyncEngine {
             throw LibrarySyncError.keyUnavailable(description.current)
         }
         if sealing?.current.id != current.id { sealerVerified = [] }
-        sealing = SealingState(libraryID: manifest.libraryID, manifest: description, keys: held, current: current)
+        sealing = SealingState(libraryID: manifest.libraryID, manifest: description, keys: held, current: current,
+                               startedEncrypted: manifest.supersedes == nil && (description.replaces != nil || manifest.created == description.sealedSince))
         waitingForKey = nil; waitingSealing = nil
     }
 
@@ -354,6 +362,52 @@ extension LibrarySyncEngine {
         }
         names.formUnion(inboxNames(directory).filter(SyncFiles.isHash))
         return names.sorted().map { folder.appendingPathComponent($0) }
+    }
+
+    /// Of `plaintext` (plaintext entries of `kind` an encrypted library lists), those it vouches for, read with `read` as
+    /// they're taken. Anyone who can write the iCloud container could drop a well-formed plaintext entry there, and nothing
+    /// authenticates one, so once the plaintext from before is retired (or there never was any, `plaintextNeedsVouching`) a
+    /// plaintext entry is history only when:
+    ///
+    /// - something vouched for names it: `vouched` holds what this device applied (its heads, which it wrote or read when it
+    ///   could), sealed entries, and their parents, and an entry taken adds its own parents (an ID is its content's SHA-256,
+    ///   so a parent named by a vouched entry is that entry). This takes a device's own late writes (a pass that ran on a
+    ///   manifest from before encryption, offline) and their ancestors, which its sealer then seals;
+    /// - this process read it already, when it was history; or
+    /// - it's sealed under a key held here too (the sealer's name for it needs the key), so it adds nothing.
+    ///
+    /// Anything else is left alone: not read, applied, sealed, waited for, or deleted (its author may yet seal it again).
+    func admitPlaintext(_ plaintext: [JournalEntry], kind: SealedKind, vouched: Set<String>, read: ([JournalEntry]) throws -> Void,
+                        parents: (String) -> [String]?) rethrows -> [JournalEntry] {
+        var trusted = vouched, waiting = plaintext, admitted: [JournalEntry] = []
+        let counterparts = Set(plaintext.filter { hasSealedCounterpart($0.name, kind: kind) }.map(\.name))
+        func known(_ id: String) -> Bool {
+            switch kind {
+            case .event: return eventCache[id] != nil
+            case .metadata: return metadataCache[id] != nil
+            default: return false
+            }
+        }
+        while true {
+            let now = waiting.filter { trusted.contains($0.name) || known($0.name) || counterparts.contains($0.name) }
+            guard !now.isEmpty else { break }
+            let taken = Set(now.map(\.path))
+            waiting.removeAll { taken.contains($0.path) }
+            try read(now)
+            admitted += now
+            for entry in now { trusted.formUnion(parents(entry.name) ?? []) }
+        }
+        return admitted
+    }
+
+    /// Whether the entry with plaintext ID `id` is in the sync folder sealed under a key held here (or in the inbox).
+    func hasSealedCounterpart(_ id: String, kind: SealedKind) -> Bool {
+        guard let sealing, let directory = kind.directory else { return false }
+        return sealing.readingOrder.contains { key in
+            guard let name = key.objectName(kind, plaintextSHA256: id) else { return false }
+            let path = "\(directory)/\(name)"
+            return SyncFiles.itemState(remoteRoot.appendingPathComponent(path)) != .absent || inboxCopy(path) != nil
+        }
     }
 
     /// The listing `hasRemoteChanges` compares: every journal file's path, compaction records included.

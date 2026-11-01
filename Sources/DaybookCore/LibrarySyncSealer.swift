@@ -376,8 +376,10 @@ extension LibrarySyncEngine {
         let legacyEntries = (input.eventEntries + input.metadataEntries + input.compactionEntries).filter { !$0.isSealed }
         let legacyBlobs = (try? journalBlobNames()) ?? []
         if !legacyEntries.isEmpty || !legacyBlobs.isEmpty || sealing.manifest.legacyRetired == nil {
-            // Once retired, plaintext that reappears (iCloud.com's Data Recovery restores deleted files for 30 days) is
-            // sealed if it's live and deleted at once.
+            // Once retired, a plaintext file is history only when the library vouches for it (`admitPlaintext`): one that
+            // reappears with its sealed counterpart here (iCloud.com's Data Recovery restores deleted files for 30 days) is
+            // deleted, and one a device wrote late, on a manifest from before encryption, is sealed by that device. Any
+            // other never reaches the sealer: it isn't read, sealed, or deleted.
             var ready = true
             if sealing.manifest.legacyRetired == nil {
                 if now.timeIntervalSince(sealing.manifest.sealedSince) < Self.retirementGrace { ready = false; progress.waitingFor.append(.gracePeriod) }
