@@ -104,7 +104,7 @@ apps qualify ([forum 751188](https://developer.apple.com/forums/thread/751188)).
 
 ### (b) One multiplatform target
 
-Prototyped as `DaybookOne` in `Apps/Universal/project.yml` (commit `1939cc5`): `supportedDestinations: [iOS, macOS]`,
+Prototyped as `DaybookOne` in `Apps/Universal/project.yml` (the commit "Prototype one project for both apps (research)"): `supportedDestinations: [iOS, macOS]`,
 each app's sources behind `destinationFilters`, the widget embedded for iOS only. It builds for the Mac (ad hoc) and the
 Simulator. What it took:
 
@@ -190,7 +190,7 @@ signed with a team, uploaded, or launched except the probes, under bundle IDs of
 | Probe 2: `local.daybook.research.manifest2`, whose manifest lists `${BundleId}.plist` (absent), `local.daybook.research.source2.plist` (moved under its own name), and a library | macOS skipped the absent item and moved the rest; in the sandbox, `UserDefaults.standard.persistentDomain(forName: "local.daybook.research.source2")` and `UserDefaults(suiteName:)` both read the moved domain. That's how the App Store build reads `local.daybook.app`'s preferences |
 
 Each probe leaves its container's protected metadata file (29 KB) in `~/Library/Containers`, as docs/sandbox.md
-describes. The prototype project is commit `1939cc5`, removed in `c7fa98a`; build it from there with
+describes. The prototype project is the commit "Prototype one project for both apps (research)", removed by "Remove the one-project prototype (research)"; build it from there with
 `Apps/Universal/build-research.sh generate|mac|mac-store|phone|one-mac|one-phone`.
 
 ## release.yml

@@ -114,7 +114,7 @@ docs/iphone.md "Moving to the new app".
   `./scripts/build-app.sh --debug --ad-hoc` builds `local.daybook.adhoc` and passes `check-mac-app.sh --kind adhoc`.
   `scripts/build-ios.sh --test` on an iPhone 18 Pro clone: 229 tests, 0 failures.
 - The proposed `release.yml` and `ci.yml` changes apply cleanly (`git apply --check`) and pass `actionlint`.
-- Prototypes (research, commit `1939cc5`): one XcodeGen spec including both apps built the Mac target ad hoc and the
+- Prototypes (research, the commit "Prototype one project for both apps (research)"): one XcodeGen spec including both apps built the Mac target ad hoc and the
   iPhone app for the Simulator; a single multiplatform target built for both after SDK-conditional bundle ID and
   Info.plist and an excluded resource.
 
