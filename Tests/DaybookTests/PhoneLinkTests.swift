@@ -1037,6 +1037,131 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertEqual(track.alignment?.method, .audio)
         XCTAssertEqual(track.alignment?.offset ?? 99, 0.1, accuracy: 0.001)
     }
+
+    // MARK: A recording the iPhone transcribed itself
+
+    /// What the iPhone's own processing leaves (docs/iphone.md, "Processing on this iPhone"): its recording transcribed
+    /// and fused there, and its Transcribe request finished by the iPhone itself.
+    private func transcribeOnThePhone(_ library: PhoneLibrarySide, _ id: UUID, text: String) async throws -> UUID {
+        let meeting = try XCTUnwrap(library.library.meeting(id))
+        let track = try XCTUnwrap(meeting.tracks.first)
+        let run = UUID(), speaker = "\(run.uuidString):S1"
+        let words = TranscriptSegment(trackID: track.id, start: 0, end: 0.5, text: text, speakerID: speaker)
+        let now = Date()
+        let request = try XCTUnwrap(meeting.processingRequests?.first)
+        let done = try XCTUnwrap(request.claimed(by: library.device, at: now)?.completed(by: library.device, at: now))
+        library.library.update(id) { meeting in
+            meeting.transcripts = [TrackTranscript(id: run, trackID: track.id, segments: [words], modelID: "parakeet/ultra",
+                                                   processingSettings: ProcessingSettings(modelID: "parakeet/ultra"))]
+            meeting.speakers = [Speaker(id: speaker, name: "Speaker 1", sourceTrackID: track.id)]
+            meeting.unifiedTranscript = [words]
+            meeting.upsertProcessingRequest(done)
+        }
+        await library.library.flush()
+        return track.id
+    }
+
+    func testAPhoneRecordingTranscribedOnThePhoneJoinsTheMacConversationWithItsTranscript() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { library.tearDown() }
+        // The sound matches the Mac's recording, 0.1 s in.
+        state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: 0.1, rate: 1, confidence: 0.9) }
+        let macAudio = try rig.audio("mac-t.wav", frequency: 330)
+        let phoneAudio = try rig.audio("iphone-t.wav", frequency: 490)
+        let start = Date().addingTimeInterval(-300)
+        let id = try await rig.macConversation("Standup", at: start, seconds: 0.5, audio: macAudio)
+        try rig.inference.script(macAudio, [(0, "Same room, heard by the Mac.")])
+        state.awaitingModels.remove(id)
+
+        // The iPhone recorded on its own, transcribed it, and summarizes it itself: it asks this Mac for nothing.
+        let own = try await library.file(phoneAudio, recordingID: UUID(), start: start.addingTimeInterval(0.1), duration: 0.5)
+        let phoneTrack = try await transcribeOnThePhone(library, own, text: "Same room, heard by the iPhone.")
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitUntil("the phone's recording to join with its transcript", timeout: 20) {
+            rig.meeting(id)?.tracks.count == 2 && rig.meeting(own) == nil && state.processingID == nil && state.queuedIDs.isEmpty
+                && rig.meeting(id)?.summary != nil
+        }
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        let track = try XCTUnwrap(meeting.tracks.first { $0.deviceKind == DaybookPhoneIntegration.id })
+        XCTAssertEqual(track.alignment?.method, .audio)
+        XCTAssertEqual(meeting.transcripts.filter { $0.trackID == track.id }.flatMap(\.segments).map(\.text), ["Same room, heard by the iPhone."],
+                       "Its transcript came with it")
+        XCTAssertTrue(meeting.speakers.contains { $0.sourceTrackID == track.id }, "and its speakers")
+        XCTAssertEqual(rig.inference.transcribed, [try AudioDigest.sha256(fileURL: macAudio)], "Not transcribed again here")
+        XCTAssertTrue(meeting.unifiedTranscript.contains { $0.text == "Same room, heard by the iPhone." }, "Fused into this conversation")
+        XCTAssertEqual(rig.inference.summarized.count, 1, "Summarized once, here")
+        XCTAssertTrue(state.sources.hasChecked(phoneRecording: phoneTrack))
+
+        // On the iPhone: its own conversation goes, and the Mac's holds its recording.
+        await state.synchronizeLibrary()
+        await library.synchronize()
+        XCTAssertNil(library.library.meeting(own))
+        XCTAssertEqual(library.library.meeting(id)?.tracks.count, 2)
+    }
+
+    func testAPhoneTranscribedRecordingSentForASummaryFindsItsConversationFirst() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { library.tearDown() }
+        state.sources.alignAudio = { _, _, _, _ in AudioAlignment(offset: 0.1, rate: 1, confidence: 0.9) }
+        let macAudio = try rig.audio("mac-s.wav", frequency: 340)
+        let phoneAudio = try rig.audio("iphone-s.wav", frequency: 500)
+        let start = Date().addingTimeInterval(-300)
+        let id = try await rig.macConversation("Planning", at: start, seconds: 0.5, audio: macAudio)
+        try rig.inference.script(macAudio, [(0, "Planning, from the Mac.")])
+        state.awaitingModels.remove(id)
+
+        // Without a summary model, the iPhone's countdown ran out and sent the summary to this Mac.
+        let own = try await library.file(phoneAudio, recordingID: UUID(), start: start.addingTimeInterval(0.1), duration: 0.5)
+        _ = try await transcribeOnThePhone(library, own, text: "Planning, from the iPhone.")
+        library.library.requestProcessing(own, mode: .summaryOnly, by: library.device)
+        await library.library.flush()
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitUntil("the phone's recording to join", timeout: 20) {
+            rig.meeting(id)?.tracks.count == 2 && rig.meeting(own) == nil && state.processingID == nil && state.queuedIDs.isEmpty
+                && rig.meeting(id)?.summary != nil
+        }
+        XCTAssertEqual(rig.inference.transcribed, [try AudioDigest.sha256(fileURL: macAudio)], "The iPhone's recording isn't transcribed again")
+        XCTAssertEqual(rig.inference.summarized.count, 1, "One summary: the Mac's conversation's, not the iPhone's too")
+    }
+
+    func testAPhoneTranscribedRecordingThatBelongsNowhereStaysAndIsCheckedOnce() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let cloud = try temporaryFolder("Cloud")
+        try rig.connectSync(cloud)
+        let library = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { library.tearDown() }
+        let compared = ExpectedOffsets()
+        state.sources.alignAudio = { _, _, prior, _ in compared.append(prior); return nil }
+        let phoneAudio = try rig.audio("iphone-alone.wav", frequency: 510)
+        let own = try await library.file(phoneAudio, recordingID: UUID(), start: Date().addingTimeInterval(-60), duration: 0.5)
+        let phoneTrack = try await transcribeOnThePhone(library, own, text: "Just me, on a walk.")
+        library.library.update(own) { $0.setSummary(MeetingSummary(title: "Walk", overview: "From this iPhone", modelID: "gemma-4/e2b-4bit")) }
+        await library.library.flush()
+        await library.synchronize()
+        await state.synchronizeLibrary()
+        try await waitUntil("the check", timeout: 20) { state.sources.hasChecked(phoneRecording: phoneTrack) && state.processingID == nil && state.queuedIDs.isEmpty }
+        let meeting = try XCTUnwrap(rig.meeting(own))
+        XCTAssertEqual(meeting.tracks.count, 1, "It stays in its own conversation")
+        XCTAssertEqual(meeting.summary?.overview, "From this iPhone", "The iPhone's summary stays as it is")
+        XCTAssertNotEqual(meeting.status, .transcribing)
+        XCTAssertTrue(rig.inference.transcribed.isEmpty)
+        XCTAssertTrue(rig.inference.summarized.isEmpty, "Nothing asked this Mac to summarize it")
+        XCTAssertTrue(state.phoneTranscriptsToCheck().isEmpty, "Checked once")
+        await state.synchronizeLibrary()
+        XCTAssertTrue(state.queuedIDs.isEmpty)
+        XCTAssertNil(state.processingID)
+    }
 }
 
 /// Expected offsets the aligner was given.
