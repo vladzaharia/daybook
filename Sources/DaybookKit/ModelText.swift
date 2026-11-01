@@ -9,10 +9,13 @@ public enum ModelText {
     public static func inlineMarkdown(_ text: String) -> AttributedString {
         var attributed = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(text)
-        let linked = attributed.runs.filter { $0.link != nil || $0.imageURL != nil }.map(\.range)
+        // Attributes by their keys, not key paths: a key path to an attribute isn't Sendable.
+        typealias Link = AttributeScopes.FoundationAttributes.LinkAttribute
+        typealias Image = AttributeScopes.FoundationAttributes.ImageURLAttribute
+        let linked = attributed.runs.filter { $0[Link.self] != nil || $0[Image.self] != nil }.map(\.range)
         for range in linked {
-            attributed[range].link = nil
-            attributed[range].imageURL = nil
+            attributed[range][Link.self] = nil
+            attributed[range][Image.self] = nil
         }
         return attributed
     }

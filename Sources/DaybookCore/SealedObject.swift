@@ -430,15 +430,31 @@ extension SealedObject {
     /// Runs two pieces of work at once (each in its own autorelease pool, so a long file's reads don't pile up), and
     /// rethrows the first failure. Small chunks run one after the other.
     private static func inParallel(_ first: () throws -> Void, _ second: () throws -> Void) throws {
-        final class Failures: @unchecked Sendable { var first: Error?; var second: Error? }
-        let failures = Failures()
-        DispatchQueue.concurrentPerform(iterations: 2) { lane in
-            autoreleasepool {
-                if lane == 0 { do { try first() } catch { failures.first = error } }
-                else { do { try second() } catch { failures.second = error } }
+        try withoutActuallyEscaping(first) { first in
+            try withoutActuallyEscaping(second) { second in
+                let lanes = Lanes(first, second)
+                DispatchQueue.concurrentPerform(iterations: 2) { lane in autoreleasepool { lanes.run(lane) } }
+                if let error = lanes.firstFailure ?? lanes.secondFailure { throw error }
             }
         }
-        if let error = failures.first ?? failures.second { throw error }
+    }
+
+    /// `inParallel`'s two pieces of work and how each failed, handed to `concurrentPerform`'s threads. Unchecked, and
+    /// safe: each lane runs one closure and writes only its own failure, the two closures touch disjoint state (one
+    /// chunk is sealed or opened while the next is read or written), and `concurrentPerform` returns only once both
+    /// finished, before anything reads the failures.
+    private final class Lanes: @unchecked Sendable {
+        private let first: () throws -> Void
+        private let second: () throws -> Void
+        private(set) var firstFailure: Error?
+        private(set) var secondFailure: Error?
+
+        init(_ first: @escaping () throws -> Void, _ second: @escaping () throws -> Void) { self.first = first; self.second = second }
+
+        func run(_ lane: Int) {
+            if lane == 0 { do { try first() } catch { firstFailure = error } }
+            else { do { try second() } catch { secondFailure = error } }
+        }
     }
 
     private static func create(_ url: URL) throws -> FileHandle {

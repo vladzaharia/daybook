@@ -47,7 +47,10 @@ public final class CloudSetup {
                 catalog: CloudCatalog = .builtIn) {
         store = keys
         self.defaults = defaults
-        directory = CloudDirectory(catalog: catalog, keys: keys, client: client, defaults: defaults)
+        // UserDefaults is safe from any thread (Foundation documents it), but isn't marked Sendable: the directory's
+        // actor shares it with this object.
+        nonisolated(unsafe) let shared = defaults
+        directory = CloudDirectory(catalog: catalog, keys: keys, client: client, defaults: shared)
         preferences = CloudSummaryPreferences.load(from: defaults)
         reloadKeys()
     }

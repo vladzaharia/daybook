@@ -171,7 +171,7 @@ public enum RevisionText {
 
     private static func bold(_ text: AttributedString) -> AttributedString {
         var text = text
-        text.inlinePresentationIntent = .stronglyEmphasized
+        text[AttributeScopes.FoundationAttributes.InlinePresentationIntentAttribute.self] = .stronglyEmphasized
         return text
     }
 }
