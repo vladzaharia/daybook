@@ -1,3 +1,5 @@
+// MLXVLM builds for the Mac only (Package.swift): the iPhone reads photos with Apple Vision alone.
+#if canImport(MLXVLM)
 import CoreImage
 import DaybookCore
 import DaybookKit
@@ -59,3 +61,4 @@ final class MLXVisionDescriber: DescribingImages, @unchecked Sendable {
         Memory.clearCache()
     }
 }
+#endif

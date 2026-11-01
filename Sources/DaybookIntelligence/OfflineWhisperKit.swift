@@ -1,3 +1,5 @@
+// WhisperKit builds for the Mac only (Package.swift).
+#if canImport(WhisperKit)
 import Foundation
 import NaturalLanguage
 import WhisperKit
@@ -79,3 +81,4 @@ private final class OfflineWhisperTokenizer: WhisperTokenizer {
         return (words, groups)
     }
 }
+#endif

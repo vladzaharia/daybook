@@ -300,6 +300,48 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertEqual(request(a, id)?.outcome?.result, .completed)
     }
 
+    /// An iPhone that transcribes its own recordings (docs/iphone.md, "Processing on this iPhone") claims
+    /// the request in the save that files the recording: this Mac leaves it, never transcribes again what
+    /// the iPhone transcribed, and summarizes when the iPhone hands the request back without a summary.
+    func testBehaviorAMacLeavesWhatAnIPhoneClaimedAndNeverTranscribesItAgain() async throws {
+        let mac = try await rig()
+        let cloud = try temporaryFolder("Cloud")
+        try mac.connectSync(cloud)
+        let phone = try await PhoneLibrarySide.make(in: self, root: try temporaryFolder("Phone"), cloud: cloud, phoneID: UUID())
+        defer { phone.tearDown() }
+        let audio = try mac.audio("iphone-own.wav", frequency: 880)
+        try mac.inference.script(audio, [(0, "The iPhone transcribed this.")])
+        let id = try await phone.file(audio, recordingID: UUID(), start: Date().addingTimeInterval(-60), duration: 0.5)
+        let asked = try XCTUnwrap(phone.library.meeting(id)?.openProcessingRequests.first)
+        XCTAssertNotNil(phone.library.claimProcessingRequest(asked.id, in: id, by: phone.device))
+        await phone.library.flush()
+        await phone.synchronize()
+
+        await mac.state.synchronizeLibrary()
+        XCTAssertFalse(mac.state.queuedIDs.contains(id))
+        XCTAssertNil(mac.state.processingID, "the iPhone's recording, claimed as it was filed, is the iPhone's")
+        if case .processing(let progress) = mac.state.processingStatus(for: try XCTUnwrap(mac.meeting(id))) {
+            XCTAssertEqual(progress.device?.id, phone.device.id)
+        } else { XCTFail("The Mac shows it processing on the iPhone") }
+
+        // The iPhone transcribes it, fuses, and, with no summary model, gives the request back.
+        let track = try XCTUnwrap(phone.library.meeting(id)?.tracks.first)
+        let words = TranscriptSegment(trackID: track.id, start: 0, end: 0.5, text: "The iPhone transcribed this.")
+        phone.library.update(id) { $0.transcripts.append(TrackTranscript(trackID: track.id, segments: [words], modelID: "parakeet/redux")) }
+        await phone.library.realign(id)
+        XCTAssertNotNil(phone.library.releaseProcessingRequest(asked.id, in: id, by: phone.device))
+        await phone.library.flush()
+        await phone.synchronize()
+
+        await mac.state.synchronizeLibrary()
+        try await answered(mac, id)
+        XCTAssertEqual(mac.inference.transcribed, [], "never transcribed again")
+        XCTAssertEqual(mac.inference.summarized.count, 1, "the summary is the Mac's")
+        XCTAssertEqual(mac.meeting(id)?.transcripts.map(\.modelID), ["parakeet/redux"], "the iPhone's transcript, with its model")
+        XCTAssertEqual(request(mac, id)?.outcome?.result, .completed)
+        XCTAssertNotNil(mac.meeting(id)?.summary)
+    }
+
     func testAClaimSurvivesSleepUnlessAnotherMacTookItOver() async throws {
         let rig = try await rig()
         rig.state.requestTiming = RequestTiming(lease: 600, renewInterval: .seconds(3600))

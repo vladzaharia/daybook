@@ -46,12 +46,14 @@ public actor LocalIntelligenceRuntime {
     }
 
     /// - Parameters:
+    ///   - store: the store over `modelsDirectory` to share (the iPhone's, which its live captions and
+    ///     downloads use too); nil makes one.
     ///   - builtIn: the built-in manifest; nil reads DaybookKit's ModelCatalog folder.
     ///   - fetcher: how files arrive; nil uses Hugging Face through HubApi.
-    public init(modelsDirectory: URL, registry: ModelEngineRegistry = .standard, builtIn: ModelManifestReader.Result? = nil,
-                fetcher: (any ModelArtifactFetcher)? = nil) {
+    public init(modelsDirectory: URL, store: ModelStore? = nil, registry: ModelEngineRegistry = .standard,
+                builtIn: ModelManifestReader.Result? = nil, fetcher: (any ModelArtifactFetcher)? = nil) {
         self.modelsDirectory = modelsDirectory
-        self.store = ModelStore(root: modelsDirectory)
+        self.store = store ?? ModelStore(root: modelsDirectory)
         self.registry = registry
         self.builtIn = builtIn
         self.fetcher = fetcher ?? HubSnapshotFetcher()

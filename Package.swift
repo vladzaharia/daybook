@@ -11,7 +11,8 @@ import PackageDescription
 //   DaybookLive          live speech on this device: streaming transcription, speaker detection, and
 //                        live identification against voice profiles, behind DaybookCaptions' captioner
 //                        protocol; and the voice-profile recipe the Mac's final pipeline shares (macOS + iOS)
-//   DaybookIntelligence  local models: the Mac's ProcessingEngine (macOS for now; no AppKit)
+//   DaybookIntelligence  local models: the processing engines and ProcessingEngine (no AppKit; on iOS without
+//                        WhisperKit and MLXVLM, which the iPhone doesn't use)
 //   DaybookLink          the Mac <-> iPhone local-network channel: pairing, control, status (macOS + iOS)
 //   DaybookCaptions      tentative on-device live captions for any audio source (Speech framework; macOS + iOS)
 //   DaybookDesign        the design both apps share: tokens, the rolling meter, the clock, caption strip,
@@ -74,16 +75,18 @@ let package = Package(
             "DaybookModelStore",
             .product(name: "FluidAudio", package: "FluidAudio")
         ]),
+        // The iPhone links it too, for its own recordings (docs/iphone.md, "Processing on this iPhone"), without
+        // what it doesn't run: Whisper (it transcribes with Parakeet) and photo captions (Apple Vision reads photos).
         .target(name: "DaybookIntelligence", dependencies: [
             "DaybookCore",
             "DaybookKit",
             "DaybookModelStore",
             "DaybookLive",
-            .product(name: "WhisperKit", package: "argmax-oss-swift"),
+            .product(name: "WhisperKit", package: "argmax-oss-swift", condition: .when(platforms: [.macOS])),
             .product(name: "MLX", package: "mlx-swift"),
             .product(name: "MLXLLM", package: "mlx-swift-lm"),
             // Gemma 4's vision tower, for photo captions (docs/models.md, "Photos").
-            .product(name: "MLXVLM", package: "mlx-swift-lm"),
+            .product(name: "MLXVLM", package: "mlx-swift-lm", condition: .when(platforms: [.macOS])),
             .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             .product(name: "MLXGuidedGeneration", package: "mlx-swift-lm"),
             .product(name: "FluidAudio", package: "FluidAudio"),

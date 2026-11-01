@@ -1,3 +1,4 @@
+import CoreML
 import DaybookCore
 import DaybookKit
 import Foundation
@@ -35,6 +36,18 @@ extension ModelEngine {
         for path in paths where !FileManager.default.fileExists(atPath: folder.appendingPathComponent(path).path) {
             throw LocalIntelligenceError.modelNotInstalled(installation.key.variantKey)
         }
+    }
+}
+
+extension MLComputeUnits {
+    /// Where the processing models run: anywhere on a Mac; on an iPhone the Neural Engine and CPU only,
+    /// never the GPU, which iOS doesn't give an app in the background (docs/model-runtime.md, "iPhone").
+    static var processing: MLComputeUnits {
+        #if os(iOS)
+        return .cpuAndNeuralEngine
+        #else
+        return .all
+        #endif
     }
 }
 
@@ -121,10 +134,14 @@ public struct ModelEngineRegistry: Sendable {
         for engine in engines { register(engine) }
     }
 
-    /// The engines Daybook ships. Adding an engine means adding it here.
+    /// The engines Daybook ships. Adding an engine means adding it here. WhisperKit is the Mac's only
+    /// (Package.swift): the iPhone transcribes with Parakeet.
     public static var standard: ModelEngineRegistry {
-        ModelEngineRegistry([
-            WhisperKitEngine(),
+        var engines: [any ModelEngine] = []
+        #if canImport(WhisperKit)
+        engines.append(WhisperKitEngine())
+        #endif
+        return ModelEngineRegistry(engines + [
             Community1Engine(),
             SortformerEngine(),
             MLXLanguageEngine(),

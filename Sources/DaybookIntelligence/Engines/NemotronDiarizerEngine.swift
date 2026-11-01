@@ -64,7 +64,7 @@ public struct NemotronDiarizerEngine: ModelEngine {
         }
         progress(.init(0, "Loading speaker model locally"))
         // Local files only: `load(config:directory:)` never downloads.
-        let models = try await Nemotron3Models.load(config: config, directory: installation.folder(for: "model"), computeUnits: .all)
+        let models = try await Nemotron3Models.load(config: config, directory: installation.folder(for: "model"), computeUnits: .processing)
         return NemotronDiarizer(models: models, config: config, maxSpeakers: installation.capabilities.maxSpeakers ?? config.numSpeakers)
     }
 }
