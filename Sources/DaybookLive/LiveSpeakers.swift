@@ -60,7 +60,7 @@ final class NemotronLiveDiarizer: LiveDiarizing, @unchecked Sendable {
 
     /// Loads a preset's model on the Neural Engine and CPU (never the GPU, which a locked iPhone can't use).
     static func load(_ folder: URL, options: [String: String]) async throws -> (Nemotron3Models, Nemotron3Config) {
-        guard let config = LiveDiarizationPreset.configuration(options) else { throw LiveModelError.unsupportedRole(.liveDiarization) }
+        guard let config = NemotronDiarizationLayout.configuration(options, default: NemotronDiarizationLayout.livePreset) else { throw LiveModelError.unsupportedRole(.liveDiarization) }
         let models = try await Nemotron3Models.load(config: config, directory: folder, computeUnits: .cpuAndNeuralEngine)
         return (models, config)
     }

@@ -1,6 +1,7 @@
 import CoreML
 import DaybookCore
 import DaybookKit
+import DaybookLive
 import FluidAudio
 import Foundation
 
@@ -14,26 +15,16 @@ public struct NemotronDiarizerEngine: ModelEngine {
     public init() {}
 
     public let descriptor = ModelEngineDescriptor(
-        id: .nemotronDiarizer, name: "FluidAudio Nemotron 3 Diarization", version: 1, runtime: "FluidAudio 0.17.7",
+        id: .nemotronDiarizer, name: "FluidAudio Nemotron 3 Diarization", version: 1, runtime: EngineRuntime.fluidAudio,
         roles: [.diarization, .liveDiarization], platforms: [.macOS, .iOS], residency: .shared)
 
-    /// The streaming configuration an install's options name, with `modelFileName` as the bundle's
-    /// path inside the artifact; nil for a preset FluidAudio 0.17.7 doesn't know.
+    /// The configuration an install's options name ("offline" when they name none), as live speakers
+    /// read it (`NemotronDiarizationLayout`); nil for a preset the pinned FluidAudio doesn't know.
     static func configuration(_ options: [String: String]) -> Nemotron3Config? {
-        guard var config = Nemotron3Config.preset(named: options["preset"] ?? "offline") else { return nil }
-        config.modelFileName = bundlePath(config)
-        return config
+        NemotronDiarizationLayout.configuration(options, default: "offline")
     }
 
-    /// "monolithic/v2/Nemotron3Diarizer_offline.mlmodelc", as in FluidInference's repository.
-    static func bundlePath(_ config: Nemotron3Config) -> String {
-        config.modelFileName.contains("/") ? config.modelFileName : "\(config.hubSubdirectory)/\(config.modelFileName)"
-    }
-
-    static func requiredFiles(_ config: Nemotron3Config) -> [String] {
-        [config.modelFileName + "/coremldata.bin", config.modelFileName + "/model.mil", ModelNames.Nemotron3.silenceEmbeddingFile]
-            + (config.splitGraph ? [ModelNames.Nemotron3.preEncodeProjectionFile] : [])
-    }
+    static func requiredFiles(_ config: Nemotron3Config) -> [String] { NemotronDiarizationLayout.requiredFiles(config) }
 
     public func validate(_ installation: ModelInstallation) throws {
         guard let config = Self.configuration(installation.engineOptions) else {

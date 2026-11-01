@@ -19,7 +19,7 @@ public struct ParakeetEngine: ModelEngine {
     public init() {}
 
     public let descriptor = ModelEngineDescriptor(
-        id: .parakeet, name: "FluidAudio Parakeet", version: 1, runtime: "FluidAudio 0.17.7",
+        id: .parakeet, name: "FluidAudio Parakeet", version: 1, runtime: EngineRuntime.fluidAudio,
         roles: [.transcription], platforms: [.macOS, .iOS], residency: .shared)
 
     /// The FluidAudio model version an install's options name; nil for one this engine doesn't run.

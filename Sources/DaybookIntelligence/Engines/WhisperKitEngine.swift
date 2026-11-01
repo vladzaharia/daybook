@@ -15,7 +15,7 @@ public struct WhisperKitEngine: ModelEngine {
     public init() {}
 
     public let descriptor = ModelEngineDescriptor(
-        id: .whisperKit, name: "WhisperKit", version: 2, runtime: "argmax-oss-swift 1.1.1",
+        id: .whisperKit, name: "WhisperKit", version: 2, runtime: EngineRuntime.whisperKit,
         roles: [.transcription], platforms: [.macOS, .iOS], residency: .shared)
 
     public func validate(_ installation: ModelInstallation) throws {

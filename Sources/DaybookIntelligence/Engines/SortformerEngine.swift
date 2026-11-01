@@ -10,7 +10,7 @@ public struct SortformerEngine: ModelEngine {
     public init() {}
 
     public let descriptor = ModelEngineDescriptor(
-        id: .sortformer, name: "FluidAudio Sortformer", version: 1, runtime: "FluidAudio 0.17.7",
+        id: .sortformer, name: "FluidAudio Sortformer", version: 1, runtime: EngineRuntime.fluidAudio,
         roles: [.diarization], platforms: [.macOS, .iOS], residency: .shared)
 
     public func validate(_ installation: ModelInstallation) throws {

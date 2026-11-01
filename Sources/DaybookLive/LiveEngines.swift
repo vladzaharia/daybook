@@ -11,16 +11,16 @@ public enum LiveEngines {
     /// NVIDIA's cache-aware streaming recognizers through FluidAudio
     /// (`StreamingNemotronMultilingualAsrManager`).
     public static let streamingTranscription = ModelEngineDescriptor(
-        id: .nemotronStreaming, name: "FluidAudio Nemotron Streaming", version: 1, runtime: "FluidAudio 0.17.7",
+        id: .nemotronStreaming, name: "FluidAudio Nemotron Streaming", version: 1, runtime: EngineRuntime.fluidAudio,
         roles: [.liveTranscription], platforms: [.macOS, .iOS], residency: .shared)
     /// Nemotron 3 Diarization's streaming presets (`Nemotron3Diarizer`). The Mac's descriptor for the
     /// same engine also serves final speaker detection.
     public static let speakerDetection = ModelEngineDescriptor(
-        id: .nemotronDiarizer, name: "FluidAudio Nemotron 3 Diarization", version: 1, runtime: "FluidAudio 0.17.7",
+        id: .nemotronDiarizer, name: "FluidAudio Nemotron 3 Diarization", version: 1, runtime: EngineRuntime.fluidAudio,
         roles: [.liveDiarization], platforms: [.macOS, .iOS], residency: .shared)
     /// Community-1's WeSpeaker model, for voice profiles in the space the Mac's profiles use.
     public static let voiceProfiles = ModelEngineDescriptor(
-        id: .community1, name: "FluidAudio Community-1", version: 1, runtime: "FluidAudio 0.17.7",
+        id: .community1, name: "FluidAudio Community-1", version: 1, runtime: EngineRuntime.fluidAudio,
         roles: [.speakerEmbedding], platforms: [.macOS, .iOS], residency: .shared)
 
     /// What a device that runs only live models can run.
@@ -33,10 +33,11 @@ public enum LiveEngines {
         switch role {
         case .liveTranscription: required = StreamingTranscriptionFiles.required
         case .liveDiarization:
-            guard let config = LiveDiarizationPreset.configuration(installation.engineOptions) else {
+            guard let config = NemotronDiarizationLayout.configuration(installation.engineOptions,
+                                                                       default: NemotronDiarizationLayout.livePreset) else {
                 throw LiveModelError.damaged(installation.receipt.name)
             }
-            required = LiveDiarizationPreset.requiredFiles(config)
+            required = NemotronDiarizationLayout.requiredFiles(config)
         case .speakerEmbedding: required = WeSpeakerEmbedder.requiredFiles
         default: throw LiveModelError.unsupportedRole(role)
         }
@@ -64,17 +65,31 @@ enum StreamingTranscriptionFiles {
                            ModelNames.NemotronMultilingualStreaming.metadata, ModelNames.NemotronMultilingualStreaming.tokenizer]
 }
 
-/// Nemotron 3 Diarization for live speakers: `engineOptions["preset"]` names a streaming shape
-/// FluidAudio knows ("fast32-split-w8a8", 2.88 s behind the audio), loaded from FluidInference's layout.
-enum LiveDiarizationPreset {
-    static func configuration(_ options: [String: String]) -> Nemotron3Config? {
-        guard var config = Nemotron3Config.preset(named: options["preset"] ?? "fast32-split-w8a8") else { return nil }
-        if !config.modelFileName.contains("/") { config.modelFileName = "\(config.hubSubdirectory)/\(config.modelFileName)" }
+/// Nemotron 3 Diarization's converted shapes, as FluidInference lays them out: which configuration an
+/// install's `engineOptions["preset"]` names and what loading it needs. Live speakers here and the
+/// Mac's speaker detection (`NemotronDiarizerEngine`) both use it, so they check an install alike.
+public enum NemotronDiarizationLayout {
+    /// Live speakers' shape when an install names none: a streaming one, 2.88 s behind the audio.
+    public static let livePreset = "fast32-split-w8a8"
+
+    /// The configuration `options["preset"]` names, else `fallback`, with `modelFileName` as the
+    /// bundle's path inside the artifact ("monolithic/v2/Nemotron3Diarizer_offline.mlmodelc"); nil for
+    /// a preset the pinned FluidAudio doesn't know.
+    public static func configuration(_ options: [String: String], default fallback: String) -> Nemotron3Config? {
+        guard var config = Nemotron3Config.preset(named: options["preset"] ?? fallback) else { return nil }
+        config.modelFileName = bundlePath(config)
         return config
     }
 
-    static func requiredFiles(_ config: Nemotron3Config) -> [String] {
-        [config.modelFileName + "/coremldata.bin", ModelNames.Nemotron3.silenceEmbeddingFile]
+    /// "monolithic/v2/Nemotron3Diarizer_offline.mlmodelc", as in FluidInference's repository.
+    static func bundlePath(_ config: Nemotron3Config) -> String {
+        config.modelFileName.contains("/") ? config.modelFileName : "\(config.hubSubdirectory)/\(config.modelFileName)"
+    }
+
+    /// What loading `config` needs: the compiled model with its program (`model.mil`), the learned
+    /// silence, and, for a split graph, the host-side projection.
+    public static func requiredFiles(_ config: Nemotron3Config) -> [String] {
+        [config.modelFileName + "/coremldata.bin", config.modelFileName + "/model.mil", ModelNames.Nemotron3.silenceEmbeddingFile]
             + (config.splitGraph ? [ModelNames.Nemotron3.preEncodeProjectionFile] : [])
     }
 }

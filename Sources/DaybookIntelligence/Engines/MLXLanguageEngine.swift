@@ -43,7 +43,7 @@ public struct MLXLanguageEngine: ModelEngine {
     }
 
     public let descriptor = ModelEngineDescriptor(
-        id: .mlxLanguage, name: "MLX language models", version: 3, runtime: "mlx-swift-lm 3.32.3",
+        id: .mlxLanguage, name: "MLX language models", version: 3, runtime: EngineRuntime.mlxLanguage,
         roles: Self.roles, platforms: [.macOS, .iOS], residency: .exclusive)
 
     #if canImport(MLXVLM)

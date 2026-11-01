@@ -104,10 +104,18 @@ final class LiveModelsTests: XCTestCase {
         XCTAssertTrue(complete.folder(for: "model").path.hasSuffix("model/latin/1120ms"), "loads from the bundle's own folder")
         let partial = try install(latin, files: ["metadata.json"], root: root)
         XCTAssertThrowsError(try LiveEngines.validate(partial, role: .liveTranscription))
+        let bundle = "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc"
         let speakers = try install("nemotron-3-diarization/live", files: [
-            "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/coremldata.bin", "learnable_sil_emb.bin", "pre_encode_proj_t.bin"], root: root)
+            "\(bundle)/coremldata.bin", "\(bundle)/model.mil", "learnable_sil_emb.bin", "pre_encode_proj_t.bin"], root: root)
         XCTAssertNoThrow(try LiveEngines.validate(speakers, role: .liveDiarization))
         XCTAssertEqual(LiveEngines.role(of: speakers), .liveDiarization)
+        // The model's program is needed to load it, here as for the Mac's speaker detection: one rule for both.
+        let withoutProgram = try install("nemotron-3-diarization/live", files: [
+            "\(bundle)/coremldata.bin", "learnable_sil_emb.bin", "pre_encode_proj_t.bin"], root: root)
+        XCTAssertThrowsError(try LiveEngines.validate(withoutProgram, role: .liveDiarization))
+        let live = try XCTUnwrap(NemotronDiarizationLayout.configuration([:], default: NemotronDiarizationLayout.livePreset))
+        XCTAssertEqual(NemotronDiarizationLayout.requiredFiles(live),
+                       ["\(bundle)/coremldata.bin", "\(bundle)/model.mil", "learnable_sil_emb.bin", "pre_encode_proj_t.bin"])
         let voices = try install("community-1/offline", files: WeSpeakerEmbedder.requiredFiles, root: root)
         XCTAssertNoThrow(try LiveEngines.validate(voices, role: .speakerEmbedding))
     }

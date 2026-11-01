@@ -131,7 +131,7 @@ final class ModelEngineTests: XCTestCase {
         XCTAssertEqual(registry.engine(.community1)?.descriptor.roles, [.diarization, .speakerEmbedding])
         XCTAssertEqual(registry.engine(.parakeet)?.descriptor.roles, [.transcription])
         XCTAssertEqual(registry.engine(.nemotronDiarizer)?.descriptor.roles, [.diarization, .liveDiarization])
-        XCTAssertEqual(registry.engine(.parakeet)?.descriptor.versionString, "1 (FluidAudio 0.17.7)")
+        XCTAssertEqual(registry.engine(.parakeet)?.descriptor.versionString, "1 (\(EngineRuntime.fluidAudio))")
         XCTAssertEqual(registry.engine(.nemotronDiarizer)?.descriptor.residency, .shared)
         XCTAssertEqual(registry.engine(.mlxLanguage)?.descriptor.residency, .exclusive)
         XCTAssertEqual(registry.engine(.sortformer)?.descriptor.residency, .shared)

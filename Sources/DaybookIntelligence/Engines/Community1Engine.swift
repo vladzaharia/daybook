@@ -17,7 +17,7 @@ public struct Community1Engine: ModelEngine {
     public init() {}
 
     public let descriptor = ModelEngineDescriptor(
-        id: .community1, name: "FluidAudio Community-1", version: 1, runtime: "FluidAudio 0.17.7",
+        id: .community1, name: "FluidAudio Community-1", version: 1, runtime: EngineRuntime.fluidAudio,
         roles: [.diarization, .speakerEmbedding], platforms: [.macOS, .iOS], residency: .shared)
 
     public func validate(_ installation: ModelInstallation) throws {
