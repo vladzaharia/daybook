@@ -7,19 +7,19 @@ import Foundation
 /// Debug-only: where a summary runs, on screen without a job, a key, or the network
 /// (docs/multipoint.md, "Where summaries run"):
 ///
-///     --placement-demo countdown|cloud|colophon
+///     --placement-demo countdown|cloud|colophon|colophon-mac
 ///
 /// - `countdown`: the conversation being processed counts down to summarizing on this Mac (30 s), with
 ///   Use the Cloud and Start Now. With `--library-demo` it's "Roadmap review"; with `--notes-demo
 ///   processing`, Floating Notes' conversation.
 /// - `cloud`: the same conversation summarizing with Claude Sonnet 5.5.
-/// - `colophon`: with `--library-demo`, the ready conversation's summary made in the cloud, and the
-///   transcript-only one's summarized on another Mac.
+/// - `colophon`, `colophon-mac`: with `--library-demo`, "Offsite retro"'s summary made in the cloud, or on
+///   another Mac.
 ///
 /// The cloud is a stand-in that offers one model and never runs.
 @MainActor
 enum PlacementDemo {
-    enum Scenario: String { case countdown, cloud, colophon }
+    enum Scenario: String { case countdown, cloud, colophon, colophonMac = "colophon-mac" }
 
     static let scenario = LaunchOptions.value(after: "--placement-demo").flatMap(Scenario.init(rawValue:))
 
@@ -51,15 +51,15 @@ enum PlacementDemo {
             state.processingProgress = IntelligenceProgress(scenario == .cloud ? 0.35 : 0, "Summarizing")
             state.placements.begin(id)
             if scenario == .cloud { state.placements.perform(.useCloud, for: id) }
-        case .colophon:
-            let me = state.library.thisDevice
-            if let ready = state.meetings.first(where: { $0.title == LibraryDemo.ready }), let summary = ready.summary {
-                state.update(ready.id) { $0.setSummary(summary.placed(.cloud(sonnet), by: me, inputs: ready.modelsBehindTranscript)) }
-            }
-            if let older = state.meetings.first(where: { $0.title == LibraryDemo.older }), let summary = older.summary {
-                let studio = ProcessingRequest.Device(id: "studio-mac", name: "Studio Mac")
-                state.update(older.id) { $0.setSummary(summary.placed(.thisDevice, by: studio, inputs: older.modelsBehindTranscript)) }
-            }
+        case .colophon, .colophonMac:
+            guard let older = state.meetings.first(where: { $0.title == LibraryDemo.older }), var summary = older.summary else { return }
+            // Its own model again, so the demo's earlier runs don't leave the cloud's behind.
+            summary.modelID = "gemma-4/e2b-4bit"
+            summary.processingSettings = nil
+            let placed = scenario == .colophon
+                ? summary.placed(.cloud(sonnet), by: state.library.thisDevice, inputs: older.modelsBehindTranscript)
+                : summary.placed(.thisDevice, by: ProcessingRequest.Device(id: "studio-mac", name: "Studio Mac"), inputs: older.modelsBehindTranscript)
+            state.update(older.id) { $0.setSummary(placed) }
         }
     }
 }
