@@ -1,16 +1,6 @@
 import DaybookCore
 import Foundation
 
-/// A device's own summarizer, when it has one (docs/multipoint.md, "Where summaries run"). The iPhone's
-/// comes from its processing models; until it has one, it has none, and its summaries go to a Mac or the
-/// cloud. The planner asks only whether it can run now.
-public protocol LocalSummarizing: Sendable {
-    /// Its model is installed and this device has the memory for it.
-    var canSummarize: Bool { get }
-    func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],
-                   progress: @escaping @Sendable (Double) -> Void) async throws -> MeetingSummary
-}
-
 /// Where one conversation's summary runs, and the countdown that lets the person choose the cloud first
 /// (docs/multipoint.md, "Where summaries run").
 ///
@@ -245,19 +235,5 @@ extension CloudSummaryPreferences {
             }
         }
         return nil
-    }
-
-    /// Where the apps keep them (Settings › Cloud writes them).
-    public static let defaultsKey = "cloudSummaryPreferences"
-
-    /// The stored preferences, or the defaults (ask, 15 s, Balanced, medium).
-    public static func stored(in defaults: UserDefaults) -> CloudSummaryPreferences {
-        guard let data = defaults.data(forKey: defaultsKey),
-              let stored = try? JSONDecoder().decode(CloudSummaryPreferences.self, from: data) else { return CloudSummaryPreferences() }
-        return stored
-    }
-
-    public func store(in defaults: UserDefaults) {
-        if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.defaultsKey) }
     }
 }

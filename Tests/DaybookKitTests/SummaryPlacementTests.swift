@@ -281,16 +281,6 @@ final class SummaryPlacementTests: XCTestCase {
         XCTAssertNil(preferences.resolve(in: [sonnet]))
     }
 
-    func testBehaviorPreferencesAreStoredAndReadBack() {
-        let defaults = makeTestDefaults()
-        XCTAssertEqual(CloudSummaryPreferences.stored(in: defaults), CloudSummaryPreferences())
-        var preferences = CloudSummaryPreferences()
-        preferences.countdownSeconds = 30
-        preferences.policy = .always
-        preferences.store(in: defaults)
-        XCTAssertEqual(CloudSummaryPreferences.stored(in: defaults), preferences)
-    }
-
     // MARK: Every conversation on a device
 
     @MainActor

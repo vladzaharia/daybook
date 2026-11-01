@@ -52,7 +52,7 @@ final class PhoneSummaryPlacement {
     var preferences: CloudSummaryPreferences {
         didSet {
             guard preferences != oldValue else { return }
-            preferences.store(in: defaults)
+            preferences.save(to: defaults)
             refresh()
         }
     }
@@ -80,7 +80,7 @@ final class PhoneSummaryPlacement {
         self.presence = presence
         self.defaults = defaults
         self.clock = clock
-        let preferences = CloudSummaryPreferences.stored(in: defaults)
+        let preferences = CloudSummaryPreferences.load(from: defaults)
         self.preferences = preferences
         placements = SummaryPlacements(preferences: preferences, waitsForMacs: true, clock: clock, runsTimer: runsTimer)
         subscription = placements.$planners.sink { [weak self] planners in self?.planners = planners }
@@ -239,7 +239,7 @@ final class PhoneSummaryPlacement {
                     summary = try await cloud.summarize(meeting, template: template, vocabulary: vocabulary, model: model, effort: effort) { _ in }
                 case .thisDevice:
                     guard let local else { throw CancellationError() }
-                    summary = try await local.summarize(meeting, template: template, vocabulary: vocabulary) { _ in }
+                    summary = try await local.summarize(meeting, template: template, vocabulary: vocabulary) { _ in }.summary
                 case .mac:
                     throw CancellationError()
                 }
