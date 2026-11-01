@@ -76,6 +76,11 @@ final class FailureWordsTests: XCTestCase {
         typealias Kind = ProcessingRequest.FailureKind
         XCTAssertEqual(Kind(DaybookError.noSpeech), .noSpeech)
         XCTAssertEqual(Kind(DaybookError.invalidAudio("Call.m4a")), .plainReason)
+        XCTAssertEqual(Kind(DaybookError.libraryUnavailable), .plainReason)
+        XCTAssertEqual(Kind(DaybookError.saveFailed("No space left on device")), .other, "the system's words go behind Details")
+        let save = FailureWords(kind: Kind(DaybookError.saveFailed("No space left on device")),
+                                reason: DaybookError.saveFailed("No space left on device").localizedDescription, hadTranscripts: false, device: "this Mac")
+        XCTAssertEqual(save.message, "Something went wrong on this Mac. The recording is saved.")
         XCTAssertEqual(Kind(AudioFetchError.downloadTimedOut), .plainReason)
         XCTAssertEqual(Kind(AudioFetchError.downloadFailed("The request timed out.")), .other, "the system's words go behind Details")
         XCTAssertEqual(Kind(CloudError.badKey(.anthropic, details: "401")), .cloud(.badKey))
