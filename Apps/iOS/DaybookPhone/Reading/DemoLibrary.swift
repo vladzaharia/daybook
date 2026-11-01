@@ -6,13 +6,14 @@ import Foundation
 /// Debug only: `--library-demo` (or `--demo-library`), with `--library <scratch folder>`, fills the library with the
 /// conversations the Mac's demo has, in every state the reading screens show (DaybookKit's `ReadingDemo`), so an
 /// iPhone screenshot and a Mac snapshot of one conversation show the same content. This iPhone's saved live captions
-/// go through its caption store. Nothing is written when the library already has the demo.
+/// go through its caption store. As on the Mac, it never touches the everyday library: without `--library` nothing is
+/// written, and only into an empty scratch library, or one the demo filled before (`ReadingDemo.mayFill`).
 @MainActor
 enum DemoLibrary {
-    static var isRequested: Bool { ReadingDemo.isRequested }
+    static var isRequested: Bool { ReadingDemo.isRequested && LaunchOptions().libraryPath != nil }
 
     static func seed(_ library: LibraryController, rootURL: URL, now: Date = Date()) {
-        guard isRequested, library.isLoaded else { return }
+        guard isRequested, ReadingDemo.mayFill(library) else { return }
         let store = LiveCaptionStore(libraryRoot: rootURL)
         let finishing = ReadingDemo.seed(library, as: .iPhone, now: now) { meetingID, trackID, locale, lines in
             try? store.save(LiveCaptions(meetingID: meetingID, trackID: trackID, localeIdentifier: locale, segments: lines.map { line in

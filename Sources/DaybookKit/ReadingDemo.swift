@@ -73,6 +73,14 @@ public enum ReadingDemo {
     public static let studio = ProcessingRequest.Device(id: "demo-studio-mac", name: "Studio Mac")
     public static let phone = ProcessingRequest.Device(id: "demo-alex-iphone", name: "Alex’s iPhone")
 
+    /// Whether the demo may go into `library`: an empty one (no conversations, an empty Trash), or one it filled on
+    /// an earlier launch. Never a library with conversations of its own, whose devices would see the demo's requests.
+    public static func mayFill(_ library: LibraryController) -> Bool {
+        guard library.isLoaded else { return false }
+        if library.meetings.contains(where: { $0.title == Title.ready }) { return true }
+        return library.meetings.isEmpty && library.trashedMeetingIDs().isEmpty
+    }
+
     /// Fills `library` (loaded, a scratch one) with its conversations at once, so a launch's `--select` finds them
     /// right after. `saveCaptions` writes a conversation's saved live captions (meeting, recording, locale, lines)
     /// where the app keeps them. What takes the library's lock (photos, the Trash) and the save to disk follow in the

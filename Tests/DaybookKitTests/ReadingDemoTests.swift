@@ -72,6 +72,27 @@ final class ReadingDemoTests: XCTestCase {
         XCTAssertEqual(library.meetings.count, count)
     }
 
+    func testBehaviorTheDemoGoesOnlyIntoAnEmptyLibraryOrItsOwn() async throws {
+        let library = LibraryController(rootURL: makeTemporaryFolder("DaybookReadingDemoGuard"), sync: nil)
+        XCTAssertFalse(ReadingDemo.mayFill(library), "not loaded yet")
+        try await library.load()
+        XCTAssertTrue(ReadingDemo.mayFill(library), "empty")
+
+        // Someone's own conversation, even one in the Trash, keeps the demo out.
+        let own = library.newMeeting(title: "Planning")
+        XCTAssertFalse(ReadingDemo.mayFill(library))
+        let moved = try await library.moveToTrash(own)
+        XCTAssertTrue(moved)
+        XCTAssertTrue(library.meetings.isEmpty)
+        XCTAssertFalse(ReadingDemo.mayFill(library), "the Trash isn't empty")
+
+        // A library the demo filled on an earlier launch may be opened with it again; the seed itself writes nothing.
+        let seeded = LibraryController(rootURL: makeTemporaryFolder("DaybookReadingDemoAgain"), sync: nil)
+        try await seeded.load()
+        await ReadingDemo.seed(seeded, as: .iPhone) { _, _, _, _ in }?.value
+        XCTAssertTrue(ReadingDemo.mayFill(seeded))
+    }
+
     func testBehaviorOnAMacTheRequestsAreTheIPhones() async throws {
         let library = LibraryController(rootURL: makeTemporaryFolder("DaybookReadingDemoMac"), sync: nil)
         try await library.load()
