@@ -95,4 +95,18 @@ final class SettingsWordsTests: XCTestCase {
         XCTAssertNil(SheetCreaseSplit<EmptyView, EmptyView, EmptyView>.crease(
             width: 402, placement: WindowPlacement(windowWidth: 402, minX: 0)))
     }
+
+    // MARK: Cloud
+
+    func testTheCloudRowSaysWhatSummariesUse() {
+        XCTAssertEqual(CloudSetup.demo(providers: [], defaults: makeTestDefaults()).summary, "Off", "Nothing until a key is set")
+        let openAI = CloudSetup.demo(providers: [.openai], defaults: makeTestDefaults())
+        XCTAssertEqual(openAI.summary, "GPT-6.1 Sol", "The model Balanced resolves to")
+        openAI.choose(.economy)
+        XCTAssertEqual(openAI.summary, "GPT-6.1 Terra")
+        openAI.preferences.policy = .never
+        XCTAssertEqual(openAI.summary, "Never")
+        XCTAssertEqual(CloudTier.allCases.map(CloudSettingsScreen.title), ["Best", "Balanced", "Economy"])
+        XCTAssertEqual(CloudEffort.allCases.map(CloudSettingsScreen.title), ["Low", "Medium", "High"])
+    }
 }

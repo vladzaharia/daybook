@@ -19,10 +19,12 @@ import Foundation
 ///     --interface-orientation portrait|landscape   turn the interface in table mode (the simulator can't turn the device)
 ///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
 ///     --caption-probe [file]     log what live captions can do here (and, if ready, caption the file); never downloads
-///     --open-settings [icloud|macs|devices|device|device-details|pairing|storage|templates|template|vocabulary|recording|
-///                      library-devices|about|acknowledgements|add-device|add-recorder|add-term]
+///     --open-settings [icloud|macs|devices|device|device-details|pairing|storage|models|cloud|cloud-key|templates|template|
+///                      vocabulary|recording|library-devices|about|acknowledgements|add-device|add-recorder|add-term]
 ///                                (add-device goes straight to Soundcore's setup; add-recorder stays on the list of kinds;
 ///                                add-term is Vocabulary with Add Term showing)
+///     --cloud-demo none|anthropic|both|never|failed   Settings › Cloud with in-memory keys and the catalog's models (no
+///                                network, no keychain); open it with --open-settings cloud (failed: cloud-key)
 ///     --scroll-end               a Settings screen opened with --open-settings, scrolled to its foot
 ///     --posture closed|open|partial[:degrees]   force the fold posture (see DevicePosture)
 ///     --show-posture             show the posture in a small badge
