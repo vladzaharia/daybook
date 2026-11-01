@@ -39,7 +39,9 @@ public final class LibraryController {
     /// The sync folder, when the app has one. Saves ask it to sync.
     public let sync: LibrarySyncController?
 
-    @ObservationIgnored private var store: MeetingStore?
+    /// The one store over the library's folder, for this module's extensions too: every write goes through it, so
+    /// the durability barrier (`flushDurably`) flushes what each wrote. Nil until `load`.
+    @ObservationIgnored private(set) var store: MeetingStore?
     @ObservationIgnored private var glossaryStore: GlossaryStore?
     /// Saves, coalesced and written in the background (`LibrarySaveQueue`).
     private let saves = LibrarySaveQueue()

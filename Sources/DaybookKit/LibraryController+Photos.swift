@@ -26,7 +26,7 @@ extension LibraryController {
     @discardableResult
     public func addPhoto(from url: URL, to id: UUID, timing: PhotoTimingInput = .fromFile, origin: PhotoOrigin? = nil,
                          fileName: String? = nil, now: Date = Date()) async throws -> MeetingPhoto {
-        guard let meeting = meeting(id) else { throw DaybookError.libraryUnavailable }
+        guard let store, let meeting = meeting(id) else { throw DaybookError.libraryUnavailable }
         let metadata = await Task.detached { PhotoMetadata.read(url) }.value
         guard let width = metadata.pixelWidth, let height = metadata.pixelHeight, width > 0, height > 0 else {
             throw PhotoStoreError.unsupportedImage(fileName ?? url.lastPathComponent)
@@ -35,7 +35,6 @@ extension LibraryController {
         if let moment = timing.capturedAt { (capturedAt, source) = (moment, .camera) }
         else if let moment = metadata.capturedAt { (capturedAt, source) = (moment, .metadata) }
         else { (capturedAt, source) = (now, .added) }
-        let store = try MeetingStore(rootURL: rootURL)
         let size = metadata.pixelWidth.flatMap { width in metadata.pixelHeight.map { (width, $0) } }
         let stored = try await store.storePhoto(from: url, in: meeting, fileName: fileName, capturedAt: capturedAt, capturedAtSource: source,
                                                 trackID: timing.trackID, time: timing.time, origin: origin, pixelSize: size)
@@ -103,7 +102,8 @@ extension LibraryController {
     /// Where a photo's original is in the library. On an iPhone it may not be there yet; the sync
     /// controller's `fetchPhoto` brings it.
     public func photoURL(for photo: MeetingPhoto, in id: UUID) async throws -> URL {
-        try await MeetingStore(rootURL: rootURL).photoURL(for: photo, in: id)
+        guard let store else { throw DaybookError.libraryUnavailable }
+        return try await store.photoURL(for: photo, in: id)
     }
 
     /// Whether a photo's original is in this library now.

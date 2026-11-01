@@ -1,9 +1,9 @@
 import CoreGraphics
-import DaybookCore
 import DaybookTestSupport
 import ImageIO
 import UniformTypeIdentifiers
 import XCTest
+@testable import DaybookCore
 @testable import DaybookKit
 
 @MainActor
@@ -71,6 +71,37 @@ final class PhotoLibraryTests: XCTestCase {
         let reopened = LibraryController(rootURL: library.rootURL, sync: nil)
         try await reopened.load()
         XCTAssertEqual(reopened.meeting(id)?.visiblePhotos.map(\.id), [photo.id])
+    }
+
+    /// A pasted or captured photo's temporary original is gone once it's added, so the library's copy must reach
+    /// permanent storage at the next durability barrier, as the conversation that refers to it does.
+    func testBehaviorAnAddedPhotoIsFlushedByTheLibrarysDurabilityBarrier() async throws {
+        let library = LibraryController(rootURL: root.appendingPathComponent("Library"), sync: nil)
+        try await library.load()
+        let id = library.newMeeting(title: "Whiteboard")
+        let store = try XCTUnwrap(library.store)
+        try await library.flushDurably()
+        await library.acquireLock()
+        let photo = try await library.addPhoto(data: try jpeg(), to: id)
+        library.releaseLock()
+
+        let url = try await library.photoURL(for: photo, in: id).standardizedFileURL
+        let pending = await store.unsynchronizedWrites
+        XCTAssertTrue(pending.contains(url), "\(pending.map(\.path))")
+        XCTAssertTrue(pending.contains(url.deletingLastPathComponent()), "Its Originals/Photos folder too")
+        try await library.flushDurably([id])
+        let flushed = await store.unsynchronizedWrites
+        XCTAssertTrue(flushed.isEmpty, "\(flushed.map(\.path))")
+    }
+
+    func testBehaviorPhotosNeedAnOpenLibrary() async throws {
+        let library = LibraryController(rootURL: root.appendingPathComponent("Library"), sync: nil)
+        let photo = MeetingPhoto(relativePath: "Originals/Photos/a.jpg", fileName: "a.jpg", sha256: "", capturedAt: Date())
+        do {
+            _ = try await library.photoURL(for: photo, in: UUID())
+            XCTFail("Not loaded")
+        } catch DaybookError.libraryUnavailable {
+        } catch { XCTFail("\(error)") }
     }
 
     func testExportWritesPhotosAndKeepsExistingSiblingFolders() throws {
