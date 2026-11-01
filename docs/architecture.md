@@ -18,6 +18,10 @@ The package builds the shared logic for macOS 15 and iOS 26, so the Mac app and 
 
 `ProcessingStatus` is derived per conversation from its data, its synced requests, and the device's own queue (a Mac's, or the iPhone's for its own recordings); the list rows and the conversation page both read it, and the iPhone uses the same definition. Which requests a device that processes its own recordings carries out, under the same claims, is `OnDeviceProcessing` ([iPhone](iphone.md#processing-on-this-iphone)). Where a summary runs (this device, a Mac, or the cloud, after a countdown that offers the cloud first) is one planner both apps share (`SummaryPlacementPlanner`, [multipoint](multipoint.md#where-summaries-run)): the Mac's queue and the iPhone's processor hand it the summary once the transcript is fused, and a summary placed on the iPhone comes back to its processor. The Mac's processing queue (`AppState.process`) stays in the app: it orders work, places new recordings, applies each recording's result as it arrives, moves recordings between conversations, and proposes vocabulary, calling the engine through the seam for transcripts, speakers, and summaries.
 
+## Bundle IDs and distribution
+
+The Mac app (`Apps/macOS/project.yml`) and the iPhone app (`Apps/iOS/project.yml`) are two Xcode targets over the same package, one per platform. They ship together as one App Store Connect record, `local.daybook.phone`, the iPhone app's: universal purchase needs one bundle ID on every platform. So the Mac's sandboxed builds (the App Store and TestFlight build, and Developer ID with the sandbox) run as `local.daybook.phone` too, and the unsandboxed Developer ID download on GitHub stays `local.daybook.app` (`AppIdentity`). Both Mac identities share the iCloud container `iCloud.local.daybook`, the keychain groups `<team>.local.daybook.app` and `<team>.local.daybook.shared`, and the library format; moving between them moves the library (docs/sandbox.md, "Changing bundle ID"; docs/release.md, "Mac on TestFlight"). Mac Catalyst and running the iPhone app on a Mac were weighed and left out (docs/research/one-bundle.md).
+
 ## Components and data flow
 
 ```mermaid
