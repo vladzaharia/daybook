@@ -23,7 +23,7 @@ struct ConversationList: View {
         }
         .navigationTitle(title)
         // The subtitle follows a download's percent without redrawing the list.
-        .modifier(ListSubtitle(download: state.downloadActivity) { subtitle })
+        .modifier(ListSubtitle(download: state.downloadActivity, placements: state.placements) { subtitle(at: $0) })
         .safeAreaInset(edge: .top, spacing: 0) { LibraryNotice(state: state) }
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in importAudio(urls) } isTargeted: { isDropTargeted = $0 }
@@ -137,15 +137,17 @@ struct ConversationList: View {
         }
     }
 
-    /// Says something only while work is happening (a selection's count is on the page).
-    private var subtitle: String {
+    /// Says something only while work is happening (a selection's count is on the page). While the running job's
+    /// summary counts down, or runs in the cloud, it says that: "Summarizing in 12 s".
+    private func subtitle(at now: Date) -> String {
         if state.isSearching {
             let count = state.searchHits.count
             return count == 1 ? "1 result" : "\(count) results"
         }
         if state.isStoppingRecording { return "Saving recording…" }
         if state.isRecording { return "Recording" }
-        if state.processingID != nil {
+        if let id = state.processingID {
+            if let placing = state.placements[id]?.shortLine(at: now) { return placing }
             let total = state.queuedIDs.count + 1
             return total > 1 ? "Transcribing 1 of \(total)" : "Transcribing"
         }
@@ -161,12 +163,19 @@ struct ConversationList: View {
     }
 }
 
-/// The list's subtitle, redrawn by a download's progress on its own.
+/// The list's subtitle, redrawn by a download's progress and a summary's countdown on their own: a countdown's
+/// seconds once a second.
 private struct ListSubtitle: ViewModifier {
     @ObservedObject var download: ActivityProgress
-    let text: () -> String
+    @ObservedObject var placements: SummaryPlacements
+    let text: (Date) -> String
 
-    func body(content: Content) -> some View { content.navigationSubtitle(text()) }
+    func body(content: Content) -> some View {
+        let counting = placements.planners.values.contains { $0.deadline != nil }
+        TimelineView(.periodic(from: .now, by: counting ? 1 : 3_600)) { context in
+            content.navigationSubtitle(text(context.date))
+        }
+    }
 }
 
 // MARK: - Rows

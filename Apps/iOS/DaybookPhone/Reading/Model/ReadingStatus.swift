@@ -70,7 +70,7 @@ struct StatusPresentation: Equatable {
         case .requested(let waiting):
             let mode: ProcessingRequest.Mode
             if case .device(let request) = waiting { mode = request.mode } else { mode = .newAudio }
-            return StatusPresentation(kind: .line, symbol: "clock", title: waitingTitle(mode),
+            return StatusPresentation(kind: .line, symbol: "clock", title: waitingTitle(mode, summarized: meeting.summary != nil),
                                       detail: MacSighting.line(sighting, now: now))
         case .processing(let progress):
             return StatusPresentation(kind: .line, symbol: progress.device == nil ? "iphone" : "desktopcomputer", title: workingTitle(progress),
@@ -136,14 +136,17 @@ struct StatusPresentation: Equatable {
         return nil
     }
 
-    /// The row's words and glyph when a conversation isn't ready; nil when everything is fine.
-    static func row(_ status: ProcessingStatus) -> RowStatus? {
+    /// The row's words and glyph when a conversation isn't ready; nil when everything is fine. `meeting`, when
+    /// given, tells a first summary from Summarize Again.
+    static func row(_ status: ProcessingStatus, meeting: Meeting? = nil) -> RowStatus? {
         switch status {
         case .recorded: return RowStatus(kind: .notTranscribed, text: "Not transcribed yet")
         case .requested(.queued): return RowStatus(kind: .waiting, text: "Waiting on this iPhone")
         case .requested(.paused): return RowStatus(kind: .waiting, text: "Paused")
         case .requested(let waiting):
-            if case .device(let request) = waiting { return RowStatus(kind: .waiting, text: waitingTitle(request.mode)) }
+            if case .device(let request) = waiting {
+                return RowStatus(kind: .waiting, text: waitingTitle(request.mode, summarized: meeting?.summary != nil))
+            }
             return RowStatus(kind: .waiting, text: "Waiting for your Mac")
         case .processing(let progress):
             return RowStatus(kind: .processing, text: workingTitle(progress), fraction: progress.fraction)
@@ -153,10 +156,11 @@ struct StatusPresentation: Equatable {
         }
     }
 
-    static func waitingTitle(_ mode: ProcessingRequest.Mode) -> String {
+    /// What a request waiting for a Mac says. A Summarize request says "again" only when there's a summary already.
+    static func waitingTitle(_ mode: ProcessingRequest.Mode, summarized: Bool = false) -> String {
         switch mode {
         case .newAudio: return "Waiting for your Mac"
-        case .summaryOnly: return "Waiting for your Mac to summarize again"
+        case .summaryOnly: return summarized ? "Waiting for your Mac to summarize again" : "Waiting for your Mac to summarize"
         case .speakerRefresh: return "Waiting for your Mac to identify speakers again"
         case .fullRetranscription: return "Waiting for your Mac to transcribe everything again"
         }

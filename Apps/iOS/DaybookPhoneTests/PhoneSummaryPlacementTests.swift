@@ -137,7 +137,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let sent = try XCTUnwrap(summaryRequests(rig.library, id).first)
         XCTAssertNil(sent.claim, "Sent as a Summarize request, for the Mac to claim")
         XCTAssertEqual(StatusPresentation.page(ProcessingStatus(try XCTUnwrap(rig.library.meeting(id))), meeting: try XCTUnwrap(rig.library.meeting(id)),
-                                               sighting: nil)?.title, "Waiting for your Mac to summarize again")
+                                               sighting: nil)?.title, "Waiting for your Mac to summarize", "Its first summary")
     }
 
     func testBehaviorWithoutAKeyItGoesToTheMacAtOnce() async throws {

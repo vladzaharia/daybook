@@ -166,6 +166,35 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Summarizing · 60%")
     }
 
+    func testMacLineCountsDownWithAMacsCountdownOrThisIPhonesToAMac() {
+        var inputs = StatusInputs()
+        inputs.mac = .connected(name: "Studio Mac")
+        let id = UUID()
+        inputs.liveProgress = [LiveProgress(LinkProcessingProgress(meetingID: id, phase: .summaryCountdown, macName: "Studio Mac",
+                                                                   countdown: LinkSummaryCountdown(secondsLeft: 12, cloudOffered: true)), receivedAt: now)]
+        let mac = StatusSheetModel.macLine(inputs, now: now)
+        XCTAssertEqual(mac.title, "Studio Mac")
+        XCTAssertEqual(mac.text, "Summarizing in 12 s")
+        XCTAssertEqual(mac.countdownUntil, now.addingTimeInterval(12))
+        XCTAssertEqual(mac.text(at: now.addingTimeInterval(3)), "Summarizing in 9 s", "it ticks")
+
+        // This iPhone counting down to sending one to Studio Mac.
+        inputs.liveProgress = []
+        var entry = StatusQueueEntry(id: id, title: "A", line: "Summarizing on Studio Mac in 15 s", requestedHere: false, progress: nil,
+                                     isRunning: false, countdownUntil: now.addingTimeInterval(15))
+        entry.isRunning = true
+        entry.mac = "Studio Mac"
+        entry.countdownPlace = "on Studio Mac"
+        inputs.queue = [entry]
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Summarizing in 15 s")
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text(at: now.addingTimeInterval(5)), "Summarizing in 10 s")
+        // Counting down to summarizing on this iPhone: nothing for the Mac's line.
+        entry.mac = nil
+        entry.countdownPlace = "on this iPhone"
+        inputs.queue = [entry]
+        XCTAssertEqual(StatusSheetModel.macLine(inputs, now: now).text, "Connected")
+    }
+
     func testSyncLineTone() {
         var inputs = StatusInputs()
         inputs.syncLine = "Up to date"; inputs.syncTone = .upToDate
