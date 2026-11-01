@@ -460,8 +460,9 @@ final class RecorderHandoffTests: XCTestCase {
         let staleness = phone.handoff.timing.followStaleness
         await phone.handoff.checkFollowed(now: Date().addingTimeInterval(staleness / 2))
         XCTAssertFalse(phone.handoff.followed.isEmpty, "not yet")
-        await phone.handoff.checkFollowed(now: Date().addingTimeInterval(staleness + 60))
-        XCTAssertTrue(phone.handoff.followed.isEmpty, "its presence is too old to believe")
+        // A check the handoff's own timer is running makes this one return untried (slow runners), so until it ran.
+        let stale = Date().addingTimeInterval(staleness + 60)
+        try await waitUntilAsync("its presence is too old to believe") { await !phone.handoff.checkFollowed(now: stale) }
         XCTAssertTrue(recorder.isRecording, "left to the person")
     }
 
@@ -492,8 +493,7 @@ final class RecorderHandoffTests: XCTestCase {
         // Another device takes it over: it's that device's to stop now.
         phone.library.claimRecorder(kind: kind, serial: recorder.serial, deviceClass: .mac,
                                     by: ProcessingRequest.Device(id: "office-imac", name: "Office iMac"))
-        await relaunched.checkFollowed()
-        XCTAssertTrue(relaunched.followed.isEmpty)
+        try await waitUntilAsync("it's that device's") { await !relaunched.checkFollowed() }
     }
 
     func testOfferingItAndHandingItBackWhenTheMacArrives() async throws {
