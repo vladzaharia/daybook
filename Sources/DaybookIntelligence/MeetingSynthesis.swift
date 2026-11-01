@@ -290,7 +290,7 @@ public enum MeetingSynthesis {
         // Quotes are checked against the recorded transcript, never the notes, before accepting actions.
         // A conversation too long for one pass is read in parts, word for word: compressed evidence keeps
         // only paraphrases, which no quote from it can match.
-        let parts = await transcriptParts(transcript, model: model, tokenLimit: evidenceBudget)
+        let parts = await transcriptParts(transcript, model: model, tokenLimit: evidenceBudget, evenly: false)
         var actionResponses: [String] = []
         for (index, part) in parts.enumerated() {
             try Task.checkCancellation()
@@ -431,8 +431,12 @@ public enum MeetingSynthesis {
 
     /// The transcript in parts of at most `tokenLimit` tokens and about the same size, split between
     /// passages; each part after the first starts with the two passages before it, so an answer ("Sure,
-    /// I'll post it today") keeps the request it answers. One part when it fits.
-    static func transcriptParts(_ transcript: String, model: any SynthesisModel, tokenLimit: Int) async -> [String] {
+    /// I'll post it today") keeps the request it answers. One part when it fits. `evenly: false` keeps the
+    /// commitments passes' parts as they were tuned (an even share with a tenth to spare), evening them out only
+    /// where that leaves a part under half the size of another: moved to even shares, the weekly's two parts
+    /// split at another passage, and Gemma 4 E2B kept 12 of its 38 commitments rather than 17, the 26B 35
+    /// rather than 36 (docs/validation.md, 2026-10-31).
+    static func transcriptParts(_ transcript: String, model: any SynthesisModel, tokenLimit: Int, evenly: Bool = true) async -> [String] {
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         guard await model.encode(transcript).count > tokenLimit else { return [transcript] }
         // Each passage with its cost; one longer than a part (a transcript without line breaks) is split by tokens.
@@ -444,14 +448,14 @@ public enum MeetingSynthesis {
         let average = lines.reduce(0) { $0 + $1.cost } / max(1, lines.count)
         var rest = Array(repeating: 0, count: lines.count + 1)   // What the passages from each one on cost.
         for index in lines.indices.reversed() { rest[index] = rest[index + 1] + lines[index].cost }
-        // Parts up to `target`; with `count`, each part closes nearest an even share of what's left (counting the
-        // passages each later part repeats), so the parts come out even.
-        func split(target: Int, count: Int? = nil) -> [String] {
-            var parts: [String] = [], current: [(line: String, cost: Int)] = [], spent = 0
+        // Parts up to `target`, with what each costs; with `count`, each part closes nearest an even share of what's
+        // left (counting the passages each later part repeats), so the parts come out even.
+        func split(target: Int, count: Int? = nil) -> [(text: String, cost: Int)] {
+            var parts: [(text: String, cost: Int)] = [], current: [(line: String, cost: Int)] = [], spent = 0
             for (index, (line, cost, pieces)) in lines.enumerated() {
                 if let pieces {
-                    if !current.isEmpty { parts.append(current.map(\.line).joined(separator: "\n")); current = []; spent = 0 }
-                    parts += pieces
+                    if !current.isEmpty { parts.append((current.map(\.line).joined(separator: "\n"), spent)); current = []; spent = 0 }
+                    parts += pieces.map { ($0, tokenLimit) }
                     continue
                 }
                 var goal = target
@@ -460,28 +464,33 @@ public enum MeetingSynthesis {
                     goal = min(target, (spent + rest[index] + 2 * average * (left - 1)) / left)
                 }
                 if current.count > 2, spent + cost > target || spent + cost / 2 > goal {
-                    parts.append(current.map(\.line).joined(separator: "\n"))
+                    parts.append((current.map(\.line).joined(separator: "\n"), spent))
                     current = Array(current.suffix(2))
                     spent = current.reduce(0) { $0 + $1.cost }
                 }
                 current.append((line, cost))
                 spent += cost
             }
-            if !current.isEmpty { parts.append(current.map(\.line).joined(separator: "\n")) }
+            if !current.isEmpty { parts.append((current.map(\.line).joined(separator: "\n"), spent)) }
             return parts
+        }
+        if !evenly {
+            let count = (rest[0] + tokenLimit - 1) / tokenLimit, share = rest[0] / count
+            let tuned = split(target: min(tokenLimit, share + share / 10))
+            if let smallest = tuned.map(\.cost).min(), let largest = tuned.map(\.cost).max(), smallest * 2 >= largest { return tuned.map(\.text) }
         }
         // As few parts as full ones take, in even shares: filled to the limit, a three-hour meeting's 12,000-token
         // parts left a last one of 828 tokens (docs/validation.md, 2026-10-31).
         let fewest = split(target: tokenLimit).count
         let even = split(target: tokenLimit, count: fewest)
-        if even.count <= fewest { return even }
+        if even.count <= fewest { return even.map(\.text) }
         // Where the shares can't fall evenly, parts as small as that count allows.
         var low = 1, high = tokenLimit
         while low < high {
             let middle = (low + high) / 2
             if split(target: middle).count <= fewest { high = middle } else { low = middle + 1 }
         }
-        return split(target: low)
+        return split(target: low).map(\.text)
     }
 
     /// The notes and bookmarks that fit `budget`, in order: notes and bookmarks with words first.
