@@ -325,6 +325,67 @@ final class CascadingRecordingTests: XCTestCase {
 }
 
 extension CascadingRecordingTests {
+    // MARK: Levels
+
+    /// Readings gather as the meter takes them and go a few at a time, about five times a second, as a
+    /// meter shows them.
+    func testBehaviorLevelsGoAFewReadingsAtATime() {
+        var share = LevelShare()
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        XCTAssertEqual(share.add(0.123, at: t0), [0.12], "the first at once")
+        var sent: [[Double]] = []
+        for tick in 1...15 {
+            if let values = share.add(1.4, at: t0.addingTimeInterval(Double(tick) / 15)) { sent.append(values) }
+        }
+        XCTAssertTrue((4...5).contains(sent.count), "about five times a second: \(sent.count)")
+        XCTAssertTrue(sent.allSatisfy { $0.count >= 2 && $0.count <= 4 }, "a few readings each: \(sent)")
+        XCTAssertEqual(Set(sent.joined()), [1], "kept to 0…1")
+        for tick in 0..<(LinkLevels.maximumValues + 10) { _ = share.add(0.5, at: t0.addingTimeInterval(1.1 + Double(tick) * 0.001)) }
+        XCTAssertLessThanOrEqual(share.pending.count, LinkLevels.maximumValues, "never more than one message carries")
+    }
+
+    /// A Mac recording this conversation too that draws other devices' levels gets this iPhone's, a few
+    /// readings at a time; one that doesn't list `liveLevels` (an older Mac) gets none.
+    func testBehaviorAMacRecordingAlongGetsThisIPhonesLevelOnlyWhenItDrawsIt() async throws {
+        for draws in [true, false] {
+            let features = [LinkCapabilities.cascadeFeature] + (draws ? [LinkCapabilities.liveLevelsFeature] : [])
+            let mac = try await makeMac(features: features)
+            let inbox = LinkServicesTests.MacInbox(mac.service.events())
+            let macRecorder = LinkServicesTests.RecordingMac()
+            await mac.service.setRecordControlHandler { _, request in await macRecorder.handle(request) }
+            let link = makeLink()
+            let rig = RecorderRig()
+            let model = try makeModel(link: link, rig: rig)
+            try await pair(link, with: mac)
+            XCTAssertEqual(link.macs.first?.showsLevels, draws, "from its capabilities")
+
+            try await model.startRecording()
+            let id = try XCTUnwrap(model.recorder.captureID)
+            try await waitUntil("the Mac records too") { model.multipoint?.recordingMacs.map(\.id) == [mac.id] }
+            XCTAssertEqual(model.macsShowingLevels(id), draws ? [mac.id] : [])
+            let t0 = Date()
+            for tick in 0..<8 {
+                rig.pump(1.0 / 15)
+                model.shareLevel(AudioLevel(rms: -18, peak: -9), at: t0.addingTimeInterval(Double(tick) / 15))
+            }
+            if draws {
+                // The tone's level, as this iPhone's meter reads it (silent until the first audio).
+                try await waitUntil("its level at the Mac") { inbox.levels.contains { $0.values.contains { $0 > 0.5 } } }
+                let levels = inbox.levels
+                XCTAssertTrue(levels.allSatisfy { $0.conversationID == id })
+                XCTAssertTrue(levels.allSatisfy { !$0.values.isEmpty && $0.values.allSatisfy { (0...1).contains($0) } })
+                XCTAssertEqual(levels.first?.interval ?? 0, PhoneRecorder.levelInterval, accuracy: 0.0001)
+            } else {
+                try await Task.sleep(for: .milliseconds(300))
+                XCTAssertTrue(inbox.levels.isEmpty, "an older Mac is never sent levels")
+            }
+            rig.pump(1)
+            try await model.stopRecording()
+            try await eventually("the Mac stops too") { await macRecorder.recording == nil }
+            await link.setActivity(.background)
+        }
+    }
+
     /// Polls a condition that awaits (the Mac's actor) until it holds.
     func eventually(_ what: String, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line,
                     _ condition: () async -> Bool) async throws {
@@ -340,5 +401,8 @@ extension CascadingRecordingTests {
 private extension LinkServicesTests.MacInbox {
     var notes: [LinkNote] {
         all.compactMap { if case .received(.note(let note), _) = $0 { return note } else { return nil } }
+    }
+    var levels: [LinkLevels] {
+        all.compactMap { if case .received(.levels(let levels), _) = $0 { return levels } else { return nil } }
     }
 }

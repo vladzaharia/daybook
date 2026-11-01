@@ -349,6 +349,8 @@ extension LinkCapabilities {
     public static let sharedNotesFeature = "sharedNotes"
     /// Shows the other device's live captions of a shared recording beside its own (`captions`).
     public static let liveCaptionsFeature = "liveCaptions"
+    /// Draws the other device's input level during a shared recording beside its own meters (`levels`).
+    public static let liveLevelsFeature = "liveLevels"
     /// Counts down before summarizing and says so (`processing.progress` with `summaryCountdown`), and takes
     /// the person's choice from the other device (`processing.choice`: Use the Cloud, Start Now).
     public static let summaryPlacementFeature = "summaryPlacement"
@@ -357,6 +359,7 @@ extension LinkCapabilities {
     public var cascades: Bool { features.contains(Self.cascadeFeature) }
     public var sharesNotes: Bool { features.contains(Self.sharedNotesFeature) }
     public var showsCaptions: Bool { features.contains(Self.liveCaptionsFeature) }
+    public var showsLevels: Bool { features.contains(Self.liveLevelsFeature) }
     public var placesSummaries: Bool { features.contains(Self.summaryPlacementFeature) }
 }
 
@@ -596,6 +599,38 @@ public struct LinkCaptions: Codable, Sendable, Equatable {
     }
 }
 
+/// The sender's input level during a shared recording, for a device recording it too to draw beside
+/// its own meters: the readings its level meter took since it last sent, oldest first, a few times a
+/// second. Feedback like live captions: never stored or synced.
+public struct LinkLevels: Codable, Sendable, Equatable {
+    /// The most readings one message carries; a receiver drops the rest.
+    public static let maximumValues = 30
+
+    public var conversationID: UUID
+    /// Meter readings, 0…1 (−60…0 dBFS), oldest first and `interval` apart: the last is the newest.
+    public var values: [Double]
+    /// Seconds between readings.
+    public var interval: TimeInterval
+    public var sentAt: Date
+
+    public init(conversationID: UUID, values: [Double], interval: TimeInterval = 1.0 / 15, sentAt: Date = Date()) {
+        self.conversationID = conversationID
+        self.values = values
+        self.interval = interval
+        self.sentAt = sentAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        conversationID = try c.decode(UUID.self, forKey: .conversationID)
+        values = (try c.decodeIfPresent([Double].self, forKey: .values) ?? []).prefix(Self.maximumValues)
+            .map { $0.isFinite ? min(1, max(0, $0)) : 0 }
+        let interval = try c.decodeIfPresent(TimeInterval.self, forKey: .interval) ?? 1.0 / 15
+        self.interval = interval.isFinite && interval > 0 ? interval : 1.0 / 15
+        sentAt = try c.decodeIfPresent(Date.self, forKey: .sentAt) ?? Date()
+    }
+}
+
 /// Live progress of processing on a Mac. Coarse progress also travels through sync.
 public struct LinkProcessingProgress: Codable, Sendable, Equatable {
     public struct Phase: LinkOpenValue {
@@ -738,6 +773,9 @@ public enum LinkMessage: Sendable, Equatable {
     /// Live captions of a shared recording, for a device that shows them (`liveCaptionsFeature`).
     /// Additive within version 1: an older build ignores them.
     case captions(LinkCaptions)
+    /// An iPhone's input level during a shared recording, for a Mac that draws it (`liveLevelsFeature`).
+    /// Additive within version 1: an older build ignores them.
+    case levels(LinkLevels)
     /// The person's choice on a phone for a summary a Mac counts down to (`summaryPlacementFeature`).
     /// Additive within version 1: an older build ignores it.
     case summaryChoice(LinkSummaryChoice)

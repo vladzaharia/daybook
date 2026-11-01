@@ -188,6 +188,8 @@ final class AppState: ObservableObject {
     let recorder = RecordingController()
     /// Live captions while this Mac records (You and Call), and their setting and language.
     let captions: LiveCaptionsController
+    /// The input levels iPhones recording along send, for Floating Notes' meters (App/PhoneLevels.swift).
+    let phoneLevels = PhoneLevels()
     let captionSettings: LiveCaptionSettings
     /// Live transcription from local models, when they're downloaded (Captions/MacLiveModels.swift).
     let liveModels: MacLiveModels

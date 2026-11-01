@@ -123,6 +123,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// This iPhone's captions going to each Mac recording the same conversation (`shareCaptions`).
     @ObservationIgnored private var captionShares: [UUID: CaptionShare] = [:]
     @ObservationIgnored private var captionSharing: Task<Void, Never>?
+    /// This iPhone's level readings on their way to the Macs recording with it that draw them (`shareLevel`).
+    @ObservationIgnored private var levelShare = LevelShare()
     /// Heat, power, and battery changes the processor backs off for.
     @ObservationIgnored private var processingObservers: [NSObjectProtocol] = []
 
@@ -626,10 +628,35 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     /// The connected Macs recording this conversation too that show other devices' captions.
     func macsShowingCaptions(_ id: UUID) -> [UUID] {
+        macsRecording(id) { $0.showsCaptions }
+    }
+
+    /// The connected Macs recording this conversation too that draw this iPhone's level.
+    func macsShowingLevels(_ id: UUID) -> [UUID] {
+        macsRecording(id) { $0.showsLevels }
+    }
+
+    private func macsRecording(_ id: UUID, where shows: (PhoneLink.Mac) -> Bool) -> [UUID] {
         link.connectedMacs.filter { mac in
-            mac.showsCaptions && (mac.recording?.takesPart(in: id) == true
+            shows(mac) && (mac.recording?.takesPart(in: id) == true
                 || multipoint.map { $0.conversationID == id && $0.macs.contains { $0.id == mac.id && $0.state == .recording } } == true)
         }.map(\.id)
+    }
+
+    // MARK: Levels for the Macs recording along
+
+    /// While this iPhone records a conversation with Macs that draw its level, its meter's readings go to
+    /// them over the local link, a few at a time about five times a second (`LinkLevels`), so the Mac
+    /// meters every source. Paused, none go: the Mac's meter for this iPhone rests.
+    func shareLevel(_ level: AudioLevel, at now: Date = Date()) {
+        guard recorder.state == .recording, let id = recorder.captureID else {
+            levelShare = LevelShare()
+            return
+        }
+        guard let values = levelShare.add(level.meterValue, at: now) else { return }
+        let macs = macsShowingLevels(id)
+        guard !macs.isEmpty else { return }
+        link.sendLevels(LinkLevels(conversationID: id, values: values, interval: PhoneRecorder.levelInterval, sentAt: now), to: macs)
     }
 
     // MARK: RecordingCommandHandling
@@ -1243,6 +1270,7 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     private func levelChanged(_ level: AudioLevel) {
         levels.append(recorder.state == .recording ? level.meterValue : 0)
+        shareLevel(level)
         updateActivity()
         sendRecordingState(force: false)
         // The widgets' confirmation that it's still recording, once a minute.
