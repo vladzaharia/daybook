@@ -238,22 +238,21 @@ extension AppState {
 
     // MARK: After a sync pass
 
-    /// Stops work on requests another device now holds or that finished elsewhere: the running
-    /// job (not paused; the request isn't this Mac's any more) and queued ones.
+    /// Stops work on requests another device now holds or that finished elsewhere (`ProcessingRequest.isLost`, as on
+    /// the iPhone): the running job (not paused; the request isn't this Mac's any more) and queued ones. A job of this
+    /// Mac's own, with no request, is never lost; one whose request went with its conversation is.
     func reconcileClaims() {
-        let me = library.thisDevice.id, now = Date()
+        let me = library.thisDevice, now = Date()
         func lost(_ job: ProcessingJob) -> Bool {
-            guard let requestID = job.requestID, let request = request(requestID, in: job.meetingID) else { return job.requestID != nil }
-            if !request.isOpen { return true }
-            guard let holder = request.activeClaim(at: now) else { return false }
-            return holder.device.id != me
+            guard let requestID = job.requestID else { return false }
+            return request(requestID, in: job.meetingID)?.isLost(for: me, at: now) ?? true
         }
         if let running = runningJob, lost(running), currentRequest?.isCancelled == false {
             claimsLost.insert(running.meetingID)
             currentRequest?.cancel()
             if let request = running.requestID.flatMap({ request($0, in: running.meetingID) }), request.isOpen,
-               let holder = request.activeClaim(at: now)?.device.name {
-                notice = "\(holder) is transcribing “\(meetings.first { $0.id == running.meetingID }?.title ?? "a conversation")”."
+               let holder = request.activeClaim(at: now)?.device, holder.id != me.id {
+                notice = "\(holder.name) is transcribing “\(meetings.first { $0.id == running.meetingID }?.title ?? "a conversation")”."
             }
         }
         processingQueue.removeAll(where: lost)

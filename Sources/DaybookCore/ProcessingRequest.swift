@@ -317,11 +317,10 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
 
     /// Whether `device`, working on this request, has lost it: it finished elsewhere (or was given up), another
     /// device holds a live claim on it, or it was asked for in a way this version doesn't know. Both apps' queues
-    /// stop the work then, after a sync pass (the Mac's `reconcileClaims`, the iPhone's `PhoneProcessor`).
+    /// stop the work then, after a sync pass (the Mac's `reconcileClaims`, the iPhone's `PhoneProcessor`): exactly
+    /// when it's no longer `isClaimable` by that device.
     public func isLost(for device: Device, at now: Date, observations: ClaimObservations = .shared) -> Bool {
-        guard isOpen, isUnderstood else { return true }
-        guard let holder = activeClaim(at: now, observations: observations) else { return false }
-        return holder.device.id != device.id
+        !isClaimable(by: device, at: now, observations: observations)
     }
 
     // MARK: Merging

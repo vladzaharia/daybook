@@ -169,5 +169,18 @@ final class FailureWordsTests: XCTestCase {
         let lapsed = mine.isLost(for: phone, at: now.addingTimeInterval(ProcessingRequest.defaultLease + ClaimObservations.staleAfter + 1),
                                  observations: observations)
         XCTAssertFalse(lapsed)
+        // One asked for in a way this version doesn't know (a newer Daybook's mode) isn't this device's either.
+        var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(mine)) as? [String: Any])
+        json["mode"] = "translate"
+        let newer = try JSONDecoder().decode(ProcessingRequest.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(newer.isUnderstood)
+        XCTAssertTrue(newer.isLost(for: mac, at: now, observations: observations))
+        // Both queues ask the one question: lost is exactly no longer claimable.
+        for request in [request, mine, done, newer] {
+            for device in [mac, phone] {
+                XCTAssertEqual(request.isLost(for: device, at: now, observations: observations),
+                               !request.isClaimable(by: device, at: now, observations: observations))
+            }
+        }
     }
 }

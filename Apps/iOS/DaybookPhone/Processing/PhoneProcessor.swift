@@ -469,7 +469,7 @@ final class PhoneProcessor {
         for id in paused where library.meeting(id) == nil { paused.remove(id) }
         guard let current = running, stopping == nil else { pickUp(); return }
         let request = library.meeting(current.meetingID)?.processingRequests?.first { $0.id == current.requestID }
-        if request?.isClaimable(by: library.thisDevice, at: now) != true { stop(.lost) }
+        if request?.isLost(for: library.thisDevice, at: now) != false { stop(.lost) }
     }
 
     // MARK: Pausing

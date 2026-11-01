@@ -166,6 +166,38 @@ final class ProcessingRequestQueueTests: XCTestCase {
         XCTAssertTrue(failure.isNoSpeech, "Every device words it as no speech, without Try Again")
     }
 
+    func testBehaviorAfterASyncPassWorkOnALostRequestStopsAndThisMacsOwnStays() async throws {
+        let rig = try await rig()
+        let taken = try rig.audio("taken.wav", frequency: 510)
+        let takenID = try await rig.waitingConversation("Taken over", audio: taken, script: [(0, "Someone else has this.")])
+        let own = try rig.audio("own.wav", frequency: 520)
+        let ownID = try await rig.waitingConversation("Own", audio: own, script: [(0, "This Mac's own work.")])
+        rig.state.library.requestProcessing(takenID, mode: .newAudio, by: .phone)
+        try rig.inference.block(taken)
+        rig.state.pickUpRequests()
+        try await waitUntil("the job to start") { rig.inference.isWaiting(on: taken) }
+        rig.state.enqueue(ownID)
+        XCTAssertNil(rig.state.processingQueue.first { $0.meetingID == ownID }?.requestID, "queued for this Mac's own reasons")
+
+        // A sync pass brings another Mac's newer claim (`ProcessingRequest.isLost`).
+        let studio = ProcessingRequest.Device(id: "studio-mac", name: "Studio Mac")
+        var released = try XCTUnwrap(request(rig, takenID))
+        released.claim = nil
+        let theirs = try XCTUnwrap(released.claimed(by: studio, at: Date()))
+        rig.state.library.update(takenID) { $0.upsertProcessingRequest(theirs) }
+        rig.state.reconcileClaims()
+        try await waitUntil("the lost job to stop") { rig.state.processingID != takenID }
+        XCTAssertEqual(rig.state.notice, "Studio Mac is transcribing “Taken over”.")
+        XCTAssertFalse(rig.state.pausedIDs.contains(takenID), "Losing a claim isn't a pause")
+        XCTAssertEqual(request(rig, takenID)?.claim?.device, studio, "The request is the other Mac's, untouched")
+        XCTAssertEqual(request(rig, takenID)?.isOpen, true)
+
+        try rig.inference.unblock(taken)
+        try await rig.processed(ownID)
+        XCTAssertEqual(rig.meeting(ownID)?.status, .ready, "This Mac's own job went on")
+        XCTAssertEqual(rig.inference.transcribed.count, 1, "Only this Mac's own recording was transcribed")
+    }
+
     func testPauseAndCancelGiveTheClaimBack() async throws {
         let rig = try await rig()
         let audio = try rig.audio("long.wav", frequency: 500)
