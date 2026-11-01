@@ -14,3 +14,15 @@ public enum DaybookError: LocalizedError {
         }
     }
 }
+
+extension DaybookError: ProcessingFailureClassifying {
+    /// What a failed request records (`ProcessingRequest.FailureKind`): no speech is its own kind, so rewording its
+    /// sentence never turns a silent recording into one that offers Try Again. The others say what happened and what
+    /// to do in a plain sentence, shown as it is.
+    public var failureKind: ProcessingRequest.FailureKind {
+        switch self {
+        case .noSpeech: return .noSpeech
+        case .libraryUnavailable, .invalidAudio, .saveFailed: return .plainReason
+        }
+    }
+}

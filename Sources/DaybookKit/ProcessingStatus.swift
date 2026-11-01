@@ -62,10 +62,19 @@ public enum ProcessingStatus: Equatable, Sendable {
         public var device: ProcessingRequest.Device?
         /// The failed request, when there was one; Try Again writes a new request.
         public var request: ProcessingRequest?
+        /// What kind of failure it was, as the request's outcome stored it; for an older record, or a failure kept
+        /// only on the conversation, what `reason` says (`FailureKind(legacyMessage:)`). Both apps word it from
+        /// this (`FailureWords`), never from `reason`.
+        public var kind: ProcessingRequest.FailureKind
 
-        public init(reason: String, hadTranscripts: Bool, device: ProcessingRequest.Device? = nil, request: ProcessingRequest? = nil) {
+        public init(reason: String, hadTranscripts: Bool, device: ProcessingRequest.Device? = nil, request: ProcessingRequest? = nil,
+                    kind: ProcessingRequest.FailureKind? = nil) {
             self.reason = reason; self.hadTranscripts = hadTranscripts; self.device = device; self.request = request
+            self.kind = kind ?? ProcessingRequest.FailureKind(legacyMessage: reason)
         }
+
+        /// Trying again can't find speech that isn't there.
+        public var isNoSpeech: Bool { kind == .noSpeech }
     }
 
     /// What this device's processing queue is doing: the Mac's, and the iPhone's own recordings'
@@ -134,14 +143,18 @@ public enum ProcessingStatus: Equatable, Sendable {
         let lastFailure = (meeting.processingRequests ?? []).filter { $0.outcome?.result == .failed }
             .max { $0.outcome!.finishedAt < $1.outcome!.finishedAt }
         if meeting.status == .failed {
-            self = .failed(Failure(reason: meeting.errorMessage ?? lastFailure?.outcome?.message ?? "",
-                                   hadTranscripts: !meeting.transcripts.isEmpty, device: lastFailure?.outcome?.device, request: lastFailure))
+            let reason = meeting.errorMessage ?? lastFailure?.outcome?.message ?? ""
+            // The request's stored kind, when the conversation's message is that request's; otherwise the message says.
+            let outcome = lastFailure?.outcome
+            let kind = outcome.flatMap { ($0.message ?? "") == reason || meeting.errorMessage == nil ? $0.failureKind : nil }
+            self = .failed(Failure(reason: reason, hadTranscripts: !meeting.transcripts.isEmpty, device: outcome?.device,
+                                   request: lastFailure, kind: kind))
             return
         }
         if let lastFailure, let outcome = lastFailure.outcome, !lastFailure.isSatisfied(by: meeting),
            !(meeting.processingRequests ?? []).contains(where: { $0.outcome?.result == .completed && $0.outcome!.finishedAt > outcome.finishedAt }) {
             self = .failed(Failure(reason: outcome.message ?? "", hadTranscripts: !meeting.transcripts.isEmpty,
-                                   device: outcome.device, request: lastFailure))
+                                   device: outcome.device, request: lastFailure, kind: outcome.failureKind))
             return
         }
         if meeting.hasUntranscribedTranscribableAudio { self = .recorded; return }

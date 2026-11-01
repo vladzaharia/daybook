@@ -95,9 +95,98 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         public var finishedAt: Date
         /// The device's reason, for a failure.
         public var message: String?
+        /// What kind of failure it was, set where the error was caught, so every device words it alike without
+        /// reading `message`. Absent from a failure written before kinds were stored, and from a success.
+        @ExtensibleOptional public var failure: FailureKind?
 
-        public init(result: Result, device: Device, finishedAt: Date, message: String? = nil) {
+        public init(result: Result, device: Device, finishedAt: Date, message: String? = nil, failure: FailureKind? = nil) {
             self.result = result; self.device = device; self.finishedAt = finishedAt; self.message = message
+            self.failure = failure
+        }
+
+        /// The failure's kind: the one stored, `.other` for one a newer Daybook named, and for an older record,
+        /// what its message says (`FailureKind(legacyMessage:)`). Nil for a success.
+        public var failureKind: FailureKind? {
+            guard result == .failed else { return nil }
+            if let failure { return failure }
+            if !$failure.isKnown { return .other }
+            return FailureKind(legacyMessage: message ?? "")
+        }
+    }
+
+    /// Why processing couldn't finish, as a kind both apps word the same way (DaybookKit's `FailureWords`). Stored
+    /// with a failed request's outcome; the raw values ("noSpeech", "cloud.badKey") are synced and must not change.
+    public enum FailureKind: Hashable, Sendable {
+        /// The recording worked but holds no speech: trying again can't help.
+        case noSpeech
+        /// The models the work needs aren't on the device that tried.
+        case modelsMissing
+        /// A model (the summary's, usually) couldn't start: memory, or the model itself.
+        case modelCouldNotStart
+        /// The cloud couldn't summarize it.
+        case cloud(CloudFailure)
+        /// The recording itself didn't start, so there's nothing to process.
+        case recordingDidNotStart
+        /// The device's own reason is one of Daybook's plain sentences, which says what happened and what to do:
+        /// shown as it is.
+        case plainReason
+        /// Anything else: its words stay behind Details.
+        case other
+
+        /// What a cloud provider said, in kinds that call for different fixes.
+        public enum CloudFailure: String, CaseIterable, Sendable {
+            /// The key is missing, refused, or revoked: Settings › Cloud.
+            case badKey
+            /// The account is out of credit.
+            case noCredit
+            /// The key can't use the chosen model.
+            case modelUnavailable
+            /// No internet connection.
+            case offline
+            /// The provider limits requests from this key for now.
+            case rateLimited
+            /// The provider is overloaded.
+            case busy
+            /// The connection broke or timed out.
+            case connectionLost
+            /// The model declined, ran too long, or the reply couldn't be read.
+            case other
+        }
+
+        /// Trying again later may work: the cloud's passing troubles.
+        public var isTransient: Bool {
+            switch self {
+            case .cloud(.offline), .cloud(.rateLimited), .cloud(.busy), .cloud(.connectionLost): return true
+            default: return false
+            }
+        }
+
+        /// For an older record without a stored kind: what its message says, matched only on the sentences Daybook
+        /// and its engines wrote for each kind. A recording iCloud couldn't download isn't a missing model.
+        public init(legacyMessage message: String) {
+            let lower = message.lowercased()
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+            func has(_ words: String...) -> Bool { words.allSatisfy { lower.contains($0) } }
+            if lower.isEmpty { self = .other; return }
+            if has("no speech") { self = .noSpeech; return }
+            if lower.contains("icloud") || has("recording", "download") { self = .other; return }
+            if has("not installed") || has("model", "download") || has("models", "aren't on") { self = .modelsMissing; return }
+            if has("memory") || has("language model") || has("couldn't start") { self = .modelCouldNotStart; return }
+            if has("didn't accept this key") || has("add an", "key in settings") { self = .cloud(.badKey); return }
+            if has("out of credit") { self = .cloud(.noCredit); return }
+            if has("this key can't use") { self = .cloud(.modelUnavailable); return }
+            if has("you're offline") { self = .cloud(.offline); return }
+            if has("is limiting requests") { self = .cloud(.rateLimited); return }
+            if has("connection to", "was lost") { self = .cloud(.connectionLost); return }
+            if has("is busy", "try again") { self = .cloud(.busy); return }
+            self = .other
+        }
+
+        /// The kind for an error caught while processing: its own (`ProcessingFailureClassifying`), else what its
+        /// words say.
+        public init(_ error: Error) {
+            if let classified = error as? ProcessingFailureClassifying { self = classified.failureKind; return }
+            self.init(legacyMessage: error.localizedDescription)
         }
     }
 
@@ -211,17 +300,28 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         finished(.completed, by: device, at: now, message: nil, observations: observations)
     }
 
-    /// The work couldn't finish; `reason` is shown with Try Again.
-    public func failed(by device: Device, at now: Date, reason: String, observations: ClaimObservations = .shared) -> ProcessingRequest? {
-        finished(.failed, by: device, at: now, message: reason, observations: observations)
+    /// The work couldn't finish; `reason` is shown with Try Again, and `kind` says how every device words it
+    /// (nil reads the kind from `reason`, as for a record written before kinds were stored).
+    public func failed(by device: Device, at now: Date, reason: String, kind: FailureKind? = nil,
+                       observations: ClaimObservations = .shared) -> ProcessingRequest? {
+        finished(.failed, by: device, at: now, message: reason, failure: kind, observations: observations)
     }
 
-    private func finished(_ result: Outcome.Result, by device: Device, at now: Date, message: String?,
+    private func finished(_ result: Outcome.Result, by device: Device, at now: Date, message: String?, failure: FailureKind? = nil,
                           observations: ClaimObservations) -> ProcessingRequest? {
         guard isClaimable(by: device, at: now, observations: observations) else { return nil }
         var copy = self
-        copy.outcome = Outcome(result: result, device: device, finishedAt: now, message: message)
+        copy.outcome = Outcome(result: result, device: device, finishedAt: now, message: message, failure: failure)
         return copy
+    }
+
+    /// Whether `device`, working on this request, has lost it: it finished elsewhere (or was given up), another
+    /// device holds a live claim on it, or it was asked for in a way this version doesn't know. Both apps' queues
+    /// stop the work then, after a sync pass (the Mac's `reconcileClaims`, the iPhone's `PhoneProcessor`).
+    public func isLost(for device: Device, at now: Date, observations: ClaimObservations = .shared) -> Bool {
+        guard isOpen, isUnderstood else { return true }
+        guard let holder = activeClaim(at: now, observations: observations) else { return false }
+        return holder.device.id != device.id
     }
 
     // MARK: Merging
@@ -259,8 +359,8 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         return key(a) > key(b) ? a : b
     }
 
-    private static func order(_ outcome: Outcome) -> (Date, String, String, String) {
-        (outcome.finishedAt, outcome.result.rawValue, outcome.device.id, outcome.message ?? "")
+    private static func order(_ outcome: Outcome) -> (Date, String, String, String, String) {
+        (outcome.finishedAt, outcome.result.rawValue, outcome.device.id, outcome.message ?? "", outcome.$failure.storedRawValue ?? "")
     }
 
     /// The parts fixed when the request was made.
@@ -276,6 +376,54 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         var createdAt: Date
         var upgrade: Upgrade?
     }
+}
+
+/// An error that knows what kind of processing failure it is (`ProcessingRequest.FailureKind`): Daybook's own errors,
+/// the engines', and the cloud's, so the kind is set where the error is caught rather than read from its words.
+public protocol ProcessingFailureClassifying: Error {
+    var failureKind: ProcessingRequest.FailureKind { get }
+}
+
+extension ProcessingRequest.FailureKind: RawRepresentable, Codable, ExtensibleSyncEnum {
+    /// An unknown kind (a newer Daybook's) reads as `.other`, while its raw value is kept (`ExtensibleOptional`).
+    public static var syncFallback: ProcessingRequest.FailureKind { .other }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "noSpeech": self = .noSpeech
+        case "modelsMissing": self = .modelsMissing
+        case "modelCouldNotStart": self = .modelCouldNotStart
+        case "recordingDidNotStart": self = .recordingDidNotStart
+        case "plainReason": self = .plainReason
+        case "other": self = .other
+        default:
+            guard rawValue.hasPrefix("cloud."), let cloud = CloudFailure(rawValue: String(rawValue.dropFirst("cloud.".count))) else { return nil }
+            self = .cloud(cloud)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .noSpeech: return "noSpeech"
+        case .modelsMissing: return "modelsMissing"
+        case .modelCouldNotStart: return "modelCouldNotStart"
+        case .cloud(let cloud): return "cloud." + cloud.rawValue
+        case .recordingDidNotStart: return "recordingDidNotStart"
+        case .plainReason: return "plainReason"
+        case .other: return "other"
+        }
+    }
+}
+
+extension ExtensibleOptional {
+    /// The stored raw value, known or not; nil when nothing is stored.
+    fileprivate var storedRawValue: String? { unknownRawValue ?? wrappedValue?.rawValue }
+}
+
+extension AudioFetchError: ProcessingFailureClassifying {
+    /// A recording that isn't here to process: its own sentence when it's one of Daybook's, else the system's words
+    /// behind Details. Never a missing model.
+    public var failureKind: ProcessingRequest.FailureKind { isPlainSentence ? .plainReason : .other }
 }
 
 /// When this device first saw each claim's heartbeat, by its own clock. Leases are judged from these moments
