@@ -130,14 +130,16 @@ extension LibraryController {
         guard let meeting = meeting(id) else { return nil }
         let me = thisDevice
         guard meeting.summaryHolder(excluding: me.id, at: now) == nil else { return nil }
-        if let open = meeting.openProcessingRequests.first(where: {
+        let request = meeting.openProcessingRequests.first {
             $0.mode == .summaryOnly && $0.isClaimable(by: me, at: now) && !$0.isSatisfied(by: meeting)
-        }) {
-            return claimProcessingRequest(open.id, in: id, at: now, lease: lease)
-        }
-        let request = ProcessingRequest(meetingID: id, mode: .summaryOnly, templateID: templateID, requestedBy: me, createdAt: now)
-        update(id) { $0.upsertProcessingRequest(request) }
-        return claimProcessingRequest(request.id, in: id, at: now, lease: lease)
+        } ?? {
+            let request = ProcessingRequest(meetingID: id, mode: .summaryOnly, templateID: templateID, requestedBy: me, createdAt: now)
+            update(id) { $0.upsertProcessingRequest(request) }
+            return request
+        }()
+        guard claimProcessingRequest(request.id, in: id, at: now, lease: lease) != nil else { return nil }
+        // Other devices read it as summarizing here ("Summarizing on Pocket iPhone").
+        return renewProcessingClaim(request.id, in: id, stage: .summarizing, at: now, lease: lease)
     }
 
     /// Applies a summary this device made (here or in the cloud) with where it ran, unless another device's

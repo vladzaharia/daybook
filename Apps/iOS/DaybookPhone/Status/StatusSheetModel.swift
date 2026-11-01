@@ -63,9 +63,21 @@ struct StatusQueueEntry: Equatable, Identifiable, Sendable {
     var mac: String?
     /// The line without the Mac's name ("Transcribing · 40%", "Couldn’t finish"), for under that Mac's row.
     var brief: String?
+    /// What the person can choose for its summary here (docs/multipoint.md, "Where summaries run").
+    var actions: [SummaryPlacementPlanner.Action] = []
+    /// Its summary's countdown runs out then, where `countdownPlace` says ("on Studio Mac", "on this iPhone").
+    var countdownUntil: Date?
+    var countdownPlace: String?
 
     /// The line under a Mac's row in the Macs card: that Mac isn't named again.
-    func line(under macName: String?) -> String {
+    func line(under macName: String?) -> String { line(under: macName, at: Date()) }
+
+    /// The same at a moment: a countdown's seconds move with it.
+    func line(under macName: String?, at now: Date) -> String {
+        if let until = countdownUntil, let place = countdownPlace {
+            let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
+            return mac != nil && mac == macName ? "Summarizing in \(seconds) s" : "Summarizing \(place) in \(seconds) s"
+        }
         guard let mac, mac == macName, let brief else { return line }
         return brief
     }
@@ -435,15 +447,38 @@ enum StatusSheetModel {
     /// Conversations a Mac is working on or will, as this iPhone knows: live progress first, then the
     /// synced claims, then requests waiting (oldest first), then conversations waiting for a recording
     /// made alongside (oldest first), then failures. At most `limit`.
+    ///
+    /// Where a summary runs comes first for its conversation (docs/multipoint.md, "Where summaries run"): this
+    /// iPhone's countdown or wait (`planners`), a summary running here or in the cloud (`runs`), a Mac's countdown,
+    /// and, with the cloud on offer, Use the Cloud for a Summarize request still waiting for a Mac.
     static func queue(meetings: [Meeting], liveProgress: [UUID: LiveProgress], thisDevice: String,
+                      planners: [UUID: SummaryPlacementPlanner] = [:], runs: [UUID: SummaryPlace] = [:], cloudOffered: Bool = false,
                       now: Date = Date(), limit: Int = 6) -> [StatusQueueEntry] {
         var running: [StatusQueueEntry] = [], waiting: [(Date, StatusQueueEntry)] = [], failed: [StatusQueueEntry] = []
         var awaiting: [(Date, StatusQueueEntry)] = []
         for meeting in meetings {
             let requestedHere = meeting.openProcessingRequests.contains { $0.requestedBy.id == thisDevice }
+            if let run = runs[meeting.id] {
+                let line = "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: PhoneSummaryPlacement.thisDeviceWords))"
+                running.append(StatusQueueEntry(id: meeting.id, title: meeting.title, line: line, requestedHere: false, progress: nil,
+                                                isRunning: true))
+                continue
+            }
+            if let planner = planners[meeting.id], let line = planner.line(at: now, thisDevice: PhoneSummaryPlacement.thisDeviceWords) {
+                var entry = StatusQueueEntry(id: meeting.id, title: meeting.title, line: line, requestedHere: false, progress: nil,
+                                             isRunning: false, actions: planner.actions, countdownUntil: planner.deadline)
+                if case .countingDown(let place, _) = planner.phase {
+                    entry.countdownPlace = SummaryPlacementPlanner.where(place, thisDevice: PhoneSummaryPlacement.thisDeviceWords)
+                    if case .mac(_, let name) = place { entry.mac = name }
+                }
+                running.append(entry)
+                continue
+            }
             if let live = liveProgress[meeting.id], !live.isFinished {
-                running.append(StatusQueueEntry(id: meeting.id, title: meeting.title, line: live.line, requestedHere: requestedHere,
-                                                progress: live.fraction, isRunning: true, mac: live.macName, brief: live.brief))
+                running.append(StatusQueueEntry(id: meeting.id, title: meeting.title, line: live.line(at: now), requestedHere: requestedHere,
+                                                progress: live.isCountingDown ? nil : live.fraction, isRunning: true, mac: live.macName,
+                                                brief: live.brief(at: now), actions: live.placementActions, countdownUntil: live.countdownUntil,
+                                                countdownPlace: live.isCountingDown ? "on \(live.macName)" : nil))
                 continue
             }
             switch ProcessingStatus(meeting, now: now) {
@@ -463,9 +498,12 @@ enum StatusSheetModel {
                                                 requestedHere: requestedHere, progress: progress.fraction, isRunning: true,
                                                 mac: progress.device?.name, brief: verb + percent))
             case .requested(.device(let request)):
-                waiting.append((request.createdAt, StatusQueueEntry(id: meeting.id, title: meeting.title, line: "Waiting",
+                // A summary waiting for a Mac can go to the cloud instead.
+                let cloud = cloudOffered && request.mode == .summaryOnly
+                waiting.append((request.createdAt, StatusQueueEntry(id: meeting.id, title: meeting.title,
+                                                                    line: cloud ? "Waiting for a Mac to summarize" : "Waiting",
                                                                     requestedHere: request.requestedBy.id == thisDevice,
-                                                                    progress: nil, isRunning: false)))
+                                                                    progress: nil, isRunning: false, actions: cloud ? [.useCloud] : [])))
             case .awaitingRecordings(let recordings):
                 awaiting.append((recordings.map(\.since).min() ?? now,
                                  StatusQueueEntry(id: meeting.id, title: meeting.title, line: ProcessingStatus.awaitingLine(recordings),

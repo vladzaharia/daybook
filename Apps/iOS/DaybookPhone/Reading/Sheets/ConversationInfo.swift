@@ -8,6 +8,7 @@ struct ConversationInfo: View {
     let meetingID: UUID
     private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
+    @Environment(\.summaryPlacement) private var placement
     @State private var detent: PresentationDetent = Self.launchDetent
 
     var body: some View {
@@ -95,7 +96,7 @@ struct ConversationInfo: View {
         } label: { InfoLabel("Shows In", systemImage: "rectangle.stack") }
         Picker(selection: Binding(get: { library.templateSelection(for: meeting.id) }, set: { id in
             if library.chooseTemplate(id, for: meeting.id), !meeting.unifiedTranscript.isEmpty {
-                library.requestProcessing(meeting.id, mode: .summaryOnly, templateID: id == "auto" ? nil : id)
+                library.summarize(meeting.id, templateID: id == "auto" ? nil : id, placement: placement)
             }
         })) {
             Text(automaticTemplateTitle(meeting)).tag("auto")

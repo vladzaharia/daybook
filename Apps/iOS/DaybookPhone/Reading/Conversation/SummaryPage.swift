@@ -19,6 +19,7 @@ struct SummaryPage: View {
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
     @Environment(\.macSighting) private var sightingOverride
+    @Environment(\.summaryPlacement) private var placement
     @Environment(\.isTwoPage) private var twoPage
     @State private var consumedToken = 0
     /// The status line's symbol column (`StatusView`).
@@ -35,7 +36,13 @@ struct SummaryPage: View {
                     if showsHeader {
                         PageHeader(library: library, meeting: meeting, play: play).id(SummaryBlockID.header)
                     }
-                    if let status, !(twoPage && isRecordedOnly && !hasCaptions) {
+                    if let status, status.countdownUntil != nil {
+                        // A summary's countdown: its seconds move.
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            StatusView(presentation: self.status(at: context.date) ?? status, perform: perform)
+                        }
+                        .padding(.top, PhoneStyle.Space.s4).id("status")
+                    } else if let status, !(twoPage && isRecordedOnly && !hasCaptions) {
                         StatusView(presentation: status, perform: perform).padding(.top, PhoneStyle.Space.s4).id("status")
                     } else if meeting.tracks.isEmpty && !twoPage {
                         // Only notes so far. Two pages show this on the transcript's page. Record sits at
@@ -108,9 +115,18 @@ struct SummaryPage: View {
         }
     }
 
-    private var status: StatusPresentation? {
+    private var status: StatusPresentation? { status(at: Date()) }
+
+    /// Where its summary runs first, when that's what there is to say (`PhoneSummaryPlacement`), then the processing status.
+    private func status(at now: Date) -> StatusPresentation? {
         let sighting = sightingOverride ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id)
-        return StatusPresentation.page(ProcessingStatus.phone(meeting), meeting: meeting, sighting: sighting, pause: PhoneProcessor.current?.pause)
+        let processing = ProcessingStatus.phone(meeting, now: now)
+        if let placement, let placing = StatusPresentation.placement(placement.planners[meeting.id], run: placement.runs[meeting.id],
+                                                                      live: placement.live(meeting.id), status: processing,
+                                                                      cloudOffered: placement.cloudOffer != nil, sighting: sighting, now: now) {
+            return placing
+        }
+        return StatusPresentation.page(processing, meeting: meeting, sighting: sighting, pause: PhoneProcessor.current?.pause)
     }
 
     /// Recorded and nothing asked yet: two pages say so on the transcript's page, with Transcribe.
@@ -131,9 +147,12 @@ struct SummaryPage: View {
 
     private func perform(_ action: StatusPresentation.Action) {
         switch action {
+        case .request(.summaryOnly): library.summarize(meeting.id, placement: placement)
         case .request(let mode): library.requestProcessing(meeting.id, mode: mode)
         case .details(let text): session.sheet = .details(text)
         case .dismiss: library.update(meeting.id) { $0.errorMessage = nil }
+        case .placement(let choice): placement?.perform(choice, for: meeting.id)
+        case .stopSummary: placement?.stop(meeting.id)
         }
     }
 }
@@ -414,17 +433,19 @@ private struct SectionBody: View {
 private struct Colophon: View {
     @ObservedObject var library: LibraryController
     let meeting: Meeting
+    @Environment(\.summaryPlacement) private var placement
 
     var body: some View {
         VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
             Rectangle().fill(PhoneStyle.Ink.faint).frame(width: 24, height: 1).padding(.bottom, PhoneStyle.Space.s1)
                 .accessibilityHidden(true)
             if let summary = meeting.summary {
-                let cloud = summary.cloudProvenance
                 Label {
-                    Text("\(cloud?.label ?? "Summarized on your Mac") · \(summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))")
+                    // Where it ran: "Summarized on your Mac", "Summarized on this iPhone", "Summarized with Claude Sonnet 5.5".
+                    Text("\(summary.origin.colophon(thisDeviceID: library.thisDevice.id, thisDevice: PhoneSummaryPlacement.thisDeviceWords, unknown: "your Mac")) · \(summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))")
                 } icon: {
-                    Image(systemName: cloud == nil ? "laptopcomputer" : "cloud").symbolEffect(.bounce, value: summary.createdAt)
+                    Image(systemName: summary.origin.cloudModel != nil ? "cloud" : summary.origin.deviceID == library.thisDevice.id ? "iphone" : "laptopcomputer")
+                        .symbolEffect(.bounce, value: summary.createdAt)
                 }
                 .labelStyle(CompactLabelStyle())
             }
@@ -440,7 +461,7 @@ private struct Colophon: View {
                 // Only while it can be asked for: a pending request already shows on the page.
                 if !meeting.unifiedTranscript.isEmpty && !isPending {
                     Text("·").accessibilityHidden(true)
-                    Button("Summarize Again") { library.requestProcessing(meeting.id, mode: .summaryOnly) }
+                    Button("Summarize Again") { library.summarize(meeting.id, placement: placement) }
                         .buttonStyle(.daybookLink)
                         .fontWeight(.medium)
                 }
@@ -466,6 +487,7 @@ struct TemplateMenu<Label: View>: View {
     @ObservedObject var library: LibraryController
     let meeting: Meeting
     @ViewBuilder var label: Label
+    @Environment(\.summaryPlacement) private var placement
 
     var body: some View {
         Menu {
@@ -490,6 +512,6 @@ struct TemplateMenu<Label: View>: View {
 
     private func choose(_ id: String) {
         guard library.chooseTemplate(id, for: meeting.id), !meeting.unifiedTranscript.isEmpty else { return }
-        library.requestProcessing(meeting.id, mode: .summaryOnly, templateID: id == "auto" ? nil : id)
+        library.summarize(meeting.id, templateID: id == "auto" ? nil : id, placement: placement)
     }
 }

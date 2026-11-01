@@ -212,6 +212,10 @@ struct StatusView: View {
             Button("Details") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
         case .dismiss:
             Button("Dismiss") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
+        case .placement(let choice):
+            Button(choice.title) { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.semibold))
+        case .stopSummary:
+            Button("Stop") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
         }
     }
 }

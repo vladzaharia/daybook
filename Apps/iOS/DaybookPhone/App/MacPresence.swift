@@ -133,22 +133,48 @@ struct LiveProgress: Equatable, Sendable {
     /// 0...1 within the phase, when the Mac reports one.
     var fraction: Double?
     var macName: String
+    /// The Mac that sent it, for answering its countdown.
+    var macID: UUID?
     /// The Mac's own words (failures in particular).
     var detail: String?
     var receivedAt: Date
+    /// While the Mac counts down to summarizing it (`summaryCountdown`): when it starts, on this iPhone's clock,
+    /// and whether Use the Cloud is on offer there.
+    var countdownUntil: Date?
+    var cloudOffered = false
+    /// Summarizing in the cloud: the model's name.
+    var cloudModel: String?
 
     static let staleAfter: TimeInterval = 120
 
-    init(_ progress: LinkProcessingProgress, receivedAt: Date = Date()) {
+    init(_ progress: LinkProcessingProgress, from macID: UUID? = nil, receivedAt: Date = Date()) {
         meetingID = progress.meetingID
         phase = progress.phase
         fraction = progress.fraction.map { min(1, max(0, $0)) }
         macName = progress.macName
+        self.macID = macID
         detail = progress.detail
         self.receivedAt = receivedAt
+        if progress.phase == .summaryCountdown, let countdown = progress.countdown {
+            countdownUntil = receivedAt.addingTimeInterval(max(0, countdown.secondsLeft))
+            cloudOffered = countdown.cloudOffered
+        }
+        cloudModel = progress.cloudModel
     }
 
     var isFinished: Bool { phase == .finished || phase == .failed }
+    /// The Mac counts down to summarizing it, and the person here may choose (docs/multipoint.md, "Where summaries run").
+    var isCountingDown: Bool { phase == .summaryCountdown && countdownUntil != nil }
+    /// What the person may choose here for the Mac's countdown, in order.
+    var placementActions: [SummaryPlacementPlanner.Action] {
+        guard isCountingDown, macID != nil else { return [] }
+        return (cloudOffered ? [.useCloud] : []) + [.startNow]
+    }
+
+    /// Seconds left in the Mac's countdown, rounded up.
+    func secondsLeft(at now: Date) -> Int? {
+        countdownUntil.map { max(1, Int($0.timeIntervalSince(now).rounded(.up))) }
+    }
 
     /// The verb for the phase: "Transcribing", "Summarizing".
     var activity: String {
@@ -162,12 +188,18 @@ struct LiveProgress: Equatable, Sendable {
         case .waitingForModels: return "Waiting for models"
         case .finished: return "Finished"
         case .failed: return "Couldn’t finish"
+        case .summaryCountdown: return "Summarizing"
         default: return "Working"
         }
     }
 
     /// "Transcribing on Studio Mac · 40%".
-    var line: String {
+    var line: String { line(at: Date()) }
+
+    /// The line at a moment: a countdown's seconds change with it ("Summarizing on Studio Mac in 12 s").
+    func line(at now: Date) -> String {
+        if let seconds = secondsLeft(at: now), isCountingDown { return "Summarizing on \(macName) in \(seconds) s" }
+        if phase == .summarizing, let cloudModel { return "Summarizing with \(cloudModel)" }
         switch phase {
         case .queued: return detail.map { "In line on \(macName) · \($0)" } ?? "In line on \(macName)"
         case .waitingForModels: return "Waiting for models on \(macName)"
@@ -182,7 +214,11 @@ struct LiveProgress: Equatable, Sendable {
     }
 
     /// The line without the Mac's name, under that Mac in the status sheet: "Transcribing · 40%".
-    var brief: String {
+    var brief: String { brief(at: Date()) }
+
+    func brief(at now: Date) -> String {
+        if let seconds = secondsLeft(at: now), isCountingDown { return "Summarizing in \(seconds) s" }
+        if phase == .summarizing, let cloudModel { return "Summarizing with \(cloudModel)" }
         switch phase {
         case .queued: return detail.map { "In line · \($0)" } ?? "In line"
         case .failed, .waitingForModels, .paused, .finished: return activity

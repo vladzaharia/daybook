@@ -91,6 +91,13 @@ struct LibraryPage: View {
     }
 
     private var place: LibraryPlace { session.place.libraryPlace ?? .section(.all) }
+
+    /// Where a summary runs first ("Summarizing in 12 s"), then the processing status.
+    private func rowStatus(_ meeting: Meeting, now: Date) -> RowStatus? {
+        let placement = model.placement
+        return StatusPresentation.placementRow(placement.planners[meeting.id], run: placement.runs[meeting.id], live: placement.live(meeting.id), now: now)
+            ?? StatusPresentation.row(ProcessingStatus.phone(meeting, now: now))
+    }
     private var meetings: [Meeting] { place.meetings(in: library.meetings) }
 
     private var list: some View {
@@ -101,7 +108,7 @@ struct LibraryPage: View {
                 Section {
                     ForEach(group.meetings) { meeting in
                         ConversationRow(meeting: meeting,
-                                        status: StatusPresentation.row(ProcessingStatus.phone(meeting, now: now)),
+                                        status: rowStatus(meeting, now: now),
                                         timeLabel: RowDate.format(meeting.date, group: group.title, now: now),
                                         isPlaying: session.player.meetingID == meeting.id && session.player.isPlaying)
                             .tag(meeting.id)
