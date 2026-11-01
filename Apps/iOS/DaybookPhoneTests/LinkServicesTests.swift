@@ -120,7 +120,8 @@ final class LinkServicesTests: XCTestCase {
         let code = await mac.service.beginPairing()
         let paired = try await link.pair(with: mac.endpoint, code: code.digits)
         XCTAssertEqual(paired.name, "Studio Mac")
-        try await waitUntil("connected") { link.macs.first?.isConnected == true }
+        // Connected, and its capabilities in: the connection's state can arrive before the message that carries them.
+        try await waitUntil("connected") { link.macs.first.map { $0.isConnected && $0.appVersion != nil } == true }
     }
 
     /// Pairs, then answers the pairing sheet's question with Allow, so the Mac may start recording here.
@@ -148,7 +149,8 @@ final class LinkServicesTests: XCTestCase {
         let code = try XCTUnwrap(shown)
         let paired = try await link.pair(with: mac.endpoint, code: code.formatted)
         XCTAssertEqual(paired.deviceID, mac.id)
-        try await waitUntil("connected") { link.macs.first?.isConnected == true }
+        // Connected, and its capabilities in: the connection's state can arrive before the message that carries them.
+        try await waitUntil("connected") { link.macs.first.map { $0.isConnected && $0.appVersion != nil } == true }
         let status = try XCTUnwrap(link.macs.first)
         XCTAssertEqual(status.name, "Studio Mac")
         XCTAssertTrue(status.canProcess)

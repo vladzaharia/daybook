@@ -424,7 +424,8 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         await link.start()
         let code = await service.beginPairing()
         _ = try await link.pair(with: LinkEndpoint(host: "127.0.0.1", port: port), code: code.digits)
-        try await waitUntil("connected") { link.macs.first?.isConnected == true }
+        // Connected, and its capabilities in: the connection's state can arrive before the message that carries them.
+        try await waitUntil("connected") { link.macs.first.map { $0.isConnected && $0.appVersion != nil } == true }
         let mac = try XCTUnwrap(link.macs.first)
         XCTAssertEqual(mac.processing?.models?["summarization"], "gemma-4/e4b", "What it summarizes with, from its capabilities")
         XCTAssertTrue(mac.placesSummaries)
