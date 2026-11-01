@@ -51,7 +51,9 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.3.5")
     ],
     targets: [
-        .target(name: "DaybookCore"),
+        // Complete concurrency checking (the package stays in Swift 5 mode): a data race in the library's core is a
+        // warning, not silence.
+        .target(name: "DaybookCore", swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         .target(name: "DaybookLink"),
         // Foundation, AVFoundation, and Speech only, so the device framework can use it too.
         .target(name: "DaybookCaptions"),
@@ -66,7 +68,8 @@ let package = Package(
         // a result and list their licenses. CloudCatalog.json and CloudPrices.json are the cloud models'
         // family rules and measurements, and a snapshot of OpenRouter's prices (docs/cloud.md).
         .target(name: "DaybookKit", dependencies: ["DaybookCore", "DaybookDevices", "DaybookLink"],
-                resources: [.copy("Resources/ModelCatalog"), .copy("Resources/CloudCatalog.json"), .copy("Resources/CloudPrices.json")]),
+                resources: [.copy("Resources/ModelCatalog"), .copy("Resources/CloudCatalog.json"), .copy("Resources/CloudPrices.json")],
+                swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]),
         // Downloads, verification, and installs (docs/models.md, "Storage"); the iPhone links it for its
         // live models without the Mac's engines. Hub: swift-transformers' downloader.
         .target(name: "DaybookModelStore", dependencies: [
