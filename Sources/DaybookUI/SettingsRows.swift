@@ -178,7 +178,9 @@ public struct SettingsFooter: View {
     public var body: some View {
         Text(text)
             .font(density == .touch ? .footnote : .subheadline)
-            .foregroundStyle(.secondary)
+            // The secondary label colour itself: the iPhone's section footer is secondary already, and a
+            // hierarchical `.secondary` inside it fell to about 2:1.
+            .foregroundStyle(Color.secondary)
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
