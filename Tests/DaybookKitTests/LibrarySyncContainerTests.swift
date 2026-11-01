@@ -300,7 +300,8 @@ final class LibrarySyncContainerTests: XCTestCase {
         await current.waitForContainer()
         XCTAssertEqual(current.iCloud, .connected, current.statusText)
         XCTAssertEqual(current.folder, journal)
-        XCTAssertEqual(defaults.data(forKey: "syncICloudAccount"), account.identity, "its own token from now on")
+        XCTAssertEqual(defaults.data(forKey: "syncICloudAccount"), LibrarySyncController.accountDigest(try XCTUnwrap(account.identity)),
+                       "its own token from now on, as a digest")
         XCTAssertEqual(defaults.string(forKey: "syncICloudAccountApp"), "local.daybook")
 
         // Back to the earlier release (its own token again): the same.
@@ -389,6 +390,60 @@ final class LibrarySyncContainerTests: XCTestCase {
         let same = controller(environment(app: "local.daybook.app", earlierApp: "local.daybook.app"))
         same.restore()
         try await waitUntil("the pause for this app", state: syncState) { same.iCloud == .accountChanged }
+    }
+
+    /// The recorded account is compared by its bytes, never decoded: an archive another process of the person's wrote
+    /// into preferences instantiates nothing here, and reads as another account.
+    func testBehaviorARecordedAccountIsNeverDecoded() async throws {
+        let planted = try NSKeyedArchiver.archivedData(withRootObject: Tripwire(), requiringSecureCoding: false)
+        Tripwire.decoded = false
+        defaults.set(planted, forKey: "syncICloudAccount")
+        defaults.set("local.daybook", forKey: "syncICloudAccountApp")
+        let sync = controller(environment(app: "local.daybook"))
+        sync.restore()
+        await sync.waitForContainer()
+        XCTAssertEqual(sync.iCloud, .accountChanged)
+        XCTAssertFalse(Tripwire.decoded, "The planted archive was decoded")
+        XCTAssertFalse(LibrarySyncController.sameAccount(planted, try XCTUnwrap(account.identity)))
+        XCTAssertFalse(Tripwire.decoded)
+        // An archive recorded as earlier releases kept it still reads as the same account, byte for byte, and is kept as a
+        // digest from then on.
+        defaults.set(account.identity, forKey: "syncICloudAccount")
+        let earlier = controller(environment(app: "local.daybook"))
+        earlier.restore()
+        await earlier.waitForContainer()
+        XCTAssertEqual(earlier.iCloud, .connected, earlier.statusText)
+        XCTAssertEqual(defaults.data(forKey: "syncICloudAccount"), LibrarySyncController.accountDigest(try XCTUnwrap(account.identity)))
+        XCTAssertTrue(earlier.isOnSameAccount)
+    }
+
+    /// The same account whose token archives to other bytes: the container holds the library this device last synced
+    /// with it, so sync carries on rather than pausing as for another account.
+    func testBehaviorTheSameAccountReadingDifferentlyCarriesOnWithItsLibrary() async throws {
+        let sync = controller(environment(app: "local.daybook"))
+        sync.syncDebounce = nil
+        sync.restore()
+        try await waitUntil("the container", state: syncState) { sync.iCloud == .connected && sync.containerListed }
+        let first = try await pass(sync)
+        XCTAssertNotNil(first)
+        XCTAssertNotNil(defaults.string(forKey: "syncICloudAccountLibrary"))
+        sync.disconnect(); defaults.removeObject(forKey: "syncICloudTurnedOff")
+        account.identity = Data("account-a, archived differently".utf8)
+        let again = controller(environment(app: "local.daybook"))
+        again.restore()
+        try await waitUntil("the connection", state: syncState) { again.iCloud == .connected }
+        // Another account's container, with another library: paused.
+        let other = root.appendingPathComponent("Other Container", isDirectory: true)
+        let otherJournal = other.appendingPathComponent("Documents/Daybook", isDirectory: true)
+        try fm.createDirectory(at: otherJournal, withIntermediateDirectories: true)
+        let manifest = "{\"format\":\"DaybookSync\",\"schemaVersion\":1,\"libraryID\":\"" + UUID().uuidString + "\"}"
+        try Data(manifest.utf8).write(to: otherJournal.appendingPathComponent("daybook-sync.json"))
+        again.disconnect(); defaults.removeObject(forKey: "syncICloudTurnedOff")
+        account.container = other
+        account.identity = Data("account-b".utf8)
+        let another = controller(environment(app: "local.daybook"))
+        another.restore()
+        try await waitUntil("the pause", state: syncState) { another.iCloud == .accountChanged }
     }
 
     func testTheAccountNotificationWithTheSameAccountLeavesSyncAsItWas() async throws {
@@ -619,6 +674,15 @@ private final class SyncReadGate: @unchecked Sendable {
         _ = semaphore.wait(timeout: .now() + 10)
         lock.withLock { _sawCancellation = Task.isCancelled }
     }
+}
+
+/// An object whose decoding the tests watch for: a recorded account must never instantiate one.
+@objc(DaybookTripwire)
+private final class Tripwire: NSObject, NSCoding {
+    nonisolated(unsafe) static var decoded = false
+    override init() { super.init() }
+    init?(coder: NSCoder) { Tripwire.decoded = true; super.init() }
+    func encode(with coder: NSCoder) {}
 }
 
 /// Something a test turns on and off while the engine reads it from another thread.

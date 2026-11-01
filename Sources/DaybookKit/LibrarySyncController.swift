@@ -1,3 +1,4 @@
+import CryptoKit
 import DaybookCore
 import Foundation
 import Network
@@ -299,9 +300,13 @@ public final class LibrarySyncController {
         static let folderLocation = "syncFolderLocation"
         static let migratedFolderBookmark = "syncMigratedFolderBookmark"
         static let migration = "syncContainerMigration"
+        /// The account this library syncs with: the SHA-256 of its archived identity token (`accountDigest`), or, as
+        /// releases before it kept it, the archive itself. Never decoded.
         static let account = "syncICloudAccount"
         /// The bundle ID of the app that recorded `account`.
         static let accountApp = "syncICloudAccountApp"
+        /// The library this device last synced with that account (`prepareContainer`).
+        static let accountLibrary = "syncICloudAccountLibrary"
         static let turnedOff = "syncICloudTurnedOff"
         static let deviceID = "syncDeviceID"
         static let installation = "syncInstallation"
@@ -430,6 +435,7 @@ public final class LibrarySyncController {
     public func useCurrentICloudAccount() {
         defaults.removeObject(forKey: Key.account)
         defaults.removeObject(forKey: Key.accountApp)
+        defaults.removeObject(forKey: Key.accountLibrary)
         guard let identifier = containerIdentifier else { return }
         // The other account's library is another library: whether this one was encrypted says nothing about it.
         forgetsSealedLibrary = true
@@ -664,6 +670,10 @@ public final class LibrarySyncController {
         guard canApply(result) else { throw SyncControllerError.busy }
         let completed = Date()
         lastResultStorageFull = result.storageFull
+        // The library this account's container holds, for telling a token that archived differently from another account.
+        if transport == .iCloudContainer, let library = await engine.libraryID {
+            defaults.set(library.uuidString, forKey: Key.accountLibrary)
+        }
         status = settledStatus(uploads: result.pendingUploads, downloads: result.pendingDownloads, at: completed)
         lastSync = completed; defaults.set(completed, forKey: Key.lastCompleted)
         isSyncing = false
@@ -1072,15 +1082,21 @@ public final class LibrarySyncController {
         // Another app's account: iCloud's account token is per app, so a token another app recorded never equals this
         // one's, even for the same account. That's an earlier Mac release (`local.daybook.app`) whose preferences this
         // one (`local.daybook`) carried over, or the other way round. The container decides, below: holding this
-        // library's journal, it's the same account.
+        // library's journal, it's the same account. This app's own record reading differently is another account,
+        // unless the container holds the very library this device last synced with it (`Key.accountLibrary`): the token
+        // archived to other bytes.
         var recordedByAnotherApp = false
+        var expectedLibrary: UUID?
         if let previous = defaults.data(forKey: Key.account), !Self.sameAccount(previous, account) {
             let recorder = defaults.string(forKey: Key.accountApp) ?? environment.earlierAccountApp
-            guard let recorder, let app = environment.appIdentifier, recorder != app else {
+            if let recorder, let app = environment.appIdentifier, recorder != app {
+                recordedByAnotherApp = true
+            } else if let library = defaults.string(forKey: Key.accountLibrary).flatMap(UUID.init(uuidString:)) {
+                recordedByAnotherApp = true; expectedLibrary = library
+            } else {
                 iCloud = .accountChanged; status = .accountChanged
                 return
             }
-            recordedByAnotherApp = true
         }
         iCloud = .checking; status = .connecting
         let resolve = environment.resolveContainer
@@ -1105,6 +1121,10 @@ public final class LibrarySyncController {
                 guard isCurrent(generation) else { return }
                 switch ownership {
                 case .thisLibrary:
+                    if let expectedLibrary, LibrarySyncEngine.manifestLibraryID(remoteRoot: root) != expectedLibrary {
+                        iCloud = .accountChanged; status = .accountChanged
+                        return
+                    }
                     break waiting
                 case .anotherLibrary:
                     iCloud = .accountChanged; status = .accountChanged
@@ -1132,7 +1152,7 @@ public final class LibrarySyncController {
             return
         }
         // The library is bound to this account from here on, so a change mid-migration pauses too.
-        defaults.set(account, forKey: Key.account)
+        defaults.set(Self.accountDigest(account), forKey: Key.account)
         if let app = environment.appIdentifier { defaults.set(app, forKey: Key.accountApp) } else { defaults.removeObject(forKey: Key.accountApp) }
         guard await migrateFolder(into: root, identifier: identifier, generation: generation), isCurrent(generation) else { return }
         // An account change cancels the pass in flight, but it may still be unwinding (a long audio copy): attaching
@@ -1293,6 +1313,10 @@ public final class LibrarySyncController {
         return sameAccount(a, b)
     }
 
+    /// How the account is recorded (`Key.account`): the SHA-256 of its archived identity token. Archives of the same
+    /// token are the same bytes, so equal digests are the same account.
+    static func accountDigest(_ archive: Data) -> Data { Data(SHA256.hash(data: archive)) }
+
     private func detach() {
         if activeTask == nil { isSyncing = false }
         activeTask?.cancel(); configurationID = UUID(); pendingReceipt = nil
@@ -1317,17 +1341,12 @@ public final class LibrarySyncController {
         a.standardizedFileURL.resolvingSymlinksInPath().path == b.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    /// Identity tokens compare with `isEqual`; archives of the same token are usually identical bytes too.
-    static func sameAccount(_ a: Data, _ b: Data) -> Bool {
-        if a == b { return true }
-        func token(_ data: Data) -> NSObject? {
-            guard let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) else { return nil }
-            unarchiver.requiresSecureCoding = false
-            defer { unarchiver.finishDecoding() }
-            return unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? NSObject
-        }
-        guard let first = token(a), let second = token(b) else { return false }
-        return first.isEqual(second)
+    /// Whether `recorded` (a digest, `accountDigest`, or an archive as releases before it kept it) is the account whose
+    /// archived token is `current`. Bytes are compared, never decoded: preferences another process of the person's can
+    /// write never instantiate anything in this one. A record that reads differently is settled by the container
+    /// (`prepareContainer`).
+    static func sameAccount(_ recorded: Data, _ current: Data) -> Bool {
+        recorded == current || recorded == accountDigest(current)
     }
 
     // MARK: Monitoring

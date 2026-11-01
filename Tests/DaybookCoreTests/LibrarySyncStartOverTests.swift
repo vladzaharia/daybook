@@ -222,6 +222,31 @@ final class LibrarySyncStartOverTests: XCTestCase {
         XCTAssertEqual(Set(try manifest().sealing?.replaces ?? []), [old, mine])
     }
 
+    /// Whose journal a container holds, for an app that finds another app's account record: a library this device synced
+    /// that started over since, or one it only ever waited in for the key, is still this account's.
+    func testBehaviorJournalOwnershipCountsReplacedLibrariesAndAWaitingDevicesPresence() async throws {
+        let mac = try mac()
+        try await pass(mac, "Mac", [Meeting(title: "Before")])
+        try await mac.enableSealing()
+        try await pass(mac, "Mac")
+        // The key is lost everywhere; another device starts over. This Mac's checkpoint is for the library it replaced.
+        let lost = MemoryLibraryKeyStore()
+        let other = try LibrarySyncEngine(localRoot: local("Other"), remoteRoot: remote, deviceID: "Other", replica: SyncReplicaConfiguration(
+            device: SyncDeviceIdentity(deviceClass: .mac, displayName: "Other", canProcess: true), cloud: cloud.files, keyStore: lost, sealsNewLibrary: false))
+        do { _ = try await other.synchronize(meetings: []) } catch LibrarySyncError.keyUnavailable {}
+        let started = try await other.replaceLibrary(try manifest(), recovery: nil, now: Date())
+        XCTAssertNotEqual(started, try XCTUnwrap(try manifest().sealing?.replaces?.first))
+        XCTAssertEqual(LibrarySyncEngine.journalOwnership(localRoot: local("Mac"), deviceID: "Mac", remoteRoot: remote, cloud: cloud.files), .thisLibrary)
+        // A device that only waited for the key there: no checkpoint, but its presence.
+        let waiting = try LibrarySyncEngine(localRoot: local("Waiting"), remoteRoot: remote, deviceID: "Waiting", replica: SyncReplicaConfiguration(
+            device: SyncDeviceIdentity(deviceClass: .mac, displayName: "Waiting", canProcess: true), cloud: cloud.files, keyStore: MemoryLibraryKeyStore()))
+        XCTAssertEqual(LibrarySyncEngine.journalOwnership(localRoot: local("Waiting"), deviceID: "Waiting", remoteRoot: remote, cloud: cloud.files), .anotherLibrary)
+        do { _ = try await waiting.synchronize(meetings: []) } catch LibrarySyncError.keyUnavailable {}
+        XCTAssertEqual(LibrarySyncEngine.journalOwnership(localRoot: local("Waiting"), deviceID: "Waiting", remoteRoot: remote, cloud: cloud.files), .thisLibrary)
+        // A device that never synced here.
+        XCTAssertEqual(LibrarySyncEngine.journalOwnership(localRoot: local("Stranger"), deviceID: "Stranger", remoteRoot: remote, cloud: cloud.files), .anotherLibrary)
+    }
+
     func testBehaviorAnUnrelatedEncryptedLibraryResolvesAsARival() async throws {
         let mac = try mac()
         try await pass(mac, "Mac")

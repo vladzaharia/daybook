@@ -1160,7 +1160,8 @@ public actor LibrarySyncEngine {
     }
     /// Whose journal a sync folder holds, as far as its manifest says (`journalOwnership`).
     public enum JournalOwnership: Equatable, Sendable {
-        /// The manifest names a library (or one it replaced) this device has a checkpoint for.
+        /// The manifest names a library (or one it superseded or replaced) this device has a checkpoint for, or this
+        /// device's presence is in the folder (it waited there for an encrypted library's key).
         case thisLibrary
         /// The manifest names another library, or can't be read.
         case anotherLibrary
@@ -1185,10 +1186,32 @@ public actor LibrarySyncEngine {
         do { bytes = try SyncFiles.read(url, below: remoteRoot, cloud: cloud) } catch { return .inCloud }
         guard let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)) else { return .anotherLibrary }
         let sync = localRoot.standardizedFileURL.appendingPathComponent("Sync", isDirectory: true)
-        let held = ([manifest.libraryID] + (manifest.supersedes ?? [])).contains {
+        // This library, one it superseded, or one it replaced (started over from, or a rival that met it).
+        let libraries = [manifest.libraryID] + (manifest.supersedes ?? []) + (manifest.sealing?.replaces ?? [])
+        let held = libraries.contains {
             FileManager.default.fileExists(atPath: sync.appendingPathComponent("\(checkpointStem(libraryID: $0, deviceID: deviceID)).json").path)
         }
-        return held ? .thisLibrary : .anotherLibrary
+        if held { return .thisLibrary }
+        // A device that only ever waited for an encrypted library's key has no checkpoint, but it wrote its presence into
+        // this container while it waited: a container is one account's, so it's the same account.
+        let presence = remoteRoot.appendingPathComponent("\(SyncPresenceFiles.directory)/\(SyncPresenceFiles.fileName(for: deviceID))")
+        switch SyncFiles.itemState(presence) {
+        case .local:
+            let record = (try? SyncFiles.read(presence, below: remoteRoot, cloud: cloud)).flatMap(SyncPresenceFiles.decode)
+            return record?.deviceID == deviceID ? .thisLibrary : .anotherLibrary
+        case .inCloud:
+            try? SyncFiles.available(presence, cloud: cloud)
+            return .inCloud
+        case .absent:
+            return .anotherLibrary
+        }
+    }
+    /// The library a sync folder's manifest names, when it's downloaded and reads; nil otherwise. Reads only.
+    public static func manifestLibraryID(remoteRoot: URL) -> UUID? {
+        let url = remoteRoot.appendingPathComponent("daybook-sync.json")
+        guard SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.coordinateRead(url, below: remoteRoot, operation: { try Data(contentsOf: $0) }),
+              let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)) else { return nil }
+        return manifest.libraryID
     }
     /// Whether one of this device's checkpoints (for any library) records `id` as deleted through sync.
     public static func recordsDeletion(of id: UUID, localRoot: URL, deviceID: String) -> Bool {
