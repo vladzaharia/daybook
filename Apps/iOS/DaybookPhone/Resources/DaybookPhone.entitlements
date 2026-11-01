@@ -21,10 +21,11 @@
 	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.local.daybook.phone</string>
+		<string>group.local.daybook</string>
 	</array>
 	<key>keychain-access-groups</key>
 	<array>
+		<string>$(AppIdentifierPrefix)local.daybook</string>
 		<string>$(AppIdentifierPrefix)local.daybook.phone</string>
 		<string>$(AppIdentifierPrefix)local.daybook.shared</string>
 	</array>

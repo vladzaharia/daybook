@@ -129,7 +129,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Daybook
-        # local.daybook.app for signed builds; ad hoc and rehearsal builds have their own (Config/Signing.xcconfig).
+        # local.daybook for signed builds; ad hoc and rehearsal builds have their own (Config/Signing.xcconfig).
         PRODUCT_BUNDLE_IDENTIFIER: $(DAYBOOK_BUNDLE_ID)
         PRODUCT_MODULE_NAME: Daybook
         INFOPLIST_FILE: $(DAYBOOK_ROOT)/Resources/Info.plist

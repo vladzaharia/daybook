@@ -7,17 +7,16 @@
      the one that creates the container. The app's launch check (SandboxMigration) handles every other case.
      The preferences move too: macOS doesn't move them by itself (the rehearsal showed it, docs/validation.md), and
      they hold the devices, model choices, sync state, and folder bookmarks. Quit the unsandboxed app first.
-     Sandboxed builds run as local.daybook.phone, the iPhone app's bundle ID (universal purchase), and the unsandboxed
-     app is local.daybook.app, so its preferences file moves under the new name: ${BundleId} would name a file it
-     never wrote. A probe showed macOS moving a preferences file under another name this way and the sandboxed app
-     reading it as its own (docs/validation.md). -->
+     Every signed build is local.daybook, the Developer ID download included, so its preferences file is ${BundleId}'s.
+     Releases before the one bundle ID were local.daybook.app: that file moves into the container under its own name, and
+     the app carries its settings over at launch (PreferencesCarryOver), as the unsandboxed app does. A probe showed
+     macOS skipping an item that isn't there and moving the rest, and the sandboxed app reading a domain moved under its
+     own name (docs/validation.md). -->
 <plist version="1.0"><dict>
 <key>Move</key>
 <array>
     <string>${ApplicationSupport}/Daybook</string>
-    <array>
-        <string>${Library}/Preferences/local.daybook.app.plist</string>
-        <string>${Library}/Preferences/${BundleId}.plist</string>
-    </array>
+    <string>${Library}/Preferences/${BundleId}.plist</string>
+    <string>${Library}/Preferences/local.daybook.app.plist</string>
 </array>
 </dict></plist>

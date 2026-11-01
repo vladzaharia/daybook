@@ -3,9 +3,9 @@
 # adds it to a TestFlight beta group. Uses the App Store Connect API with curl and jq, authenticated
 # with a JWT from scripts/ci/asc-jwt.sh. No fastlane, no Ruby.
 #
-#   scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --version 1.4.0 --build 1057 \
+#   scripts/ci/asc-testflight.sh --bundle-id local.daybook --version 1.4.0 --build 1057 \
 #       [--group "Daybook testers"] [--notes-file notes.txt] [--locale en-US] [--timeout 3600] [--platform IOS]
-#   scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --version 1.4.0 \
+#   scripts/ci/asc-testflight.sh --bundle-id local.daybook --version 1.4.0 \
 #       --find-build "1057 1057.2" [--uploaded-after 2026-10-24T20:11:08Z] [--platform IOS]
 #
 # --platform is IOS (the default) or MAC_OS: one app record holds both apps (universal purchase), and each

@@ -6,7 +6,7 @@
 # Developer ID signing, which Apple reserves for the Account Holder (docs/release.md, "Fallback: a
 # Developer ID .p12").
 #
-#   scripts/ci/asc-profile.sh --bundle-id local.daybook.app --type MAC_APP_DIRECT \
+#   scripts/ci/asc-profile.sh --bundle-id local.daybook --type MAC_APP_DIRECT \
 #       [--keychain "$DAYBOOK_SIGNING_KEYCHAIN"] [--install-dir DIR]
 #
 # With --keychain, the profile must contain the certificate of that keychain's Developer ID

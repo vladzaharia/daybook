@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Signed builds in the App Sandbox (Apple Development, Developer ID), selected only with DAYBOOK_SANDBOX = YES
-     (scripts/build-app.sh with sandbox, Apps/macOS/Config/Signing.xcconfig, docs/sandbox.md). Until the switch ships,
-     signed builds use Daybook.entitlements and aren't sandboxed.
+<!-- Signed builds in the App Sandbox (the App Store and TestFlight build; Developer ID with sandbox), selected only with
+     DAYBOOK_SANDBOX = YES (scripts/build-app.sh with sandbox or app-store, Apps/macOS/Config/Signing.xcconfig,
+     docs/sandbox.md). Until the switch ships, Developer ID builds use Daybook.entitlements and aren't sandboxed.
 
      Exactly Daybook.entitlements (keep every key and value the same; scripts/ci/tests/run-tests.sh checks it) plus the
      App Sandbox and what Daybook needs in it: the microphone, Bluetooth for the Soundcore, the link's listener and
@@ -22,5 +22,5 @@
 <key>com.apple.security.network.server</key><true/>
 <key>com.apple.security.files.user-selected.read-write</key><true/>
 <key>com.apple.security.files.bookmarks.app-scope</key><true/>
-<key>keychain-access-groups</key><array><string>$(AppIdentifierPrefix)local.daybook.app</string><string>$(AppIdentifierPrefix)local.daybook.shared</string></array>
+<key>keychain-access-groups</key><array><string>$(AppIdentifierPrefix)local.daybook</string><string>$(AppIdentifierPrefix)local.daybook.app</string><string>$(AppIdentifierPrefix)local.daybook.shared</string></array>
 </dict></plist>

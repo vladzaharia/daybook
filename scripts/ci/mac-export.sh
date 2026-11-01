@@ -6,8 +6,7 @@
 #
 # With a Developer ID keychain (the .p12 fallback; secrets.sh sets DAYBOOK_SIGNING_KEYCHAIN), it installs
 # the manually managed Developer ID profile (scripts/ci/asc-profile.sh) for the archived app's bundle ID
-# (local.daybook.app, or local.daybook.phone for a sandboxed build) and the export signs manually with that
-# identity. Without one, the export uses Xcode's cloud-managed signing with the API key (docs/release.md,
+# (local.daybook) and the export signs manually with that identity. Without one, the export uses Xcode's cloud-managed signing with the API key (docs/release.md,
 # Signing). Then build-app.sh --export-only packages dist/Daybook.app.
 set -euo pipefail
 
