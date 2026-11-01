@@ -54,7 +54,7 @@ struct ModelsSettingsScreen: View {
         .navigationTitle("Models")
         .navigationBarTitleDisplayMode(.inline)
         .task { await models.refresh() }
-        .onChange(of: settings.processesOnThisIPhone) { _, _ in model.processor.pickUp() }
+        .onChange(of: settings.processesOnThisIPhone) { _, _ in model.processingChanged() }
         .confirmationDialog(removing.map { "Remove \($0.name)?" } ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
                             titleVisibility: .visible, presenting: removing) { item in
             Button("Remove", role: .destructive) { Task { await models.remove(item) } }

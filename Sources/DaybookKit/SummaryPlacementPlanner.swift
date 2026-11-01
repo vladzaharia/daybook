@@ -219,21 +219,3 @@ extension SummaryPlacementPlanner {
         }
     }
 }
-
-extension CloudSummaryPreferences {
-    /// The model these preferences pick among `models` (those the person's keys reach): the one chosen, while
-    /// it's reachable; otherwise the tier's best (lowest rank, then price), falling back to the other tiers in
-    /// order. Nil with no models (no key) or with the policy Never.
-    public func resolve(in models: [CloudModel]) -> CloudModel? {
-        guard policy != .never, !models.isEmpty else { return nil }
-        if let model, let chosen = models.first(where: { $0.id == model }) { return chosen }
-        let tiers = [tier] + CloudTier.allCases.filter { $0 != tier }
-        for tier in tiers {
-            let candidates = models.filter { $0.tier == tier }
-            if let best = candidates.min(by: { ($0.rank, $0.outputPrice ?? .infinity, $0.id) < ($1.rank, $1.outputPrice ?? .infinity, $1.id) }) {
-                return best
-            }
-        }
-        return nil
-    }
-}

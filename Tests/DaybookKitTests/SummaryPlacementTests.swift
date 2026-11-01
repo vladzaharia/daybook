@@ -261,26 +261,6 @@ final class SummaryPlacementTests: XCTestCase {
         XCTAssertEqual(SummaryPlacementPlanner.Action.allCases.map(\.title), ["Use the Cloud", "Start Now", "Wait for a Mac"])
     }
 
-    // MARK: Preferences
-
-    func testBehaviorPreferencesResolveToTheChosenModelOrTheTiersBest() {
-        let opus = CloudModel(provider: .anthropic, id: "claude-opus-5-5", name: "Claude Opus 5.5", tier: .best, inputPrice: 4, outputPrice: 20,
-                              priceIsEstimated: false, contextTokens: nil, rank: 1)
-        let sol = CloudModel(provider: .openai, id: "gpt-6.1-sol", name: "GPT-6.1 Sol", tier: .balanced, inputPrice: 2, outputPrice: 10,
-                             priceIsEstimated: false, contextTokens: nil, rank: 2)
-        var preferences = CloudSummaryPreferences()
-        XCTAssertEqual(preferences.resolve(in: [sol, opus, sonnet]), sonnet, "Balanced, lowest rank")
-        XCTAssertEqual(preferences.resolve(in: [sol, opus]), sol)
-        XCTAssertEqual(preferences.resolve(in: [opus]), opus, "Another tier when the chosen one has none")
-        preferences.model = opus.id
-        XCTAssertEqual(preferences.resolve(in: [sol, opus, sonnet]), opus)
-        preferences.model = "gone"
-        XCTAssertEqual(preferences.resolve(in: [sol, sonnet]), sonnet, "A chosen model no key reaches falls back to the tier")
-        XCTAssertNil(preferences.resolve(in: []), "No key, no model")
-        preferences.policy = .never
-        XCTAssertNil(preferences.resolve(in: [sonnet]))
-    }
-
     // MARK: Every conversation on a device
 
     @MainActor

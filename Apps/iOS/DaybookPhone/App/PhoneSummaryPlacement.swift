@@ -1,4 +1,5 @@
 import Combine
+import DaybookIntelligence
 import DaybookKit
 import DaybookLink
 import Foundation
@@ -21,12 +22,11 @@ extension LibraryController {
 }
 
 /// Where this iPhone's summaries run (docs/multipoint.md, "Where summaries run"; docs/iphone.md). The same
-/// planner as the Mac's, with what an iPhone offers: its own summarizer when it has one (`localSummarizer`;
-/// none yet, so its summaries go to a Mac or the cloud), the Macs that summarize and are reachable now (over
-/// the link, or seen through sync in the last 15 minutes), and the cloud model the person's keys and
-/// preferences resolve to.
+/// planner as the Mac's, with what an iPhone offers: its own summarizer when its processing models have one
+/// (`localSummarizer`), the Macs that summarize and are reachable now (over the link, or seen through sync in
+/// the last 15 minutes), and the cloud model Settings › Cloud resolves to (`cloud`, the app's `CloudSetup`).
 ///
-/// - **Due** (`summaryIsDue`, once this iPhone has a transcript of its own): with the cloud on offer it
+/// - **Due** (`summaryIsDue`, once `PhoneProcessor` has transcribed and fused a conversation): with the cloud on offer it
 ///   counts down 15 s (or the setting) to its default: this iPhone, else "Summarizing on Vlad's MacBook
 ///   Pro". With nowhere to run it: "Waiting for a Mac to summarize · Use the Cloud", counting down when a
 ///   Mac becomes reachable. Wait for a Mac passes over this iPhone.
@@ -34,7 +34,8 @@ extension LibraryController {
 ///   with no Mac reachable, the request waits for one in the library, and Use the Cloud takes it back.
 /// - **Sending to a Mac** writes a Summarize request (`ProcessingRequest`, the existing path) and nudges
 ///   connected Macs. **Here or in the cloud**, this iPhone claims the summary through a request first, so
-///   no Mac summarizes it too, and keeps a summary another device wrote meanwhile.
+///   no Mac summarizes it too, and keeps a summary another device wrote meanwhile. Here, the processor runs
+///   it (`runHere`), under its rules: on the screen, one at a time, backing off for heat and power.
 /// - **A Mac's own countdown** (over the link) shows here, with Use the Cloud and Start Now sent to it; this
 ///   iPhone stops its own countdown for that conversation.
 /// - **In the background**, where a countdown can't run, each countdown's default happens at once, and a
@@ -44,28 +45,37 @@ extension LibraryController {
 final class PhoneSummaryPlacement {
     /// What's being placed, by conversation (`placements`' planners, observable here).
     private(set) var planners: [UUID: SummaryPlacementPlanner] = [:]
-    /// Summaries running here or in the cloud, by conversation: "Summarizing with Claude Sonnet 5.5".
+    /// Summaries running in the cloud, by conversation: "Summarizing with Claude Sonnet 5.5". One running here
+    /// is the processor's, and its status says so.
     private(set) var runs: [UUID: SummaryPlace] = [:]
-    /// The cloud models the person's keys reach, as the cloud last said.
-    private(set) var cloudModels: [CloudModel] = []
-    /// How the person wants summaries placed (Settings › Cloud).
-    var preferences: CloudSummaryPreferences {
+    /// Settings › Cloud (`PhoneAppModel.cloudSummaries`): the keys, the models they reach, and the preferences,
+    /// read only from there. Nil until the app sets it: nothing about the cloud is offered.
+    @ObservationIgnored var cloud: CloudSetup? {
         didSet {
-            guard preferences != oldValue else { return }
-            preferences.save(to: defaults)
+            // A key, the models, or the preferences changing reaches every countdown at once.
+            cloud?.onChange = { [weak self] in self?.refresh() }
             refresh()
         }
     }
-    /// This iPhone's own summarizer, once it has one (the iPhone's processing models fill it in).
+    /// How the person wants summaries placed: Settings › Cloud's.
+    var preferences: CloudSummaryPreferences { cloud?.preferences ?? CloudSummaryPreferences() }
+    /// This iPhone's own summarizer, when its processing models have one that fits (`PhoneModels.summarizer`).
     @ObservationIgnored var localSummarizer: (any LocalSummarizing)? { didSet { refresh() } }
-    /// Summaries in the cloud, with the person's own keys. Nil until there's a cloud to use.
-    @ObservationIgnored var cloudSummarizer: (any CloudSummarizing)? { didSet { Task { await refreshCloudModels() } } }
+    /// Runs a summary placed on this iPhone, on the request claimed for it: the processor's work
+    /// (`PhoneProcessor.summarizeHere`). Without it, a summary placed here goes to a Mac.
+    @ObservationIgnored var runHere: ((UUID, ProcessingRequest) -> Void)?
+    /// Summaries in the cloud with the person's own keys: `cloud`'s directory, sent as this iPhone. Tests and demos
+    /// set one of their own.
+    var cloudSummarizer: (any CloudSummarizing)? {
+        get { cloudSummarizerOverride ?? cloud.map { CloudSummarizer(directory: $0.directory, deviceName: library.thisDevice.name) } }
+        set { cloudSummarizerOverride = newValue }
+    }
+    @ObservationIgnored private var cloudSummarizerOverride: (any CloudSummarizing)?
 
     @ObservationIgnored let placements: SummaryPlacements
     @ObservationIgnored private let library: LibraryController
     @ObservationIgnored private let link: PhoneLink
     @ObservationIgnored private let presence: () -> [KnownSyncDevice]
-    @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let clock: () -> Date
     /// Summaries running here or in the cloud, with the request this iPhone claimed for each.
     @ObservationIgnored private var running: [UUID: (request: UUID, task: Task<Void, Never>)] = [:]
@@ -73,16 +83,13 @@ final class PhoneSummaryPlacement {
     @ObservationIgnored private var templates: [UUID: String] = [:]
     @ObservationIgnored private var subscription: AnyCancellable?
 
-    init(library: LibraryController, link: PhoneLink, presence: @escaping () -> [KnownSyncDevice], defaults: UserDefaults,
+    init(library: LibraryController, link: PhoneLink, presence: @escaping () -> [KnownSyncDevice],
          clock: @escaping () -> Date = Date.init, runsTimer: Bool = true) {
         self.library = library
         self.link = link
         self.presence = presence
-        self.defaults = defaults
         self.clock = clock
-        let preferences = CloudSummaryPreferences.load(from: defaults)
-        self.preferences = preferences
-        placements = SummaryPlacements(preferences: preferences, waitsForMacs: true, clock: clock, runsTimer: runsTimer)
+        placements = SummaryPlacements(waitsForMacs: true, clock: clock, runsTimer: runsTimer)
         subscription = placements.$planners.sink { [weak self] planners in self?.planners = planners }
         placements.onSettled = { [weak self] id, phase in self?.settled(id, phase) }
         // A Mac's countdown or work on a conversation ends this iPhone's own countdown for it.
@@ -102,36 +109,45 @@ final class PhoneSummaryPlacement {
         return SummarizingMac.reachable(connected: connected, presence: presence(), now: clock())
     }
 
-    /// The cloud model on offer, if any.
-    var cloudOffer: CloudModel? { preferences.resolve(in: cloudModels) }
+    /// The cloud model on offer: what Settings › Cloud resolves to, nil without a key (the planner leaves it out
+    /// with Never).
+    var cloudOffer: CloudModel? { preferences.policy == .never ? nil : cloud?.resolved?.model }
 
     var options: SummaryOptions {
-        SummaryOptions(thisDeviceCanSummarize: localSummarizer?.canSummarize ?? false, macs: reachableMacs, cloud: cloudOffer)
+        SummaryOptions(thisDeviceCanSummarize: runHere != nil && localSummarizer?.canSummarize == true, macs: reachableMacs,
+                       cloud: cloud?.resolved?.model)
     }
 
     /// What's on offer changed (a Mac came or went, presence, a key, this iPhone's summarizer): every countdown
-    /// follows, and one a Mac has taken meanwhile stops here.
+    /// follows, and one a Mac has taken meanwhile, or whose conversation went (to the Trash, or into a Mac's
+    /// conversation of the same meeting), stops here.
     func refresh() {
         placements.update(options: options, preferences: preferences)
         for id in placements.undecided where isTakenElsewhere(id) { placements.end(id) }
-        // A summary this iPhone runs that another device took over in a merge: it stands down.
+        // A summary this iPhone runs in the cloud that another device took over in a merge, or whose conversation
+        // went: it stands down.
         for (id, run) in running {
-            guard let request = library.meeting(id)?.processingRequests?.first(where: { $0.id == run.request }) else { continue }
+            guard let request = library.meeting(id)?.processingRequests?.first(where: { $0.id == run.request }) else {
+                run.task.cancel()
+                continue
+            }
             if let holder = request.activeClaim(at: clock()), holder.device.id != library.thisDevice.id { run.task.cancel() }
         }
     }
 
-    func refreshCloudModels(refresh: Bool = false) async {
-        let models = await cloudSummarizer?.availableModels(refresh: refresh) ?? []
-        if models != cloudModels { cloudModels = models }
-        self.refresh()
+    /// Reads the keys and their models again (`CloudSetup.reload`): before a summary is placed, at launch, and when
+    /// Daybook comes back. A key added on the Mac reaches this iPhone through iCloud Keychain.
+    func reloadCloud() async {
+        await cloud?.reload()
+        refresh()
     }
 
     // MARK: Starting
 
-    /// A conversation's summary is due on this iPhone: its own transcript is ready (the iPhone's processing
+    /// A conversation's summary is due on this iPhone: its own transcript is ready and fused (the processor
     /// calls this). A Mac already working on it keeps it.
-    func summaryIsDue(_ id: UUID, templateID: String? = nil) {
+    func summaryIsDue(_ id: UUID, templateID: String? = nil) async {
+        await reloadCloud()
         guard !isTakenElsewhere(id) else { return }
         if let templateID { templates[id] = templateID }
         refresh()
@@ -185,10 +201,13 @@ final class PhoneSummaryPlacement {
     /// A Mac's live progress on the conversation, over the link.
     func live(_ id: UUID) -> LiveProgress? { link.liveProgress[id] }
 
-    /// A Mac is working on the conversation, or counting down to: it has it.
+    /// A Mac is working on the conversation, or counting down to: it has it. A conversation that's gone (a Mac
+    /// moved its recording into its own conversation of the same meeting, and this one went to the Trash) is
+    /// nobody's to summarize here.
     func isTakenElsewhere(_ id: UUID) -> Bool {
+        guard let meeting = library.meeting(id) else { return true }
         if let live = link.liveProgress[id], !live.isFinished { return true }
-        return library.meeting(id)?.summaryHolder(excluding: library.thisDevice.id, at: clock()) != nil
+        return meeting.summaryHolder(excluding: library.thisDevice.id, at: clock()) != nil
     }
 
     // MARK: Running
@@ -213,38 +232,35 @@ final class PhoneSummaryPlacement {
         }
     }
 
-    /// Summarizes here or in the cloud, holding a claim on a Summarize request so no Mac does it too.
+    /// Summarizes here or in the cloud, holding a claim on a Summarize request so no Mac does it too. Here, the
+    /// processor runs it (`runHere`) under its rules; in the cloud, it runs now.
     private func run(_ id: UUID, _ place: SummaryPlace) {
+        if place == .thisDevice, runHere == nil { return send(id) }
         let templateID = templates.removeValue(forKey: id)
         guard running[id] == nil, let meeting = library.meeting(id), !isTakenElsewhere(id),
               let claimed = library.claimSummary(id, templateID: templateID, at: clock()) else {
             placements.end(id)
             return
         }
-        // From here it shows as running (`runs`), whether it was placed here or taken from a waiting request.
         placements.end(id)
-        runs[id] = place
         link.nudge(claimed)
+        guard case .cloud(let model) = place, let cloud = cloudSummarizer else {
+            // The processor's work from here: its status says "Summarizing on this iPhone".
+            runHere?(id, claimed)
+            return
+        }
+        // From here it shows as running (`runs`), whether it was placed here or taken from a waiting request.
+        runs[id] = place
         let started = clock()
         let template = (claimed.templateID ?? templateID).map { SummaryTemplate.resolved(id: $0, kind: meeting.kind, templates: library.templates) }
             ?? library.resolvedTemplate(for: meeting)
         let vocabulary = library.glossary.filter { $0.approved || $0.sourceMeetingIDs.contains(id) }.map(\.term)
-        let cloud = cloudSummarizer, local = localSummarizer, effort = preferences.effort
+        let effort = preferences.effort
         let task = Task { [weak self] in
             do {
-                let summary: MeetingSummary
-                switch place {
-                case .cloud(let model):
-                    guard let cloud else { throw CancellationError() }
-                    summary = try await cloud.summarize(meeting, template: template, vocabulary: vocabulary, model: model, effort: effort) { _ in }
-                case .thisDevice:
-                    guard let local else { throw CancellationError() }
-                    summary = try await local.summarize(meeting, template: template, vocabulary: vocabulary) { _ in }.summary
-                case .mac:
-                    throw CancellationError()
-                }
+                let output = try await cloud.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model, effort: effort) { _ in }
                 try Task.checkCancellation()
-                self?.finished(id, request: claimed.id, summary: summary, place: place, started: started)
+                await self?.finished(id, request: claimed.id, output: output, place: place, started: started)
             } catch is CancellationError {
                 self?.stopped(id, request: claimed.id, reason: nil)
             } catch {
@@ -254,10 +270,13 @@ final class PhoneSummaryPlacement {
         running[id] = (claimed.id, task)
     }
 
-    private func finished(_ id: UUID, request: UUID, summary: MeetingSummary, place: SummaryPlace, started: Date) {
+    private func finished(_ id: UUID, request: UUID, output: SummaryProcessingOutput, place: SummaryPlace, started: Date) async {
         running[id] = nil
         runs[id] = nil
-        library.applyPlacedSummary(summary, to: id, place: place, started: started)
+        if library.applyPlacedSummary(output.summary, to: id, place: place, started: started) {
+            library.update(id) { $0.errorMessage = output.warnings.isEmpty ? nil : output.warnings.joined(separator: "\n") }
+            try? await library.proposeTerms(output.suggestedTerms, for: id)
+        }
         library.completeProcessingRequest(request, in: id, at: clock())
     }
 
@@ -269,6 +288,6 @@ final class PhoneSummaryPlacement {
         else { library.releaseProcessingRequest(request, in: id, at: clock()) }
     }
 
-    /// Stops a summary running here or in the cloud; the request goes back for a Mac.
+    /// Stops a summary running in the cloud; the request goes back for a Mac.
     func stop(_ id: UUID) { running[id]?.task.cancel() }
 }
