@@ -191,6 +191,18 @@ final class ConversationStatusPresentationTests: XCTestCase {
             XCTAssertEqual(page(.requested(.device(request)), meeting, inputs)?.title, "Waiting for Studio Mac to upgrade the transcript")
             XCTAssertEqual(row(.requested(.device(request)), meeting, inputs)?.text, "Waiting for Studio Mac")
         }
+
+        // New audio comes first: the page and the row both say what happens to it, not the upgrade.
+        var arrived = meeting
+        arrived.tracks.append(RecordingTrack(source: .soundcore, relativePath: "Originals/b.wav", fileName: "b.wav", duration: 60))
+        XCTAssertTrue(arrived.hasUntranscribedAudio)
+        let other = Presentation.Inputs(words: .mac(id: "this-mac"), local: .mac())
+        for inputs in [mac, phone, other] {
+            let shown = page(.requested(.device(request)), arrived, inputs)
+            XCTAssertNotEqual(shown?.title, "Waiting for Studio Mac to upgrade the transcript")
+            XCTAssertEqual(row(.requested(.device(request)), arrived, inputs)?.text, shown?.title, "\(inputs.words.here)")
+        }
+        XCTAssertEqual(row(.requested(.device(request)), arrived, other)?.text, "Requested from Alex’s iPhone")
     }
 
     func testBehaviorAFailureReadsTheSameWordsAndOffersItsFix() {

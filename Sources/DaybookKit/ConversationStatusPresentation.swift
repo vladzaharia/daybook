@@ -630,7 +630,8 @@ extension ConversationStatusPresentation {
         case .requested(.paused):
             return ConversationRowStatus(kind: .paused, text: "Paused")
         case .requested(.device(let request)):
-            if let upgrade = request.upgrade { return ConversationRowStatus(kind: .waiting, text: upgrade.shortLine) }
+            // As the page: an upgrade's own line only while there's no new audio to transcribe first.
+            if let upgrade = request.upgrade, !meeting.hasUntranscribedAudio { return ConversationRowStatus(kind: .waiting, text: upgrade.shortLine) }
             if inputs.local.transcribes, request.requestedBy.id != words.thisDeviceID, meeting.hasUntranscribedAudio {
                 return ConversationRowStatus(kind: .waiting, text: "Requested from \(request.requestedBy.name)")
             }
