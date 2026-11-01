@@ -1,4 +1,5 @@
 import DaybookCaptions
+import DaybookDesign
 import DaybookKit
 import DaybookLink
 import DaybookUI
@@ -477,7 +478,7 @@ struct StatusLineRow: View {
                 Spacer(minLength: 0)
             }
             if line.tone == .working, let progress = line.progress {
-                StatusProgressLine(fraction: progress).padding(.leading, 30)
+                WorkProgressLine(fraction: progress).padding(.leading, 30)
             }
         }
         .contentShape(Rectangle())
@@ -519,23 +520,6 @@ struct StatusLineRow: View {
         case .working: return PhoneStyle.Ink.link
         default: return PhoneStyle.Ink.meta
         }
-    }
-}
-
-/// Work in progress: the 2 pt brand-gradient line, as in a list row that's transcribing.
-struct StatusProgressLine: View {
-    let fraction: Double
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(PhoneStyle.quietFill)
-                Capsule().fill(PhoneStyle.brandGradient).frame(width: proxy.size.width * min(1, max(0, fraction)))
-            }
-        }
-        .frame(height: 2)
-        .animation(.linear(duration: 0.3), value: fraction)
-        .accessibilityHidden(true)
     }
 }
 
@@ -1091,7 +1075,7 @@ private struct QueueRow: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if entry.isRunning, let progress = entry.progress {
-                        StatusProgressLine(fraction: progress).padding(.top, 2)
+                        WorkProgressLine(fraction: progress).padding(.top, 2)
                     }
                 }
                 .accessibilityElement(children: .combine)
