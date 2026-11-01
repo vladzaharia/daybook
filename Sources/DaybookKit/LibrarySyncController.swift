@@ -107,7 +107,7 @@ public struct SyncContainerEnvironment: Sendable {
     /// compared across apps.
     public var appIdentifier: String?
     /// Which app recorded an account before the app was kept with it: on the Mac the only signed build then,
-    /// `local.daybook.app`; on the iPhone the app itself.
+    /// `local.daybook.app` (signed Mac builds are `local.daybook` now); on the iPhone the app itself.
     public var earlierAccountApp: String?
 
     public init(containerIdentifier: String?, hasEntitlement: @escaping @Sendable (String) -> Bool,
@@ -250,6 +250,10 @@ public final class LibrarySyncController: ObservableObject {
     /// transport there: Settings offers Choose Folder… and a chosen folder is restored at launch. Builds signed
     /// for iCloud ignore it. See docs/icloud-sync.md, "Development builds".
     public static let developmentFolderSyncKey = "DaybookDevelopmentFolderSync"
+
+    /// How many checks, `retryInterval` apart, a container without any manifest gets before another app's recorded
+    /// account counts as another account (`prepareContainer`): about two minutes at the usual five seconds.
+    static let accountJournalWaitPasses = 24
 
     private enum Key {
         static let folderBookmark = "syncFolderBookmark"
@@ -931,9 +935,9 @@ public final class LibrarySyncController: ObservableObject {
             return
         }
         // Another app's account: iCloud's account token is per app, so a token another app recorded never equals this
-        // one's, even for the same account. That's this Mac's Developer ID build (`local.daybook.app`) when the App Store
-        // build (`local.daybook.phone`) took over its library and preferences, or the other way round. The container
-        // decides, below: holding this library's journal, it's the same account.
+        // one's, even for the same account. That's an earlier Mac release (`local.daybook.app`) whose preferences this
+        // one (`local.daybook`) carried over, or the other way round. The container decides, below: holding this
+        // library's journal, it's the same account.
         var recordedByAnotherApp = false
         if let previous = defaults.data(forKey: Key.account), !Self.sameAccount(previous, account) {
             let recorder = defaults.string(forKey: Key.accountApp) ?? environment.earlierAccountApp
@@ -954,14 +958,33 @@ public final class LibrarySyncController: ObservableObject {
         }
         let root = container.appendingPathComponent("Documents", isDirectory: true).appendingPathComponent("Daybook", isDirectory: true)
         if recordedByAnotherApp {
+            // The manifest may still be in iCloud (the first launch after the change, or a fresh install): it's asked
+            // for, and sync keeps saying "Connecting to iCloud…" until it's here. Only a manifest naming another library,
+            // or none turning up after a while, means another account.
             let (localRoot, deviceID, cloud) = (localRoot, deviceID, environment.cloud)
-            let holds = await Task.detached(priority: .utility) {
-                LibrarySyncEngine.holdsJournal(localRoot: localRoot, deviceID: deviceID, remoteRoot: root, cloud: cloud)
-            }.value
-            guard isCurrent(generation) else { return }
-            guard holds else {
-                iCloud = .accountChanged; status = "Sync paused: the iCloud account changed"
-                return
+            var passesWithoutManifest = 0
+            waiting: while true {
+                let ownership = await Task.detached(priority: .utility) {
+                    LibrarySyncEngine.journalOwnership(localRoot: localRoot, deviceID: deviceID, remoteRoot: root, cloud: cloud)
+                }.value
+                guard isCurrent(generation) else { return }
+                switch ownership {
+                case .thisLibrary:
+                    break waiting
+                case .anotherLibrary:
+                    iCloud = .accountChanged; status = "Sync paused: the iCloud account changed"
+                    return
+                case .absent:
+                    passesWithoutManifest += 1
+                    if passesWithoutManifest > Self.accountJournalWaitPasses {
+                        iCloud = .accountChanged; status = "Sync paused: the iCloud account changed"
+                        return
+                    }
+                case .inCloud:
+                    break
+                }
+                try? await Task.sleep(for: environment.retryInterval)
+                guard isCurrent(generation) else { return }
             }
         }
         if forgetsSealedLibrary {
