@@ -460,6 +460,123 @@ both record the conversation and list `sharedNotes`.
   editor wrote its text back is kept rather than taken as deleted (`SharedNotesTracker.keepingArrivals`).
 - What was there before the shared recording began, and work after it, travel through sync as before.
 
+## Where summaries run
+
+A conversation's summary can run on the device that has its transcript, on a Mac another device sends it to,
+or in the cloud with the person's own key (docs/cloud.md). Transcription, speakers, voice profiles, and audio
+never leave the device. Where each summary runs is decided by one planner both apps share
+(`SummaryPlacementPlanner` in DaybookKit), from what the device can offer when the summary is due
+(`SummaryOptions`) and the person's preferences (`CloudSummaryPreferences`, Settings › Cloud):
+
+| Code | What it does | Where |
+| --- | --- | --- |
+| Planner | One conversation's placement: its phase, the person's choices, and how it reacts when what's on offer changes. Pure; every change takes the time | [SummaryPlacementPlanner.swift](../Sources/DaybookKit/SummaryPlacementPlanner.swift) |
+| Placements | A planner per conversation, the countdowns' timer, and the options and preferences every countdown follows | [SummaryPlacements.swift](../Sources/DaybookKit/SummaryPlacements.swift) |
+| Claims and provenance | `claimSummary`, `summaryHolder`, `applyPlacedSummary`, and where a summary ran (`MeetingSummary.origin`, `modelsByRole`) | [LibraryController+SummaryPlacement.swift](../Sources/DaybookKit/LibraryController+SummaryPlacement.swift) |
+| Reachable Macs, capabilities | `SummarizingMac.reachable`, and `ProcessingCapabilities` as the link and presence carry them | [ProcessingCapabilities+Devices.swift](../Sources/DaybookKit/ProcessingCapabilities+Devices.swift) |
+| The Mac | The summary step of every job, its capabilities, phones' choices | [AppState+SummaryPlacement.swift](../Sources/Daybook/App/AppState+SummaryPlacement.swift) |
+| The iPhone | Its options, sending to a Mac, running here or in the cloud, the background | [PhoneSummaryPlacement.swift](../Apps/iOS/DaybookPhone/App/PhoneSummaryPlacement.swift) |
+
+**What a device offers.** Whether it can summarize itself (a Mac with its summary model; an iPhone with a
+`LocalSummarizing`, none until the iPhone's processing models land), the Macs that summarize and are
+reachable now (connected over the link, or seen through sync in the last 15 minutes, by their capabilities;
+an earlier Daybook's Mac counts when it says it processes), and the cloud model the preferences resolve to
+among those the person's keys reach (none without a key, or with Never).
+
+**The phases.**
+
+- **Counting down** to this device or a Mac: 15 s by default, or the setting (30 s). When it runs out, the
+  default starts: this device when it can summarize, else the first reachable Mac. The person can choose
+  **Use the Cloud** and **Start Now**, and, on a device that isn't a Mac and counts down to itself, **Wait
+  for a Mac** (a reachable Mac gets it at once; otherwise it waits for one, passing over this device from
+  then on).
+- **Waiting for a Mac**: nothing here can summarize it and no Mac is reachable, with the cloud on offer.
+  No countdown; Use the Cloud. When a Mac becomes reachable, a fresh countdown starts before it's sent.
+- **Started**: here, sent to a Mac, or in the cloud. Nothing changes it after this.
+- **Waiting, as before**: nowhere to run it, not even the cloud. It goes to the Macs as a request, as it
+  always has.
+
+**When it counts down.** Only when there's something to choose. Without a cloud model on offer (no key, or
+Never) a summary starts at once where it can, as before there was a cloud. **Always** sends it to the cloud
+with no countdown. A summary someone asked for starts at once wherever it can: Summarize Again, a template,
+Identify Speakers Again, Transcribe Everything Again, here or as another device's request. Only the summary
+that new audio makes due counts down.
+
+**When what's on offer changes mid-countdown**, every countdown follows (`SummaryPlacements.update`): a
+countdown keeps its deadline when where it ends up changes (the Mac it counted down to went away and another
+is reachable; this device became able to summarize, or stopped); one with nowhere left to go waits for a Mac;
+one whose cloud went away (the key removed, Never chosen) starts its default now, since the countdown was
+there to offer the cloud; Always chosen sends it to the cloud. Waiting turns into a fresh countdown when
+somewhere to run it appears.
+
+**On the Mac.** The summary step of every job goes through the planner (`placedSummary`): when the
+transcript is ready and the summary is due, the job counts down, then summarizes here, or in the cloud if
+the person chose it. The queue waits for the countdown, so a batch of imports counts down one at a time.
+Pause and Cancel during the countdown pause the job. It shows where processing status shows: the page's
+line ("Summarizing on this Mac in 12 s · Use the Cloud · Start Now", then "Summarizing with Claude Sonnet
+5.5" with Stop), the list row ("Summarizing in 12 s"), the inspector's Processing, and Floating Notes (the
+chip, whose menu has the choices, and the home's line for this Mac). Connected phones see the countdown too
+(`processing.progress`, phase `summaryCountdown`) and may choose; their choice arrives as
+`processing.choice` and acts as if it had been made here. A Mac's own summarizer is always available to a
+job (a job reaches the summary step only with the summary model), so a Mac never waits for another Mac. A
+request another device makes that joins a job counting down (its own countdown for that conversation ran
+out) starts it at once.
+
+**On the iPhone.** The same planner, with "this iPhone":
+
+- A summary due on the iPhone (its own transcript is ready; the iPhone's processing calls
+  `PhoneSummaryPlacement.summaryIsDue`) counts down to this iPhone when it has a summarizer, else to a
+  reachable Mac ("Summarizing on Vlad's MacBook Pro in 12 s"), then **sends** it: a Summarize request
+  (`ProcessingRequest` `.summaryOnly`, the existing path), with a nudge to connected Macs. With no Mac
+  reachable: "Waiting for a Mac to summarize · Use the Cloud", and a countdown when one arrives.
+- Summarize, Summarize Again, and a template the person asks for start at once where they can. With no
+  Mac reachable the request waits for one in the library, as before, and while it waits the page offers
+  Use the Cloud, which takes that request.
+- A Mac counting down to a conversation shows the Mac's countdown here, with its choices sent to it, and
+  this iPhone stops its own countdown for that conversation.
+- In the background a countdown can't run, so each one's default happens as the app leaves the screen, and
+  a summary waiting for a Mac is left to one through the library.
+- The conversation page, the list row, and the status sheet's Macs card say it, with the same choices.
+
+**One summary per conversation.** Through the request and claim mechanism every Mac already respects:
+
+- A device that summarizes a conversation here or in the cloud first claims it (`claimSummary`): a
+  Summarize request waiting for a Mac that it may take, or one it makes for the purpose, claimed with the
+  summarizing stage, so other devices read "Summarizing on Pocket iPhone" and no Mac takes it. A device
+  that finds another holding a live claim on any of the conversation's open requests stands down: every
+  request ends with a summary.
+- The Mac stands down at the summary step, before and after its countdown, when another device holds the
+  conversation (an iPhone chose the cloud and its claim arrived through sync), and its job finishes
+  without a summary; that device's arrives.
+- Two devices claiming at once: the merge keeps the newest claim, and the one that lost stops (the Mac's
+  `reconcileClaims` as before; the iPhone's cloud or local run when a pass shows the claim held elsewhere).
+- A summary another device wrote after this device began summarizing is kept rather than replaced
+  (`summaryWrittenElsewhere`), on both apps.
+- A Mac that arrives late finds the request claimed, or finished, and leaves it.
+
+**Provenance.** A summary records where it ran in its processing settings (`MeetingSummary.origin`): the
+device that ran it or sent it to the cloud (`summarizedBy`, `summarizedByName`), `place` (`local` or
+`cloud`), and for the cloud the model's name and provider. It also records the model behind each role
+(`model.transcription`, `model.diarization`, `model.summarization`, read with `modelsByRole`), for comparing
+later with what a device could do better. The colophon says it: "Summarized on this Mac", "Summarized on
+Studio Mac", "Summarized on this iPhone", "Summarized with Claude Sonnet 5.5"; a summary made before this
+reads as before ("on this Mac" on a Mac, "on your Mac" on the iPhone).
+
+**Capabilities.** A Mac advertises `ProcessingCapabilities` (transcribes, finds speakers, summarizes, and
+the model it would use for each role it runs) over the link (`LinkCapabilities.processing`) and in its
+presence record (`SyncDeviceIdentity.capabilities`): worked out from its routed models and, for summaries,
+the memory the summary model suggests, and only while it transcribes synced recordings (otherwise it takes
+no work from others, and says none). Earlier peers send none, which reads as unknown, not as "can't".
+
+**Limits.** A countdown inside a job holds the Mac's queue for its length. The iPhone's choice for a Mac's
+countdown travels only over the link; without it, the iPhone sees the Mac at work through sync and can't
+choose. Two devices that both start summarizing before either's claim reaches the other (no link, iCloud
+slow) can both finish; the later one keeps the earlier summary if it arrived first, and otherwise the
+merge keeps one and Version History the other. A Mac's presence counts as reachable for 15 minutes after
+it was seen, so a Mac that went to sleep a few minutes ago can be counted on until then; the request waits
+in the library for it. The iPhone has no summarizer of its own yet (`LocalSummarizing` is the seam for
+it), so today its summaries go to a Mac or the cloud.
+
 ## Preferences
 
 | Preference | Default | Where |

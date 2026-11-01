@@ -63,6 +63,35 @@ A conversation's processing state comes from its data and is shown the same way 
 - **On a Mac nothing changes.** New audio that arrives through sync is processed as it is today; requests only make the phone's intent explicit and visible.
 - **The phone never fakes progress.** If no Mac is paired or has been seen, the state says so plainly.
 
+### Where summaries run
+
+The iPhone places its summaries with the Mac's planner (docs/multipoint.md, "Where summaries run";
+`PhoneSummaryPlacement`, `model.placement`), from what it can offer: its own summarizer (`localSummarizer`, a
+`LocalSummarizing`; none until its processing models land), the Macs that summarize and are reachable now
+(connected over the link, or seen through sync in the last 15 minutes, by their `ProcessingCapabilities`),
+and the cloud model the person's keys and preferences resolve to (`cloudSummarizer`, set by the cloud work).
+
+| Moment | The page says | Then |
+|---|---|---|
+| Its own transcript is ready (`summaryIsDue`), a Mac is reachable, a key is set | "Summarizing on Vlad's MacBook Pro in 12 s" · Use the Cloud · Start Now | A Summarize request, nudged to the Mac |
+| The same, with its own summarizer | "Summarizing on this iPhone in 12 s" · Use the Cloud · Start Now · Wait for a Mac | Summarized here, with a claim |
+| No Mac reachable, a key is set | "Waiting for a Mac to summarize" · Use the Cloud | A countdown when a Mac arrives |
+| Use the Cloud | "Summarizing with Claude Sonnet 5.5" · Stop | Summarized in the cloud, with a claim |
+| A Mac counts down to it (over the link) | "Summarizing on Studio Mac in 12 s" · Use the Cloud · Start Now | The choice goes to the Mac |
+| Summarize, Summarize Again, a template, with no Mac reachable and a key | "Waiting for a Mac to summarize" · Use the Cloud | The request waits for a Mac; Use the Cloud takes it |
+| No key | As before | A request for a Mac, at once |
+
+The list row says "Summarizing in 12 s" or "Waiting for a Mac to summarize", and the status sheet's Macs card
+lists it under the Mac it counts down to (or on its own while it waits), with the same choices. In the
+background, where a countdown can't run, each countdown's default happens as the app leaves the screen, and a
+summary waiting for a Mac is left to one through the library. The colophon says where a summary ran:
+"Summarized on your Mac" (a summary that doesn't say), "on Studio Mac", "on this iPhone", or "with Claude
+Sonnet 5.5".
+
+For the iPhone's processing work: call `model.placement.summaryIsDue(id)` once a conversation's transcript made
+here is in, and set `model.placement.localSummarizer` to a `LocalSummarizing` when a summary model fits
+(`canSummarize` says whether it can run now). Everything else (countdown, Macs, cloud, claims) follows.
+
 ### On the Mac
 
 The queue is `AppState`'s (`AppState+Requests.swift`); each change to a request is one of `ProcessingRequest`'s pure functions, saved like an edit.
@@ -237,7 +266,7 @@ and sync at a glance, expanding to manage them (`DaybookPhone/Status/`). The wor
 | Detent | What it shows |
 |---|---|
 | **Compact** | Record, Import, and Search at the thumb; then one line each: the recorder ("Connected · 80% · 2 new", "Recording · 80%", "Importing 1 of 3", "Managed by Studio Mac", a handoff under way), your Mac ("Transcribing · 40%" with the gradient line, "Connected · 2 waiting", "Last seen 2 h ago", or "Recording" with the red dot when its synced presence says so and the link has no word), and iCloud ("Up to date", "Syncing 3 changes"). Tapping a line goes to medium |
-| **Medium** | Live listening captions while a recorder streams, first (`DeviceSession.liveCaptions`, tentative). Then at most three groups, each a generic heading and one full-width card, with each device in one card only. **Recorders**: a card per recorder, its tile, name, and status opening its page, then its handoff as a row (Use on This iPhone / Use on Studio Mac, progress, Take Over Anyway); Add Recorder… when there's none. **Macs**: every paired Mac as a row opening its details, the queue as rows under the Mac doing it (running with progress, waiting oldest first with "Requested from this iPhone", then conversations waiting for a recording made alongside, "Waiting for Soundcore Work audio", oldest first and not counted in the Mac's "2 waiting", then failures with the page's plain sentence and the Mac's words behind Details; the Mac isn't named again), and Pair with Your Mac… last. An empty queue shows nothing |
+| **Medium** | Live listening captions while a recorder streams, first (`DeviceSession.liveCaptions`, tentative). Then at most three groups, each a generic heading and one full-width card, with each device in one card only. **Recorders**: a card per recorder, its tile, name, and status opening its page, then its handoff as a row (Use on This iPhone / Use on Studio Mac, progress, Take Over Anyway); Add Recorder… when there's none. **Macs**: every paired Mac as a row opening its details, the queue as rows under the Mac doing it (summaries counting down or waiting for a Mac first, with their choices: "Summarizing in 12 s" · Use the Cloud · Start Now; then running with progress, waiting oldest first with "Requested from this iPhone", then conversations waiting for a recording made alongside, "Waiting for Soundcore Work audio", oldest first and not counted in the Mac's "2 waiting", then failures with the page's plain sentence and the Mac's words behind Details; the Mac isn't named again), and Pair with Your Mac… last. An empty queue shows nothing |
 | **Large** | Each recorder's card adds its storage to its status ("About 2,170 hours left"), its actions as one row of equal-width buttons (Connect, Record or Pause on Soundcore, Import N New, Listen Live or Stop Listening: only what can be done now, never a disabled button), and the recordings waiting on it with Import, then All Recordings. A third group, **This iPhone**, is the audio kept on it ("1.2 GB of audio", as Settings says it), opening Storage. Links open the full screens (the device page, a Mac, Storage) inside the sheet rather than copies of them |
 
 **Per posture, and why:**
