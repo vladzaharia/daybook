@@ -1,6 +1,7 @@
 {
  "version": 1,
  "measured": "2026-10-31",
+ "promptCharacters": 7300,
  "providers": {
   "anthropic": {
    "name": "Anthropic",
