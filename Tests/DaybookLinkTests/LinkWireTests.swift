@@ -26,6 +26,15 @@ final class LinkWireTests: XCTestCase {
             .app(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .failed, fraction: nil, macName: "M",
                                                             detail: "Out of space"))),
             .app(.processingNudge(LinkProcessingNudge(requestID: UUID(), meetingID: id, mode: .transcribe, requestedAt: t0))),
+            .capabilities(LinkCapabilities(deviceClass: .mac, name: "Studio Mac", appVersion: "2.1", canProcess: true,
+                                           features: [LinkCapabilities.summaryPlacementFeature],
+                                           processing: LinkProcessingCapabilities(transcribes: true, findsSpeakers: false, summarizes: true,
+                                                                                  models: ["summarization": "gemma-4/e4b"]))),
+            .app(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .summaryCountdown, macName: "M",
+                                                            countdown: LinkSummaryCountdown(secondsLeft: 12.5, cloudOffered: true)))),
+            .app(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .summarizing, fraction: 0.5, macName: "M",
+                                                            cloudModel: "Claude Sonnet 5.5"))),
+            .app(.summaryChoice(LinkSummaryChoice(meetingID: id, choice: .useCloud, sentAt: t0))),
             .app(.libraryKeyRequest(LinkLibraryKeyRequest(libraryID: id, keyIDs: [String(repeating: "a", count: 32)]))),
             .app(.libraryKeyGrant(LinkLibraryKeyGrant(libraryID: id, keyID: String(repeating: "a", count: 32), key: Data(repeating: 7, count: 32)))),
             .recordRequest(LinkRecordRequest(action: .stop, conversationID: id, timing: LinkTiming(startedAt: t0, elapsed: 60),
@@ -80,6 +89,29 @@ final class LinkWireTests: XCTestCase {
         XCTAssertEqual(String(decoding: data, as: UTF8.self), #"["transcribing","dreaming"]"#)
         let decoded = try JSONDecoder().decode([LinkRecordRefusal.Reason].self, from: Data(#"["busy","onTheMoon"]"#.utf8))
         XCTAssertEqual(decoded, [.busy, "onTheMoon"])
+    }
+
+    /// Where summaries run (docs/link.md): a Mac's processing capabilities, its countdown, and a phone's choice are
+    /// additive. An older peer sends none of them (unknown, not "can't"), and one this build can't read is dropped,
+    /// never the message it came in.
+    func testBehaviorSummaryPlacementIsAdditive() throws {
+        let older = try LinkWire.decode(Data(#"{"v":1,"type":"capabilities","body":{"deviceClass":"mac","name":"Old Mac","canProcess":true}}"#.utf8))
+        guard case .capabilities(let capabilities) = older.message else { return XCTFail("\(older)") }
+        XCTAssertNil(capabilities.processing)
+        XCTAssertTrue(capabilities.canProcess)
+        XCTAssertFalse(capabilities.placesSummaries)
+        let garbled = try LinkWire.decode(Data(#"{"v":1,"type":"capabilities","body":{"deviceClass":"mac","name":"New Mac","processing":7}}"#.utf8))
+        guard case .capabilities(let newer) = garbled.message else { return XCTFail("\(garbled)") }
+        XCTAssertNil(newer.processing)
+        XCTAssertEqual(newer.name, "New Mac")
+        let meeting = UUID()
+        let progress = try LinkWire.decode(Data(#"{"v":1,"type":"processing.progress","body":{"meetingID":"\#(meeting.uuidString)","phase":"summarizing","macName":"M"}}"#.utf8))
+        guard case .app(.processingProgress(let plain)) = progress.message else { return XCTFail("\(progress)") }
+        XCTAssertNil(plain.countdown)
+        XCTAssertNil(plain.cloudModel)
+        // A build without `processing.choice` ignores it as an unknown type.
+        let choice = try LinkWire.encode(.app(.summaryChoice(LinkSummaryChoice(meetingID: meeting, choice: .startNow))), version: 1)
+        XCTAssertTrue(String(decoding: choice, as: UTF8.self).contains(#""type":"processing.choice""#))
     }
 
     func testOlderPeersMissingOptionalFieldsStillDecode() throws {

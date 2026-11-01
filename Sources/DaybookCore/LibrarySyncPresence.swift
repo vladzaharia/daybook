@@ -35,6 +35,9 @@ struct SyncDeviceRecord: Codable, Equatable {
     /// so an earlier ID of the same name and class last seen before this one began is the same device
     /// (`KnownSyncDevice.supersededBy`). Additive: earlier versions write none.
     var firstSeen: Date?
+    /// What it does with its own models for other devices (`SyncDeviceCapabilities`). Additive: earlier versions
+    /// write none, and are read as unknown.
+    var capabilities: SyncDeviceCapabilities?
 
     init(deviceID: String, deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, audioPolicy: String?, lastSeen: Date,
          installation: String? = nil, activity: SyncDeviceActivity? = nil) {
@@ -44,7 +47,7 @@ struct SyncDeviceRecord: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case format, schemaVersion, deviceID, deviceClass, displayName, canProcess, audioPolicy, lastSeen, installation, activity
-        case features, key, sealed, compaction, firstSeen
+        case features, key, sealed, compaction, firstSeen, capabilities
     }
 
     init(from decoder: Decoder) throws {
@@ -65,6 +68,7 @@ struct SyncDeviceRecord: Codable, Equatable {
         sealed = (try? values.decodeIfPresent(String.self, forKey: .sealed)) ?? nil
         compaction = (try? values.decodeIfPresent(String.self, forKey: .compaction)) ?? nil
         firstSeen = (try? values.decodeIfPresent(Date.self, forKey: .firstSeen)) ?? nil
+        capabilities = (try? values.decodeIfPresent(SyncDeviceCapabilities.self, forKey: .capabilities)) ?? nil
     }
 
     /// The same device, saying the same thing: everything but when it was written.
@@ -136,6 +140,7 @@ extension LibrarySyncEngine {
                                       activity: stamped)
         record.features = [Self.sealingFeature, Self.compactionFeature]
         record.compaction = state.compactionAck
+        record.capabilities = device.capabilities
         // Whether the library is encrypted isn't known yet (the manifest isn't downloaded): say nothing private.
         let known = checkManifestForPresence()
         if let sealing { record.key = SyncDeviceKeyState(state: .ready, id: sealing.current.idHex) }
@@ -204,6 +209,7 @@ extension LibrarySyncEngine {
             known.features = record.features ?? []
             known.keyState = record.key
             known.firstSeen = record.firstSeen.map { min($0, now) }
+            known.capabilities = record.capabilities
             return known
         }
         if records[deviceID] == nil, let device {
@@ -211,6 +217,7 @@ extension LibrarySyncEngine {
                                         canProcess: device.canProcess, audioPolicy: audioPolicy,
                                         lastSeen: presenceWritten.map { min($0.at, now) }, isCurrentDevice: true, activity: activity)
             known.features = [Self.sealingFeature, Self.compactionFeature]
+            known.capabilities = device.capabilities
             known.keyState = sealing.map { SyncDeviceKeyState(state: .ready, id: $0.current.idHex) }
                 ?? waitingForKey.map { SyncDeviceKeyState(state: .waiting, id: $0) }
             known.firstSeen = presenceFirstSeen.map { min($0, now) }

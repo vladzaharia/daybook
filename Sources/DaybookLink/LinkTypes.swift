@@ -15,9 +15,12 @@ public struct LinkIdentity: Sendable, Equatable {
     public var features: [String]
     /// The sync replica ID, sent in capabilities so the other side can match library records to it.
     public var syncDeviceID: String?
+    /// What it does with its own models for other devices (a Mac's transcription, speakers, summaries).
+    public var processing: LinkProcessingCapabilities?
 
     public init(deviceID: UUID, name: String, deviceClass: LinkDeviceClass, appVersion: String, libraryID: UUID? = nil,
-                canProcess: Bool = false, features: [String] = [], syncDeviceID: String? = nil) {
+                canProcess: Bool = false, features: [String] = [], syncDeviceID: String? = nil,
+                processing: LinkProcessingCapabilities? = nil) {
         self.deviceID = deviceID
         self.name = name
         self.deviceClass = deviceClass
@@ -26,11 +29,12 @@ public struct LinkIdentity: Sendable, Equatable {
         self.canProcess = canProcess
         self.features = features
         self.syncDeviceID = syncDeviceID
+        self.processing = processing
     }
 
     var capabilities: LinkCapabilities {
         LinkCapabilities(deviceClass: deviceClass, name: name, appVersion: appVersion, libraryID: libraryID,
-                         canProcess: canProcess, features: features, syncDeviceID: syncDeviceID)
+                         canProcess: canProcess, features: features, syncDeviceID: syncDeviceID, processing: processing)
     }
 
     var pairingDevice: PairingDevice {

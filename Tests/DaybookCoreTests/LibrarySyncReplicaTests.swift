@@ -465,6 +465,40 @@ final class LibrarySyncReplicaTests: XCTestCase {
         XCTAssertEqual(devices.first { $0.id == "Mac" }?.canProcess, false)
     }
 
+    /// A Mac's presence says what it does for other devices, role by role, with its models; an earlier Daybook's
+    /// record says nothing, which reads as unknown (docs/multipoint.md, "Where summaries run").
+    func testBehaviorPresenceCarriesWhatAMacDoesForOthers() async throws {
+        let phone = try phone()
+        let mac = try mac()
+        let capabilities = SyncDeviceCapabilities(transcribes: true, findsSpeakers: true, summarizes: true,
+                                                  models: ["transcription": "whisper/large-v3", "summarization": "gemma-4/e4b"])
+        await mac.updateDevice(SyncDeviceIdentity(deviceClass: .mac, displayName: "Mac Studio", canProcess: true, capabilities: capabilities))
+        try await pass(mac, "Mac")
+        var devices = try await phone.knownDevices()
+        XCTAssertEqual(devices.first { $0.id == "Mac" }?.capabilities, capabilities)
+        // A change of models rewrites the record at once.
+        var fewer = capabilities
+        fewer.summarizes = false
+        fewer.models?["summarization"] = nil
+        await mac.updateDevice(SyncDeviceIdentity(deviceClass: .mac, displayName: "Mac Studio", canProcess: true, capabilities: fewer))
+        try await pass(mac, "Mac")
+        devices = try await phone.knownDevices()
+        XCTAssertEqual(devices.first { $0.id == "Mac" }?.capabilities, fewer)
+        // An earlier Daybook's record, and one whose capabilities a newer Daybook wrote differently.
+        let formatter = ISO8601DateFormatter()
+        func write(_ object: [String: Any], id: String) throws {
+            try JSONSerialization.data(withJSONObject: object).write(to: remote.appendingPathComponent("Devices/\(AudioDigest.sha256(data: Data(id.utf8))).json"))
+        }
+        try write(["format": "DaybookDevice", "schemaVersion": 1, "deviceID": "Older", "deviceClass": "mac", "displayName": "Older iMac",
+                   "canProcess": true, "lastSeen": formatter.string(from: Date())], id: "Older")
+        try write(["format": "DaybookDevice", "schemaVersion": 1, "deviceID": "Newer", "deviceClass": "mac", "displayName": "Newer iMac",
+                   "canProcess": true, "lastSeen": formatter.string(from: Date()), "capabilities": "a string this build can't read"], id: "Newer")
+        devices = try await phone.knownDevices()
+        XCTAssertNil(devices.first { $0.id == "Older" }?.capabilities)
+        XCTAssertEqual(devices.first { $0.id == "Older" }?.canProcess, true)
+        XCTAssertNil(devices.first { $0.id == "Newer" }?.capabilities, "Unreadable is unknown, and the device is still listed")
+    }
+
     /// A phone reinstalled with the same sync folder takes a new device ID. Its earlier ID, last seen before the new one
     /// began, is the same device: listed once. Two devices with the same name in use at the same time both are. An ID not
     /// seen for six months is retired from the list; lookups by device ID still find every one.
