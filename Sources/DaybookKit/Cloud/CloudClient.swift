@@ -127,7 +127,7 @@ public struct CloudClient: Sendable {
         request.setValue("Daybook", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (bytes, response) = try await open(request, provider: nil, model: nil)
-        let data = try await collect(bytes, limit: 32 << 20)
+        let data = try await collect(bytes, limit: 32 << 20, provider: nil)
         guard (200..<300).contains(response.statusCode) else {
             throw CloudError.rejected(.openai, details: "OpenRouter: HTTP \(response.statusCode)")
         }
@@ -138,7 +138,7 @@ public struct CloudClient: Sendable {
         var request = URLRequest(url: url)
         authorize(&request, provider: provider, key: key)
         let (bytes, response) = try await open(request, provider: provider, model: nil)
-        let data = try await collect(bytes, limit: 16 << 20)
+        let data = try await collect(bytes, limit: 16 << 20, provider: provider)
         guard (200..<300).contains(response.statusCode) else {
             throw Self.error(status: response.statusCode, body: data, response: response, provider: provider, model: nil)
         }
@@ -219,7 +219,7 @@ public struct CloudClient: Sendable {
         http.httpBody = try body(request, fallback: fallback)
         let (bytes, response) = try await open(http, provider: request.provider, model: request.modelName)
         guard (200..<300).contains(response.statusCode) else {
-            let data = try await collect(bytes, limit: 1 << 20)
+            let data = try await collect(bytes, limit: 1 << 20, provider: request.provider)
             throw Self.error(status: response.statusCode, body: data, response: response, provider: request.provider, model: request.modelName)
         }
         var stream = StreamReader(provider: request.provider, model: request.model, modelName: request.modelName)
@@ -253,7 +253,7 @@ public struct CloudClient: Sendable {
         }
     }
 
-    private func collect(_ bytes: URLSession.AsyncBytes, limit: Int) async throws -> Data {
+    private func collect(_ bytes: URLSession.AsyncBytes, limit: Int, provider: CloudProvider?) async throws -> Data {
         var data = Data()
         do {
             for try await byte in bytes {
@@ -261,7 +261,7 @@ public struct CloudClient: Sendable {
                 if data.count >= limit { break }
             }
         } catch let error as URLError {
-            throw Self.error(error, provider: .openai)
+            throw Self.error(error, provider: provider ?? .openai)
         }
         return data
     }

@@ -185,6 +185,24 @@ final class CloudDirectoryTests: XCTestCase {
     }
 
     @MainActor
+    func testBehaviorAKeyTheKeychainWontRemoveSaysSo() async throws {
+        final class StuckStore: CloudKeyStore, @unchecked Sendable {
+            let key = CloudAPIKey("sk-ant-api03-TESTtestTESTtestTESTtest-gDAA")!
+            func key(for provider: CloudProvider) throws -> CloudAPIKey? { provider == .anthropic ? key : nil }
+            func store(_ key: CloudAPIKey, for provider: CloudProvider) throws {}
+            func removeKey(for provider: CloudProvider) throws { throw CloudKeyStoreError.keychain(-25_244) }
+        }
+        let setup = CloudSetup(keys: StuckStore(), client: CloudClient(session: FakeCloudServer().session), defaults: makeTestDefaults())
+        setup.fetches = false
+        XCTAssertEqual(setup.keys, [.anthropic: "sk-ant-…gDAA"])
+        await setup.removeKey(for: .anthropic)
+        XCTAssertEqual(setup.keys, [.anthropic: "sk-ant-…gDAA"], "Still there, and it says so")
+        guard case .failed(let message, let details)? = setup.checks[.anthropic] else { return XCTFail("\(String(describing: setup.checks))") }
+        XCTAssertEqual(message, "The keychain couldn’t remove the key.")
+        XCTAssertTrue(details.hasSuffix("(-25244)"), details)
+    }
+
+    @MainActor
     func testBehaviorCostPerHourUsesThePreferredEffort() async throws {
         let setup = CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults())
         let sonnet = try XCTUnwrap(setup.offers.offer("claude-sonnet-5-5"))

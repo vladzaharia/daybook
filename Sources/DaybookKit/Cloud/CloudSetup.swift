@@ -77,8 +77,12 @@ public final class CloudSetup {
     }
 
     public func removeKey(for provider: CloudProvider) async {
-        try? store.removeKey(for: provider)
-        checks[provider] = nil
+        do {
+            try store.removeKey(for: provider)
+            checks[provider] = nil
+        } catch {
+            checks[provider] = .failed(message: "The keychain couldn’t remove the key.", details: error.localizedDescription)
+        }
         reloadKeys()
         await directory.forget(provider)
         offers = await directory.currentOffers()

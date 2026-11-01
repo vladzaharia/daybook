@@ -53,10 +53,11 @@ public enum CloudKeyStoreError: Error, Equatable, LocalizedError {
     case keychain(OSStatus)
     case notKept
 
+    /// The keychain's own words, with the status.
     public var errorDescription: String? {
         switch self {
-        case .keychain(let status): return "The keychain couldn't keep the key (\(status))."
-        case .notKept: return "The keychain didn't keep the key."
+        case .keychain(let status): return "\((SecCopyErrorMessageString(status, nil) as String?) ?? "Keychain error.") (\(status))"
+        case .notKept: return "The key couldn’t be read back after it was stored."
         }
     }
 }
