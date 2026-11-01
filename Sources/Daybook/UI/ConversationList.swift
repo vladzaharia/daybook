@@ -418,9 +418,8 @@ private struct RowMenu: View {
 
 // MARK: - Notices and drop targets
 
-/// One library-wide notice at the top of the list column; the newest wins.
-/// The library's notice, with its one action as a text link when it has one (Undo, Show, Show in Finder:
-/// `AppState.post(_:action:)`).
+/// One library-wide notice at the top of the list column; the newest wins. It ends with its one action as a
+/// text link when it has one (Undo, Show, Show in Finder: `AppState.post(_:action:)`).
 private struct LibraryNotice: View {
     let state: AppState
     var body: some View {
