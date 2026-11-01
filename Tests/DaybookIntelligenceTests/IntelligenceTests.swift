@@ -27,9 +27,13 @@ final class IntelligenceTests: XCTestCase {
             } catch LocalIntelligenceError.modelNotInstalled(let id) { XCTAssertEqual(id, model) }
         }
         do {
-            _ = try await runtime.summarize(transcript: "Hello", notes: "", model: "qwen-1.5b")
+            _ = try await runtime.summarize(transcript: "Hello", notes: "", model: "qwen-7b")
             XCTFail("Missing summary model must fail")
-        } catch LocalIntelligenceError.modelNotInstalled(let id) { XCTAssertEqual(id, "qwen-1.5b") }
+        } catch LocalIntelligenceError.modelNotInstalled(let id) { XCTAssertEqual(id, "qwen-7b") }
+        do {
+            _ = try await runtime.summarize(transcript: "Hello", notes: "", model: "qwen-1.5b")
+            XCTFail("Qwen 2.5 1.5B writes no summaries any more")
+        } catch LocalIntelligenceError.unsupportedRole(let model, _) { XCTAssertEqual(model, "qwen-1.5b") }
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path), "Inference must not create a download directory")
     }
 
