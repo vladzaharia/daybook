@@ -67,7 +67,9 @@ extension AppState {
                         runningJob = running.carrying(claimed)
                         startClaimHeartbeat()
                         // Another device asked for its summary (its own countdown ran out): no second countdown here.
-                        if request.mode != .newAudio, request.requestedBy.id != me.id { placements.begin(meeting.id, immediately: true) }
+                        if request.mode != .newAudio, request.requestedBy.id != me.id, placements[meeting.id] != nil {
+                            placements.begin(meeting.id, immediately: true)
+                        }
                     }
                     continue
                 }

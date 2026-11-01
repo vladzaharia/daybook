@@ -239,6 +239,26 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(rig.meeting(id)?.processingRequests?.first?.outcome?.result, .completed)
     }
 
+    func testBehaviorAPhonesRequestTakenWhileTranscribingStartsItsSummaryAtOnce() async throws {
+        let rig = try await rig(seconds: 60)
+        let audio = try rig.audio("Transcribing.wav", frequency: 435)
+        let id = try await rig.waitingConversation("Transcribing", audio: audio, script: [(0, "We ship on Friday.")])
+        try rig.inference.block(audio)
+        rig.state.enqueue(id)
+        try await waitUntil("transcribing") { rig.inference.isWaiting(on: audio) }
+        rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
+        rig.state.pickUpRequests()
+        XCTAssertNil(rig.state.placements[id], "Nothing placed before the summary is due")
+        var counted = false
+        let watch = rig.state.placements.$planners.sink { planners in if planners[id]?.deadline != nil { counted = true } }
+        defer { watch.cancel() }
+        try rig.inference.unblock(audio)
+        try await rig.processed(id)
+        XCTAssertFalse(counted, "The phone asked for its summary")
+        XCTAssertEqual(rig.inference.summarized.count, 1)
+        XCTAssertNil(rig.state.placements[id])
+    }
+
     func testBehaviorPausingDuringTheCountdownPausesTheJob() async throws {
         let rig = try await rig(seconds: 60)
         let id = try await conversation(rig, "Pause", frequency: 440)
