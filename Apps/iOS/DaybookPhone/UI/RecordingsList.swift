@@ -25,7 +25,7 @@ private struct RecentConversations: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(meetings) { meeting in
                 Button { session.open(meeting.id) } label: {
-                    ConversationRow(meeting: meeting, status: StatusPresentation.row(ProcessingStatus.phone(meeting, now: now)),
+                    ConversationRow(meeting: meeting, status: StatusPresentation.row(ProcessingStatus.phone(meeting, now: now), meeting: meeting),
                                     timeLabel: RowDate.format(meeting.date, group: DateGroup.title(for: meeting.date, now: now, calendar: .current), now: now))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())

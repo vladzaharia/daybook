@@ -96,7 +96,7 @@ struct LibraryPage: View {
     private func rowStatus(_ meeting: Meeting, now: Date) -> RowStatus? {
         let placement = model.placement
         return StatusPresentation.placementRow(placement.planners[meeting.id], run: placement.runs[meeting.id], live: placement.live(meeting.id), now: now)
-            ?? StatusPresentation.row(ProcessingStatus.phone(meeting, now: now))
+            ?? StatusPresentation.row(ProcessingStatus.phone(meeting, now: now), meeting: meeting)
     }
     private var meetings: [Meeting] { place.meetings(in: library.meetings) }
 

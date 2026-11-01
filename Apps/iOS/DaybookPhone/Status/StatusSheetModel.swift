@@ -36,9 +36,17 @@ struct StatusLine: Equatable, Identifiable, Sendable {
     var progress: Double?
     /// A shorter way to say it, when `text` doesn't fit on one line.
     var shortText: String?
+    /// A summary's countdown runs out then: the line counts down to it, a second at a time ("Summarizing in 12 s").
+    var countdownUntil: Date?
 
     var id: String { kind.rawValue }
     var accessibilityLabel: String { "\(title), \(text)" }
+
+    /// The words at a moment: a countdown's seconds move with it.
+    func text(at now: Date) -> String {
+        guard let until = countdownUntil else { return text }
+        return "Summarizing in \(max(1, Int(until.timeIntervalSince(now).rounded(.up)))) s"
+    }
 }
 
 /// A conversation in the Mac's processing queue, as the phone knows it.
@@ -390,6 +398,11 @@ enum StatusSheetModel {
             if live.phase == .failed {
                 return StatusLine(kind: .mac, symbol: "desktopcomputer", title: live.macName, text: "Couldn’t finish", tone: .attention)
             }
+            if live.isCountingDown {
+                // The Mac counts down to summarizing a conversation: "Summarizing in 12 s", ticking.
+                return StatusLine(kind: .mac, symbol: "desktopcomputer", title: live.macName, text: live.brief(at: now), tone: .working,
+                                  countdownUntil: live.countdownUntil)
+            }
             var text = live.activity
             if let fraction = live.fraction, [.transcribing, .identifyingSpeakers, .summarizing, .aligning].contains(live.phase) {
                 text += " · \(Int((fraction * 100).rounded(.down)))%"
@@ -397,7 +410,14 @@ enum StatusSheetModel {
             return StatusLine(kind: .mac, symbol: "desktopcomputer", title: live.macName, text: text, tone: .working, progress: live.fraction,
                               shortText: text == live.activity ? nil : live.activity)
         }
-        if let running = inputs.queue.first(where: \.isRunning) {
+        // This iPhone's own countdown (to summarizing here) isn't a Mac's.
+        if let running = inputs.queue.first(where: { $0.isRunning && ($0.countdownUntil == nil || $0.mac != nil) }) {
+            if let until = running.countdownUntil, let mac = running.mac {
+                // Counting down to sending it to that Mac.
+                var line = StatusLine(kind: .mac, symbol: "desktopcomputer", title: mac, text: "", tone: .working, countdownUntil: until)
+                line.text = line.text(at: now)
+                return line
+            }
             // Coarse progress from the claim that synced.
             let verb = running.line.components(separatedBy: " on ").first ?? "Transcribing"
             let percent = running.progress.map { " · \(Int(($0 * 100).rounded(.down)))%" } ?? ""

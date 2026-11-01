@@ -173,7 +173,7 @@ struct ConversationInfo: View {
                 }
             }
         }
-        if let status = StatusPresentation.row(ProcessingStatus.phone(meeting)) {
+        if let status = StatusPresentation.row(ProcessingStatus.phone(meeting), meeting: meeting) {
             LabeledContent("Now", value: status.text)
         }
         ReprocessMenu(library: library, meeting: meeting)

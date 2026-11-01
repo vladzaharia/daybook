@@ -127,7 +127,8 @@ final class ReadingTests: XCTestCase {
         let never = StatusPresentation.page(status, meeting: meeting, sighting: nil, now: now)
         XCTAssertEqual(never?.detail, "No Mac has checked in yet. Open Daybook on your Mac.")
         XCTAssertEqual(StatusPresentation.row(status)?.text, "Waiting for your Mac")
-        XCTAssertEqual(StatusPresentation.waitingTitle(.summaryOnly), "Waiting for your Mac to summarize again")
+        XCTAssertEqual(StatusPresentation.waitingTitle(.summaryOnly), "Waiting for your Mac to summarize", "a first summary")
+        XCTAssertEqual(StatusPresentation.waitingTitle(.summaryOnly, summarized: true), "Waiting for your Mac to summarize again")
     }
 
     func testProcessingNamesTheMacAndNeverInventsProgress() {

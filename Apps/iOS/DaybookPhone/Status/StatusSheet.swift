@@ -462,9 +462,16 @@ struct StatusLineRow: View {
                     .foregroundStyle(PhoneStyle.Ink.title)
                     .lineLimit(1)
                     .layoutPriority(1)
-                ViewThatFits(in: .horizontal) {
-                    lineText(line.text)
-                    if let short = line.shortText { lineText(short) }
+                if line.countdownUntil != nil {
+                    // A summary's countdown, a second at a time.
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        lineText(line.text(at: context.date)).monospacedDigit()
+                    }
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        lineText(line.text)
+                        if let short = line.shortText { lineText(short) }
+                    }
                 }
                 Spacer(minLength: 0)
             }
