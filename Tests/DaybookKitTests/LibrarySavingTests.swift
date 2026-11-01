@@ -154,4 +154,73 @@ final class LibrarySavingTests: XCTestCase {
         let stored = try await MeetingStore(rootURL: root).load(id)
         XCTAssertEqual(stored.title, "Second")
     }
+
+    // MARK: Leaving the foreground
+
+    func testBehaviorLeavingTheForegroundWritesWaitingSavesAndThenEndsItsBackgroundTime() async throws {
+        let library = try await open()
+        library.saveDelay = .seconds(60)
+        let id = library.newMeeting(title: "Written on the way out")
+        let time = FakeBackgroundTime()
+        await library.flushInBackground(time).value
+        XCTAssertEqual(time.begun, ["Saving the library"])
+        XCTAssertEqual(time.ended, [1])
+        let stored = try await MeetingStore(rootURL: root).load(id)
+        XCTAssertEqual(stored.title, "Written on the way out")
+    }
+
+    func testBehaviorBackgroundTimeRunningOutEndsItThenAndNotAgainOnceTheSavesAreWritten() async throws {
+        let library = try await open()
+        library.saveDelay = .seconds(60)
+        let id = library.newMeeting(title: "Written when the app comes back")
+        let time = FakeBackgroundTime()
+        let flushing = library.flushInBackground(time)
+        time.expire()
+        XCTAssertEqual(time.ended, [1], "Held past its time, the app would be ended instead of suspended")
+        await flushing.value
+        XCTAssertEqual(time.ended, [1])
+        let stored = try await MeetingStore(rootURL: root).load(id)
+        XCTAssertEqual(stored.title, "Written when the app comes back")
+    }
+
+    func testBehaviorWithNoBackgroundTimeLeftTheSavesAreStillWrittenAndNothingIsEnded() async throws {
+        let library = try await open()
+        library.saveDelay = .seconds(60)
+        let id = library.newMeeting(title: "No time granted")
+        let time = FakeBackgroundTime(grants: false)
+        await library.flushInBackground(time).value
+        XCTAssertEqual(time.ended, [])
+        let stored = try await MeetingStore(rootURL: root).load(id)
+        XCTAssertEqual(stored.title, "No time granted")
+    }
+}
+
+/// Background time that's granted (or not) at once and runs out when a test says so.
+@MainActor
+private final class FakeBackgroundTime: BackgroundTime {
+    private let grants: Bool
+    private var next = 1
+    private var expirations: [Int: @MainActor @Sendable () -> Void] = [:]
+    private(set) var begun: [String] = []
+    private(set) var ended: [Int] = []
+
+    init(grants: Bool = true) { self.grants = grants }
+
+    func begin(_ name: String, expired: @escaping @MainActor @Sendable () -> Void) -> Int? {
+        guard grants else { return nil }
+        begun.append(name)
+        defer { next += 1 }
+        expirations[next] = expired
+        return next
+    }
+
+    func end(_ assertion: Int) {
+        ended.append(assertion)
+        expirations[assertion] = nil
+    }
+
+    /// The time is up for every assertion still held.
+    func expire() {
+        for expired in expirations.sorted(by: { $0.key < $1.key }).map(\.value) { expired() }
+    }
 }

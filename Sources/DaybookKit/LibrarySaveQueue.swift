@@ -95,21 +95,66 @@ final class LibrarySaveQueue {
     }
 }
 
-#if canImport(UIKit)
+/// Time the system grants to finish work once the app leaves the foreground: UIKit's background tasks on iPhone, a
+/// fake in tests.
+@MainActor
+protocol BackgroundTime {
+    /// Starts an assertion, or nil when there's no time to grant. `expired` runs when the time is up; an assertion
+    /// still held then gets the app ended instead of suspended.
+    func begin(_ name: String, expired: @escaping @MainActor @Sendable () -> Void) -> Int?
+    func end(_ assertion: Int)
+}
+
 extension LibraryController {
-    /// On iPhone, leaving the foreground writes waiting saves at once, in the time iOS grants for it.
+    /// Leaving the foreground: writes waiting saves now, inside the time the system grants. The assertion ends once
+    /// they're written or, when the time runs out first, right then, and never twice; what's left is written when
+    /// the app comes back. Returns the flush, for tests.
+    @discardableResult
+    func flushInBackground(_ time: any BackgroundTime) -> Task<Void, Never> {
+        let assertion = BackgroundAssertion(time)
+        assertion.begin("Saving the library")
+        return Task {
+            await self.flush()
+            assertion.end()
+        }
+    }
+}
+
+/// One background-time assertion, ended once: by whichever of the work and the time finishes first.
+@MainActor
+private final class BackgroundAssertion {
+    private let time: any BackgroundTime
+    private var id: Int?
+
+    init(_ time: any BackgroundTime) { self.time = time }
+
+    func begin(_ name: String) { id = time.begin(name) { [weak self] in self?.end() } }
+
+    func end() {
+        guard let id else { return }
+        self.id = nil
+        time.end(id)
+    }
+}
+
+#if canImport(UIKit)
+/// UIKit's background tasks.
+struct SystemBackgroundTime: BackgroundTime {
+    func begin(_ name: String, expired: @escaping @MainActor @Sendable () -> Void) -> Int? {
+        let id = UIApplication.shared.beginBackgroundTask(withName: name, expirationHandler: expired)
+        return id == .invalid ? nil : id.rawValue
+    }
+
+    func end(_ assertion: Int) { UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: assertion)) }
+}
+
+extension LibraryController {
+    /// On iPhone, leaving the foreground writes waiting saves at once (`flushInBackground`). Termination isn't
+    /// watched: the app always leaves the foreground first, and work started as it ends never runs.
     func flushWhenBackgrounded() -> AnyCancellable {
         NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
-            .merge(with: NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification))
             .sink { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    let assertion = UIApplication.shared.beginBackgroundTask(withName: "Saving the library")
-                    Task {
-                        await self.flush()
-                        UIApplication.shared.endBackgroundTask(assertion)
-                    }
-                }
+                MainActor.assumeIsolated { _ = self?.flushInBackground(SystemBackgroundTime()) }
             }
     }
 }
