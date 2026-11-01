@@ -101,6 +101,16 @@ are in it already, and identical content merges without conflicts.
 
 The checkpoint holds heads, published fingerprints, and deletions; each conversation's applied base is its own file under `Bases/`, written on acknowledgement only when it changed, and a pending pass records only the bases it changes. Checkpoints written by earlier versions (with every base inline, and a full copy in an unacknowledged pass) are moved over on first load, keeping the pending pass; the checkpoint keeps empty inline fields so an earlier version can still open it (it would publish its library once more, sequentially). A pass's publications share one sequence number and the checkpoint is saved once after them (and again with the pending pass), not after each one: a pass interrupted between writing an entry and saving (a crash, a cancelled background pass) writes the same bytes again next time for anything unchanged, so it leaves no sibling entries behind.
 
+**Edits in a burst.** Every publication is a full snapshot of the conversation: every transcript run with its word
+timings, the unified transcript, speakers, and History, about 2 MB for an hour-long call with two sources. So a
+conversation whose snapshot is 256 KB or more (`heldPublicationBytes`), edited again within three minutes of this device's
+last publication of it (`publicationInterval`), is held back: counted in `pendingUploads`, what others changed in it
+meanwhile waits as for any unpublished edit, and the pass reports when it may go (`SyncResult.nextPublication`), when the
+controller asks for another pass and the cheap check (`hasRemoteChanges`) says there's work. One publication then carries
+the burst. Both apps publish what's held at once when the person leaves the conversation and when the app goes to the
+background (`LibrarySyncController.publishHeldEdits`). A conversation's first publication, a small conversation, a
+deletion, library settings, and a merge against history that's gone always go at once.
+
 The app serializes sync with imports and defers it while final inference is active. While the Mac records, it runs settings-only passes (`SyncPassScope.metadataOnly`): library settings (recorder ownership, handoffs, folders, templates, vocabulary) are exchanged and conversations wait until the recording is filed, so another device's handoff or claim is seen during a long recording. An edit saved while a pass runs isn't in that pass: the library remembers it (`SyncApplied.editedDuringPass`) and asks for another pass when this one ends; the iPhone counts it as waiting and runs one at once. Notes edited while a transfer is in progress are rebased before applying remote changes. Account changes invalidate the pending sync receipt and pause sync (see [The iCloud container](#the-icloud-container)). Changing transport is disabled through the durable apply phase.
 
 ## Replicas and audio

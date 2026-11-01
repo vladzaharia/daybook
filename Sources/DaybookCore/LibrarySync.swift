@@ -25,6 +25,9 @@ public struct SyncResult: Sendable {
     /// iCloud refused to upload part of what's waiting because the person's iCloud storage is full: `pendingUploads`
     /// won't go down on its own.
     public var storageFull = false
+    /// A large conversation edited here again within `LibrarySyncEngine.publicationInterval` of its last publication is
+    /// held back (counted in `pendingUploads`) until then; a pass at or after this date publishes it. Nil: nothing held.
+    public var nextPublication: Date?
     public var hasPendingTransfers: Bool { pendingDownloads > 0 || pendingUploads > 0 }
     /// Synchronize again soon: this pass stopped at its work limits.
     public var hasMoreWork: Bool { deferredItems > 0 }
@@ -234,6 +237,13 @@ public actor LibrarySyncEngine {
     var heldDeletions: Set<UUID> = []
     /// When this device last compacted.
     var lastCompaction: Date?
+    /// When this device last published each conversation, in this process (`publicationInterval`).
+    var lastPublished: [UUID: Date] = [:]
+    /// When the earliest conversation held back by the last pass may go (`SyncResult.nextPublication`).
+    var heldPublicationDue: Date?
+    /// The publication throttle's clock (tests move it on).
+    var publicationClock: @Sendable () -> Date = { Date() }
+    func setPublicationClock(_ clock: @escaping @Sendable () -> Date) { publicationClock = clock }
     /// What compaction did on the last pass that ran it.
     public internal(set) var compactionReport: CompactionReport?
     /// Compaction's clock (tests move it on).
@@ -400,6 +410,8 @@ public actor LibrarySyncEngine {
         let inJournal = Set(events.values.map(\.meetingID)), deletedInJournal = Set(events.values.filter(\.deleted).map(\.meetingID))
         /// Conversations changed here whose applied heads are gone from the journal, merged below against their stored base.
         var rebases: [UUID: Rebase] = [:]
+        let publishedAt = publicationClock()
+        var nextPublication: Date?
         let retiredKeyLeftovers = heldAsideEntries.keys.contains(where: heldAsideLately)
         do {
             // Publish changes against the last applied heads, not newly observed remote heads. This is what
@@ -428,9 +440,17 @@ public actor LibrarySyncEngine {
                 // the journal: matching the base is then a revert, which must be published too.
                 let baseIsCurrent = state.submittedHashes[key] == nil
                 if !force, (baseIsCurrent && supplied == state.bases[key]) || pendingBase == supplied { continue }
-                let fingerprint = try hash(supplied)
+                let encoded = try SyncEncoding.data(supplied), fingerprint = SyncDigest.sha256(data: encoded)
                 guard force || (fingerprint != state.submittedHashes[key] && (!baseIsCurrent || fingerprint != state.bases[key].flatMap({ try? hash($0) }))
                       && fingerprint != pendingBase.flatMap({ try? hash($0) })) else { continue }
+                // A large conversation edited again soon after this device published it waits (`publicationInterval`): one
+                // publication carries the burst, rather than a full snapshot every time the person pauses typing. What
+                // others changed in it meanwhile waits too, as for any edit not yet published.
+                if !force, gone.isEmpty, let due = publicationHeld(supplied.id, bytes: encoded.count, now: publishedAt) {
+                    pendingUploads += 1; failedPublications.insert(supplied.id)
+                    nextPublication = min(nextPublication ?? due, due)
+                    continue
+                }
                 if !gone.isEmpty, !force, !deletedInJournal.contains(supplied.id) {
                     // Only a whole read can tell gone from still downloading, unless a commit says they were pruned.
                     if journalIncomplete, !gone.allSatisfy(prunedIDs.contains) { pendingUploads += 1; failedPublications.insert(supplied.id); continue }
@@ -451,6 +471,7 @@ public actor LibrarySyncEngine {
                     events[id] = SyncEventHeader(event); eventCache[id] = events[id]; snapshotCache[id] = prepared.meeting
                     state.submittedHashes[key] = fingerprint
                     state.heads[key] = [id]
+                    lastPublished[supplied.id] = publishedAt
                     published += 1
                 } catch is SyncPendingDownload { pendingDownloads += 1; pendingUploads += 1; failedPublications.insert(supplied.id) }
                 catch let error as CancellationError { throw error }
@@ -611,6 +632,7 @@ public actor LibrarySyncEngine {
         state.pending = SyncPendingApply(id: checkpointID, heads: proposedHeads, metadataHeads: settings.applied ? metadataHeads : state.metadataHeads,
             changedBases: baseChanges, removedBases: removedBases.sorted())
         try saveCheckpoint()
+        heldPublicationDue = nextPublication
         retainCaches(heads: Set(proposedHeads.values.joined()).union(state.heads.values.joined()),
                      metadataHeads: Set(metadataHeads).union(state.metadataHeads))
         // An encrypted library: seal what's live from before (or under an older key), and retire what's no longer
@@ -658,7 +680,31 @@ public actor LibrarySyncEngine {
             deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
             pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
             changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred, writtenFiles: written,
-            storageFull: uploads.storageFull)
+            storageFull: uploads.storageFull, nextPublication: heldPublicationDue)
+    }
+
+    // MARK: Publication
+
+    /// How soon after this device published a large conversation it publishes it again: edits in between are held back
+    /// and go together (`SyncResult.nextPublication`), or at once when the person leaves the conversation or the app
+    /// (`publishHeldEdits`).
+    public static let publicationInterval: TimeInterval = 3 * 60
+    /// A conversation is held back only when its snapshot is at least this large (an hour-long call with its transcripts
+    /// is about 2 MB); a small one costs little to publish every time.
+    public static let heldPublicationBytes = 256 * 1024
+
+    /// When a publication of `id` (its snapshot `bytes` long) held back may go, or nil to publish it now.
+    func publicationHeld(_ id: UUID, bytes: Int, now: Date) -> Date? {
+        guard bytes >= Self.heldPublicationBytes, let last = lastPublished[id] else { return nil }
+        let due = last.addingTimeInterval(Self.publicationInterval)
+        return due > now ? due : nil
+    }
+
+    /// Publishes edits held back (`publicationInterval`) on the next pass: of `ids`, or every conversation's. For when the
+    /// person leaves a conversation, or the app goes to the background.
+    public func publishHeldEdits(of ids: Set<UUID>? = nil) {
+        if let ids { for id in ids { lastPublished[id] = nil } } else { lastPublished = [:] }
+        heldPublicationDue = nil
     }
 
     /// Reads the library settings versions the sync folder lists, and returns them with the entries read: in an encrypted
@@ -822,6 +868,8 @@ public actor LibrarySyncEngine {
     /// True when another replica added journal entries since the last pass that settled (nothing pending or
     /// deferred), or when no pass has settled in this process. Local edits are the caller's to track.
     public func hasRemoteChanges() -> Bool {
+        // An edit held back (`publicationInterval`) is due: a pass publishes it.
+        if let due = heldPublicationDue, due <= publicationClock() { return true }
         // A recording the sealer asked for has arrived: a pass seals it.
         if sealerDownloads.contains(where: { SyncFiles.itemState(remoteRoot.appendingPathComponent($0)) == .local }) { return true }
         guard let settled = settledJournalListing, let listing = try? listingPaths() else { return true }

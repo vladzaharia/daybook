@@ -628,6 +628,7 @@ public final class LibrarySyncController {
             await noteOtherInstallation(engine)
             await noteEncryption(engine)
             handToCourier(result.writtenFiles, engine: engine)
+            schedulePublication(result.nextPublication)
             pendingReceipt = result.checkpointID
             pendingDownloads = result.pendingDownloads; pendingUploads = result.pendingUploads; warnings = result.warnings
             hasMoreWork = result.hasMoreWork
@@ -1048,6 +1049,33 @@ public final class LibrarySyncController {
     public func resumeCourier() {
         guard let courier, let start = courierStart else { return }
         Task { await start.value; await courier.reconnect() }
+    }
+
+    // MARK: Held publications
+
+    @ObservationIgnored private var publicationTimer: Task<Void, Never>?
+
+    /// A large conversation edited here again soon after it was published is held back by the engine
+    /// (`LibrarySyncEngine.publicationInterval`): a pass is asked for when it may go.
+    private func schedulePublication(_ due: Date?) {
+        publicationTimer?.cancel(); publicationTimer = nil
+        guard let due else { return }
+        publicationTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(1, due.timeIntervalSinceNow)))
+            guard !Task.isCancelled else { return }
+            self?.requestSync()
+        }
+    }
+
+    /// Publishes edits the engine held back (`LibrarySyncEngine.publicationInterval`) at once: of `conversation`, or every
+    /// one. Both apps call it when the person leaves a conversation's page, and when the app goes to the background.
+    public func publishHeldEdits(of conversation: UUID? = nil) {
+        guard let engine else { return }
+        publicationTimer?.cancel(); publicationTimer = nil
+        Task {
+            await engine.publishHeldEdits(of: conversation.map { [$0] })
+            self.requestSync()
+        }
     }
 
     /// Asks the courier for what other devices sent (a push arrived).
@@ -1484,6 +1512,7 @@ public final class LibrarySyncController {
         containerGeneration = UUID()
         stopMonitoring()
         stopCourier()
+        publicationTimer?.cancel(); publicationTimer = nil
         if let accountObserver { NotificationCenter.default.removeObserver(accountObserver) }
         accountObserver = nil
         engine = nil; folder = nil; transport = .none

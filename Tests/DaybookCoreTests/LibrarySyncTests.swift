@@ -326,6 +326,55 @@ final class LibrarySyncTests: XCTestCase {
         XCTAssertEqual(again.publishedEvents, 0)
     }
 
+    func testBehaviorALargeConversationEditedAgainSoonIsPublishedOnceForTheBurst() async throws {
+        let a = try engine("A"), b = try engine("B")
+        let clock = MovingClock()
+        await a.setPublicationClock { clock.now }
+        var long = Meeting(title: "Long call")
+        long.setNotes(String(repeating: "Quarterly planning, line by line. ", count: 9_000))
+        let first = try await publish(long, using: a, name: "A")
+        // Typing on: each pause asks for a pass, which holds the edit back instead of uploading the whole call again.
+        var edited = first
+        for line in 1...3 {
+            clock.advance(20)
+            edited.setNotes(edited.notes + "\nAdded line \(line)")
+            let held = try await a.synchronize(meetings: [edited])
+            XCTAssertEqual(held.publishedEvents, 0, "line \(line)")
+            XCTAssertGreaterThan(held.pendingUploads, 0)
+            XCTAssertEqual(held.nextPublication, clock.start.addingTimeInterval(LibrarySyncEngine.publicationInterval))
+            XCTAssertEqual(held.meetings.first?.notes, edited.notes, "The edit here stays as it is")
+            try await apply(held, to: "A", using: a)
+            let early = await a.hasRemoteChanges()
+            XCTAssertFalse(early)
+        }
+        // A small conversation goes every time.
+        var short = try await publish(Meeting(title: "Quick"), using: a, name: "A")
+        short.setNotes("Second thought")
+        let again = try await a.synchronize(meetings: [edited, short])
+        XCTAssertEqual(again.publishedEvents, 1)
+        try await apply(again, to: "A", using: a)
+        // Once it's due, the cheap check says so, and one publication carries the burst.
+        clock.advance(LibrarySyncEngine.publicationInterval)
+        let due = await a.hasRemoteChanges()
+        XCTAssertTrue(due)
+        let burst = try await a.synchronize(meetings: [edited, short])
+        XCTAssertEqual(burst.publishedEvents, 1)
+        XCTAssertNil(burst.nextPublication)
+        try await apply(burst, to: "A", using: a)
+        // Leaving the conversation publishes what's held at once.
+        clock.advance(10)
+        edited.setNotes(edited.notes + "\nLast word")
+        let held = try await a.synchronize(meetings: [edited, short])
+        XCTAssertEqual(held.publishedEvents, 0)
+        try await apply(held, to: "A", using: a)
+        await a.publishHeldEdits(of: [edited.id])
+        let left = try await a.synchronize(meetings: [edited, short])
+        XCTAssertEqual(left.publishedEvents, 1)
+        try await apply(left, to: "A", using: a)
+        let pulled = try await b.synchronize(meetings: [])
+        XCTAssertEqual(pulled.meetings.first { $0.id == edited.id }?.notes, edited.notes)
+    }
+
     func testBehaviorAPassThatChangesNothingDoesntWriteTheCheckpoint() async throws {
         let a = try engine("A"), b = try engine("B")
         _ = try await publish(Meeting(title: "Quiet"), using: a, name: "A")
@@ -525,4 +574,13 @@ final class LibrarySyncTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: syncPath, withDestinationURL: outside)
         XCTAssertThrowsError(try engine("C"))
     }
+}
+
+/// A clock a test moves on, read from the engine's actor.
+private final class MovingClock: @unchecked Sendable {
+    private let lock = NSLock()
+    let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    private var offset: TimeInterval = 0
+    var now: Date { lock.withLock { start.addingTimeInterval(offset) } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { offset += seconds } }
 }
