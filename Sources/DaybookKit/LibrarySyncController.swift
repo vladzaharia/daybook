@@ -663,11 +663,38 @@ public final class LibrarySyncController {
         try await engine.acknowledge(result.checkpointID)
         guard canApply(result) else { throw SyncControllerError.busy }
         let completed = Date()
-        status = result.hasPendingTransfers ? .exchanged(uploads: result.pendingUploads, downloads: result.pendingDownloads) : .upToDate(at: completed)
+        lastResultStorageFull = result.storageFull
+        status = settledStatus(uploads: result.pendingUploads, downloads: result.pendingDownloads, at: completed)
         lastSync = completed; defaults.set(completed, forKey: Key.lastCompleted)
         isSyncing = false
         takeNewIdentity()
-        if encryptsAutomatically, encryption == .off { Task { await encryptOnceEveryDeviceCan() } }
+        if encryptsAutomatically, encryption == .off, !isStorageFull { Task { await encryptOnceEveryDeviceCan() } }
+    }
+
+    /// iCloud is refusing uploads for lack of storage (the last pass found it, or the courier did): encrypting or rotating
+    /// the key, which writes a sealed copy of the library before the old one goes, waits.
+    public var isStorageFull: Bool { status == .storageFull || lastResultStorageFull || courierStatus.storageFull }
+
+    /// Where sync stands after a pass: iCloud storage is full when the pass found iCloud refusing uploads for it, or the
+    /// courier did while uploads wait (CloudKit and iCloud Drive share the quota); else files still moving; else up to
+    /// date, which needs nothing waiting to upload.
+    private func settledStatus(uploads: Int, downloads: Int, at date: Date) -> SyncStatus {
+        if lastResultStorageFull || (courierStatus.storageFull && uploads > 0) { return .storageFull }
+        return uploads > 0 || downloads > 0 ? .exchanged(uploads: uploads, downloads: downloads) : .upToDate(at: date)
+    }
+
+    /// The courier's latest status, applied in the order it was reported (`startCourier`), and only from the courier
+    /// running now. Storage full there turns a settled status with uploads waiting into `storageFull`, and back once it
+    /// clears.
+    private func applyCourierStatus(_ next: CourierStatus, number: Int, from numbering: StatusNumbering) {
+        guard numbering === courierNumbering, numbering.apply(number) else { return }
+        courierStatus = next
+        switch status {
+        case .exchanged, .storageFull:
+            status = settledStatus(uploads: pendingUploads, downloads: pendingDownloads, at: lastSync ?? Date())
+        default:
+            break
+        }
     }
 
     public func reportFailure(_ message: String) {
@@ -706,7 +733,7 @@ public final class LibrarySyncController {
     /// if it's still on an earlier Daybook, says to update when it's back, and changes nothing. An iPhone leaves it to a
     /// Mac that's around, which seals the history from its own audio rather than downloading it.
     func encryptOnceEveryDeviceCan(now: Date = Date()) async {
-        guard encryptsAutomatically, encryption == .off, !isSyncing, engine != nil else { return }
+        guard encryptsAutomatically, encryption == .off, !isSyncing, !isStorageFull, engine != nil else { return }
         // Every identity, superseded or not: one that only looks like an earlier install of another device (the same name)
         // may be a device that's merely away, and encrypting would stop it syncing until it's updated.
         let others = await knownDevices().filter {
@@ -727,6 +754,8 @@ public final class LibrarySyncController {
     public func enableEncryption(recoveryKey: RecoveryKey? = nil) async throws {
         guard let engine else { throw SyncControllerError.notConnected }
         guard !isSyncing else { throw SyncControllerError.busy }
+        // It writes a sealed copy of the library into iCloud before the plaintext goes: not while iCloud is full.
+        guard !isStorageFull else { throw SyncControllerError.storageFull }
         try await engine.enableSealing(recovery: recoveryKey)
         await noteEncryption(engine)
         requestSync()
@@ -757,6 +786,7 @@ public final class LibrarySyncController {
     public func rotateEncryptionKey() async throws {
         guard let engine else { throw SyncControllerError.notConnected }
         guard !isSyncing else { throw SyncControllerError.busy }
+        guard !isStorageFull else { throw SyncControllerError.storageFull }
         try await engine.rotateKey()
         await noteEncryption(engine)
         requestSync()
@@ -918,6 +948,10 @@ public final class LibrarySyncController {
     public var courierRole: CourierRole = []
     /// The courier's state for the sync status: how many files wait to send, and whether a send is stuck.
     public private(set) var courierStatus = CourierStatus()
+    /// Numbers the running courier's statuses (`applyCourierStatus`).
+    @ObservationIgnored private var courierNumbering = StatusNumbering()
+    /// The last acknowledged pass found iCloud refusing uploads for lack of storage.
+    @ObservationIgnored private var lastResultStorageFull = false
     /// Called once the courier is available. The apps register for remote notifications, which CKSyncEngine needs.
     @ObservationIgnored public var onCourierAvailable: (() -> Void)?
     @ObservationIgnored private var courierStart: Task<Void, Never>?
@@ -932,8 +966,13 @@ public final class LibrarySyncController {
         if role.contains(.receive) {
             receiver = { files in await weakSelf?.receiveCourierFiles(files) ?? [] }
         }
+        // Statuses hop to the main actor one task each, which may run out of order: each is numbered as it's reported,
+        // and an older one never covers a newer.
+        let numbering = StatusNumbering()
+        courierNumbering = numbering
         let onStatus: @Sendable (CourierStatus) -> Void = { status in
-            Task { @MainActor in weakSelf?.courierStatus = status }
+            let number = numbering.issue()
+            Task { @MainActor in weakSelf?.applyCourierStatus(status, number: number, from: numbering) }
         }
         courierStart = Task {
             let availability = await courier.start(role: role, receiver: receiver, onStatus: onStatus)
@@ -1398,6 +1437,24 @@ private extension SyncMigrationRecord {
     }
 }
 
+/// Numbers reports made on any thread so they're applied in the order they were made: one that arrives after a later
+/// one is dropped.
+final class StatusNumbering: Sendable {
+    private let numbers = Mutex((issued: 0, applied: 0))
+
+    /// The next report's number.
+    func issue() -> Int { numbers.withLock { $0.issued += 1; return $0.issued } }
+
+    /// Whether the report numbered `number` is newer than every one applied so far; it counts as applied when it is.
+    func apply(_ number: Int) -> Bool {
+        numbers.withLock { state in
+            guard number > state.applied else { return false }
+            state.applied = number
+            return true
+        }
+    }
+}
+
 /// Waits for a task, or until the waiting task is cancelled, whichever comes first. Awaiting `task.value` alone can't
 /// be cut short.
 enum TaskWaiter {
@@ -1411,38 +1468,39 @@ enum TaskWaiter {
         } onCancel: { gate.open() }
     }
 
-    private final class Gate: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<Void, Never>?
-        private var isOpen = false
+    private final class Gate: Sendable {
+        private let state = Mutex<(isOpen: Bool, continuation: CheckedContinuation<Void, Never>?)>((false, nil))
 
         func hold(_ waiting: CheckedContinuation<Void, Never>) {
-            let resumeNow = lock.withLock { () -> Bool in
-                if isOpen { return true }
-                continuation = waiting
+            let resumeNow = state.withLock { state -> Bool in
+                if state.isOpen { return true }
+                state.continuation = waiting
                 return false
             }
             if resumeNow { waiting.resume() }
         }
 
         func open() {
-            let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-                isOpen = true
-                defer { continuation = nil }
-                return continuation
+            let waiting = state.withLock { state -> CheckedContinuation<Void, Never>? in
+                state.isOpen = true
+                defer { state.continuation = nil }
+                return state.continuation
             }
             waiting?.resume()
         }
     }
 }
 
-private enum SyncControllerError: LocalizedError {
+enum SyncControllerError: LocalizedError, Equatable {
     case busy, overlappingLibrary, notConnected
+    /// Encrypting or rotating the key waits for room in iCloud.
+    case storageFull
     public var errorDescription: String? {
         switch self {
         case .busy: return "Wait for the current sync to finish before changing folders."
         case .overlappingLibrary: return "Choose a separate iCloud Drive folder, outside the local working library."
         case .notConnected: return "Sync isn’t on."
+        case .storageFull: return "iCloud storage is full. Free up space in iCloud, then try again."
         }
     }
 }

@@ -32,6 +32,11 @@ public struct SealerProgress: Equatable, Sendable {
     public var waitingFor: [RetirementWait] = []
     /// An iPhone sealing history waits for Wi‑Fi to download recordings (`SyncReplicaConfiguration.network`).
     public var waitsForWiFi = false
+    /// iCloud is refusing uploads for lack of storage: no new sealed copies are written until there's room (the
+    /// plaintext they replace goes as each copy uploads, which makes some).
+    public var waitsForStorage = false
+    /// Why sealing something failed on the last pass, for diagnostics (never shown as it is).
+    public var lastError: String?
 
     public enum RetirementWait: String, Sendable {
         /// The grace period (a week after encryption began, or after the key changed).
@@ -75,6 +80,10 @@ extension LibrarySyncEngine {
     static let migratorAbsence: TimeInterval = 14 * 24 * 60 * 60
     /// How many recordings an on-demand replica's sealer has iCloud download at once.
     static let sealerDownloadBatch = 4
+    /// How many bytes of sealed objects the sealer lets wait for iCloud to upload before it writes more: the library is
+    /// sealed a batch at a time, as uploads go, so the sync folder never holds a second copy of all of it at once, and a
+    /// full iCloud stops it rather than filling the disk.
+    static let sealerBacklogBytes: Int64 = 2 << 30
 
     // MARK: Turning it on
 
@@ -293,41 +302,77 @@ extension LibrarySyncEngine {
                     author = record.deviceID
                 }
                 if sealedPaths.contains(counterpart(kind, id)) { continue }
-                guard isMigrator || author == deviceID, !budget.timeExceeded, budget.admitJournalRead() else { progress.remaining += 1; continue }
+                guard isMigrator || author == deviceID, !budget.timeExceeded, !Task.isCancelled, budget.admitJournalRead() else { progress.remaining += 1; continue }
                 do {
                     let (read, bytes) = try readEntry(entry, kind: kind)
                     guard read == id else { progress.remaining += 1; continue }
                     sealedPaths.insert(try writeSealed(bytes, id: id, kind: kind, key: current))
                     progress.sealed += 1
-                } catch { progress.remaining += 1 }
+                } catch is CancellationError { progress.remaining += 1 }
+                catch { progress.remaining += 1; noteSealerError(error, progress: &progress) }
             }
         }
 
-        // Objects live conversations use, sealed by the migrator.
+        // Objects live conversations use, sealed by the migrator, a backlog at a time (`sealerBacklogBytes`), and none
+        // while iCloud refuses uploads for lack of storage.
         if isMigrator {
             // Downloads asked for that arrived, or whose object went, make room for the next batch.
             sealerDownloads = sealerDownloads.filter { SyncFiles.itemState(remoteRoot.appendingPathComponent($0)) == .inCloud }
-            for (meetingID, assets) in input.liveAssets.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where !input.deleted.contains(meetingID) {
+            var backlog: (bytes: Int64, refused: Bool)?
+            objects: for (meetingID, assets) in input.liveAssets.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where !input.deleted.contains(meetingID) {
                 for asset in assets {
+                    guard !Task.isCancelled else { break objects }
                     guard let name = current.objectName(.blob, plaintextSHA256: asset.sha256) else { continue }
                     let path = "Sealed/Blobs/\(name)"
                     let url = remoteRoot.appendingPathComponent(path)
                     if SyncFiles.itemState(url) != .absent || inboxCopy(path) != nil { continue }
                     guard !budget.timeExceeded else { progress.remaining += 1; continue }
-                    if (try? sealObject(asset, meetingID: meetingID, sealing: sealing, progress: &progress)) == true { progress.sealed += 1 } else { progress.remaining += 1 }
+                    let waiting = backlog ?? sealedBacklog()
+                    backlog = waiting
+                    if storageFullLately || waiting.refused { progress.remaining += 1; progress.waitsForStorage = true; continue }
+                    if waiting.bytes >= sealerBacklogLimit { progress.remaining += 1; continue }
+                    do {
+                        if try sealObject(asset, meetingID: meetingID, sealing: sealing, progress: &progress) {
+                            progress.sealed += 1
+                            backlog?.bytes = waiting.bytes + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+                        } else { progress.remaining += 1 }
+                    } catch is CancellationError { break objects }
+                    catch { progress.remaining += 1; noteSealerError(error, progress: &progress) }
                 }
             }
         }
 
         progress.legacyRetired = sealing.manifest.legacyRetired != nil && !hasLegacyFiles()
         progress.oldKeysRetired = sealing.manifest.keys.count == 1
-        guard isMigrator else { return progress }
-        guard input.complete, progress.remaining == 0 else {
-            if !(progress.legacyRetired && progress.oldKeysRetired) { progress.waitingFor.append(input.complete ? .uploads : .completeRead) }
-            return progress
-        }
+        guard isMigrator, !Task.isCancelled else { return progress }
+        // What's sealed and uploaded replaces its plaintext (or old-key) copy at once, object by object, once retirement
+        // may begin: a full iCloud then gets room back as the sealed copies go up, rather than waiting for all of them.
         retire(input, progress: &progress, now: now)
+        if !(progress.legacyRetired && progress.oldKeysRetired) {
+            if !input.complete { progress.waitingFor.append(.completeRead) } else if progress.remaining > 0 { progress.waitingFor.append(.uploads) }
+        }
+        var seen = Set<SealerProgress.RetirementWait>()
+        progress.waitingFor = progress.waitingFor.filter { seen.insert($0).inserted }
         return progress
+    }
+
+    /// Bytes of sealed objects in the sync folder that iCloud hasn't uploaded yet (the sealer's backlog), and whether it
+    /// refused any of them for lack of storage.
+    private func sealedBacklog() -> (bytes: Int64, refused: Bool) {
+        let folder = remoteRoot.appendingPathComponent("Sealed/Blobs", isDirectory: true)
+        guard let urls = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) else { return (0, false) }
+        var bytes: Int64 = 0, refused = false
+        for url in urls where SyncFiles.itemState(url) == .local && !cloud.isUploaded(url) {
+            bytes += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            if cloud.uploadRefusedForQuota(url) { refused = true }
+        }
+        return (bytes, refused)
+    }
+
+    /// Keeps why sealing failed, for diagnostics.
+    private func noteSealerError(_ error: Error, progress: inout SealerProgress) {
+        progress.lastError = error.localizedDescription
+        Self.log.error("Sealing failed: \(error.localizedDescription, privacy: .public)")
     }
 
     /// Seals one object from this device's verified local copy, or from the sync folder's copy (plaintext, or under an
@@ -379,11 +424,16 @@ extension LibrarySyncEngine {
     // MARK: Retirement
 
     /// Deletes what an encrypted library no longer needs, once it's safe: the plaintext from before, and files under
-    /// keys that aren't current. Only files this pass read and accounted for are deleted, and only when each live one
-    /// has a counterpart under the current key that was read back whole and that iCloud reports uploaded.
+    /// keys that aren't current. Only files this pass read and accounted for are deleted. Once retiring may begin (the
+    /// grace period, and another key holder or a recovery key; after a rotation, every device on the new key), each live
+    /// file goes as soon as its own counterpart under the current key was read back whole and iCloud reports it uploaded,
+    /// one by one, so iCloud gets room back as the sealed copies go up. What nothing live needs (a deleted conversation's
+    /// history, an object no live conversation uses) goes only after a pass that read everything with nothing left to
+    /// seal (`whole`); so do `legacyRetired` and the old keys' retirement in the manifest, once nothing is left.
     private func retire(_ input: SealerInput, progress: inout SealerProgress, now: Date) {
         guard let sealing else { return }
         let current = sealing.current
+        let whole = input.complete && progress.remaining == 0
         let liveShas = Set(input.liveAssets.filter { !input.deleted.contains($0.key) }.values.joined().map(\.sha256))
         let knownShas = Set(input.events.values.flatMap { $0.assets.map(\.sha256) }).union(liveShas)
 
@@ -401,20 +451,23 @@ extension LibrarySyncEngine {
                 if !sealing.hasRecovery, otherDevicesHolding(current.idHex).isEmpty { ready = false; progress.waitingFor.append(.anotherDeviceOrRecoveryKey) }
             }
             // A library that started over never wrote plaintext: a recording from before nothing uses is the old library's.
-            if ready, let plan = retirementPlan(entries: legacyEntries, blobs: legacyBlobs.map { ($0, Optional<Data>.none) }, input: input,
-                                                liveShas: liveShas, knownShas: knownShas, unnamedAreReplaced: sealing.manifest.replaces != nil,
-                                                progress: &progress) {
-                for url in plan { deleteRemote(url) }
-                // Plaintext entries compaction pruned need no sealed counterpart: they go too, once what says they're pruned
-                // is in iCloud.
-                if compactionRecords.values.filter(\.record.isCommit).allSatisfy({ cloud.isUploaded($0.url) }) {
-                    for path in prunedEntryPaths where !path.hasPrefix("Sealed/") { deleteRemote(remoteRoot.appendingPathComponent(path)) }
+            if ready {
+                let plan = retirementPlan(entries: legacyEntries, blobs: legacyBlobs.map { ($0, Optional<Data>.none) }, input: input,
+                                          liveShas: liveShas, knownShas: knownShas, unnamedAreReplaced: sealing.manifest.replaces != nil,
+                                          whole: whole, progress: &progress)
+                for url in plan.delete { deleteRemote(url) }
+                if plan.complete {
+                    // Plaintext entries compaction pruned need no sealed counterpart: they go too, once what says they're
+                    // pruned is in iCloud.
+                    if compactionRecords.values.filter(\.record.isCommit).allSatisfy({ cloud.isUploaded($0.url) }) {
+                        for path in prunedEntryPaths where !path.hasPrefix("Sealed/") { deleteRemote(remoteRoot.appendingPathComponent(path)) }
+                    }
+                    deleteStalePresence()
+                    if sealing.manifest.legacyRetired == nil, let updated = try? updateManifest({ $0.sealing?.legacyRetired = now }), let description = updated.sealing {
+                        self.sealing?.manifest = description
+                    }
                 }
-                deleteStalePresence()
-                if sealing.manifest.legacyRetired == nil, let updated = try? updateManifest({ $0.sealing?.legacyRetired = now }), let description = updated.sealing {
-                    self.sealing?.manifest = description
-                }
-                progress.legacyRetired = !hasLegacyFiles()
+                progress.legacyRetired = self.sealing?.manifest.legacyRetired != nil && !hasLegacyFiles()
             }
         } else {
             progress.legacyRetired = true
@@ -445,9 +498,10 @@ extension LibrarySyncEngine {
                 if SyncFiles.itemState(remoteRoot.appendingPathComponent("Sealed/Blobs/\(name)")) != .absent { oldBlobs.append((sha, key.id)) }
             }
         }
-        guard let plan = retirementPlan(entries: oldEntries, blobs: oldBlobs, input: input, liveShas: liveShas, knownShas: knownShas,
-                                        progress: &progress) else { return }
-        for url in plan { deleteRemote(url) }
+        let plan = retirementPlan(entries: oldEntries, blobs: oldBlobs, input: input, liveShas: liveShas, knownShas: knownShas,
+                                  whole: whole, progress: &progress)
+        for url in plan.delete { deleteRemote(url) }
+        guard plan.complete else { return }
         let retiredIDs = Set(listedOld.map(\.id))
         if !retiredIDs.isEmpty, let updated = try? updateManifest({ manifest in
             guard var description = manifest.sealing else { return }
@@ -604,42 +658,51 @@ extension LibrarySyncEngine {
         return names
     }
 
-    /// The files to delete when retiring `entries` and objects `blobs` (by plaintext SHA-256, under the key whose ID is
-    /// given, or plaintext with nil), or nil when something isn't safe yet: an entry not read, a live counterpart under
-    /// the current key not read back whole, or not uploaded. An object nothing names is left alone, unless
-    /// `unnamedAreReplaced` (it's a replaced library's).
+    /// What may go when retiring `entries` and objects `blobs` (by plaintext SHA-256, under the key whose ID is given, or
+    /// plaintext with nil), and whether that's all of them (`complete`). A live one goes once its counterpart under the
+    /// current key was read back whole and iCloud has it; one waiting for that stays, as does one not read this pass.
+    /// What nothing live needs goes only with `whole` (the pass read everything, and nothing is left to seal): until
+    /// then what's live isn't fully known. An object nothing names is left alone, unless `unnamedAreReplaced` (it's a
+    /// replaced library's).
     private func retirementPlan(entries: [JournalEntry], blobs: [(String, Data?)], input: SealerInput, liveShas: Set<String>,
-                                knownShas: Set<String>, unnamedAreReplaced: Bool = false, progress: inout SealerProgress) -> [URL]? {
-        guard let sealing else { return nil }
+                                knownShas: Set<String>, unnamedAreReplaced: Bool = false, whole: Bool,
+                                progress: inout SealerProgress) -> (delete: [URL], complete: Bool) {
+        guard let sealing else { return ([], false) }
         let current = sealing.current
         var delete: [URL] = []
-        var waitingForUploads = false
+        var complete = whole, waitingForUploads = false
+        /// Whether the counterpart under the current key at `path` lets the file go now.
+        func confirmed(_ path: String, kind: SealedKind, id: String) -> Bool {
+            switch confirmSealed(path, kind: kind, id: id) {
+            case .confirmed: return true
+            case .uploading: waitingForUploads = true
+            case .waitingForWiFi: waitingForUploads = true; progress.waitsForWiFi = true
+            case .missing: progress.remaining += 1
+            }
+            complete = false
+            return false
+        }
         for entry in entries {
             let kind: SealedKind = entry.directory.hasSuffix("Events") ? .event : entry.directory.hasSuffix(Self.compactionDirectory) ? .compaction : .metadata
-            guard let id = entry.isSealed ? sealedNames[entry.path] : entry.name else { progress.waitingFor.append(.completeRead); return nil }
+            guard let id = entry.isSealed ? sealedNames[entry.path] : entry.name else { progress.waitingFor.append(.completeRead); complete = false; continue }
             let wanted: Bool
             switch kind {
             case .event:
-                guard let header = input.events[id] else { progress.waitingFor.append(.completeRead); return nil }
+                guard let header = input.events[id] else { progress.waitingFor.append(.completeRead); complete = false; continue }
                 wanted = !input.deleted.contains(header.meetingID) || header.deleted
             case .compaction:
-                guard compactionRecords[entry.path]?.id == id else { progress.waitingFor.append(.completeRead); return nil }
+                guard compactionRecords[entry.path]?.id == id else { progress.waitingFor.append(.completeRead); complete = false; continue }
                 wanted = true
             default:
-                guard input.metadata[id] != nil else { progress.waitingFor.append(.completeRead); return nil }
+                guard input.metadata[id] != nil else { progress.waitingFor.append(.completeRead); complete = false; continue }
                 wanted = true
             }
             if wanted {
-                guard let name = current.objectName(kind, plaintextSHA256: id) else { return nil }
-                let path = "\(kind.directory!)/\(name)"
-                switch confirmSealed(path, kind: kind, id: id) {
-                case .confirmed: break
-                case .uploading: waitingForUploads = true
-                case .waitingForWiFi: waitingForUploads = true; progress.waitsForWiFi = true
-                case .missing: progress.remaining += 1; return nil
-                }
+                guard let name = current.objectName(kind, plaintextSHA256: id) else { complete = false; continue }
+                if confirmed("\(kind.directory!)/\(name)", kind: kind, id: id) { delete.append(entry.url) }
+            } else if whole {
+                delete.append(entry.url)
             }
-            delete.append(entry.url)
         }
         for (sha, keyID) in blobs {
             let url: URL
@@ -650,21 +713,17 @@ extension LibrarySyncEngine {
                 url = blobURL(sha)
             }
             if liveShas.contains(sha) {
-                guard let name = current.objectName(.blob, plaintextSHA256: sha) else { return nil }
-                switch confirmSealed("Sealed/Blobs/\(name)", kind: .blob, id: sha) {
-                case .confirmed: break
-                case .uploading: waitingForUploads = true
-                case .waitingForWiFi: waitingForUploads = true; progress.waitsForWiFi = true
-                case .missing: progress.remaining += 1; return nil
-                }
+                guard let name = current.objectName(.blob, plaintextSHA256: sha) else { complete = false; continue }
+                if confirmed("Sealed/Blobs/\(name)", kind: .blob, id: sha) { delete.append(url) }
             } else if !knownShas.contains(sha), !unnamedAreReplaced {
                 // Not named by anything this pass read (an upload whose entry hasn't arrived): left alone.
                 continue
+            } else if whole {
+                delete.append(url)
             }
-            delete.append(url)
         }
-        if waitingForUploads { progress.waitingFor.append(.uploads); return nil }
-        return delete
+        if waitingForUploads { progress.waitingFor.append(.uploads) }
+        return (delete, complete)
     }
 
     private enum Confirmation { case confirmed, uploading, missing, waitingForWiFi }

@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookTestSupport
 import Foundation
+import Synchronization
 import XCTest
 @testable import DaybookKit
 
@@ -519,6 +520,35 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertNil(sync.status.problem)
     }
 
+    func testBehaviorAFullICloudSaysSoAndHoldsEncryptionBack() async throws {
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let full = Switch()
+        let sync = controller(environment())
+        sync.replica.keyStore = MemoryLibraryKeyStore()
+        sync.replica.sealsNewLibrary = false
+        sync.encryptsAutomatically = false
+        sync.syncDebounce = nil
+        sync.replica.cloud = SyncCloudFiles(requestDownload: { _ in }, isUploaded: { _ in !full.isOn },
+                                            uploadRefusedForQuota: { full.isOn && FileManager.default.fileExists(atPath: $0.path) })
+        try sync.connect(to: folder, monitorChanges: false)
+        full.isOn = true
+        let refused = try await pass(sync, [Meeting(title: "Long call")])
+        XCTAssertEqual(refused?.storageFull, true)
+        XCTAssertEqual(sync.status, .storageFull, "Never “Up to date” while uploads are refused")
+        XCTAssertEqual(sync.status.problem, .storageFull)
+        XCTAssertTrue(sync.isStorageFull)
+        // Encrypting writes a sealed copy of the library before the plaintext goes: not now.
+        do { try await sync.enableEncryption(); XCTFail("Encrypted into a full iCloud") }
+        catch let error as SyncControllerError { XCTAssertEqual(error, .storageFull) }
+        XCTAssertEqual(sync.encryption, .off)
+        full.isOn = false
+        _ = try await pass(sync, refused?.meetings ?? [])
+        guard case .upToDate = sync.status else { return XCTFail(sync.statusText) }
+        XCTAssertFalse(sync.isStorageFull)
+        try await sync.enableEncryption()
+        XCTAssertTrue(sync.encryption.isOn)
+    }
+
     func testBehaviorThePollSkipsAPassThatWouldChangeNothing() async throws {
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let sync = controller(environment())
@@ -589,6 +619,12 @@ private final class SyncReadGate: @unchecked Sendable {
         _ = semaphore.wait(timeout: .now() + 10)
         lock.withLock { _sawCancellation = Task.isCancelled }
     }
+}
+
+/// Something a test turns on and off while the engine reads it from another thread.
+private final class Switch: Sendable {
+    private let state = Mutex(false)
+    var isOn: Bool { get { state.withLock { $0 } } set { state.withLock { $0 = newValue } } }
 }
 
 /// The test's iCloud account and container.

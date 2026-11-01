@@ -78,7 +78,7 @@ Local library/Sync/          # never synchronized
   Courier/                   # the courier: outbox.json, Outbox/ (staged copies), cloudkit-state.json
 ```
 
-`NSFileCoordinator` coordinates access with the file provider. `NSMetadataQuery` requests updates for the journal's tree. Evicted files trigger iCloud download requests and remain pending until readable. Files and event hashes are validated, relative paths cannot escape the library, symlinks are rejected, and a partially downloaded recording is never installed: audio reaches the library only by an atomic move after its SHA-256 matches. An uploaded local file is not assumed to have reached another Mac: upload and download counts remain visible.
+`NSFileCoordinator` coordinates access with the file provider. `NSMetadataQuery` requests updates for the journal's tree. Evicted files trigger iCloud download requests and remain pending until readable. Files and event hashes are validated, relative paths cannot escape the library, symlinks are rejected, and a partially downloaded recording is never installed: audio reaches the library only by an atomic move after its SHA-256 matches. A temporary file a write left behind when its process died (`.upload-`, `.promote-`, or `.migrate-` in the sync folder, which iCloud would keep and count against storage; `.seal-`, `.download-`, `.fetch-`, and unrenamed checkpoints in the local library) is deleted at the start of a pass once it's a day old, at most once a day (`sweepStaleTemporaries`); a younger one may be another device's write in flight. An uploaded local file is not assumed to have reached another Mac: upload and download counts remain visible.
 
 Journal entries are immutable and named by their hash, so an engine reads and validates each one once; the directory listing on every pass stays the source of truth. Every event's header (conversation, parents, assets) stays in memory, but a snapshot is kept only while passes use it (a head, or the base of a merge) and is read again from the journal (and checked against its name) when needed, and library settings keep their data only for heads, so memory follows the size of the library, not of its history. If part of the journal is unread on a pass (still downloading, or deferred by limits), a conversation whose applied head wasn't read is held back rather than offered at an older revision, library metadata waits for a complete read, and a deletion already applied here is not republished. An entry that can't be read at all is a different case (see [Newer versions](#newer-versions)).
 
@@ -107,7 +107,7 @@ The app serializes sync with imports and defers it while final inference is acti
 
 Each replica chooses an audio policy when it creates its `LibrarySyncEngine` (`SyncReplicaConfiguration.audioPolicy`). The policy is local state; nothing about it is synchronized, and both kinds publish identical events.
 
-- **Eager** (the Mac default, and the behaviour before iPhone): a conversation applies only once every original is copied into the local library and verified. Missing audio is a pending download.
+- **Eager** (the Mac default, and the behaviour before iPhone): a conversation applies only once every original is copied into the local library and verified. Missing audio is a pending download. An object iCloud already holds is trusted by its name, as on demand: an edit to a conversation whose recording iCloud dropped from this Mac (Optimize Mac Storage) publishes at once, without downloading the recording to hash it again. Once iCloud has uploaded an object the library holds verified, the Mac lets iCloud drop its local copy of it (`evictUploadedContainerCopies`), so it doesn't keep every recording twice (an encrypted library's sealed copy is other bytes, never a clone of the library's).
 - **On demand** (iPhone): conversations, transcripts, summaries, notes, and library metadata apply as soon as their events are readable. Tracks stay complete and valid, with SHA-256, duration, and provenance. Their audio stays in the sync folder. `SyncResult.notLocalAudio` lists those tracks, and `audioAvailability(for:)` answers per track. This is a normal state. It is not counted in `pendingDownloads`, never produces a warning, and never blocks `acknowledge`. A pass never reads or downloads a blob, so it can't judge one corrupt.
 
 **Publishing with partial audio.** An on-demand replica publishes a track whose audio it doesn't hold (never fetched, or evicted) by reference: the event carries the same path and SHA-256, provided an event in the journal or an object in `Blobs/` already has that hash. Every other replica sees the track as before. It doesn't download an object just to re-verify it, either. A track with no local file and no remote object is still `missingLocalAudio`, as on a Mac. Recordings made on the phone are ordinary originals, usually AAC in `.m4a`. They upload to `Blobs/` like any Mac recording and arrive on eager replicas byte for byte.
@@ -133,7 +133,7 @@ It never deletes:
 - protected (playing) tracks;
 - anything not listed in `audio-cache.json`.
 
-Losing that index therefore only makes eviction more cautious. Eager replicas never evict.
+Losing that index therefore only makes eviction more cautious. Eager replicas never evict the library's own audio.
 
 ## Devices and presence
 
@@ -301,7 +301,10 @@ that synced in that time, which seals the history from its own audio. No recover
 Recovery Key once it's on. From Settings, turning it on first lists the devices that would stop syncing until they're
 updated (their presence doesn't list the feature, or they were seen only in the journal), and offers a recovery key.
 Either way, a new key is stored and read back, and only then is the manifest rewritten as version 2 with this device as
-the migrator. The courier drops plaintext files it still holds and deletes those it sent.
+the migrator. The courier drops plaintext files it still holds and deletes those it sent. Neither starts while iCloud is
+refusing uploads for lack of storage (`LibrarySyncController.isStorageFull`): encrypting writes a sealed copy of the
+library before the plaintext goes, so Settings' Turn On (and rotating the key, below) says "iCloud storage is full. Free
+up space in iCloud, then try again.", and the automatic one waits.
 A Mac that moved from a chosen folder (above) offers to delete that folder's plaintext copy of the journal
 (`deleteRetiredFolderJournal`): its manifest, `Events/`, `Metadata/`, `Blobs/`, and `Devices/`, nothing else.
 
@@ -318,25 +321,34 @@ while this iPhone is encrypting (`PhoneSettings.encryptsOverCellular`, off by de
 arrives (also on cellular, once it's here), and then lets iCloud drop the downloaded copy. Reading back what it sealed
 waits for Wi‑Fi the same way. Off Wi‑Fi, Settings says "Encrypting · 12 left · Waiting for Wi‑Fi"; back on Wi‑Fi, or once
 cellular is allowed, a pass starts, and a download arriving makes the next cheap check (`hasRemoteChanges`) run one.
+Objects are sealed a backlog at a time: while 2 GB of what it sealed is still waiting for iCloud to upload
+(`sealerBacklogBytes`), it writes no more, so the sync folder never holds a second copy of the whole library at once,
+and while iCloud refuses uploads for lack of storage it writes none at all (`SealerProgress.waitsForStorage`). Why sealing
+something failed is kept in `SealerProgress.lastError` and logged (Console: subsystem `local.daybook`, category `sync`),
+as is a compaction commit that failed (`CompactionReport.lastError`); both are tried again on a later pass.
 
-**Retiring the plaintext.** The migrator deletes a plaintext file only when its sealed counterpart was read back whole and
-iCloud reports it uploaded, another device holds the key or a recovery key was saved, and a week has passed since
-encryption began. Then `Events/`, `Metadata/`, and `Blobs/` are emptied (the folders stay), plaintext presence records
-are deleted, and the manifest records `legacyRetired`. Only files a pass read and accounted for are deleted; an object
-nothing it read names is left alone. After that (and from the start in a library that never held plaintext: a new one,
+**Retiring the plaintext.** Once another device holds the key or a recovery key was saved, and a week has passed since
+encryption began, the migrator deletes each plaintext file as soon as its own sealed counterpart was read back whole and
+iCloud reports it uploaded, file by file, so a full iCloud gets room back as the sealed copies go up rather than waiting
+for all of them. What no live conversation needs (a deleted conversation's history, a recording nothing live uses) goes
+only after a pass that read the whole journal with nothing left to seal. Once nothing is left, `Events/`, `Metadata/`, and
+`Blobs/` are empty (the folders stay), plaintext presence records are deleted, and the manifest records `legacyRetired`.
+Only files a pass read and accounted for are deleted; an object nothing it read names is left alone. After that (and from the start in a library that never held plaintext: a new one,
 one that started over, or a rival started at once), a plaintext entry is history only when the library vouches for it
 (`admitPlaintext`): its sealed counterpart is here (restored by Data Recovery: it's deleted), this device applied it or
 something it applied names it (its own late write, from a pass that ran on the manifest from before encryption: its
 author seals it), or this process read it while it was history. Anything else in `Events/`, `Metadata/`, or
 `Compaction/` is left alone: not read, applied, sealed, waited for, or deleted, so a file anyone with write access to the
-container drops there changes nothing, and an author's late upload isn't lost before it seals it. Until then, an iPhone keeps originals it recorded rather than evict them. A device that was away across
+container drops there changes nothing, and an author's late upload isn't lost before it seals it.
+Until then, an iPhone keeps originals it recorded rather than evict them. A device that was away across
 retirement and still has a deleted conversation applies the deletion (its parents are gone, not on their way) or, if it
 changed the conversation meanwhile, keeps it as a new one. An on-demand replica publishes a recording it doesn't hold by
 reference only to an object in the sync folder; one the journal names but that isn't there waits.
 
 **Rotating** ("Erase Deleted Conversations from iCloud", `rotateKey`). A new key becomes current, the sealer seals what's
 live under it, and once every device seen in the last 30 days that reads encrypted libraries reports it holds the new key
-and a week has passed, the old key's files are deleted and the manifest stops listing it. Deleted conversations' history
+and a week has passed, the old key's files are deleted, each as soon as its counterpart under the new key is read back
+and uploaded, and once none is left the manifest stops listing it. Deleted conversations' history
 isn't carried over, so it's erased from iCloud. The manifest records when the old key was retired (`sealing.retired`).
 For at least 30 days the old key stays in iCloud Keychain, so a file sealed with it later (a device that was away) or
 restored from iCloud.com's Data Recovery (which keeps deleted files that long) stays readable and is sealed again, or
@@ -464,7 +476,7 @@ func pass(trigger: Trigger) async throws {
 
 - **Cancellation.** Cancel the task running `synchronize` (for example from a `BGAppRefreshTask` expiration handler). Publications already written stay valid, and an unacknowledged pull is offered again next time.
 - **`SyncPassLimits`.** These bound first-time journal reads and wall-clock time (and, on eager replicas, audio copying). Leftover work sets `hasMoreWork`.
-- **Status.** `LibrarySyncController.status` is a `SyncStatus` (DaybookKit/SyncStatus.swift): off, connecting, syncing, applying, waiting for iCloud or the key, exchanged or up to date, moving from a chosen folder, and every way sync can stop. Each case has the controller's sentence (`text`, which logs and tests read through `statusText`), the phrase both apps' status lines say for it (`shortText`: the Mac's iCloud row and the iPhone's sync line), and, when the person should know or act, a `SyncProblem` (`problem`: a sentence, with the system's words for Details). Settings › Library, Floating Notes, and the iPhone read `problem`, never the words, so a copy pass can't hide one; `SyncStatusTests` drives every error path into a problem. A move to iCloud that stopped on an error is `migrationPaused`: Settings says so under its progress and Floating Notes says "Moving to iCloud is paused." while it tries again. Something worth knowing that doesn't stop sync goes in `warning` (`SyncWarning`). Storage full, a library removed or replaced in iCloud, a keychain that can't be read yet, and another installation syncing as this device have their cases already, for the passes that report them.
+- **Status.** `LibrarySyncController.status` is a `SyncStatus` (DaybookKit/SyncStatus.swift): off, connecting, syncing, applying, waiting for iCloud or the key, exchanged or up to date, moving from a chosen folder, and every way sync can stop. Each case has the controller's sentence (`text`, which logs and tests read through `statusText`), the phrase both apps' status lines say for it (`shortText`: the Mac's iCloud row and the iPhone's sync line), and, when the person should know or act, a `SyncProblem` (`problem`: a sentence, with the system's words for Details). Settings › Library, Floating Notes, and the iPhone read `problem`, never the words, so a copy pass can't hide one; `SyncStatusTests` drives every error path into a problem. A move to iCloud that stopped on an error is `migrationPaused`: Settings says so under its progress and Floating Notes says "Moving to iCloud is paused." while it tries again. Something worth knowing that doesn't stop sync goes in `warning` (`SyncWarning`). A pass reports iCloud refusing uploads for lack of storage (`SyncResult.storageFull`, from `ubiquitousItemUploadingError`), and the courier does (`CourierStatus.storageFull`, which counts while uploads wait, since CloudKit and iCloud Drive share the quota): either is `storageFull`, never "Up to date", which needs nothing waiting to upload. A library removed from iCloud is `libraryRemoved` and one replaced by a plaintext library `newLibrary`, each with its action (above); a keychain that can't be read yet is `keyStoreUnreadable`, which waits without a problem; and another installation syncing as this device is `warning == .otherInstallation`.
 - **Requests.** `requestSync()` runs a pass after `syncDebounce` (two seconds), so a burst of edits makes one pass; nil turns automatic passes off (test rigs drive passes themselves). `hasPendingSyncRequest` says one is waiting and `awaitIdle()` returns once none is waiting or running. A request made while the requested pass runs (an edit saved meanwhile, a courier delivery) waits for it and runs after it rather than cancelling it. Pull to refresh on the iPhone goes through `PhoneSync.synchronize`, so it joins a pass already running. The iPhone's background refresh is scheduled whether or not sync is connected (the same task resumes recorders' automatic imports); its pass runs only when connected.
 - **Suggested phone cadence.**
   - Run a pass on launch and on foreground, and two seconds after a local edit.

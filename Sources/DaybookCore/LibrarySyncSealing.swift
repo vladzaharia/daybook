@@ -681,14 +681,19 @@ extension LibrarySyncEngine {
         let path = "Sealed/Blobs/\(name)"
         let target = remoteRoot.appendingPathComponent(path)
         let object = RemoteObject.sealed(target, name: name, key: key)
-        // Never download an object just to re-verify it: on a phone that would fetch every recording.
-        if audioPolicy == .onDemand, SyncFiles.itemState(target) == .inCloud { return }
+        // Never download an object just to re-verify it: iCloud holds it, under the name its content gives it. On a phone
+        // that would fetch every recording; on a Mac whose copy iCloud dropped, gigabytes before an edit syncs.
+        if SyncFiles.itemState(target) == .inCloud { return }
         if fm.fileExists(atPath: target.path) {
             try SyncFiles.available(target, cloud: cloud)
-            if let stamp = try? assetStamp(target, digest: asset.sha256), verifiedAssets[target.path] == stamp { return }
+            if let stamp = try? assetStamp(target, digest: asset.sha256), verifiedAssets[target.path] == stamp {
+                noteContainerCopy(path, holding: asset.sha256)
+                return
+            }
             guard try objectHolds(object, digest: asset.sha256) else { throw LibrarySyncError.invalidBlob(asset.sha256) }
             verifiedAssets[target.path] = try assetStamp(target, digest: asset.sha256)
             sealerVerified.insert(path)
+            noteContainerCopy(path, holding: asset.sha256)
             return
         }
         // A courier brought this object from the device that recorded it, and that device uploads it.
@@ -714,6 +719,75 @@ extension LibrarySyncEngine {
         }
         verifiedAssets[target.path] = try? assetStamp(target, digest: asset.sha256)
         if let written, let digest = written.sealedSHA256 { courierWrites[path] = SyncJournalFile(path: path, sha256: digest, size: written.size) }
+        noteContainerCopy(path, holding: asset.sha256)
+    }
+
+    // MARK: Disk
+
+    /// Remembers an object an eager replica's library holds a verified copy of (`containerCopies`).
+    func noteContainerCopy(_ path: String, holding sha256: String) {
+        guard audioPolicy == .eager else { return }
+        containerCopies[path] = sha256
+    }
+
+    /// Lets iCloud drop its local copy of objects it has uploaded and the library holds verified, so a Mac doesn't keep
+    /// every recording twice (an encrypted library's sealed copy is other bytes, never a clone of the library's). One
+    /// it needs again comes back on its own: an edit publishes by reference to what iCloud holds, and the sealer seals
+    /// from the library's copy.
+    func evictUploadedContainerCopies() {
+        guard audioPolicy == .eager, !containerCopies.isEmpty else { return }
+        let meetings = localRoot.appendingPathComponent("Meetings", isDirectory: true).standardizedFileURL.path + "/"
+        let held = Set(verifiedAssets.filter { $0.key.hasPrefix(meetings) }.map(\.value.digest))
+        for (path, sha256) in containerCopies {
+            let url = remoteRoot.appendingPathComponent(path)
+            switch SyncFiles.itemState(url) {
+            case .absent, .inCloud:
+                containerCopies[path] = nil
+            case .local:
+                guard held.contains(sha256), cloud.isUploaded(url) else { continue }
+                cloud.evictLocalCopy(url)
+                containerCopies[path] = nil
+            }
+        }
+    }
+
+    /// How old a temporary file must be before it's taken for one a write left when its process died.
+    static let staleTemporaryAge: TimeInterval = 24 * 60 * 60
+
+    /// Deletes temporary files a write left behind when its process died (a crash, iOS ending a background task in the
+    /// middle of a copy): partial `.upload-`, `.promote-`, and `.migrate-` files in the sync folder, which iCloud would
+    /// otherwise keep and count against the person's storage, and `.seal-`, `.download-`, and `.fetch-` files and unrenamed
+    /// checkpoints in the local library. Only ones a day old: another device's write in flight is never touched. At most
+    /// once a day.
+    func sweepStaleTemporaries(now: Date) {
+        if let last = lastTemporarySweep, now.timeIntervalSince(last) < Self.staleTemporaryAge { return }
+        lastTemporarySweep = now
+        func stale(_ url: URL) -> Bool {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? now
+            return now.timeIntervalSince(modified) >= Self.staleTemporaryAge
+        }
+        func sweep(_ folder: URL, below root: URL, prefixes: [String], suffix: String = "", coordinated: Bool) {
+            guard (try? SyncFiles.noSymlinks(folder, below: root)) != nil,
+                  let names = try? fm.contentsOfDirectory(atPath: folder.path) else { return }
+            for name in names where prefixes.contains(where: name.hasPrefix) && name.hasSuffix(suffix) {
+                let url = folder.appendingPathComponent(name)
+                guard stale(url) else { continue }
+                if coordinated { try? SyncFiles.coordinateDelete(url, below: root) } else { try? fm.removeItem(at: url) }
+            }
+        }
+        for directory in ["Events", "Metadata", "Blobs", Self.compactionDirectory, "Sealed/Events", "Sealed/Metadata", "Sealed/Blobs",
+                          "Sealed/Compaction", SyncPresenceFiles.directory] {
+            sweep(remoteRoot.appendingPathComponent(directory, isDirectory: true), below: remoteRoot,
+                  prefixes: [".upload-", ".promote-", ".migrate-"], coordinated: true)
+        }
+        let sync = localRoot.appendingPathComponent("Sync", isDirectory: true)
+        sweep(sync.appendingPathComponent("Sealing", isDirectory: true), below: localRoot, prefixes: [".seal-"], coordinated: false)
+        sweep(sync, below: localRoot, prefixes: ["."], suffix: ".tmp", coordinated: false)
+        let meetings = localRoot.appendingPathComponent("Meetings", isDirectory: true)
+        for meeting in (try? fm.contentsOfDirectory(atPath: meetings.path)) ?? [] where UUID(uuidString: meeting) != nil {
+            sweep(meetings.appendingPathComponent("\(meeting)/Originals", isDirectory: true), below: localRoot,
+                  prefixes: [".download-", ".fetch-"], coordinated: false)
+        }
     }
 
     /// Sealed objects up to this size are hashed as they're written, for the courier (which carries up to 50 MB).

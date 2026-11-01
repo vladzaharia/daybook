@@ -12,6 +12,8 @@ final class SimulatedICloud: @unchecked Sendable {
     private var requests: [String] = []
     private var dropped: [String] = []
     private var notUploaded: Set<String> = []
+    /// Everything under this folder is refused for lack of iCloud storage.
+    private var quotaFullUnder: String?
     /// Everything under this folder reads as not uploaded yet.
     private var uploadsHeldUnder: String?
     private var holding = false
@@ -42,6 +44,8 @@ final class SimulatedICloud: @unchecked Sendable {
     func setUploaded(_ url: URL, _ uploaded: Bool) { lock.withLock { if uploaded { notUploaded.remove(url.path) } else { notUploaded.insert(url.path) } } }
     /// Files under `folder` (nil: none) read as not uploaded yet, however they got there.
     func holdUploads(under folder: URL?) { lock.withLock { uploadsHeldUnder = folder.map { $0.standardizedFileURL.path + "/" } } }
+    /// iCloud storage is full: files under `folder` (nil: none) are refused, and read as not uploaded.
+    func refuseUploadsForQuota(under folder: URL?) { lock.withLock { quotaFullUnder = folder.map { $0.standardizedFileURL.path + "/" } } }
     var downloadRequests: [String] { lock.withLock { requests } }
     var droppedLocalCopies: [String] { lock.withLock { dropped } }
 
@@ -59,10 +63,16 @@ final class SimulatedICloud: @unchecked Sendable {
             isUploaded: { [self] url in
                 let present = FileManager.default.fileExists(atPath: url.path) || FileManager.default.fileExists(atPath: Self.placeholder(url).path)
                 return present && lock.withLock {
-                    !notUploaded.contains(url.path) && !(uploadsHeldUnder.map { url.standardizedFileURL.path.hasPrefix($0) } ?? false)
+                    let path = url.standardizedFileURL.path
+                    return !notUploaded.contains(url.path) && !(uploadsHeldUnder.map { path.hasPrefix($0) } ?? false)
+                        && !(quotaFullUnder.map { path.hasPrefix($0) } ?? false)
                 }
             },
-            evictLocalCopy: { [self] url in lock.withLock { dropped.append(url.path) } })
+            evictLocalCopy: { [self] url in lock.withLock { dropped.append(url.path) } },
+            uploadRefusedForQuota: { [self] url in
+                FileManager.default.fileExists(atPath: url.path)
+                    && lock.withLock { quotaFullUnder.map { url.standardizedFileURL.path.hasPrefix($0) } ?? false }
+            })
     }
 }
 
@@ -197,6 +207,68 @@ final class LibrarySyncReplicaTests: XCTestCase {
         XCTAssertFalse(macCopy.revisions.contains { $0.field.hasPrefix("sync:") })
     }
 
+    // MARK: iCloud storage and the disk
+
+    func testBehaviorUploadsRefusedForLackOfStorageAreReportedAndClear() async throws {
+        let mac = try mac()
+        let meeting = try await record(audioBytes(4000, seed: 9), on: "Mac", into: Meeting(title: "Long call"))
+        cloud.refuseUploadsForQuota(under: remote.appendingPathComponent("Blobs"))
+        let refused = try await pass(mac, "Mac", [meeting])
+        XCTAssertTrue(refused.storageFull)
+        XCTAssertGreaterThan(refused.pendingUploads, 0)
+        let full = await mac.storageFullLately
+        XCTAssertTrue(full)
+        cloud.refuseUploadsForQuota(under: nil)
+        let cleared = try await pass(mac, "Mac", refused.meetings)
+        XCTAssertFalse(cleared.storageFull)
+        XCTAssertEqual(cleared.pendingUploads, 0)
+    }
+
+    func testBehaviorAMacTrustsWhatICloudHoldsAndLetsGoOfItsSecondCopy() async throws {
+        let mac = try mac()
+        let recorded = try await pass(mac, "Mac", [try await record(audioBytes(6000, seed: 4), on: "Mac", into: Meeting(title: "Retro"))]).meetings[0]
+        let object = blob(recorded.tracks[0])
+        // Uploaded, and the library holds it verified: iCloud may drop the sync folder's copy.
+        XCTAssertEqual(cloud.droppedLocalCopies, [object.path])
+        // It did (Optimize Mac Storage). Renaming the conversation publishes at once, without downloading the recording
+        // to hash it again.
+        try cloud.evict(object)
+        var renamed = recorded
+        renamed.title = "Retro, renamed"
+        let edit = try await pass(mac, "Mac", [renamed])
+        XCTAssertEqual(edit.publishedEvents, 1)
+        XCTAssertEqual(edit.pendingDownloads, 0)
+        XCTAssertFalse(cloud.downloadRequests.contains(object.path), "Downloaded just to re-hash")
+        XCTAssertEqual(edit.meetings.map(\.title), ["Retro, renamed"])
+    }
+
+    func testBehaviorStaleTemporaryFilesAreSweptAndFreshOnesKept() async throws {
+        let mac = try mac()
+        let recorded = try await pass(mac, "Mac", [try await record(audioBytes(3000, seed: 2), on: "Mac", into: Meeting(title: "Kept"))]).meetings[0]
+        let fm = FileManager.default
+        let old = Date().addingTimeInterval(-2 * LibrarySyncEngine.staleTemporaryAge)
+        func make(_ url: URL, stale: Bool) throws {
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("partial".utf8).write(to: url)
+            if stale { try fm.setAttributes([.modificationDate: old], ofItemAtPath: url.path) }
+        }
+        let staleUpload = remote.appendingPathComponent("Blobs/.upload-\(UUID().uuidString)")
+        let freshUpload = remote.appendingPathComponent("Blobs/.upload-\(UUID().uuidString)")
+        let stalePromote = remote.appendingPathComponent("Events/.promote-\(UUID().uuidString)")
+        let staleSeal = local("Mac").appendingPathComponent("Sync/Sealing/.seal-\(UUID().uuidString)")
+        let staleDownload = local("Mac").appendingPathComponent("Meetings/\(recorded.id.uuidString)/Originals/.download-\(UUID().uuidString)")
+        let staleCheckpoint = local("Mac").appendingPathComponent("Sync/.checkpoint.json.\(UUID().uuidString).tmp")
+        for url in [staleUpload, stalePromote, staleSeal, staleDownload, staleCheckpoint] { try make(url, stale: true) }
+        try make(freshUpload, stale: false)
+        // A new engine (a relaunch) sweeps on its first pass.
+        try await pass(try self.mac(), "Mac", [recorded])
+        for url in [staleUpload, stalePromote, staleSeal, staleDownload, staleCheckpoint] {
+            XCTAssertFalse(fm.fileExists(atPath: url.path), url.lastPathComponent)
+        }
+        XCTAssertTrue(fm.fileExists(atPath: freshUpload.path), "Another device's write may still be in flight")
+        XCTAssertTrue(fm.fileExists(atPath: blob(recorded.tracks[0]).path))
+    }
+
     // MARK: Fetch on demand
 
     func testFetchRequestsDownloadReportsProgressAndInstallsVerifiedAudio() async throws {
@@ -210,6 +282,9 @@ final class LibrarySyncReplicaTests: XCTestCase {
 
         let events = Recorder<AudioFetchProgress>()
         let cloud = self.cloud!
+        // The Mac, holding the recording verified, let go of iCloud's copy once it was uploaded.
+        let droppedBefore = cloud.droppedLocalCopies
+        XCTAssertEqual(droppedBefore, [object.path])
         let installed = try await phone.fetchAudio(for: track, in: meeting.id, options: fast) { progress in
             events.append(progress)
             // iCloud finishes the download after a couple of checks.
@@ -225,7 +300,7 @@ final class LibrarySyncReplicaTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(copying.count, 3)
         XCTAssertEqual(copying.map(\.completedBytes), copying.map(\.completedBytes).sorted())
         XCTAssertEqual(copying.last?.completedBytes, Int64(bytes.count)); XCTAssertEqual(copying.last?.totalBytes, Int64(bytes.count))
-        XCTAssertEqual(cloud.droppedLocalCopies, [object.path], "The library copy is kept; iCloud's duplicate is released")
+        XCTAssertEqual(Array(cloud.droppedLocalCopies.dropFirst(droppedBefore.count)), [object.path], "The library copy is kept; iCloud's duplicate is released")
         XCTAssertEqual(phone.audioAvailability(for: meeting), [track.id: .local])
         let cached = await phone.cachedAudio()
         XCTAssertEqual(cached.map(\.origin), [.fetched]); XCTAssertEqual(cached.first?.bytes, UInt64(bytes.count))

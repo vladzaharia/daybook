@@ -618,6 +618,67 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(phoneAgain.publishedEvents, 0); XCTAssertEqual(phoneAgain.pendingDownloads, 0); XCTAssertEqual(phoneAgain.warnings, [])
     }
 
+    func testBehaviorPlaintextGoesObjectByObjectAsItsSealedCopyUploads() async throws {
+        let mac = try mac()
+        let first = try await record(audioBytes(5000, seed: 21), on: "Mac", into: Meeting(title: "First"))
+        let second = try await record(audioBytes(5000, seed: 22), on: "Mac", into: Meeting(title: "Second"))
+        let library = try await pass(mac, "Mac", [first, second]).meetings
+        let start = Date()
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace * 2) }
+        let key = try await mac.enableSealing(recovery: RecoveryKey.generate())
+        // iCloud is full: one sealed copy went up before it filled, the other can't.
+        let stuck = try XCTUnwrap(key.objectName(.blob, plaintextSHA256: second.tracks[0].sha256))
+        let stuckURL = remote.appendingPathComponent("Sealed/Blobs/\(stuck)")
+        cloud.setUploaded(stuckURL, false)
+        try await pass(mac, "Mac", library)
+        try await pass(mac, "Mac", library)
+        // The plaintext whose sealed copy is up goes at once, giving iCloud room back; the other waits, and so does the
+        // retirement of the plaintext as a whole.
+        XCTAssertFalse(files("Blobs").contains(first.tracks[0].sha256))
+        XCTAssertTrue(files("Blobs").contains(second.tracks[0].sha256))
+        XCTAssertNil(try manifest().sealing?.legacyRetired)
+        let waiting = await mac.sealerProgress
+        XCTAssertEqual(waiting?.legacyRetired, false)
+        XCTAssertEqual(waiting?.waitingFor.contains(.uploads), true)
+        // Once it's up, the rest goes and the plaintext is retired.
+        cloud.setUploaded(stuckURL, true)
+        try await pass(mac, "Mac", library)
+        XCTAssertTrue(files("Blobs").isEmpty)
+        XCTAssertNotNil(try manifest().sealing?.legacyRetired)
+        let fresh = try await pass(try self.mac("Fresh"), "Fresh")
+        XCTAssertEqual(Set(fresh.meetings.map(\.title)), ["First", "Second"]); XCTAssertEqual(fresh.pendingDownloads, 0)
+    }
+
+    func testBehaviorTheSealerWritesABacklogAtATimeAndNothingWhileICloudIsFull() async throws {
+        let mac = try mac()
+        let first = try await record(audioBytes(5000, seed: 31), on: "Mac", into: Meeting(title: "First"))
+        let second = try await record(audioBytes(5000, seed: 32), on: "Mac", into: Meeting(title: "Second"))
+        let library = try await pass(mac, "Mac", [first, second]).meetings
+        await mac.setSealerBacklogLimit(1)
+        cloud.holdUploads(under: remote.appendingPathComponent("Sealed/Blobs"))
+        try await mac.enableSealing()
+        try await pass(mac, "Mac", library)
+        // One object sealed; the next waits for it to upload.
+        XCTAssertEqual(files("Sealed/Blobs").count, 1)
+        let progress = await mac.sealerProgress
+        XCTAssertEqual(progress?.remaining, 1)
+        cloud.holdUploads(under: nil)
+        // iCloud is full (it refuses what the sealer wrote): no new sealed copy is written, and the progress says why.
+        cloud.refuseUploadsForQuota(under: remote.appendingPathComponent("Sealed/Blobs"))
+        try await pass(mac, "Mac", library)
+        try await pass(mac, "Mac", library)
+        XCTAssertEqual(files("Sealed/Blobs").count, 1)
+        let full = await mac.sealerProgress
+        XCTAssertEqual(full?.waitsForStorage, true)
+        // Room again: the rest is sealed.
+        cloud.refuseUploadsForQuota(under: nil)
+        try await pass(mac, "Mac", library)
+        try await pass(mac, "Mac", library)
+        XCTAssertEqual(files("Sealed/Blobs").count, 2)
+        let done = await mac.sealerProgress
+        XCTAssertEqual(done?.remaining, 0)
+    }
+
     func testRetirementWaitsForAnotherDeviceOrARecoveryKey() async throws {
         let mac = try mac()
         try await pass(mac, "Mac", [Meeting(title: "Alone")])

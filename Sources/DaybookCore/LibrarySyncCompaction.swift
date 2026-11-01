@@ -61,6 +61,8 @@ public struct CompactionReport: Equatable, Sendable {
     public var deletedBytes: Int64 = 0
     /// Commit records were consolidated into one.
     public var consolidated = false
+    /// Why committing failed, when it did, for diagnostics (never shown as it is): what failed is tried again later.
+    public var lastError: String?
     public init() {}
 }
 
@@ -297,7 +299,11 @@ extension LibrarySyncEngine {
                 report.pruned = fresh.count
                 if executed != nil { pendingProposal = nil }
                 deletePrunedFiles(input.entries, report: &report)
-            } catch {}
+            } catch is CancellationError {
+            } catch {
+                report.lastError = error.localizedDescription
+                Self.log.error("Compaction couldn’t commit: \(error.localizedDescription, privacy: .public)")
+            }
         }
         tidyCompactionRecords(policy, now: now, report: &report)
         if pendingProposal == nil || proposalIsStale(input, now: now) {

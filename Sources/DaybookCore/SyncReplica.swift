@@ -128,13 +128,24 @@ public struct SyncCloudFiles: Sendable {
     public var isUploaded: @Sendable (URL) -> Bool
     /// Best-effort request to drop the provider's local copy of an item that is safely in the cloud.
     public var evictLocalCopy: @Sendable (URL) -> Void
+    /// Whether iCloud refused to upload an item because the person's iCloud storage is full
+    /// (`ubiquitousItemUploadingError`, `CocoaError.ubiquitousFileNotUploadedDueToQuota`).
+    public var uploadRefusedForQuota: @Sendable (URL) -> Bool
 
     public init(requestDownload: @escaping @Sendable (URL) throws -> Void,
                 downloadFraction: @escaping @Sendable (URL) -> Double? = { _ in nil },
                 isUploaded: @escaping @Sendable (URL) -> Bool,
-                evictLocalCopy: @escaping @Sendable (URL) -> Void = { _ in }) {
+                evictLocalCopy: @escaping @Sendable (URL) -> Void = { _ in },
+                uploadRefusedForQuota: @escaping @Sendable (URL) -> Bool = SyncCloudFiles.systemQuotaRefusal) {
         self.requestDownload = requestDownload; self.downloadFraction = downloadFraction
-        self.isUploaded = isUploaded; self.evictLocalCopy = evictLocalCopy
+        self.isUploaded = isUploaded; self.evictLocalCopy = evictLocalCopy; self.uploadRefusedForQuota = uploadRefusedForQuota
+    }
+
+    /// The system's answer for `uploadRefusedForQuota`: false for anything that isn't an iCloud item.
+    public static let systemQuotaRefusal: @Sendable (URL) -> Bool = { url in
+        guard let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemUploadingErrorKey]),
+              values.isUbiquitousItem == true, let error = values.ubiquitousItemUploadingError else { return false }
+        return error.domain == NSCocoaErrorDomain && error.code == CocoaError.ubiquitousFileNotUploadedDueToQuota.rawValue
     }
 
     public static let system = SyncCloudFiles(

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public struct SyncResult: Sendable {
     /// Acknowledge only after every returned change is durably saved locally.
@@ -21,6 +22,9 @@ public struct SyncResult: Sendable {
     /// Journal files this replica wrote into the sync folder since the last pass that returned: events, metadata, and
     /// audio objects it copied there. A courier sends them ahead of iCloud Drive (docs/icloud-sync.md, "Courier").
     public var writtenFiles: [SyncJournalFile] = []
+    /// iCloud refused to upload part of what's waiting because the person's iCloud storage is full: `pendingUploads`
+    /// won't go down on its own.
+    public var storageFull = false
     public var hasPendingTransfers: Bool { pendingDownloads > 0 || pendingUploads > 0 }
     /// Synchronize again soon: this pass stopped at its work limits.
     public var hasMoreWork: Bool { deferredItems > 0 }
@@ -89,6 +93,8 @@ public enum LibrarySyncError: LocalizedError, Equatable {
 /// A coordinated, immutable file transport usable with an explicitly selected iCloud Drive folder
 /// or a native ubiquity container. It never moves the live library into cloud storage.
 public actor LibrarySyncEngine {
+    /// Sync's diagnostics (Console: subsystem `local.daybook`, category `sync`): what failed and is tried again later.
+    static let log = Logger(subsystem: "local.daybook", category: "sync")
     public nonisolated let localRoot: URL
     public nonisolated let remoteRoot: URL
     public nonisolated let deviceID: String
@@ -123,6 +129,11 @@ public actor LibrarySyncEngine {
     private var photoLineage: [String: Bool] = [:]
     /// Files written into the sync folder that no returned pass has reported yet (`SyncResult.writtenFiles`).
     var courierWrites: [String: SyncJournalFile] = [:]
+    /// Objects in the sync folder an eager replica wrote, verified, or installed from, by path, with the plaintext SHA-256
+    /// the library holds a verified copy of: once iCloud has one, its local copy is let go (`evictUploadedContainerCopies`).
+    var containerCopies: [String: String] = [:]
+    /// When stale temporary files were last swept (`sweepStaleTemporaries`).
+    var lastTemporarySweep: Date?
     /// Devices that wrote the journal entries seen by the last pass, including ones without presence.
     var journalDeviceIDs: Set<String> = []
     /// Journal file names seen by the last pass that finished with nothing pending or deferred.
@@ -154,6 +165,9 @@ public actor LibrarySyncEngine {
     var manifestChecked = false
     /// The library is encrypted and the keychain couldn't be read to open it (`LibrarySyncError.keyStoreUnreadable`).
     var keyStoreUnreadable = false
+    /// The last pass found iCloud refusing uploads for lack of storage (`countPendingCloudUploads`): the sealer writes no
+    /// new sealed objects meanwhile.
+    public internal(set) var storageFullLately = false
     /// Sealed entries already opened, by path: the entry ID (SHA-256 of the plaintext record) each holds, and its key.
     var sealedNames: [String: String] = [:]
     var sealedKeys: [String: Data] = [:]
@@ -177,6 +191,9 @@ public actor LibrarySyncEngine {
     /// The sealer's clock (tests move it past the grace periods).
     var sealerClock: @Sendable () -> Date = { Date() }
     func setSealerClock(_ clock: @escaping @Sendable () -> Date) { sealerClock = clock }
+    /// How many bytes of sealed objects may wait for iCloud before the sealer writes more (`sealerBacklogBytes`; tests).
+    var sealerBacklogLimit = LibrarySyncEngine.sealerBacklogBytes
+    func setSealerBacklogLimit(_ bytes: Int64) { sealerBacklogLimit = bytes }
     /// When this device compacts the journal (LibrarySyncCompaction.swift); nil: never (it still reads compaction
     /// records and acknowledges proposals).
     var compactionPolicy: SyncCompactionPolicy?
@@ -249,6 +266,7 @@ public actor LibrarySyncEngine {
         let manifest = try prepareRemote()
         libraryID = manifest.libraryID
         forgetOtherLibraries(manifest.libraryID)
+        sweepStaleTemporaries(now: Date())
         // An encrypted library whose key isn't here: nothing is read or written (the library never receives plaintext
         // from this device), and local edits wait. Presence says this device is waiting for the key.
         do { try loadSealing(manifest) } catch {
@@ -611,8 +629,11 @@ public actor LibrarySyncEngine {
                                           entries: (eventEntries + metadataEntries).filter { !replacedEntries.contains($0.path) },
                                           deleted: deletes, complete: complete), now: compactionClock())
         }
-        // A coordinated local write is not necessarily uploaded to iCloud yet.
-        pendingUploads += try countPendingCloudUploads()
+        // A coordinated local write is not necessarily uploaded to iCloud yet; one iCloud refused for lack of storage won't be.
+        let uploads = try countPendingCloudUploads()
+        // Objects iCloud has, which the library holds verified, needn't stay on disk twice.
+        evictUploadedContainerCopies()
+        pendingUploads += uploads.pending
         try saveAudioIndexIfNeeded()
         // Courier deliveries the sync folder now holds, downloaded and identical, aren't needed any more.
         pruneCourierInbox()
@@ -624,7 +645,8 @@ public actor LibrarySyncEngine {
         return SyncResult(checkpointID: checkpointID, meetings: output.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date > $1.date },
             deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
             pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
-            changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred, writtenFiles: written)
+            changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred, writtenFiles: written,
+            storageFull: uploads.storageFull)
     }
 
     /// Reads the library settings versions the sync folder lists, and returns them with the entries read: in an encrypted
@@ -1399,14 +1421,19 @@ public actor LibrarySyncEngine {
     private func upload(_ asset: SyncAsset, from source: URL) throws {
         if let sealing { return try uploadSealed(asset, from: source, sealing: sealing) }
         let target = blobURL(asset.sha256)
-        // Never download an object just to re-verify it: on a phone that would fetch every recording.
-        if audioPolicy == .onDemand, SyncFiles.itemState(target) == .inCloud { return }
+        // Never download an object just to re-verify it: iCloud holds it, under the name its content gives it. On a phone
+        // that would fetch every recording; on a Mac whose copy iCloud dropped, gigabytes before an edit syncs.
+        if SyncFiles.itemState(target) == .inCloud { return }
         if fm.fileExists(atPath: target.path) {
             try SyncFiles.available(target, cloud: cloud)
-            if let stamp = try? assetStamp(target, digest: asset.sha256), verifiedAssets[target.path] == stamp { return }
+            if let stamp = try? assetStamp(target, digest: asset.sha256), verifiedAssets[target.path] == stamp {
+                noteContainerCopy("Blobs/\(asset.sha256)", holding: asset.sha256)
+                return
+            }
             let valid = try SyncFiles.coordinateRead(target, below: remoteRoot) { try SyncDigest.sha256(fileURL: $0) == asset.sha256 }
             guard valid else { throw LibrarySyncError.invalidBlob(asset.sha256) }
             verifiedAssets[target.path] = try assetStamp(target, digest: asset.sha256)
+            noteContainerCopy("Blobs/\(asset.sha256)", holding: asset.sha256)
             return
         }
         // A courier brought this object from the device that recorded it, and that device uploads it through iCloud
@@ -1428,10 +1455,11 @@ public actor LibrarySyncEngine {
         }
         let stamp = try? assetStamp(target, digest: asset.sha256)
         verifiedAssets[target.path] = stamp
+        let path = "Blobs/\(asset.sha256)"
         if wrote, let stamp {
-            let path = "Blobs/\(asset.sha256)"
             courierWrites[path] = SyncJournalFile(path: path, sha256: asset.sha256, size: Int64(stamp.size))
         }
+        noteContainerCopy(path, holding: asset.sha256)
     }
 
     private func validate(snapshot: Meeting, assets: [SyncAsset]) throws {
@@ -1490,6 +1518,7 @@ public actor LibrarySyncEngine {
             }
             try install(temporary, at: destination, in: directory, warnings: &warnings)
             verifiedAssets[destination.path] = try assetStamp(destination, digest: asset.sha256)
+            if delivered == nil { noteContainerCopy(String(object.url.standardizedFileURL.path.dropFirst(remoteRoot.path.count + 1)), holding: asset.sha256) }
         }
     }
     /// Moves verified bytes into the library. An existing different file is an original and is preserved.
@@ -1652,21 +1681,27 @@ public actor LibrarySyncEngine {
         }
         return photoLineage[id] ?? false
     }
-    private func countPendingCloudUploads() throws -> Int {
-        var count = 0
+    /// Files in the sync folder iCloud hasn't uploaded yet, and whether it refused any for lack of storage (then they
+    /// won't upload until the person frees some). Remembered for the sealer (`storageFullLately`).
+    func countPendingCloudUploads() throws -> (pending: Int, storageFull: Bool) {
+        var count = 0, full = false
+        let keys: [URLResourceKey] = [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey, .ubiquitousItemUploadingErrorKey]
         var urls = [remoteRoot.appendingPathComponent("daybook-sync.json")]
         for name in ["Events", "Blobs", "Metadata"] where sealing == nil || fm.fileExists(atPath: remoteRoot.appendingPathComponent(name).path) {
-            urls += try fm.contentsOfDirectory(at: remoteRoot.appendingPathComponent(name), includingPropertiesForKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey], options: [.skipsHiddenFiles])
+            urls += try fm.contentsOfDirectory(at: remoteRoot.appendingPathComponent(name), includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
         }
         for name in ["Sealed/Events", "Sealed/Metadata", "Sealed/Blobs"] where fm.fileExists(atPath: remoteRoot.appendingPathComponent(name).path) {
-            urls += try fm.contentsOfDirectory(at: remoteRoot.appendingPathComponent(name), includingPropertiesForKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey], options: [.skipsHiddenFiles])
+            urls += try fm.contentsOfDirectory(at: remoteRoot.appendingPathComponent(name), includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
         }
         for url in urls {
             try Task.checkCancellation()
             let values = try url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemIsUploadedKey])
-            if values.isUbiquitousItem == true && values.ubiquitousItemIsUploaded == false { count += 1 }
+            let refused = cloud.uploadRefusedForQuota(url)
+            if refused || (values.isUbiquitousItem == true && values.ubiquitousItemIsUploaded == false) { count += 1 }
+            if refused { full = true }
         }
-        return count
+        storageFullLately = full
+        return (count, full)
     }
 }
 
