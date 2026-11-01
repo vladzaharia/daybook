@@ -68,7 +68,8 @@ public enum ProcessingStatus: Equatable, Sendable {
         }
     }
 
-    /// What this device's processing queue is doing. The Mac supplies it; the iPhone has none.
+    /// What this device's processing queue is doing: the Mac's, and the iPhone's own recordings'
+    /// (`PhoneProcessor`).
     public struct LocalQueue: Equatable, Sendable {
         /// The conversation being processed now.
         public var running: UUID?
@@ -83,11 +84,16 @@ public enum ProcessingStatus: Equatable, Sendable {
         public var awaitingModels: Set<UUID>
         /// The models automatic processing needs are installed.
         public var canProcess: Bool
+        /// The running conversation's step, when the queue knows it; nil reads it from the conversation
+        /// (the Mac marks one being summarized).
+        public var stage: ProcessingRequest.Stage?
 
         public init(running: UUID? = nil, fraction: Double = 0, identifyingSpeakers: Bool = false, queued: [UUID] = [],
-                    paused: Set<UUID> = [], awaitingModels: Set<UUID> = [], canProcess: Bool = true) {
+                    paused: Set<UUID> = [], awaitingModels: Set<UUID> = [], canProcess: Bool = true,
+                    stage: ProcessingRequest.Stage? = nil) {
             self.running = running; self.fraction = fraction; self.identifyingSpeakers = identifyingSpeakers
             self.queued = queued; self.paused = paused; self.awaitingModels = awaitingModels; self.canProcess = canProcess
+            self.stage = stage
         }
     }
 
@@ -97,8 +103,8 @@ public enum ProcessingStatus: Equatable, Sendable {
     public init(_ meeting: Meeting, queue: LocalQueue? = nil, now: Date = Date()) {
         if let queue {
             if queue.running == meeting.id {
-                let stage: ProcessingRequest.Stage = meeting.status == .summarizing ? .summarizing
-                    : queue.identifyingSpeakers ? .identifyingSpeakers : .transcribing
+                let stage: ProcessingRequest.Stage = queue.stage ?? (meeting.status == .summarizing ? .summarizing
+                    : queue.identifyingSpeakers ? .identifyingSpeakers : .transcribing)
                 self = .processing(Progress(stage: stage, fraction: queue.fraction, awaiting: meeting.awaitedRecordings(now: now)))
                 return
             }
