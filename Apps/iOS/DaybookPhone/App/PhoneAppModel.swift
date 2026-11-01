@@ -527,6 +527,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// this iPhone can summarize, and the processor picks up what it can do now.
     func processingChanged() {
         placement.localSummarizer = processingSummarizer
+        upgrades.refresh()
         processor.pickUp()
     }
 
