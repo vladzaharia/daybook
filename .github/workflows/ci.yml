@@ -333,7 +333,7 @@ jobs:
           metallib="$(find "$app" -name default.metallib -print -quit)"
           test -n "$metallib" || { echo "::error::No MLX default.metallib in the app: the Metal shaders weren't compiled"; exit 1; }
           echo "Metal library: $metallib"
-          # Sandboxed, as local.daybook.app.adhoc, with no migration manifest: an ad hoc build can never create the
+          # Sandboxed, as local.daybook.adhoc, with no migration manifest: an ad hoc build can never create the
           # app's container or move a library into it (docs/sandbox.md).
           scripts/ci/check-mac-app.sh --app "$app" --kind adhoc
       - name: Save derived data
