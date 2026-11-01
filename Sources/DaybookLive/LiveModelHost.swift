@@ -22,12 +22,17 @@ public actor LiveModelHost {
     private struct Key: Hashable { var kind: String; var install: ModelInstallKey }
 
     private let idleRelease: Duration
-    private let store: ModelStore?
+    private let leases: (any LiveModelLeasing)?
     private var loaded: [Key: Loaded] = [:]
 
     public init(idleRelease: Duration, store: ModelStore? = nil) {
+        self.init(idleRelease: idleRelease, leases: store)
+    }
+
+    /// `leases`: where the revisions in use are leased (the store; tests script it).
+    init(idleRelease: Duration, leases: (any LiveModelLeasing)?) {
         self.idleRelease = idleRelease
-        self.store = store
+        self.leases = leases
     }
 
     /// How many models are loaded or loading, for tests and diagnostics.
@@ -78,17 +83,24 @@ public actor LiveModelHost {
                               load: @escaping @Sendable () async throws -> Value) async throws -> Value {
         let key = Key(kind: kind.rawValue, install: installation.key)
         let entry: Loaded
+        let isNew: Bool
         if let existing = loaded[key] {
             entry = existing
+            isNew = false
         } else {
             entry = Loaded(task: Task(priority: .utility) { try await load() })
             loaded[key] = entry
-            let lease = await store?.lease([installation.key])
-            if loaded[key] === entry { entry.lease = lease } else if let lease { await store?.endLease(lease) }
+            isNew = true
         }
+        // Counted before anything here waits: what runs meanwhile (`releaseIdle` under memory pressure)
+        // must not take a model being handed out for unused.
         entry.users += 1
         entry.release?.cancel()
         entry.release = nil
+        if isNew, let leases {
+            let lease = await leases.lease([installation.key])
+            if loaded[key] === entry { entry.lease = lease } else { await leases.endLease(lease) }
+        }
         do {
             guard let value = try await entry.task.value as? Value else { throw LiveModelError.damaged(installation.receipt.name) }
             return value
@@ -103,9 +115,17 @@ public actor LiveModelHost {
         guard let entry = loaded[key], !ifUnused || entry.users <= 0 else { return }
         loaded[key] = nil
         entry.release?.cancel()
-        if let lease = entry.lease { await store?.endLease(lease) }
+        if let lease = entry.lease { await leases?.endLease(lease) }
     }
 }
+
+/// Leases on installed revisions, so removal and garbage collection leave the ones in use alone.
+protocol LiveModelLeasing: Sendable {
+    func lease(_ keys: Set<ModelInstallKey>) async -> UUID
+    func endLease(_ id: UUID) async
+}
+
+extension ModelStore: LiveModelLeasing {}
 
 /// A loaded live speaker model and the preset it was converted for.
 struct LoadedDiarizer: @unchecked Sendable {

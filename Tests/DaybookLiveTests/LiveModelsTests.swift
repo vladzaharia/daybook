@@ -170,6 +170,60 @@ final class LiveModelsTests: XCTestCase {
         XCTAssertEqual(loaded, 0)
     }
 
+    /// Store leases that wait until let through, so a test can act while the host waits for one.
+    actor HeldLeases: LiveModelLeasing {
+        private(set) var active: Set<UUID> = []
+        private(set) var asked = 0
+        private var held = true
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        func lease(_ keys: Set<ModelInstallKey>) async -> UUID {
+            asked += 1
+            if held { await withCheckedContinuation { waiting.append($0) } }
+            let id = UUID()
+            active.insert(id)
+            return id
+        }
+
+        func endLease(_ id: UUID) { active.remove(id) }
+
+        func open() {
+            held = false
+            waiting.forEach { $0.resume() }
+            waiting = []
+        }
+    }
+
+    func testMemoryPressureWhileAModelIsHandedOutLeavesItLoadedAndLeased() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LiveModelsTests-\(UUID())", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let recognizer = try install("nemotron-3.5-asr-streaming/latin-1120ms", files: [], root: root)
+        let leases = HeldLeases()
+        let host = LiveModelHost(idleRelease: .zero, leases: leases)
+        let loads = LiveSourcesTests.Loads()
+        let first = Task { try await host.use(.transcription, recognizer) { loads.add("recognizer"); return "model" } }
+        try await waitUntilAsync("the host waits for the lease") { await leases.asked == 1 }
+        // A memory warning as captions start: nothing idle to let go.
+        await host.releaseIdle()
+        await leases.open()
+        _ = try await first.value
+        var loaded = await host.loadedCount
+        var active = await leases.active.count
+        XCTAssertEqual(loaded, 1, "the model being handed out stays loaded")
+        XCTAssertEqual(active, 1, "and its revision leased, so garbage collection leaves it alone")
+        // A second capture shares it rather than loading a copy, and the first ending leaves it to the second.
+        _ = try await host.use(.transcription, recognizer) { loads.add("recognizer"); return "copy" }
+        XCTAssertEqual(loads["recognizer"], 1)
+        await host.done(.transcription, recognizer)
+        await host.releaseIdle()
+        loaded = await host.loadedCount
+        XCTAssertEqual(loaded, 1, "still in use by the second")
+        await host.done(.transcription, recognizer)
+        try await waitUntilAsync("released once neither uses it") { await host.loadedCount == 0 }
+        active = await leases.active.count
+        XCTAssertEqual(active, 0, "and its lease ended")
+    }
+
     // MARK: Backing off
 
     func testTheiPhoneShedsSpeakersBeforeWordsAndWordsOnlyWhenItMust() {
