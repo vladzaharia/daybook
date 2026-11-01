@@ -31,8 +31,8 @@ command line, export it. From Xcode, which doesn't see shell variables, create
 `Config/Signing.local.xcconfig` (ignored by git) with `DAYBOOK_TEAM_ID = ABCDE12345`. Simulator
 builds need no team.
 
-Identifiers: `local.daybook.phone` (app), `local.daybook.phone.widgets` (widget extension), app group
-`group.local.daybook.phone`, iCloud container `$(DAYBOOK_ICLOUD_CONTAINER)` (default
+Identifiers: `local.daybook` (app, the Mac app's bundle ID too: docs/release.md, "One bundle ID"),
+`local.daybook.widgets` (widget extension), app group `group.local.daybook`, iCloud container `$(DAYBOOK_ICLOUD_CONTAINER)` (default
 `iCloud.local.daybook`, set in `Config/Signing.xcconfig` and overridable in the local file).
 
 Sync uses the app's own iCloud ubiquity container, not a folder picked in Files. The app's
@@ -128,26 +128,26 @@ Debug builds accept launch arguments (see `DaybookPhone/App/LaunchOptions.swift`
 simulator never routes the Mac's microphone:
 
 ```sh
-xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --start-recording --demo-notes
-xcrun simctl launch <udid> local.daybook.phone --posture open        # or closed, partial[:degrees]
-xcrun simctl launch <udid> local.daybook.phone --log-geometry        # window, safe area, posture to Documents/geometry.jsonl
-xcrun simctl launch <udid> local.daybook.phone --open-latest         # the newest conversation's page
-xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --start-recording --simulate-interruption 6   # paused for a call
-xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --start-recording --demo-multipoint "Studio Mac"
-xcrun simctl launch <udid> local.daybook.phone --demo-link --open-settings              # Settings; also macs, pairing, storage, …
-xcrun simctl launch <udid> local.daybook.phone --sync-folder /tmp/container --demo-mac "Studio Mac:2"   # sync through a folder
-xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --open-settings device   # Soundcore, simulated
-xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --start-recording --demo-notes --demo-captions  # scripted captions
-xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --start-recording --demo-notes --posture partial --interface-orientation preview-portrait --write-notes   # table mode, writing (fold to book first)
-xcrun simctl launch <udid> local.daybook.phone --caption-probe /path/to/audio.m4a   # Documents/caption-probe.json; never downloads
-xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet (or panel) at a size
-xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --handoff-demo waiting --open-settings device   # a handoff state
-xcrun simctl launch <udid> local.daybook.phone --device-simulator --device-autopilot --demo-link --demo-live-captions --status-detent medium   # captions while the recorder streams
-xcrun simctl launch <udid> local.daybook.phone --synthetic-audio --demo-recorder-only "Soundcore Work"   # only the recorder records; this iPhone's microphone didn't start
-xcrun simctl launch <udid> local.daybook.phone --demo-link --open-settings add-term   # Vocabulary with Add Term showing (a card on the right page when open)
-xcrun simctl launch <udid> local.daybook.phone --library <dir> --demo-library --speaker-demo --select "Vendor call" --sheet info --info-detent large --info-scroll people   # Recognized and Maybe
-xcrun simctl launch <udid> local.daybook.phone --library <dir> --open-settings speaker-profile:Vladimir --profile-name Vlad   # a profile; also --merge-into Vlad [--confirm-merge]
-xcrun simctl launch <udid> local.daybook.phone --library <dir> --demo-library --select "Weekly product sync" --sheet history --history-change "Summary written"   # a change in Version History
+xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --demo-notes
+xcrun simctl launch <udid> local.daybook --posture open        # or closed, partial[:degrees]
+xcrun simctl launch <udid> local.daybook --log-geometry        # window, safe area, posture to Documents/geometry.jsonl
+xcrun simctl launch <udid> local.daybook --open-latest         # the newest conversation's page
+xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --simulate-interruption 6   # paused for a call
+xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --demo-multipoint "Studio Mac"
+xcrun simctl launch <udid> local.daybook --demo-link --open-settings              # Settings; also macs, pairing, storage, …
+xcrun simctl launch <udid> local.daybook --sync-folder /tmp/container --demo-mac "Studio Mac:2"   # sync through a folder
+xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --open-settings device   # Soundcore, simulated
+xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --demo-notes --demo-captions  # scripted captions
+xcrun simctl launch <udid> local.daybook --synthetic-audio --start-recording --demo-notes --posture partial --interface-orientation preview-portrait --write-notes   # table mode, writing (fold to book first)
+xcrun simctl launch <udid> local.daybook --caption-probe /path/to/audio.m4a   # Documents/caption-probe.json; never downloads
+xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --status-detent medium   # the status sheet (or panel) at a size
+xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --handoff-demo waiting --open-settings device   # a handoff state
+xcrun simctl launch <udid> local.daybook --device-simulator --device-autopilot --demo-link --demo-live-captions --status-detent medium   # captions while the recorder streams
+xcrun simctl launch <udid> local.daybook --synthetic-audio --demo-recorder-only "Soundcore Work"   # only the recorder records; this iPhone's microphone didn't start
+xcrun simctl launch <udid> local.daybook --demo-link --open-settings add-term   # Vocabulary with Add Term showing (a card on the right page when open)
+xcrun simctl launch <udid> local.daybook --library <dir> --demo-library --speaker-demo --select "Vendor call" --sheet info --info-detent large --info-scroll people   # Recognized and Maybe
+xcrun simctl launch <udid> local.daybook --library <dir> --open-settings speaker-profile:Vladimir --profile-name Vlad   # a profile; also --merge-into Vlad [--confirm-merge]
+xcrun simctl launch <udid> local.daybook --library <dir> --demo-library --select "Weekly product sync" --sheet history --history-change "Summary written"   # a change in Version History
 Apps/iOS/Tools/duo-fold/duo-fold.sh <udid> open                      # or closed, book, 0.0–1.0
 ```
 

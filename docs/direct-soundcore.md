@@ -254,7 +254,7 @@ this build".
 
 Joining another network needs the Hotspot Configuration capability. Done (2026-10-29):
 
-1. The account owner enabled **Hotspot Configuration** on the App ID `local.daybook.phone` in the
+1. The account owner enabled **Hotspot Configuration** on the App ID `local.daybook.phone` (and enables it on `local.daybook`, docs/release.md, "One bundle ID") in the
    developer portal (Certificates, Identifiers & Profiles › Identifiers). It's also enabled on the Mac's
    App ID, which Daybook doesn't use: Fast Transfer is iPhone-only.
 2. The entitlement is in the iPhone app's entitlements, from `Apps/iOS/project.yml` (the iPhone target's
