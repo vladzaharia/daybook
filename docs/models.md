@@ -31,6 +31,8 @@ A variant is named everywhere by its **key**, `family/variant`. Selections, queu
 
 The iPhone links DaybookKit, so it names the model behind any result (Conversation Info) and can list acknowledgements, and DaybookLive and DaybookModelStore, so it downloads and runs live captions' models. It registers no processing engines: final transcription, speakers, and summaries run on a Mac.
 
+Cloud models (Anthropic's and OpenAI's, for summaries only, with the person's own key) aren't manifest models: their catalog, keys, discovery, and requests are in `DaybookKit/Cloud`, and the summarizer is DaybookIntelligence's `CloudSummarizer` ("Cloud models", below; [cloud](cloud.md)).
+
 ## Engines
 
 Every engine conforms to `ModelEngine`:
@@ -115,7 +117,7 @@ Every entry carries its license, release dates (the variant's upstream publicati
 - **Queued jobs freeze exact revisions** (`ProcessingJob.revisions`), so an update installed while they wait never changes what they run.
 - **Updating a variant:** a new revision downloads beside the old one, is verified, and appears with one atomic rename; from then on selections resolve to it. The old revision stays until nothing selects, runs, queues, or pins it, then garbage collection removes it.
 - **Removing a selected model** falls back to the preset's next installed choice, with a notice saying so, or keeps the choice and shows "Download" (`ModelSelections.removing`). Processing never silently switches models: a job whose frozen revision is gone fails with "Download … in Models" rather than running another one.
-- **Provenance:** every transcript, speaker run, and summary records the exact family, variant, revision, engine, and engine version in `ProcessingSettings.model`, and the variant key in `modelID`. A model the catalog no longer lists, or one only another device had, is still named from the recorded provenance.
+- **Provenance:** every transcript, speaker run, and summary records the exact family, variant, revision, engine, and engine version in `ProcessingSettings.model`, and the variant key in `modelID`. A model the catalog no longer lists, or one only another device had, is still named from the recorded provenance. A cloud summary records the provider as the family and the provider's model ID as the variant, with engine `cloud` and no revision ("anthropic/claude-sonnet-5-5"), and its tokens, estimated cost, and sending device in the parameters (`CloudProvenance`).
 - **Migration:** before the model system, Daybook stored catalog IDs (`whisper-base`, `qwen-7b`, `speaker-community-1`, …). Each built-in revision's `legacy.ids` is the migration table: stored preferences map through it once at launch (`ModelSelections.migrating`; the old keys are left for an older build), and old results still resolve to their variant and exact revision (`ModelCatalog.provenance(of:modelID:)`, engine version "legacy").
 
 ## Routing
@@ -292,6 +294,10 @@ The live models are catalog entries like any other: `minimumEngineVersion`, revi
 ## Photos
 
 The `imageDescription` role uses Apple Vision by default (`apple-vision/system`, engine `appleVision`): OCR, labels, sharpness, and near-duplicate detection, with no download. Gemma 4 E2B and E4B also serve this role through MLXVLM and the existing installation. Their optional captions retain exact provenance; Vision remains the fallback. See [Photos](photos.md#local-understanding).
+
+## Cloud models
+
+Summaries can also run on a cloud model ([cloud](cloud.md)); nothing else does. `CloudCatalog.json` (DaybookKit) is the cloud's counterpart to the manifest, slimmer: family rules that place a model ID in a tier (Best: Claude Opus, GPT Astra; Balanced: Claude Sonnet, GPT Sol; Economy: Claude Haiku, GPT Terra and Luna), and, for the models measured on our prompt, their rank within the tier, a `summaryQuality` (0–100, the scale the local summary models will share for "Upgrade" offers: Gemma 4 26B A4B is 90 and E4B 53 on it), and how many tokens they write. Prices come from OpenRouter's model list, kept a day, over a bundled snapshot (`CloudPrices.json`). What's offered is what a person's key reaches: the measured models, newer versions of their families, and "-pro" variants a provider lists.
 
 ## What the next changes touch
 
