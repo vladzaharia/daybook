@@ -208,7 +208,8 @@ set by `PhoneDevices.holdRecorders`):
 The device managing a recorder that records along with a shared recording saves its audio into the
 conversation as it records (`DeviceSession.captureLive(into:)`, Listen Live's stream, captioned as
 Listen Live is, so the shared recording's captions show the recorder's lines: `LiveCaptureCaptions`;
-docs/capture.md, "Every source"), ends it when the shared recording stops (`endLiveCapture`, which waits until it's in the
+docs/capture.md, "Every source"; and metered: `liveLevel(into:)`, each buffer's level as it arrives, not
+published, for Floating Notes to sample), ends it when the shared recording stops (`endLiveCapture`, which waits until it's in the
 library), and imports the recorder's own file into the same conversation once it's finished and
 listed (`importWhenFinished`, the same waiting list as a handoff's imports). A live portion is a track
 whose recording ID ends with `~live`; the full recording replaces it (docs/multipoint.md, "A recorder's
