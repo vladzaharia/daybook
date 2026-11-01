@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -8,7 +9,7 @@ import XCTest
 @MainActor
 final class LibraryLockTests: XCTestCase {
     func testACancelledWaiterStopsWaitingWithoutTheLockAndTheNextOneGetsIt() async throws {
-        let library = LibraryController(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("Lock-\(UUID())"), sync: nil)
+        let library = LibraryController(rootURL: makeTemporaryFolder("Lock"), sync: nil)
         await library.acquireLock()
         var order: [String] = []
         let cancelled = Task {

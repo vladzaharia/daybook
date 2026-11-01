@@ -17,14 +17,13 @@ final class SpeakerProfileLibraryTests: XCTestCase {
     private let me = SyntheticVoice.person(1), other = SyntheticVoice.person(2)
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSpeakerProfiles-\(UUID().uuidString)", isDirectory: true)
+        root = makeTemporaryFolder("DaybookSpeakerProfiles")
         try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
     }
 
     override func tearDown() async throws {
         for controller in controllers { controller.reportFailure("Test cleanup"); controller.disconnect() }
         controllers = []
-        try? FileManager.default.removeItem(at: root)
     }
 
     private func library(_ name: String, synced: Bool = true) async throws -> LibraryController {

@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -30,9 +31,7 @@ final class LibraryPlacementTests: XCTestCase {
     }
 
     func testImportedDeviceRecordingKeepsItsIdentityAcrossReload() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookPlacement-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = makeTemporaryFolder("DaybookPlacement")
         let source = root.appendingPathComponent("Soundcore-1729000000.wav")
         try Data(repeating: 7, count: 2_048).write(to: source)
         let store = try MeetingStore(rootURL: root)
@@ -48,9 +47,7 @@ final class LibraryPlacementTests: XCTestCase {
     }
 
     func testSameBytesFromARecorderRecordItsIdentityOnTheExistingTrack() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookPlacement-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = makeTemporaryFolder("DaybookPlacement")
         let source = root.appendingPathComponent("export.wav")
         try Data(repeating: 3, count: 2_048).write(to: source)
         let store = try MeetingStore(rootURL: root)

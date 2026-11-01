@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -83,7 +84,7 @@ final class EchoRemoverTests: XCTestCase {
                         S.noise(count: far.count, level: 0.0005, seed: 53))
         // The call device delivered 16 000 × (1 + drift) frames per host second, labelled 16 kHz.
         let callSamples = S.convert(far, from: rate, to: rate * (1 + drift))
-        var random = SplitMix64(seed: 54)
+        var random = SeededRandom(seed: 54)
         let anchors = stride(from: 0, to: Int64(callSamples.count), by: 4_096).map { frame in
             ClockAnchor(frame: frame, hostTime: 100 + Double(frame) / (rate * (1 + drift)) + random.uniform(-0.0015...0.0015))
         }

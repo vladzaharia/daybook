@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookCore
@@ -10,18 +11,16 @@ final class LibraryLoadingTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookLoading-\(UUID().uuidString)", isDirectory: true)
-    }
-
-    override func tearDown() async throws {
-        // Permissions some tests took away are given back so the folder can be removed.
-        if let root {
+        let root = makeTemporaryFolder("DaybookLoading")
+        self.root = root
+        // Permissions some tests took away are given back first, so the folder can be removed (teardown blocks run
+        // last added, first).
+        addTeardownBlock {
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
             for path in (try? FileManager.default.subpathsOfDirectory(atPath: root.path)) ?? [] {
                 try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.appendingPathComponent(path).path)
             }
         }
-        try? FileManager.default.removeItem(at: root)
     }
 
     private func open() async throws -> LibraryController {

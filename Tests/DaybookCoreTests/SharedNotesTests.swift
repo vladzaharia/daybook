@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -156,11 +157,9 @@ final class SharedNotesTests: XCTestCase {
     }
 
     func testTheRecordersFileWithTheLiveAudiosBytesBecomesThatTrack() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookLive-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = makeTemporaryFolder("DaybookLive")
         let store = try MeetingStore(rootURL: root)
         let audio = root.appendingPathComponent("recording.wav")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data((0..<4_000).map { UInt8($0 % 251) }).write(to: audio)
         let live = DeviceRecordingIdentity(kind: "soundcore.work", serial: "SN1", recordingID: "1729000000~live")
         let whole = DeviceRecordingIdentity(kind: "soundcore.work", serial: "SN1", recordingID: "1729000000")

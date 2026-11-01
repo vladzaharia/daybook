@@ -1,3 +1,4 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -6,12 +7,9 @@ import XCTest
 final class DurableFilesTests: XCTestCase {
     private var root: URL!
 
-    override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("Durable-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    override func setUp() {
+        root = makeTemporaryFolder("Durable")
     }
-
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
     func testTheBarrierFlushesWhatAnImportWroteThenForgetsIt() async throws {
         let store = try MeetingStore(rootURL: root.standardizedFileURL)

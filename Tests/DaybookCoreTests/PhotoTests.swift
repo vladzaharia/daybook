@@ -1,14 +1,13 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
 final class PhotoTests: XCTestCase {
     private var root: URL!
 
-    override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookPhotoTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    override func setUp() {
+        root = makeTemporaryFolder("DaybookPhotoTests")
     }
-    override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
     private var library: URL { root.appendingPathComponent("Library") }
     private func source(_ name: String, seed: Int = 0) throws -> URL {

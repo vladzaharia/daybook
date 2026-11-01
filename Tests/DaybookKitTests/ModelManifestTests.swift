@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -171,10 +172,9 @@ final class ModelManifestTests: XCTestCase {
     }
 
     func testCatalogFolderLoadsEachFamilyFileOnItsOwn() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = makeTemporaryFolder("DaybookCatalog")
         let families = folder.appendingPathComponent("Families", isDirectory: true)
         try FileManager.default.createDirectory(at: families, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
         try Data(#"{"schemaVersion": 1, "catalogVersion": "test"}"#.utf8).write(to: folder.appendingPathComponent("Catalog.json"))
         func family(_ id: String, minimumReaderVersion: Int = 1) -> Data {
             Data("""

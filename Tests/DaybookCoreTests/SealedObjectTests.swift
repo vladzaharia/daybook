@@ -1,5 +1,6 @@
 import CryptoKit
 import Darwin
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
@@ -13,11 +14,9 @@ final class SealedObjectTests: XCTestCase {
     private var keyring: SealedObject.Keyring { { [key] id in id == key.id ? key : nil } }
     private var root: URL!
 
-    override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSealedTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    override func setUp() {
+        root = makeTemporaryFolder("DaybookSealedTests")
     }
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
     // MARK: Known answers
 

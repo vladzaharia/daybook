@@ -80,10 +80,9 @@ final class LibrarySavingTests: XCTestCase {
         let id = library.newMeeting(title: "Autosaved")
         library.rename(id, to: "Autosaved, renamed")
         let primary = root.appendingPathComponent("Meetings/\(id.uuidString)/meeting.json")
-        for _ in 0..<200 where (try? JSONDecoder().decode(Meeting.self, from: Data(contentsOf: primary)))?.title != "Autosaved, renamed" {
-            try await Task.sleep(for: .milliseconds(10))
+        try await waitUntil("the rename to be saved without a flush") {
+            (try? JSONDecoder().decode(Meeting.self, from: Data(contentsOf: primary)))?.title == "Autosaved, renamed"
         }
-        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: Data(contentsOf: primary)).title, "Autosaved, renamed")
     }
 
     func testAFailedSaveIsRetriedAtTheNextFlushWithoutAnotherEdit() async throws {

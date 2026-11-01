@@ -1,13 +1,12 @@
+import DaybookTestSupport
 import XCTest
 @testable import DaybookCore
 
 final class MeetingStoreTests: XCTestCase {
     var root: URL!
-    override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    override func setUp() {
+        root = makeTemporaryFolder("DaybookTests")
     }
-    override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
     func testRoundTripRetainsNotesCorrectionsAndOriginalTranscripts() async throws {
         let store = try MeetingStore(rootURL: root)
@@ -346,7 +345,10 @@ final class MeetingStoreTests: XCTestCase {
         let target = Meeting(title: "Long import")
         try await store.save(target)
         let importing = Task { try await store.importAudio(from: source, into: target) }
-        try await Task.sleep(for: .milliseconds(100))
+        let originals = root.appendingPathComponent("Meetings/\(target.id.uuidString)/Originals")
+        try await waitUntil("the import to stage its copy") {
+            ((try? FileManager.default.contentsOfDirectory(atPath: originals.path)) ?? []).contains { $0.hasPrefix(".import-") }
+        }
         let started = Date()
         var other = Meeting(title: "Edited meanwhile")
         try await store.save(other)
@@ -355,7 +357,6 @@ final class MeetingStoreTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "Saves don't wait for the import")
         importing.cancel()
         do { _ = try await importing.value; XCTFail("A cancelled import finished") } catch is CancellationError { }
-        let originals = root.appendingPathComponent("Meetings/\(target.id.uuidString)/Originals")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: originals.path), [], "Nothing staged is left behind")
         let stored = try await store.load(target.id)
         XCTAssertTrue(stored.tracks.isEmpty)

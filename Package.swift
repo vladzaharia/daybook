@@ -113,8 +113,8 @@ let package = Package(
             "DaybookDesign",
             "DaybookUI"
         ]),
-        // What every test bundle shares (Tests/DaybookTestSupport): waiting for something to happen, and
-        // UserDefaults suites and folders that are removed when a test ends.
+        // What every test bundle shares (Tests/DaybookTestSupport): waiting for something to happen, UserDefaults
+        // suites and folders that are removed when a test ends, and one seeded random generator.
         .target(name: "DaybookTestSupport", path: "Tests/DaybookTestSupport"),
         .testTarget(name: "DaybookCoreTests", dependencies: ["DaybookCore", "DaybookTestSupport"]),
         // Device tests decode transferred audio with DaybookIntelligence's reader (macOS).

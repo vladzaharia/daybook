@@ -36,7 +36,7 @@ final class AudioAlignerTests: XCTestCase {
     // MARK: Building blocks
 
     func testFFTCorrelationMatchesDirectDotProducts() {
-        var random = SeededRandom(7)
+        var random = SeededRandom(recording: 7)
         let reference = (0..<5_000).map { _ in Float(random.uniform(-1...1)) }
         let correlator = WindowCorrelator(reference: reference)
         let window = reference[1_200..<1_700]

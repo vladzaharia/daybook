@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookTestSupport
 import Foundation
 import XCTest
 @testable import DaybookKit
@@ -10,10 +11,8 @@ final class LibraryImportLookupTests: XCTestCase {
     private var root: URL!
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookLookup-\(UUID().uuidString)", isDirectory: true)
+        root = makeTemporaryFolder("DaybookLookup")
     }
-
-    override func tearDown() async throws { try? FileManager.default.removeItem(at: root) }
 
     private func file(_ name: String, _ contents: String) throws -> URL {
         let folder = root.appendingPathComponent("Incoming-\(UUID().uuidString)", isDirectory: true)

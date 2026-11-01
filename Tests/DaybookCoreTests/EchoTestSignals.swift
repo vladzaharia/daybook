@@ -1,27 +1,8 @@
 import Accelerate
 import AVFoundation
+import DaybookTestSupport
 import Foundation
 @testable import DaybookCore
-
-/// Deterministic pseudo-random numbers for repeatable synthetic audio.
-struct SplitMix64: RandomNumberGenerator {
-    private var state: UInt64
-    init(seed: UInt64) { state = seed }
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-    /// Uniform in [0, 1) straight from the bits (much cheaper than `Double.random` in debug builds).
-    mutating func unit() -> Double { Double(next() >> 11) * 0x1p-53 }
-    mutating func uniform(_ range: ClosedRange<Double>) -> Double { range.lowerBound + unit() * (range.upperBound - range.lowerBound) }
-    mutating func gaussian() -> Double {
-        let u = max(unit(), 1e-12), v = unit()
-        return (-2 * log(u)).squareRoot() * cos(2 * .pi * v)
-    }
-}
 
 /// Synthetic signals for echo tests. Nothing here records or downloads anything.
 enum EchoTestSignals {
@@ -30,7 +11,7 @@ enum EchoTestSignals {
     /// talker to the given time ranges.
     static func speech(seconds: Double, rate: Double, seed: UInt64, level: Float = 0.1,
                        active: [ClosedRange<Double>]? = nil) -> [Float] {
-        var random = SplitMix64(seed: seed)
+        var random = SeededRandom(seed: seed)
         let count = Int(seconds * rate)
         var output = [Float](repeating: 0, count: count)
         var time = random.uniform(0...0.2)
@@ -83,7 +64,7 @@ enum EchoTestSignals {
     /// Direct path after `delay`, a few early reflections, and an exponentially decaying diffuse tail.
     static func roomResponse(rate: Double, delay: Double, gain: Float, reverb: Double = 0.25,
                              length: Double = 0.18, seed: UInt64 = 99) -> [Float] {
-        var random = SplitMix64(seed: seed)
+        var random = SeededRandom(seed: seed)
         let first = Int(delay * rate)
         var response = [Float](repeating: 0, count: first + Int(length * rate) + 1)
         response[first] = gain
@@ -126,7 +107,7 @@ enum EchoTestSignals {
     }
 
     static func noise(count: Int, level: Float, seed: UInt64) -> [Float] {
-        var random = SplitMix64(seed: seed)
+        var random = SeededRandom(seed: seed)
         return (0..<count).map { _ in Float(random.gaussian()) * level }
     }
 

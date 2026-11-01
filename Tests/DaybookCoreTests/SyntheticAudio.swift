@@ -1,20 +1,11 @@
 import Accelerate
 import AVFoundation
+import DaybookTestSupport
 import Foundation
 
-/// Deterministic random numbers so synthetic recordings are identical on every run.
-struct SeededRandom {
-    private var state: UInt64
-    init(_ seed: UInt64) { state = seed &+ 0x9E37_79B9_7F4A_7C15 }
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-    mutating func uniform() -> Double { Double(next() >> 11) / Double(1 << 53) }
-    mutating func uniform(_ range: ClosedRange<Double>) -> Double { range.lowerBound + uniform() * (range.upperBound - range.lowerBound) }
+extension SeededRandom {
+    /// The stream these recordings were measured on (and tests' tolerances tuned to): `seed` one step in.
+    init(recording seed: UInt64) { self.init(seed: seed &+ 0x9E37_79B9_7F4A_7C15) }
 }
 
 /// A synthetic conversation in "true time" at 8 kHz: voiced syllables (harmonics shaped by vowel
@@ -35,12 +26,12 @@ struct SyntheticEvent {
         var taps: [(delay: Int, gain: Float)]
         /// A direct path plus 48 reflections with exponentially decaying gain (RT60 about 0.45 s).
         static func room(seed: UInt64) -> Reverb {
-            var random = SeededRandom(seed)
+            var random = SeededRandom(recording: seed)
             var taps: [(Int, Float)] = [(0, 1)]
             for _ in 0..<48 {
                 let delay = random.uniform(0.004...0.42)
                 let decay = Float(exp(-6.9 * delay / 0.45))
-                taps.append((Int(delay * SyntheticEvent.rate), decay * Float(random.uniform(0.25...0.6)) * (random.uniform() < 0.5 ? -1 : 1)))
+                taps.append((Int(delay * SyntheticEvent.rate), decay * Float(random.uniform(0.25...0.6)) * (random.unit() < 0.5 ? -1 : 1)))
             }
             return Reverb(taps: taps)
         }
@@ -49,7 +40,7 @@ struct SyntheticEvent {
     /// `remoteShare` of the talk spurts belong to the remote talker.
     static func conversation(seed: UInt64, start: Double = 0, duration: Double, remoteShare: Double = 0.6,
                              remoteInRoomGain: Float = 0.5, localGain: Float = 1, noiseLevel: Float = 0.02) -> SyntheticEvent {
-        var random = SeededRandom(seed)
+        var random = SeededRandom(recording: seed)
         let count = Int(duration * rate)
         var remote = [Float](repeating: 0, count: count)
         var room = [Float](repeating: 0, count: count)
@@ -60,14 +51,14 @@ struct SyntheticEvent {
         var syllable = [Float](repeating: 0, count: Int(0.5 * rate))
         var phase = [Float](repeating: 0, count: syllable.count)
         while time < duration - 1 {
-            let isRemote = random.uniform() < remoteShare
+            let isRemote = random.unit() < remoteShare
             let pitch = isRemote ? random.uniform(95...140) : random.uniform(170...240)
             let syllables = Int(random.uniform(3...14))
             for _ in 0..<syllables {
                 let length = Int(random.uniform(0.11...0.32) * rate)
                 guard time + Double(length) / rate < duration - 0.5 else { break }
                 vDSP_vclr(&syllable, 1, vDSP_Length(length))
-                let (f1, f2) = vowels[Int(random.uniform() * Double(vowels.count)) % vowels.count]
+                let (f1, f2) = vowels[Int(random.unit() * Double(vowels.count)) % vowels.count]
                 let f0 = pitch * random.uniform(0.9...1.12)
                 var harmonic = 1
                 while Double(harmonic) * f0 < 3_600, harmonic <= 30 {
