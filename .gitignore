@@ -22,6 +22,3 @@ AuthKey_*
 *.mobileprovision
 *.provisionprofile
 *.cer
-
-# Research prototype (docs/research/one-bundle.md): generated from Apps/Universal/project.yml.
-Apps/Universal/DaybookUniversal.xcodeproj/
