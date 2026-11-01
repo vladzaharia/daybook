@@ -377,8 +377,7 @@ extension Meeting {
     /// The person's latest rename of a speaker, when the speaker still has that name: the name is the
     /// person's, never Daybook's to change.
     public func handRename(of speakerID: String) -> MeetingRevision? {
-        let field = "speaker:\(speakerID)"
-        guard let latest = revisions.filter({ $0.field == field })
+        guard let latest = revisions.filter({ $0.kind == .speaker(speakerID) })
             .max(by: { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }),
               let speaker = speakers.first(where: { $0.id == speakerID }), speaker.name == latest.newValue else { return nil }
         return latest

@@ -430,11 +430,102 @@ public struct MeetingSummary: Codable, Equatable, Sendable {
 public struct MeetingRevision: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var date: Date
+    /// What changed, as stored (`RevisionField.rawValue`); read it through `kind`.
     public var field: String
     public var oldValue: String
     public var newValue: String
     public init(id: UUID = UUID(), date: Date = Date(), field: String, oldValue: String, newValue: String) {
         self.id = id; self.date = date; self.field = field; self.oldValue = oldValue; self.newValue = newValue
+    }
+    public init(id: UUID = UUID(), date: Date = Date(), kind: RevisionField, oldValue: String, newValue: String) {
+        self.init(id: id, date: date, field: kind.rawValue, oldValue: oldValue, newValue: newValue)
+    }
+
+    /// What changed, typed.
+    public var kind: RevisionField {
+        get { RevisionField(rawValue: field) }
+        set { field = newValue.rawValue }
+    }
+}
+
+/// What a Version History entry changed. On disk it stays text (`MeetingRevision.field`: "notes", "summary",
+/// "segment:<UUID>", …); this is its one spelling and its one reading.
+public enum RevisionField: Hashable, Sendable {
+    case notes
+    case summary
+    /// A speaker the person renamed, by speaker ID.
+    case speaker(String)
+    /// A passage of the transcript the person corrected.
+    case segment(UUID)
+    /// A photo added, removed, or put back.
+    case photo(UUID)
+    /// A photo's caption.
+    case photoCaption(UUID)
+    /// A correction carried over from an earlier transcript, applied or dismissed, by its issue's ID.
+    case correctionTransfer(UUID)
+    /// Where a recording or the whole conversation came from: a track's ID, or "restored:<UUID>" and
+    /// "kept-after-deletion:<UUID>" for a conversation kept as a new one.
+    case source(String)
+    /// Two devices changed one field at once (`MeetingMerge`): the field's name; both values are kept.
+    case sync(String)
+    /// A kind this version doesn't know (a newer Daybook's), kept as written.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        guard let colon = rawValue.firstIndex(of: ":") else {
+            switch rawValue {
+            case "notes": self = .notes
+            case "summary": self = .summary
+            default: self = .unknown(rawValue)
+            }
+            return
+        }
+        let target = String(rawValue[rawValue.index(after: colon)...])
+        switch rawValue[..<colon] {
+        case "speaker": self = .speaker(target)
+        case "segment": self = UUID(uuidString: target).map(Self.segment) ?? .unknown(rawValue)
+        case "photo": self = UUID(uuidString: target).map(Self.photo) ?? .unknown(rawValue)
+        case "photo-caption": self = UUID(uuidString: target).map(Self.photoCaption) ?? .unknown(rawValue)
+        case "correction-transfer": self = UUID(uuidString: target).map(Self.correctionTransfer) ?? .unknown(rawValue)
+        case "source": self = .source(target)
+        case "sync": self = .sync(target)
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .notes: return "notes"
+        case .summary: return "summary"
+        case .speaker(let id): return "speaker:\(id)"
+        case .segment(let id): return "segment:\(id.uuidString)"
+        case .photo(let id): return "photo:\(id.uuidString)"
+        case .photoCaption(let id): return "photo-caption:\(id.uuidString)"
+        case .correctionTransfer(let id): return "correction-transfer:\(id.uuidString)"
+        case .source(let target): return "source:\(target)"
+        case .sync(let field): return "sync:\(field)"
+        case .unknown(let raw): return raw
+        }
+    }
+
+    /// The person's own words or names: a correction, a rename, or notes.
+    public var isPersonsEdit: Bool {
+        switch self {
+        case .notes, .segment, .speaker: return true
+        default: return false
+        }
+    }
+}
+
+extension Sequence where Element == MeetingRevision {
+    /// Speakers the person renamed, by ID: a name the person gave is theirs, never Daybook's to replace.
+    public var renamedSpeakerIDs: Set<String> {
+        Set(lazy.compactMap { if case .speaker(let id) = $0.kind { return id } else { return nil } })
+    }
+
+    /// Passages the person corrected, by ID.
+    public var correctedSegmentIDs: Set<UUID> {
+        Set(lazy.compactMap { if case .segment(let id) = $0.kind { return id } else { return nil } })
     }
 }
 
@@ -511,14 +602,18 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         self.speakers = speakers; self.status = status; self.errorMessage = errorMessage
         self.correctionTransferIssues = correctionTransferIssues; self.speakerMatches = speakerMatches
     }
+    /// Speakers the person renamed (Version History), by ID.
+    public var renamedSpeakerIDs: Set<String> { revisions.renamedSpeakerIDs }
+    /// Passages the person corrected (Version History), by ID.
+    public var correctedSegmentIDs: Set<UUID> { revisions.correctedSegmentIDs }
     public mutating func setNotes(_ value: String) {
         guard notes != value else { return }
-        revisions.append(MeetingRevision(field: "notes", oldValue: notes, newValue: value))
+        revisions.append(MeetingRevision(kind: .notes, oldValue: notes, newValue: value))
         notes = value; updatedAt = Date()
     }
     public mutating func correctSegment(id: UUID, text: String) {
         guard let index = unifiedTranscript.firstIndex(where: { $0.id == id }), unifiedTranscript[index].text != text else { return }
-        revisions.append(MeetingRevision(field: "segment:\(id.uuidString)", oldValue: unifiedTranscript[index].text, newValue: text))
+        revisions.append(MeetingRevision(kind: .segment(id), oldValue: unifiedTranscript[index].text, newValue: text))
         unifiedTranscript[index].text = text; updatedAt = Date()
     }
     /// Recorded in Version History. A name Daybook gave that the summary still uses follows into it
@@ -527,7 +622,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         guard let index = speakers.firstIndex(where: { $0.id == id }), speakers[index].name != name else { return }
         let old = speakers[index].name
         let daybooks = isDaybooksName(old, for: id, identity: speakerIdentity(id))
-        revisions.append(MeetingRevision(field: "speaker:\(id)", oldValue: old, newValue: name))
+        revisions.append(MeetingRevision(kind: .speaker(id), oldValue: old, newValue: name))
         speakers[index].name = name; updatedAt = Date()
         if daybooks { summaryFollowsRename(of: id, from: old, to: name) }
     }
@@ -543,7 +638,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         encoder.outputFormatting = [.sortedKeys]
         let old = summary.flatMap { try? encoder.encode($0) }.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         let new = (try? encoder.encode(value)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        if old != new { revisions.append(MeetingRevision(field: "summary", oldValue: old, newValue: new)) }
+        if old != new { revisions.append(MeetingRevision(kind: .summary, oldValue: old, newValue: new)) }
         summary = value; updatedAt = Date()
     }
     @discardableResult public mutating func applyFusion(_ result: FusionResult) -> [CorrectionTransferIssue] {
@@ -566,7 +661,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
             guard unifiedTranscript.contains(where: { $0.id == targetSegmentID }) else { return false }
             correctSegment(id: targetSegmentID, text: issue.originalSegment.text)
         }
-        revisions.append(MeetingRevision(field: "correction-transfer:\(id.uuidString)", oldValue: issue.originalSegment.text,
+        revisions.append(MeetingRevision(kind: .correctionTransfer(id), oldValue: issue.originalSegment.text,
             newValue: targetSegmentID.map { "applied:\($0.uuidString)" } ?? "dismissed"))
         correctionTransferIssues?.removeAll { $0.id == id }
         if correctionTransferIssues?.isEmpty == true { correctionTransferIssues = nil }

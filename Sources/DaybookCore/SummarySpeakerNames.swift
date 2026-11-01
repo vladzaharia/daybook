@@ -45,7 +45,7 @@ extension Meeting {
         let oldValue = SyncEncoding.string(before), newValue = SyncEncoding.string(summary)
         // The same change made on two Macs (a label each gives) is one entry in Version History.
         revisions.append(MeetingRevision(id: SyncEncoding.uuid("summary-names|\(id.uuidString)|\(oldValue)|\(newValue)"),
-                                         field: "summary", oldValue: oldValue, newValue: newValue))
+                                         kind: .summary, oldValue: oldValue, newValue: newValue))
         self.summary = summary
         updatedAt = Date()
         return true

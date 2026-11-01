@@ -22,7 +22,7 @@ public enum MeetingMerge {
         var conflicted = Set<String>()
         func record(_ field: String, _ smaller: String, _ larger: String) {
             let id = SyncEncoding.uuid("\(local.id):\(field):\(smaller):\(larger)")
-            conflicts.append(MeetingRevision(id: id, date: max(local.updatedAt, remote.updatedAt), field: "sync:\(field)", oldValue: smaller, newValue: larger))
+            conflicts.append(MeetingRevision(id: id, date: max(local.updatedAt, remote.updatedAt), kind: .sync(field), oldValue: smaller, newValue: larger))
         }
         func choose<T: Encodable & Equatable>(_ field: String, _ lhs: T, _ rhs: T, _ ancestor: T?) -> T {
             if lhs == rhs { return lhs }

@@ -314,7 +314,7 @@ extension Meeting {
     public mutating func addPhoto(_ photo: MeetingPhoto) {
         guard self.photo(photo.id) == nil else { return }
         photos = (photos ?? []) + [photo]
-        revisions.append(MeetingRevision(field: "photo:\(photo.id.uuidString)", oldValue: "", newValue: "added"))
+        revisions.append(MeetingRevision(kind: .photo(photo.id), oldValue: "", newValue: "added"))
         updatedAt = Date()
     }
 
@@ -322,7 +322,7 @@ extension Meeting {
     public mutating func removePhoto(_ id: UUID, at date: Date = Date()) {
         guard let index = photos?.firstIndex(where: { $0.id == id }), photos?[index].removedAt == nil else { return }
         photos?[index].removedAt = date
-        revisions.append(MeetingRevision(date: date, field: "photo:\(id.uuidString)", oldValue: "present", newValue: "removed"))
+        revisions.append(MeetingRevision(date: date, kind: .photo(id), oldValue: "present", newValue: "removed"))
         updatedAt = Date()
     }
 
@@ -330,7 +330,7 @@ extension Meeting {
     public mutating func restorePhoto(_ id: UUID) {
         guard let index = photos?.firstIndex(where: { $0.id == id }), photos?[index].removedAt != nil else { return }
         photos?[index].removedAt = nil
-        revisions.append(MeetingRevision(field: "photo:\(id.uuidString)", oldValue: "removed", newValue: "present"))
+        revisions.append(MeetingRevision(kind: .photo(id), oldValue: "removed", newValue: "present"))
         updatedAt = Date()
     }
 
@@ -340,7 +340,7 @@ extension Meeting {
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         let value: String? = trimmed.isEmpty ? nil : trimmed
         guard photos?[index].caption != value else { return }
-        revisions.append(MeetingRevision(field: "photo-caption:\(id.uuidString)", oldValue: photos?[index].caption ?? "", newValue: value ?? ""))
+        revisions.append(MeetingRevision(kind: .photoCaption(id), oldValue: photos?[index].caption ?? "", newValue: value ?? ""))
         photos?[index].caption = value
         updatedAt = Date()
     }

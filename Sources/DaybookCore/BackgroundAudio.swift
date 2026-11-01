@@ -241,7 +241,7 @@ extension Meeting {
     /// The verdict for each recording's latest transcript run, by track. Speakers the person named,
     /// and passages the person corrected, are never judged.
     public func backgroundVerdicts() -> [UUID: BackgroundAudio.Verdict] {
-        let named = Set(revisions.compactMap { $0.field.hasPrefix("speaker:") ? String($0.field.dropFirst(8)) : nil })
+        let named = renamedSpeakerIDs
         let corrected = correctedSourcePassageIDs
         let latest = Dictionary(grouping: transcripts, by: \.trackID).compactMapValues { $0.max { $0.createdAt < $1.createdAt } }
         var result: [UUID: BackgroundAudio.Verdict] = [:]
@@ -257,7 +257,7 @@ extension Meeting {
     /// the correction's own passage and the ones fusion made it from. A correction says it's the
     /// conversation, so it's never left out as background audio, and stays in Version History.
     var correctedSourcePassageIDs: Set<UUID> {
-        let corrected = Set(revisions.compactMap { $0.field.hasPrefix("segment:") ? UUID(uuidString: String($0.field.dropFirst(8))) : nil })
+        let corrected = correctedSegmentIDs
         guard !corrected.isEmpty else { return [] }
         var result = corrected
         for segment in unifiedTranscript + (backgroundPassages ?? []) where corrected.contains(segment.id) {

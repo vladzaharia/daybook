@@ -325,7 +325,7 @@ extension Meeting {
     public var hasPersonMadeContent: Bool {
         !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || folderID != nil || !(tags ?? []).isEmpty
             || templateID != nil || placement != nil || summary?.actionItems.contains(where: \.completed) == true
-            || revisions.contains { ["segment", "speaker", "notes"].contains($0.field.split(separator: ":").first.map(String.init) ?? "") }
+            || revisions.contains { $0.kind.isPersonsEdit }
             || highlights.contains { !$0.text.isEmpty } || !visiblePhotos.isEmpty
     }
 }

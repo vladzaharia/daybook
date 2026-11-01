@@ -553,8 +553,8 @@ struct MeetingVoices {
         for mapping in meeting.fusionSummary?.speakerMappings ?? [] {
             if let source = mapping.sourceSpeakerID, source != mapping.speakerID { aliases[mapping.speakerID, default: []].insert(source) }
         }
-        for revision in meeting.revisions where revision.field.hasPrefix("speaker:") {
-            let id = String(revision.field.dropFirst("speaker:".count))
+        for revision in meeting.revisions {
+            guard case .speaker(let id) = revision.kind else { continue }
             if let current = renames[id], (current.date, current.id.uuidString) >= (revision.date, revision.id.uuidString) { continue }
             renames[id] = revision
         }

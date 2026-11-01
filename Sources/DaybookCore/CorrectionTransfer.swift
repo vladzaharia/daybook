@@ -53,16 +53,21 @@ enum CorrectionTransfer {
 
     static func apply(to segments: [TranscriptSegment], in meeting: Meeting) -> Result {
         var seen = Set<UUID>()
-        let edits = meeting.revisions.filter { $0.field.hasPrefix("segment:") }.sorted { $0.date > $1.date }
+        let edits = meeting.revisions.compactMap { revision -> (id: UUID, edit: MeetingRevision)? in
+            guard case .segment(let id) = revision.kind else { return nil }
+            return (id, revision)
+        }.sorted { $0.edit.date > $1.edit.date }
         // Looked up by ID, once: each transcript run's passages are flattened a single time.
-        let transferred = Set(meeting.revisions.lazy.map(\.field).filter { $0.hasPrefix("correction-transfer:") })
+        let transferred = Set(meeting.revisions.compactMap { revision -> UUID? in
+            guard case .correctionTransfer(let id) = revision.kind else { return nil }
+            return id
+        })
         let unified = Dictionary(meeting.unifiedTranscript.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let pending = Dictionary((meeting.correctionTransferIssues ?? []).map { ($0.id, $0.originalSegment) }, uniquingKeysWith: { first, _ in first })
         let raw = Dictionary(meeting.transcripts.lazy.flatMap(\.segments).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var originals: [TranscriptSegment] = []
-        for edit in edits {
-            guard let id = UUID(uuidString: String(edit.field.dropFirst(8))), seen.insert(id).inserted else { continue }
-            guard !transferred.contains("correction-transfer:\(id.uuidString)") else { continue }
+        for (id, edit) in edits {
+            guard seen.insert(id).inserted, !transferred.contains(id) else { continue }
             if var original = unified[id] ?? pending[id] ?? raw[id] {
                 // The revision is authoritative even after a prior fusion no longer displays this passage.
                 original.text = edit.newValue

@@ -81,6 +81,17 @@ final class TranscriptReadingTests: XCTestCase {
         XCTAssertEqual(second.marks.labelSegments[meeting.unifiedTranscript[0].id], "Opening")
     }
 
+    func testBehaviorTheLayoutKnowsWhichPassagesThePersonCorrected() {
+        var meeting = Meeting(title: "Corrected")
+        let track = UUID()
+        meeting.unifiedTranscript = [TranscriptSegment(trackID: track, start: 0, end: 2, text: "Hello"),
+                                     TranscriptSegment(trackID: track, start: 2, end: 4, text: "agin")]
+        XCTAssertEqual(TranscriptLayout.cached(for: meeting).correctedSegmentIDs, [])
+        meeting.correctSegment(id: meeting.unifiedTranscript[1].id, text: "again")
+        meeting.setNotes("Not a correction")
+        XCTAssertEqual(TranscriptLayout.cached(for: meeting).correctedSegmentIDs, [meeting.unifiedTranscript[1].id])
+    }
+
     func testATimelineTimeNoRecordingCoversPlaysTheTranscribedRecording() throws {
         let original = RecordingTrack(source: .microphone, relativePath: "Originals/mic.caf", fileName: "mic.caf")
         var cleaned = RecordingTrack(source: .microphone, relativePath: "Originals/clean.caf", fileName: "clean.caf")

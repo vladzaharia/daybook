@@ -346,7 +346,7 @@ public final class LibraryController {
         notesTasks.removeValue(forKey: id)?.cancel()
         guard let original = noteOriginals.removeValue(forKey: id) else { return }
         update(id) { meeting in
-            if original != meeting.notes { meeting.revisions.append(.init(field: "notes", oldValue: original, newValue: meeting.notes)) }
+            if original != meeting.notes { meeting.revisions.append(.init(kind: .notes, oldValue: original, newValue: meeting.notes)) }
         }
     }
 

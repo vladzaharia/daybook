@@ -57,7 +57,7 @@ public enum SourceFusion {
     /// and speaker. A speaker the person named stays on the passage rather than giving way to the
     /// new recording's unnamed one, so adding a source never takes a name off what someone said.
     static func keepingNamedSpeakers(_ result: FusionResult, in meeting: Meeting) -> FusionResult {
-        let named = Set(meeting.revisions.compactMap { $0.field.hasPrefix("speaker:") ? String($0.field.dropFirst(8)) : nil })
+        let named = meeting.renamedSpeakerIDs
         guard !named.isEmpty else { return result }
         var spokenBy: [UUID: String] = [:]
         for transcript in meeting.transcripts { for segment in transcript.segments { if let speaker = segment.speakerID { spokenBy[segment.id] = speaker } } }

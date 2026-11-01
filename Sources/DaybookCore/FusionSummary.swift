@@ -165,9 +165,8 @@ public struct FusionInputs: Sendable {
     /// passages that are background audio (unless the person included it).
     public init(meeting: Meeting, placements: [UUID: TrackPlacement] = [:], signalQuality: [UUID: SignalQualityProfile] = [:],
                 recordingStartDates: [UUID: Date] = [:], options: FusionOptions = .init()) {
-        let renamed = Set(meeting.revisions.filter { $0.field.hasPrefix("speaker:") }.map { String($0.field.dropFirst(8)) })
         self.init(placements: placements, audioAlignments: meeting.audioAlignments ?? [], signalQuality: signalQuality,
-                  recordingStartDates: recordingStartDates, speakers: meeting.speakers, namedSpeakerIDs: renamed, options: options,
+                  recordingStartDates: recordingStartDates, speakers: meeting.speakers, namedSpeakerIDs: meeting.renamedSpeakerIDs, options: options,
                   background: meeting.backgroundSegmentKinds())
     }
 }

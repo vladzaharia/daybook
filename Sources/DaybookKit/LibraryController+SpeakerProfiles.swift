@@ -37,7 +37,7 @@ extension LibraryController {
               let stored = identity.profileID, let profile = metadata.speakerProfile(stored) else { return }
         update(id) { meeting in
             if meeting.speakerName(speakerID) != profile.name { meeting.renameSpeaker(id: speakerID, name: profile.name) }
-            let basis = meeting.revisions.filter { $0.field == "speaker:\(speakerID)" }
+            let basis = meeting.revisions.filter { $0.kind == .speaker(speakerID) }
                 .max { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }?.id
             meeting.setSpeakerIdentity(SpeakerIdentity(speakerID: speakerID, profileID: profile.id, source: .confirmed, basis: basis,
                                                        rejectedProfileIDs: identity.rejectedProfileIDs?.filter { $0 != profile.id }), for: speakerID)
@@ -244,7 +244,7 @@ public final class SpeakerProfileCoordinator {
                 hasher.combine(speaker.embeddingModelID); hasher.combine(speaker.embedding)
             }
             for identity in meeting.speakerIdentities ?? [] { hasher.combine(SyncValueText.of(identity)) }
-            for revision in meeting.revisions where revision.field.hasPrefix("speaker:") { hasher.combine(revision.id) }
+            for revision in meeting.revisions { if case .speaker = revision.kind { hasher.combine(revision.id) } }
             for run in meeting.transcripts { hasher.combine(run.id); hasher.combine(run.segments.count) }
             for passage in meeting.backgroundPassages ?? [] { hasher.combine(passage.id) }
             for match in meeting.speakerMatches ?? [] { hasher.combine(match.sourceSpeakerID); hasher.combine(match.targetSpeakerID) }
