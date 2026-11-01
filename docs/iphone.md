@@ -96,8 +96,11 @@ How it's wired (`PhoneAppModel.wireProcessing`): the processor hands each conver
 placed here back to the processor (`runHere` → `PhoneProcessor.summarizeHere`); `localSummarizer` is
 `PhoneModels.summarizer()` while Transcribe on This iPhone is on, set again when a processing model is downloaded or
 removed or that setting changes (`processingChanged`); `cloud` is set at launch and read again when Daybook comes
-back. A conversation that goes away (a Mac moved its recording into its own conversation of the meeting, and this
-one went to the Trash) ends its countdown, its cloud run, or its summary here.
+back. A summary that's due is held in the library from the start (a Summarize request this iPhone claims and keeps
+through the countdown or the wait for a Mac), so killing Daybook never strands it: the next launch places it again
+(`resumeHeldSummaries`), and if this iPhone never comes back, a Mac takes the request once its lease runs out. A
+conversation that goes away (a Mac moved its recording into its own conversation of the meeting, and this one went
+to the Trash) ends its countdown, its cloud run, or its summary here.
 
 ### On the Mac
 

@@ -36,6 +36,10 @@ without being wired to each other. Now they are ([cloud](cloud.md#for-callers), 
   transcript and speakers so it isn't transcribed again, and that conversation fuses and summarizes through the
   placement; each is checked once per Mac. On the iPhone, a countdown, cloud run, or summary for the conversation that
   went stands down.
+- Never stranded: the iPhone writes a due summary down before its countdown (a Summarize request it claims and holds,
+  renewed while it waits for a Mac), gives it back when it sends it to a Mac, places it again at the next launch if
+  Daybook was killed (`resumeHeldSummaries`), and leaves it to a Mac once the lease runs out if it never comes back.
+  The Mac's check of an iPhone-transcribed recording no longer waits for the iPhone's hold to end.
 - Small fixes: a first summary waiting for a Mac says "Waiting for your Mac to summarize" ("… again" only for Summarize
   Again); the status sheet's compact Mac line counts down ("Summarizing in 12 s", a second at a time) during a Mac's
   countdown or this iPhone's countdown to a Mac; the Mac list's subtitle says "Summarizing in 12 s" (or "Summarizing
@@ -50,18 +54,21 @@ still counts down one at a time (docs/multipoint.md, "Limits").
 **Verified.**
 
 - `swift build --build-tests` clean (the one warning left, an unmutated `var` in `AppState.init`, is older). `swift
-  test`: 1,488 tests, 0 failures (1 skipped, as before). New or changed: `SummaryClaimTests` (a placed cloud summary keeps the cloud's provenance and adds
+  test`: 1,498 tests, 0 failures (1 skipped, as before), after the rebase onto e27fa0a (`CloudSummarizerTests` included, with `RestatedCommitments` and the new `finalPrompt`). New or changed: `SummaryClaimTests` (a placed cloud summary keeps the cloud's provenance and adds
   where it ran; one without it gets the model it was sent to; one made without the placement still names its model,
   with its tokens and cost), `SummaryPlacementProcessingTests` (the real `CloudSummarizer` against `FakeCloudServer`
   through Settings › Cloud on the Mac: both provenances, the colophon, and the suggested terms; a key removed and
   Never chosen mid-countdown), `OnDeviceProcessingTests` (the summary placed once fused, run here only when placed
-  here), `PhoneLinkTests` (an iPhone-transcribed recording joining the Mac's conversation with its transcript, with no
-  request and with a Summarize request; one that belongs nowhere staying, with the iPhone's summary, checked once).
-- `scripts/build-ios.sh --test` on an iPhone 18 Pro simulator clone: 221 tests, 0 failures. New or changed: `PhoneProcessingTests`
+  here), `PhoneLinkTests` (an iPhone-transcribed recording joining the Mac's conversation with its transcript, while the
+  iPhone holds its summary and with a Summarize request; one that belongs nowhere staying, with the iPhone's summary,
+  checked once), and a Mac taking over a Summarize request an iPhone held and never came back for.
+- `scripts/build-ios.sh --test` on an iPhone 18 Pro simulator clone: 223 tests, 0 failures. New or changed: `PhoneProcessingTests`
   (the real placement wired to the processor as the app wires it: a countdown with a key, then the summary here held
   for heat; a summary placed here stopped by a recording and run again, one at a time; Use the Cloud during the
   countdown running it there and not here; a conversation that went away ending its countdown and its summary here),
-  `PhoneSummaryPlacementTests` (Settings › Cloud's `CloudSetup`, a local summary through the processor),
+  `PhoneSummaryPlacementTests` (Settings › Cloud's `CloudSetup`, a local summary through the processor, the request held
+  through the countdown and given back to a Mac, a relaunch placing a held summary again while one a Mac took over is
+  left to it, and a held summary a Mac may take once its lease runs out),
   `StatusSheetModelTests` (the Mac line's countdown), `ReadingTests` (the first summary's words).
 - `./scripts/build-app.sh --generate-only`, then `./scripts/build-app.sh --debug --ad-hoc` (Xcode, Debug, ad hoc
   signed): both succeed, `dist/Daybook.app` signed ad hoc, no team and no provisioning.

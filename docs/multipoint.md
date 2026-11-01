@@ -558,6 +558,14 @@ out) starts it at once.
   this iPhone stops its own countdown for that conversation.
 - In the background a countdown can't run, so each one's default happens as the app leaves the screen, and
   a summary waiting for a Mac is left to one through the library.
+- Never stranded. A summary that's due is written down before it counts down: a Summarize request the
+  iPhone claims (`claimSummary`, the summarizing stage) and holds through the countdown or the wait for a Mac,
+  renewing it while it waits. Sending it to a Mac gives that request back; running it here or in the cloud
+  carries it out. If Daybook is killed meanwhile, the next launch places it again
+  (`PhoneSummaryPlacement.resumeHeldSummaries`: a request it claimed and never gave back, unless another
+  device took it). If the iPhone never comes back, the claim's lease (10 minutes) runs out and a Mac takes the
+  request like any other. A Mac checking where an iPhone-transcribed recording belongs doesn't wait for the
+  hold to end.
 - The conversation page, the list row, and the status sheet's Macs card say it, with the same choices.
 
 **One summary per conversation.** Through the request and claim mechanism every Mac already respects:
