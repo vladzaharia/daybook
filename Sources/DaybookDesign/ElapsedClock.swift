@@ -119,17 +119,28 @@ public struct RecordingPhaseLabel: View {
                 .tracking(metrics.tracking)
                 .lineLimit(1)
                 .fixedSize()
-            if let detail {
-                Text("· \(detail)")
-                    .font(metrics.font(weight: .regular, plus: 0.5))
-                    .foregroundStyle(detailIsWarning ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(-1)
-                    .frame(minWidth: 0, idealWidth: detailYields ? 0 : nil, maxWidth: detailYields ? .infinity : nil, alignment: .leading)
+            if let detail, detailYields {
+                // All of it, a readable start of it, or none: cut to its first letter it says nothing.
+                ViewThatFits(in: .horizontal) {
+                    detailText(detail).fixedSize()
+                    detailText(detail).frame(minWidth: metrics.size * 7, idealWidth: metrics.size * 7, maxWidth: .infinity, alignment: .leading)
+                    Color.clear.frame(width: 0, height: 0)
+                }
+                .layoutPriority(-1)
+                .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+            } else if let detail {
+                detailText(detail).layoutPriority(-1)
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private func detailText(_ detail: String) -> some View {
+        Text("· \(detail)")
+            .font(metrics.font(weight: .regular, plus: 0.5))
+            .foregroundStyle(detailIsWarning ? DaybookPalette.Ink.warning : DaybookPalette.Ink.meta)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     @ViewBuilder private var glyph: some View {
