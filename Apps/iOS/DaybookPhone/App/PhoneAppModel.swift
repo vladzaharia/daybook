@@ -439,6 +439,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         if options.handoffDemo != nil || options.demoLiveCaptions || options.demoTransfer != nil { runStatusDemo() }
         #if DEBUG
         if PhonePlacementDemo.scenario != nil { Task { await PhonePlacementDemo.apply(to: self) } }
+        if PhoneUpgradeDemo.scenario != nil { Task { await PhoneUpgradeDemo.apply(to: self) } }
         #endif
         if options.startRecording, !recorder.isActive {
             try? await startRecording()
