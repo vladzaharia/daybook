@@ -604,6 +604,13 @@ public final class DeviceSession: ObservableObject, Identifiable {
         return soundcore.liveConversation
     }
 
+    /// How loud the recorder's live audio is, 0…1 for a meter, while it's saved into `conversation`;
+    /// nil before its audio arrives, or once it stops arriving.
+    public func liveLevel(into conversation: UUID, at now: Date = Date()) -> Double? {
+        guard let soundcore = direct as? SoundcoreConnection, soundcore.live.isListening, soundcore.liveConversation == conversation else { return nil }
+        return soundcore.live.level(at: now)
+    }
+
     /// Ends a live capture and waits (at most `limit`) until what arrived is in the library. Returns the
     /// latest live portion saved (or that couldn't be), which the caller checks against its conversation.
     @discardableResult

@@ -422,4 +422,29 @@ public final class LiveCapture: ObservableObject {
     @Published public var captionState: LiveCaptionState = .off
     @Published public var saved: Saved?
     @Published public var receivedSeconds: TimeInterval = 0
+
+    /// How loud the arriving audio is, 0…1 for a meter (−60…0 dBFS), and when it last arrived. Not
+    /// published, so nothing redraws at the audio's pace: a meter samples it (`level(at:)`).
+    public private(set) var meterValue: Double = 0
+    public private(set) var heardAt: Date?
+    /// How long a level counts as current after the audio it came from.
+    public static let levelLifetime: TimeInterval = 1
+
+    /// The level while audio keeps arriving; nil before any has, or once it stops.
+    public func level(at now: Date = Date()) -> Double? {
+        guard let heardAt, now.timeIntervalSince(heardAt) < Self.levelLifetime else { return nil }
+        return meterValue
+    }
+
+    /// A buffer of the live audio arrived: its level is now the meter's.
+    func heard(rms: Float, at now: Date = Date()) {
+        meterValue = Double(max(0, min(1, (rms + 60) / 60)))
+        heardAt = now
+    }
+
+    /// Listening ended: no level until audio arrives again.
+    func clearLevel() {
+        meterValue = 0
+        heardAt = nil
+    }
 }

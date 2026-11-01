@@ -251,6 +251,30 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         _ = await rig.session.endLiveCapture()
     }
 
+    /// Floating Notes meters a recorder recording along from the live audio it saves into the shared
+    /// recording: a level while audio arrives, none before or after.
+    func testARecordersLiveAudioGivesTheSharedRecordingItsLevel() async throws {
+        let device = SimulatedSoundcore(recordings: [])
+        device.recordsInRealTime = true
+        device.pace = .milliseconds(15)
+        let rig = rig(device)
+        try await connected(rig)
+        let conversation = UUID()
+        XCTAssertNil(rig.session.liveLevel(into: conversation), "nothing captured yet")
+
+        rig.connection.startRecording()
+        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        XCTAssertTrue(rig.session.captureLive(into: conversation))
+        // The simulated recorder records a steady tone.
+        try await waitUntil("its live audio has a level") { (rig.session.liveLevel(into: conversation) ?? 0) > 0.3 }
+        XCTAssertNil(rig.session.liveLevel(into: UUID()), "only the conversation it records into")
+        XCTAssertNil(rig.session.liveLevel(into: conversation, at: Date().addingTimeInterval(LiveCapture.levelLifetime + 1)),
+                     "audio that stops arriving leaves no level")
+
+        _ = await rig.session.endLiveCapture()
+        XCTAssertNil(rig.session.liveLevel(into: conversation), "none once the capture ends")
+    }
+
     func testARecordersFileThatDiffersFromItsLiveAudioReplacesIt() async throws {
         let device = SimulatedSoundcore(recordings: [])
         device.recordsInRealTime = true

@@ -669,6 +669,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         live.isListening = true
         live.saved = nil
         live.receivedSeconds = 0
+        live.clearLevel()
         liveConversation = conversation
         liveSleep.hold(true)
         beginActivity()
@@ -693,6 +694,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
                 } else if !(error is CancellationError), (error as? SoundcoreError) != .disconnected { self.lastTechnicalProblem = error.localizedDescription }
             }
             self.live.isListening = false
+            self.live.clearLevel()
             self.liveConversation = nil
             self.listeningTask = nil
             self.endCaptions()
@@ -764,6 +766,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         guard live.isListening, buffer.frameLength > 0 else { return }
         let time = AVAudioTime(sampleTime: liveFrames, atRate: buffer.format.sampleRate)
         liveFrames += AVAudioFramePosition(buffer.frameLength)
+        // Its level, for the meters of a recording it records along with.
+        if let level = AudioBufferLevel.measure(buffer) { live.heard(rms: level.rms) }
         captioner?.append(buffer, at: time)
     }
 
