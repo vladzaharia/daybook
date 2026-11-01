@@ -2,6 +2,7 @@ import AppKit
 import DaybookCore
 import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// What the panel shows, apart from what the app already knows: the conversation in focus, and
@@ -55,7 +56,19 @@ struct FloatingNotesRoot: View {
     var body: some View {
         FloatingNotesView(model: model, state: state, chrome: chrome, feed: model.feed, input: model.input)
             .environment(\.readingScale, CGFloat(state.readingScale))
+            .modifier(FloatingNotesSurface())
             .modifier(DemoContrast())
+    }
+}
+
+/// Floating Notes is a panel: every shared view under it takes the panel's type and sizes.
+struct FloatingNotesSurface: ViewModifier {
+    static let density = DaybookDensity.panel
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.daybookDensity, Self.density)
+            .environment(\.platformMetrics, .for(Self.density))
     }
 }
 

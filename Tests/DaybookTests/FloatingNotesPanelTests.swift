@@ -1,4 +1,7 @@
 import AppKit
+import DaybookDesign
+import DaybookUI
+import SwiftUI
 import XCTest
 @testable import Daybook
 
@@ -35,5 +38,31 @@ final class FloatingNotesPanelTests: XCTestCase {
             panel.layoutIfNeeded()
             XCTAssertEqual(closeCenter(), chrome.band / 2, accuracy: 0.5, "after a resize to \(size)")
         }
+    }
+
+    /// The panel says once, at its root, that it's a panel: a shared view placed in it without its own
+    /// metrics takes the panel's type and sizes, not the window's or the phone's.
+    func testViewsUnderThePanelTakeThePanelDensity() {
+        var seen: (density: DaybookDensity, metrics: PlatformMetrics)?
+        let host = NSHostingView(rootView: DensityProbe { seen = ($0, $1) }.modifier(FloatingNotesSurface()))
+        host.frame = NSRect(x: 0, y: 0, width: 200, height: 100)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(seen?.density, .panel)
+        XCTAssertEqual(seen?.metrics, .for(.panel))
+        XCTAssertEqual(seen?.metrics.meter, .panel, "The panel's meter, not the phone's bars")
+        XCTAssertEqual(seen?.metrics.phase, .panel)
+        XCTAssertEqual(DaybookFont.docTitle.size(.panel), 17, "Floating Notes' title")
+    }
+}
+
+/// Reports the density and metrics a view under it reads.
+private struct DensityProbe: View {
+    let report: (DaybookDensity, PlatformMetrics) -> Void
+    @Environment(\.daybookDensity) private var density
+    @Environment(\.platformMetrics) private var metrics
+
+    var body: some View {
+        report(density, metrics)
+        return Color.clear
     }
 }
