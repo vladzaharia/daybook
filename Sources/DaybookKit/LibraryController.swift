@@ -428,8 +428,9 @@ public final class LibraryController {
         }
     }
 
+    /// Recorded in Version History, where it can be put back.
     public func removeBookmark(_ highlightID: UUID, in id: UUID) {
-        update(id) { $0.highlights.removeAll { $0.id == highlightID } }
+        update(id) { $0.removeBookmark(highlightID) }
     }
 
     /// Adjust Timing: places a recording on the conversation's timeline by hand, or clears it.

@@ -137,6 +137,51 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertEqual(library.meeting(id)?.highlights.count, 1)
     }
 
+    func testBehaviorADeletedBookmarkIsInVersionHistoryAndComesBackAsItWas() async throws {
+        let library = try await open()
+        let id = library.newMeeting()
+        let track = RecordingTrack(relativePath: "Originals/a.m4a", fileName: "a.m4a")
+        library.update(id) { $0.tracks = [track] }
+        library.addBookmark(in: id, trackID: track.id, at: 83)
+        let bookmark = try XCTUnwrap(library.meeting(id)?.highlights.first)
+        library.setBookmarkText(bookmark.id, text: "Pricing", in: id)
+        let named = try XCTUnwrap(library.meeting(id)?.highlights.first)
+
+        library.removeBookmark(bookmark.id, in: id)
+        await library.flush()
+        let reopened = try await open()
+        let meeting = try XCTUnwrap(reopened.meeting(id))
+        XCTAssertEqual(meeting.highlights, [])
+        let deletion = try XCTUnwrap(meeting.revisions.last)
+        XCTAssertEqual(deletion.kind, .bookmark(bookmark.id))
+        XCTAssertEqual(deletion.bookmark, named, "The whole bookmark: its recording, time, and words")
+        XCTAssertEqual(RevisionText.title(deletion, in: meeting), "Bookmark deleted")
+        XCTAssertEqual(RevisionText.readable(deletion.oldValue, field: deletion.field), "Bookmark at 1:23 · Pricing")
+        XCTAssertEqual(RevisionText.readable(deletion.newValue, field: deletion.field), "Deleted")
+
+        XCTAssertTrue(RevisionRestore.canRestore(deletion, in: meeting))
+        reopened.restore(deletion, in: id)
+        let restored = try XCTUnwrap(reopened.meeting(id))
+        XCTAssertEqual(restored.highlights, [named])
+        XCTAssertEqual(restored.revisions.last.map { RevisionText.title($0, in: restored) }, "Bookmark put back")
+        XCTAssertFalse(RevisionRestore.canRestore(deletion, in: restored), "It's back: nothing to put back")
+    }
+
+    func testBehaviorUndoingABookmarkDeletionPutsItBackAndSaysSoInVersionHistory() async throws {
+        let library = try await open()
+        let id = library.newMeeting()
+        library.addBookmark(in: id, at: 12)
+        let bookmark = try XCTUnwrap(library.meeting(id)?.highlights.first)
+        let undo = UndoManager()
+        library.update(id, actionName: "Delete Bookmark", undoManager: undo) { $0.removeBookmark(bookmark.id) }
+        XCTAssertEqual(library.meeting(id)?.highlights, [])
+        undo.undo()
+        let meeting = try XCTUnwrap(library.meeting(id))
+        XCTAssertEqual(meeting.highlights, [bookmark])
+        XCTAssertEqual(meeting.revisions.map { RevisionText.title($0, in: meeting) }, ["Bookmark deleted", "Bookmark put back"])
+        XCTAssertEqual(meeting.revisions.last?.bookmark, bookmark)
+    }
+
     func testVocabularyIsMirroredIntoTheSyncedSettings() async throws {
         let library = try await open()
         let term = GlossaryTerm(term: "Daybook", approved: true)

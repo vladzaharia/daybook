@@ -446,6 +446,20 @@ public struct MeetingRevision: Codable, Equatable, Identifiable, Sendable {
         get { RevisionField(rawValue: field) }
         set { field = newValue.rawValue }
     }
+
+    /// A bookmark entry's side where the bookmark isn't: deleted, or not yet put back.
+    public static let bookmarkRemoved = "removed"
+
+    /// The bookmark a bookmark entry deleted or put back, from whichever side holds it.
+    public var bookmark: Highlight? {
+        guard case .bookmark = kind else { return nil }
+        return Self.bookmark(from: newValue == Self.bookmarkRemoved ? oldValue : newValue)
+    }
+
+    /// A bookmark as a bookmark entry keeps it; nil for anything else.
+    public static func bookmark(from value: String) -> Highlight? {
+        try? JSONDecoder().decode(Highlight.self, from: Data(value.utf8))
+    }
 }
 
 /// What a Version History entry changed. On disk it stays text (`MeetingRevision.field`: "notes", "summary",
@@ -461,6 +475,8 @@ public enum RevisionField: Hashable, Sendable {
     case photo(UUID)
     /// A photo's caption.
     case photoCaption(UUID)
+    /// A bookmark deleted or put back (`Meeting.removeBookmark`); the entry keeps the whole bookmark.
+    case bookmark(UUID)
     /// A correction carried over from an earlier transcript, applied or dismissed, by its issue's ID.
     case correctionTransfer(UUID)
     /// Where a recording or the whole conversation came from: a track's ID, or "restored:<UUID>" and
@@ -486,6 +502,7 @@ public enum RevisionField: Hashable, Sendable {
         case "segment": self = UUID(uuidString: target).map(Self.segment) ?? .unknown(rawValue)
         case "photo": self = UUID(uuidString: target).map(Self.photo) ?? .unknown(rawValue)
         case "photo-caption": self = UUID(uuidString: target).map(Self.photoCaption) ?? .unknown(rawValue)
+        case "bookmark": self = UUID(uuidString: target).map(Self.bookmark) ?? .unknown(rawValue)
         case "correction-transfer": self = UUID(uuidString: target).map(Self.correctionTransfer) ?? .unknown(rawValue)
         case "source": self = .source(target)
         case "sync": self = .sync(target)
@@ -501,6 +518,7 @@ public enum RevisionField: Hashable, Sendable {
         case .segment(let id): return "segment:\(id.uuidString)"
         case .photo(let id): return "photo:\(id.uuidString)"
         case .photoCaption(let id): return "photo-caption:\(id.uuidString)"
+        case .bookmark(let id): return "bookmark:\(id.uuidString)"
         case .correctionTransfer(let id): return "correction-transfer:\(id.uuidString)"
         case .source(let target): return "source:\(target)"
         case .sync(let field): return "sync:\(field)"
@@ -667,6 +685,28 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         if correctionTransferIssues?.isEmpty == true { correctionTransferIssues = nil }
         updatedAt = Date()
         return true
+    }
+    /// Deletes a bookmark. Version History keeps the whole bookmark (`MeetingRevision.bookmark`), so it can be put
+    /// back as it was (`restoreBookmark`).
+    public mutating func removeBookmark(_ id: UUID, at date: Date = Date()) {
+        guard let index = highlights.firstIndex(where: { $0.id == id }) else { return }
+        let removed = highlights.remove(at: index)
+        revisions.append(MeetingRevision(date: date, kind: .bookmark(id), oldValue: SyncEncoding.string(removed),
+                                         newValue: MeetingRevision.bookmarkRemoved))
+        updatedAt = Date()
+    }
+    /// The entry deleted a bookmark that isn't back.
+    public func canRestoreBookmark(_ revision: MeetingRevision) -> Bool {
+        guard case .bookmark(let id) = revision.kind, revision.newValue == MeetingRevision.bookmarkRemoved,
+              let bookmark = revision.bookmark, bookmark.id == id else { return false }
+        return !highlights.contains { $0.id == id }
+    }
+    /// Puts back the bookmark the entry deleted, as it was. Recorded in Version History.
+    public mutating func restoreBookmark(_ revision: MeetingRevision) {
+        guard canRestoreBookmark(revision), let bookmark = revision.bookmark else { return }
+        highlights.append(bookmark)
+        revisions.append(MeetingRevision(kind: .bookmark(bookmark.id), oldValue: MeetingRevision.bookmarkRemoved, newValue: revision.oldValue))
+        updatedAt = Date()
     }
     public func alignedTime(for highlight: Highlight) -> TimeInterval? {
         guard let trackID = highlight.trackID else { return highlight.time }

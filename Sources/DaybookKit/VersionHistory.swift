@@ -24,6 +24,7 @@ public enum RevisionRestore {
             // A deleted photo can be put back; adding one isn't undone from here (delete it instead).
             guard revision.newValue == "removed", let uuid = UUID(uuidString: id(revision)), let photo = meeting.photo(uuid) else { return false }
             return photo.isRemoved
+        case "bookmark": return meeting.canRestoreBookmark(revision)
         default: return false
         }
     }
@@ -43,6 +44,7 @@ public enum RevisionRestore {
             if let summary = decodedSummary(revision.oldValue) { meeting.setSummary(summary) }
         case "photo":
             if let uuid = UUID(uuidString: id(revision)) { meeting.restorePhoto(uuid) }
+        case "bookmark": meeting.restoreBookmark(revision)
         default: break
         }
     }
@@ -72,6 +74,7 @@ public enum RevisionText {
             default: return "Photo put back"
             }
         case "photo-caption": return "Photo caption edited"
+        case "bookmark": return revision.newValue == MeetingRevision.bookmarkRemoved ? "Bookmark deleted" : "Bookmark put back"
         default: return "Edited"
         }
     }
@@ -102,6 +105,7 @@ public enum RevisionText {
         case "source": return "waveform"
         case "photo": return "photo"
         case "photo-caption": return "text.below.photo"
+        case "bookmark": return "bookmark"
         default: return "arrow.triangle.branch"
         }
     }
@@ -112,6 +116,14 @@ public enum RevisionText {
         if field.hasPrefix("correction-transfer") {
             if value == "dismissed" { return "Kept in Version History only" }
             if value.hasPrefix("applied:") { return "Applied to a passage in the new transcript" }
+        }
+        if case .bookmark = RevisionField(rawValue: field) {
+            // The entry keeps the whole bookmark; its time and words show.
+            if value == MeetingRevision.bookmarkRemoved { return "Deleted" }
+            if let bookmark = MeetingRevision.bookmark(from: value) {
+                let time = "Bookmark at \(TimeLabel.short(bookmark.time))"
+                return bookmark.text.isEmpty ? time : "\(time) · \(bookmark.text)"
+            }
         }
         return value
     }

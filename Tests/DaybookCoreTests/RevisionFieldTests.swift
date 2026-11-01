@@ -15,6 +15,7 @@ final class RevisionFieldTests: XCTestCase {
             (.segment(id), "segment:\(id.uuidString)"),
             (.photo(id), "photo:\(id.uuidString)"),
             (.photoCaption(id), "photo-caption:\(id.uuidString)"),
+            (.bookmark(id), "bookmark:\(id.uuidString)"),
             (.correctionTransfer(id), "correction-transfer:\(id.uuidString)"),
             (.source(id.uuidString), "source:\(id.uuidString)"),
             (.source("restored:\(id.uuidString)"), "source:restored:\(id.uuidString)"),
