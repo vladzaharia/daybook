@@ -54,7 +54,7 @@ public struct Community1Engine: ModelEngine {
     /// Loading Core ML assets directly avoids ModelHub's online repair fallback.
     static func loadModels(at folder: URL, id: String) throws -> OfflineDiarizerModels {
         let started = Date()
-        func load(_ name: String, units: MLComputeUnits = .all) throws -> MLModel {
+        func load(_ name: String, units: MLComputeUnits = .processing) throws -> MLModel {
             let config = MLModelConfiguration(); config.computeUnits = units
             return try MLModel(contentsOf: folder.appendingPathComponent(name + ".mlmodelc"), configuration: config)
         }

@@ -27,8 +27,9 @@ settings:
 
 packages:
   # The repository's Swift package: DaybookKit (which re-exports DaybookCore and DaybookDevices),
-  # DaybookLink, and, for live captions, DaybookLive and DaybookModelStore. DaybookIntelligence (the
-  # Mac's processing: MLX, WhisperKit) stays out: final transcription and summaries run on a Mac.
+  # DaybookLink, DaybookLive and DaybookModelStore for live captions, and DaybookIntelligence for
+  # processing the iPhone's own recordings (docs/iphone.md, "Processing on this iPhone"), which
+  # builds for iOS without WhisperKit and MLXVLM (Package.swift).
   Daybook:
     path: ../..
 
@@ -48,11 +49,15 @@ targets:
         product: DaybookLink
       - package: Daybook
         product: DaybookCaptions
-      # Live transcription from local models (FluidAudio) and their store; no MLX or WhisperKit.
+      # Live transcription from local models (FluidAudio) and their store.
       - package: Daybook
         product: DaybookLive
       - package: Daybook
         product: DaybookModelStore
+      # Transcription, speakers, voice profiles, and summaries of the iPhone's own recordings: the
+      # Mac's engines (FluidAudio, MLX) and its ProcessingEngine.
+      - package: Daybook
+        product: DaybookIntelligence
       - target: DaybookPhoneWidgets
         embed: true
         codeSign: true
@@ -112,14 +117,19 @@ targets:
         NSBluetoothAlwaysUsageDescription: Daybook connects to your Soundcore Work to import its recordings.
         # audio: recording with the screen locked; bluetooth-central: Soundcore imports and state
         # restoration; fetch: BGAppRefreshTask sync passes (PhoneSync.refreshIdentifier);
-        # remote-notification: CloudKit's silent pushes, which the courier's CKSyncEngine relies on.
+        # remote-notification: CloudKit's silent pushes, which the courier's CKSyncEngine relies on;
+        # processing: background tasks for processing, here the continued-processing task that lets
+        # transcribing this iPhone's recordings go on in the background (ContinuedProcessing).
         UIBackgroundModes:
           - audio
           - bluetooth-central
           - fetch
           - remote-notification
+          - processing
+        # The sync pass, and one continued-processing task per job (`local.daybook.phone.processing.<UUID>`).
         BGTaskSchedulerPermittedIdentifiers:
           - local.daybook.phone.sync
+          - local.daybook.phone.processing.*
         NSSupportsLiveActivities: true
         # Audio shared to Daybook (Voice Memos, call recordings saved from Notes, Files) is copied in.
         LSSupportsOpeningDocumentsInPlace: false

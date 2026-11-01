@@ -131,6 +131,29 @@ final class InferenceProcessingEngineTests: XCTestCase {
         } catch DaybookError.noSpeech {}
     }
 
+    /// The iPhone's local summarizer (`LocalSummarizing`) is this engine's summary step: the same
+    /// pipeline, provenance, and suggested terms, with progress as a fraction.
+    func testBehaviorTheLocalSummarizerIsTheEnginesSummaryStep() async throws {
+        let inference = Scripted()
+        let summarizer: any LocalSummarizing = LocalSummarizer(engine: InferenceProcessingEngine(inference: inference, configuration: configuration))
+        XCTAssertEqual(summarizer.model, "qwen-1.5b")
+        let fractions = Fractions()
+        let output = try await summarizer.summarize(meeting(), template: nil, vocabulary: ["Daybook"]) { fractions.add($0) }
+        XCTAssertEqual(inference.calls, ["summarize qwen-1.5b auto"])
+        XCTAssertEqual(output.summary.processingSettings?.modelID, "qwen-1.5b")
+        XCTAssertEqual(output.summary.processingSettings?.parameters["configuration"], "abc123")
+        XCTAssertEqual(output.suggestedTerms, ["Friday"])
+        XCTAssertEqual(output.warnings, ["Check the owner."])
+        XCTAssertTrue(fractions.values.allSatisfy { (0...1).contains($0) })
+    }
+
+    private final class Fractions: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _values: [Double] = []
+        var values: [Double] { lock.withLock { _values } }
+        func add(_ value: Double) { lock.withLock { _values.append(value) } }
+    }
+
     func testWithoutASmallTasksModelTheSummarizerNamesTheConversationAsBefore() async throws {
         let inference = Scripted()
         inference.smallTasks = SmallTaskResult(title: "Never used")

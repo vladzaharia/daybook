@@ -1,3 +1,5 @@
+// WhisperKit builds for the Mac only (Package.swift): the iPhone transcribes with Parakeet.
+#if canImport(WhisperKit)
 import AVFoundation
 import DaybookCore
 import DaybookKit
@@ -145,3 +147,4 @@ final class WhisperKitTranscriber: Transcribing, @unchecked Sendable {
                                  language: language, duration: duration)
     }
 }
+#endif

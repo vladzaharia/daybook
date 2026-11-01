@@ -5,7 +5,9 @@ import MLX
 import MLXGuidedGeneration
 import MLXLLM
 import MLXLMCommon
+#if canImport(MLXVLM)
 import MLXVLM
+#endif
 
 /// Language models on the GPU through mlx-swift-lm. Any MLX conversion whose `config.json`
 /// `model_type` this mlx-swift-lm registers can run: a new family of an existing architecture is
@@ -18,7 +20,8 @@ import MLXVLM
 /// asks the commitments pass in fewer words, `noteCheck: "on"`, which checks notes against what was said
 /// first, and `outputTokens`, the most a pass may write, below its default from the context window). Version 3 serves `imageDescription` too:
 /// a variant that declares the role (and `imageInput`) is loaded through MLXVLM to caption photos
-/// (`MLXVisionDescriber`), from the same install that writes summaries.
+/// (`MLXVisionDescriber`), from the same install that writes summaries. MLXVLM builds for the Mac only
+/// (Package.swift), so on the iPhone the engine serves summaries alone.
 public struct MLXLanguageEngine: ModelEngine {
     /// Whether this mlx-swift-lm can build a model from a `config.json`. The default asks
     /// `LLMTypeRegistry` whether it registers the architecture, then instantiates it from the
@@ -41,7 +44,13 @@ public struct MLXLanguageEngine: ModelEngine {
 
     public let descriptor = ModelEngineDescriptor(
         id: .mlxLanguage, name: "MLX language models", version: 3, runtime: "mlx-swift-lm 3.32.3",
-        roles: [.summarization, .imageDescription], platforms: [.macOS, .iOS], residency: .exclusive)
+        roles: Self.roles, platforms: [.macOS, .iOS], residency: .exclusive)
+
+    #if canImport(MLXVLM)
+    static let roles: Set<ModelRole> = [.summarization, .imageDescription]
+    #else
+    static let roles: Set<ModelRole> = [.summarization]
+    #endif
 
     /// The files the summary pipeline has always fetched for an MLX model.
     public static let include = ["*.safetensors", "*.json", "*.jinja"]
@@ -83,9 +92,13 @@ public struct MLXLanguageEngine: ModelEngine {
             if !repository.contains("processor_config.json") && !repository.contains("preprocessor_config.json") {
                 problems.append("It has no image processor (processor_config.json), so it can’t read photos.")
             }
+            #if canImport(MLXVLM)
             if await !VLMTypeRegistry.shared.contains(modelType) {
                 problems.append("Its architecture (\(modelType)) can’t read photos in this version of Daybook.")
             }
+            #else
+            problems.append("Photos are read on a Mac.")
+            #endif
         } else if await !supportsArchitecture(modelType, data) {
             problems.append("Its architecture (\(modelType)) doesn’t run in this version of Daybook.")
         }
@@ -107,7 +120,11 @@ public struct MLXLanguageEngine: ModelEngine {
         if role == .imageDescription {
             // The catalog says which variants serve the role (`LocalIntelligenceRuntime.resolve`); an
             // install made before photos has the same files, so its receipt isn't consulted.
+            #if canImport(MLXVLM)
             return try await MLXVisionDescriber.load(from: installation.folder(for: "model"), engineOptions: installation.engineOptions)
+            #else
+            throw LocalIntelligenceError.unsupportedRole(model: installation.key.variantKey, role: "photos")
+            #endif
         }
         Memory.cacheLimit = 256 * 1_024 * 1_024
         let started = Date()
