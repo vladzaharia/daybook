@@ -1,5 +1,71 @@
 # Validation record
 
+## Upgrade: a better model redoes a conversation's step, and every step after it (2026-10-31)
+
+When a clearly better model than the one that made a conversation's transcript, speakers, or summary is within reach,
+the conversation page offers to redo that step there, on the Mac and the iPhone ([multipoint](multipoint.md#upgrade),
+[models](models.md#quality-ranks), [interface](interface.md#behaviour-worth-knowing)).
+
+**What changed.**
+
+- **Ranks** per step in the model catalog (`quality` in each variant's manifest entry; `CatalogModel.quality(for:)`),
+  on the cloud catalog's `summaryQuality` scale for summaries. Transcripts: Parakeet Ultra 90, Whisper Large v3 Turbo
+  85, Parakeet Redux 80, Whisper Small 70, Base 60. Speakers: Nemotron 3 89, Compact 88, Community-1 85 (85 for voice
+  profiles too), Sortformer 2.1 79 and 77. Summaries: Gemma 4 31B 8-bit 94, 26B A4B 90, Qwen 3.6 35B A3B 87, Qwen 3.5
+  9B 65, Gemma 4 12B 60, E4B 53, Qwen 3.5 4B 45, Qwen 2.5 7B 30, Gemma 4 E2B 25, Qwen 2.5 3B 20, 1.5B 10. Measured
+  where the offsite or the published AMI and catalog figures allow, estimated conservatively elsewhere, each with its
+  basis in docs/models.md.
+- **The comparison** (`Upgrades.offer`, DaybookKit, pure): the weakest recording's model now, against this device's
+  own, the reachable Macs' (`ProcessingMac.reachable`, the placement's reachability), and, for summaries, the cloud model
+  Settings › Cloud resolves to; a margin of 10 on each step; nothing for unknown provenance, nor while anything
+  records, works, waits, or is placed (a summary the iPhone holds through its countdown included); the most upstream step
+  first.
+- **The line** on both pages, in the status line's idiom: "Upgrade transcript", "Upgrade transcript on Studio Mac",
+  "Upgrade summary with Claude Sonnet 5.5", with Upgrade and Dismiss. Never in list rows.
+- **The work** goes through the request and claim path: `ProcessingRequest.upgrade` names the step, the model, its rank,
+  and the device; Transcribe Everything Again, Identify Speakers Again, or Summarize Again redoes it and every step after
+  it, keeping corrections as those paths do. A device with a weaker model leaves the request; the iPhone runs only those
+  naming itself. An upgrade's summary is due, so it goes through the placement with its countdown (the iPhone's own
+  through `summaryIsDue`, held like any due summary); the cloud's starts there at once (`SummaryPlacements.beginInCloud`).
+  If the device named is gone, the request stays and the page says "Waiting for Studio Mac to upgrade the transcript";
+  a device with a model as good takes it instead.
+- **Dismissals** (`Meeting.upgradeDismissals`) sync with the conversation and merge as a union; a later, better model
+  offers again.
+- **Demos:** `--upgrade-demo mac|here|cloud|waiting` on both apps (the Mac's on "Offsite retro" with `--library-demo`,
+  the iPhone's on "Weekly product sync" with `--demo-library`). Without it the Mac's library demo offers nothing, so its
+  other captures stay as they were (its Gemma 4 E2B summaries would otherwise be offered this Mac's summary model).
+
+**Verified.**
+
+- `swift build --build-tests` clean. `swift test`: 1,522 tests, 0 failures (1 skipped, as before): Captions 13, Core
+  425, Devices 119, Intelligence 188, Kit 326, Link 75, Live 39, Mac app 337. New: `UpgradeTests` (18: the ranks load
+  and read from manifests; each margin on both sides; the best within reach and ties; the weakest recording; unknown
+  provenance; work under way and a held summary; the most upstream step; the iPhone's words and its own recordings; a
+  transcript's language; dismissals, their sync and merge, and a better model offering again; the requests an accepted
+  offer makes and who may carry them out; the iPhone leaving a Mac's upgrade; no offer once done) and
+  `UpgradeProcessingTests` (6: this Mac redoing an iPhone's transcript with every later step, keeping a corrected passage
+  and a renamed speaker, the earlier summary in Version History, and no offer after; an upgrade's summary counting down;
+  a cloud upgrade summarizing there at once; Dismiss; another Mac asked by name and waited for, then a Mac with a model as
+  good taking it; a request naming this Mac carried out, and one for a better model left alone).
+- `scripts/build-ios.sh --test` on an iPhone 18 Pro simulator clone: 227 tests, 0 failures. New: `PhoneUpgradeTests`
+  (4: a Mac's better summary model offered as "Upgrade summary on Vlad's MacBook Pro" and asked by name, with the
+  waiting line and nothing run here; this iPhone's own recording redone here with its summary counting down after, and
+  no transcript offer again; the cloud's summary started at once; Dismiss).
+- `./scripts/build-app.sh --generate-only`, then `./scripts/build-app.sh --debug --ad-hoc`: both succeed, `dist/Daybook.app`
+  signed ad hoc, no team and no provisioning.
+- Window snapshots, light and dark, before (fb8f56f, this branch's base) and after: the Mac's "Offsite retro" page
+  (`--upgrade-demo mac|here|cloud|waiting`) and the iPhone's "Weekly product sync" page (the same four).
+
+**Still to check, with hardware or real recordings.**
+
+- The ranks that are estimates: the recognizers (Parakeet Ultra and Redux, the three Whispers) and Community-1 against
+  Nemotron 3 on real meetings with the evaluation harness, and Gemma 4 12B and Qwen 3.5 on the three-hour offsite; then
+  update the catalog.
+- A real iPhone and Mac: accepting on the iPhone, the nudge over the link, and the Mac redoing the transcript with real
+  models; a Mac asked while asleep, and one that never comes back.
+- An earlier Daybook Mac in the same library takes upgrade requests as plain ones and runs them with its own models
+  (expected, docs/multipoint.md, "Upgrade", Limits).
+
 ## Cloud, placement, and iPhone processing together (2026-10-31)
 
 The three streams below (cloud summaries, where summaries run, and processing on the iPhone) landed on one branch
