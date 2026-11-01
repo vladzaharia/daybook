@@ -223,8 +223,7 @@ final class PhoneProcessor {
             }
             // The rest: a summary here, or the request goes back for a Mac (recordings to line up,
             // or no summary model here).
-            guard OnDeviceProcessing.work(for: request, in: meeting, device: device) == .summarize,
-                  request.mode == .summaryOnly || OnDeviceProcessing.fusesHere(meeting),
+            guard services.capabilities().summarizes, request.mode == .summaryOnly || OnDeviceProcessing.fusesHere(meeting),
                   let summarizer = services.summarizer() else { return .handedBack }
             if let reason = blocking(summarizing: true) { return .paused(reason) }
             try await summarize(id, request: request, with: summarizer)
@@ -340,7 +339,14 @@ final class PhoneProcessor {
                 }
             }
         case .handedBack:
-            library.releaseProcessingRequest(requestID, in: id, at: now)
+            let request = library.meeting(id)?.processingRequests?.first { $0.id == requestID }
+            if let request, request.mode == .fullRetranscription || request.mode == .speakerRefresh {
+                // Done here: a Mac carrying out the request would do it all again. It summarizes instead.
+                library.completeProcessingRequest(requestID, in: id, at: now)
+                library.requestProcessing(id, mode: .summaryOnly, templateID: request.templateID, at: now)
+            } else {
+                library.releaseProcessingRequest(requestID, in: id, at: now)
+            }
         case .failed(let reason):
             library.failProcessingRequest(requestID, in: id, reason: reason, at: now)
         case .paused:

@@ -409,6 +409,8 @@ final class PhoneAppModel: RecordingCommandHandling {
             if options.demoLink || options.demoMultipointMac != nil { applyLinkDemo() } else { await link.start() }
         }
         await sync.synchronize(.launch)
+        // Work a previous run claimed or paused carries on, and anything filed since is picked up.
+        processor.pickUp()
         let libraryID = await sync.libraryID()
         await link.updateLibrary(libraryID)
         await audio.setBudget(settings.audioCacheBudget)
@@ -513,6 +515,13 @@ final class PhoneAppModel: RecordingCommandHandling {
             processingObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main, using: read))
         }
         processor.conditions.live = conditions.current
+        // Launched in the background (a download's events), work waits for the screen: no scene phase
+        // says so until one connects.
+        switch UIApplication.shared.applicationState {
+        case .active: processor.conditions.screen = .active
+        case .inactive: processor.conditions.screen = .inactive
+        default: processor.conditions.screen = .background
+        }
     }
 
     // MARK: Captions from every source

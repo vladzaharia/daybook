@@ -117,6 +117,12 @@ final class OnDeviceProcessingTests: XCTestCase {
         var (speakers, refresh) = recorded([mine], request: .speakerRefresh)
         speakers.transcripts = [transcript(mine, at: now.addingTimeInterval(-60))]
         XCTAssertEqual(OnDeviceProcessing.work(for: refresh, in: speakers, device: device(all, owning: [mine.id]), at: now), .identifySpeakers([mine.id]))
+        // Each recording once: done since the request, what's left is the summary, here or a Mac's.
+        meeting.transcripts.append(transcript(mine, at: now.addingTimeInterval(30)))
+        XCTAssertEqual(OnDeviceProcessing.work(for: again, in: meeting, device: device(all, owning: [mine.id]), at: now), .summarize)
+        XCTAssertNil(OnDeviceProcessing.work(for: again, in: meeting, device: device(noSummaries, owning: [mine.id]), at: now))
+        speakers.transcripts.append(transcript(mine, at: now.addingTimeInterval(30)))
+        XCTAssertEqual(OnDeviceProcessing.work(for: refresh, in: speakers, device: device(all, owning: [mine.id]), at: now), .summarize)
         var (mixed, retranscribe) = recorded([mine, macs], request: .fullRetranscription)
         mixed.transcripts = [transcript(mine, at: now), transcript(macs, at: now)]
         XCTAssertNil(OnDeviceProcessing.work(for: retranscribe, in: mixed, device: device(all, owning: [mine.id]), at: now))

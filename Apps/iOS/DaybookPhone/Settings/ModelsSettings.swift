@@ -48,7 +48,9 @@ struct ModelsSettingsScreen: View {
             Section {
                 Toggle("Download over Cellular", isOn: $bindable.allowsCellular)
             }
+            SettingsScrollEndMarker()
         }
+        .settingsScrollEnd()
         .navigationTitle("Models")
         .navigationBarTitleDisplayMode(.inline)
         .task { await models.refresh() }
