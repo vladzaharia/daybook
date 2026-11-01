@@ -21,10 +21,13 @@ final class PhoneProcessingTests: XCTestCase {
         private var _transcribed: [UUID] = []
         private var _running = 0, _mostAtOnce = 0
         private var _holding = false, _waiting = false
+        private var _failure: Error?
         var transcribed: [UUID] { lock.withLock { _transcribed } }
         var mostAtOnce: Int { lock.withLock { _mostAtOnce } }
         var isWaiting: Bool { lock.withLock { _waiting } }
         func hold(_ on: Bool) { lock.withLock { _holding = on } }
+        /// Transcribing throws `error`, as an engine that stops does.
+        func fail(with error: Error?) { lock.withLock { _failure = error } }
 
         func transcribe(_ input: TrackProcessingInput, progress: @escaping ProcessingProgressHandler) async throws -> TrackProcessingOutput {
             lock.withLock { _running += 1; _mostAtOnce = max(_mostAtOnce, _running) }
@@ -35,6 +38,7 @@ final class PhoneProcessingTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(10))
             }
             try Task.checkCancellation()
+            if let failure = lock.withLock({ _failure }) { throw failure }
             lock.withLock { _transcribed.append(input.track.id) }
             let run = UUID(), speaker = "\(run.uuidString):0"
             let words = TranscriptSegment(trackID: input.track.id, start: 0, end: 4, text: "Ship the beta on Friday.", speakerID: speaker)
@@ -511,6 +515,20 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertEqual(after.claim?.device, mac, "the Mac's, untouched")
         XCTAssertTrue(rig.library.controller.meeting(meeting.id)?.transcripts.isEmpty == true)
         XCTAssertFalse(rig.processor.paused.contains(meeting.id))
+    }
+
+    func testBehaviorAFailureStoresTheKindOfTheErrorThatStoppedIt() async throws {
+        let rig = try await rig()
+        rig.engine.fail(with: DaybookError.noSpeech)
+        let meeting = try await record(into: rig.library)
+        rig.processor.pickUp()
+        let words = DaybookError.noSpeech.localizedDescription
+        try await waitUntil("the failure") { outcome(rig, meeting.id) == .failed(words, .noSpeech) }
+        let failed = try XCTUnwrap(rig.library.controller.meeting(meeting.id)?.processingRequests?.first { $0.mode == .newAudio })
+        XCTAssertEqual(failed.outcome?.result, .failed)
+        XCTAssertEqual(failed.outcome?.message, words)
+        XCTAssertEqual(failed.outcome?.failure, .noSpeech, "stored where it was caught, not read from its words")
+        XCTAssertEqual(ProcessingRequest.FailureKind(PhoneProcessingError.modelsMissing), .modelsMissing)
     }
 
     func testBehaviorOneConversationAtATime() async throws {
