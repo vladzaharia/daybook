@@ -191,6 +191,19 @@ final class SummaryCompletenessTests: XCTestCase {
             XCTAssertEqual(parts.count, 1 + (count - 10 + 7) / 8, "\(count)")
             XCTAssertEqual(Set(parts.flatMap { $0.components(separatedBy: "\n") }), Set(lines), "Every passage, whole")
         }
+        // The commitments passes keep the parts they were tuned on (an even share with a tenth to spare), evened out
+        // only where those leave a scrap: 60 passages split 33 and 29, where even shares split them 31 and 31, and
+        // 99, which would split 50, 50, and 3, come out in three even parts.
+        func lines(_ count: Int) -> String {
+            (0..<count).map { String(format: "[%02d:%02d] Mei: one two three four five six seven %d", $0 / 60, $0 % 60, $0) }.joined(separator: "\n")
+        }
+        let tuned = await MeetingSynthesis.transcriptParts(lines(60), model: model, tokenLimit: 550, evenly: false)
+        XCTAssertEqual(tuned.map { $0.components(separatedBy: "\n").count }, [33, 29])
+        let even = await MeetingSynthesis.transcriptParts(lines(60), model: model, tokenLimit: 550)
+        XCTAssertEqual(even.map { $0.components(separatedBy: "\n").count }, [31, 31])
+        let scrap = await MeetingSynthesis.transcriptParts(lines(99), model: model, tokenLimit: 550, evenly: false).map { $0.components(separatedBy: "\n").count }
+        XCTAssertEqual(scrap.count, 3)
+        XCTAssertGreaterThanOrEqual((scrap.min() ?? 0) * 2, scrap.max() ?? 0, "\(scrap)")
     }
 
     func testACommitmentRestatedLaterIsListedOnceInItsFirstWording() throws {
