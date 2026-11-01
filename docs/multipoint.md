@@ -275,9 +275,11 @@ start and the clock estimate, rather than asking it back. It refuses with a reas
 recording another conversation (`recordingSomethingElse`, naming it), starting or stopping
 (`busy`), or isn't allowed the microphone (`permissionDenied`; an undecided permission is refused
 too, since nobody may be at the Mac to answer the prompt). A phone that asks on its own (a cascading
-start, below) is declined when this Mac's **Record along with this Mac** for it is off: "Recording along
-with Alex's iPhone is turned off on this Mac." The phone may stop a recording it asked for, or one it
-records along with (below), not one started on the Mac without it (`declined`); it stops each Mac it started when it stops, including
+start, below) is declined when this Mac's **Record along with this Mac** for it (Can start recording on
+its page) is off: "It isn’t set to let this iPhone start recording. Turn on Can start recording for this
+iPhone on the Mac." The phone may stop a recording it asked for, or one it records along with (below), and,
+from its page for this Mac (Stop on Studio Mac, a standalone stop; docs/link.md, "Record control"), any
+recording when it can start recording here; otherwise not one started on the Mac without it (`declined`). It stops each Mac it started when it stops, including
 one still being asked and one whose answer never came, and owes a stop that didn't arrive until that
 Mac reconnects, kept for a day in `owed-stops.json` in its library's folder (never synced), so a
 relaunch still sends it. A start that comes back after the phone stopped is stopped too.

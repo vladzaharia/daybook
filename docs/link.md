@@ -107,6 +107,55 @@ Pairing runs over the same TLS listener as sessions, using a **public** PSK
 and hides the exchange from passive observers. All of pairing's security comes from the exchange
 above.
 
+A timeout is its own failure (`PasskeyExchange.Failure.timedOut`, the Mac's `LinkPairingError.timedOut`), never
+read from a reason's words.
+
+### What both devices show
+
+Pairing looks and reads the same on both devices: DaybookUI's `PairingView(role:)` draws it, and DaybookLink's
+`PairingWords` words it once.
+
+- **Title.** "Pair with Your iPhone" on the Mac, "Pair with Your Mac" on the iPhone, in New York, under the other
+  device's glyph.
+- **Each side names the other's exact control.** Under the Mac's code: "On your iPhone, open Daybook › Settings ›
+  Pair with Your Mac, choose “Studio Mac”, and enter this code." Under the iPhone's title: "On your Mac, open
+  Daybook › Settings › Devices and click Pair with iPhone." The Mac's button reads Pair with iPhone… in Settings ›
+  Devices (its empty state included) and Add Device; the iPhone's reads Pair with Your Mac….
+- **The code.** Grouped `LinkPairingCode.groupSize` (3) digits apart with the one `LinkPairingCode.separator`: the
+  Mac shows "482 913" (`PairingCodeView`), the iPhone's six boxes leave the same gap (`PairingCodeEntry`).
+- **The Macs on the iPhone's network.** A Mac showing a code first, then the rest, then any Mac with another library
+  open, dimmed as "Uses another library" and not offered. When the person declined Local Network for Daybook, the
+  list is a `ProblemLine`, "Allow Daybook to find your Mac on this network.", with Open Settings. After 15 s with no
+  Mac to offer it adds "No Mac found. Open Daybook › Settings › Devices on your Mac, on this Wi‑Fi."
+- **Paired.** The glyph becomes the Mac and iPhone together (`replace.magic`, a cross-fade under Reduce Motion), the
+  title says "Paired with Studio Mac" beside a checkmark that draws on (`DoneMark`), and the iPhone gives a success
+  tap; a failed code gives an error tap.
+- **Layout.** One column in the hand and in the Mac's 560 pt sheet; over the open iPhone Duo two pages through the
+  app's `CreaseSplit`: the title and the Macs on the left, the code on the right.
+- **Unpair.** "Unpair…" on both, confirmed with "Unpair Studio Mac?" and one consequence: "Recording together stops
+  until you pair again. Recordings stay in your library." When the keychain refuses, the window says "Couldn’t Unpair
+  Studio Mac" and the pairing stays.
+
+### A paired device's page
+
+The Mac's page for an iPhone and the iPhone's page for a Mac are one view, DaybookUI's `PeerDevicePage`, worked out
+from plain facts (`PeerPage`):
+
+- the header: its tile (teal while connected), its name, and its status in `PeerStatusWords`' words ("Recording",
+  "Not connected · Last seen today, 9:12 AM");
+- what keeps the pair from working, as a `ProblemLine` with its fix: a pairing this device can't read or the other
+  device no longer knows ("Studio Mac doesn’t recognize this iPhone anymore. Pair again to connect.") with Pair
+  Again…, which opens pairing with that device chosen once it's found; a version mismatch saying which side to
+  update when its versions tell ("Update Daybook on Studio Mac to connect."); on the Mac, sync that's off, with
+  Library Settings…;
+- "Recording now · since 10:02 AM" with the conversation (a link on the Mac) and Stop on Studio Mac, offered when
+  the other device would take it: it lists `pageStopFeature`, or this device records that conversation with it;
+- the recorders it manages ("Soundcore Work · Recording since 10:02");
+- Can start recording (Can Start Recording on the iPhone): whether it may start a recording here, and stop one from
+  its page. On the Mac it's the device's `recordsAlongsideMac`, also in Settings › Devices;
+- its facts: Transcribes (once it has said), Daybook (its version), Paired. The clock offset isn't shown;
+- Unpair….
+
 ## Transport and session authentication
 
 **TLS version.** The brief asked for TLS 1.3 with a PSK. Network.framework's public API doesn't
@@ -163,9 +212,15 @@ The Mac advertises `_daybook-link._tcp` under its name, with this TXT record:
 | `p` | `1` while pairing is open |
 
 A phone recognises its library and its paired Macs by computing the tags. Nobody else learns the
-IDs or can follow a Mac between networks by them. The phone offers only Macs that share its
-library, plus Macs it's already paired with. With no library yet, it offers all. A spoofed advert
-can copy the tags, but it can't complete TLS without the key.
+IDs or can follow a Mac between networks by them. The phone offers Macs that share its library,
+plus Macs it's already paired with; with no library yet, it offers all. It lists the rest too, marked
+`LinkDiscoveredMac.usesAnotherLibrary` (another Apple ID, another library, or one not synced yet), so the
+pairing screen can show them dimmed rather than look as if no Mac were there. A spoofed advert can copy the
+tags, but it can't complete TLS without the key.
+
+`LinkClient.discovery` (and the `.discovery` event) says whether Macs can be found: `idle`, `searching`, or
+`localNetworkDenied`. iOS leaves a browser without the Local Network permission waiting (or failed) with
+DNS-SD's `PolicyDenied` (−65570); the client reads that as `localNetworkDenied` until a result arrives.
 
 ## Messages
 
@@ -239,14 +294,25 @@ retry after a lost reply, even on a new connection, gets the first answer and ne
 second recording, and a request repeated while the first is still being answered (a microphone
 prompt that outlasts the timeout) reaches the app once, with every connection that asked getting
 its answer. Both apps therefore ask again with the same ID when an answer doesn't come, rather than
-giving up. `LinkTiming` carries the requester's prior: its own start, where the conversation's
-timeline began and how much of it has passed, and its clock-offset estimate with uncertainty.
+giving up. The Mac's `LinkService` and the iPhone's `LinkClient` keep this in one shared
+`LinkRecordAnswers` (each device's answers, the latest `LinkRecordReply.rememberedReplies` (64) of them, and
+the requests still being answered), and wire their sessions with one `LinkSession.Delegate.forwarding(to:)`,
+so both sides treat a repeated Start the same way. `LinkTiming` carries the requester's prior: its own
+start, where the conversation's timeline began and how much of it has passed, and its clock-offset
+estimate with uncertainty.
+
+A refusal for the person to act on names the control that would allow it, worded for the device that
+reads it (`PairingWords.notAllowedToStart(asker:)`): "It isn’t set to let this iPhone start recording. Turn on
+Can start recording for this iPhone on the Mac."
 
 Additions within version 1, all optional, which older builds ignore:
 - `title` and `date`: the conversation as the requester has it, so a receiver that hasn't synced it
   makes the same record rather than a placeholder.
 - `standalone`: record a conversation of the receiver's own (a device page's Start Recording). A
-  start without timing, from an older Mac, means the same.
+  start without timing, from an older Mac, means the same. On a stop it's a device page's Stop on
+  <device>: a receiver listing `pageStop` (`LinkCapabilities.pageStopFeature`; the Mac lists it) stops
+  what it records when the asker can start recording on it, and otherwise only a recording it shares
+  with the asker, as before. A page offers Stop only to a device that lists it or records with it.
 - `recorder` (`LinkRecorderTarget`: kind, serial, and for a stop the recording's ID): start or stop
   a recorder the receiver manages instead of its microphone. Sent only to a peer that lists
   `recorderControl` in its features, since an older one would record its own microphone; a stop
@@ -279,7 +345,13 @@ start reads as a start the person chose, and `sharedConversationID` isn't read.
 - **Notes and bookmarks** carry their IDs (a paragraph's anchor ID, a bookmark's ID), so the copy over
   the link and the one through sync are one item. A note carries the time its writer files it at,
   which the receiver keeps exactly, and when it was written and changed on the sender's clock; the
-  receiver moves those onto its own and keeps the latest change of each item.
+  receiver moves those onto its own and keeps the latest change of each item. On the Mac, a change a
+  phone recording along didn't get (it was away for a moment, or the send failed) is owed to it
+  (`SharedNotesTracker.owe`, a paragraph's newest text replacing what was owed of it) and sent, before
+  anything newer, when it connects again, until the recording ends.
+- **In order.** Each kind of message that must arrive in order goes out one after another: the Mac's
+  recording state, its progress, and its notes; the iPhone's recording state, its bookmarks with its
+  notes, its nudges, and its summary choices (`PhoneLink.SendChannel`).
 
 ## Recording state
 
@@ -336,7 +408,18 @@ clock before any sound is compared.
     suspend the app anyway; calling `.foreground` again reconnects.
 - **Mac sleep and wake.** Call `systemDidWake()` from `NSWorkspace.didWakeNotification`. It probes
   every phone and reopens the listener if it failed. The listener also reopens on its own after a
-  failure, with backoff, falling back to any port, which Bonjour carries.
+  failure, with backoff, falling back to any port, which Bonjour carries. The Mac app's `PhoneLink`
+  follows the notification itself (for as long as it lives) and hands it to `AppState.systemDidWake`
+  through `onWake`; AppState registers no observer of its own.
+- **Pairings the keychain won't give.** One pairing item that doesn't decode (another build's record
+  shape, or damage) is left out of `records()` and listed by `damagedDevices()`
+  (`LinkPairedDevice.isDamaged`, named by its item's label), so every other pairing keeps connecting
+  and the damaged one can be paired again or unpaired; only the keychain itself failing throws. When
+  a read fails (a keychain that won't allow reads yet, just after login), both apps keep the list
+  they had, never taking a paired device for unpaired, and read again after a delay (5 s, doubling to
+  about five minutes), at wake (the iPhone: coming to the foreground), and at the next start. A Mac
+  whose listener can't open for it keeps trying to start (`PhoneLink.keepStarting`). An unpair the
+  keychain refuses throws, and the app says so.
 
 ## API
 
@@ -352,7 +435,7 @@ for await event in service.events() { … }        // .pairingCode, .paired, .co
 let code = await service.beginPairing()          // show code.formatted ("482 913")
 await service.endPairing()
 await service.connectedPeers                     // [LinkPeer]: capabilities, version, clock
-try await service.pairedDevices()                // [LinkPairedDevice], never keys
+try await service.pairedDevices()                // [LinkPairedDevice], damaged ones marked, never keys
 try await service.send(.processingProgress(…), to: phoneID)   // nil = every phone
 let reply = try await service.request(LinkRecordRequest(action: .start, conversationID: id,
                                                         timing: prior), from: phoneID)
@@ -371,7 +454,8 @@ let client = LinkClient(identity: LinkIdentity(deviceID: phoneID, name: UIDevice
                         keyStore: KeychainLinkKeyStore())
 for await event in client.events() { … }         // .discovered, .connectionState, .connected, .received, …
 
-await client.startBrowsing()                     // pairing screen: .discovered([LinkDiscoveredMac])
+await client.startBrowsing()                     // pairing screen: .discovered([LinkDiscoveredMac]), .discovery(state)
+await client.discovery                           // .searching, or .localNetworkDenied (Open Settings)
 let mac = try await client.pair(with: discovered.endpoint, code: typedCode)   // throws LinkPairingError
 try await client.connect(to: mac.deviceID)       // keep connected; found by Bonjour
 try await client.send(.bookmark(LinkBookmark(conversationID: id, recordingTime: t)))
@@ -454,8 +538,23 @@ iCloud Keychain. There's no Mac-to-Mac path; two Macs rely on iCloud Keychain or
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 73 tests, about 9 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 95 tests, about 9 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
+- **Pairings that can't be read** (`LinkKeyStoreTests`, `LinkDiscoveryTests`): a damaged item is left out
+  and listed apart, the others keep working, pairing again replaces it, unpairing removes it, a damaged
+  login item moves as it is, and a keychain failure still throws; a Mac with one keeps listening.
+- **Finding Macs** (`LinkDiscoveryTests`): `PolicyDenied` reads as `localNetworkDenied`; a Mac with
+  another library is listed but not offered, a paired one always is; the pairing timeout is typed.
+- **Record requests answered once** (`LinkRecordAnswersTests`): every asker hears the one answer,
+  replies are kept per device up to `rememberedReplies` and forgotten on unpair, and the Mac answers a
+  repeat across a reconnect once, as the phone does.
+- **Words** (`LinkPairingWordsTests`): the titles, each instruction naming the other device's control,
+  the code's one separator, the side to update, and the refusals.
+- **In the apps:** `PhoneLinkTests` on the Mac (a pairings read that fails keeps every phone and is
+  tried again, a link that can't start keeps trying, a refused unpair is said, a damaged pairing,
+  wake, the page's Stop, notes owed to a phone that was away, `PeerPage` for both devices) and
+  `LinkServicesTests` on the iPhone (the same keychain cases, sends in order, Stop on a Mac, a Mac's
+  problems and Last seen, Macs of another library).
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
   key is rejected.

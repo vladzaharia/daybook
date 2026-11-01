@@ -410,17 +410,20 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
 | `files`, "Through iCloud" (first) | `SyncedPhoneRecordings`: the phone's recordings in the library, which arrive with sync. Connected while sync is on; "Sync is off" otherwise. Each phone lists its own; a track whose serial is no paired phone's counts for every phone, so a single phone still lists its recordings if the IDs ever differ |
 | `direct`, "Over Wi‑Fi" | `PhoneLinkConnection`, the app's adapter over DaybookLink (DaybookDevices can't depend on it, so the app supplies it through `DeviceEnvironment.phone`). Connected while the phone has a session; record control (`AnsweringRecordControl`, docs/multipoint.md), the phone's recording state, and its clock. Connect and Disconnect do nothing: the phone connects to the Mac |
 
-- **Pairing.** Add Device › Daybook on iPhone, or Settings › Devices › Add iPhone…, opens the
-  pairing step: the code from `LinkService.beginPairing()` and the instructions, a new code after a
-  failed attempt (with why), "Paired with <name>", and the paired phones, each with Unpair. A paired
-  phone joins Devices under its link ID. Unpairing (either side) removes the device; its recordings
-  stay and keep arriving through sync.
+- **Pairing.** Add Device › Daybook on iPhone, or Settings › Devices › Pair with iPhone…, opens the
+  pairing step, the shared `PairingView` (docs/link.md, "What both devices show"): "Pair with Your
+  iPhone", the code from `LinkService.beginPairing()` and the instructions, a new code after a
+  failed attempt (with why), "Paired with <name>", and the paired phones, each with Unpair (one that
+  can't be read says "Needs pairing again"). A paired phone joins Devices under its link ID.
+  Unpairing (either side) removes the device; its recordings stay and keep arriving through sync.
 - **When the link runs.** Only while pairing is open or a phone is paired: a Mac nobody pairs with
   never opens a listener, and `LinkService` advertises over Bonjour under the same rule. Tests use
   loopback and memory keys.
-- **Device page.** Paired and connected or when last seen, what it's recording now (with Stop on
-  iPhone), and a box when it isn't paired or sync is off. The list column shows all of them, as
-  they're all in Daybook.
+- **Device page.** The page both apps show for a paired Daybook (`PeerDevicePage`, docs/link.md, "A
+  paired device's page"): connected or when last seen, what to do when it isn't paired or sync is off,
+  what it's recording now (with Stop on Alex's iPhone when the phone would take it), the recorders it
+  manages, Can start recording, its version and pairing date, and Unpair…. The list column shows its
+  recordings, as they're all in Daybook.
 - **Settings › Devices.** Over Wi‑Fi status, Record along with this Mac (both ways:
   off, the phone's cascading starts are declined too), how recordings arrive (with a link to sync
   settings when it's off), and Unpair….
