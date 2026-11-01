@@ -6,7 +6,7 @@ import SwiftUI
 /// conversation, to confirm or dismiss. Each is laid out like a recording row. The state and
 /// actions live in `AppState+Sources`.
 struct SourceHooks: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
 
     var body: some View {

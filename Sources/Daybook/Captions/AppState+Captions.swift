@@ -1,4 +1,3 @@
-import Combine
 import DaybookCaptions
 import DaybookCore
 import DaybookDevices
@@ -25,21 +24,18 @@ extension AppState {
         }
         // Live recognizers are biased toward the library's approved vocabulary, including a term
         // approved while a recording runs.
-        library.$glossary
-            .map(MacLiveModels.terms)
-            .removeDuplicates()
-            .sink { [weak self] terms in self?.liveModels.vocabulary.update(terms) }
-            .store(in: &subscriptions)
+        let library = self.library
+        watches.append(ObservationWatch.distinctValues(of: { MacLiveModels.terms(library.glossary) }) { [weak self] terms in
+            self?.liveModels.vocabulary.update(terms)
+        })
         // Which live models captions use follows what's downloaded, chosen, and the captions' language.
-        Publishers.CombineLatest3($installedModels, $modelSelections, settings.$localeIdentifier)
-            .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshLiveModels() }
-            .store(in: &subscriptions)
+        watches.append(ObservationWatch.values(of: { [weak self, weak settings] in
+            _ = (self?.installedModels, self?.modelSelections, settings?.localeIdentifier)
+        }, delay: .milliseconds(200)) { [weak self] _ in self?.refreshLiveModels() })
         // Captions the transcript replaced, or whose conversation went to the Trash, go.
-        library.$meetings
-            .debounce(for: .seconds(1), scheduler: RunLoop.main)
-            .sink { [weak self] meetings in self?.pruneCaptions(meetings) }
-            .store(in: &subscriptions)
+        watches.append(ObservationWatch.values(of: { library.meetings }, delay: .seconds(1)) { [weak self] meetings in
+            self?.pruneCaptions(meetings)
+        })
     }
 
     /// Re-reads the live models captions use (`MacLiveModels`).

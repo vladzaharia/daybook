@@ -6,7 +6,7 @@ import SwiftUI
 
 /// Presents the main window's one sheet for the selected conversation.
 struct ConversationSheet: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let sheet: ActiveSheet
     var body: some View {
         if let meeting = state.selectedMeeting {
@@ -29,7 +29,7 @@ struct ConversationSheet: View {
 // MARK: - Version History
 
 struct VersionHistorySheet: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
@@ -160,7 +160,7 @@ enum WordDiff {
 // MARK: - Adjust Timing
 
 struct AdjustTimingSheet: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let trackID: UUID?
     @Environment(\.dismiss) private var dismiss
@@ -225,7 +225,7 @@ enum TimeField {
 // MARK: - Review Earlier Corrections
 
 struct ReviewCorrectionsSheet: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     @Environment(\.dismiss) private var dismiss
     @State private var index = 0

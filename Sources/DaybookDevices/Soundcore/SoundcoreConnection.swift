@@ -1,8 +1,8 @@
 import AVFoundation
-import Combine
 import DaybookCaptions
 import DaybookCore
 import Foundation
+import Observation
 import os
 
 /// Soundcore Work's direct method: a connection state machine over a `SoundcoreTransport`.
@@ -16,7 +16,8 @@ import os
 /// - It only reads from the recorder. It never deletes, resets, rebinds, or updates it, and starts or
 ///   pauses a recording only when the person asks.
 @MainActor
-public final class SoundcoreConnection: ObservableObject, DiscoveringConnection, RecordControlConnection,
+@Observable
+public final class SoundcoreConnection: DiscoveringConnection, RecordControlConnection,
                                  LiveListeningConnection, DetailedConnection, ManagedConnection {
     /// Where the connection is. Each phase owns at most one timer.
     public enum Phase: Equatable {
@@ -56,36 +57,36 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     public let method = ConnectionMethodKind.direct
     public let capabilities: DeviceCapabilities = [.battery, .caseBattery, .storage, .liveListening, .recordControl, .details, .wirelessTransfer]
 
-    @Published public private(set) var phase: Phase = .idle
-    @Published public private(set) var remembered: SoundcoreSnapshot?
+    public private(set) var phase: Phase = .idle
+    public private(set) var remembered: SoundcoreSnapshot?
     /// The recorder's status while connected.
-    @Published public private(set) var info: SoundcoreDeviceInfo?
-    @Published public private(set) var statusUpdatedAt: Date?
-    @Published public private(set) var recordings: [DeviceRecording] = []
-    @Published public private(set) var inventoryUpdatedAt: Date?
-    @Published public private(set) var isRefreshing = false
-    @Published public private(set) var problem: DeviceProblem?
-    @Published public private(set) var discovered: [DiscoveredRecorder] = []
-    @Published public private(set) var searchFoundNothing = false
-    @Published public private(set) var connectingTo: String?
-    @Published public private(set) var recordCommandPending = false
-    @Published public private(set) var lastTechnicalProblem: String?
-    @Published public private(set) var keyExchangeComplete = false
-    @Published public private(set) var reconnectAttempt = 0
+    public private(set) var info: SoundcoreDeviceInfo?
+    public private(set) var statusUpdatedAt: Date?
+    public private(set) var recordings: [DeviceRecording] = []
+    public private(set) var inventoryUpdatedAt: Date?
+    public private(set) var isRefreshing = false
+    public private(set) var problem: DeviceProblem?
+    public private(set) var discovered: [DiscoveredRecorder] = []
+    public private(set) var searchFoundNothing = false
+    public private(set) var connectingTo: String?
+    public private(set) var recordCommandPending = false
+    public private(set) var lastTechnicalProblem: String?
+    public private(set) var keyExchangeComplete = false
+    public private(set) var reconnectAttempt = 0
     /// A transfer, Listen Live, or a Start or Pause is waiting for another app's transfer to finish (the
     /// Soundcore app, over the link iOS shares between apps): Daybook never starts one over it.
-    @Published public private(set) var isWaitingForOtherApp = false
+    public private(set) var isWaitingForOtherApp = false
     /// Wi‑Fi Fast Transfer's stage while it runs (iPhone).
-    @Published public private(set) var fastTransferStage: FastTransferStage?
+    public private(set) var fastTransferStage: FastTransferStage?
     public let live = LiveCapture()
 
-    public var onChange: (() -> Void)?
+    @ObservationIgnored public var onChange: (() -> Void)?
     /// A Listen Live portion to save: the staged file (the handler removes it once it's saved), the
     /// recording's ID, its length, and the conversation it was captured for (a shared recording), if any.
-    public var onLiveSaved: ((URL, String, TimeInterval, UUID?) -> Void)?
+    @ObservationIgnored public var onLiveSaved: ((URL, String, TimeInterval, UUID?) -> Void)?
     /// The recorder's own button started (true) or stopped (false) a recording: a pushed state that
     /// changes what this device knew, while no Start or Pause of its own is waiting for an answer.
-    public var onButton: ((Bool) -> Void)?
+    @ObservationIgnored public var onButton: ((Bool) -> Void)?
     /// Holds the link while the recorder is in range, so its button is heard (a shared recording
     /// starts from it): never let go when idle, and after a drop or a failed attempt a pending
     /// connection with no deadline, rather than the cooldown automatic import waits. The iPhone sets
@@ -123,7 +124,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     /// device). While set, this device never connects on its own (automatic import, reconnecting,
     /// multipoint) and `connect()` does nothing; a link that's up is let go once it's idle, never in
     /// the middle of a transfer. Clearing it re-arms automatic import as usual.
-    @Published public var managedElsewhere: RecorderOwnership? {
+    public var managedElsewhere: RecorderOwnership? {
         didSet {
             guard managedElsewhere != oldValue else { return }
             if managedElsewhere != nil, oldValue == nil {
@@ -162,7 +163,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     }
     /// The import queue has another recording from this recorder waiting (the device's session sets it):
     /// Fast Transfer keeps the recorder's Wi‑Fi open for it.
-    public var hasMoreQueued: (() -> Bool)?
+    @ObservationIgnored public var hasMoreQueued: (() -> Bool)?
 
     /// Settings › Devices › Connect over Bluetooth.
     public var isEnabled = true {
@@ -177,12 +178,12 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     private let stagingDirectory: URL
     private let makeTransport: () -> any SoundcoreTransport
     private let captionHooks: LiveCaptionHooks
-    private var transport: (any SoundcoreTransport)?
-    private var session: SoundcoreSession?
-    private var listeningTask: Task<Void, Never>?
+    @ObservationIgnored private var transport: (any SoundcoreTransport)?
+    @ObservationIgnored private var session: SoundcoreSession?
+    @ObservationIgnored private var listeningTask: Task<Void, Never>?
     private var peripheral: UUID?
-    private var timer: Task<Void, Never>?
-    private var idleTimer: Task<Void, Never>?
+    @ObservationIgnored private var timer: Task<Void, Never>?
+    @ObservationIgnored private var idleTimer: Task<Void, Never>?
     private var origin: Origin = .person
     /// An intent waiting for Bluetooth to come back on.
     private var deferredIntent: Intent?
@@ -195,28 +196,28 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     /// Listings under way (a refresh, or one after the recorder's button), for `isRefreshing`.
     private var listingsInFlight = 0
     /// The last listing on this connection: what it found, or why it found nothing (Device Details).
-    @Published public private(set) var lastListing: ListingOutcome?
+    public private(set) var lastListing: ListingOutcome?
     /// Quiet tries again after a listing that failed, while the link stays up.
     private var relistAttempt = 0
-    private var relistTimer: Task<Void, Never>?
+    @ObservationIgnored private var relistTimer: Task<Void, Never>?
     /// The recording this device asked the recorder to start.
     private var startedHereID: UInt32?
     /// Redraws a remembered recording as unknown once it's too old to show.
-    private var expiry: Task<Void, Never>?
+    @ObservationIgnored private var expiry: Task<Void, Never>?
     /// When the automatic-import wait ends, on the wall clock: a suspended iPhone app runs no timers,
     /// so a background wake checks this instead (`resumeAutomaticImportIfDue`).
     public private(set) var automaticDueAt: Date?
     private var names: [UUID: String] = [:]
     /// Listen Live's captioner, its listeners, and where the live audio has reached (16 kHz frames).
-    private var captioner: (any LiveCaptioning)?
-    private var captionListeners: [Task<Void, Never>] = []
-    private var captionSession = UUID()
-    private var liveFrames: AVAudioFramePosition = 0
-    private var lastLiveProgress = Date.distantPast
+    @ObservationIgnored private var captioner: (any LiveCaptioning)?
+    @ObservationIgnored private var captionListeners: [Task<Void, Never>] = []
+    @ObservationIgnored private var captionSession = UUID()
+    @ObservationIgnored private var liveFrames: AVAudioFramePosition = 0
+    @ObservationIgnored private var lastLiveProgress = Date.distantPast
     private let liveSleep = SleepAssertion(reason: "Listening live to Soundcore Work")
     private var isDemo = false
     private let wifiHooks: SoundcoreWiFiHooks
-    private lazy var fastTransfer = SoundcoreFastTransfer(host: self, hooks: wifiHooks, timing: timing)
+    @ObservationIgnored private lazy var fastTransfer = SoundcoreFastTransfer(host: self, hooks: wifiHooks, timing: timing)
     /// Recordings the person chose to bring over Wi‑Fi, whatever their length.
     private var fastTransferRequested: Set<String> = []
     /// After Fast Transfer failed, transfers stay on Bluetooth until then.
@@ -284,6 +285,7 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     public var recordingState: SoundcoreRecordingState? { recordingState(at: Date()) }
 
     public func recordingState(at now: Date) -> SoundcoreRecordingState? {
+        _ = recordingKnowledgeAge
         if case .connected = phase, let info {
             let active = listedThisConnection ? activeRecordingID : remembered?.activeRecordingID
             return SoundcoreRecordingState(isRecording: info.isRecording, activeRecordingID: active, startedAt: startDate(of: active),
@@ -308,6 +310,9 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
     }
 
     private var clockCorrection: TimeInterval { clock?.correction ?? 0 }
+
+    /// Bumped when a recording last seen before the link went becomes too old to show (`scheduleRecordingExpiry`).
+    private var recordingKnowledgeAge = 0
 
     /// A Start the recorder confirmed: its new recording's ID is when it started by its own clock.
     private func measureClock(recordingID: UInt32, sentAt: Date) {
@@ -1047,7 +1052,8 @@ public final class SoundcoreConnection: ObservableObject, DiscoveringConnection,
         expiry = Task { [weak self] in
             try? await Task.sleep(for: .seconds(max(0, remaining) + 0.01))
             guard !Task.isCancelled, let self else { return }
-            self.objectWillChange.send()
+            // What was last known has grown too old to show: whatever read it reads again.
+            self.recordingKnowledgeAge &+= 1
             self.rebuildRecordings()
             self.publish()
         }

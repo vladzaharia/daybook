@@ -6,8 +6,8 @@ import SwiftUI
 /// the time at its ends. While the audio downloads it shows how far it has got; when the audio isn't on this
 /// iPhone and can't be fetched, it says so plainly.
 struct PlayerBar: View {
-    @ObservedObject var player: PlaybackController
-    @ObservedObject var library: LibraryController
+    @Bindable var player: PlaybackController
+    let library: LibraryController
     let meeting: Meeting
     private static let rates: [Float] = [0.75, 1, 1.25, 1.5, 2]
     @State private var bookmarks = 0
@@ -144,7 +144,7 @@ struct PlayerBar: View {
 
 /// While browsing, what's playing stays in reach: a small glass capsule above Record.
 struct MiniPlayer: View {
-    @ObservedObject var player: PlaybackController
+    @Bindable var player: PlaybackController
     let meeting: Meeting
     let open: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -188,7 +188,7 @@ struct MiniPlayer: View {
 /// The byline's play control: a teal pill with the length, which becomes a live mint waveform and
 /// the position while this conversation plays.
 struct PlayPill: View {
-    @ObservedObject var player: PlaybackController
+    @Bindable var player: PlaybackController
     let meeting: Meeting
     let duration: TimeInterval
     let start: () -> Void

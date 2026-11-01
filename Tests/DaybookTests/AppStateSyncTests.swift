@@ -65,9 +65,10 @@ final class AppStateSyncTests: XCTestCase {
         XCTAssertTrue(history.contains("Mac B independently"))
         XCTAssertEqual(mergedA.tags, mergedB.tags)
 
-        let aStore = try MeetingStore(rootURL: aURL)
-        _ = try await aStore.moveToTrash(id)
-        a.meetings.removeAll { $0.id == id }
+        // Through the library, which saves, syncs, and keeps the conversation's history: nothing changes its list directly.
+        let trashed = try await a.library.moveToTrash(id)
+        XCTAssertTrue(trashed)
+        XCTAssertFalse(a.meetings.contains { $0.id == id })
         await a.synchronizeLibrary(); await b.synchronizeLibrary()
         XCTAssertFalse(b.meetings.contains { $0.id == id })
         XCTAssertTrue(FileManager.default.fileExists(atPath: bURL.appendingPathComponent("Trash/\(id)/meeting.json").path))

@@ -6,8 +6,8 @@ import SwiftUI
 /// progress ring while importing, else a count of new recordings it can import), and its glyph
 /// teal while the recorder is linked. It appears once a device is set up.
 struct DevicesSidebarSection: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var hub: DeviceHub
+    let state: AppState
+    let hub: DeviceHub
     @State private var hovering = false
 
     init(state: AppState) {
@@ -48,7 +48,7 @@ struct DevicesSidebarSection: View {
 }
 
 private struct DeviceSidebarRow: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -95,8 +95,8 @@ private struct DeviceSidebarRow: View {
 /// The device row's context menu: Import All New · Connect or Disconnect (Use on This Mac for a
 /// recorder another device manages) · Device Settings….
 struct DeviceContextMenu: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -123,8 +123,8 @@ struct DeviceContextMenu: View {
 
 /// File › Add Device… and Import from each device.
 struct DeviceFileMenuItems: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var hub: DeviceHub
+    let state: AppState
+    let hub: DeviceHub
     @Environment(\.openWindow) private var openWindow
 
     init(state: AppState) {
@@ -148,8 +148,8 @@ struct DeviceFileMenuItems: View {
 
 /// Add Recording › From <device>… in a conversation's menus: opens that device's recordings.
 struct AddRecordingFromDeviceItems: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var hub: DeviceHub
+    let state: AppState
+    let hub: DeviceHub
 
     init(state: AppState) {
         self.state = state
@@ -166,8 +166,8 @@ struct AddRecordingFromDeviceItems: View {
 /// The menu bar extra's device lines: "Importing from Soundcore Work · 2 of 3", or
 /// "Soundcore Work · 3 New Recordings…" which opens the device. Nothing when there's nothing to say.
 struct DeviceMenuBarItems: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var hub: DeviceHub
+    let state: AppState
+    let hub: DeviceHub
 
     init(state: AppState) {
         self.state = state
@@ -182,8 +182,8 @@ struct DeviceMenuBarItems: View {
 }
 
 private struct DeviceMenuBarLine: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {

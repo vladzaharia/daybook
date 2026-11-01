@@ -4,7 +4,7 @@ import SwiftUI
 /// The Mac's inspector, as a sheet: where the conversation is filed, who spoke, its recordings
 /// and how they were lined up, and how it was processed.
 struct ConversationInfo: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meetingID: UUID
     private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
@@ -270,7 +270,7 @@ private struct SpeakerRow<Marker: View>: View {
 /// the person gave. The Mac acts on the answer when it arrives (it forgets what the profile learned
 /// from a Not, and learns from a Yes).
 private struct SpeakerIdentityLine: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     let speakerID: String
 

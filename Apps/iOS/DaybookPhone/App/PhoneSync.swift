@@ -1,5 +1,5 @@
 import BackgroundTasks
-import Combine
+import DaybookDevices
 import DaybookKit
 import Foundation
 import Observation
@@ -56,11 +56,11 @@ final class PhoneSync {
     /// Completed passes in this run (tests and diagnostics).
     private(set) var passes = 0
     /// The courier sending this iPhone's files to the Mac ahead of iCloud Drive, when there is one.
-    private(set) var courier = CourierStatus()
+    var courier: CourierStatus { controller?.courierStatus ?? CourierStatus() }
     /// Whether the library in iCloud is encrypted, and whether this iPhone holds its key.
-    private(set) var encryption: LibraryEncryptionState = .off
+    var encryption: LibraryEncryptionState { controller?.encryption ?? .off }
     /// Waiting for the key, Start Over may be offered (`LibrarySyncController.mayStartOverEncryption`).
-    private(set) var mayStartOver = false
+    var mayStartOver: Bool { controller?.mayStartOverEncryption ?? false }
 
     /// Nil for a library without sync (unit tests of other parts).
     let controller: LibrarySyncController?
@@ -76,7 +76,7 @@ final class PhoneSync {
     @ObservationIgnored private var continuation: Task<Void, Never>?
     @ObservationIgnored private var exchanged: Fingerprint?
     @ObservationIgnored private var lastPassAt: Date?
-    @ObservationIgnored private var subscriptions: Set<AnyCancellable> = []
+    @ObservationIgnored private var libraryWatch: ObservationWatch?
     @ObservationIgnored private var identityObserver: NSObjectProtocol?
     @ObservationIgnored private var recount: Task<Void, Never>?
 
@@ -91,11 +91,10 @@ final class PhoneSync {
         controller = library.sync
         if controller == nil { connection = .unavailable("Sync isn’t set up for this library.") }
         controller?.onSyncRequested = { [weak self] in await self?.synchronize(.remote) }
-        controller?.$courierStatus.sink { [weak self] status in self?.courier = status }.store(in: &subscriptions)
-        controller?.$encryption.sink { [weak self] state in self?.encryption = state }.store(in: &subscriptions)
-        controller?.$mayStartOverEncryption.sink { [weak self] may in self?.mayStartOver = may }.store(in: &subscriptions)
         // Count local changes as they happen, shortly after, so a burst of typing counts once.
-        library.objectWillChange.sink { [weak self] _ in self?.scheduleRecount() }.store(in: &subscriptions)
+        libraryWatch = ObservationWatch({ [weak library] in _ = library?.meetings; _ = library?.metadata }) { [weak self] in
+            self?.scheduleRecount()
+        }
     }
 
     /// The phone replica: on-demand audio within `budget`, presence as this iPhone.

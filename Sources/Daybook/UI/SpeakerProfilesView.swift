@@ -5,7 +5,7 @@ import SwiftUI
 /// Speaker Profiles: the people Daybook knows by voice, their voiceprints, and where they speak.
 /// Two profiles of one person (named two ways) merge into one.
 struct SpeakerProfilesView: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @State private var selection: UUID?
     @State private var merging: SpeakerProfileMerge?
 
@@ -114,7 +114,7 @@ private struct MergeMenu: View {
 /// One profile: its name, its voiceprints (each removable, with where it came from), and the
 /// conversations it labels.
 private struct SpeakerProfileDetail: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let profile: SpeakerProfile
     let others: [SpeakerProfile]
     let merge: (SpeakerProfileMerge) -> Void
@@ -245,7 +245,7 @@ enum SpeakerProfilesDemo {
 
 /// Settings › Models › Speakers: how many profiles, and the window to edit them.
 struct SpeakerProfilesSettingsRow: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {

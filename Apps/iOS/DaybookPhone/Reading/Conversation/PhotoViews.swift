@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// The system picker shares only the photos the person selects; no photo-library permission is needed.
 struct ImportPhotosSheet: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meetingID: UUID
     private let dismiss = SheetDismiss()
     @State private var selection: [PhotosPickerItem] = []
@@ -183,7 +183,7 @@ struct PhotoStrip: View {
 }
 
 struct PhotoViewer: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meetingID: UUID
     @State var photoID: UUID
     @Environment(ReadingSession.self) private var session

@@ -1,5 +1,5 @@
 import DaybookCaptions
-import Combine
+import DaybookDevices
 import DaybookKit
 import SwiftUI
 
@@ -8,8 +8,9 @@ import SwiftUI
 /// along (until you scroll away, when "Back to Playing" appears). Hold a passage to correct it,
 /// rename its speaker, bookmark it, or see which recordings heard it.
 struct TranscriptPage: View {
-    @ObservedObject var library: LibraryController
-    /// Not observed: the page redraws when the passage under the playhead changes, not on every tick.
+    let library: LibraryController
+    /// Not read in the page's body: the page follows it apart (`ObservationWatch`) and redraws when the passage under the
+    /// playhead changes, not on every tick.
     let player: PlaybackController
     let meeting: Meeting
     /// One column shows the title and byline here too, so switching feels like turning the page.
@@ -101,8 +102,15 @@ struct TranscriptPage: View {
         }
         .paperBackground()
         .modifier(PageTitle(title: showsHeader ? nil : SavedCaptions.shown(captions, for: meeting) == nil ? "Transcript" : "Live Captions"))
-        .onReceive(player.objectWillChange.receive(on: RunLoop.main)) { _ in followPlayhead() }
-        .onAppear { followPlayhead() }
+        // Again for each version of the conversation, which the playhead's passages come from.
+        .task(id: meeting) {
+            followPlayhead()
+            let player = self.player
+            let watch = ObservationWatch({ _ = (player.position, player.isPlaying, player.phase, player.trackID, player.meetingID) }) {
+                followPlayhead()
+            }
+            await watch.followWhileRunning()
+        }
         .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)-\(captionsSaved?.timeIntervalSince1970 ?? 0)") {
             // reading: captions come from the store `LibraryBrowser` provides; the Mac's transcript replaces them.
             captions = meeting.showsLiveCaptions ? captionStore?.captions(for: meeting.id) : nil
@@ -269,7 +277,7 @@ private struct TurnHeader: View {
 }
 
 private struct PassageRow: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     let segment: TranscriptSegment
     let isPlaying: Bool
@@ -400,7 +408,7 @@ private struct NoteRow: View {
 
 /// The right page before there's a transcript: a calm, complete state, not an error.
 private struct EmptyTranscript: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     @Environment(\.isTwoPage) private var twoPage

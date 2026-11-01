@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import CoreAudio
 import DaybookCore
 import DaybookDesign
@@ -11,46 +10,8 @@ import Observation
 
 // Where Floating Notes' status comes from: the device hub and every recorder session, the iPhone
 // link, recorder handoff, sync, and the few level facts that change rarely (call audio detected,
-// a silent microphone). Each publishes on its own; the feed turns them into one quiet signal so the
-// status bar redraws a few times a second at most, never at the meters' 15 Hz.
-
-@MainActor
-final class FloatingStatusFeed: ObservableObject {
-    @Published private(set) var revision = 0
-    private var subscriptions: Set<AnyCancellable> = []
-
-    init(state: AppState) {
-        let levels = state.recorder.levels
-        let rare: [AnyPublisher<Void, Never>] = [
-            levels.$isCallAudioDetected.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
-            levels.$isMicrophoneSilent.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
-            levels.$isCapturingCall.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
-            state.devices.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
-            state.recorderHandoff.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
-            state.phoneLink.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
-            state.sync.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
-            // Not forwarded through AppState: the recorder's state, the processing job's progress, and
-            // the multipoint recorders.
-            state.recorder.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
-            state.processingActivity.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
-            state.sources.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
-            // A summary's countdown: when it begins, changes, or ends, and each second while it runs.
-            state.placements.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
-            Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-                .filter { [weak state] _ in state?.placements.undecided.isEmpty == false }
-                .map { _ in () }.eraseToAnyPublisher(),
-            // Every session's own changes: battery, connection, recording, imports.
-            state.devices.$sessions
-                .map { sessions in Publishers.MergeMany(sessions.map { $0.objectWillChange.map { _ in () } }).eraseToAnyPublisher() }
-                .switchToLatest()
-                .eraseToAnyPublisher()
-        ]
-        Publishers.MergeMany(rare)
-            .throttle(for: .milliseconds(200), scheduler: RunLoop.main, latest: true)
-            .sink { [weak self] in self?.revision &+= 1 }
-            .store(in: &subscriptions)
-    }
-}
+// a silent microphone). The panel reads them through `FloatingStatusInputs.make`, and redraws for
+// what it read; the meters, which change 15 times a second, are sampled apart (`PanelLevels`).
 
 extension FloatingStatusInputs {
     /// Gathers the panel's facts. `meeting` is the conversation the panel shows; `afterStop` says
@@ -213,9 +174,10 @@ extension FloatingStatusInputs {
 /// The default input device's name ("MacBook Pro Microphone"), kept current. Reading a device's
 /// name needs no permission and never touches the microphone.
 @MainActor
-final class InputDeviceName: ObservableObject {
-    @Published private(set) var name: String?
-    private var listener: AudioObjectPropertyListenerBlock?
+@Observable
+final class InputDeviceName {
+    private(set) var name: String?
+    @ObservationIgnored private var listener: AudioObjectPropertyListenerBlock?
 
     func start() {
         guard listener == nil else { return }

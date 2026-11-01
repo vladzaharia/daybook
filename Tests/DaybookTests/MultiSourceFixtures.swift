@@ -1,30 +1,31 @@
 import AVFoundation
-import Combine
 import DaybookCore
 @testable import DaybookIntelligence
 @testable import DaybookKit
 import DaybookTestSupport
 import Foundation
+import Observation
 import XCTest
 @testable import Daybook
 
 /// A recorder with record control that never touches hardware: it connects (or doesn't), confirms
 /// commands (or doesn't), and hands over a synthetic recording.
 @MainActor
-final class FakeRecorder: ObservableObject, RecordControlConnection, ManagedConnection {
+@Observable
+final class FakeRecorder: RecordControlConnection, ManagedConnection {
     let method = ConnectionMethodKind.direct
     let capabilities: DeviceCapabilities = [.recordControl]
-    @Published var state: ConnectionState = .notConnected
-    @Published var recordings: [DeviceRecording] = []
+    var state: ConnectionState = .notConnected
+    var recordings: [DeviceRecording] = []
     var inventoryUpdatedAt: Date?
     var isRefreshing = false
-    @Published var status: DeviceStatus?
+    var status: DeviceStatus?
     var problem: DeviceProblem?
     var lastConnectedAt: Date?
     var summary = "Fake recorder"
     var isSetUp = true
-    var onChange: (() -> Void)?
-    @Published var recordCommandPending = false
+    @ObservationIgnored var onChange: (() -> Void)?
+    var recordCommandPending = false
     var recorderSerial: String? = "FAKE1"
     var managedElsewhere: RecorderOwnership?
 

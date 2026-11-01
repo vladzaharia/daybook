@@ -130,13 +130,12 @@ final class UpgradeProcessingTests: XCTestCase {
         madeWith(rig, id, summary: "gemma-4/e2b-4bit")
         let offer = try XCTUnwrap(try offer(rig, id))
         XCTAssertEqual(offer.line, "Upgrade summary with Claude Sonnet 5.5")
-        var counted = false
-        let watch = rig.state.placements.$planners.sink { planners in if planners[id]?.deadline != nil { counted = true } }
-        defer { watch.cancel() }
+        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        defer { counted.cancel() }
         let transcribed = rig.inference.transcribed.count
         rig.state.acceptUpgrade(offer, for: id)
         try await rig.processed(id)
-        XCTAssertFalse(counted, "The person chose the cloud: no countdown")
+        XCTAssertFalse(counted.happened, "The person chose the cloud: no countdown")
         XCTAssertEqual(cloud.summarized, [id])
         XCTAssertEqual(rig.inference.transcribed.count, transcribed, "Only the summary")
         let upgraded = try XCTUnwrap(rig.meeting(id))

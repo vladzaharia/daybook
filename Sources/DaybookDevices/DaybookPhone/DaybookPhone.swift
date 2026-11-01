@@ -1,6 +1,6 @@
-import Combine
 import DaybookCore
 import Foundation
+import Observation
 
 /// Daybook on iPhone, as a device of this Mac (docs/iphone.md, "The phone is a device to the Mac").
 /// Its recordings are Daybook conversations already: they arrive with the library's sync, which is
@@ -71,20 +71,21 @@ public final class DaybookPhoneHooks {
 /// because they arrive through sync. Nothing transfers, so the device's list shows each of them as
 /// already in Daybook.
 @MainActor
-public final class SyncedPhoneRecordings: ObservableObject, LibraryBackedConnection {
+@Observable
+public final class SyncedPhoneRecordings: LibraryBackedConnection {
     public let method = ConnectionMethodKind.files
     public let capabilities: DeviceCapabilities = []
-    @Published public private(set) var recordings: [DeviceRecording] = []
-    @Published public private(set) var inventoryUpdatedAt: Date?
+    public private(set) var recordings: [DeviceRecording] = []
+    public private(set) var inventoryUpdatedAt: Date?
     public var isRefreshing: Bool { false }
     public var status: DeviceStatus? { nil }
-    @Published public private(set) var problem: DeviceProblem?
+    public private(set) var problem: DeviceProblem?
     public var lastConnectedAt: Date? { nil }
     /// The library syncs, so recordings can arrive.
-    @Published public private(set) var syncs = false
+    public private(set) var syncs = false
     public var isSetUp: Bool { true }
     public var state: ConnectionState { syncs ? .connected : .unavailable }
-    public var onChange: (() -> Void)?
+    @ObservationIgnored public var onChange: (() -> Void)?
     /// The phone's device ID, which its tracks carry as their serial.
     public let phoneID: String
 

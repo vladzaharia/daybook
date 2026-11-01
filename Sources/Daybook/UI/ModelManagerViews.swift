@@ -161,7 +161,7 @@ struct ModelPresetRow: View {
 
 /// One role's model: a pop-up, and, when the chosen model isn't ready, its state and what to do.
 struct ModelChoiceRow: View {
-    @ObservedObject var manager: ModelManager
+    let manager: ModelManager
     let choice: ModelRoleChoice
     let label: String
 
@@ -217,7 +217,7 @@ struct ModelChoiceRow: View {
 
 /// One model in the library: name and labels, maker, size and state, and what can be done.
 struct ModelLibraryRow: View {
-    @ObservedObject var manager: ModelManager
+    let manager: ModelManager
     let row: ModelRow
     let showDetails: () -> Void
     let remove: (ModelRemoval) -> Void
@@ -344,7 +344,7 @@ struct ModelLibraryRow: View {
 
 /// An update the last check found: what changed, its size and date, and Install.
 struct ModelUpdateRow: View {
-    @ObservedObject var manager: ModelManager
+    let manager: ModelManager
     let update: ModelUpdate
 
     var body: some View {
@@ -384,8 +384,8 @@ extension View {
 /// A model's details: what it is, its license and credit, what it can do, what's on this Mac, and
 /// how many conversations it made results for.
 struct ModelDetailsSheet: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var manager: ModelManager
+    let state: AppState
+    let manager: ModelManager
     let key: String
     @Environment(\.dismiss) private var dismiss
     @State private var removal: ModelRemoval?

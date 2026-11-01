@@ -1,7 +1,7 @@
-import Combine
 import DaybookCaptions
 import DaybookCore
 import Foundation
+import Observation
 
 /// Copies transferred audio into the library with its device identity, adding it to `attachTo`
 /// when given. Returns the conversation that holds it.
@@ -9,50 +9,53 @@ public typealias DeviceImporter = @MainActor (_ url: URL, _ identity: DeviceReco
                                        _ source: AudioSource) async throws -> UUID
 
 /// One configured device at runtime: its connections, its import queue (one transfer at a time),
-/// what the library already holds from it, and its problems. Views observe a session, so a
-/// transfer's progress redraws only the device's own surfaces.
+/// what the library already holds from it, and its problems. Views read a session and its
+/// connections, and redraw only for what they read: a transfer's progress redraws only the views
+/// that show it.
 @MainActor
-public final class DeviceSession: ObservableObject, Identifiable {
-    @Published public private(set) var device: ConfiguredDevice
+@Observable
+public final class DeviceSession: Identifiable {
+    public private(set) var device: ConfiguredDevice
     public let kind: DeviceKind
     /// In the kind's order of preference.
     public private(set) var connections: [any DeviceConnection] = []
-    @Published public private(set) var queue = DeviceImportQueue()
-    @Published public private(set) var phase: TransferPhase?
-    @Published public private(set) var receivedBytes: UInt64 = 0
+    public private(set) var queue = DeviceImportQueue()
+    public private(set) var phase: TransferPhase?
+    public private(set) var receivedBytes: UInt64 = 0
     /// For the whole batch; nil until about ten seconds of samples.
-    @Published public private(set) var secondsLeft: TimeInterval?
-    @Published public private(set) var failures: [DeviceImportFailure] = []
-    @Published public private(set) var transferProblem: DeviceProblem?
-    @Published public private(set) var links = DeviceLibraryLinks()
+    public private(set) var secondsLeft: TimeInterval?
+    public private(set) var failures: [DeviceImportFailure] = []
+    public private(set) var transferProblem: DeviceProblem?
+    public private(set) var links = DeviceLibraryLinks()
     /// Listen Live's captions, oldest first: tentative text made on this device from the recorder's
     /// live audio (DaybookCaptions), replaced in place as it's revised. Never the transcript: not
     /// saved, synced, or summarized. Empty when not listening, or when captions can't run here.
-    @Published public private(set) var liveCaptions: [LiveCaptionSegment] = []
+    public var liveCaptions: [LiveCaptionSegment] { listening?.live.captions ?? [] }
     /// The recorder's live audio is arriving on this device (Listen Live).
-    @Published public private(set) var isListeningLive = false
+    public var isListeningLive: Bool { listening?.live.isListening == true }
+    /// The connection that listens live, when the kind has one.
+    private var listening: (any LiveListeningConnection)? { connections.lazy.compactMap { $0 as? any LiveListeningConnection }.first }
     /// Selection and presentation state for the device's views.
     public let browser = DeviceBrowser()
 
     public nonisolated let id: String
-    public var importer: DeviceImporter?
+    @ObservationIgnored public var importer: DeviceImporter?
     /// Persists a changed configuration.
-    public var onDeviceChange: ((ConfiguredDevice) -> Void)?
+    @ObservationIgnored public var onDeviceChange: ((ConfiguredDevice) -> Void)?
     /// The recorder's own button started (true) or stopped (false) a recording (`SoundcoreConnection.onButton`).
-    public var onRecorderButton: ((DeviceSession, Bool) -> Void)?
+    @ObservationIgnored public var onRecorderButton: ((DeviceSession, Bool) -> Void)?
     /// Libraries load after devices start; nothing imports automatically until then.
     public private(set) var libraryReady = false
     private var meetings: [Meeting] = []
     /// What the links were last built from.
     private var linkInputs: (tracks: [DeviceLibraryIndex.Track], serial: String?)?
     /// How often the links were rebuilt (tests).
-    private(set) var linkRebuilds = 0
-    private var runner: Task<Void, Never>?
-    private var runnerToken: UUID?
-    private var rate = TransferRateEstimator()
-    private var lastProgressPublish = Date.distantPast
-    private var evaluationScheduled = false
-    private var subscriptions: Set<AnyCancellable> = []
+    @ObservationIgnored private(set) var linkRebuilds = 0
+    @ObservationIgnored private var runner: Task<Void, Never>?
+    @ObservationIgnored private var runnerToken: UUID?
+    @ObservationIgnored private var rate = TransferRateEstimator()
+    @ObservationIgnored private var lastProgressPublish = Date.distantPast
+    @ObservationIgnored private var evaluationScheduled = false
     private let sleep: SleepAssertion
     private let retryPolicy: DeviceRetryPolicy
     private let defaults: UserDefaults
@@ -61,10 +64,10 @@ public final class DeviceSession: ObservableObject, Identifiable {
     /// when the recorder's serial becomes known.
     private var ownership: (owners: [RecorderOwnership], thisDevice: String)?
     /// Handing the recorder to another device: the transfer in progress finishes, nothing else starts.
-    @Published public private(set) var isHandingOff = false
+    public private(set) var isHandingOff = false
     /// Recordings the device that let go of the recorder had waiting; they import here once the
     /// recorder is connected and lists them.
-    @Published public private(set) var adoptedImports: [DeviceHandedOffImport] = []
+    public private(set) var adoptedImports: [DeviceHandedOffImport] = []
     private var adoptedAt: Date?
     /// Recordings another device imported that haven't reached this library through sync yet, and
     /// when we heard: never offered or imported automatically here meanwhile, so nothing is imported twice.
@@ -80,10 +83,8 @@ public final class DeviceSession: ObservableObject, Identifiable {
         sleep = SleepAssertion(reason: "Importing recordings from \(device.name)")
         self.connections = connections
         for connection in connections {
-            connection.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
             connection.onChange = { [weak self, method = connection.method] in self?.connectionChanged(method) }
         }
-        browser.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         if let soundcore = direct as? SoundcoreConnection {
             soundcore.onLiveSaved = { [weak self] url, id, seconds, conversation in
                 self?.saveLive(url: url, recordingID: id, seconds: seconds, into: conversation)
@@ -93,10 +94,6 @@ public final class DeviceSession: ObservableObject, Identifiable {
                 self.onRecorderButton?(self, on)
             }
             soundcore.hasMoreQueued = { [weak self] in self?.queue.waiting.contains { $0.method == .direct } == true }
-        }
-        if let listening = connections.lazy.compactMap({ $0 as? any LiveListeningConnection }).first {
-            listening.live.$captions.removeDuplicates().sink { [weak self] in self?.liveCaptions = $0 }.store(in: &subscriptions)
-            listening.live.$isListening.removeDuplicates().sink { [weak self] in self?.isListeningLive = $0 }.store(in: &subscriptions)
         }
     }
 
@@ -793,7 +790,7 @@ public final class DeviceSession: ObservableObject, Identifiable {
 
     #if DEBUG
     /// Demo only: links matched by time, since the demo library has no device identities.
-    public var demoLinks: (([Meeting]) -> DeviceLibraryLinks)?
+    @ObservationIgnored public var demoLinks: (([Meeting]) -> DeviceLibraryLinks)?
     /// Demo only: nothing imports or resumes on its own.
     public var demoFrozen = false
 
@@ -826,10 +823,11 @@ public struct DeviceHandedOffImport: Equatable, Sendable {
     }
 }
 
-/// Selection and presentation state for one device's views. It's separate from the connections,
-/// so selecting a row redraws only the device views.
+/// Selection and presentation state for one device's views. Views that read it redraw when a row is
+/// selected; nothing else does.
 @MainActor
-public final class DeviceBrowser: ObservableObject {
+@Observable
+public final class DeviceBrowser {
     /// A row in the device's list column.
     public enum Row: Hashable {
         case recording(String)
@@ -839,15 +837,15 @@ public final class DeviceBrowser: ObservableObject {
         public var recordingID: String? { if case .recording(let id) = self { return id } else { return nil } }
     }
 
-    @Published public var selection: Set<Row> = []
+    public var selection: Set<Row> = []
     /// Already in Daybook is collapsed until opened.
-    @Published public var showsImported = false
-    @Published public var showingDetails = false
-    @Published public var showsTechnicalDetails = false
+    public var showsImported = false
+    public var showingDetails = false
+    public var showsTechnicalDetails = false
     /// Asks to confirm stopping an import that has received more than a minute of audio.
-    @Published public var stopRequest: StopRequest?
+    public var stopRequest: StopRequest?
     /// Import and Add to › Choose Conversation…
-    @Published public var choosingConversation: ConversationChoice?
+    public var choosingConversation: ConversationChoice?
 
     public struct StopRequest: Identifiable {
         public let id = UUID()

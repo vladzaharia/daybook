@@ -1,14 +1,15 @@
 import AVFoundation
-import Combine
 import DaybookKit
 import MediaPlayer
+import Observation
 import UIKit
 
 /// Plays one recording of one conversation, from local audio an `AudioProviding` hands it, with
 /// Lock Screen and Control Center controls. It lives in the reading session, above every layout,
 /// so folding or unfolding the iPhone Duo never interrupts it.
 @MainActor
-final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegate {
+@Observable
+final class PlaybackController: NSObject, AVAudioPlayerDelegate {
     enum Phase: Equatable {
         case idle
         /// Getting the audio: downloading (with a fraction when known) or opening it.
@@ -18,25 +19,31 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
         case unavailable(String)
     }
 
-    @Published private(set) var phase: Phase = .idle
-    @Published private(set) var isPlaying = false
-    @Published private(set) var position: TimeInterval = 0
-    @Published private(set) var duration: TimeInterval = 0
+    private(set) var phase: Phase = .idle
+    private(set) var isPlaying = false
+    private(set) var position: TimeInterval = 0
+    private(set) var duration: TimeInterval = 0
     /// Playback speed, kept when another recording loads.
-    @Published var rate: Float = 1 { didSet { player?.rate = rate; updateNowPlaying() } }
-    @Published private(set) var meetingID: UUID?
-    @Published private(set) var trackID: UUID?
+    var rate: Float = 1 { didSet { player?.rate = rate; updateNowPlaying() } }
+    private(set) var meetingID: UUID?
+    private(set) var trackID: UUID?
     /// What the Lock Screen shows.
     private(set) var title = ""
     private(set) var subtitle = ""
     /// Debug screenshots play silently (`--play-muted`).
     var muted = false { didSet { player?.volume = muted ? 0 : 1 } }
 
-    private var player: AVAudioPlayer?
-    private var currentURL: URL?
-    private var timer: Timer?
-    private var loading: Task<Void, Never>?
-    private var commandsInstalled = false
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var currentURL: URL?
+    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var loading: Task<Void, Never>?
+    @ObservationIgnored private var commandsInstalled = false
+
+    /// Changes `isPlaying` only when it differs, so the library's rows and the mini player redraw only when playback
+    /// starts or stops, never as `position` moves.
+    private func setPlaying(_ playing: Bool) {
+        if isPlaying != playing { isPlaying = playing }
+    }
 
     /// Something is loaded or loading for this conversation, so its player shows.
     func isActive(for id: UUID) -> Bool { meetingID == id && phase != .idle }
@@ -116,10 +123,10 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
         if player.currentTime >= player.duration - 0.05 { player.currentTime = 0 }
         guard player.play() else {
             phase = .unavailable("Playback couldn’t start. Check the sound output and try again.")
-            isPlaying = false
+            setPlaying(false)
             return
         }
-        isPlaying = true
+        setPlaying(true)
         position = player.currentTime
         startTimer()
         installRemoteCommands()
@@ -130,7 +137,7 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
         guard let player else { return }
         player.pause()
         position = player.currentTime
-        isPlaying = false
+        setPlaying(false)
         stopTimer()
         updateNowPlaying()
     }
@@ -153,7 +160,7 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
         player = nil
         currentURL = nil
         stopTimer()
-        isPlaying = false
+        setPlaying(false)
         position = 0
         duration = 0
         meetingID = nil
@@ -183,7 +190,7 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
         guard let player else { return }
         position = min(player.currentTime, duration)
         if !player.isPlaying, isPlaying {
-            isPlaying = false
+            setPlaying(false)
             stopTimer()
             updateNowPlaying()
         }
@@ -192,7 +199,7 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
             guard let self, self.player === player else { return }
-            self.isPlaying = false
+            self.setPlaying(false)
             self.position = self.duration
             self.stopTimer()
             self.updateNowPlaying()
@@ -202,7 +209,7 @@ final class PlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegat
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         Task { @MainActor [weak self] in
             guard let self, self.player === player else { return }
-            self.isPlaying = false
+            self.setPlaying(false)
             self.stopTimer()
             self.phase = .unavailable("This recording couldn’t be played.")
         }

@@ -4,7 +4,7 @@ import SwiftUI
 /// Summary Templates (Direction A §5.16): the built-in templates in a fixed order, the person's
 /// own, and an editor that saves as they type.
 struct TemplatesView: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @State private var selectedID: String?
     @State private var draft: SummaryTemplate?
     @State private var deleting: SummaryTemplate?

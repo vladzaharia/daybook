@@ -76,7 +76,7 @@ extension EnvironmentValues {
 
 /// What a photo's tile offers on a right-click, wherever it's shown.
 struct PhotoMenu: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let photo: MeetingPhoto
     @Environment(\.openPhoto) private var openPhoto
@@ -103,7 +103,7 @@ struct PhotoMenu: View {
 
 /// The photos a summary section shows, under its text: up to two across at the measure, each with its caption.
 struct SectionPhotos: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let photos: [MeetingPhoto]
     @Environment(\.openPhoto) private var openPhoto
@@ -142,7 +142,7 @@ struct SectionPhotos: View {
 /// Every photo of the conversation, in the order they were taken, with their times: after your
 /// notes on the summary page.
 struct PhotoStrip: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     @Environment(\.readingScale) private var scale
     @Environment(\.openPhoto) private var openPhoto
@@ -196,7 +196,7 @@ struct PhotoStrip: View {
 /// A photo at the moment it was taken, in the transcript's time lane: its time in the margin, a
 /// thumbnail, and its caption.
 struct TranscriptPhotoBlock: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let photo: MeetingPhoto
     let time: TimeInterval
@@ -242,7 +242,7 @@ struct TranscriptPhotoBlock: View {
 
 /// One photo, large, with when it was taken. Play from Here and Show in Transcript go to its moment.
 struct PhotoViewer: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meetingID: UUID
     @State var photoID: UUID
     let play: (PlaybackTarget) -> Void
@@ -368,7 +368,7 @@ enum PhotoWords {
 
 /// Drops, paste, and Continuity Camera ("Take Photo" from an iPhone) onto a conversation.
 struct PhotoDropTarget: ViewModifier {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meetingID: UUID
     @State private var targeted = false
 

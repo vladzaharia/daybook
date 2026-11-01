@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// Places, the person's folders, and the recorder once it's set up. Nothing else.
 struct SidebarView: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @State private var folderToDelete: LibraryFolder?
     @State private var hoveringFolders = false
 
@@ -113,7 +113,7 @@ struct SidebarView: View {
 }
 
 private struct FolderRow: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let folder: LibraryFolder
     @State private var draft = ""
     @FocusState private var focused: Bool

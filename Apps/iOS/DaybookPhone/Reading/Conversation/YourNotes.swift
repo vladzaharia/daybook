@@ -4,7 +4,7 @@ import SwiftUI
 /// Your words with their recording times in the lane, then your bookmarks. The notes save as you
 /// type, with a Version History entry once typing pauses (`LibraryController.editNotes`).
 struct YourNotes: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     @Environment(ReadingSession.self) private var session
@@ -58,7 +58,7 @@ struct YourNotes: View {
 }
 
 private struct BookmarkRow: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     let highlight: Highlight
     let time: TimeInterval

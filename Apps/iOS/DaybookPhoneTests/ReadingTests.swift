@@ -1,7 +1,7 @@
 import DaybookCaptions
-import Combine
 import DaybookKit
 import ImageIO
+import Observation
 import UIKit
 import UniformTypeIdentifiers
 import XCTest
@@ -61,8 +61,8 @@ final class ReadingTests: XCTestCase {
     // MARK: The demo library
 
     /// A library written by the Mac (JSON with reference-date seconds, as the demo seeder writes)
-    /// loads, and the controller tells observers, which the list relies on: the app model's
-    /// `PhoneLibrary.conversations` isn't observable, so the list observes the controller itself.
+    /// loads, and what reads it is told, which the list relies on: the controller is `@Observable`, so a
+    /// view reading `PhoneLibrary.conversations` (or the controller) redraws once it loads.
     func testAMacLibraryLoadsAndPublishesItsConversations() async throws {
         let root = try temporaryDirectory()
         let id = UUID()
@@ -78,12 +78,11 @@ final class ReadingTests: XCTestCase {
             .write(to: root.appendingPathComponent("library.json"))
 
         let library = PhoneLibrary(rootURL: root, installation: "TEST")
-        var published = 0
-        let observation = library.controller.objectWillChange.sink { published += 1 }
-        defer { observation.cancel() }
+        let told = Told()
+        withObservationTracking { _ = library.conversations } onChange: { told.set() }
         XCTAssertTrue(library.controller.meetings.isEmpty, "nothing before the app's launch loads it")
         try await library.reload()
-        XCTAssertGreaterThan(published, 0, "views observing the controller redraw once it loads")
+        XCTAssertTrue(told.value, "a list drawn before the library loaded redraws once it loads")
         XCTAssertEqual(LibraryPlace.section(.all).meetings(in: library.controller.meetings).map(\.title), ["Weekly product sync"])
         XCTAssertEqual(library.controller.allTags, ["launch"])
     }
@@ -464,6 +463,23 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(filed.folderID, folder)
     }
 
+    /// The library's rows and the mini player read the player through the reading session: they're told when what
+    /// plays, or whether it plays, changes, and not as the position moves.
+    func testThePlayerTellsWhatReadsItThroughTheSession() throws {
+        let session = ReadingSession()
+        let meeting = Meeting(title: "Notes only", date: now)
+        let row = Told(), mini = Told(), position = Told()
+        withObservationTracking { _ = session.player.meetingID; _ = session.player.isPlaying } onChange: { row.set() }
+        withObservationTracking { _ = session.player.isActive(for: meeting.id) } onChange: { mini.set() }
+        withObservationTracking { _ = session.player.position } onChange: { position.set() }
+        session.player.play(.timeline(0), in: meeting, provider: NoAudio())
+        XCTAssertTrue(row.value, "the row that says Playing redraws")
+        XCTAssertTrue(mini.value, "the mini player appears")
+        XCTAssertFalse(position.value)
+        XCTAssertTrue(session.player.isActive(for: meeting.id))
+        guard case .unavailable = session.player.phase else { return XCTFail("a conversation without a recording can't play") }
+    }
+
     func testTheSessionCarriesReadingAcrossLayouts() throws {
         let session = ReadingSession()
         let first = UUID(), second = UUID(), segment = UUID()
@@ -580,5 +596,21 @@ final class ReadingTests: XCTestCase {
         try await library.controller.restoreFromTrash(trashed)
         XCTAssertEqual(Set(library.controller.meetings.map(\.id)), [kept, trashed])
         XCTAssertTrue(TrashedConversations.load(rootURL: root, ids: library.controller.trashedMeetingIDs()).isEmpty)
+    }
+}
+
+/// Whether an observation was told of a change (its callback is `@Sendable`).
+private final class Told: @unchecked Sendable {
+    private let lock = NSLock()
+    private var told = false
+    var value: Bool { lock.withLock { told } }
+    func set() { lock.withLock { told = true } }
+}
+
+/// Audio that never arrives: the player is asked for a recording the conversation doesn't have.
+private struct NoAudio: AudioProviding {
+    @MainActor func availability(of track: RecordingTrack, in meetingID: UUID) async -> AudioAvailability { .missing }
+    @MainActor func localAudio(for track: RecordingTrack, in meetingID: UUID, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+        throw CancellationError()
     }
 }

@@ -3,16 +3,8 @@ import SwiftUI
 
 // A summary's countdown, and where it runs, wherever processing status shows (docs/interface.md, "Where
 // summaries run"): the page's status line, the list row, the inspector, and Floating Notes. The words come
-// from `SummaryPlacementPlanner`, shared with the iPhone; only the views that show a countdown observe
+// from `SummaryPlacementPlanner`, shared with the iPhone; only the views that show a countdown read
 // `AppState.placements`, and only a countdown ticks, once a second.
-
-/// Redraws its content when what's being placed changes (a countdown begins, the person chooses, it ends).
-struct PlacementReader<Content: View>: View {
-    @ObservedObject var placements: SummaryPlacements
-    @ViewBuilder var content: () -> Content
-
-    var body: some View { content() }
-}
 
 /// Text that follows a countdown, a second at a time; static otherwise.
 struct PlacementText: View {
@@ -33,7 +25,7 @@ struct PlacementText: View {
 /// The page's status line while a summary is placed: "Summarizing on this Mac in 12 s", then Use the Cloud
 /// and Start Now; "Summarizing with Claude Sonnet 5.5" with Stop while the cloud works.
 struct PlacementStatusLine: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meetingID: UUID
     let planner: SummaryPlacementPlanner
 
@@ -59,7 +51,7 @@ struct PlacementStatusLine: View {
 
 /// Use the Cloud and Start Now as text links; Stop while it runs in the cloud.
 struct PlacementActions: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meetingID: UUID
     let planner: SummaryPlacementPlanner
 
@@ -78,8 +70,8 @@ struct PlacementActions: View {
 
 /// The inspector's Processing section while a summary is placed: the line and its choices.
 struct PlacementInspectorRow: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var placements: SummaryPlacements
+    let state: AppState
+    let placements: SummaryPlacements
     let meetingID: UUID
 
     init(state: AppState, meetingID: UUID) {

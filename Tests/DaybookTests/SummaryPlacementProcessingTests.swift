@@ -89,12 +89,11 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     func testBehaviorWithoutAKeyTheSummaryStartsAtOnceAsBefore() async throws {
         let rig = try await rig(cloud: nil)
         let id = try await conversation(rig, "No key", frequency: 300)
-        var counted = false
-        let watch = rig.state.placements.$planners.sink { planners in if planners[id]?.deadline != nil { counted = true } }
-        defer { watch.cancel() }
+        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        defer { counted.cancel() }
         rig.state.enqueue(id)
         try await rig.processed(id)
-        XCTAssertFalse(counted, "Nothing to choose: no countdown")
+        XCTAssertFalse(counted.happened, "Nothing to choose: no countdown")
         XCTAssertEqual(rig.inference.summarized.count, 1)
         let summary = try XCTUnwrap(rig.meeting(id)?.summary)
         XCTAssertEqual(summary.origin.deviceID, rig.state.library.thisDevice.id, "Where it ran is recorded")
@@ -288,13 +287,12 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await countingDown(rig, id)
         rig.state.chooseSummaryPlacement(.startNow, for: id)
         try await rig.processed(id)
-        var counted = false
-        let watch = rig.state.placements.$planners.sink { planners in if planners[id]?.deadline != nil { counted = true } }
-        defer { watch.cancel() }
+        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        defer { counted.cancel() }
         rig.state.enqueue(id, mode: .summaryOnly)
         try await waitUntil("the second summary") { rig.inference.summarized.count == 2 }
         try await rig.processed(id)
-        XCTAssertFalse(counted, "The person asked: no countdown")
+        XCTAssertFalse(counted.happened, "The person asked: no countdown")
     }
 
     func testBehaviorAPhonesSummaryRequestStartsAtOnce() async throws {
@@ -306,12 +304,11 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await rig.processed(id)
         // The phone counted down already (or the person asked there): this Mac starts at once.
         rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
-        var counted = false
-        let watch = rig.state.placements.$planners.sink { planners in if planners[id]?.deadline != nil { counted = true } }
-        defer { watch.cancel() }
+        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        defer { counted.cancel() }
         rig.state.pickUpRequests()
         try await rig.processed(id)
-        XCTAssertFalse(counted)
+        XCTAssertFalse(counted.happened)
         XCTAssertEqual(rig.inference.summarized.count, 2)
         XCTAssertEqual(rig.meeting(id)?.processingRequests?.first?.outcome?.result, .completed)
     }
@@ -339,12 +336,11 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
         rig.state.pickUpRequests()
         XCTAssertNil(rig.state.placements[id], "Nothing placed before the summary is due")
-        var counted = false
-        let watch = rig.state.placements.$planners.sink { planners in if planners[id]?.deadline != nil { counted = true } }
-        defer { watch.cancel() }
+        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        defer { counted.cancel() }
         try rig.inference.unblock(audio)
         try await rig.processed(id)
-        XCTAssertFalse(counted, "The phone asked for its summary")
+        XCTAssertFalse(counted.happened, "The phone asked for its summary")
         XCTAssertEqual(rig.inference.summarized.count, 1)
         XCTAssertNil(rig.state.placements[id])
     }

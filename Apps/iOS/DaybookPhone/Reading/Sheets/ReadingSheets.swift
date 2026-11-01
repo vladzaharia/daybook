@@ -5,7 +5,7 @@ import UIKit
 /// Version History: every change to the notes, the transcript, speaker names, and the summary,
 /// newest first, each with what it was before and after, and Restore.
 struct VersionHistoryView: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meetingID: UUID
     private let dismiss = SheetDismiss()
     @State private var path: [UUID] = []
@@ -85,7 +85,7 @@ struct VersionHistoryView: View {
 }
 
 private struct RevisionDetail: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meetingID: UUID
     let revision: MeetingRevision
     @Environment(\.colorScheme) private var scheme
@@ -172,7 +172,7 @@ private struct RevisionDetail: View {
 
 /// Correct Passage: the words as heard, editable. The model's original stays in Version History.
 struct PassageCorrectionSheet: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meetingID: UUID
     let segmentID: UUID
     private let dismiss = SheetDismiss()
@@ -228,7 +228,7 @@ struct PassageCorrectionSheet: View {
 
 /// Which recordings heard a passage, each with what it heard and a way to play it.
 struct HeardInSheet: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meetingID: UUID
     let segmentID: UUID
     private let dismiss = SheetDismiss()
@@ -327,7 +327,7 @@ struct SheetDismiss: DynamicProperty {
 /// Presents whichever sheet the reading session asks for.
 struct ReadingSheetContent: View {
     let sheet: ReadingSheet
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
 
     var body: some View {
         switch sheet {

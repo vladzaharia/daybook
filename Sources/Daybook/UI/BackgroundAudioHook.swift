@@ -5,7 +5,7 @@ import SwiftUI
 /// Inspector › Audio: how much was left out as music or TV, with Include; once included, Leave Out.
 /// Unstyled, like `SourceHooks`.
 struct BackgroundAudioHook: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
 
     var body: some View {

@@ -1,10 +1,10 @@
-import Combine
 import DaybookCore
 import DaybookDevices
 import DaybookIntelligence
 import DaybookKit
 import DaybookLink
 import Foundation
+import Observation
 
 /// Lines up one recording against another from their sound: `AudioAligner.align` in the app,
 /// a stub in tests. Runs off the main actor.
@@ -16,7 +16,8 @@ typealias AudioAlignmentFunction = @Sendable (_ other: URL, _ reference: URL, _ 
 /// conversations carries with it. The decisions themselves live in `SourceMatcher` and
 /// `SourceFusion`; `AppState+Sources` connects them to the library and the processing queue.
 @MainActor
-final class MultiSourceCoordinator: ObservableObject {
+@Observable
+final class MultiSourceCoordinator {
     /// What a conversation held when this Mac started recording into it.
     struct CaptureContext: Equatable {
         var preexistingTrackIDs: Set<UUID>
@@ -43,13 +44,13 @@ final class MultiSourceCoordinator: ObservableObject {
 
     let recorders: CompanionRecorders
     var policy = SourceMatcher.Policy()
-    var alignAudio: AudioAlignmentFunction = { other, reference, expected, radius in
+    @ObservationIgnored var alignAudio: AudioAlignmentFunction = { other, reference, expected, radius in
         try AudioAligner.align(other: other, reference: reference, expectedOffset: expected, searchRadius: radius)
     }
     /// Replaces the local runtime for processing (tests).
-    var inference: (any MeetingInference)?
+    @ObservationIgnored var inference: (any MeetingInference)?
     /// Files imported by hand join a conversation they overlap, like recorder recordings do.
-    @Published var matchesImportedFiles: Bool {
+    var matchesImportedFiles: Bool {
         didSet { defaults.set(matchesImportedFiles, forKey: Self.matchesImportedFilesKey) }
     }
     var captures: [UUID: CaptureContext] = [:]
@@ -80,13 +81,11 @@ final class MultiSourceCoordinator: ObservableObject {
         defaults.set(Array(checked.suffix(Self.checkedPhoneRecordingsLimit)), forKey: Self.checkedPhoneRecordingsKey)
     }
     private let defaults: UserDefaults
-    private var subscription: AnyCancellable?
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
         matchesImportedFiles = defaults.bool(forKey: Self.matchesImportedFilesKey)
         recorders = CompanionRecorders(owed: OwedStopsStore(defaults: defaults, key: Self.owedStopsKey))
-        subscription = recorders.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 }
 
@@ -164,7 +163,8 @@ struct CompanionLead: Equatable {
 /// recording joins that conversation whenever and however it arrives. Nothing here can affect the
 /// Mac recording: it runs after the capture started, never throws, and reports one quiet line.
 @MainActor
-final class CompanionRecorders: ObservableObject {
+@Observable
+final class CompanionRecorders {
     struct Timing {
         var connect: Duration = .seconds(20)
         /// A little longer than the recorder's own confirmation window.
@@ -179,17 +179,17 @@ final class CompanionRecorders: ObservableObject {
     }
 
     /// One line for the recording surfaces: "Also recording on Soundcore Work."
-    @Published private(set) var status: String?
+    private(set) var status: String?
     /// The devices to consider: the hub's sessions in the app.
-    var sessions: () -> [DeviceSession] = { [] }
+    @ObservationIgnored var sessions: () -> [DeviceSession] = { [] }
     /// A conversation's links, and a way to change them.
-    var links: (UUID) -> [CompanionRecording] = { _ in [] }
+    @ObservationIgnored var links: (UUID) -> [CompanionRecording] = { _ in [] }
     /// A conversation as devices that answer are told about it when asked to record it.
-    var conversation: (UUID) -> CompanionConversation? = { _ in nil }
+    @ObservationIgnored var conversation: (UUID) -> CompanionConversation? = { _ in nil }
     /// The connected device managing a recorder another device owns, when it starts and stops its
     /// recorders when asked (Daybook on iPhone): multipoint goes through it.
-    var owner: (RecorderOwnership) -> (session: DeviceSession, control: any AnsweringRecordControl)? = { _ in nil }
-    var write: (UUID, (inout [CompanionRecording]) -> Void) -> Void = { _, _ in }
+    @ObservationIgnored var owner: (RecorderOwnership) -> (session: DeviceSession, control: any AnsweringRecordControl)? = { _ in nil }
+    @ObservationIgnored var write: (UUID, (inout [CompanionRecording]) -> Void) -> Void = { _, _ in }
     var timing = Timing()
 
     /// A stop that didn't reach a device that answers: sent again when it reconnects, even after a
@@ -207,8 +207,8 @@ final class CompanionRecorders: ObservableObject {
         var lead: Bool?
     }
 
-    private var starting: [UUID: Task<Void, Never>] = [:]
-    private var stopping: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var starting: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var stopping: [UUID: Task<Void, Never>] = [:]
     private var stopRequested: Set<UUID> = []
     /// Links to devices that answer whose start never got an answer: they may be recording.
     private var unanswered: Set<UUID> = []

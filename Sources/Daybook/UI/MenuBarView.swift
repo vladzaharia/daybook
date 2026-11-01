@@ -6,7 +6,7 @@ import SwiftUI
 /// The menu bar extra: a standard menu. Personal conversations are never named here,
 /// since the menu bar is visible while sharing a screen.
 struct MenuBarView: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
@@ -31,7 +31,7 @@ struct MenuBarView: View {
         Toggle("Record Calls Automatically", isOn: $state.automaticRecording)
         if state.automaticRecording { DetectionStatusText(monitor: state.monitor) }
         // The percent follows the job's own progress, not the app's other changes.
-        ActivityReader(processing: state.processingActivity, download: state.downloadActivity) {
+        ActivityReader {
             if let activity {
                 // Work in progress is an item that opens it, so it reads at full strength, not as a dimmed status line.
                 Divider()
@@ -76,6 +76,6 @@ struct MenuBarView: View {
 
 /// "Listening for calls", from the call detector itself.
 private struct DetectionStatusText: View {
-    @ObservedObject var monitor: MeetingMonitor
+    let monitor: MeetingMonitor
     var body: some View { Text(monitor.statusText) }
 }

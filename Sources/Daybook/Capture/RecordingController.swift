@@ -1,9 +1,9 @@
 import AppKit
 import AVFoundation
-import Combine
 import CoreMedia
 import Foundation
 import IOKit.pwr_mgt
+import Observation
 
 /// Everything the controller needs from the system, injectable so tests drive it with fakes
 /// instead of a real microphone, process tap, or ScreenCaptureKit stream.
@@ -45,20 +45,21 @@ struct CaptureEnvironment {
 /// and route changes are followed rather than ending the recording. After Stop, `CaptureFinalizer`
 /// removes the call's echo from the microphone; this controller only captures.
 @MainActor
-final class RecordingController: ObservableObject {
+@Observable
+final class RecordingController {
     enum State: String { case idle, starting, recording, stopping }
-    @Published private(set) var state: State = .idle
-    @Published private(set) var lastError: String?
-    @Published private(set) var lastResult: CaptureResult?
-    @Published private(set) var startedAt: Date?
+    private(set) var state: State = .idle
+    private(set) var lastError: String?
+    private(set) var lastResult: CaptureResult?
+    private(set) var startedAt: Date?
     /// How the call is being recorded (process tap or ScreenCaptureKit) and why.
-    @Published private(set) var systemAudioCapture: SystemAudioCaptureInfo?
+    private(set) var systemAudioCapture: SystemAudioCaptureInfo?
     /// The current output route; `.headphones` means the call cannot echo into the microphone.
-    @Published private(set) var outputRoute: AudioOutputRoute?
-    /// Call audio was audible within the last few seconds. Changes rarely, so it is safe to observe
-    /// through AppState; per-source meters are on `levels`.
-    @Published private(set) var isCallAudioDetected = false
-    /// Live "You" and "Call" meters. Observe directly; see `CaptureLevelMonitor`.
+    private(set) var outputRoute: AudioOutputRoute?
+    /// Call audio was audible within the last few seconds. Changes rarely, so any view may read it;
+    /// per-source meters are on `levels`.
+    private(set) var isCallAudioDetected = false
+    /// Live "You" and "Call" meters; see `CaptureLevelMonitor`.
     let levels = CaptureLevelMonitor()
     var isRecording: Bool { state == .recording }
     /// Monotonic time shared with audio-track offsets, unaffected by wall-clock edits.
@@ -68,34 +69,34 @@ final class RecordingController: ObservableObject {
     }
     /// Called after an unexpected stop (device failure, revoked permission, sleep).
     /// The partial recording is complete and safe to import at this point.
-    var onUnexpectedStop: ((CaptureResult) -> Void)?
+    @ObservationIgnored var onUnexpectedStop: ((CaptureResult) -> Void)?
     /// Copies each source's live audio to captions (`LiveCaptionsController.prepare`). Set before
     /// `start`; it's read once when a recording starts and dropped when it ends.
-    var captionTap: CaptureCaptionTap?
+    @ObservationIgnored var captionTap: CaptureCaptionTap?
 
     private let environment: CaptureEnvironment
-    private var microphone: CaptureAudioSource?
-    private var system: CaptureAudioSource?
-    private var microphoneWriter: PCMTrackWriter?
-    private var systemWriter: PCMTrackWriter?
+    @ObservationIgnored private var microphone: CaptureAudioSource?
+    @ObservationIgnored private var system: CaptureAudioSource?
+    @ObservationIgnored private var microphoneWriter: PCMTrackWriter?
+    @ObservationIgnored private var systemWriter: PCMTrackWriter?
     private var manifest: CaptureSessionManifest?
     private var directory: URL?
     private var warnings: [String] = []
     /// The system's own words for problems, kept for each track's capture notes.
     private var technicalNotes: [CapturedTrackRole: [String]] = [:]
     private var routeEvents: [AudioRouteEvent] = []
-    private var routeObservation: AnyObject?
-    private var meterTimer: Timer?
+    @ObservationIgnored private var routeObservation: AnyObject?
+    @ObservationIgnored private var meterTimer: Timer?
     private var cancelStart = false
-    private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
     /// This recording's caption tap, on its session timeline.
-    private var activeCaptionTap: CaptureCaptionTap?
+    @ObservationIgnored private var activeCaptionTap: CaptureCaptionTap?
 
     /// Runs as the Mac goes to sleep, once the recording has stopped: what must reach other devices
     /// first (stopping the recorders that recorded along). Sleep waits for it, at most `sleepGrace`.
-    var beforeSleep: (@MainActor () async -> Void)?
+    @ObservationIgnored var beforeSleep: (@MainActor () async -> Void)?
     static let sleepGrace: Duration = .seconds(5)
-    private var sleepGate: SystemSleepGate?
+    @ObservationIgnored private var sleepGate: SystemSleepGate?
 
     init(environment: CaptureEnvironment = .live) {
         self.environment = environment

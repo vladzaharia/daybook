@@ -1,70 +1,74 @@
 import AppKit
 import AVFoundation
-import Combine
 import DaybookCore
+import DaybookDevices
 import DaybookIntelligence
 import DaybookKit
 import DaybookLink
 import Foundation
+import Observation
 import UniformTypeIdentifiers
 
 /// The Mac app's state. The library itself (conversations, edits, saving, sync, requests) is
 /// `library`, shared with the iPhone through DaybookKit; this adds what only the Mac does:
 /// capture, the processing queue and local models, devices' wiring, windows, and panels. Library
 /// members are forwarded so views and menus read them here as before.
+///
+/// It's `@Observable`, like everything views read here (the library, sync, devices, the recorder, the
+/// link): a view redraws for the properties it reads, and nothing is forwarded by hand. Memos and tasks
+/// are `@ObservationIgnored`, so working something out never redraws anything.
 @MainActor
-final class AppState: ObservableObject {
+@Observable
+final class AppState {
     /// `Application Support/Daybook` for the app; `Daybook Development` for unbundled runs (`LibraryLocation`).
     nonisolated static let libraryURL = LibraryLocation.standard
     /// The library: conversations, folders, templates, vocabulary, and every edit.
     let library: LibraryController
-    var meetings: [Meeting] {
-        get { library.meetings }
-        set { library.meetings = newValue }
-    }
-    @Published var selectedID: UUID?
-    @Published var search = ""
-    @Published var searchTokens: [SearchToken] = []
-    @Published var searchScope: SearchScope = .all
+    /// The library's conversations. Every change goes through `library` (`update`, `add`, …), which saves it.
+    var meetings: [Meeting] { library.meetings }
+    var selectedID: UUID?
+    var search = ""
+    var searchTokens: [SearchToken] = []
+    var searchScope: SearchScope = .all
     /// The sidebar selection: a library section, a folder, or a device.
-    @Published var place: LibraryPlace = .section(.all)
+    var place: LibraryPlace = .section(.all)
     /// Asks the main window to present Add Device (from menus, Welcome, Settings, or a device page).
-    @Published var addDeviceRequest: AddDeviceRequest?
+    var addDeviceRequest: AddDeviceRequest?
     var libraryMetadata: LibraryMetadata { library.metadata }
     var folders: [LibraryFolder] { library.folders }
     var templates: [SummaryTemplate] { library.templates }
     var allTags: [String] { library.allTags }
 
-    @Published var pageMode: PageMode = .summary
+    var pageMode: PageMode = .summary
     /// A transcript passage the page should scroll to, from search or a bookmark.
-    @Published var pageScrollTarget: UUID?
+    var pageScrollTarget: UUID?
     /// Set to ask the window to confirm moving conversations to the Trash.
-    @Published var trashRequestIDs: [UUID] = []
+    var trashRequestIDs: [UUID] = []
     var trashRequestID: UUID? {
         get { trashRequestIDs.count == 1 ? trashRequestIDs[0] : nil }
         set { trashRequestIDs = newValue.map { [$0] } ?? [] }
     }
     /// Several conversations selected in the list; empty when one or none is.
-    @Published var multiSelection: Set<UUID> = []
+    var multiSelection: Set<UUID> = []
     /// The folder being renamed in place in the sidebar.
-    @Published var renamingFolderID: UUID?
+    var renamingFolderID: UUID?
     /// The conversation the device page is showing for a selected, already-imported recording.
-    @Published var deviceConversationID: UUID?
+    var deviceConversationID: UUID?
     /// Set to move keyboard focus to a conversation's title on its page.
-    @Published var titleFocusRequest: UUID?
+    var titleFocusRequest: UUID?
     /// The one sheet the main window shows at a time.
-    @Published var activeSheet: ActiveSheet?
+    var activeSheet: ActiveSheet?
     /// Set to ask the sidebar to create a folder, optionally moving conversations into it.
-    @Published var newFolderRequest: NewFolderRequest?
+    var newFolderRequest: NewFolderRequest?
     /// Incremented to move keyboard focus to the library search field.
-    @Published var searchFocusRequest = 0
+    var searchFocusRequest = 0
     /// View › Make Text Bigger scales only the reading surface.
-    @Published var readingScale: Double { didSet { preferences.set(readingScale, forKey: "readingScale") } }
-    /// App-owned so menu commands can drive it. Views observe it directly; its frequent
-    /// position updates are deliberately not forwarded through this object.
+    var readingScale: Double { didSet { preferences.set(readingScale, forKey: "readingScale") } }
+    /// App-owned so menu commands can drive it. Only what shows the playhead reads its position, which
+    /// moves ten times a second; the Controls menu reads only whether it's playing.
     let playback = AudioPlaybackController()
     /// What couldn't be done, for the window's alert (`report(_:_:_:)`, AppProblem.swift).
-    @Published var problem: AppProblem?
+    var problem: AppProblem?
     /// The alert's sentence: a reported problem's, else a library save that failed. Setting it shows
     /// a plain message in place of either.
     var errorMessage: String? {
@@ -75,24 +79,24 @@ final class AppState: ObservableObject {
         get { library.notice }
         set { library.notice = newValue }
     }
-    @Published var isReady = false
+    var isReady = false
     /// A library in the wrong place for this build (docs/sandbox.md): the library doesn't open until the person decides.
-    @Published var libraryMoveOffer: LibraryMoveOffer?
-    @Published var isMovingLibrary = false
-    @Published var libraryMoveError: AppProblem?
+    var libraryMoveOffer: LibraryMoveOffer?
+    var isMovingLibrary = false
+    var libraryMoveError: AppProblem?
     /// A library just copied into the container, before the person decides about the old copy.
-    @Published var movedLibrary: MovedLibrary?
+    var movedLibrary: MovedLibrary?
     /// Said once the library opens (`LaunchCheck`).
     var launchNotice: String?
-    @Published var processingID: UUID?
+    var processingID: UUID?
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
     /// Photos that couldn't be read wait before they're tried again (AppState+Photos.swift).
     var photoBackoff = PhotoReadingBackoff()
-    var photoRetry: Task<Void, Never>?
+    @ObservationIgnored var photoRetry: Task<Void, Never>?
     /// Listening to recordings transcribed before Daybook listened for music and TV, when idle
     /// (AppState+BackgroundAudio.swift): the pass, whether it has started, and the recordings tried.
-    var backgroundListening: Task<Void, Never>?
+    @ObservationIgnored var backgroundListening: Task<Void, Never>?
     var isListeningToEarlierRecordings = false
     var listenedRecordings = Set<UUID>()
     var backgroundListeningDelay: Duration = .seconds(20)
@@ -103,15 +107,15 @@ final class AppState: ObservableObject {
         get { processingActivity.value }
         set { processingActivity.set(newValue) }
     }
-    @Published var processingQueue: [ProcessingJob] = []
+    var processingQueue: [ProcessingJob] = []
     /// The job running now (`processingID`'s), with the request it carries out, if any.
-    @Published var runningJob: ProcessingJob?
+    var runningJob: ProcessingJob?
     var queuedIDs: [UUID] { processingQueue.map(\.meetingID) }
     /// Conversations the person paused; they resume only when asked.
-    @Published var pausedIDs: Set<UUID> = []
+    var pausedIDs: Set<UUID> = []
     /// Conversations that start transcribing as soon as the selected models finish downloading.
-    @Published var awaitingModels: Set<UUID> = []
-    @Published var processingPreferences: ProcessingPreferences {
+    var awaitingModels: Set<UUID> = []
+    var processingPreferences: ProcessingPreferences {
         didSet {
             if let data = try? JSONEncoder().encode(processingPreferences.normalized) { preferences.set(data, forKey: "processingPreferences") }
             // The speaker model is the selection's diarization choice; keep the two in step.
@@ -120,20 +124,20 @@ final class AppState: ObservableObject {
         }
     }
     /// Variant keys ("whisper/base") with a verified revision on this Mac.
-    @Published var installedModels: Set<String> = [] { didSet { presenceChanged() } }
+    var installedModels: Set<String> = [] { didSet { presenceChanged() } }
     /// The devices in the library's presence records, as of the last sync pass: other Macs and the models they run, for
     /// "Upgrade" offers (AppState+Upgrade.swift).
-    @Published var syncDevices: [KnownSyncDevice] = []
+    var syncDevices: [KnownSyncDevice] = []
     /// Variant key → the revision a new job freezes (the newest verified one).
-    @Published var installedRevisions: [String: String] = [:]
+    var installedRevisions: [String: String] = [:]
     /// Every model Daybook knows here: built in plus the ones the person added.
-    @Published var modelCatalog: ModelCatalog = .builtIn { didSet { catalogRevision &+= 1 } }
+    var modelCatalog: ModelCatalog = .builtIn { didSet { catalogRevision &+= 1 } }
     /// Bumped whenever the catalog changes: part of the key for the routed models (`routedRequiredModelIDs`).
     private(set) var catalogRevision = 0
     /// The routed models and what they were worked out from (AppState+SpeechRouting.swift).
-    var routeMemo: (key: SpeechRoute.Inputs, models: [String])?
+    @ObservationIgnored var routeMemo: (key: SpeechRoute.Inputs, models: [String])?
     /// The model chosen for each role, by family and variant (docs/models.md).
-    @Published var modelSelections: ModelSelections {
+    var modelSelections: ModelSelections {
         didSet {
             if let data = try? JSONEncoder().encode(modelSelections) { preferences.set(data, forKey: "modelSelections") }
             if let speaker = modelSelections[.diarization], processingPreferences.speakerModelID != speaker {
@@ -142,7 +146,7 @@ final class AppState: ObservableObject {
             presenceChanged()
         }
     }
-    @Published var downloadingID: String?
+    var downloadingID: String?
     /// The current download's progress, throttled like `processingActivity`.
     let downloadActivity = ActivityProgress(IntelligenceProgress(0, ""))
     var downloadProgress: IntelligenceProgress {
@@ -150,10 +154,10 @@ final class AppState: ObservableObject {
         set { downloadActivity.set(newValue) }
     }
     var glossary: [GlossaryTerm] { library.glossary }
-    @Published var recordingID: UUID?
-    @Published var isStartingRecording = false
-    @Published var isStoppingRecording = false
-    @Published var recordingStartedAt: Date?
+    var recordingID: UUID?
+    var isStartingRecording = false
+    var isStoppingRecording = false
+    var recordingStartedAt: Date?
     /// The selected transcription and summary models' variant keys (`modelSelections`).
     var transcriptionModel: String {
         get { modelSelections[.transcription] ?? "" }
@@ -163,7 +167,7 @@ final class AppState: ObservableObject {
         get { modelSelections[.summarization] ?? "" }
         set { modelSelections[.summarization] = newValue }
     }
-    @Published var automaticRecording: Bool {
+    var automaticRecording: Bool {
         didSet {
             preferences.set(automaticRecording, forKey: "automaticRecording")
             if automaticRecording { monitor.startMonitoring() }
@@ -173,9 +177,9 @@ final class AppState: ObservableObject {
             }
         }
     }
-    @Published var includeComputerAudio: Bool { didSet { preferences.set(includeComputerAudio, forKey: "includeComputerAudio") } }
-    @Published var processSyncedAudio: Bool { didSet { preferences.set(processSyncedAudio, forKey: "processSyncedAudio"); presenceChanged() } }
-    @Published var detectSpeakers: Bool { didSet { preferences.set(detectSpeakers, forKey: "detectSpeakers"); presenceChanged() } }
+    var includeComputerAudio: Bool { didSet { preferences.set(includeComputerAudio, forKey: "includeComputerAudio") } }
+    var processSyncedAudio: Bool { didSet { preferences.set(processSyncedAudio, forKey: "processSyncedAudio"); presenceChanged() } }
+    var detectSpeakers: Bool { didSet { preferences.set(detectSpeakers, forKey: "detectSpeakers"); presenceChanged() } }
     let sync: LibrarySyncController
     /// Daybook's local link to paired iPhones: pairing, record control, live progress.
     let phoneLink: PhoneLink
@@ -224,20 +228,20 @@ final class AppState: ObservableObject {
     var hasCloudSetup: Bool { cloudSetup != nil }
     let runtime: LocalIntelligenceRuntime
     /// Keeps speaker profiles and conversations in step (AppState+SpeakerProfiles.swift).
-    lazy var speakerProfileCoordinator = makeSpeakerProfileCoordinator()
+    @ObservationIgnored lazy var speakerProfileCoordinator = makeSpeakerProfileCoordinator()
     /// Gives voices to speakers found without them, when this Mac is idle (AppState+SpeakerProfiles.swift).
     var voicingID: UUID?
-    var voicingTask: Task<Void, Never>?
+    @ObservationIgnored var voicingTask: Task<Void, Never>?
     /// Runs given voices (or tried) this session.
     var voicedRuns = Set<UUID>()
-    var processingTask: Task<Void, Never>?
-    private(set) var currentRequest: Task<Void, Error>?
+    @ObservationIgnored var processingTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var currentRequest: Task<Void, Error>?
     /// How requests from other devices are claimed and kept (tests shorten these).
     var requestTiming = RequestTiming()
     /// The memory a summary model must fit in (tests set it, so they don't depend on the machine's).
     var physicalMemory = ProcessInfo.processInfo.physicalMemory
-    /// Where each summary runs, with the countdown before it (AppState+SummaryPlacement.swift). Views that
-    /// show a countdown observe it directly.
+    /// Where each summary runs, with the countdown before it (AppState+SummaryPlacement.swift). Only views that
+    /// show a countdown read it.
     let placements: SummaryPlacements
     /// Summaries in the cloud with the person's own keys: `cloud`'s directory, sent as this Mac. Demos and tests set
     /// one of their own.
@@ -245,20 +249,20 @@ final class AppState: ObservableObject {
         get { cloudSummarizerOverride ?? CloudSummarizer(directory: cloud.directory, deviceName: ProcessingRequest.Device.currentName) }
         set { cloudSummarizerOverride = newValue }
     }
-    private var cloudSummarizerOverride: (any CloudSummarizing)?
+    @ObservationIgnored private var cloudSummarizerOverride: (any CloudSummarizing)?
     /// Conversations whose running job stopped because another device took its request over.
     var claimsLost: Set<UUID> = []
-    var claimHeartbeat: Task<Void, Never>?
-    var lastClaimRenewal = Date.distantPast
-    var lastRenewedStage: ProcessingRequest.Stage?
+    @ObservationIgnored var claimHeartbeat: Task<Void, Never>?
+    @ObservationIgnored var lastClaimRenewal = Date.distantPast
+    @ObservationIgnored var lastRenewedStage: ProcessingRequest.Stage?
     /// Conversations an iPhone recording moved out of, on their way to the Trash: not processed.
     var movedPhoneRecordings: Set<UUID> = []
     /// Conversations of an iPhone's own queued only to check where its recording belongs (`phoneTranscriptArrived`):
     /// phones aren't told, since this Mac doesn't summarize them (the iPhone does, or its countdown goes on).
     var checkingPhoneTranscripts: Set<UUID> = []
     /// The last live progress sent to phones, and when; sends go out one after another, in order.
-    var lastPhoneProgress: (message: LinkProcessingProgress, at: Date)?
-    var phoneProgressSend: Task<Void, Never>?
+    @ObservationIgnored var lastPhoneProgress: (message: LinkProcessingProgress, at: Date)?
+    @ObservationIgnored var phoneProgressSend: Task<Void, Never>?
     /// Recordings this Mac is making because a phone asked, by conversation.
     var phoneLeads: [UUID: CompanionLead] = [:]
     /// The device whose word is stopping this Mac's recording now (a phone that stopped, or asked this
@@ -268,23 +272,26 @@ final class AppState: ObservableObject {
     var pendingRecorderLead: String?
     /// Notes and bookmarks of this Mac's recording, kept in step with the phones recording it too.
     let sharedNotes = SharedNotesTracker()
-    var sharedNotesWatch: AnyCancellable?
-    var sharedNotesSend: Task<Void, Never>?
+    @ObservationIgnored var sharedNotesWatch: ObservationWatch?
+    @ObservationIgnored var sharedNotesSend: Task<Void, Never>?
     /// Starts and stops this Mac's capture when a phone asks. Tests replace it: no microphone.
-    var phoneCapture = PhoneCapture()
+    @ObservationIgnored var phoneCapture = PhoneCapture()
     /// Whether this Mac may use the microphone without asking. Tests replace it.
-    var microphoneAccess: () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .audio) }
-    var wakeObserver: NSObjectProtocol?
-    private var downloadTask: Task<Void, Never>?
-    var subscriptions: Set<AnyCancellable> = []
+    @ObservationIgnored var microphoneAccess: () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .audio) }
+    @ObservationIgnored var wakeObserver: NSObjectProtocol?
+    @ObservationIgnored private var downloadTask: Task<Void, Never>?
+    /// What this state follows in the models it holds (`ObservationWatch`), for as long as it lives.
+    @ObservationIgnored var watches: [ObservationWatch] = []
     private var recordingWasAutomatic = false
     /// This Mac's recording started on its own (a detected meeting).
     var recordingWasStartedAutomatically: Bool { recordingWasAutomatic }
-    private var captureDirectory: URL?
-    private var notesPanel: NotesPanelController?
-    /// Bumped whenever the library's conversations change: the key for what's derived from them.
-    private(set) var libraryRevision = 0
-    private var visibleMemo: (place: LibraryPlace, revision: Int, meetings: [Meeting])?
+    @ObservationIgnored private var captureDirectory: URL?
+    @ObservationIgnored private var notesPanel: NotesPanelController?
+    /// Changes whenever the library's conversations do: the key for what's derived from them.
+    var libraryRevision: Int { library.revision }
+    /// Bumped when a search that ran off the main actor has its results, so the views showing them read them again.
+    private var searchResultsArrived = 0
+    @ObservationIgnored private var visibleMemo: (place: LibraryPlace, revision: Int, meetings: [Meeting])?
     let searchMemo = LibrarySearchMemo()
 
     init(libraryURL: URL = AppState.libraryURL, defaults: UserDefaults = .standard) {
@@ -346,17 +353,8 @@ final class AppState: ObservableObject {
         liveModels = MacLiveModels(store: runtime.store)
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: libraryURL),
                                           makeCaptioner: MacCaptioners.recordingFactory(settings: captionSettings))
-        // Only what nearly every view reads through this object is forwarded: the library, and the
-        // device list (sidebar, menus, pages). The recorder, call detection, sync, multipoint sources,
-        // the iPhone link, and progress change often and are observed directly by the views that show
-        // them (SyncSettingsView, ConversationStatus, ActivityReader, FloatingStatusFeed, …), so a
-        // sync pass or a progress report doesn't redraw the whole window.
-        for publisher in [library.objectWillChange.eraseToAnyPublisher(), devices.objectWillChange.eraseToAnyPublisher()] {
-            publisher.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
-        }
-        library.$meetings.sink { [weak self] _ in self?.libraryRevision &+= 1 }.store(in: &subscriptions)
         processingActivity.onChange = { [weak self] _ in self?.processingProgressChanged() }
-        searchMemo.onUpdate = { [weak self] in self?.objectWillChange.send() }
+        searchMemo.onUpdate = { [weak self] in self?.searchResultsArrived &+= 1 }
         sync.onSyncRequested = { [weak self] in await self?.synchronizeLibrary() }
         monitor.onMeetingStarted = { [weak self] candidate in
             guard let self, self.automaticRecording, self.recordingID == nil, !self.isStartingRecording else { return }
@@ -554,7 +552,8 @@ final class AppState: ObservableObject {
     /// The library search's results for the current query, kept until it or the library changes;
     /// a large library is searched off the main actor (`LibrarySearchMemo`).
     var searchHits: [SearchHit] {
-        searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
+        _ = searchResultsArrived
+        return searchMemo.hits(for: .init(text: search, tokens: searchTokens, scope: searchScope, revision: libraryRevision), in: meetings)
     }
     var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty || !searchTokens.isEmpty }
 
@@ -869,16 +868,24 @@ final class AppState: ObservableObject {
 
     /// This Mac's queue, as `ProcessingStatus` reads it: the running job's step is the one the engine reports
     /// (`ProcessingProgress.stage`), or summarizing from when the conversation is marked so.
-    var processingQueueState: ProcessingStatus.LocalQueue {
-        let stage = processingProgress.stage
-        return ProcessingStatus.LocalQueue(running: processingID, fraction: processingProgress.fraction,
+    var processingQueueState: ProcessingStatus.LocalQueue { queueState(readingProgress: true) }
+
+    /// The one status the list, the conversation page, and device pages show (shared with the iPhone). Only the
+    /// conversation being processed reads the job's progress, so a progress report redraws its row and page, not every row.
+    func processingStatus(for meeting: Meeting) -> ProcessingStatus {
+        ProcessingStatus(meeting, queue: queueState(readingProgress: meeting.id == processingID))
+    }
+
+    /// The queue, with the running job's progress and step when `readingProgress` (only the running conversation's
+    /// status uses them).
+    private func queueState(readingProgress: Bool) -> ProcessingStatus.LocalQueue {
+        let progress = readingProgress ? processingProgress : IntelligenceProgress(0, "")
+        let stage = progress.stage
+        return ProcessingStatus.LocalQueue(running: processingID, fraction: progress.fraction,
                                            identifyingSpeakers: stage == .identifyingSpeakers,
                                            queued: queuedIDs, paused: pausedIDs, awaitingModels: awaitingModels, canProcess: canProcess,
                                            stage: stage)
     }
-
-    /// The one status the list, the conversation page, and device pages show (shared with the iPhone).
-    func processingStatus(for meeting: Meeting) -> ProcessingStatus { ProcessingStatus(meeting, queue: processingQueueState) }
 
     /// The template a job summarizes with: the one its request asked for, else the conversation's own.
     func template(for job: ProcessingJob, meeting: Meeting) -> SummaryTemplate? {
@@ -1073,7 +1080,7 @@ final class AppState: ObservableObject {
         pendingDownloads.removeFirst(); download(next)
     }
     /// Models still to download after the current one.
-    @Published private(set) var pendingDownloads: [String] = []
+    private(set) var pendingDownloads: [String] = []
     /// Takes one waiting model off the download queue (the model manager's Cancel).
     func removePendingDownload(_ id: String) { pendingDownloads.removeAll { ModelReference($0).id == ModelReference(id).id } }
     func removeModel(_ id: String) { removeModels([id]) }

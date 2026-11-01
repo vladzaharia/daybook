@@ -6,10 +6,10 @@ import SwiftUI
 /// and what needs the person (pairing, or sync that's off). Nothing imports from it: its recordings
 /// are conversations already, arrive through sync, and are the list beside the page.
 struct PhoneOverview: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     /// Sync turning on or off redraws the page (its box says when it's off).
-    @ObservedObject private var sync: LibrarySyncController
+    private let sync: LibrarySyncController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
 

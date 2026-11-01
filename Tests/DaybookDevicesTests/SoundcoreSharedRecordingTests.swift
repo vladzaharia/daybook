@@ -1,4 +1,3 @@
-import Combine
 import DaybookCaptions
 import DaybookCore
 import DaybookTestSupport
@@ -232,8 +231,8 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         final class Heard { var updates: [LiveCaptureCaptions.Update] = [] }
         let heard = Heard(), elsewhere = Heard()
         let follower = LiveCaptureCaptions(), other = LiveCaptureCaptions()
-        follower.follow(Just([rig.session]), conversation: { conversation }) { heard.updates.append($0) }
-        other.follow(Just([rig.session]), conversation: { UUID() }) { elsewhere.updates.append($0) }
+        follower.follow({ [rig.session] }, conversation: { conversation }) { heard.updates.append($0) }
+        other.follow({ [rig.session] }, conversation: { UUID() }) { elsewhere.updates.append($0) }
 
         rig.connection.startRecording()
         try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }

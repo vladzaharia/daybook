@@ -1,7 +1,7 @@
 import AppKit
 import AVFoundation
-import Combine
 import DaybookCore
+import DaybookDevices
 import DaybookKit
 import DaybookLink
 import Foundation
@@ -50,19 +50,15 @@ extension AppState {
             self?.checkPhoneLead()
             return self?.macRecordingState() ?? LinkRecordingState(phase: .idle)
         }
-        Publishers.CombineLatest3($recordingID, $isStartingRecording, $isStoppingRecording)
-            .map { RecordingPhaseKey(recording: $0, starting: $1, stopping: $2) }
-            .removeDuplicates().dropFirst()
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.phoneLink.sendRecordingState() } }
-            .store(in: &subscriptions)
+        watches.append(ObservationWatch.distinctValues(of: { [weak self] in
+            RecordingPhaseKey(recording: self?.recordingID, starting: self?.isStartingRecording == true, stopping: self?.isStoppingRecording == true)
+        }, initial: false) { [weak self] _ in self?.phoneLink.sendRecordingState() })
         // And what the recorders this Mac manages are doing, when that changes.
-        devices.recorderChanges()
-            .sink { [weak self] in self?.phoneLink.sendRecordingState(onlyIfRecordersChanged: true) }
-            .store(in: &subscriptions)
+        watches.append(devices.watchRecorders { [weak self] in self?.phoneLink.sendRecordingState(onlyIfRecordersChanged: true) })
         // The phone's synced recordings list follows sync being on or off.
-        sync.$folder.dropFirst().sink { [weak self] _ in
-            Task { @MainActor in self?.phoneSessions.forEach { $0.connection(.files)?.refresh() } }
-        }.store(in: &subscriptions)
+        watches.append(ObservationWatch({ [weak self] in _ = self?.sync.folder }) { [weak self] in
+            self?.phoneSessions.forEach { $0.connection(.files)?.refresh() }
+        })
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in await self?.systemDidWake() }
         }

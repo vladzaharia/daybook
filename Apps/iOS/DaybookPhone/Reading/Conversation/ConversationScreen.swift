@@ -4,7 +4,7 @@ import SwiftUI
 
 /// One column: the conversation with a Summary | Transcript switch, the player at the thumb.
 struct ConversationScreen: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let id: UUID
     @Environment(ReadingSession.self) private var session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -55,7 +55,7 @@ struct ConversationScreen: View {
 
 /// Info and More, the same in every layout.
 struct ConversationToolbar: ToolbarContent {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     @Environment(ReadingSession.self) private var session
 
@@ -75,7 +75,7 @@ struct ConversationToolbar: ToolbarContent {
 
 /// The conversation's More menu: share, ask your Mac, history, then filing.
 struct ConversationMoreMenu: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     @Environment(ReadingSession.self) private var session
 
@@ -110,7 +110,7 @@ struct ConversationMoreMenu: View {
 /// Processing your Mac carries out. Each item writes a request; the page then says it's waiting.
 /// Only what can be asked for now: nothing without a recording or while a request is pending.
 struct ReprocessMenu: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     @Environment(\.summaryPlacement) private var placement
     let meeting: Meeting
 

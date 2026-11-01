@@ -288,7 +288,8 @@ final class CascadingRecordingTests: XCTestCase {
         session.activate()
         session.libraryChanged(rig.state.meetings, ready: true)
         rig.state.sources.recorders.sessions = { [session] }
-        rig.state.library.$meetings.sink { session.libraryChanged($0, ready: true) }.store(in: &rig.state.subscriptions)
+        let library = rig.state.library
+        rig.state.watches.append(ObservationWatch.values(of: { library.meetings }) { session.libraryChanged($0, ready: true) })
         addTeardownBlock { session.shutDown() }
         return (session, device)
     }

@@ -4,7 +4,7 @@ import SwiftUI
 /// Vocabulary (Direction A §5.15): names and terms Daybook spells correctly. A term proposed
 /// from a conversation can stay with that conversation, or be used in all of them.
 struct GlossaryView: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @Environment(\.undoManager) private var undoManager
     @Environment(\.openWindow) private var openWindow
     @State private var search = ""
@@ -245,7 +245,7 @@ private struct TermCell: View {
 
 /// "All conversations", or "Only “Conversation”" for a term proposed from one conversation.
 private struct UsedInCell: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let term: GlossaryTerm
     let change: (Bool) -> Void
 

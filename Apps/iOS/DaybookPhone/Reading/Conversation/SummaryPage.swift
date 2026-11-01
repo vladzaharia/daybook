@@ -9,7 +9,7 @@ import SwiftUI
 /// A conversation that isn't transcribed yet is a complete page too: title, byline, a calm status
 /// line, your notes, and your bookmarks; everything but the summary works.
 struct SummaryPage: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     /// The page shows its own title and byline (one column, and the notebook's left page).
     var showsHeader = true
@@ -169,7 +169,7 @@ struct SummaryPage: View {
 
 /// Title and one byline: the same on both pages, so switching feels like turning the page.
 struct PageHeader: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     @Environment(ReadingSession.self) private var session
@@ -238,7 +238,7 @@ struct PageHeader: View {
 
 /// Lede, next steps, and the template's sections, ending at "Your notes".
 private struct SummaryBody: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     let summary: MeetingSummary
     let play: (PlaybackTarget) -> Void
@@ -313,7 +313,7 @@ struct EvidenceLink<Content: View>: View {
 }
 
 private struct NextStepRow: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     let item: ActionItem
     let evidence: UUID?
@@ -439,7 +439,7 @@ private struct SectionBody: View {
 /// How the page was made, at its foot: a fact that doubles as the privacy line, the template, and
 /// Summarize Again (a request your Mac carries out).
 private struct Colophon: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     @Environment(\.summaryPlacement) private var placement
 
@@ -492,7 +492,7 @@ private struct Colophon: View {
 /// The template picker: Automatic (with its guess), then the built-in and your own templates.
 /// Choosing another one asks your Mac to summarize again; the old summary stays in Version History.
 struct TemplateMenu<Label: View>: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let meeting: Meeting
     @ViewBuilder var label: Label
     @Environment(\.summaryPlacement) private var placement

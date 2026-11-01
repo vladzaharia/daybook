@@ -1,30 +1,34 @@
 import DaybookCore
 import DaybookIntelligence
 import Foundation
+import Observation
 import SwiftUI
 
 /// The progress of this Mac's current processing job or model download. Engines report it from any
 /// thread, as often as they like (a download reports per network chunk); it reaches the main actor
-/// at most ten times a second, the latest value winning, in one hop. Views that draw it observe this
-/// object (`ActivityReader`), so nothing else in the window redraws, and they redraw only when what
-/// they show changes: the percent, the message, or the step. A report that moves a bar by less than
-/// a percent is kept (`value` is always the latest) without a redraw. A report that names no step
-/// (reading photos) keeps the step before it. `onChange` tells `AppState` of every delivery, which
-/// renews the request's claim and tells connected iPhones.
+/// at most ten times a second, the latest value winning, in one hop. A view that reads `value`
+/// redraws only when what it shows changes: the percent, the message, or the step. A report that
+/// moves a bar by less than a percent is kept (`value` is always the latest) without a redraw. A
+/// report that names no step (reading photos) keeps the step before it. `onChange` tells `AppState`
+/// of every delivery, which renews the request's claim and tells connected iPhones.
 @MainActor
-final class ActivityProgress: ObservableObject {
-    /// Never reports: what a view observes when the activity it would show isn't its own (a list row
-    /// that isn't being processed), so it keeps its identity without redrawing at progress pace.
-    static let idle = ActivityProgress(IntelligenceProgress(0, ""))
-
-    /// The latest report. Setting it publishes only a visible change (`isVisibleChange`).
-    private(set) var value: IntelligenceProgress
-    /// After each change on the main actor; `visible` when the percent or message changed.
-    var onChange: (_ visible: Bool) -> Void = { _ in }
+@Observable
+final class ActivityProgress {
+    /// The latest report. Reading it follows only visible changes (`isVisibleChange`).
+    var value: IntelligenceProgress {
+        _ = visibleChanges
+        return latest
+    }
+    /// The latest report, always current; reading it alone follows nothing.
+    @ObservationIgnored private var latest: IntelligenceProgress
+    /// Bumped when the percent, the message, or the step changes: what `value`'s readers follow.
+    private var visibleChanges = 0
+    /// After each change on the main actor; `visible` when the percent, message, or step changed.
+    @ObservationIgnored var onChange: (_ visible: Bool) -> Void = { _ in }
     nonisolated let throttle: Throttle
 
     init(_ initial: IntelligenceProgress, interval: TimeInterval = 0.1) {
-        value = initial
+        latest = initial
         throttle = Throttle(interval: interval)
     }
 
@@ -34,7 +38,7 @@ final class ActivityProgress: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, let latest = self.throttle.take() else { return }
-                self.apply(latest.continuing(self.value.stage))
+                self.apply(latest.continuing(self.latest.stage))
             }
         }
     }
@@ -48,13 +52,13 @@ final class ActivityProgress: ObservableObject {
     /// At once, on the main actor: the work moves on to `stage` before any report from it says so (this Mac marks a
     /// conversation summarizing before its countdown). Reports still in flight from the step before are dropped.
     func enter(_ stage: ProcessingRequest.Stage) {
-        set(IntelligenceProgress(value.fraction, value.message, stage: stage))
+        set(IntelligenceProgress(latest.fraction, latest.message, stage: stage))
     }
 
     private func apply(_ progress: IntelligenceProgress) {
-        let visible = Self.isVisibleChange(from: value, to: progress)
-        if visible { objectWillChange.send() }
-        value = progress
+        let visible = Self.isVisibleChange(from: latest, to: progress)
+        latest = progress
+        if visible { visibleChanges &+= 1 }
         onChange(visible)
     }
 
@@ -95,20 +99,10 @@ final class ActivityProgress: ObservableObject {
     }
 }
 
-/// Draws `content` again whenever the activities report, without redrawing anything around it: a
-/// progress bar, a percentage, a status line that names the stage.
+/// Draws `content` in a view of its own: what it reads of a job's or a download's progress
+/// (`AppState.processingProgress`, `downloadProgress`) redraws only it, never the view around it.
 struct ActivityReader<Content: View>: View {
-    @ObservedObject var processing: ActivityProgress
-    @ObservedObject var download: ActivityProgress
     @ViewBuilder var content: () -> Content
-
-    /// An activity left out is one that never moves (`ActivityProgress.idle`).
-    @MainActor
-    init(processing: ActivityProgress? = nil, download: ActivityProgress? = nil, @ViewBuilder content: @escaping () -> Content) {
-        self.processing = processing ?? .idle
-        self.download = download ?? .idle
-        self.content = content
-    }
 
     var body: some View { content() }
 }

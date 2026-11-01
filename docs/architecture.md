@@ -62,7 +62,9 @@ flowchart LR
 | Transcript synthesis | Aligns source clocks and removes only sufficiently evidenced duplicate passages | [TranscriptFusion](../Sources/DaybookCore/TranscriptFusion.swift) |
 | Vocabulary | Keeps proposed terms scoped to their source meeting until user approval | [GlossaryStore](../Sources/DaybookCore/GlossaryStore.swift) |
 
-The core library depends on Foundation, making persistence and alignment tests independent of model downloads or microphone permissions. DaybookKit and DaybookDevices add Combine and, for Soundcore, CoreBluetooth and AVFoundation; none of the three import AppKit. The app uses actors for storage and inference. UI mutations belong to the main actor; the application owns sequencing across capture, import, editing, and inference operations.
+The core library depends on Foundation, making persistence and alignment tests independent of model downloads or microphone permissions. DaybookKit and DaybookDevices add Observation and, for Soundcore, CoreBluetooth and AVFoundation; none of the three import AppKit. The app uses actors for storage and inference. UI mutations belong to the main actor; the application owns sequencing across capture, import, editing, and inference operations.
+
+Every model a view reads is `@MainActor @Observable`, on both apps: the library and sync controllers, the device hub, sessions, and connections, recorder handoff and placements, and the Mac's `AppState`, recorder, link, and panels, as the iPhone's own models are. A view redraws for the properties it reads and for nothing else, so nothing is forwarded by hand; memos, tasks, and callbacks are `@ObservationIgnored`. Code that isn't a view follows them with `ObservationWatch` (DaybookDevices): called on the main queue once a change has landed, once per turn, optionally after a quiet spell, until it's released. macOS 15 has no sequence of changes (`Observations` needs macOS 26), so this is `withObservationTracking` kept following.
 
 ## Capture and import
 

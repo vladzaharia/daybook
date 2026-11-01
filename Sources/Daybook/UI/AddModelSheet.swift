@@ -6,7 +6,7 @@ import SwiftUI
 /// engine this Daybook has; what would be added is shown before anything is written, and adding
 /// downloads it. Whatever engines exist decide what can be added, so new engines need nothing here.
 struct AddModelSheet: View {
-    @ObservedObject var manager: ModelManager
+    let manager: ModelManager
     var initialText = ""
     var checksImmediately = false
     @Environment(\.dismiss) private var dismiss

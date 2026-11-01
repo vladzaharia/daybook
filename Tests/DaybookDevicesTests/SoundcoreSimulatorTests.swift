@@ -981,11 +981,10 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertEqual(relaunched.recordingState?.activeRecordingID, id)
         XCTAssertEqual(relaunched.recordings.first { $0.id == String(id) }?.isInProgress, true)
 
-        // Nobody can see it stop: after a while it's unknown again, and the page redraws.
-        var redrawn = false
-        let watching = rig.connection.objectWillChange.sink { redrawn = true }
+        // Nobody can see it stop: after a while it's unknown again, and the page, which reads it, redraws.
+        let watching = ObservationCount { _ = rig.connection.recordingState; _ = rig.session.split }
         try await waitUntil("the remembered recording to expire", timeout: 4) { rig.connection.recordingState == nil }
-        try await waitUntil("the page to redraw") { redrawn && rig.session.split.inProgress == nil }
+        try await waitUntil("the page to redraw") { watching.count > 0 && rig.session.split.inProgress == nil }
         XCTAssertNil(rig.connection.status?.isRecording)
         XCTAssertNil(relaunched.status?.isRecording)
         watching.cancel()
@@ -1166,14 +1165,13 @@ final class SoundcoreSimulatorTests: XCTestCase {
         XCTAssertFalse(session.isListeningLive)
         XCTAssertEqual(session.liveCaptions, [])
 
-        var changes = 0
-        let watching = session.objectWillChange.sink { changes += 1 }
+        let watching = ObservationCount { _ = session.isListeningLive; _ = session.liveCaptions }
         let line = LiveCaptionSegment(start: 3, end: 4.5, text: "We still need legal", isTentative: true)
         connection.live.isListening = true
         connection.live.captions = [line]
         XCTAssertTrue(session.isListeningLive)
         XCTAssertEqual(session.liveCaptions, [line])
-        XCTAssertGreaterThanOrEqual(changes, 2, "observable: screens redraw as captions arrive")
+        XCTAssertGreaterThanOrEqual(watching.count, 2, "observable: screens that read the session redraw as captions arrive")
         connection.live.captions = []
         connection.live.isListening = false
         XCTAssertFalse(session.isListeningLive)

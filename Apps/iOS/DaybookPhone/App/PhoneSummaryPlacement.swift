@@ -1,4 +1,3 @@
-import Combine
 import DaybookIntelligence
 import DaybookKit
 import DaybookLink
@@ -48,8 +47,8 @@ extension LibraryController {
 @MainActor
 @Observable
 final class PhoneSummaryPlacement {
-    /// What's being placed, by conversation (`placements`' planners, observable here).
-    private(set) var planners: [UUID: SummaryPlacementPlanner] = [:]
+    /// What's being placed, by conversation (`placements`' planners).
+    var planners: [UUID: SummaryPlacementPlanner] { placements.planners }
     /// Summaries running in the cloud, by conversation: "Summarizing with Claude Sonnet 5.5". One running here
     /// is the processor's, and its status says so.
     private(set) var runs: [UUID: SummaryPlace] = [:]
@@ -77,7 +76,7 @@ final class PhoneSummaryPlacement {
     }
     @ObservationIgnored private var cloudSummarizerOverride: (any CloudSummarizing)?
 
-    @ObservationIgnored let placements: SummaryPlacements
+    let placements: SummaryPlacements
     @ObservationIgnored private let library: LibraryController
     @ObservationIgnored private let link: PhoneLink
     @ObservationIgnored private let presence: () -> [KnownSyncDevice]
@@ -91,7 +90,6 @@ final class PhoneSummaryPlacement {
     @ObservationIgnored private var running: [UUID: (request: UUID, task: Task<Void, Never>)] = [:]
     /// The template each was asked for with; nil uses the conversation's own.
     @ObservationIgnored private var templates: [UUID: String] = [:]
-    @ObservationIgnored private var subscription: AnyCancellable?
 
     init(library: LibraryController, link: PhoneLink, presence: @escaping () -> [KnownSyncDevice],
          clock: @escaping () -> Date = Date.init, runsTimer: Bool = true) {
@@ -101,7 +99,6 @@ final class PhoneSummaryPlacement {
         self.clock = clock
         self.runsTimer = runsTimer
         placements = SummaryPlacements(waitsForMacs: true, clock: clock, runsTimer: runsTimer)
-        subscription = placements.$planners.sink { [weak self] planners in self?.planners = planners }
         placements.onSettled = { [weak self] id, phase in self?.settled(id, phase) }
         // A Mac's countdown or work on a conversation ends this iPhone's own countdown for it.
         link.onLiveProgress = { [weak self] _ in self?.refresh() }

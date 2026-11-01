@@ -175,6 +175,7 @@ Apps/iOS            (Xcode, via XcodeGen)
   DaybookPhoneWidgets   Live Activity, Control Center controls, widgets
 ```
 
+- **One kind of model.** The shared controllers (DaybookKit's library, sync, handoff, and placements; DaybookDevices' hub, sessions, and connections) are `@Observable`, as the phone's own models and the player are. A view reads them directly, through the app model or not, and redraws for what it reads: a Listen Live caption redraws the caption strip, never the device list. Nothing mirrors them or counts their changes; what isn't a view follows them with `ObservationWatch`.
 - **Processing seam.**
   - `ProcessingEngine` (in DaybookKit) takes a meeting and its transcribable tracks and returns transcripts, speakers, and a summary. Both apps implement it with DaybookIntelligence's `InferenceProcessingEngine`: the Mac's queue, and on the phone `PhoneProcessor` for its own recordings ("Processing on this iPhone").
   - Without the processing models, the phone's requests wait for a Mac as they always did.

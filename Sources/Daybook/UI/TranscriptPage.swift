@@ -1,16 +1,17 @@
 import AppKit
 import DaybookCore
+import DaybookDevices
 import DaybookKit
 import SwiftUI
 
 /// The evidence behind the page: who said what, with your notes and bookmarks at their times.
 ///
-/// The page doesn't observe the player, which publishes its position ten times a second: it keeps
-/// the passage under the playhead in its own state and redraws when that passage changes. Blocks,
-/// bookmark marks, and the playhead index are worked out once per version of the conversation
-/// (`TranscriptLayout`).
+/// The page doesn't read the player, whose position moves ten times a second: it follows it apart
+/// (`ObservationWatch`, on the main queue, so it keeps up while a slider is dragged), keeps the passage
+/// under the playhead in its own state, and redraws when that passage changes. Blocks, bookmark marks,
+/// and the playhead index are worked out once per version of the conversation (`TranscriptLayout`).
 struct TranscriptPage: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let player: AudioPlaybackController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
@@ -83,9 +84,15 @@ struct TranscriptPage: View {
                 withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: 0.33)) }
             }
         }
-        .onReceive(player.objectWillChange.receive(on: RunLoop.main)) { _ in followPlayhead(layout) }
-        .onAppear { followPlayhead(layout) }
-        .onChange(of: meeting) { _, _ in followPlayhead(TranscriptLayout.cached(for: meeting)) }
+        // Again for each version of the conversation, which the playhead's passages come from.
+        .task(id: meeting) {
+            followPlayhead(TranscriptLayout.cached(for: meeting))
+            let player = self.player
+            let watch = ObservationWatch({ _ = (player.position, player.isPlaying, player.duration, player.trackID, player.meetingID) }) {
+                followPlayhead(TranscriptLayout.cached(for: meeting))
+            }
+            await watch.followWhileRunning()
+        }
     }
 
     /// What the transcript needs from the person, in the page's status boxes.
@@ -130,7 +137,7 @@ struct TranscriptPage: View {
 }
 
 private struct TurnView: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let speakerID: String?
     let segments: [TranscriptSegment]
@@ -181,7 +188,7 @@ private struct TurnView: View {
 }
 
 private struct Passage: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let segment: TranscriptSegment
     let showsTime: Bool

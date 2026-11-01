@@ -3,7 +3,7 @@ import SwiftUI
 /// Asks about a library in the wrong place (`AppState.libraryMoveOffer`, docs/sandbox.md). For a move, the library stays
 /// closed until the person answers, and after it the app starts over.
 struct LibraryMoveSheet: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let offer: LibraryMoveOffer
 
     var body: some View {

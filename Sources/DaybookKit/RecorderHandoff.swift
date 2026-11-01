@@ -1,8 +1,8 @@
-import Combine
 import DaybookCore
 import DaybookDevices
 import DaybookLink
 import Foundation
+import Observation
 
 /// Moves a recorder (Soundcore Work) between this device and another in one tap: "Use on This
 /// iPhone" and "Use on This Mac", from either side (docs/devices.md, "Handing a recorder over").
@@ -29,7 +29,8 @@ import Foundation
 /// - Taking over without asking (Take Over Anyway, or setting the recorder up elsewhere) makes the
 ///   old owner do the same: finish, let go, and hand over its waiting imports.
 @MainActor
-public final class RecorderHandoff: ObservableObject {
+@Observable
+public final class RecorderHandoff {
     // MARK: Types
 
     /// Another device on the local link, as the handoff sees it.
@@ -135,7 +136,7 @@ public final class RecorderHandoff: ObservableObject {
     // MARK: State
 
     /// Each recorder's handoff, by `RecorderOwnership.id`. Absent means idle.
-    @Published public private(set) var states: [String: State] = [:]
+    public private(set) var states: [String: State] = [:]
     /// The local link. The app sets it once its link is running.
     public var link: Link
     /// iPhone, off by default: "Hand back to my Mac when it's nearby". When the Mac this iPhone took
@@ -163,23 +164,23 @@ public final class RecorderHandoff: ObservableObject {
     private var answered: [UUID: LinkRecorderHandoffReply] = [:]
     /// Recorders this device is letting go of, with the request (by recorder ID).
     private var releasing: [String: (request: UUID, to: LinkHandoffDevice, linkID: UUID?)] = [:]
-    private var releaseTasks: [String: Task<Void, Never>] = [:]
-    private var watchTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var releaseTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var watchTasks: [String: Task<Void, Never>] = [:]
     /// Releases this device already took over from.
     private var completed: Set<UUID> = []
     /// Each recorder's owner as last seen, to notice when another device took it over.
     private var lastOwners: [String: String] = [:]
     /// Peers on the link that hand recorders over, by sync ID, to notice one arriving.
     private var presentPeers: Set<String> = []
-    private var subscriptions: Set<AnyCancellable> = []
-    private var metadataCheckScheduled = false
-    private var sending: Task<Void, Never>?
+    @ObservationIgnored private var libraryWatches: [ObservationWatch] = []
+    @ObservationIgnored private var metadataCheckScheduled = false
+    @ObservationIgnored private var sending: Task<Void, Never>?
     /// Recordings handed over mid-recording that stop when their conversation's recording ends
     /// ("A recording handed over mid-recording", below), kept across relaunches.
     private(set) var followed: [FollowedRecording] = []
-    private var followTask: Task<Void, Never>?
-    private var isCheckingFollowed = false
-    private var followCheckScheduled = false
+    @ObservationIgnored private var followTask: Task<Void, Never>?
+    @ObservationIgnored private var isCheckingFollowed = false
+    @ObservationIgnored private var followCheckScheduled = false
 
     public init(library: LibraryController, devices: DeviceHub, deviceClass: SyncDeviceClass, defaults: UserDefaults = .standard,
                 link: Link = .none, timing: Timing = Timing(), deviceName: String? = nil) {
@@ -191,11 +192,11 @@ public final class RecorderHandoff: ObservableObject {
         self.link = link
         self.timing = timing
         for owner in library.recorderOwners { lastOwners[owner.id] = owner.ownerID }
-        // `@Published` announces before the value changes: look once it has.
-        library.$metadata.dropFirst().sink { [weak self] _ in self?.scheduleMetadataCheck() }.store(in: &subscriptions)
+        // Each look comes once the change has landed (`ObservationWatch`).
+        libraryWatches.append(ObservationWatch({ _ = library.metadata }) { [weak self] in self?.scheduleMetadataCheck() })
         scheduleMetadataCheck()
         // A conversation whose recording a recorder here follows may arrive, with that recording ended.
-        library.$meetings.dropFirst().sink { [weak self] _ in self?.scheduleFollowCheck() }.store(in: &subscriptions)
+        libraryWatches.append(ObservationWatch({ _ = library.meetings }) { [weak self] in self?.scheduleFollowCheck() })
         loadFollowed()
     }
 

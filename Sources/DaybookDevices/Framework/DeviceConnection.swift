@@ -1,7 +1,7 @@
-import Combine
 import DaybookCaptions
 import DaybookCore
 import Foundation
+import Observation
 
 // The common interface every connection method implements, and the optional abilities some add.
 
@@ -259,10 +259,10 @@ public enum DeviceProblemAction: Equatable {
     }
 }
 
-/// The interface every connection method implements. Connections are main-actor objects that
-/// publish their own changes; the device's session forwards them to the views.
+/// The interface every connection method implements. Connections are main-actor `@Observable` objects: views read
+/// them through their device's session, and redraw for what they read.
 @MainActor
-public protocol DeviceConnection: ObservableObject where ObjectWillChangePublisher == ObservableObjectPublisher {
+public protocol DeviceConnection: AnyObject, Observable {
     var method: ConnectionMethodKind { get }
     var state: ConnectionState { get }
     var capabilities: DeviceCapabilities { get }
@@ -401,7 +401,8 @@ public protocol DetailedConnection: DeviceConnection {
 
 /// Listen Live, observed separately so its captions don't redraw every surface of the device.
 @MainActor
-public final class LiveCapture: ObservableObject {
+@Observable
+public final class LiveCapture {
     /// What Stop Listening saved.
     public struct Saved: Equatable {
         public let seconds: TimeInterval
@@ -413,20 +414,20 @@ public final class LiveCapture: ObservableObject {
         }
     }
 
-    @Published public var isListening = false
+    public var isListening = false
     /// What's being said, as tentative live captions made on this device (DaybookCaptions), oldest
     /// first. Never the transcript. Empty when not listening.
-    @Published public var captions: [LiveCaptionSegment] = []
+    public var captions: [LiveCaptionSegment] = []
     /// Where the captioner stands: getting ready, downloading, listening, unavailable (and why), or
     /// stopped. `.off` when captions are off or not listening.
-    @Published public var captionState: LiveCaptionState = .off
-    @Published public var saved: Saved?
-    @Published public var receivedSeconds: TimeInterval = 0
+    public var captionState: LiveCaptionState = .off
+    public var saved: Saved?
+    public var receivedSeconds: TimeInterval = 0
 
     /// How loud the arriving audio is, 0…1 for a meter (−60…0 dBFS), and when it last arrived. Not
-    /// published, so nothing redraws at the audio's pace: a meter samples it (`level(at:)`).
-    public private(set) var meterValue: Double = 0
-    public private(set) var heardAt: Date?
+    /// observed, so nothing redraws at the audio's pace: a meter samples it (`level(at:)`).
+    @ObservationIgnored public private(set) var meterValue: Double = 0
+    @ObservationIgnored public private(set) var heardAt: Date?
     /// How long a level counts as current after the audio it came from.
     public static let levelLifetime: TimeInterval = 1
 

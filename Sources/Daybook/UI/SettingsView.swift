@@ -11,7 +11,7 @@ enum SettingsPane: String {
 
 /// Settings (Direction A §5.14): five grouped panes, 600 pt wide, each as tall as its content.
 struct SettingsView: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @AppStorage("settingsPane") private var pane = SettingsPane.general
 
     var body: some View {
@@ -150,9 +150,9 @@ struct DetailsButton: View {
 // MARK: - General
 
 private struct GeneralSettings: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     /// The import-matching switch lives on the sources coordinator, which the window doesn't follow.
-    @ObservedObject private var sources: MultiSourceCoordinator
+    @Bindable private var sources: MultiSourceCoordinator
     @AppStorage("showsFloatingNotesWhileRecording") private var showsFloatingNotes = true
     @AppStorage("showsMenuBarExtra") private var showsMenuBarExtra = true
     @AppStorage("screenCaptureRequested") private var screenCaptureRequested = false
@@ -286,8 +286,8 @@ private struct AllowedLabel: View {
 /// The live line under "Record calls automatically", shown only while it's on: a mint dot while
 /// listening, the recording red while a detected call is being recorded.
 private struct DetectionStatusLine: View {
-    @ObservedObject var state: AppState
-    @ObservedObject private var monitor: MeetingMonitor
+    let state: AppState
+    private let monitor: MeetingMonitor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(state: AppState) {
@@ -346,7 +346,7 @@ private struct SupportedCallsPopover: View {
 // MARK: - Library
 
 private struct LibrarySettings: View {
-    @ObservedObject var state: AppState
+    let state: AppState
 
     /// "Daybook 1.2 (45)"; nothing for a development build without a version.
     private var version: String? {

@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookTestSupport
 import Foundation
+import Observation
 import XCTest
 @testable import DaybookDevices
 
@@ -88,7 +89,8 @@ final class DaybookPhoneDeviceTests: XCTestCase {
 
 /// A direct method that does nothing, standing in for the app's link adapter.
 @MainActor
-private final class InertConnection: ObservableObject, DeviceConnection {
+@Observable
+private final class InertConnection: DeviceConnection {
     let method = ConnectionMethodKind.direct
     let capabilities: DeviceCapabilities = [.recordControl]
     var state: ConnectionState = .notConnected

@@ -1,7 +1,7 @@
 import DaybookCaptions
 import ActivityKit
-import Combine
 import CryptoKit
+import DaybookDevices
 import DaybookKit
 import DaybookLink
 import DaybookModelStore
@@ -115,7 +115,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored var lastRecorders: [LinkRecorderState]?
     /// The audio session synthetic demos use, so a script can interrupt the recording.
     @ObservationIgnored var demoAudioSession: ScriptedAudioSession?
-    @ObservationIgnored private var subscriptions: Set<AnyCancellable> = []
+    /// What the model follows in the library, the recorders, and sync (`ObservationWatch`).
+    @ObservationIgnored private var watches: [ObservationWatch] = []
     /// Labelling saved captions' speakers from their recordings (`labelCaptionSpeakers`).
     @ObservationIgnored private var speakerPass: (id: UUID, task: Task<Void, Never>)?
     /// Recorders recording along: their live audio's captions join this iPhone's.
@@ -177,11 +178,10 @@ final class PhoneAppModel: RecordingCommandHandling {
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models))
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
         // Live recognizers are biased toward the library's approved vocabulary, as it changes.
-        library.controller.$glossary
-            .map { $0.filter(\.approved).map(\.term) }
-            .removeDuplicates()
-            .sink { [weak models] terms in models?.vocabulary.update(terms) }
-            .store(in: &subscriptions)
+        let controller = library.controller
+        watches.append(ObservationWatch.distinctValues(of: { controller.glossary.filter(\.approved).map(\.term) }) { [weak models] terms in
+            models?.vocabulary.update(terms)
+        })
         // A recorder's Listen Live is captioned like recordings: the live models when downloaded.
         self.devices.hub.environment.liveCaptions.makeCaptioner = Self.listenLiveCaptioner(settings: settings, options: options, models: models)
         self.devices.hub.environment.liveCaptions.locale = { [weak settings] in settings?.captionLocale ?? .current }
@@ -216,26 +216,24 @@ final class PhoneAppModel: RecordingCommandHandling {
         self.devices.onImported = { [weak self] filed in self?.filedElsewhere(filed) }
         wireRecorderHandoff()
         // Macs hear what the recorders this iPhone manages are doing, when that changes.
-        self.devices.hub.recorderChanges()
-            .sink { [weak self] in
-                guard let self else { return }
-                let cascade = self.devices.cascade
-                guard self.devices.hub.recorderStates(conversation: { cascade.sharedConversation(of: $0) }) != self.lastRecorders else { return }
-                self.sendRecordingState(force: true)
-            }
-            .store(in: &subscriptions)
+        watches.append(self.devices.hub.watchRecorders { [weak self] in
+            guard let self else { return }
+            let cascade = self.devices.cascade
+            guard self.devices.hub.recorderStates(conversation: { cascade.sharedConversation(of: $0) }) != self.lastRecorders else { return }
+            self.sendRecordingState(force: true)
+        })
         // An encrypted library keeps its conversations out of backups (`BackupExclusion`).
-        library.controller.sync?.$encryption.removeDuplicates().dropFirst()
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.applyBackupExclusion() } }
-            .store(in: &subscriptions)
+        watches.append(ObservationWatch.distinctValues(of: { controller.sync?.encryption }, initial: false) { [weak self] _ in
+            self?.applyBackupExclusion()
+        })
         // A recorder recording along is captioned from its live audio, beside this iPhone's captions.
         recorderCaptions.follow(self.devices.hub, conversation: { [weak self] in self?.captions.activeMeetingID }) { [weak self] update in
             self?.recorderCaptioned(update)
         }
         // A conversation moved to the Trash takes its live captions with it.
-        library.controller.$meetings.map(\.count).removeDuplicates().dropFirst()
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneCaptions() } }
-            .store(in: &subscriptions)
+        watches.append(ObservationWatch.distinctValues(of: { controller.meetings.count }, initial: false) { [weak self] _ in
+            self?.pruneCaptions()
+        })
         wireProcessing()
     }
 
@@ -529,7 +527,6 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// this iPhone can summarize, and the processor picks up what it can do now.
     func processingChanged() {
         placement.localSummarizer = processingSummarizer
-        upgrades.refresh()
         processor.pickUp()
     }
 

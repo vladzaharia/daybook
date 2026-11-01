@@ -1,4 +1,3 @@
-import Combine
 import CryptoKit
 import DaybookCore
 import DaybookDevices
@@ -558,7 +557,6 @@ final class RecorderHandoffTests: XCTestCase {
         let handoff: RecorderHandoff
         let defaults: UserDefaults
         var imported: [DeviceRecordingIdentity] = []
-        var subscriptions: Set<AnyCancellable> = []
         var id: String { library.thisDevice.id }
 
         init(name: String, library: LibraryController, hub: DeviceHub, session: DeviceSession, connection: SoundcoreConnection,
@@ -621,10 +619,9 @@ final class RecorderHandoffTests: XCTestCase {
             side.imported.append(identity)
             return id
         }
-        hub.observeLibrary(library.$meetings.combineLatest(library.$isLoaded).eraseToAnyPublisher())
+        hub.observeLibrary { [weak library] in (library?.meetings ?? [], library?.isLoaded == true) }
         let thisDevice = library.thisDevice.id
-        hub.observeOwnership(library.$metadata.map { ($0.recorderOwners, thisDevice) }
-            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }.eraseToAnyPublisher())
+        hub.observeOwnership { [weak library] in (library?.recorderOwners ?? [], thisDevice) }
         hub.start()
         sides.append(side)
         return side

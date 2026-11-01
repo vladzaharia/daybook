@@ -6,7 +6,7 @@ import SwiftUI
 /// List column for a device: the recording in progress, the import queue, new recordings, and
 /// recordings already in Daybook (collapsed). Its rows come from the device's primary method.
 struct DeviceRecordingsList: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     var body: some View {
         if let session = state.selectedDevice {
             DeviceRecordingsListContent(state: state, session: session, browser: session.browser)
@@ -22,15 +22,15 @@ struct DeviceRecordingsList: View {
 
 /// The list's subtitle, kept current by the session on its own.
 private struct DeviceListSubtitle: ViewModifier {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
 
     func body(content: Content) -> some View { content.navigationSubtitle(session.subtitle) }
 }
 
 private struct DeviceRecordingsListContent: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var browser: DeviceBrowser
+    let state: AppState
+    let session: DeviceSession
+    @Bindable var browser: DeviceBrowser
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -350,8 +350,8 @@ private struct RecordingNowRow: View {
 // MARK: - Context menu
 
 private struct DeviceRowMenu: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     let rows: Set<DeviceBrowser.Row>
 
     var body: some View {
@@ -386,7 +386,7 @@ private struct DeviceRowMenu: View {
 
 /// Import and Add to: overlapping conversations first, then Choose Conversation….
 struct ImportAndAddMenu: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     let recordings: [DeviceRecording]
 
     var body: some View {

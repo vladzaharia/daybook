@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 /// The main window: places, the conversation list, and the page, with an optional inspector.
 struct LibraryView: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     @AppStorage("isInspectorPresented") private var inspectorPresented = false
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var autoCollapsedSidebar = false
@@ -173,7 +173,7 @@ struct LibraryView: View {
 
 /// Record, or the red elapsed-time pill that stops the recording.
 struct RecordToolbarItem: ToolbarContent {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     var body: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) { RecordControl(state: state) }
     }
@@ -181,7 +181,7 @@ struct RecordToolbarItem: ToolbarContent {
 
 /// Record, then the red elapsed-time pill, then Saving…; each blurs into the next.
 private struct RecordControl: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Phase { case idle, recording, saving }
@@ -216,7 +216,7 @@ private struct RecordControl: View {
 }
 
 private struct RecordingPill: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let start: Date
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -242,7 +242,7 @@ private struct RecordingPill: View {
 // MARK: - Empty library and multiple selection
 
 private struct EmptyLibraryView: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     @State private var isDropTargeted = false
     var body: some View {
         VStack(spacing: Space.s4) {
@@ -261,7 +261,7 @@ private struct EmptyLibraryView: View {
             .controlSize(.large)
             .padding(.top, Space.s2)
             if let id = state.downloadingID {
-                ActivityReader(download: state.downloadActivity) {
+                ActivityReader {
                     Text("Downloading \(state.modelCatalog.name(for: id)) · \(Int(state.downloadProgress.fraction * 100))%")
                         .font(TypeStyle.status)
                         .foregroundStyle(Ink.secondary)
@@ -281,7 +281,7 @@ private struct EmptyLibraryView: View {
 }
 
 private struct BatchSelectionView: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let ids: [UUID]
     private var meetings: [Meeting] { state.meetings.filter { ids.contains($0.id) }.sorted { $0.date > $1.date } }
     var body: some View {
@@ -312,7 +312,7 @@ private struct BatchSelectionView: View {
 
 /// Audio dropped on an open conversation joins it as another recording.
 private struct AddRecordingDrop: ViewModifier {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let meeting: Meeting
     @State private var targeted = false
     func body(content: Content) -> some View {

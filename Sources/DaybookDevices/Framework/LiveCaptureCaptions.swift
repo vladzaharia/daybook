@@ -1,4 +1,3 @@
-import Combine
 import DaybookCaptions
 import Foundation
 
@@ -22,26 +21,27 @@ public final class LiveCaptureCaptions {
         }
     }
 
-    private var hub: AnyCancellable?
-    private var sessions: [String: AnyCancellable] = [:]
+    private var hub: ObservationWatch?
+    private var sessions: [String: ObservationWatch] = [:]
 
     public init() {}
 
     /// Follows `hub`'s recorders: whenever one capturing into `conversation()` has new captions,
     /// `deliver` gets them.
     public func follow(_ hub: DeviceHub, conversation: @escaping () -> UUID?, deliver: @escaping (Update) -> Void) {
-        follow(hub.$sessions, conversation: conversation, deliver: deliver)
+        follow({ hub.sessions }, conversation: conversation, deliver: deliver)
     }
 
-    /// The same, for any list of sessions as it changes (tests).
-    public func follow(_ sessions: some Publisher<[DeviceSession], Never>, conversation: @escaping () -> UUID?,
+    /// The same, for any list of sessions as it changes, read from `@Observable` models (tests).
+    public func follow(_ sessions: @escaping @MainActor () -> [DeviceSession], conversation: @escaping () -> UUID?,
                        deliver: @escaping (Update) -> Void) {
-        hub = sessions.sink { [weak self] sessions in
+        hub = ObservationWatch.values(of: sessions) { [weak self] sessions in
             guard let self else { return }
             let ids = Set(sessions.map(\.id))
             self.sessions = self.sessions.filter { ids.contains($0.key) }
             for session in sessions where self.sessions[session.id] == nil {
-                self.sessions[session.id] = session.$liveCaptions.sink { [weak session] segments in
+                self.sessions[session.id] = ObservationWatch.distinctValues(of: { [weak session] in session?.liveCaptions ?? [] }) {
+                    [weak session] segments in
                     guard let session, let id = conversation(), session.liveCaptureConversation == id else { return }
                     deliver(Update(recorderID: session.id, name: session.kind.shortName,
                                    startedAt: session.status?.recordingStartedAt, segments: segments))

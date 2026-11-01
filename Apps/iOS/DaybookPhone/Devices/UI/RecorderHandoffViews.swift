@@ -9,7 +9,7 @@ import SwiftUI
 /// A working state is a bare line; a state that needs the person (an answer, or waiting too long)
 /// offers at most two actions (docs/interface.md).
 struct RecorderHandoffCard: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     @Environment(PhoneAppModel.self) private var model
     @State private var confirmingTakeOver = false
 

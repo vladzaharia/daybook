@@ -107,8 +107,8 @@ struct MarginTime: View {
 
 /// Title and one byline: the same on Summary and Transcript, so switching feels like turning the page.
 struct PageHeader: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var player: AudioPlaybackController
+    let state: AppState
+    let player: AudioPlaybackController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     @AppStorage("isInspectorPresented") private var inspectorPresented = false
@@ -186,8 +186,8 @@ struct PageHeader: View {
 
 /// The byline's play control: a teal pill that shows a live waveform while this conversation plays.
 private struct PlayPill: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var player: AudioPlaybackController
+    let state: AppState
+    let player: AudioPlaybackController
     let duration: TimeInterval
     let isPlayingHere: Bool
     let start: () -> Void
@@ -238,12 +238,12 @@ private struct PlayPill: View {
 
 /// The one line that speaks when something is working or needs the person, and is absent otherwise.
 struct ConversationStatus: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     /// What the recorders recording along are doing ("Soundcore Work is recording too").
-    @ObservedObject private var sources: MultiSourceCoordinator
+    private let sources: MultiSourceCoordinator
     /// A summary's countdown, and the cloud at work.
-    @ObservedObject private var placements: SummaryPlacements
+    private let placements: SummaryPlacements
     @AppStorage(SettingsPaneKey.storageKey) private var settingsPane = "general"
     @Environment(\.openSettings) private var openSettings
     @State private var showingDetails = false
@@ -257,7 +257,7 @@ struct ConversationStatus: View {
 
     var body: some View {
         // Progress redraws only this line, at its own pace.
-        ActivityReader(processing: state.processingActivity, download: state.downloadActivity) { content }
+        ActivityReader { content }
             .transition(.opacity.combined(with: .move(edge: .top)))
             .animation(.easeOut(duration: 0.2), value: state.processingID)
             // Settings › Cloud, when the cloud could upgrade this summary.
@@ -546,7 +546,7 @@ enum FriendlyError {
 /// How the page was made, at its foot: a fact that doubles as the privacy line. A transcript that
 /// has no summary yet keeps the template and Summarize here.
 struct Colophon: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
 
     var body: some View {

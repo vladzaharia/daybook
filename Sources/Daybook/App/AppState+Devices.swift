@@ -1,6 +1,6 @@
 import AppKit
-import Combine
 import DaybookCore
+import DaybookDevices
 import DaybookKit
 import DaybookLink
 import Foundation
@@ -105,12 +105,11 @@ extension AppState {
             guard let self else { throw AppError.libraryUnavailable }
             return try await self.importFromDevice(url, identity: identity, attachTo: attachTo, source: source)
         }
-        devices.observeLibrary(library.$meetings.combineLatest($isReady).eraseToAnyPublisher())
+        devices.observeLibrary { [weak self] in (self?.meetings ?? [], self?.isReady == true) }
         // One Bluetooth owner per recorder: a recorder the iPhone (or another Mac) manages isn't
         // connected here; its recordings arrive through sync.
         let thisDevice = library.thisDevice.id
-        devices.observeOwnership(library.$metadata.map { ($0.recorderOwners, thisDevice) }
-            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }.eraseToAnyPublisher())
+        devices.observeOwnership { [weak library] in (library?.recorderOwners ?? [], thisDevice) }
         wireRecorderHandoff()
         wireSources()
         devices.onRecorderButton = { [weak self] session, on in self?.recorderButton(session, on) }
@@ -144,8 +143,7 @@ extension AppState {
 
     // MARK: Recorder handoff (docs/devices.md, "Handing a recorder over")
 
-    /// The handoff talks to phones over the link; its states redraw the device page, Settings, and
-    /// the menu bar.
+    /// The handoff talks to phones over the link; the device page, Settings, and the menu bar read its states.
     private func wireRecorderHandoff() {
         let link = phoneLink
         recorderHandoff.link = RecorderHandoff.Link(peers: {
@@ -155,10 +153,7 @@ extension AppState {
                                      handsOffRecorders: peer.capabilities.handsOffRecorders)
             }
         }, send: { message, phone in try await link.send(message, to: phone) })
-        recorderHandoff.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
-        phoneLink.changes.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.recorderHandoff.peersChanged() }
-        }.store(in: &subscriptions)
+        watches.append(ObservationWatch({ _ = link.peers; _ = link.paired }) { [weak self] in self?.recorderHandoff.peersChanged() })
     }
 
     /// "Use on This Mac": nobody manages the recorder, or this Mac does: connect. A phone does: ask

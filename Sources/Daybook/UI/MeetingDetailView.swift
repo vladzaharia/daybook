@@ -8,7 +8,7 @@ struct PhotoViewerRequest: Identifiable, Equatable { let id: UUID }
 
 /// A conversation: its page (Summary or Transcript), toolbar, and player.
 struct MeetingDetailView: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let meetingID: UUID
     @State private var playbackRequest: Task<Void, Never>?
     @State private var viewingPhoto: PhotoViewerRequest?
@@ -69,7 +69,7 @@ struct MeetingDetailView: View {
     }
 }
 
-/// The page observes the library itself. The window redrawing it for the same conversation (the app has one
+/// The page reads the library itself. The window redrawing it for the same conversation (the app has one
 /// state) adds nothing, so it isn't drawn again: each change of the library draws the page once.
 extension MeetingDetailView: Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.meetingID == rhs.meetingID }
@@ -81,7 +81,7 @@ extension MeetingDetailView: Equatable {
 /// [view switch · More], then the inspector toggle. The groups never come and go: what doesn't
 /// apply is dimmed, so Record stays under the pointer from one conversation to the next.
 struct DetailToolbar: ToolbarContent {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let meeting: Meeting?
     @Binding var inspectorPresented: Bool
 
@@ -133,7 +133,7 @@ struct DetailToolbar: ToolbarContent {
 
 /// The conversation's More menu: share, add, reprocess, history, then file actions.
 struct ConversationMoreMenu: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let meeting: Meeting
     private var locked: Bool { state.recordingID == meeting.id || state.processingID == meeting.id || state.isStartingRecording || state.isStoppingRecording }
     var body: some View {
@@ -159,7 +159,7 @@ struct ConversationMoreMenu: View {
 }
 
 struct ReprocessMenu: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let meeting: Meeting
     var body: some View {
         Menu("Reprocess") {
@@ -176,8 +176,8 @@ struct ReprocessMenu: View {
 
 /// One glass capsule pinned to the bottom of the page, shown once something plays.
 private struct PlayerBar: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var player: AudioPlaybackController
+    @Bindable var state: AppState
+    @Bindable var player: AudioPlaybackController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     private static let rates: [Float] = [0.75, 1, 1.25, 1.5, 2]

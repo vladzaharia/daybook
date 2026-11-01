@@ -1,11 +1,13 @@
 import Foundation
+import Observation
 
 /// Live levels for a recording view: "You" (microphone) and "Call" (call audio).
 ///
-/// Observe this object directly (`recorder.levels`), not through AppState: it updates about 15
-/// times a second, and forwarding that through AppState would redraw unrelated views.
+/// The levels change about 15 times a second: read `microphone` and `call` only in what draws a
+/// meter (Floating Notes samples them on its own timer). The flags change rarely and any view may read them.
 @MainActor
-final class CaptureLevelMonitor: ObservableObject {
+@Observable
+final class CaptureLevelMonitor {
     struct Level: Equatable {
         /// Recent root-mean-square level, dBFS (−160 is silence).
         var rms: Float
@@ -16,15 +18,15 @@ final class CaptureLevelMonitor: ObservableObject {
         static let silent = Level(rms: -160, peak: -160)
     }
 
-    @Published private(set) var microphone = Level.silent
-    @Published private(set) var call = Level.silent
+    private(set) var microphone = Level.silent
+    private(set) var call = Level.silent
     /// The call track carried audible sound within the last few seconds.
-    @Published private(set) var isCallAudioDetected = false
+    private(set) var isCallAudioDetected = false
     /// No non-zero microphone sample arrived for several seconds: the input is muted in hardware,
     /// unplugged, or blocked by permission.
-    @Published private(set) var isMicrophoneSilent = false
+    private(set) var isMicrophoneSilent = false
     /// True while call audio is part of the recording.
-    @Published private(set) var isCapturingCall = false
+    private(set) var isCapturingCall = false
 
     static let callHoldSeconds: TimeInterval = 4
     static let silentMicrophoneSeconds: TimeInterval = 3

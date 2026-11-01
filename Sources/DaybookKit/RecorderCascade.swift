@@ -1,8 +1,8 @@
-import Combine
 import DaybookCore
 import DaybookDevices
 import DaybookLink
 import Foundation
+import Observation
 
 /// The recorders this device manages recording along with one of its conversations (a cascading
 /// start, docs/multipoint.md): started with it, their audio saved into it as they record (the stream
@@ -13,7 +13,8 @@ import Foundation
 /// another device asking for it over the link, its button): a second ask waits for the first and gets
 /// its answer. Nothing here can stop or delay the device's own recording; trouble is one quiet line.
 @MainActor
-public final class RecorderCascade: ObservableObject {
+@Observable
+public final class RecorderCascade {
     public struct Timing: Sendable {
         public var connect: Duration = .seconds(20)
         public var confirm: Duration = .seconds(15)
@@ -77,17 +78,17 @@ public final class RecorderCascade: ObservableObject {
         public var members: [Member] = []
     }
 
-    @Published public private(set) var conversation: Conversation?
+    public private(set) var conversation: Conversation?
     /// One line about the recorders, when there's something to say ("Also recording on Soundcore Work.").
-    @Published public private(set) var status: String?
+    public private(set) var status: String?
     /// The devices to consider: the hub's sessions.
-    public var sessions: () -> [DeviceSession]
+    @ObservationIgnored public var sessions: () -> [DeviceSession]
     public var timing = Timing()
     /// A recorder joined, started, or stopped (the app sends its recording state).
-    public var onChange: (() -> Void)?
+    @ObservationIgnored public var onChange: (() -> Void)?
 
     /// Starts under way, by session: for which conversation, and the start every ask for it waits on.
-    private var starting: [String: (conversation: UUID, task: Task<Member?, Never>)] = [:]
+    @ObservationIgnored private var starting: [String: (conversation: UUID, task: Task<Member?, Never>)] = [:]
     /// Conversations ended recently, kept a little so a late start for one is refused rather than
     /// beginning it again (by ID, with when they ended).
     private var ended: [UUID: Date] = [:]

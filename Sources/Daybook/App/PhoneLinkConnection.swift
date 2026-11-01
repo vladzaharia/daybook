@@ -1,32 +1,47 @@
-import Combine
 import DaybookCore
+import DaybookDevices
 import DaybookKit
 import DaybookLink
 import Foundation
+import Observation
 
 /// Daybook on iPhone's *direct* method: Daybook's local link to one paired phone, as a device
 /// connection. It gives the device page the phone's presence and recording state, and multipoint
 /// its record control. The phone connects to this Mac, never the reverse, so Connect and Disconnect
 /// do nothing; recordings arrive through sync (`SyncedPhoneRecordings`), never over the link.
 @MainActor
-final class PhoneLinkConnection: ObservableObject, AnsweringRecordControl {
+@Observable
+final class PhoneLinkConnection: AnsweringRecordControl {
     let method = ConnectionMethodKind.direct
     let capabilities: DeviceCapabilities = [.recordControl]
     let phoneID: UUID
-    var onChange: (() -> Void)?
-    @Published private(set) var recordCommandPending = false
+    @ObservationIgnored var onChange: (() -> Void)?
+    private(set) var recordCommandPending = false
 
     private let link: PhoneLink
-    private var subscription: AnyCancellable?
+    @ObservationIgnored private var watch: ObservationWatch?
 
     init(phoneID: UUID, link: PhoneLink) {
         self.phoneID = phoneID
         self.link = link
-        subscription = link.changes.sink { [weak self] id in
-            guard let self, id == nil || id == self.phoneID else { return }
-            self.objectWillChange.send()
-            self.onChange?()
-        }
+        // What reads this connection follows the link itself; the device's session hears of each change to this
+        // phone (it resumes imports, and re-evaluates), once the change has landed.
+        watch = ObservationWatch.distinctValues(of: { [weak link] in
+            guard let link else { return PhoneState() }
+            return PhoneState(peer: link.peers[phoneID], recording: link.recordingStates[phoneID], paired: link.isPaired(phoneID),
+                              loaded: link.pairingsLoaded, lastConnected: link.lastConnected[phoneID],
+                              recorders: link.phoneRecorders[phoneID])
+        }, initial: false) { [weak self] _ in self?.onChange?() }
+    }
+
+    /// What this connection reads of the link about its phone.
+    private struct PhoneState: Equatable {
+        var peer: LinkPeer?
+        var recording: LinkRecordingState?
+        var paired = false
+        var loaded = false
+        var lastConnected: Date?
+        var recorders: [LinkRecorderState]?
     }
 
     var peer: LinkPeer? { link.peers[phoneID] }

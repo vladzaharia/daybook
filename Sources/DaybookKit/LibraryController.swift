@@ -2,6 +2,7 @@ import Combine
 import DaybookCore
 import DaybookDevices
 import Foundation
+import Observation
 
 /// The library both apps share: its conversations, folders, templates, and vocabulary; loading and
 /// saving through `MeetingStore`; every edit, with the Version History records the conversation
@@ -11,21 +12,25 @@ import Foundation
 /// adds those; the iPhone app holds one too. Everything here runs on the main actor; the store,
 /// fusion, and sync engine do their work off it.
 @MainActor
-public final class LibraryController: ObservableObject {
-    /// The library's conversations, in the order they were loaded or added.
-    @Published public var meetings: [Meeting] = []
+@Observable
+public final class LibraryController {
+    /// The library's conversations, in the order they were loaded or added. Changed only through the methods
+    /// here (`update`, `add`, …), which save, sync, and keep Version History.
+    public private(set) var meetings: [Meeting] = [] { didSet { revision &+= 1 } }
+    /// Bumped whenever `meetings` changes: the key for what's derived from them (a list's order, search).
+    public private(set) var revision = 0
     /// Folders, templates, and vocabulary: synced library settings.
-    @Published public private(set) var metadata = LibraryMetadata()
-    /// Vocabulary, mirrored into `metadata.vocabulary` when it changes.
-    @Published public var glossary: [GlossaryTerm] = []
+    public private(set) var metadata = LibraryMetadata()
+    /// Vocabulary, mirrored into `metadata.vocabulary` when it changes (`saveGlossaryTerm`, `removeGlossaryTerm`).
+    public private(set) var glossary: [GlossaryTerm] = []
     /// The last thing that went wrong, in a sentence for the person.
-    @Published public var errorMessage: String?
+    public var errorMessage: String?
     /// The system's own words for it, shown only behind Details.
-    @Published public var errorDetails: String?
+    public var errorDetails: String?
     /// The last thing worth knowing (a sync warning, a recording already in the library).
-    @Published public var notice: String?
+    public var notice: String?
     /// The store is open and the conversations are loaded.
-    @Published public private(set) var isLoaded = false
+    public private(set) var isLoaded = false
     /// A sync result is being applied: its saves don't ask for another sync, and a device's
     /// processing waits.
     public private(set) var isApplyingSync = false
@@ -34,22 +39,22 @@ public final class LibraryController: ObservableObject {
     /// The sync folder, when the app has one. Saves ask it to sync.
     public let sync: LibrarySyncController?
 
-    private var store: MeetingStore?
-    private var glossaryStore: GlossaryStore?
+    @ObservationIgnored private var store: MeetingStore?
+    @ObservationIgnored private var glossaryStore: GlossaryStore?
     /// Saves, coalesced and written in the background (`LibrarySaveQueue`).
     private let saves = LibrarySaveQueue()
     /// Saves that failed, by conversation ID, "library-settings", or "glossary", until one succeeds.
     private var persistenceErrors: [String: String] { saves.failures }
     /// Edits since the last sync request; the request goes out once they're written.
-    private var syncWanted = false
+    @ObservationIgnored private var syncWanted = false
     /// False when `library.json` couldn't be read or a newer Daybook wrote it: never overwritten.
     private var metadataWritable = true
-    private var lifecycle: AnyCancellable?
-    private var notesTasks: [UUID: Task<Void, Never>] = [:]
-    private var noteOriginals: [UUID: String] = [:]
+    @ObservationIgnored private var lifecycle: AnyCancellable?
+    @ObservationIgnored private var notesTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var noteOriginals: [UUID: String] = [:]
     private var locked = false
     /// Tasks waiting for the lock, in order; each is resumed with true when it's handed the lock.
-    private var lockWaiters: [(id: UUID, waiting: CheckedContinuation<Bool, Never>)] = []
+    @ObservationIgnored private var lockWaiters: [(id: UUID, waiting: CheckedContinuation<Bool, Never>)] = []
 
     /// How long a save waits after an edit, so a burst of edits (typing) writes once.
     public var saveDelay: Duration {
@@ -179,7 +184,7 @@ public final class LibraryController: ObservableObject {
 
     /// Changes a conversation and saves it when something changed. Version History entries are
     /// the change's own: `Meeting`'s editing methods record them. Observers hear of it once, and not
-    /// at all when nothing changed: each change redraws every window that shows the library.
+    /// at all when nothing changed: each change redraws every view that reads the conversations.
     public func update(_ id: UUID, _ change: (inout Meeting) -> Void) {
         guard let index = meetings.firstIndex(where: { $0.id == id }) else { return }
         var meeting = meetings[index]

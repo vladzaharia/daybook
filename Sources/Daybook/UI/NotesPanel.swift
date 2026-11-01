@@ -182,22 +182,23 @@ enum FloatingLayout {
 /// What the sheet needs from the window around it. SwiftUI's own hover tracking isn't reliable in a
 /// non-key panel of an inactive app, which is this panel's normal state during a call.
 @MainActor
-final class PanelChrome: NSResponder, ObservableObject {
-    @Published var isHovering = false
+@Observable
+final class PanelChrome: NSResponder {
+    var isHovering = false
     /// The title band's height: the system's title bar and `FloatingLayout.bandRoom`. The status bar
     /// is centred in it, and content starts below it.
-    @Published var band: CGFloat = 28 + FloatingLayout.bandRoom
+    var band: CGFloat = 28 + FloatingLayout.bandRoom
     /// The close button's centre line, from the top of the window.
-    @Published var buttonCenter: CGFloat = (28 + FloatingLayout.bandRoom) / 2
+    var buttonCenter: CGFloat = (28 + FloatingLayout.bandRoom) / 2
     /// The close button's leading inset, which the Compact button's trailing inset mirrors.
-    @Published var buttonInset: CGFloat = 8
+    var buttonInset: CGFloat = 8
     /// The close button's width, so the status bar starts clear of it.
-    @Published var buttonWidth: CGFloat = 14
-    weak var closeButton: NSButton?
-    weak var panel: NSPanel?
+    var buttonWidth: CGFloat = 14
+    @ObservationIgnored weak var closeButton: NSButton?
+    @ObservationIgnored weak var panel: NSPanel?
     /// The height to return to from Compact.
-    private var fullHeight: CGFloat?
-    private var area: NSTrackingArea?
+    @ObservationIgnored private var fullHeight: CGFloat?
+    @ObservationIgnored private var area: NSTrackingArea?
 
     override init() {
         super.init()

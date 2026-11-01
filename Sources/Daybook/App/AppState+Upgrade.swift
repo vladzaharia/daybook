@@ -51,8 +51,8 @@ extension AppState {
         guard !hasCloudSetup, let current = meeting.upgradeCurrent(.summarization, ranks: upgradeRanks),
               let best = upgradeRanks.cloud.models.compactMap(\.summaryQuality).max(),
               best >= current.quality + UpgradeRole.summarization.margin else { return }
+        // What the page reads of Settings › Cloud now that it's made (`cloud`, `upgradeCloud`) redraws it.
         await cloud.reload()
-        objectWillChange.send()
     }
 
     /// Upgrade: the work goes to the device with the better model (docs/multipoint.md, "Upgrade").

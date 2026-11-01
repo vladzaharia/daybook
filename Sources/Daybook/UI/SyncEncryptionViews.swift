@@ -122,7 +122,7 @@ private struct ShownRecoveryKey: Identifiable {
 
 /// Turning encryption on: the devices that would stop syncing, a recovery key, and Encrypt.
 private struct EncryptLibrarySheet: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let onRecoveryKey: (RecoveryKey) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var notReady: [KnownSyncDevice]?
@@ -212,7 +212,7 @@ private struct RecoveryKeySheet: View {
 
 /// Typing a recovery key while waiting for the library's key.
 private struct EnterRecoveryKeySheet: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var problem: AppProblem?

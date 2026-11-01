@@ -73,10 +73,10 @@ enum WindowID {
 
 struct DaybookApp: App {
     @NSApplicationDelegateAdaptor(DaybookDelegate.self) private var delegate
-    /// The app's state, held and not observed: every view, the menus, and the menu bar item observe what
-    /// they show. Observed here, each change of the library rebuilt every scene and drew the library window twice.
-    @StateObject private var holder = AppStateHolder()
-    private var state: AppState { holder.state }
+    /// The app's state. The scenes only pass it on: every view, the menus, and the menu bar item read what they
+    /// show, and redraw for that alone. Read here, each change would rebuild every scene and draw the library window
+    /// twice, so the only thing the scenes read is whether a library move holds the library.
+    @State private var state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults)
     @AppStorage("showsMenuBarExtra", store: LaunchOptions.defaults) private var showsMenuBarExtra = true
     @AppStorage("onboardingCompleted", store: LaunchOptions.defaults) private var onboardingCompleted = false
 
@@ -133,17 +133,10 @@ struct DaybookApp: App {
     }
 }
 
-/// Makes the app's state when the app first draws its scenes. It never announces a change itself, so the
-/// state's changes don't rebuild the scenes.
-@MainActor
-private final class AppStateHolder: ObservableObject {
-    let state = AppState(libraryURL: LaunchOptions.libraryURL ?? AppState.libraryURL, defaults: LaunchOptions.defaults)
-}
-
 /// The menu bar item: a symbol only, since a ticking text label makes the status item re-layout every
 /// second. The menu's first line shows the elapsed time.
 private struct MenuBarLabel: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     var body: some View {
         Image(systemName: state.isRecording ? "record.circle.fill" : "waveform")
             .symbolRenderingMode(.palette)
@@ -155,7 +148,7 @@ private struct MenuBarLabel: View {
 /// The menu bar. Every toolbar and context-menu action has a home here; items that don't apply
 /// are disabled, never hidden.
 struct DaybookCommands: Commands {
-    @ObservedObject var state: AppState
+    let state: AppState
     @Environment(\.openWindow) private var openWindow
 
     private var meeting: Meeting? { state.place.isDevice ? nil : state.selectedMeeting }
@@ -284,7 +277,7 @@ struct DaybookCommands: Commands {
                 .disabled(meeting?.revisions.isEmpty != false)
         }
         CommandMenu("Controls") {
-            PlayPauseMenuItem(activity: state.playback.activity) { state.playback.toggle() }
+            PlayPauseMenuItem(player: state.playback)
                 .disabled(meeting?.tracks.isEmpty != false || state.isRecording)
             Button("Jump Back 15 Seconds") { state.playback.skip(-15) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
@@ -297,17 +290,16 @@ struct DaybookCommands: Commands {
     }
 }
 
-/// Controls › Play or Pause, as playback is. It follows only whether playback is playing, so the
+/// Controls › Play or Pause, as playback is. It reads only whether playback is playing, so the
 /// menu isn't rebuilt as the position moves.
 private struct PlayPauseMenuItem: View {
-    @ObservedObject var activity: PlaybackActivity
-    let toggle: () -> Void
-    var body: some View { Button(activity.isPlaying ? "Pause" : "Play", action: toggle) }
+    let player: AudioPlaybackController
+    var body: some View { Button(player.isPlaying ? "Pause" : "Play") { player.toggle() } }
 }
 
 /// Template choices for a conversation, shared by the colophon, inspector, and Conversation menu.
 struct TemplateMenuItems: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meetingID: UUID
     @Environment(\.openWindow) private var openWindow
     var body: some View {
@@ -333,7 +325,7 @@ struct TemplateMenuItems: View {
 
 /// Folder choices for one or more conversations.
 struct FolderMenuItems: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meetingIDs: [UUID]
     var body: some View {
         Button("None") { state.moveToFolder(meetingIDs, nil) }
@@ -427,7 +419,7 @@ private final class DockMenuItem: NSMenuItem {
 /// `--page transcript`, `--inspector`, `--open-settings <pane>`, `--open-window <id>`,
 /// `--show-notes`, `--show-setup`, `--simulate-recording <title> [--demo-captions]`, `--library-demo`.
 private struct DebugLaunchActions: ViewModifier {
-    @ObservedObject var state: AppState
+    let state: AppState
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var applied = false

@@ -1,6 +1,6 @@
-import Combine
 import DaybookCore
 import Foundation
+import Observation
 
 /// The summaries this device is placing, one `SummaryPlacementPlanner` per conversation, with the countdowns'
 /// timer (docs/multipoint.md, "Where summaries run"). What this device can offer (`options`) and the person's
@@ -11,21 +11,22 @@ import Foundation
 /// out. A caller that would rather wait for the answer uses `place(_:immediately:)`. The entry stays until
 /// the app ends it, so the status can say "Summarizing with Claude Sonnet 5.5" while the cloud works.
 @MainActor
-public final class SummaryPlacements: ObservableObject {
-    @Published public private(set) var planners: [UUID: SummaryPlacementPlanner] = [:]
+@Observable
+public final class SummaryPlacements {
+    public private(set) var planners: [UUID: SummaryPlacementPlanner] = [:]
     public private(set) var options: SummaryOptions
     public private(set) var preferences: CloudSummaryPreferences
     /// This device isn't a Mac: it may wait for one.
     public let waitsForMacs: Bool
     /// A conversation started somewhere, or waits with nowhere to run it (`.waiting`).
-    public var onSettled: ((UUID, SummaryPlacementPlanner.Phase) -> Void)?
+    @ObservationIgnored public var onSettled: ((UUID, SummaryPlacementPlanner.Phase) -> Void)?
     /// Any planner changed in a way worth telling another device (a countdown began, retargeted, or ended).
-    public var onChange: ((UUID) -> Void)?
+    @ObservationIgnored public var onChange: ((UUID) -> Void)?
 
     private let clock: () -> Date
     private let runsTimer: Bool
-    private var timer: Task<Void, Never>?
-    private var waiters: [UUID: CheckedContinuation<SummaryPlace?, Never>] = [:]
+    @ObservationIgnored private var timer: Task<Void, Never>?
+    @ObservationIgnored private var waiters: [UUID: CheckedContinuation<SummaryPlace?, Never>] = [:]
 
     /// `runsTimer: false` leaves the countdowns to `advance()`, for tests with a clock of their own.
     public init(options: SummaryOptions = SummaryOptions(thisDeviceCanSummarize: false, reachableMacs: [], cloud: nil),

@@ -14,7 +14,7 @@ struct RecordingsList: View {
 }
 
 private struct RecentConversations: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let limit: Int?
     @Environment(ReadingSession.self) private var session
 

@@ -1,4 +1,3 @@
-import Combine
 import DaybookCore
 import DaybookTestSupport
 import Foundation
@@ -46,13 +45,12 @@ final class LibrarySavingTests: XCTestCase {
         let id = library.newMeeting(title: "Standup")
         await library.flush()
         let saves = library.savesCompleted
-        var changes = 0
-        let counting = library.objectWillChange.sink { changes += 1 }
-        defer { counting.cancel() }
+        let changes = ObservationCount { _ = library.meetings }
+        defer { changes.cancel() }
         library.update(id) { $0.status = .transcribing }
-        XCTAssertEqual(changes, 1, "One change for observers, its time stamp included: every window redraws per change")
+        XCTAssertEqual(changes.count, 1, "One change for observers, its time stamp included: every view of the library redraws per change")
         library.update(id) { $0.status = .transcribing; $0.errorMessage = nil }
-        XCTAssertEqual(changes, 1, "Nothing changed: no redraw, and no save")
+        XCTAssertEqual(changes.count, 1, "Nothing changed: no redraw, and no save")
         let stamped = try XCTUnwrap(library.meeting(id)?.updatedAt)
         await library.flush()
         XCTAssertEqual(library.savesCompleted - saves, 1)
@@ -64,12 +62,11 @@ final class LibrarySavingTests: XCTestCase {
         let id = library.newMeeting(title: "Standup")
         await library.flush()
         let before = library.savesCompleted
-        var changes = 0
-        let counting = library.objectWillChange.sink { changes += 1 }
+        let changes = ObservationCount { _ = library.meetings }
         let text = "Ship the beta on Friday"
         for count in 1...text.count { library.editNotes(id, text: String(text.prefix(count))) }
-        XCTAssertEqual(changes, text.count, "One change per keystroke")
-        counting.cancel()
+        XCTAssertEqual(changes.count, text.count, "One change per keystroke")
+        changes.cancel()
         await library.flush()
         XCTAssertEqual(library.savesCompleted - before, 1, "The whole burst is one save")
         let reopened = try await open()

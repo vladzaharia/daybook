@@ -7,7 +7,7 @@ import SwiftUI
 /// a selected imported recording (which brings its own toolbar). What the page shows follows the
 /// device's capabilities.
 struct DevicePage: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     var body: some View {
         if let session = state.selectedDevice {
             DevicePageContent(state: state, session: session, browser: session.browser).id(session.id)
@@ -18,9 +18,9 @@ struct DevicePage: View {
 }
 
 private struct DevicePageContent: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var browser: DeviceBrowser
+    let state: AppState
+    let session: DeviceSession
+    @Bindable var browser: DeviceBrowser
 
     private enum Target: Equatable {
         case device, recordingNow, meeting(UUID), recording(DeviceRecording), several([DeviceRecording])
@@ -100,8 +100,8 @@ private struct DevicePageContent: View {
 // MARK: - The device page
 
 private struct DeviceOverview: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -188,9 +188,9 @@ private struct DeviceOverview: View {
 /// The page's one action for its state: Import N New, Connect, or Use on This Mac. Nothing when the
 /// problem box already offers it, or while a handoff is under way.
 private struct DevicePrimaryAction: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var handoff: RecorderHandoff
+    let state: AppState
+    let session: DeviceSession
+    let handoff: RecorderHandoff
     let problem: DeviceProblem?
 
     init(state: AppState, session: DeviceSession, problem: DeviceProblem?) {
@@ -243,7 +243,7 @@ private struct DevicePrimaryAction: View {
 /// The status line under a device's title: its dot, its state, and Cancel while it's looking or
 /// connecting.
 struct DeviceByline: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     let text: String
 
     var body: some View {
@@ -264,7 +264,7 @@ struct DeviceByline: View {
 /// Recorder, Case, Storage: what the device reports, in tiles. Values the recorder hasn't confirmed
 /// since it was last connected are drawn quieter, with their time once under the tiles.
 private struct DeviceFigures: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
 
     var body: some View {
         let capabilities = session.direct?.capabilities ?? []
@@ -326,7 +326,7 @@ private struct DeviceFigures: View {
 
 /// "Importing 1 of 3 · about 6 min left", the bar, and Stop.
 private struct ImportProgress: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
 
     var body: some View {
         let queue = session.queue
@@ -368,8 +368,8 @@ private struct ImportProgress: View {
 
 /// How recordings arrive: each method in the kind's order of preference, with its state and one action.
 struct DeviceMethodRows: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -502,8 +502,8 @@ struct RecommendedBadge: View {
 
 /// Recently imported: the library's latest from this device, and anything that didn't import.
 struct RecentImports: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     /// "Recent imports", which holds what didn't import too.
     var heading = "Recent imports"
 
@@ -601,9 +601,9 @@ struct RecentImports: View {
 
 /// The device's More menu (`ellipsis`) in the detail toolbar, built from its capabilities.
 struct DeviceMoreMenu: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var browser: DeviceBrowser
+    let state: AppState
+    let session: DeviceSession
+    @Bindable var browser: DeviceBrowser
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {

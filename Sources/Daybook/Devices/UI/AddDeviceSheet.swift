@@ -6,7 +6,7 @@ import SwiftUI
 /// preference. A direct method's card is the pre-permission screen: its one button starts the
 /// search, which is when macOS asks about Bluetooth.
 struct AddDeviceSheet: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let request: AddDeviceRequest
     @State private var step: Step
     @State private var session: DeviceSession?
@@ -114,7 +114,7 @@ struct AddDeviceSheet: View {
 // MARK: - Choose a kind
 
 private struct KindChooser: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let choose: (DeviceKind) -> Void
     let cancel: () -> Void
 
@@ -190,8 +190,8 @@ private struct KindCard: View {
 // MARK: - A kind's methods
 
 private struct MethodChooser: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     let back: (() -> Void)?
     let discover: () -> Void
     let finish: () -> Void
@@ -282,8 +282,8 @@ private struct MethodCard: View {
 // MARK: - Looking for the recorder
 
 private struct DiscoveryStep: View {
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var connection: SoundcoreConnection
+    let session: DeviceSession
+    let connection: SoundcoreConnection
     let back: (() -> Void)?
     /// The fallback that always works, offered when nothing is found.
     let useFolder: (() -> Void)?
@@ -398,7 +398,7 @@ private struct FoundRow: View {
     let recorder: DiscoveredRecorder
     let symbol: String
     let prominent: Bool
-    @ObservedObject var connection: SoundcoreConnection
+    let connection: SoundcoreConnection
 
     private var connecting: Bool { connection.connectingTo == recorder.id }
 

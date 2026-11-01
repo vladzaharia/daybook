@@ -6,8 +6,8 @@ import SwiftUI
 /// Add iPhone…: the six-digit code to type on the phone, then what happened, then the phones this
 /// Mac is paired with, each with Unpair. Pairing stays open only while this is showing.
 struct PhonePairingStep: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var link: PhoneLink
+    let state: AppState
+    let link: PhoneLink
     let back: (() -> Void)?
     /// Pairing finished (with the phone that paired) or was cancelled (nil).
     let finish: (LinkPairedDevice?) -> Void
@@ -114,8 +114,8 @@ struct PhonePairingStep: View {
 
 /// The phones this Mac is paired with, each with whether it's connected and Unpair.
 struct PairedPhonesList: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var link: PhoneLink
+    let state: AppState
+    let link: PhoneLink
     @Binding var unpairing: LinkPairedDevice?
 
     var body: some View {

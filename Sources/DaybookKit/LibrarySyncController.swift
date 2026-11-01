@@ -1,6 +1,6 @@
-import Combine
 import DaybookCore
 import Foundation
+import Observation
 #if os(macOS)
 import Security
 #endif
@@ -169,27 +169,28 @@ public struct SyncContainerEnvironment: Sendable {
 }
 
 @MainActor
-public final class LibrarySyncController: ObservableObject {
-    @Published public private(set) var folder: URL?
-    @Published public private(set) var isICloudLocation = false
+@Observable
+public final class LibrarySyncController {
+    public private(set) var folder: URL?
+    public private(set) var isICloudLocation = false
     /// Where sync stands (`SyncStatus`): what both apps show, and whether it needs the person (`status.problem`).
-    @Published public private(set) var status: SyncStatus = .off
+    public private(set) var status: SyncStatus = .off
     /// `status` in the controller's sentence, for logs and test messages. Views read `status` and its `problem`.
     public var statusText: String { status.text }
     /// Something worth knowing that doesn't stop sync.
-    @Published public internal(set) var warning: SyncWarning?
-    @Published public private(set) var isSyncing = false { didSet { if oldValue && !isSyncing { passEnded() } } }
-    @Published public private(set) var lastSync: Date?
-    @Published public private(set) var warnings: [String] = []
-    @Published public private(set) var pendingDownloads = 0
-    @Published public private(set) var pendingUploads = 0
+    public internal(set) var warning: SyncWarning?
+    public private(set) var isSyncing = false { didSet { if oldValue && !isSyncing { passEnded() } } }
+    public private(set) var lastSync: Date?
+    public private(set) var warnings: [String] = []
+    public private(set) var pendingDownloads = 0
+    public private(set) var pendingUploads = 0
     /// Where sync runs now.
-    @Published public private(set) var transport: SyncTransport = .none
+    public private(set) var transport: SyncTransport = .none
     /// iCloud container sync, for Settings.
-    @Published public private(set) var iCloud: ICloudSyncState
+    public private(set) var iCloud: ICloudSyncState
     /// The move from a previously chosen folder into the container, when there was one.
-    @Published public private(set) var migrationRecord: SyncMigrationRecord?
-    public var onSyncRequested: (() async -> Void)?
+    public private(set) var migrationRecord: SyncMigrationRecord?
+    @ObservationIgnored public var onSyncRequested: (() async -> Void)?
     private let localRoot: URL
     private let defaults: UserDefaults
     public let environment: SyncContainerEnvironment
@@ -207,45 +208,45 @@ public final class LibrarySyncController: ObservableObject {
     /// (`knownDevices`), and the cheap `hasRemoteChanges` check.
     public private(set) var engine: LibrarySyncEngine?
     /// The last pass stopped at its `SyncPassLimits`; run another soon.
-    @Published public private(set) var hasMoreWork = false
+    public private(set) var hasMoreWork = false
     /// Whether the library is encrypted here, updated after every pass.
-    @Published public private(set) var encryption: LibraryEncryptionState = .off
+    public private(set) var encryption: LibraryEncryptionState = .off
     /// A plaintext library is encrypted once every device in use can read it (`encryptOnceEveryDeviceCan`). Rigs that
     /// check plaintext sync turn it off.
     public var encryptsAutomatically = true
     /// Waiting for the key, Start Over may be offered: no other device has said it holds the key recently
     /// (`LibrarySyncEngine.mayStartOver`).
-    @Published public private(set) var mayStartOverEncryption = false
+    public private(set) var mayStartOverEncryption = false
     /// The libraries whose plaintext courier files were dropped once they were found encrypted.
-    private var courierSealedLibraries = Set<UUID>()
-    private var activeTask: Task<SyncResult, Error>?
-    private var pendingReceipt: UUID?
+    @ObservationIgnored private var courierSealedLibraries = Set<UUID>()
+    @ObservationIgnored private var activeTask: Task<SyncResult, Error>?
+    @ObservationIgnored private var pendingReceipt: UUID?
     /// Where sync stood before the pass in flight, which is still true if that pass is cancelled.
-    private var statusBeforePass: SyncStatus?
+    @ObservationIgnored private var statusBeforePass: SyncStatus?
     /// The account signed in when a chosen folder connected.
-    private var folderAccount: Data?
-    private var polling: Task<Void, Never>?
-    private var debounce: Task<Void, Never>?
-    private var debounceToken = UUID()
+    @ObservationIgnored private var folderAccount: Data?
+    @ObservationIgnored private var polling: Task<Void, Never>?
+    @ObservationIgnored private var debounce: Task<Void, Never>?
+    @ObservationIgnored private var debounceToken = UUID()
     /// The requested pass is running; a request now waits for it to end.
-    private var debounceRunsPass = false
-    private var requestedDuringPass = false
-    private var passEndWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var debounceRunsPass = false
+    @ObservationIgnored private var requestedDuringPass = false
+    @ObservationIgnored private var passEndWaiters: [CheckedContinuation<Void, Never>] = []
     /// How long a request waits before it runs a pass, so a burst of edits makes one. Nil: requests never run a
     /// pass on their own; test rigs drive passes themselves.
     public var syncDebounce: Duration? = .seconds(2)
     /// A requested pass is waiting out `syncDebounce` or running.
     public var hasPendingSyncRequest: Bool { debounce != nil }
-    private var query: NSMetadataQuery?
-    private var observers: [NSObjectProtocol] = []
-    private var scopedURL: URL?
-    private var configurationID = UUID()
-    private var containerTask: Task<Void, Never>?
-    private var migrationTask: Task<Void, Never>?
-    private var containerGeneration = UUID()
-    private var accountObserver: NSObjectProtocol?
+    @ObservationIgnored private var query: NSMetadataQuery?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private var scopedURL: URL?
+    @ObservationIgnored private var configurationID = UUID()
+    @ObservationIgnored private var containerTask: Task<Void, Never>?
+    @ObservationIgnored private var migrationTask: Task<Void, Never>?
+    @ObservationIgnored private var containerGeneration = UUID()
+    @ObservationIgnored private var accountObserver: NSObjectProtocol?
     /// The person chose to sync with another iCloud account: forget the container's library was encrypted.
-    private var forgetsSealedLibrary = false
+    @ObservationIgnored private var forgetsSealedLibrary = false
     /// iCloud has listed the connected folder once (its metadata query finished gathering).
     private(set) var containerListed = false
 
@@ -746,8 +747,13 @@ public final class LibrarySyncController: ObservableObject {
     /// The folder this Mac synced through before the move into iCloud still holds a plaintext copy of the journal, and
     /// the library is now encrypted: Settings offers to delete that copy.
     public var hasRetiredFolderJournal: Bool {
-        encryption.isOn && migrationRecord?.completedAt != nil && defaults.data(forKey: Key.migratedFolderBookmark) != nil
+        _ = retiredFolderChanges
+        return encryption.isOn && migrationRecord?.completedAt != nil && defaults.data(forKey: Key.migratedFolderBookmark) != nil
     }
+
+    /// Bumped when the retired folder's bookmark is kept or forgotten (it lives in preferences), so what reads
+    /// `hasRetiredFolderJournal` reads it again.
+    private var retiredFolderChanges = 0
 
     /// Deletes the previous sync folder's journal (its manifest, `Events/`, `Metadata/`, `Blobs/`, and `Devices/`),
     /// nothing else in it, and forgets the folder.
@@ -768,13 +774,13 @@ public final class LibrarySyncController: ObservableObject {
             }
         }
         defaults.removeObject(forKey: Key.migratedFolderBookmark)
-        objectWillChange.send()
+        retiredFolderChanges &+= 1
     }
 
     // MARK: Presence
 
     /// What this device is doing, in its presence record. Kept across reconnections.
-    private var activity: SyncDeviceActivity?
+    @ObservationIgnored private var activity: SyncDeviceActivity?
 
     /// Tells the other devices this one is recording into `conversationID` (nil: it stopped), and which recorders
     /// it drives. Written at once and kept fresh every few minutes, even while recording holds sync passes back, so
@@ -825,15 +831,15 @@ public final class LibrarySyncController: ObservableObject {
     /// The fast path beside iCloud Drive (docs/icloud-sync.md, "Courier (CloudKit)"): the iPhone sends the files its
     /// passes write, a Mac receives them into the engine's inbox. Set it and `courierRole` before connecting. Nil, or
     /// unavailable: iCloud Drive carries everything, exactly as without a courier.
-    public var courier: (any SyncCourier)?
+    @ObservationIgnored public var courier: (any SyncCourier)?
     public var courierRole: CourierRole = []
     /// The courier's state for the sync status: how many files wait to send, and whether a send is stuck.
-    @Published public private(set) var courierStatus = CourierStatus()
+    public private(set) var courierStatus = CourierStatus()
     /// Called once the courier is available. The apps register for remote notifications, which CKSyncEngine needs.
-    public var onCourierAvailable: (() -> Void)?
-    private var courierStart: Task<Void, Never>?
-    private var courierSends: Task<Void, Never>?
-    private var courierExpiryCheck: Date?
+    @ObservationIgnored public var onCourierAvailable: (() -> Void)?
+    @ObservationIgnored private var courierStart: Task<Void, Never>?
+    @ObservationIgnored private var courierSends: Task<Void, Never>?
+    @ObservationIgnored private var courierExpiryCheck: Date?
 
     private func startCourier() {
         guard let courier, !courierRole.isEmpty, courierStart == nil else { return }
@@ -1115,8 +1121,8 @@ public final class LibrarySyncController: ObservableObject {
 
     /// Each run of the move, so progress it reported arriving after it ended (a run that failed, say) doesn't cover
     /// what the end said.
-    private var migrationAttempt = 0
-    private var settledMigrationAttempt = 0
+    @ObservationIgnored private var migrationAttempt = 0
+    @ObservationIgnored private var settledMigrationAttempt = 0
 
     private func showMigration(_ progress: SyncMigrationProgress, generation: UUID, attempt: Int) {
         guard generation == containerGeneration, attempt > settledMigrationAttempt, case .migrating = iCloud else { return }
@@ -1132,6 +1138,7 @@ public final class LibrarySyncController: ObservableObject {
     private func retireFolderBookmark() {
         if let data = defaults.data(forKey: Key.folderBookmark) { defaults.set(data, forKey: Key.migratedFolderBookmark) }
         defaults.removeObject(forKey: Key.folderBookmark)
+        retiredFolderChanges &+= 1
     }
 
     private func observeAccount() {

@@ -3,7 +3,7 @@ import SwiftUI
 /// First-run Welcome window (Direction A §5.6): what Daybook is, how carefully it listens, and how to begin.
 /// Every step can be skipped with Esc or the close button. Permissions are asked for at first use, not here.
 struct WelcomeWindow: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @AppStorage("onboardingCompleted") private var onboardingCompleted = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
@@ -150,7 +150,7 @@ private struct WelcomeIntro: View {
 // MARK: - Step 2
 
 private struct WelcomeQuality: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @Binding var preset: ModelPreset
     let download: () -> Void
     let skip: () -> Void
@@ -193,7 +193,7 @@ private struct WelcomeQuality: View {
 /// Quick, Balanced and Detailed as one radio group, with each total size: laid out as Settings › Models › Quality
 /// lays them out, with this Mac's recommendation marked the same way.
 private struct WelcomePresetGroup: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     @Binding var selection: ModelPreset
 
     var body: some View {
@@ -251,7 +251,7 @@ private struct WelcomePresetGroup: View {
 // MARK: - Step 3
 
 private struct WelcomeReady: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let chosen: ModelPreset?
     let record: () -> Void
     let importAudio: () -> Void

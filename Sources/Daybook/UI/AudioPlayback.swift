@@ -1,29 +1,32 @@
 import AVFoundation
-import Combine
 import Foundation
+import Observation
 
 /// Lightweight local-file playback for source audio and transcript timestamps.
 @MainActor
-final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    @Published private(set) var isPlaying = false {
-        didSet { if activity.isPlaying != isPlaying { activity.isPlaying = isPlaying } }
-    }
-    /// Whether it's playing, apart from the position: what only needs that (the Controls menu's
-    /// Play or Pause) follows this and isn't redrawn ten times a second.
-    let activity = PlaybackActivity()
-    @Published private(set) var position: TimeInterval = 0
-    @Published private(set) var duration: TimeInterval = 0
-    @Published private(set) var currentURL: URL?
-    @Published private(set) var errorMessage: String?
+@Observable
+final class AudioPlaybackController: NSObject, AVAudioPlayerDelegate {
+    /// Whether it's playing. What reads only this (the Controls menu's Play or Pause) isn't redrawn as
+    /// `position` moves ten times a second.
+    private(set) var isPlaying = false
+    private(set) var position: TimeInterval = 0
+    private(set) var duration: TimeInterval = 0
+    private(set) var currentURL: URL?
+    private(set) var errorMessage: String?
     /// The system's words for `errorMessage`, in its tooltip.
-    @Published private(set) var errorDetails: String?
+    private(set) var errorDetails: String?
     /// Playback speed, kept when another source loads.
-    @Published var rate: Float = 1 { didSet { player?.rate = rate } }
+    var rate: Float = 1 { didSet { player?.rate = rate } }
     /// The recording and conversation now loaded, so views can follow along.
-    @Published private(set) var trackID: UUID?
-    @Published private(set) var meetingID: UUID?
-    private var player: AVAudioPlayer?
-    private var timer: Timer?
+    private(set) var trackID: UUID?
+    private(set) var meetingID: UUID?
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var timer: Timer?
+
+    /// Changes `isPlaying` only when it differs, so what reads it redraws only when playback starts or stops.
+    private func setPlaying(_ playing: Bool) {
+        if isPlaying != playing { isPlaying = playing }
+    }
 
     /// Starts or seeks playback of one recording of a conversation.
     func play(url: URL, at seconds: TimeInterval = 0, trackID: UUID, meetingID: UUID) {
@@ -65,7 +68,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
             currentURL = nil
             duration = 0
             position = 0
-            isPlaying = false
+            setPlaying(false)
             errorMessage = "This recording couldn’t be opened."; errorDetails = error.localizedDescription
             invalidateTimer()
         }
@@ -76,12 +79,12 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
         if player.currentTime >= player.duration { player.currentTime = 0 }
         guard player.play() else {
             errorMessage = "Playback couldn’t start. Check your output device and try again."; errorDetails = nil
-            isPlaying = false
+            setPlaying(false)
             invalidateTimer()
             return
         }
         errorMessage = nil; errorDetails = nil
-        isPlaying = true
+        setPlaying(true)
         position = player.currentTime
         invalidateTimer()
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -94,7 +97,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
     func pause() {
         player?.pause()
         position = player?.currentTime ?? position
-        isPlaying = false
+        setPlaying(false)
         invalidateTimer()
     }
 
@@ -103,7 +106,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
         player?.stop()
         player?.currentTime = 0
         position = 0
-        isPlaying = false
+        setPlaying(false)
         invalidateTimer()
     }
 
@@ -130,7 +133,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
         guard let player else { return }
         position = min(player.currentTime, duration)
         if !player.isPlaying {
-            isPlaying = false
+            setPlaying(false)
             invalidateTimer()
         }
     }
@@ -143,7 +146,7 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
             guard let self, self.player === player else { return }
-            self.isPlaying = false
+            self.setPlaying(false)
             self.position = self.duration
             self.invalidateTimer()
             if !flag { self.errorMessage = "Playback stopped before the end of the recording."; self.errorDetails = nil }
@@ -153,17 +156,11 @@ final class AudioPlaybackController: NSObject, ObservableObject, AVAudioPlayerDe
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         Task { @MainActor [weak self] in
             guard let self, self.player === player else { return }
-            self.isPlaying = false
+            self.setPlaying(false)
             self.errorMessage = "This recording couldn’t be played."; self.errorDetails = error?.localizedDescription
             self.invalidateTimer()
         }
     }
 
     deinit { timer?.invalidate() }
-}
-
-/// Whether playback is playing, published only when that changes.
-@MainActor
-final class PlaybackActivity: ObservableObject {
-    @Published fileprivate(set) var isPlaying = false
 }

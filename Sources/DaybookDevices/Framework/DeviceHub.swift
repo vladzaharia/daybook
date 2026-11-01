@@ -1,28 +1,29 @@
-import Combine
 import DaybookCore
 import Foundation
+import Observation
 
 /// Every recorder the person added: their sessions, persisted configuration, setup, and the
-/// library links each needs. It publishes only when devices are added, removed, or renamed;
-/// each session publishes its own activity.
+/// library links each needs. Its own state changes only when devices are added or removed; each
+/// session, and each session's connections, carry their own activity.
 @MainActor
-public final class DeviceHub: ObservableObject {
-    @Published public private(set) var sessions: [DeviceSession] = []
+@Observable
+public final class DeviceHub {
+    public private(set) var sessions: [DeviceSession] = []
     /// A device being set up. It joins `sessions` once one of its methods is set up.
-    @Published public private(set) var pendingSetup: DeviceSession?
+    public private(set) var pendingSetup: DeviceSession?
     public let environment: DeviceEnvironment
-    public var importer: DeviceImporter? { didSet { (sessions + [pendingSetup].compactMap { $0 }).forEach { $0.importer = importer } } }
+    @ObservationIgnored public var importer: DeviceImporter? { didSet { (sessions + [pendingSetup].compactMap { $0 }).forEach { $0.importer = importer } } }
     /// A recorder's own button started (true) or stopped (false) a recording, on any device here.
-    public var onRecorderButton: ((DeviceSession, Bool) -> Void)?
+    @ObservationIgnored public var onRecorderButton: ((DeviceSession, Bool) -> Void)?
 
-    private var meetings: [Meeting] = []
-    private var index = DeviceLibraryIndex(meetings: [])
+    @ObservationIgnored private var meetings: [Meeting] = []
+    @ObservationIgnored private var index = DeviceLibraryIndex(meetings: [])
     private var libraryReady = false
     private var started = false
     /// Staged audio older than this belongs to an earlier run: no transfer of this one owns it.
     private let createdAt = Date()
-    private var librarySubscription: AnyCancellable?
-    private var ownershipSubscription: AnyCancellable?
+    @ObservationIgnored private var libraryWatch: ObservationWatch?
+    @ObservationIgnored private var ownershipWatch: ObservationWatch?
     /// The library's recorder ownership and this device's sync ID, once known.
     private var ownership: (owners: [RecorderOwnership], thisDevice: String)?
 
@@ -92,9 +93,12 @@ public final class DeviceHub: ObservableObject {
     public func session(_ id: String) -> DeviceSession? { sessions.first { $0.id == id } }
     public func session(kind: String) -> DeviceSession? { sessions.first { $0.kind.id == kind } }
 
-    /// Follows the library: its conversations, and whether it has loaded.
-    public func observeLibrary(_ library: AnyPublisher<([Meeting], Bool), Never>) {
-        librarySubscription = library.sink { [weak self] meetings, ready in self?.libraryChanged(meetings, ready: ready) }
+    /// Follows the library: its conversations, and whether it has loaded, as `library` reads them from `@Observable`
+    /// models. Applied now, and again once each change has landed (`ObservationWatch`).
+    public func observeLibrary(_ library: @escaping @MainActor () -> (meetings: [Meeting], ready: Bool)) {
+        libraryWatch = ObservationWatch.values(of: library) { [weak self] library in
+            self?.libraryChanged(library.meetings, ready: library.ready)
+        }
     }
 
     /// The library's ownership records changed. Sessions whose recorder another device owns stop
@@ -104,9 +108,12 @@ public final class DeviceHub: ObservableObject {
         sessions.forEach { $0.applyOwnership(owners, thisDevice: thisDevice) }
     }
 
-    /// Follows the library's ownership records: (owners, this device's sync ID).
-    public func observeOwnership(_ owners: AnyPublisher<([RecorderOwnership], String), Never>) {
-        ownershipSubscription = owners.sink { [weak self] owners, thisDevice in self?.recorderOwnersChanged(owners, thisDevice: thisDevice) }
+    /// Follows the library's ownership records and this device's sync ID, as `owners` reads them. Applied now, and again
+    /// once each change has landed.
+    public func observeOwnership(_ owners: @escaping @MainActor () -> (owners: [RecorderOwnership], thisDevice: String)) {
+        ownershipWatch = ObservationWatch.values(of: owners) { [weak self] ownership in
+            self?.recorderOwnersChanged(ownership.owners, thisDevice: ownership.thisDevice)
+        }
     }
 
     /// The library changed: every device recomputes which of its recordings are already in it.
@@ -184,7 +191,6 @@ public final class DeviceHub: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let session = session(id) else { return }
         session.update { $0.name = String(trimmed.prefix(60)) }
-        objectWillChange.send()
     }
 
     /// Removes the device when its last method is forgotten.

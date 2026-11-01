@@ -1,4 +1,3 @@
-import Combine
 import DaybookCore
 import DaybookDevices
 import DaybookLink
@@ -65,13 +64,10 @@ extension DeviceHub {
         LinkRecorderState.states(of: sessions, conversation: conversation)
     }
 
-    /// Fires when a session publishes (a status read, a push, a new list), at most once per `interval`.
-    public func recorderChanges(every interval: RunLoop.SchedulerTimeType.Stride = .seconds(1)) -> AnyPublisher<Void, Never> {
-        $sessions.map { sessions in Publishers.MergeMany(sessions.map(\.objectWillChange)) }
-            .switchToLatest()
-            .debounce(for: interval, scheduler: RunLoop.main)
-            .map { _ in () }
-            .eraseToAnyPublisher()
+    /// Calls `changed` when what the recorders this device manages say changes (a status read, a push, a new list,
+    /// a recorder added), once nothing has changed for `interval`. Follows until the watch is released.
+    public func watchRecorders(every interval: Duration = .seconds(1), _ changed: @escaping @MainActor () -> Void) -> ObservationWatch {
+        ObservationWatch(delay: interval, { [weak self] in _ = self?.recorderStates() }, changed: changed)
     }
 }
 

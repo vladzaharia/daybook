@@ -10,9 +10,9 @@ import SwiftUI
 
 /// The device page's handoff state, under the byline. Nothing when no handoff is under way.
 struct RecorderHandoffNotice: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var handoff: RecorderHandoff
+    let state: AppState
+    let session: DeviceSession
+    let handoff: RecorderHandoff
     @State private var confirmingTakeOver = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -123,8 +123,8 @@ private extension RecorderHandoff.State {
 
 /// "Use on This Mac" / "Use on Alex’s iPhone" in the device page's More menu and the menu bar.
 struct RecorderHandoffMenuItems: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     /// The menu bar names the recorder; the device page doesn't need to.
     var namesRecorder = false
 
@@ -150,8 +150,8 @@ struct RecorderHandoffMenuItems: View {
 
 /// Settings › Devices: who manages the recorder, and the way to move it.
 struct RecorderOwnershipRow: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
 
     var body: some View {
         if session.direct is any ManagedConnection, session.recorderSerial != nil {

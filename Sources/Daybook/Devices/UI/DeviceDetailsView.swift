@@ -6,8 +6,8 @@ import SwiftUI
 /// number, and the honest technical facts under a disclosure. Every row shares one label column, so
 /// the values line up from the top of the popover to the foot of Technical Details.
 struct DeviceDetailsView: View {
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var browser: DeviceBrowser
+    let session: DeviceSession
+    let browser: DeviceBrowser
     @State private var copied = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

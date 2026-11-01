@@ -5,11 +5,10 @@ import SwiftUI
 /// search results. Places are the title's menu, search is the system search field with tag and
 /// speaker suggestions, and Select turns on multi-select for moving, tagging, and the Trash.
 ///
-/// It observes the `LibraryController` directly. (Reading `PhoneLibrary.conversations` through the
-/// `@Observable` app model doesn't: the controller is an `ObservableObject`, which Observation
-/// doesn't track, so a list drawn before the library loaded stayed empty.)
+/// It reads the `LibraryController` directly, which is `@Observable`, as the player is: the list redraws for the
+/// conversations, and a row for whether it's playing.
 struct LibraryPage: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let rootURL: URL
     /// Two pages: a tap shows the conversation on the right page instead of opening it.
     var twoPage = false
@@ -328,7 +327,7 @@ struct LibraryPage: View {
 
 /// The title's menu: places, folders, and the Trash.
 private struct PlacesMenu: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let newFolder: () -> Void
     let renameFolder: (UUID) -> Void
     let deleteFolder: (UUID) -> Void
@@ -366,7 +365,7 @@ private struct PlacesMenu: View {
 
 /// A row's menu, or the selection's. Items that don't apply are hidden.
 struct RowMenu: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let ids: [UUID]
     let trash: ([UUID]) -> Void
     @Environment(ReadingSession.self) private var session
@@ -402,7 +401,7 @@ struct RowMenu: View {
 
 /// The selection's actions, at the bottom where the thumb is.
 private struct SelectionBar: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let ids: [UUID]
     let trash: ([UUID]) -> Void
     @Environment(ReadingSession.self) private var session

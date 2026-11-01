@@ -1,5 +1,5 @@
-import Combine
 import DaybookCore
+import DaybookDevices
 import Foundation
 
 /// Speaker profiles (DaybookCore's SpeakerProfiles.swift): people known by voice across the library.
@@ -168,7 +168,7 @@ public final class SpeakerProfileCoordinator {
     private let library: LibraryController
     private let options: () -> SpeakerProfileOptions
     private let skipping: () -> Set<UUID>
-    private var observation: AnyCancellable?
+    private var observation: ObservationWatch?
     private var scheduled: Task<Void, Never>?
     private var running = false
     private var again = false
@@ -184,11 +184,13 @@ public final class SpeakerProfileCoordinator {
     /// Watches the library from now on, and reconciles once soon.
     public func start() {
         guard observation == nil else { return }
-        observation = library.objectWillChange.sink { [weak self] _ in self?.schedule() }
+        let library = self.library
+        observation = ObservationWatch({ _ = library.meetings; _ = library.metadata; _ = library.isLoaded }) { [weak self] in self?.schedule() }
         schedule()
     }
 
     public func stop() {
+        observation?.cancel()
         observation = nil
         scheduled?.cancel(); scheduled = nil
     }

@@ -29,7 +29,7 @@ struct LibraryBrowser: View {
 
 private struct ReadingLayout: View {
     let style: SurfaceStyle
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let rootURL: URL
     let openLatest: Bool
     let statusDetent: StatusDetent?
@@ -320,7 +320,7 @@ private struct NotebookPlaceholder: View {
 /// moment after the stack appears (without animation), because a stack created already pushed
 /// (after a fold) loses its page's toolbar title items.
 private struct PocketStack: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let rootURL: URL
     @Environment(ReadingSession.self) private var session
     @State private var path: [UUID] = []

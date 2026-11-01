@@ -1,5 +1,6 @@
 import AVFoundation
 import DaybookCore
+import DaybookDevices
 import DaybookKit
 import Foundation
 
@@ -536,7 +537,7 @@ extension AppState {
     func trashWhenIdle(_ id: UUID, addedTo target: String) {
         Task { [weak self] in
             guard let self else { return }
-            for await current in self.$processingID.values where current != id { break }
+            await ObservationWatch.until { [weak self] in self?.processingID != id }
             // Take in what other devices added meanwhile (notes or photos from the phone) before deciding. Sync keeps
             // anything that still arrives after the deletion as a new conversation.
             await self.synchronizeLibrary()

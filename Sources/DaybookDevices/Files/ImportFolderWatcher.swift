@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCore
 import Foundation
+import Observation
 
 /// The files method, shared by every device kind: a watched folder of exported recordings.
 ///
@@ -9,24 +10,25 @@ import Foundation
 /// copies them into the library and never moves, renames, or deletes them. A file's ID is its
 /// content digest, so different exports cannot collide merely by sharing a name and size.
 @MainActor
-public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
+@Observable
+public final class ImportFolderWatcher: DeviceConnection {
     public static let audioExtensions: Set<String> = ["wav", "mp3", "m4a", "aac", "aiff", "aif", "caf", "flac", "mp4", "ogg", "opus"]
 
     public let method = ConnectionMethodKind.files
     public let capabilities: DeviceCapabilities = []
-    @Published public private(set) var folder: URL?
-    @Published public private(set) var recordings: [DeviceRecording] = []
-    @Published public private(set) var inventoryUpdatedAt: Date?
-    @Published public private(set) var isRefreshing = false
-    @Published public private(set) var problem: DeviceProblem?
-    @Published public private(set) var lastImportDate: Date?
+    public private(set) var folder: URL?
+    public private(set) var recordings: [DeviceRecording] = []
+    public private(set) var inventoryUpdatedAt: Date?
+    public private(set) var isRefreshing = false
+    public private(set) var problem: DeviceProblem?
+    public private(set) var lastImportDate: Date?
     /// Files in iCloud Drive that haven't downloaded to this Mac yet.
-    @Published public private(set) var waitingForICloud = 0
-    @Published public private(set) var isWatching = false
+    public private(set) var waitingForICloud = 0
+    public private(set) var isWatching = false
     /// Where the folder was, when it's no longer watched because this build can't open it: in the App Sandbox a
     /// bookmark made before can stop working. Names the folder and starts Choose Folder… there (`suggestedFolder`).
-    @Published public private(set) var lastKnownFolder: URL?
-    public var onChange: (() -> Void)?
+    public private(set) var lastKnownFolder: URL?
+    @ObservationIgnored public var onChange: (() -> Void)?
 
     public var status: DeviceStatus? { nil }
     public var lastConnectedAt: Date? { nil }
@@ -40,17 +42,17 @@ public final class ImportFolderWatcher: ObservableObject, DeviceConnection {
 
     private let storage: DeviceStorage
     private let interval: Duration
-    private var task: Task<Void, Never>?
+    @ObservationIgnored private var task: Task<Void, Never>?
     private var scanning = false
     private var securityScope = false
     /// Files seen on the previous scan, by path.
-    private var observations: [String: FileFingerprint] = [:]
-    private var digests: [String: (fingerprint: FileFingerprint, value: String)] = [:]
-    private var scanGeneration = UUID()
+    @ObservationIgnored private var observations: [String: FileFingerprint] = [:]
+    @ObservationIgnored private var digests: [String: (fingerprint: FileFingerprint, value: String)] = [:]
+    @ObservationIgnored private var scanGeneration = UUID()
     /// Recording IDs imported before (kept even if the conversation is later deleted, so a file
     /// isn't imported again on its own).
     private var completed: Set<String> = []
-    private var urls: [String: URL] = [:]
+    @ObservationIgnored private var urls: [String: URL] = [:]
     private var isDemo = false
 
     public enum Keys {

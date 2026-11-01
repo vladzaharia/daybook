@@ -1,4 +1,4 @@
-import Combine
+import DaybookDevices
 import DaybookKit
 import Foundation
 import Observation
@@ -35,8 +35,6 @@ final class PhoneDevices {
     /// with it, their audio saved into it as they record, stopped with it.
     let cascade: RecorderCascade
     let mode: Mode
-    /// Bumps when the hub or a session publishes, for Observation-based views.
-    private(set) var revision = 0
     /// Recorders iOS handed back after relaunching Daybook in the background, and when.
     private(set) var restored: [UUID] = []
     private(set) var restoredAt: Date?
@@ -47,8 +45,8 @@ final class PhoneDevices {
     @ObservationIgnored var onImported: ((PhoneLibrary.Filed) -> Void)?
     @ObservationIgnored private let library: PhoneLibrary
     @ObservationIgnored private let settings: PhoneSettings
-    @ObservationIgnored private var subscriptions: Set<AnyCancellable> = []
-    @ObservationIgnored private var sessionSubscriptions: [String: AnyCancellable] = [:]
+    /// What this follows in the library and the recorders (`ObservationWatch`).
+    @ObservationIgnored private var watches: [ObservationWatch] = []
     @ObservationIgnored private var started = false
     /// The recorder's Live Activity: Listen Live, or a recording this iPhone started on it. None in tests.
     @ObservationIgnored private var recorderActivity: RecorderActivityController?
@@ -138,13 +136,18 @@ final class PhoneDevices {
             self.onImported?(filed)
             return filed.meeting.id
         }
-        hub.objectWillChange.sink { [weak self] _ in self?.changed() }.store(in: &subscriptions)
-        handoff.objectWillChange.sink { [weak self] _ in self?.changed() }.store(in: &subscriptions)
         if !LaunchOptions.isTestHost {
             let activity = RecorderActivityController { [weak self] in self?.hub.sessions ?? [] }
             recorderActivity = activity
             // Its Stop Listening runs in this process, launching the app in the background if needed.
             RecorderCommands.handler = activity
+            // The activity follows what it shows of the recorders, and, while one listens live, the audio arriving, which
+            // keeps it current (`RecorderActivityController.follow`).
+            watches.append(ObservationWatch({ [weak hub] in
+                guard let hub else { return }
+                _ = RecorderActivityController.target(hub.sessions)
+                for session in hub.sessions { _ = (session.direct as? any LiveListeningConnection)?.live.receivedSeconds }
+            }) { [weak activity] in activity?.follow() })
         }
     }
 
@@ -153,13 +156,12 @@ final class PhoneDevices {
         guard !started else { return }
         started = true
         let controller = library.controller
-        hub.observeLibrary(controller.$meetings.combineLatest(controller.$isLoaded).eraseToAnyPublisher())
-        controller.$metadata.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.applyOwnership() }
-        }.store(in: &subscriptions)
+        hub.observeLibrary { [weak controller] in (controller?.meetings ?? [], controller?.isLoaded == true) }
+        watches.append(ObservationWatch({ [weak controller] in _ = controller?.metadata }) { [weak self] in self?.applyOwnership() })
         hub.start()
-        followSessions()
+        holdRecorders()
         applyOwnership()
+        recorderActivity?.follow()
     }
 
     func shutDown() { hub.shutDown() }
@@ -177,7 +179,7 @@ final class PhoneDevices {
         hub.resumeAutomaticImportsIfDue()
     }
 
-    var sessions: [DeviceSession] { _ = revision; return hub.sessions }
+    var sessions: [DeviceSession] { hub.sessions }
 
     // MARK: Ownership
 
@@ -185,7 +187,6 @@ final class PhoneDevices {
     func applyOwnership() {
         hub.recorderOwnersChanged(library.controller.recorderOwners, thisDevice: library.controller.thisDevice.id)
         holdRecorders()
-        revision &+= 1
     }
 
     /// A recorder this iPhone manages that records along with it keeps its link while in range, so its
@@ -220,9 +221,9 @@ final class PhoneDevices {
     func takeOverAnyway(_ session: DeviceSession) { handoff.takeOverAnyway(session) }
     /// "Use on Studio Mac": offers it to a Mac connected over Wi‑Fi.
     func give(_ session: DeviceSession, to mac: RecorderHandoff.Peer) { handoff.give(session, to: mac) }
-    func handoffState(_ session: DeviceSession) -> RecorderHandoff.State { _ = revision; return handoff.state(of: session) }
+    func handoffState(_ session: DeviceSession) -> RecorderHandoff.State { handoff.state(of: session) }
     /// Macs on Wi‑Fi this iPhone could hand the recorder to.
-    func handoffTargets(_ session: DeviceSession) -> [RecorderHandoff.Peer] { _ = revision; return handoff.peersToGive(session) }
+    func handoffTargets(_ session: DeviceSession) -> [RecorderHandoff.Peer] { handoff.peersToGive(session) }
     /// Stops waiting, or clears an answer that was shown.
     func endHandoff(_ session: DeviceSession) {
         if handoff.state(of: session).isPending { handoff.cancel(session) } else { handoff.dismiss(session) }
@@ -234,7 +235,7 @@ final class PhoneDevices {
             library.controller.releaseRecorder(kind: session.kind.id, serial: serial, onlyIfOwnedBy: library.controller.thisDevice.id)
         }
         hub.remove(session.id)
-        followSessions()
+        holdRecorders()
     }
 
     /// Who manages the recorder when it isn't this iPhone.
@@ -243,11 +244,7 @@ final class PhoneDevices {
     // MARK: Setup
 
     /// Add Device: begins setting up a kind; its setup screen drives the session.
-    func beginSetup(_ kind: DeviceKind) -> DeviceSession? {
-        let session = hub.beginSetup(kind)
-        revision &+= 1
-        return session
-    }
+    func beginSetup(_ kind: DeviceKind) -> DeviceSession? { hub.beginSetup(kind) }
 
     /// The recorder connected (or a folder was chosen): it joins the device list, and this iPhone
     /// becomes its manager.
@@ -258,14 +255,11 @@ final class PhoneDevices {
         // recorder (a debug demo), whose prompt would cover its screenshots.
         if mode == .live, !LaunchOptions.isTestHost { DeviceNotifications.requestAuthorizationIfNeeded() }
         hub.commitSetup()
-        followSessions()
+        holdRecorders()
         claim(session)
     }
 
-    func cancelSetup() {
-        hub.cancelSetup()
-        revision &+= 1
-    }
+    func cancelSetup() { hub.cancelSetup() }
 
     // MARK: Background Bluetooth
 
@@ -274,36 +268,5 @@ final class PhoneDevices {
     private func didRestore(_ ids: [UUID]) {
         restored = ids
         restoredAt = Date()
-    }
-
-    // MARK: Plumbing
-
-    private func followSessions() {
-        let ids = Set(hub.sessions.map(\.id))
-        sessionSubscriptions = sessionSubscriptions.filter { ids.contains($0.key) }
-        holdRecorders()
-        for session in hub.sessions where sessionSubscriptions[session.id] == nil {
-            // Listen Live is observed apart from the session (its text changes often): follow both.
-            var changes = session.objectWillChange.eraseToAnyPublisher()
-            if let live = (session.direct as? any LiveListeningConnection)?.live {
-                changes = changes.merge(with: live.objectWillChange).eraseToAnyPublisher()
-            }
-            sessionSubscriptions[session.id] = changes.sink { [weak self] _ in self?.changed() }
-        }
-        changed()
-    }
-
-    @ObservationIgnored private var pendingChange = false
-
-    /// Coalesced: a transfer publishes often, and views need one redraw per turn.
-    private func changed() {
-        guard !pendingChange else { return }
-        pendingChange = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.pendingChange = false
-            self.revision &+= 1
-            self.recorderActivity?.follow()
-        }
     }
 }

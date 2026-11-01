@@ -3,6 +3,7 @@ import DaybookCore
 import DaybookIntelligence
 import DaybookKit
 import Foundation
+import Observation
 
 // The model manager (Settings › Models; docs/models.md, "The model manager"). Everything here is
 // derived from the catalog, never from model IDs: roles from the catalog and the registered engines,
@@ -476,26 +477,27 @@ struct ModelRepositoryInput: Equatable {
 /// runtime (`LocalIntelligenceRuntime`) or the app's download queue, so processing waits for
 /// downloads exactly as it does elsewhere.
 @MainActor
-final class ModelManager: ObservableObject {
+@Observable
+final class ModelManager {
     enum UpdateCheck: Equatable {
         case never, checking, checked(Date), failed(String)
     }
 
     let state: AppState
     /// Hugging Face's metadata API, read only when the person checks for updates or adds a model.
-    var hubClient: any ModelHubClient
+    @ObservationIgnored var hubClient: any ModelHubClient
     /// Queues downloads ("key" or "key@revision"); the app's queue, replaced in tests.
-    var requestDownload: ([String]) -> Void
+    @ObservationIgnored var requestDownload: ([String]) -> Void
 
-    @Published private(set) var inventory = ModelInventory(revisions: [])
-    @Published private(set) var diskUsage: ModelDiskUsage?
-    @Published private(set) var protectedRevisions: Set<ModelInstallKey> = []
-    @Published private(set) var updates: [ModelUpdate] = []
-    @Published private(set) var updateCheck = UpdateCheck.never
-    @Published private(set) var resultCounts: [String: Int] = [:]
+    private(set) var inventory = ModelInventory(revisions: [])
+    private(set) var diskUsage: ModelDiskUsage?
+    private(set) var protectedRevisions: Set<ModelInstallKey> = []
+    private(set) var updates: [ModelUpdate] = []
+    private(set) var updateCheck = UpdateCheck.never
+    private(set) var resultCounts: [String: Int] = [:]
     /// A problem to show: what couldn't be done, one sentence with its fix, and the system's words behind Details.
-    @Published var problem: AppProblem?
-    @Published private(set) var isWorking = false
+    var problem: AppProblem?
+    private(set) var isWorking = false
 
     init(state: AppState, hubClient: (any ModelHubClient)? = nil, requestDownload: (([String]) -> Void)? = nil) {
         self.state = state

@@ -8,19 +8,18 @@ import SwiftUI
 /// What the panel shows, apart from what the app already knows: the conversation in focus, and
 /// whether the panel watched it record (so after Stop it reports what became of it).
 @MainActor
-final class FloatingNotesModel: ObservableObject {
+@Observable
+final class FloatingNotesModel {
     let state: AppState
-    let feed: FloatingStatusFeed
     let input = InputDeviceName()
     let levels = PanelLevels()
     /// The conversation shown when nothing is recording; nil is the home.
-    @Published private(set) var focusID: UUID?
+    private(set) var focusID: UUID?
     /// The conversation this panel watched record.
-    @Published private(set) var recordedID: UUID?
+    private(set) var recordedID: UUID?
 
     init(state: AppState) {
         self.state = state
-        feed = FloatingStatusFeed(state: state)
         focusID = state.recordingID
         recordedID = state.recordingID
     }
@@ -49,12 +48,12 @@ final class FloatingNotesModel: ObservableObject {
 
 /// Reads the reading scale from the app state, so ⌘+ and ⌘− resize the notes while the panel is open.
 struct FloatingNotesRoot: View {
-    @ObservedObject var model: FloatingNotesModel
-    @ObservedObject var state: AppState
+    let model: FloatingNotesModel
+    let state: AppState
     let chrome: PanelChrome
 
     var body: some View {
-        FloatingNotesView(model: model, state: state, chrome: chrome, feed: model.feed, input: model.input)
+        FloatingNotesView(model: model, state: state, chrome: chrome, input: model.input)
             .environment(\.readingScale, CGFloat(state.readingScale))
             .modifier(FloatingNotesSurface())
             .modifier(DemoContrast())
@@ -92,12 +91,11 @@ private struct DemoContrast: ViewModifier {
 /// The three surfaces and the status bar over them. The surface follows the app: recording, a
 /// conversation (after Stop, or opened for one), or the home. The size picks full or compact.
 struct FloatingNotesView: View {
-    @ObservedObject var model: FloatingNotesModel
-    @ObservedObject var state: AppState
-    @ObservedObject var chrome: PanelChrome
-    @ObservedObject var feed: FloatingStatusFeed
-    @ObservedObject var input: InputDeviceName
-    /// Live captions are running for the recording. Kept here, rather than observing the captions,
+    let model: FloatingNotesModel
+    let state: AppState
+    let chrome: PanelChrome
+    let input: InputDeviceName
+    /// Live captions are running for the recording. Kept here, rather than reading the captions,
     /// so a revised word redraws only the caption strip.
     @State private var captionsShowing: UUID?
 
@@ -110,8 +108,29 @@ struct FloatingNotesView: View {
     private var surface: Surface { isRecording ? .recording : afterStop ? .conversation : .home }
 
     var body: some View {
-        let _ = feed.revision
-        let inputs = FloatingStatusInputs.make(state, meeting: meeting, afterStop: afterStop, inputDevice: input.name)
+        // A summary's countdown is said a second at a time; otherwise the panel redraws only for what it reads.
+        TimelineView(.periodic(from: .now, by: state.placements.undecided.isEmpty ? 3_600 : 1)) { _ in
+            panel(FloatingStatusInputs.make(state, meeting: meeting, afterStop: afterStop, inputDevice: input.name))
+        }
+        .background { shortcuts }
+        // Inside the safe-area escape, so the minimum is measured against the whole window.
+        .frame(minWidth: FloatingLayout.minimumSize.width, minHeight: FloatingLayout.minimumSize.height)
+        .background(DaybookPalette.paper)
+        .ignoresSafeArea()
+        .onAppear {
+            input.start()
+            runLevels()
+        }
+        .onChange(of: state.recordingID) { _, id in
+            model.recordingChanged(id)
+            runLevels()
+        }
+        .onChange(of: state.captions.showing, initial: true) { _, showing in
+            if showing != captionsShowing { captionsShowing = showing }
+        }
+    }
+
+    private func panel(_ inputs: FloatingStatusInputs) -> some View {
         GeometryReader { proxy in
             let compact = proxy.size.height < FloatingLayout.compactBelow
             let chips = FloatingStatus.chips(inputs, including: chipKinds(compact: compact))
@@ -128,22 +147,6 @@ struct FloatingNotesView: View {
             }
             .daybookMotion(DaybookMotion.state, value: surface)
             .daybookMotion(DaybookMotion.state, value: compact)
-        }
-        .background { shortcuts }
-        // Inside the safe-area escape, so the minimum is measured against the whole window.
-        .frame(minWidth: FloatingLayout.minimumSize.width, minHeight: FloatingLayout.minimumSize.height)
-        .background(DaybookPalette.paper)
-        .ignoresSafeArea()
-        .onAppear {
-            input.start()
-            runLevels()
-        }
-        .onChange(of: state.recordingID) { _, id in
-            model.recordingChanged(id)
-            runLevels()
-        }
-        .onReceive(state.captions.$showing) { showing in
-            if showing != captionsShowing { captionsShowing = showing }
         }
     }
 
@@ -250,7 +253,7 @@ struct PanelContext {
 /// Compact button (on hover) mirroring close. Full, the phase is centred like a window title;
 /// compact, the chips join it and shorten, then shrink to their glyphs, as the panel narrows.
 private struct StatusBand: View {
-    @ObservedObject var chrome: PanelChrome
+    let chrome: PanelChrome
     let phase: FloatingPhase?
     let chips: [FloatingChip]
     let menus: ChipMenus
@@ -393,7 +396,7 @@ private struct ChipControl: View {
 }
 
 private struct ChipMenuItems: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let chip: FloatingChip
     let meeting: Meeting?
     let openMeeting: () -> Void

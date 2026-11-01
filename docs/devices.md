@@ -22,7 +22,7 @@ The framework and kinds are the `DaybookDevices` library (`Sources/DaybookDevice
 ```text
 DeviceCatalog ── DeviceIntegration ── DeviceKind (id, name, symbol, vendor, methods in preference order)
                                           │
-DeviceHub (@MainActor ObservableObject)   │  configured devices, persisted as [ConfiguredDevice]
+DeviceHub (@MainActor @Observable)       │  configured devices, persisted as [ConfiguredDevice]
   └─ DeviceSession (one per device) ──────┘
        ├─ connections: [any DeviceConnection]   one per implemented method
        │    ├─ SoundcoreConnection (direct, Bluetooth LE) ── SoundcoreSession ── SoundcoreTransport
@@ -356,8 +356,9 @@ a second local runtime), which are gone, with their plumbing (`LiveTranscriber`,
   iOS 26) in the device's language, never downloading one. The Mac points them at Settings › General
   › Live Captions (the same switch and language as its recordings, downloading the language when
   the person listens). On the iPhone the default applies until the app sets its own.
-- **What the session publishes** (`DeviceSession`, `@MainActor`, an `ObservableObject`), for the Mac's
-  device page and the iPhone's status sheet:
+- **What the session publishes** (`DeviceSession`, `@MainActor`, `@Observable`, as the hub and every connection
+  are), for the Mac's device page and the iPhone's status sheet. A view redraws for what it reads: the captions redraw
+  the caption strip, never the device list or the session's other surfaces:
   - `liveCaptions: [LiveCaptionSegment]`: oldest first, tentative text replaced in place, then final;
     empty when not listening, or when captions are off or can't run. Read-only; demos set the
     connection's `live.captions`.

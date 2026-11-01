@@ -1,8 +1,8 @@
 import AppKit
-import Combine
 import CoreAudio
 import CoreGraphics
 import Foundation
+import Observation
 
 /// A conservative rule: audio activity alone never establishes that a call has begun.
 struct MeetingAppRule: Codable, Equatable, Identifiable {
@@ -115,17 +115,18 @@ struct MeetingDetectionStateMachine {
 }
 
 @MainActor
-final class MeetingMonitor: ObservableObject {
-    @Published private(set) var isMonitoring = false
-    @Published private(set) var isMeetingActive = false
-    @Published private(set) var activeCandidate: MeetingCandidate?
-    @Published private(set) var statusText = "Off"
+@Observable
+final class MeetingMonitor {
+    private(set) var isMonitoring = false
+    private(set) var isMeetingActive = false
+    private(set) var activeCandidate: MeetingCandidate?
+    private(set) var statusText = "Off"
     private static let listening = "Listening for calls"
     var rules = MeetingAppRule.defaults
-    var onMeetingStarted: ((MeetingCandidate) -> Void)?
-    var onMeetingEnded: (() -> Void)?
-    private var machine = MeetingDetectionStateMachine()
-    private var timer: Timer?
+    @ObservationIgnored var onMeetingStarted: ((MeetingCandidate) -> Void)?
+    @ObservationIgnored var onMeetingEnded: (() -> Void)?
+    @ObservationIgnored private var machine = MeetingDetectionStateMachine()
+    @ObservationIgnored private var timer: Timer?
 
     func startMonitoring() {
         guard !isMonitoring else { return }

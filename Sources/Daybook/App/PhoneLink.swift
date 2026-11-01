@@ -1,8 +1,8 @@
-import Combine
 import DaybookCore
 import DaybookKit
 import DaybookLink
 import Foundation
+import Observation
 
 /// This Mac's end of Daybook's local link to paired iPhones (docs/link.md): the `LinkService`, the
 /// pairing window, which phones are connected, and what they last reported.
@@ -11,7 +11,8 @@ import Foundation
 /// nobody pairs with never listens on the network, and the service itself advertises over Bonjour
 /// only under the same rule, so nothing is announced on every network this Mac joins.
 @MainActor
-final class PhoneLink: ObservableObject {
+@Observable
+final class PhoneLink {
     /// What the pairing sheet shows.
     enum Pairing: Equatable {
         case closed
@@ -34,46 +35,43 @@ final class PhoneLink: ObservableObject {
         }
     }
 
-    @Published private(set) var pairing: Pairing = .closed
+    private(set) var pairing: Pairing = .closed
     /// Why the last attempt didn't pair (a wrong code, too many tries), shown under the new code.
-    @Published private(set) var pairingProblem: String?
+    private(set) var pairingProblem: String?
     /// Phones this Mac shares a key with. Valid once `pairingsLoaded`.
-    @Published private(set) var paired: [LinkPairedDevice] = []
-    @Published private(set) var pairingsLoaded = false
+    private(set) var paired: [LinkPairedDevice] = []
+    private(set) var pairingsLoaded = false
     /// Connected, authenticated phones, with their clock estimates.
-    @Published private(set) var peers: [UUID: LinkPeer] = [:]
+    private(set) var peers: [UUID: LinkPeer] = [:]
     /// What each connected phone last said about its recorder.
-    @Published private(set) var recordingStates: [UUID: LinkRecordingState] = [:]
+    private(set) var recordingStates: [UUID: LinkRecordingState] = [:]
     /// What each phone last said about the recorders it manages, on this Mac's clock; kept after it
     /// disconnects, for as long as it can be trusted (`LinkRecorderState.lifetime`).
-    @Published private(set) var phoneRecorders: [UUID: [LinkRecorderState]] = [:]
-    private var lastSentRecorders: [LinkRecorderState]?
-    @Published private(set) var lastConnected: [UUID: Date] = [:]
-    @Published private(set) var isRunning = false
-    /// Sent after anything about a phone changed (nil: possibly every phone), so its device
-    /// connection can update.
-    let changes = PassthroughSubject<UUID?, Never>()
+    private(set) var phoneRecorders: [UUID: [LinkRecorderState]] = [:]
+    @ObservationIgnored private var lastSentRecorders: [LinkRecorderState]?
+    private(set) var lastConnected: [UUID: Date] = [:]
+    private(set) var isRunning = false
 
-    var environment: Environment
+    @ObservationIgnored var environment: Environment
     private(set) var identity: LinkIdentity
     private(set) var service: LinkService?
-    private var listening: Task<Void, Never>?
-    private var starting: Task<Bool, Never>?
+    @ObservationIgnored private var listening: Task<Void, Never>?
+    @ObservationIgnored private var starting: Task<Bool, Never>?
 
     /// A phone paired, or a pairing went away (from either side).
-    var onPaired: ((LinkPairedDevice) -> Void)?
-    var onUnpaired: ((UUID) -> Void)?
-    var onConnected: ((LinkPeer) -> Void)?
+    @ObservationIgnored var onPaired: ((LinkPairedDevice) -> Void)?
+    @ObservationIgnored var onUnpaired: ((UUID) -> Void)?
+    @ObservationIgnored var onConnected: ((LinkPeer) -> Void)?
     /// An app message from a phone: recording state, bookmarks, processing nudges.
-    var onMessage: ((LinkMessage, UUID) -> Void)?
+    @ObservationIgnored var onMessage: ((LinkMessage, UUID) -> Void)?
     /// Answers a phone asking this Mac to start or stop recording.
-    var recordHandler: (@MainActor (LinkPeer, LinkRecordRequest) async -> LinkRecordReply.Outcome)?
+    @ObservationIgnored var recordHandler: (@MainActor (LinkPeer, LinkRecordRequest) async -> LinkRecordReply.Outcome)?
     /// This Mac's own recorder as phones should see it (`recording.state`), read each time it's sent.
-    var localRecordingState: (() -> LinkRecordingState)?
+    @ObservationIgnored var localRecordingState: (() -> LinkRecordingState)?
     /// How often this Mac's state is sent again while it records, so a phone can tell it's still at it.
     var recordingStateInterval: Duration = .seconds(15)
-    private var stateBeat: Task<Void, Never>?
-    private var stateSend: Task<Void, Never>?
+    @ObservationIgnored private var stateBeat: Task<Void, Never>?
+    @ObservationIgnored private var stateSend: Task<Void, Never>?
 
     init(identity: LinkIdentity, environment: Environment = .app) {
         self.identity = identity
@@ -127,7 +125,6 @@ final class PhoneLink: ObservableObject {
         listening?.cancel(); listening = nil
         isRunning = false
         peers = [:]; recordingStates = [:]
-        changes.send(nil)
     }
 
     /// Stops for good (tests, and quitting).
@@ -187,7 +184,6 @@ final class PhoneLink: ObservableObject {
     private func reloadPairings() async {
         paired = ((try? await service?.pairedDevices()) ?? []).sorted { $0.pairedAt < $1.pairedAt }
         pairingsLoaded = true
-        changes.send(nil)
     }
 
     private func isFinished(_ pairing: Pairing) -> Bool {
@@ -258,7 +254,6 @@ final class PhoneLink: ObservableObject {
             pairing = .paired(device)
             pairingProblem = nil
             if !paired.contains(where: { $0.deviceID == device.deviceID }) { paired.append(device) }
-            changes.send(device.deviceID)
             onPaired?(device)
         case .pairingFailed(let error):
             switch error {
@@ -273,24 +268,20 @@ final class PhoneLink: ObservableObject {
             paired.removeAll { $0.deviceID == deviceID }
             peers[deviceID] = nil
             recordingStates[deviceID] = nil
-            changes.send(deviceID)
             onUnpaired?(deviceID)
         case .connected(let peer):
             peers[peer.deviceID] = peer
             lastConnected[peer.deviceID] = Date()
-            changes.send(peer.deviceID)
             // A phone that (re)connects hears at once whether this Mac is recording, and what.
             sendRecordingState(to: peer.deviceID)
             onConnected?(peer)
         case .peerUpdated(let peer):
             guard peers[peer.deviceID] != nil else { return }
             peers[peer.deviceID] = peer
-            changes.send(peer.deviceID)
         case .disconnected(let deviceID, _):
             peers[deviceID] = nil
             recordingStates[deviceID] = nil
             lastConnected[deviceID] = Date()
-            changes.send(deviceID)
         case .received(let message, let from):
             if case .recordingState(let state) = message {
                 recordingStates[from] = state
@@ -298,7 +289,6 @@ final class PhoneLink: ObservableObject {
                     let clock = peers[from]?.clock
                     phoneRecorders[from] = recorders.map { $0.moved { clock?.localDate(fromPeer: $0) ?? $0 } }
                 }
-                changes.send(from)
             }
             onMessage?(message, from)
         case .discovered, .connectionState:

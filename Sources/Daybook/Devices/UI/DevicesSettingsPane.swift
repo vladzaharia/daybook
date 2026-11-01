@@ -6,8 +6,8 @@ import SwiftUI
 /// Settings › Devices: each recorder's set-and-forget preferences and its methods. Everything
 /// operational (connecting, importing, status) lives on the device's page instead.
 struct DevicesSettingsPane: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var hub: DeviceHub
+    let state: AppState
+    let hub: DeviceHub
 
     init(state: AppState) {
         self.state = state
@@ -55,7 +55,7 @@ struct DevicesSettingsPane: View {
 }
 
 private struct AddDeviceButton: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     var kind: String?
     var title = "Add Device…"
     @Environment(\.openWindow) private var openWindow
@@ -69,8 +69,8 @@ private struct AddDeviceButton: View {
 }
 
 private struct DeviceSettingsSection: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     @Environment(\.openWindow) private var openWindow
     @State private var confirmingForget = false
     @State private var confirmingRemove = false
@@ -176,9 +176,9 @@ private struct DeviceSettingsSection: View {
 }
 
 private struct FolderRows: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var files: ImportFolderWatcher
+    let state: AppState
+    let session: DeviceSession
+    let files: ImportFolderWatcher
     let method: ConnectionMethod
 
     var body: some View {
@@ -234,10 +234,10 @@ private struct FolderRows: View {
 /// Settings › Devices for Daybook on iPhone: the link, recording along with this Mac, and how its
 /// recordings arrive.
 private struct PhoneSettingsRows: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var link: PhoneLink
-    @ObservedObject var sync: LibrarySyncController
+    let state: AppState
+    let session: DeviceSession
+    let link: PhoneLink
+    let sync: LibrarySyncController
 
     init(state: AppState, session: DeviceSession) {
         self.state = state

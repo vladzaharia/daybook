@@ -1,5 +1,5 @@
-import Combine
 import DaybookCore
+import DaybookDevices
 import DaybookKit
 import DaybookLink
 import Foundation
@@ -14,18 +14,17 @@ extension AppState {
     func startSharingNotes(_ id: UUID) {
         guard let meeting = meetings.first(where: { $0.id == id }) else { return }
         sharedNotes.begin(id, notes: NoteTimeline.anchors(meeting.timedNotes, text: meeting.notes), bookmarks: meeting.highlights)
-        sharedNotesWatch = library.$meetings
-            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
-            .sink { [weak self] meetings in
-                guard let self, let id = self.sharedNotes.conversationID, let meeting = meetings.first(where: { $0.id == id }) else { return }
-                self.shareNoteChanges(in: meeting)
-            }
+        sharedNotesWatch = ObservationWatch.values(of: { [weak self] in self?.meetings ?? [] }, delay: .milliseconds(250)) { [weak self] meetings in
+            guard let self, let id = self.sharedNotes.conversationID, let meeting = meetings.first(where: { $0.id == id }) else { return }
+            self.shareNoteChanges(in: meeting)
+        }
     }
 
     /// The recording ended: what changed last goes out, and sharing stops.
     func stopSharingNotes(_ id: UUID) {
         guard sharedNotes.conversationID == id else { return }
         if let meeting = meetings.first(where: { $0.id == id }) { shareNoteChanges(in: meeting) }
+        sharedNotesWatch?.cancel()
         sharedNotesWatch = nil
         sharedNotes.end()
     }

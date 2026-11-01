@@ -1,4 +1,3 @@
-import Combine
 import DaybookCore
 import DaybookIntelligence
 @testable import DaybookKit
@@ -7,10 +6,11 @@ import Foundation
 import XCTest
 @testable import Daybook
 
-/// What redraws the window: progress reaches the main actor at most ten times a second and redraws
-/// only the views that follow it, and only when its percent or message changes; of AppState's parts, only the library and the device list redraw the
-/// window; search and the visible list are worked out once per change of the query, the place, or the
-/// library.
+/// What redraws the window: a view redraws for the `@Observable` properties it reads, and nothing else. Progress
+/// reaches the main actor at most ten times a second and redraws only the views that read it, only when its percent or
+/// message changes, and only the row being processed reads it; a change to sync, multipoint, or the recorder doesn't
+/// reach what reads the library; search and the visible list are worked out once per change of the query, the place,
+/// or the library.
 @MainActor
 final class WindowInvalidationTests: XCTestCase {
     func testProgressFromAnyThreadIsThrottledAndTheLatestWins() async throws {
@@ -38,44 +38,52 @@ final class WindowInvalidationTests: XCTestCase {
         let defaults = makeTestDefaults("local.daybook.tests.window")
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
-        var redraws = 0, followed = 0
-        let counting = state.objectWillChange.sink { redraws += 1 }
-        let following = state.processingActivity.objectWillChange.sink { followed += 1 }
-        defer { counting.cancel(); following.cancel() }
+        let id = state.newMeeting(title: "Roadmap review")
+        let other = state.newMeeting(title: "Standup")
+        state.processingID = id
+        // What the window around a progress line reads: the list, the selection, the place, the queue, and a row
+        // that isn't being processed.
+        let window = ObservationCount {
+            _ = state.visibleMeetings; _ = state.selectedID; _ = state.place; _ = state.processingQueue
+            _ = state.meetings.first { $0.id == other }.map { RowStatus(state: state, meeting: $0) }
+        }
+        let followed = ObservationCount { _ = state.processingProgress }
+        let row = ObservationCount { _ = state.meetings.first { $0.id == id }.map { RowStatus(state: state, meeting: $0) } }
+        defer { window.cancel(); followed.cancel(); row.cancel() }
         state.processingProgress = IntelligenceProgress(0.101, "Transcribing")
         state.processingProgress = IntelligenceProgress(0.102, "Transcribing")
-        XCTAssertEqual(followed, 1, "A report that changes neither the percent nor the message redraws nothing")
+        XCTAssertEqual(followed.count, 1, "A report that changes neither the percent nor the message redraws nothing")
         XCTAssertEqual(state.processingProgress.fraction, 0.102, "It's kept, for the next redraw and for the claim and iPhones")
         state.processingProgress = IntelligenceProgress(0.11, "Transcribing")
         state.processingProgress = IntelligenceProgress(0.11, "Identifying speakers")
         state.downloadProgress = IntelligenceProgress(0.5, "Downloading")
-        XCTAssertEqual(redraws, 0, "Progress views follow the activity (ActivityReader); the window isn't redrawn")
-        XCTAssertEqual(followed, 3, "A new percent or a new message reaches what draws it")
+        XCTAssertEqual(window.count, 0, "Progress reaches only what reads it (a progress line, the row being processed); the window isn't redrawn")
+        XCTAssertEqual(followed.count, 3, "A new percent or a new message reaches what draws it")
+        XCTAssertEqual(row.count, 3, "The row being processed follows it")
         XCTAssertEqual(state.processingActivity.value.message, "Identifying speakers")
+        state.processingID = nil
+        await state.flush()
     }
 
     func testEveryDeliveryReachesTheAppButOnlyVisibleOnesRedraw() async throws {
         let activity = ActivityProgress(IntelligenceProgress(0, "Ready"), interval: 0.01)
-        var delivered: [Bool] = [], redraws = 0
+        var delivered: [Bool] = []
         activity.onChange = { delivered.append($0) }
-        let following = activity.objectWillChange.sink { redraws += 1 }
-        defer { following.cancel() }
+        let redraws = ObservationCount { _ = activity.value }
+        defer { redraws.cancel() }
         for fraction in [0.2, 0.201, 0.205, 0.21] {
             activity.report(IntelligenceProgress(fraction, "Transcribing"))
             for _ in 0..<100 where activity.value.fraction != fraction { try await Task.sleep(for: .milliseconds(5)) }
         }
         XCTAssertEqual(delivered, [true, false, false, true], "The claim and iPhones hear every delivery; it says which were visible")
-        XCTAssertEqual(redraws, 2, "Views redraw at 20% and 21%, not in between")
+        XCTAssertEqual(redraws.count, 2, "Views redraw at 20% and 21%, not in between")
         XCTAssertFalse(ActivityProgress.isVisibleChange(from: IntelligenceProgress(0.999, "Reading"), to: IntelligenceProgress(0.9999, "Reading")))
         XCTAssertTrue(ActivityProgress.isVisibleChange(from: IntelligenceProgress(0.5, "Reading part 1"), to: IntelligenceProgress(0.5, "Reading part 2")))
     }
 
     func testARowFadesWhenItsWordsChangeNotAtEveryPercent() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookWindow-\(UUID().uuidString)")
-        let suite = "local.daybook.tests.window.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
-        let state = AppState(libraryURL: root, defaults: defaults)
+        // A suite of its own in the temporary folder: one named in ~/Library/Preferences outlives the test.
+        let state = AppState(libraryURL: makeTemporaryFolder("DaybookWindow"), defaults: makeTestDefaults("local.daybook.tests.window"))
         await state.initialize()
         let id = state.newMeeting(title: "Roadmap review")
         state.update(id) { $0.status = .transcribing }
@@ -142,20 +150,39 @@ final class WindowInvalidationTests: XCTestCase {
         await state.flush()
     }
 
-    func testOnlyTheLibraryAndTheDeviceListRedrawTheWindow() async throws {
+    func testAViewRedrawsForWhatItReadsAndNothingElse() async throws {
         let root = makeTemporaryFolder("DaybookWindow")
         let defaults = makeTestDefaults("local.daybook.tests.window")
         let state = AppState(libraryURL: root, defaults: defaults)
         await state.initialize()
-        var redraws = 0
-        let counting = state.objectWillChange.sink { redraws += 1 }
-        defer { counting.cancel() }
-        // Multipoint sources, like sync, call detection, the recorder, and the iPhone link, are observed
-        // by the views that show them.
+        // What the list reads through AppState: the library, the place, and the selection.
+        let list = ObservationCount { _ = state.visibleMeetings; _ = state.selectedID; _ = state.place }
+        let sources = ObservationCount { _ = state.sources.matchesImportedFiles }
+        defer { list.cancel(); sources.cancel() }
+        // Multipoint sources, like sync, call detection, the recorder, and the iPhone link, redraw the views that
+        // read them.
         state.sources.matchesImportedFiles.toggle()
-        XCTAssertEqual(redraws, 0)
-        state.newMeeting(title: "A change to the library")
-        XCTAssertGreaterThan(redraws, 0, "The library is what nearly every view reads through AppState")
+        state.search = "budget"
+        XCTAssertEqual(list.count, 0)
+        XCTAssertEqual(sources.count, 1)
+        state.newMeeting(title: "A change to the library", selecting: false)
+        XCTAssertGreaterThan(list.count, 0, "The library is what nearly every view reads")
+        await state.flush()
+    }
+
+    func testTheVisibleListFollowsTheLibraryEvenWhenItIsAlreadyWorkedOut() async throws {
+        let root = makeTemporaryFolder("DaybookWindow")
+        let defaults = makeTestDefaults("local.daybook.tests.window")
+        let state = AppState(libraryURL: root, defaults: defaults)
+        await state.initialize()
+        _ = state.visibleMeetings
+        // The list is worked out already (the memo answers), and still follows the library.
+        let list = ObservationCount { _ = state.visibleMeetings }
+        defer { list.cancel() }
+        state.newMeeting(title: "Kickoff", selecting: false)
+        XCTAssertGreaterThan(list.count, 0)
+        XCTAssertEqual(state.visibleMeetings.map(\.title), ["Kickoff"])
+        await state.flush()
     }
 
     func testSearchAndTheVisibleListAreWorkedOutOncePerChange() async throws {

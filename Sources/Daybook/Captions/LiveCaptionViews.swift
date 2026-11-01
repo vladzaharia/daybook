@@ -82,9 +82,9 @@ enum LiveCaptionStatus {
 /// everything captioned. "Live captions · tentative", You and Call labelled, in a lighter ink than
 /// a transcript and never editable. Once the transcript lands they're gone.
 ///
-/// It observes the captions itself, so a revised word redraws only this section.
+/// It reads the captions itself, so a revised word redraws only this section.
 struct LiveCaptionsSection: View {
-    @ObservedObject var captions: LiveCaptionsController
+    let captions: LiveCaptionsController
     let meeting: Meeting
     let isRecording: Bool
     @State private var saved: LiveCaptions?
@@ -234,7 +234,7 @@ struct LiveCaptionFeed: View {
 /// Settings › General › Live Captions: on or off and the language, with a plain word on whether
 /// they can run here. Asking never downloads anything.
 struct LiveCaptionSettingsSection: View {
-    @ObservedObject var settings: LiveCaptionSettings
+    @Bindable var settings: LiveCaptionSettings
     @State private var availability: LiveCaptionAvailability?
     @State private var speechLocales: [Locale] = []
 

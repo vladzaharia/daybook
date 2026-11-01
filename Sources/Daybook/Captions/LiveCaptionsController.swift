@@ -1,9 +1,9 @@
 import AVFoundation
-import Combine
 import DaybookCaptions
 import DaybookCore
 import DaybookDevices
 import Foundation
+import Observation
 
 /// The Mac's live captions while it records, on the shared DaybookCaptions engine the iPhone uses:
 /// one captioner for You (the microphone) and one for Call (the call or system track), fed by the
@@ -22,41 +22,42 @@ import Foundation
 /// the local link). Their lines join by time, labelled with the device, without lines that repeat
 /// this Mac's (`LiveCaptionMix`).
 @MainActor
-final class LiveCaptionsController: ObservableObject {
+@Observable
+final class LiveCaptionsController {
     /// What's on screen: You and Call interleaved by time and tagged with their source, without
     /// microphone lines that only echo the call through the speakers (`CaptionEcho`), and other
     /// devices' lines that add something.
-    @Published private(set) var segments: [LiveCaptionSegment] = []
+    private(set) var segments: [LiveCaptionSegment] = []
     /// Other devices' names by source (raw value), for their lines' labels.
-    @Published private(set) var sourceNames: [String: String] = [:]
+    private(set) var sourceNames: [String: String] = [:]
     /// Each source's captioner, as it stands.
-    @Published private(set) var states: [LiveCaptionSource: LiveCaptionState] = [:]
+    private(set) var states: [LiveCaptionSource: LiveCaptionState] = [:]
     /// The conversation being captioned, from `prepare` until the captions are saved.
-    @Published private(set) var meetingID: UUID?
+    private(set) var meetingID: UUID?
     /// When captions were last written to the store, so pages showing saved captions read them again.
-    @Published private(set) var lastSave: Date?
+    private(set) var lastSave: Date?
     /// The conversation whose recording surfaces show captions now (`isShowing(for:)`), so a surface
     /// can follow it without observing every word.
-    @Published private(set) var showing: UUID?
+    private(set) var showing: UUID?
 
     let store: LiveCaptionStore
     /// Makes the captioner for one source; nil when captions are off or can't run on this system.
-    var makeCaptioner: (LiveCaptionSource) -> (any LiveCaptioning)?
+    @ObservationIgnored var makeCaptioner: (LiveCaptionSource) -> (any LiveCaptioning)?
     /// The captions of recorders recording along, as they're made (`AppState.wireCaptions`).
     let recorders = LiveCaptureCaptions()
 
-    private var captioners: [LiveCaptionSource: any LiveCaptioning] = [:]
-    private var heard: [LiveCaptionSource: [LiveCaptionSegment]] = [:]
+    @ObservationIgnored private var captioners: [LiveCaptionSource: any LiveCaptioning] = [:]
+    @ObservationIgnored private var heard: [LiveCaptionSource: [LiveCaptionSegment]] = [:]
     /// Other devices' captions of this recording, by source.
-    private var feeds: [LiveCaptionSource: DeviceCaptionFeed] = [:]
-    private var listeners: [Task<Void, Never>] = []
-    private var generation = UUID()
-    private var routes: [(time: TimeInterval, echoes: Bool)] = []
-    private var routeSubscription: AnyCancellable?
+    @ObservationIgnored private var feeds: [LiveCaptionSource: DeviceCaptionFeed] = [:]
+    @ObservationIgnored private var listeners: [Task<Void, Never>] = []
+    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var routes: [(time: TimeInterval, echoes: Bool)] = []
+    @ObservationIgnored private var routeWatch: ObservationWatch?
     /// You lines already judged, so an hour of captions isn't compared again on every word.
-    private var verdicts: [UUID: (text: String, isEcho: Bool)] = [:]
-    private var saving: Task<Void, Never>?
-    private var dirty = false
+    @ObservationIgnored private var verdicts: [UUID: (text: String, isEcho: Bool)] = [:]
+    @ObservationIgnored private var saving: Task<Void, Never>?
+    @ObservationIgnored private var dirty = false
     private var createdAt = Date()
     private var localeIdentifier = Locale.current.identifier
 
@@ -164,7 +165,7 @@ final class LiveCaptionsController: ObservableObject {
     /// Follows the recorder's output route: on speakers (or anything that might be), microphone lines
     /// that only echo the call are left out; with headphones both sources show in full.
     func follow(_ recorder: RecordingController) {
-        routeSubscription = recorder.$outputRoute.sink { [weak self, weak recorder] route in
+        routeWatch = ObservationWatch.values(of: { [weak recorder] in recorder?.outputRoute }) { [weak self, weak recorder] route in
             guard let self, let route, self.isActive else { return }
             self.routeChanged(route.kind, at: recorder?.elapsedTime ?? 0)
         }
@@ -362,16 +363,17 @@ final class LiveCaptionStore {
 
 /// Live captions' preferences on this Mac (never synced): on or off, and the language.
 @MainActor
-final class LiveCaptionSettings: ObservableObject {
-    @Published var isEnabled: Bool { didSet { defaults.set(isEnabled, forKey: Keys.enabled) } }
+@Observable
+final class LiveCaptionSettings {
+    var isEnabled: Bool { didSet { defaults.set(isEnabled, forKey: Keys.enabled) } }
     /// Nil follows the Mac's language.
-    @Published var localeIdentifier: String? { didSet { defaults.set(localeIdentifier, forKey: Keys.locale) } }
+    var localeIdentifier: String? { didSet { defaults.set(localeIdentifier, forKey: Keys.locale) } }
     /// A downloaded live transcription model captions in this language (`MacLiveModels`), so captions
     /// run even where the Speech framework can't (macOS 15). Not stored: read from what's installed.
-    @Published var hasLiveModels = false
+    var hasLiveModels = false
     /// The languages the downloaded live recognizers cover ("en", "ja"): what the language choice
     /// offers where the Speech framework can't. Not stored.
-    @Published var liveLanguages: [String] = []
+    var liveLanguages: [String] = []
     var locale: Locale { localeIdentifier.map(Locale.init(identifier:)) ?? .current }
 
     private let defaults: UserDefaults

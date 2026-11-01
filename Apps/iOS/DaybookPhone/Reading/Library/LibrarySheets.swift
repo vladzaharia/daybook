@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The Trash: conversations moved out of the library, with their audio and notes, and Restore.
 struct TrashList: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let rootURL: URL
     @Environment(ReadingSession.self) private var session
     @State private var trashed: [Meeting] = []
@@ -74,7 +74,7 @@ struct TrashList: View {
 
 /// Move to Folder: None, each folder, or a new one.
 struct MoveSheet: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let ids: [UUID]
     private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session
@@ -141,7 +141,7 @@ struct MoveSheet: View {
 /// Tags for one conversation or several: every tag in the library with a check when all of them
 /// have it (a dash when some do), and a field for a new one.
 struct TagsSheet: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     let ids: [UUID]
     private let dismiss = SheetDismiss()
     @Environment(ReadingSession.self) private var session

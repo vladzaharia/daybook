@@ -6,8 +6,8 @@ import SwiftUI
 // MARK: - A recording that isn't in Daybook yet
 
 struct RecordingPage: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     let recordings: [DeviceRecording]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -129,10 +129,10 @@ struct RecordingPage: View {
 // MARK: - Recording now, and Listen Live
 
 struct LivePage: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var connection: SoundcoreConnection
-    @ObservedObject var live: LiveCapture
+    let state: AppState
+    let session: DeviceSession
+    let connection: SoundcoreConnection
+    let live: LiveCapture
     @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
@@ -225,9 +225,9 @@ struct LivePage: View {
 
 /// "Saved 12 minutes as a new conversation…", after Stop Listening.
 struct LiveSavedNotice: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
-    @ObservedObject var live: LiveCapture
+    let state: AppState
+    let session: DeviceSession
+    let live: LiveCapture
 
     var body: some View {
         if let saved = live.saved, !live.isListening {
@@ -244,8 +244,8 @@ struct LiveSavedNotice: View {
 
 /// Conversations from the same day, give or take one, to add a device recording to.
 struct ConversationChooser: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var session: DeviceSession
+    let state: AppState
+    let session: DeviceSession
     let recordings: [DeviceRecording]
     @State private var search = ""
     @State private var selection: UUID?

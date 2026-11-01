@@ -282,7 +282,7 @@ struct StatusSheetView: View {
 /// The sections for the detent: Record pinned at the top, clear of the grabber and never scrolled
 /// under it, then the lines and groups in a scroll view.
 private struct StatusSections: View {
-    @ObservedObject var library: LibraryController
+    let library: LibraryController
     @Binding var detent: StatusDetent
     let hostsRecordButton: Bool
     let open: (StatusRoute) -> Void
@@ -743,7 +743,7 @@ private struct StatusRecorders: View {
 /// One recorder: its name and status (opening its page), its handoff, and at the large detent its
 /// storage, its actions, and the recordings waiting on it.
 private struct StatusRecorderCard: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     let detent: StatusDetent
     let open: (StatusRoute) -> Void
     @Environment(PhoneAppModel.self) private var model
@@ -839,7 +839,7 @@ private struct StatusRecorderCard: View {
 
 /// The recorder's actions as one row of equal-width buttons (stacked at the accessibility sizes).
 struct StatusRecorderActions: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     let actions: [StatusRecorderAction]
     @Environment(\.dynamicTypeSize) private var typeSize
 

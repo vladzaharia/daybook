@@ -1,5 +1,4 @@
 import AVFoundation
-import Combine
 import DaybookKit
 import Foundation
 import Observation
@@ -11,15 +10,14 @@ import Observation
 @MainActor
 @Observable
 final class PhoneLibrary {
-    /// Everything the library can do. Views may observe it directly (`@ObservedObject`); anything
-    /// read through this class (`conversations`) also updates under Observation, including when a
-    /// sync pass brings changes.
+    /// Everything the library can do. It's `@Observable`, like this class: a view redraws for what it
+    /// reads of it, directly or through this class (`conversations`), including when a sync pass
+    /// brings changes.
     let controller: LibraryController
     let rootURL: URL
-    /// Bumps whenever the controller publishes a change, so Observation-based views follow it.
-    private(set) var revision = 0
+    /// Changes whenever the conversations do (`LibraryController.revision`).
+    var revision: Int { controller.revision }
     @ObservationIgnored private let installation: String
-    @ObservationIgnored private var subscription: AnyCancellable?
     /// This iPhone, when it processes its own recordings (`PhoneProcessor`): a recording it files that it
     /// can transcribe is claimed in the same save, so a Mac that receives it leaves it. Nil: nothing is
     /// claimed, and recordings wait for a Mac.
@@ -34,10 +32,6 @@ final class PhoneLibrary {
         self.installation = installation
         broughtIn = Self.readBroughtIn(at: rootURL.standardizedFileURL.appendingPathComponent(Self.broughtInFile))
         controller = LibraryController(rootURL: self.rootURL, sync: sync)
-        // objectWillChange fires before the change lands; count it on the next turn.
-        subscription = controller.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.revision &+= 1 }
-        }
     }
 
     /// Where recordings are staged until they're filed: one folder per recording, named by its ID.
@@ -50,10 +44,7 @@ final class PhoneLibrary {
         .appendingPathComponent("Inbox", isDirectory: true)
 
     /// Conversations, newest first.
-    var conversations: [Meeting] {
-        _ = revision
-        return controller.meetings.sorted { $0.date > $1.date }
-    }
+    var conversations: [Meeting] { controller.meetings.sorted { $0.date > $1.date } }
 
     var installationID: String { installation }
 

@@ -6,7 +6,7 @@ import SwiftUI
 /// the language, and the model for languages the selected one doesn't cover. Speech routing fills
 /// them in; the model manager places them.
 struct TranscriptionLanguageSettings: View {
-    @ObservedObject var state: AppState
+    let state: AppState
 
     var body: some View {
         Picker("Language", selection: language) {
@@ -29,7 +29,7 @@ struct TranscriptionLanguageSettings: View {
                 }
             } label: {
                 Text("Other languages")
-                ActivityReader(download: state.downloadActivity) {
+                ActivityReader {
                     if let line = statusLine(other) { Text(line).monospacedDigit() }
                 }
             }

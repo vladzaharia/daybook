@@ -297,7 +297,7 @@ original.
 
 ## App integration
 
-`RecordingController` is main-actor isolated and observable:
+`RecordingController` is main-actor isolated and `@Observable`:
 
 ```swift
 let recorder = RecordingController()                      // CaptureEnvironment.live
@@ -338,7 +338,7 @@ Tests drive the controller with fakes, so no device, tap, or stream is opened.
 | `recorder.levels.microphone` | `CaptureLevelMonitor.Level` | "You": `rms` and `peak` in dBFS. `meterValue` maps −60…0 dBFS to 0…1. |
 | `recorder.levels.call` | same | "Call", with the same fields. |
 | `recorder.levels.isCallAudioDetected` | `Bool` | The call track was above −50 dBFS within the last 4 s. |
-| `recorder.isCallAudioDetected` | `@Published Bool` | The same signal on the controller. It changes rarely, so it's fine to observe through `AppState`. |
+| `recorder.isCallAudioDetected` | `Bool` | The same signal on the controller. It changes rarely, so any view may read it. |
 | `recorder.levels.isMicrophoneSilent` | `Bool` | After 3 s, not one non-zero microphone sample has arrived. The input is muted in hardware, unplugged, or denied. |
 | `recorder.levels.isCapturingCall` | `Bool` | Call audio is part of this recording. It's false after the call track stops. |
 
@@ -347,10 +347,9 @@ recorder recording along from the live audio it saves into the recording (`LiveC
 latest buffer's level, current for a second after it arrived, through `DeviceSession.liveLevel(into:)`),
 and a paired iPhone from the levels it sends over the link (`LinkLevels`; docs/link.md).
 
-`CaptureLevelMonitor` updates 15 times a second and publishes only changes of at least 0.5 dB.
-Observe `recorder.levels` directly as an `@ObservedObject`. `AppState` forwards
-`recorder.objectWillChange`, and doing the same for meters would redraw the whole app 15 times a
-second.
+`CaptureLevelMonitor` updates 15 times a second and changes its levels only by at least 0.5 dB. Only a
+meter reads `microphone` and `call`: a view that read them would redraw 15 times a second, so Floating Notes
+samples them on its own timer (`PanelLevels`) and its status bar reads only the flags, which change rarely.
 
 ## Live captions
 

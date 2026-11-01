@@ -10,10 +10,8 @@ import SwiftUI
 /// family, adding a model, and acknowledgements). Rendered from `ModelManagerSnapshot`, so the
 /// catalog decides which roles and models appear.
 struct ModelSettings: View {
-    @ObservedObject var state: AppState
-    /// The pane is the download's progress view: it follows the download itself.
-    @ObservedObject private var download: ActivityProgress
-    @StateObject private var manager: ModelManager
+    @Bindable var state: AppState
+    @State private var manager: ModelManager
     @Environment(\.openWindow) private var openWindow
     @State private var showingVoiceMatching = false
     @State private var removal: ModelRemoval?
@@ -24,8 +22,7 @@ struct ModelSettings: View {
 
     init(state: AppState) {
         self.state = state
-        download = state.downloadActivity
-        _manager = StateObject(wrappedValue: ModelManager(state: state))
+        _manager = State(initialValue: ModelManager(state: state))
     }
 
     /// Roles with sections of their own; any other role gets a section after Summaries.
@@ -345,7 +342,7 @@ enum ModelSettingsAnchor: Hashable {
 
 /// Advanced Speaker Settings: the two voice-matching thresholds, in plain words.
 private struct VoiceMatchingSheet: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

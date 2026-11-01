@@ -11,11 +11,11 @@ import SwiftUI
 /// place, with its fix; then encryption and this Mac's preference. Turning sync off and erasing sit under the group,
 /// as System Settings places such buttons.
 struct SyncSettingsView: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     /// Followed directly: the window doesn't redraw for every sync status change.
-    @ObservedObject private var sync: LibrarySyncController
+    private let sync: LibrarySyncController
     /// For Get Key from <iPhone> while waiting for the library's key.
-    @ObservedObject private var phoneLink: PhoneLink
+    private let phoneLink: PhoneLink
     @State private var confirmingTurnOff = false
     @State private var confirmingAccount = false
     @State private var confirmingSkip = false

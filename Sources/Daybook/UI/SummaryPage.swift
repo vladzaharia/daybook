@@ -4,8 +4,8 @@ import SwiftUI
 
 /// The default page: what happened, what's next, the template's sections, then your own notes.
 struct SummaryPage: View {
-    @ObservedObject var state: AppState
-    @ObservedObject var player: AudioPlaybackController
+    let state: AppState
+    let player: AudioPlaybackController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     /// The summary present when the page opened. Any later one arrived while the page was on screen,
@@ -80,7 +80,7 @@ private struct Arrival: ViewModifier {
 
 /// The summary itself: lede, next steps, and the template's sections, ending at the "Your notes" heading.
 private struct SummaryBody: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let summary: MeetingSummary
     var revealing = false
@@ -189,7 +189,7 @@ private struct OwnerChip: View {
 
 /// Your words with their recording times, then your bookmarks.
 struct YourNotes: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     @Environment(\.readingScale) private var scale
@@ -246,7 +246,7 @@ struct YourNotes: View {
 }
 
 private struct BookmarkRow: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let highlight: Highlight
     let time: TimeInterval

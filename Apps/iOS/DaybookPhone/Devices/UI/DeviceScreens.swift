@@ -29,7 +29,7 @@ struct RecordersSection: View {
 /// A recorder in Settings: its tile (teal while it's connected), its name, and the status sheet's line
 /// for it ("Connected · 80% · 2 new", "Importing 1 of 3", "Managed by Studio Mac").
 struct DeviceRow: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
@@ -43,7 +43,7 @@ struct DeviceRow: View {
 
 /// The recorder's symbol: teal while it's linked, secondary otherwise.
 struct DeviceGlyph: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     var size: CGFloat
 
     var body: some View {
@@ -77,7 +77,7 @@ private struct DevicePageContent: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.settingsPages) private var pages
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     @State private var confirmingRemove = false
     @State private var renaming = false
     @State private var name = ""
@@ -338,7 +338,7 @@ private struct DevicePageContent: View {
 /// The recorder's status and technical facts, and every recording on it with why it is or isn't
 /// new. Copy puts all of it on the clipboard, to send when something looks wrong.
 struct DeviceDetailsScreen: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     @State private var copied = false
 
     var body: some View {
@@ -453,7 +453,7 @@ private struct StatusTiles: View {
 /// One problem at a time: what happened, what's safe, at most two actions.
 struct ProblemBox: View {
     @Environment(\.openURL) private var openURL
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     let problem: DeviceProblem
 
     var body: some View {
@@ -701,7 +701,7 @@ private struct AddRecorderBar: ViewModifier {
 }
 
 private struct SetupScreen: View {
-    @ObservedObject var session: DeviceSession
+    let session: DeviceSession
     var done: (String?) -> Void
     @State private var choosingFolder = false
     @State private var folderError: String?

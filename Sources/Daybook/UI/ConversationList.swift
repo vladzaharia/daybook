@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// The list column: conversations in the selected place, or search results.
 struct ConversationList: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     @State private var isDropTargeted = false
 
     private var selection: Binding<Set<UUID>> {
@@ -23,7 +23,7 @@ struct ConversationList: View {
         }
         .navigationTitle(title)
         // The subtitle follows a download's percent without redrawing the list.
-        .modifier(ListSubtitle(download: state.downloadActivity, placements: state.placements) { subtitle(at: $0) })
+        .modifier(ListSubtitle(placements: state.placements) { subtitle(at: $0) })
         .safeAreaInset(edge: .top, spacing: 0) { LibraryNotice(state: state) }
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in importAudio(urls) } isTargeted: { isDropTargeted = $0 }
@@ -38,13 +38,12 @@ struct ConversationList: View {
             ForEach(DateGroup.groups(for: meetings)) { group in
                 Section(group.title) {
                     ForEach(group.meetings) { meeting in
-                        // Only the row being processed follows its progress; the others watch an activity that never moves.
-                        ActivityReader(processing: state.processingID == meeting.id ? state.processingActivity : nil) {
-                            PlacementReader(placements: state.placements) {
-                                ConversationRow(meeting: meeting, status: RowStatus(state: state, meeting: meeting),
-                                                timeLabel: RowDate.format(meeting.date, group: group.title),
-                                                selected: selection.wrappedValue.contains(meeting.id))
-                            }
+                        // Each row draws in a view of its own, and only the row being processed reads the job's progress
+                        // (`processingStatus(for:)`): a progress report, or a summary's countdown, redraws that row alone.
+                        ActivityReader {
+                            ConversationRow(meeting: meeting, status: RowStatus(state: state, meeting: meeting),
+                                            timeLabel: RowDate.format(meeting.date, group: group.title),
+                                            selected: selection.wrappedValue.contains(meeting.id))
                         }
                             .tag(meeting.id)
                             .draggable(meeting.id.uuidString)
@@ -163,11 +162,10 @@ struct ConversationList: View {
     }
 }
 
-/// The list's subtitle, redrawn by a download's progress and a summary's countdown on their own: a countdown's
-/// seconds once a second.
+/// The list's subtitle, redrawn by a download's progress and a summary's countdown on their own (what `text` reads
+/// redraws only it): a countdown's seconds once a second.
 private struct ListSubtitle: ViewModifier {
-    @ObservedObject var download: ActivityProgress
-    @ObservedObject var placements: SummaryPlacements
+    let placements: SummaryPlacements
     let text: (Date) -> String
 
     func body(content: Content) -> some View {
@@ -376,7 +374,7 @@ private struct SearchResultRow: View {
 
 /// Actions for one or more selected rows. Items that don't apply are hidden.
 private struct RowMenu: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let ids: [UUID]
     private var meetings: [Meeting] { state.meetings.filter { ids.contains($0.id) } }
 
@@ -422,7 +420,7 @@ private struct RowMenu: View {
 
 /// One library-wide notice at the top of the list column; the newest wins.
 private struct LibraryNotice: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     var body: some View {
         if let notice = state.notice {
             HStack(alignment: .firstTextBaseline, spacing: 8) {

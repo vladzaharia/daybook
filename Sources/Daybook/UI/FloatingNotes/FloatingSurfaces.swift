@@ -210,7 +210,7 @@ struct MeterStack: Equatable {
 /// The live captions under the notes: the newest lines, You or Call in the time lane. Observes the
 /// captions directly, so it alone redraws as words arrive.
 private struct PanelCaptions: View {
-    @ObservedObject var captions: LiveCaptionsController
+    let captions: LiveCaptionsController
     let compact: Bool
 
     var body: some View {
@@ -393,7 +393,7 @@ struct HomeSurface: View {
 
 /// A status line that opens what it's about: a recorder's or iPhone's page.
 private struct StatusLineButton: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let line: StatusLineItem
 
     var body: some View {
@@ -411,7 +411,7 @@ private struct StatusLineButton: View {
 /// The newest conversations, in the iPhone's row style: the title, then the time and what's
 /// happening (or the gist), a glyph only when it isn't ready. A row opens in Daybook.
 private struct RecentConversations: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     var limit = 5
     var showsHeading = true
 
@@ -527,7 +527,7 @@ private struct RecentRow: View {
 
 /// The conversation's title in New York, editable in place.
 struct PanelTitleField: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     @Environment(\.readingScale) private var scale
 
@@ -572,7 +572,7 @@ private struct PanelMetaLine: View {
 
 /// The notes, with each paragraph's time in the lane (right-aligned at x = 44, text at 52).
 private struct PanelNotes: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let isRecording: Bool
     /// Reserve the lane even before a note has a time (while and after recording, so nothing jumps).
@@ -632,7 +632,7 @@ private struct PanelControls<Leading: View, Trailing: View>: View {
 
 /// Record: a new conversation, or into the focused one while it has only notes.
 private struct RecordButton: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let title: String
     let into: UUID?
     let size: CGFloat

@@ -5,7 +5,7 @@ import SwiftUI
 /// Under a speaker in the inspector: a name Daybook gave by voice (which the person can take back),
 /// or a profile the voice resembles (which the person can confirm). Nothing for names the person gave.
 struct SpeakerIdentityLine: View {
-    @ObservedObject var state: AppState
+    let state: AppState
     let meeting: Meeting
     let speaker: Speaker
 
