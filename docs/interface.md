@@ -103,9 +103,9 @@ Its components are what both apps draw:
 - `DaybookTile`, `FigureTile`, and the cards of rows (`StatusCard`, `StatusRow`, `StatusDivider`); `DaybookEmptyState` and `DaybookMark`; `DoneMark`; `FlowLayout`; `FindHighlight`;
 - the recorder's: `RollingLevelMeter` and `LevelTrail`, `ElapsedClock`, `RecordingPhaseLabel`, `LiveCaptionStrip`, `StatusLineView` and `StatusChip`, and the Record, Bookmark, and Stop labels with `daybookControl(_:shape:)` (Liquid Glass on iPhone, Daybook's own fills on the Mac).
 
-The screens both apps show over the library's models belong in `DaybookUI` (docs/architecture.md, "Layers"), which links DaybookDesign and DaybookKit: the page's geometry (`ReadingPage`, `MarginRow`, `PageSpread`, `ReadingGeometry`), how a surface says its layout and density (`SurfaceLayout`, `PlatformMetrics`, `daybookSurface`), the seams each app fills (`ReadingContext`, `ReadingNavigator`, `ReadingPlayer`, `ScreenServices`), and Settings' rows (`SettingsRow`, `SettingsTile`, `SettingsActionLabel`, `DevicePageHeader`, `SettingsFooter`). A type an app declares hides the library's of the same name without a warning, so `SharedNameTests` fails on a new one; the few still moving over are listed there.
+The screens both apps show over the library's models belong in `DaybookUI` (docs/architecture.md, "Layers"), which links DaybookDesign and DaybookKit: the page's geometry (`ReadingPage`, `MarginRow`, `PageSpread`, `ReadingGeometry`), how a surface says its layout and density (`SurfaceLayout`, `PlatformMetrics`, `daybookSurface`), the seams each app fills (`ReadingContext`, `ReadingNavigator`, `ReadingPlayer`, `ScreenServices`), and Settings' rows (`SettingsRow`, `SettingsTile`, `SettingsActionLabel`, `DevicePageHeader`, `SettingsFooter`). A type, environment value, or extension member an app declares hides the library's of the same name without a warning, so `SharedNameTests` fails on a new one; the few types still moving over are listed there.
 
-Tests: `DesignTokenTests` (every ink's contrast on its surface, the time rule, glow, motion, type, flow), `DaybookDesignTokenTests` (the Mac's names resolve to the shared values), and the iPhone's `DesignParityTests` (every shade through the traits in Light, Dark, and Increase Contrast, which the Mac's tests can't make).
+Tests: `DesignTokenTests` (every ink's contrast on its surface, each chip kind's and box's words on their wash, the time rule, glow, motion, type, flow), `DaybookDesignTokenTests` (the Mac's names resolve to the shared values), and the iPhone's `DesignParityTests` (every shade through the traits in Light, Dark, and Increase Contrast, which the Mac's tests can't make).
 
 - **Colour:** each token is a `DaybookShade`, with light, dark, and increased-contrast values. Its `color`, `nsColor` (Mac), and `uiColor` (iPhone) are one implementation, so SwiftUI and the notes text views draw the same ink.
 
@@ -136,7 +136,7 @@ Tests: `DesignTokenTests` (every ink's contrast on its surface, the time rule, g
   | `Ink.onWash` | `#006B5E` / `#34D9C3` | 5.2 on the 14% accent wash | text on an accent wash: tag chips, `.daybookTinted` buttons, action tiles (link ink falls to 4.3 there) |
   | `Ink.bookmarkCount` | `#8A5200` / `#FFD23F` | 4.8 on its 20% amber pill | a bookmark count |
   | `Ink.onFind` | `#1A1917` / `#1A1917` | 10 or more on `findHighlight` | a search match's words, dark in both appearances |
-  | `Ink.onAttention` | `#9C4706` / `#FFB054` | 5.4 on the 9% warning wash | warning words in a filled chip |
+  | `Ink.onAttention` | `#9C4706` / `#FFB054` | 5.5 on the 8–9% warning wash | warning words on a warning wash: a filled chip, a problem box's title |
   | `Ink.warning` | `#B45309` / `#FFB054` | 4.9 / 9.4 | every warning glyph and warning text; replaces `.orange` everywhere |
   | `Ink.error` | `#C4271D` / `#FF6961` | 5.6 / 6.0 | destructive text buttons, unrecoverable errors. Not recording |
   | `Ink.record` / `recordFill` | `#D92D20` / `#FF453A`, fill `#E5243B` dark | white on fill 4.8 / 4.5 | the recording dot, Stop fills, the Record button's dot. Nothing else is red |
@@ -152,12 +152,12 @@ Tests: `DesignTokenTests` (every ink's contrast on its surface, the time rule, g
 - **Type:**
   - New York (serif) appears only in titles.
   - Everything else is SF, with monospaced digits for every time.
-  - Each role (`DaybookFont`: docTitle, sheetTitle, rowTitle, byline, lede, heading, body, speaker, marginTime, time, status, statusLead, colophon, and the caption lines) is one font at each density (`DaybookDensity`): under touch (the iPhone) a Dynamic Type text style; in the window and the panel (Floating Notes) a fixed size. A surface sets its density once at its root, and the shared components read it rather than taking per-platform metrics. `sheetTitle` is New York; `rowTitle` is SF.
+  - Each role (`DaybookFont`: docTitle, sheetTitle, rowTitle, byline, lede, heading, body, speaker, marginTime, time, status, statusLead, colophon, and the caption lines) is one font at each density (`DaybookDensity`): under touch (the iPhone) a Dynamic Type text style; in the window and the panel (Floating Notes) a fixed size. Floating Notes sets `.panel` at its root; the Mac's window and the iPhone keep their platform's (`DaybookDensity.platformDefault`). A shared component sizes itself from the density unless its call site passes metrics. `sheetTitle` is New York; `rowTitle` is SF.
   - The reading surface (page, transcript, floating notes) scales with View › Make Text Bigger / Smaller / Actual Size (`readingScale`). Chrome text never scales. On the iPhone, Dynamic Type scales everything, live captions included.
 - **Geometry:**
   - The text measure is 640 pt, with a 56 pt time margin hanging to its left. Times end 8 pt before the text.
   - One left edge per column: text, controls, boxes and headings share x = 0. Things that mark text hang outside it: times in the margin, and the playhead, bookmark and note rules centred in the 8 pt gutter (x = −4). Bezels (the play pill, status boxes) align their outer edge, not their label.
-  - Below a 600 pt width, a block with a time keeps a lane of times inside the column (50 pt, growing with Dynamic Type), and the rest runs edge to edge (`ReadingGeometry`; every iPhone and each page of the open Duo, which also keep 24 pt clear of the crease). Below 520 pt, a status box's actions move under its message.
+  - Below a 600 pt detail width, the Mac's page folds times inline. The iPhone's pages (every iPhone, and each page of the open Duo) keep a lane of times inside the column instead (50 pt, growing with Dynamic Type), run the rest edge to edge, and keep 24 pt clear of the crease. `ReadingGeometry` holds these values; DaybookUI's `ReadingPage` and `MarginRow`, which draw the lane for either app, aren't on either app's page yet. Below 520 pt, a status box's actions move under its message.
   - Spacing follows `Space.s1…s8` (4–64 pt). Summary headings sit 32 pt below the block before them; the lede 24 pt below the byline.
   - Corners are continuous, one radius per kind of container (`DaybookRadius`): chips are capsules; a row's wash 6 pt; a status or problem box and a figure tile 12; a card of rows 16; a recorder control 20; a panel's or the player's own surface 26.
   - A symbol on a tile (`DaybookTile`) is 30 pt in a Settings row, 32 in a card, and 56 at the top of a device's page, growing with Dynamic Type to 42, 44, and 76. Under touch every target is at least 44 × 44 pt; `daybookHitTarget()` makes a small one so without making its row taller.
@@ -179,7 +179,7 @@ Animations go through DaybookDesign, so Reduce Motion is honoured the same way o
 - `daybookTransition(_:)` inserts and removes with its transition, or with a fade under Reduce Motion: nothing slides, scales, or moves then.
 - `daybookBounce(value:)` bounces a symbol when something lands; under Reduce Motion it stays still.
 - A scroll to a passage animates with `DaybookMotion.scrollAnimation(reduceMotion:)`, which is none under Reduce Motion, so the page jumps.
-- Progress never animates (`WorkProgress`), whatever animation the change arrives in.
+- A `WorkProgress` bar or line (`.progressViewStyle(.brand)`, `WorkProgressLine`) never animates, whatever animation the change arrives in.
 
 The curves are `DaybookMotion`'s (`Motion` on the Mac, `PhoneStyle.Motion` on the iPhone): `hover` (0.12 s ease-out), `fade` (0.2 s), `state` (0.25 s snappy), `tick` (0.3 s snappy, rolling digits), `scroll` (0.3 s), `page` (0.35 s), `dim` (0.6 s), and `land` (a spring, for something small arriving); `hold` is how long a done mark stays (1.5 s). Motion only answers something the person did or a change of state. Nothing loops except work in progress and the Listening dot. `MotionAuditTests` lists the curves still written out in views; it reports them for now and fails on them with `DAYBOOK_ENFORCE_MOTION_TOKENS=1`.
 
@@ -191,9 +191,9 @@ The curves are `DaybookMotion`'s (`Motion` on the Mac, `PhoneStyle.Motion` on th
 | Record starts or stops | Record, the red pill, and Saving… blur into each other; Stop bounces once |
 | A summary arrives while the page is open | the lede, next steps, and sections fade up 40 ms apart (up to six); the colophon glyph bounces. Opening a page never animates |
 | Summarize Again | the old summary dims to half while the new one is written |
-| A row finishes work | the gradient progress line becomes an accent checkmark (`DoneMark`, drawn on where the system can) for 1.5 s, then fades |
+| A row finishes work | the gradient progress line becomes an accent checkmark for 1.5 s, then fades |
 | Playing | the byline waveform animates; the playhead rule glows mint |
-| Processing or downloading | the gradient progress bar fills, a step per report |
+| Processing or downloading | the gradient progress bar fills; a `WorkProgress` bar steps once per report |
 | Template edited | the Edited capsule scales in |
 | Auto-record is listening | the mint dot in Settings › General pulses |
 
