@@ -217,7 +217,7 @@ where the parts split.
 Summaries can run on Anthropic's or OpenAI's models with the person's own key ([cloud](cloud.md)): a catalog of family
 rules and measured models, OpenRouter's prices over a bundled snapshot, keys in iCloud Keychain, discovery of the
 models a key reaches, a summarizer that reuses the local pipeline's prompt, schema, and checks in one pass, and
-Settings › Cloud on the Mac and the iPhone. No real API was called: there were no keys for this work.
+Settings › Cloud on the Mac and the iPhone.
 
 **Measurements the catalog is built on.** The lead's runs on 2026-10-31 (the synthetic offsite's first 15, 30, 60, 120,
 and 186 minutes, one request each with a measuring prompt that asked for commitments with quotes; `max_tokens` 32,000,
@@ -281,12 +281,22 @@ A4B 90 and E4B 53 from the three-hour meeting above.
 - Settings › Cloud's states in light and dark on the Mac (`--cloud-demo`), the Add Key sheet with a refused key, and the
   colophon before and after; Settings › Cloud on an iPhone 17 Pro simulator clone.
 
-**Still needs the owner's keys and devices.**
+**Real runs.** The lead ran `--cloud-check` on the 186-minute offsite at medium effort with the owner's test keys
+(`--output`, scored with the summary harness's scorer). Both providers accepted the requests as sent: the schema under
+Anthropic's `output_config.format` and OpenAI's strict `json_schema`, and `fallbacks: "default"` with its beta header.
+No run warned.
 
-- One real run per provider with `--cloud-check` (the lead's): that both accept the requests as sent (our schema under
-  Anthropic's `output_config.format` and OpenAI's strict `json_schema`; `fallbacks: "default"` with its beta header on
-  this account, which falls back to a plain request if refused), the tokens and cost against the estimates, and whether
-  the notes findings fix Claude Sonnet 5.5's and Haiku 5.5's note attribution on the offsite (3 of 6 before).
+| Model | Input / output tokens | Topics | Commitments, right owner | Listed | Notes handled | Cost | Time |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Sonnet 5.5 | 65,025 / 10,547 | 22 / 22 | 66 / 66 | 76 | 5 of 6 | $0.236 | 62 s |
+| Claude Haiku 5.5 | 65,025 / 45,020 | 22 / 22 | 66 / 66 | 77 | 3 of 6 | $0.029 | 178 s |
+| GPT-6.1 Terra | 45,404 / 7,133 | 22 / 22 | 64 / 66 | 80 | 4 of 6 | $0.081 | 81 s |
+
+The notes findings lift Sonnet from 3 to 5 of 6. Every note missed is one that only repeats what was said, called an
+addition. Terra's two commitments missed are worded past the scorer's patterns ("snapshot-testing proposal").
+
+**Still needs the owner's devices.**
+
 - A key added on a signed Mac reaching a signed iPhone through iCloud Keychain, and removed from both.
 
 ## Processing on the iPhone (2026-10-31)
