@@ -45,12 +45,13 @@ enum SandboxMigration {
         return facts.legacyExists || facts.preferencesShowPriorUse ? .stillAtOldLocation : .fresh
     }
 
-    /// The library folder an unsandboxed build of this app used, by bundle ID: the app's real library for
-    /// `local.daybook.app`, the rehearsal's synthetic one for `local.daybook.app.rehearsal…`, and none for anything else
-    /// (ad hoc builds never look at a library outside their own container).
+    /// The library folder an unsandboxed build of this app used, by bundle ID: the app's real library for the app
+    /// (`local.daybook.app`, and `local.daybook.phone`, which sandboxed signed builds use: `AppIdentity`), the rehearsal's
+    /// synthetic one for `local.daybook.app.rehearsal…`, and none for anything else (ad hoc builds never look at a library
+    /// outside their own container).
     static func legacyFolderName(bundleIdentifier: String?) -> String? {
         guard let bundleIdentifier else { return nil }
-        if bundleIdentifier == "local.daybook.app" { return LibraryLocation.appFolder }
+        if bundleIdentifier == AppIdentity.unsandboxed || bundleIdentifier == AppIdentity.sandboxed { return LibraryLocation.appFolder }
         if bundleIdentifier.hasPrefix("local.daybook.app.rehearsal") { return "Daybook Rehearsal" }
         return nil
     }

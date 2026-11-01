@@ -47,6 +47,10 @@ enum LibraryContents {
 /// a sandboxed one moved the library into its container. It offers to move the library back, with the preferences the
 /// sandboxed app kept, so going back to an unsandboxed release loses nothing. Nothing is ever deleted: a library already
 /// here that's older is set aside under a new name first.
+///
+/// The sandboxed builds (the App Store's, and Developer ID with the sandbox) run under the iPhone app's bundle ID, so
+/// their container is `local.daybook.phone`'s, not this app's (`AppIdentity`); a container under the app's own ID is
+/// looked at too.
 enum LegacyLibraryReturn {
     struct Plan: Equatable {
         /// The sandboxed app's library, in its container.
@@ -96,9 +100,16 @@ enum LegacyLibraryReturn {
     }
 
     /// A plan when `library` (this unsandboxed app's) should take back the library a sandboxed build of the same app left
-    /// in its container; nil otherwise.
+    /// in its container; nil otherwise. With a library in more than one container, the one that changed last.
     static func plan(library: URL, bundleIdentifier: String, home: URL = UserHome.url, defaults: UserDefaults) -> Plan? {
-        let data = containerData(home: home, bundleIdentifier: bundleIdentifier)
+        AppIdentity.containers(for: bundleIdentifier)
+            .compactMap { plan(library: library, container: $0, home: home, defaults: defaults) }
+            .max { ($0.containerChanged ?? .distantPast) < ($1.containerChanged ?? .distantPast) }
+    }
+
+    /// The plan for one container: the sandboxed app's whose bundle ID is `identifier`.
+    static func plan(library: URL, container identifier: String, home: URL, defaults: UserDefaults) -> Plan? {
+        let data = containerData(home: home, bundleIdentifier: identifier)
         let container = data.appendingPathComponent("Library/Application Support", isDirectory: true)
             .appendingPathComponent(library.lastPathComponent, isDirectory: true)
         // Existence first, without reading: most Macs never ran a sandboxed Daybook.
@@ -110,7 +121,7 @@ enum LegacyLibraryReturn {
         guard kind != .none else { return nil }
         return Plan(container: container, library: library,
                     containerPreferences: data.appendingPathComponent("Library/Preferences", isDirectory: true)
-                        .appendingPathComponent("\(bundleIdentifier).plist"),
+                        .appendingPathComponent("\(identifier).plist"),
                     replacesOlder: kind == .replaceOlder, containerChanged: facts.containerChanged)
     }
 

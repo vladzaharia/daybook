@@ -60,6 +60,44 @@ final class LibraryMoveTests: XCTestCase {
         XCTAssertNil(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: defaults), "done")
     }
 
+    /// The App Store build keeps the library in `local.daybook.phone`'s container (the iPhone app's bundle ID), with its
+    /// preferences named after that ID: going back to the Developer ID release brings both back.
+    func testTheLibraryComesBackFromTheAppStoreBuild() throws {
+        let store = home.appendingPathComponent("Library/Containers/local.daybook.phone/Data", isDirectory: true)
+        let storeLibrary = store.appendingPathComponent("Library/Application Support/Daybook", isDirectory: true)
+        let storePreferences = store.appendingPathComponent("Library/Preferences/local.daybook.phone.plist")
+        try writeLibrary(at: storeLibrary, meeting: "from the App Store build")
+        try FileManager.default.createDirectory(at: storePreferences.deletingLastPathComponent(), withIntermediateDirectories: true)
+        XCTAssertTrue((["onboardingCompleted": true, "syncDeviceID": "store"] as NSDictionary).write(to: storePreferences, atomically: true))
+        let defaults = makeTestDefaults()
+
+        let plan = try XCTUnwrap(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: defaults))
+        XCTAssertEqual(plan.container, storeLibrary)
+        XCTAssertEqual(plan.containerPreferences, storePreferences)
+        try LegacyLibraryReturn.perform(plan, defaults: defaults)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: library.appendingPathComponent("Meetings/from the App Store build/meeting.json").path))
+        XCTAssertTrue(defaults.bool(forKey: "onboardingCompleted"))
+        XCTAssertEqual(defaults.string(forKey: "syncDeviceID"), "store")
+        XCTAssertNil(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: defaults), "done")
+    }
+
+    /// A library in both containers (a sandboxed build under each bundle ID ran): the one that changed last comes back,
+    /// and the other stays where it is.
+    func testWithTwoContainersTheNewerLibraryComesBack() throws {
+        let storeLibrary = home.appendingPathComponent("Library/Containers/local.daybook.phone/Data/Library/Application Support/Daybook",
+                                                       isDirectory: true)
+        try writeLibrary(at: container, meeting: "older", date: Date(timeIntervalSinceNow: -86_400))
+        try writeLibrary(at: storeLibrary, meeting: "newer")
+        var plan = try XCTUnwrap(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: makeTestDefaults()))
+        XCTAssertEqual(plan.container, storeLibrary)
+
+        try writeLibrary(at: container, meeting: "newest", date: Date(timeIntervalSinceNow: 60))
+        plan = try XCTUnwrap(LegacyLibraryReturn.plan(library: library, bundleIdentifier: bundleID, home: home, defaults: makeTestDefaults()))
+        XCTAssertEqual(plan.container, container)
+        XCTAssertEqual(plan.containerPreferences, containerPreferences)
+    }
+
     func testAnOlderLibraryHereIsSetAsideNeverDeleted() throws {
         try writeLibrary(at: library, meeting: "older", date: Date(timeIntervalSinceNow: -86_400))
         try writeLibrary(at: container, meeting: "newer")

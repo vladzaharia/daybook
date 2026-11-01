@@ -35,6 +35,7 @@ final class SandboxMigrationTests: XCTestCase {
 
     func testOnlyTheAppAndTheRehearsalHaveAnOldPlace() {
         XCTAssertEqual(SandboxMigration.legacyFolderName(bundleIdentifier: "local.daybook.app"), "Daybook")
+        XCTAssertEqual(SandboxMigration.legacyFolderName(bundleIdentifier: "local.daybook.phone"), "Daybook", "the App Store build")
         XCTAssertEqual(SandboxMigration.legacyFolderName(bundleIdentifier: "local.daybook.app.rehearsal2"), "Daybook Rehearsal")
         XCTAssertNil(SandboxMigration.legacyFolderName(bundleIdentifier: "local.daybook.app.adhoc"), "ad hoc builds never look at the real library")
         XCTAssertNil(SandboxMigration.legacyFolderName(bundleIdentifier: nil))
@@ -132,6 +133,30 @@ final class SandboxMigrationTests: XCTestCase {
 
         try FileManager.default.removeItem(at: legacy)
         XCTAssertNotNil(launch(priorUse: false).notice, "no identity: a word about pairing the iPhone again")
+    }
+
+    /// The App Store build (and Developer ID with the sandbox) runs as `local.daybook.phone`, the iPhone app's bundle ID,
+    /// so its container is that one's; its old place is still the unsandboxed app's library, and its identity is still
+    /// the keychain item named after that place.
+    func testTheAppStoreBuildTakesTheLibraryFromTheUnsandboxedApp() throws {
+        let home = root.appendingPathComponent("Home", isDirectory: true)
+        let store = home.appendingPathComponent("Library/Containers/local.daybook.phone/Data/Library/Application Support/Daybook",
+                                                isDirectory: true)
+        func launch(_ defaults: UserDefaults = makeTestDefaults(), priorUse: Bool = true) -> AppState.LaunchCheck {
+            AppState.launchCheck(library: store, bundleIdentifier: "local.daybook.phone", defaults: defaults, sandboxed: true,
+                                 priorUse: priorUse, home: home, store: keychain.store(for:))
+        }
+        try writeLibrary(at: legacy)
+        XCTAssertEqual(launch().offer, .moveIntoContainer(.init(legacy: legacy, library: store, legacyExists: true)),
+                       "the container existed before the manifest could move the library")
+
+        // The manifest moved it: the identity comes from the old place's keychain item.
+        try FileManager.default.removeItem(at: legacy)
+        try writeLibrary(at: store)
+        let identity = StoredSyncIdentity(deviceID: UUID().uuidString, installation: UUID().uuidString)
+        _ = keychain.store(for: legacy).write(identity)
+        XCTAssertEqual(launch(), .init(), "nothing to ask")
+        XCTAssertEqual(keychain.store(for: store).read(), identity)
     }
 
     func testStartingFreshWhenNoOldLibraryCanBeFound() async throws {
