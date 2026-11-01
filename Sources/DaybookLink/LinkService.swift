@@ -6,13 +6,13 @@ import Foundation
 ///
 /// Everything runs on one serial queue, which is also the actor's executor, so Network.framework
 /// callbacks and actor state never race.
-public actor LinkService {
+public actor LinkService: LinkSessionOwner {
     private let queue: DispatchSerialQueue
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private let keyStore: any LinkKeyStore
-    private let configuration: LinkConfiguration
-    private let hub = LinkEventHub()
+    let configuration: LinkConfiguration
+    let hub = LinkEventHub()
     private var identity: LinkIdentity
 
     private var listener: NWListener?
@@ -29,10 +29,8 @@ public actor LinkService {
     private var unrouted: [ObjectIdentifier: LinkChannel] = [:]
     private var sessions: [ObjectIdentifier: LinkSession] = [:]
     private var peers: [UUID: LinkSession] = [:]
-    private var answeredByDevice: [UUID: [UUID: LinkRecordReply]] = [:]
-    /// Record requests the app is still answering, by device, with every connection waiting for the answer.
-    private var answering: [UUID: [UUID: [(LinkRecordReply.Outcome) -> Void]]] = [:]
-    private var recordHandler: LinkRecordControlHandler?
+    var recordAnswers = LinkRecordAnswers()
+    private(set) var recordHandler: LinkRecordControlHandler?
 
     private struct PairingWindow {
         var code: LinkPairingCode
@@ -146,13 +144,14 @@ public actor LinkService {
     /// The code being shown, if pairing is open.
     public var pairingCode: LinkPairingCode? { pairing?.code }
 
-    public func pairedDevices() throws -> [LinkPairedDevice] { try keyStore.records().map(\.device) }
+    /// Paired phones, a damaged pairing among them (`LinkPairedDevice.isDamaged`), never a key.
+    public func pairedDevices() throws -> [LinkPairedDevice] { try keyStore.pairedDevices() }
 
     /// Forgets a phone: tells it (when connected), removes the key, and stops accepting it.
     public func unpair(_ deviceID: UUID) throws {
         if let session = peers[deviceID] { session.sendUnpairAndClose() }
         try keyStore.remove(deviceID: deviceID)
-        answeredByDevice[deviceID] = nil
+        recordAnswers.forget(deviceID)
         hub.yield(.unpaired(deviceID: deviceID, byPeer: false))
         rebuildListener()
     }
@@ -353,74 +352,38 @@ public actor LinkService {
     // MARK: Sessions
 
     private func startSession(on channel: LinkChannel, firstFrame: Data, receivedAt: Date) {
-        var delegate = LinkSession.Delegate()
+        var delegate = LinkSession.Delegate.forwarding(to: self)
         delegate.lookup = { [keyStore] deviceID in try? keyStore.record(for: deviceID) }
-        delegate.established = { [weak self] session in self?.assumeIsolated { $0.established(session) } }
-        delegate.ended = { [weak self] session, reason in self?.assumeIsolated { $0.ended(session, reason: reason) } }
-        delegate.received = { [weak self] session, message in
-            guard let deviceID = session.deviceID else { return }
-            self?.hub.yield(.received(message, from: deviceID))
-        }
-        delegate.peerUpdated = { [weak self] session in
-            guard let peer = session.peer else { return }
-            self?.hub.yield(.peerUpdated(peer))
-        }
-        delegate.unpaired = { [weak self] session in self?.assumeIsolated { $0.peerUnpaired(session) } }
-        delegate.recordRequest = { [weak self] session, request, reply in
-            guard let self else { reply(.refused(LinkRecordRefusal(reason: .unsupported))); return }
-            self.assumeIsolated { $0.answer(request, from: session, reply: reply) }
-        }
         let session = LinkSession(role: .server, channel: channel, identity: identity, record: nil, configuration: configuration,
                                   heartbeat: (configuration.heartbeatInterval, configuration.heartbeatTimeout), delegate: delegate)
         sessions[ObjectIdentifier(session)] = session
         session.startServer(firstFrame: firstFrame, receivedAt: receivedAt)
     }
 
-    private func established(_ session: LinkSession) {
+    func sessionEstablished(_ session: LinkSession) {
         guard let peer = session.peer else { return }
         if let previous = peers[peer.deviceID], previous !== session {
             previous.close(.replaced)
         }
         peers[peer.deviceID] = session
-        if let answered = answeredByDevice[peer.deviceID] { session.adoptAnsweredReplies(answered) }
+        if let answered = recordAnswers.replies(for: peer.deviceID) { session.adoptAnsweredReplies(answered) }
         hub.yield(.connected(peer))
     }
 
-    private func ended(_ session: LinkSession, reason: LinkDisconnectReason) {
+    func sessionEnded(_ session: LinkSession, reason: LinkDisconnectReason) {
         sessions.removeValue(forKey: ObjectIdentifier(session))
         guard let peer = session.peer else { return }
-        answeredByDevice[peer.deviceID, default: [:]].merge(session.answeredReplies) { old, _ in old }
+        recordAnswers.keep(session.answeredReplies, from: peer.deviceID)
         if peers[peer.deviceID] === session { peers.removeValue(forKey: peer.deviceID) }
         hub.yield(.disconnected(deviceID: peer.deviceID, reason: reason))
     }
 
-    private func peerUnpaired(_ session: LinkSession) {
+    func sessionUnpaired(_ session: LinkSession) {
         guard let deviceID = session.deviceID else { return }
         try? keyStore.remove(deviceID: deviceID)
-        answeredByDevice[deviceID] = nil
+        recordAnswers.forget(deviceID)
         hub.yield(.unpaired(deviceID: deviceID, byPeer: true))
         rebuildListener()
-    }
-
-    private func answer(_ request: LinkRecordRequest, from session: LinkSession,
-                        reply: @escaping (LinkRecordReply.Outcome) -> Void) {
-        guard let handler = recordHandler, let peer = session.peer else {
-            reply(.refused(LinkRecordRefusal(reason: .unsupported)))
-            return
-        }
-        // A repeat on a new connection (a lost reply, a reconnect) gets the first answer, and one
-        // still being worked out (a microphone prompt) is answered once, on every connection that asked.
-        let device = peer.deviceID
-        if let earlier = answeredByDevice[device]?[request.id] { reply(earlier.outcome); return }
-        if answering[device]?[request.id] != nil { answering[device]?[request.id]?.append(reply); return }
-        answering[device, default: [:]][request.id] = [reply]
-        Task {
-            let outcome = await handler(peer, request)
-            let waiting = answering[device]?.removeValue(forKey: request.id) ?? []
-            LinkRecordReply.remember(LinkRecordReply(requestID: request.id, outcome: outcome, sentAt: configuration.clock.now()),
-                                     in: &answeredByDevice[device, default: [:]])
-            for reply in waiting { reply(outcome) }
-        }
     }
 
     // MARK: Pairing attempts
@@ -472,7 +435,7 @@ public actor LinkService {
         }
         channel.onEnd = { _ in fail(nil) }
         queue.asyncAfter(deadline: .now() + configuration.pairingTimeout) {
-            fail(.unexpected("timed out"))
+            fail(.timedOut)
         }
         // The first frame is the begin.
         channel.onFrame?(firstFrame, configuration.clock.now())
@@ -546,7 +509,8 @@ public actor LinkService {
         case .refused(.unsupportedVersion): return .unsupportedVersion
         case .refused: return .notPairing
         case .invalidKey: return .protocolViolation("invalid key")
-        case .unexpected(let what): return what == "timed out" ? .timedOut : .protocolViolation(what)
+        case .timedOut: return .timedOut
+        case .unexpected(let what): return .protocolViolation(what)
         case nil: return .connectionFailed("closed")
         }
     }

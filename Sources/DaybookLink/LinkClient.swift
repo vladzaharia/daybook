@@ -6,13 +6,13 @@ import Foundation
 ///
 /// How hard it works follows `setActivity(_:)`: in the background without a recording it closes
 /// everything; while recording in the background it keeps the connection with slower heartbeats.
-public actor LinkClient {
+public actor LinkClient: LinkSessionOwner {
     private let queue: DispatchSerialQueue
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private let keyStore: any LinkKeyStore
-    private let configuration: LinkConfiguration
-    private let hub = LinkEventHub()
+    let configuration: LinkConfiguration
+    let hub = LinkEventHub()
     private var identity: LinkIdentity
 
     /// The connection kept to one Mac. Confined to the client's queue.
@@ -33,10 +33,8 @@ public actor LinkClient {
     }
 
     private var links: [UUID: MacLink] = [:]
-    private var answeredByMac: [UUID: [UUID: LinkRecordReply]] = [:]
-    /// Record requests the app is still answering, by Mac, with every connection waiting for the answer.
-    private var answering: [UUID: [UUID: [(LinkRecordReply.Outcome) -> Void]]] = [:]
-    private var recordHandler: LinkRecordControlHandler?
+    var recordAnswers = LinkRecordAnswers()
+    private(set) var recordHandler: LinkRecordControlHandler?
     private var activity: LinkActivity = .foreground
     private var networkAvailable = true
     private var pathMonitor: NWPathMonitor?
@@ -46,6 +44,8 @@ public actor LinkClient {
     private var wantsBrowsing = false
     private var browseResults: [(name: String, endpoint: NWEndpoint, advertisement: LinkAdvertisement)] = []
     public private(set) var discoveredMacs: [LinkDiscoveredMac] = []
+    /// Whether Macs can be found: browsing, not, or refused the Local Network permission.
+    public private(set) var discovery: LinkDiscoveryState = .idle
 
     public init(identity: LinkIdentity, keyStore: any LinkKeyStore, configuration: LinkConfiguration = LinkConfiguration()) {
         queue = DispatchSerialQueue(label: "local.daybook.link.client")
@@ -186,7 +186,8 @@ public actor LinkClient {
         channel.start()
     }
 
-    public func pairedMacs() throws -> [LinkPairedDevice] { try keyStore.records().map(\.device) }
+    /// Paired Macs, a damaged pairing among them (`LinkPairedDevice.isDamaged`), never a key.
+    public func pairedMacs() throws -> [LinkPairedDevice] { try keyStore.pairedDevices() }
 
     /// Forgets a Mac: tells it (when connected), removes the key, and stops connecting.
     public func unpair(_ macID: UUID) throws {
@@ -195,7 +196,7 @@ public actor LinkClient {
             if link.isConnected { link.session?.sendUnpairAndClose() } else { link.session?.close(.closedLocally) }
         }
         try keyStore.remove(deviceID: macID)
-        answeredByMac[macID] = nil
+        recordAnswers.forget(macID)
         hub.yield(.unpaired(deviceID: macID, byPeer: false))
         refreshDiscovered()
         updateBrowser()
@@ -335,41 +336,36 @@ public actor LinkClient {
                                                   allowPeerToPeer: configuration.allowPeerToPeer)
         let channel = LinkChannel(connection: NWConnection(to: endpoint.endpoint, using: parameters), queue: queue,
                                   clock: configuration.clock)
-        var delegate = LinkSession.Delegate()
-        delegate.established = { [weak self] session in self?.assumeIsolated { $0.established(session, link: link) } }
-        delegate.ended = { [weak self] session, reason in self?.assumeIsolated { $0.ended(session, link: link, reason: reason) } }
-        delegate.received = { [weak self] _, message in self?.hub.yield(.received(message, from: link.macID)) }
-        delegate.peerUpdated = { [weak self] session in
-            guard let peer = session.peer else { return }
-            self?.hub.yield(.peerUpdated(peer))
-        }
-        delegate.unpaired = { [weak self] _ in self?.assumeIsolated { $0.macUnpaired(link) } }
-        delegate.recordRequest = { [weak self] session, request, reply in
-            guard let self else { reply(.refused(LinkRecordRefusal(reason: .unsupported))); return }
-            self.assumeIsolated { $0.answer(request, from: session, reply: reply) }
-        }
         let session = LinkSession(role: .client, channel: channel, identity: identity, record: record,
-                                  configuration: configuration, heartbeat: currentHeartbeat, delegate: delegate)
-        if let answered = answeredByMac[link.macID] { session.adoptAnsweredReplies(answered) }
+                                  configuration: configuration, heartbeat: currentHeartbeat, delegate: .forwarding(to: self))
+        if let answered = recordAnswers.replies(for: link.macID) { session.adoptAnsweredReplies(answered) }
         link.session = session
         set(link, .connecting)
         session.startClient()
     }
 
-    private func established(_ session: LinkSession, link: MacLink) {
-        guard link.session === session, let peer = session.peer else { return }
+    /// The link a session belongs to, while it's still that link's session. A link removed (disconnect,
+    /// unpair) or given a newer session isn't returned.
+    private func link(of session: LinkSession) -> MacLink? {
+        guard let macID = session.deviceID, let link = links[macID], link.session === session else { return nil }
+        return link
+    }
+
+    func sessionEstablished(_ session: LinkSession) {
+        guard let link = link(of: session), let peer = session.peer else { return }
         link.attempt = 0
         set(link, .connected)
         hub.yield(.connected(peer))
         updateBrowser()
     }
 
-    private func ended(_ session: LinkSession, link: MacLink, reason: LinkDisconnectReason) {
-        answeredByMac[link.macID, default: [:]].merge(session.answeredReplies) { old, _ in old }
-        guard link.session === session else { return }
-        link.session = nil
-        if session.peer != nil { hub.yield(.disconnected(deviceID: link.macID, reason: reason)) }
-        guard links[link.macID] === link else { return }
+    func sessionEnded(_ session: LinkSession, reason: LinkDisconnectReason) {
+        guard let macID = session.deviceID else { return }
+        recordAnswers.keep(session.answeredReplies, from: macID)
+        let link = link(of: session)
+        link?.session = nil
+        if session.peer != nil { hub.yield(.disconnected(deviceID: macID, reason: reason)) }
+        guard let link else { return }
         if activity == .background { set(link, .suspended); return }
 
         switch reason {
@@ -385,7 +381,7 @@ public actor LinkClient {
             set(link, .failed(reason))
             scheduleRetry(link, delay: backoff.maximum)
         default:
-            if link.endpoint == nil { forgetEndpoint(for: link.macID) }
+            if link.endpoint == nil { browseAgain() }
             scheduleRetry(link, delay: backoff.delay(attempt: link.attempt))
             link.attempt += 1
         }
@@ -402,34 +398,17 @@ public actor LinkClient {
         queue.asyncAfter(deadline: .now() + delay, execute: retry)
     }
 
-    private func macUnpaired(_ link: MacLink) {
-        try? keyStore.remove(deviceID: link.macID)
-        answeredByMac[link.macID] = nil
-        if links[link.macID] === link { links.removeValue(forKey: link.macID) }
-        link.retry?.cancel()
-        set(link, .idle)
-        hub.yield(.unpaired(deviceID: link.macID, byPeer: true))
+    func sessionUnpaired(_ session: LinkSession) {
+        guard let macID = session.deviceID else { return }
+        try? keyStore.remove(deviceID: macID)
+        recordAnswers.forget(macID)
+        if let link = link(of: session) {
+            links.removeValue(forKey: macID)
+            link.retry?.cancel()
+            set(link, .idle)
+        }
+        hub.yield(.unpaired(deviceID: macID, byPeer: true))
         refreshDiscovered()
-    }
-
-    private func answer(_ request: LinkRecordRequest, from session: LinkSession,
-                        reply: @escaping (LinkRecordReply.Outcome) -> Void) {
-        guard let handler = recordHandler, let peer = session.peer else {
-            reply(.refused(LinkRecordRefusal(reason: .unsupported)))
-            return
-        }
-        // As on the Mac: a repeat on a new connection gets the first answer, and the app hears it once.
-        let mac = peer.deviceID
-        if let earlier = answeredByMac[mac]?[request.id] { reply(earlier.outcome); return }
-        if answering[mac]?[request.id] != nil { answering[mac]?[request.id]?.append(reply); return }
-        answering[mac, default: [:]][request.id] = [reply]
-        Task {
-            let outcome = await handler(peer, request)
-            let waiting = answering[mac]?.removeValue(forKey: request.id) ?? []
-            LinkRecordReply.remember(LinkRecordReply(requestID: request.id, outcome: outcome, sentAt: configuration.clock.now()),
-                                     in: &answeredByMac[mac, default: [:]])
-            for reply in waiting { reply(outcome) }
-        }
     }
 
     // MARK: Browsing
@@ -448,39 +427,81 @@ public actor LinkClient {
                 self?.assumeIsolated { $0.browsed(results) }
             }
             browser.stateUpdateHandler = { [weak self, weak browser] state in
-                guard case .failed = state, let browser else { return }
-                self?.assumeIsolated { client in
-                    guard client.browser === browser else { return }
-                    browser.cancel()
-                    client.browser = nil
-                    client.queue.asyncAfter(deadline: .now() + 2) { [weak client] in client?.assumeIsolated { $0.updateBrowser() } }
-                }
+                guard let browser else { return }
+                self?.assumeIsolated { $0.browser(browser, changed: state) }
             }
             self.browser = browser
+            // A browser opened again after a refusal stays refused until it says otherwise.
+            if discovery == .idle { setDiscovery(.searching) }
             browser.start(queue: queue)
         } else if !needsBrowsing, let browser {
             browser.cancel()
             self.browser = nil
+            setDiscovery(.idle)
         }
     }
 
+    private func browser(_ browser: NWBrowser, changed state: NWBrowser.State) {
+        guard self.browser === browser else { return }
+        if let discovery = Self.discovery(for: state) { setDiscovery(discovery) }
+        guard case .failed = state else { return }
+        browser.cancel()
+        self.browser = nil
+        queue.asyncAfter(deadline: .now() + 2) { [weak self] in self?.assumeIsolated { $0.updateBrowser() } }
+    }
+
+    /// What a browser's state says about finding Macs; nil when it says nothing new. Without the Local
+    /// Network permission, iOS leaves the browser waiting (or failed) with DNS-SD's PolicyDenied.
+    static func discovery(for state: NWBrowser.State) -> LinkDiscoveryState? {
+        switch state {
+        case .ready:
+            return .searching
+        case .waiting(let error), .failed(let error):
+            return isPolicyDenied(error) ? .localNetworkDenied : nil
+        default:
+            return nil
+        }
+    }
+
+    /// `kDNSServiceErr_PolicyDenied`: the person declined (or turned off) Local Network for the app.
+    static let policyDenied: DNSServiceErrorType = -65570
+
+    static func isPolicyDenied(_ error: NWError) -> Bool {
+        if case .dns(let code) = error { return code == policyDenied }
+        return false
+    }
+
+    private func setDiscovery(_ state: LinkDiscoveryState) {
+        guard state != discovery else { return }
+        discovery = state
+        hub.yield(.discovery(state))
+    }
+
     private func browsed(_ results: Set<NWBrowser.Result>) {
-        browseResults = results.compactMap { result in
+        browsed(results.compactMap { result in
             guard case .service(let name, _, _, _) = result.endpoint, case .bonjour(let txt) = result.metadata,
                   let advertisement = LinkAdvertisement(txtRecord: txt) else { return nil }
             return (name, result.endpoint, advertisement)
-        }
+        })
+    }
+
+    /// What the browser found, read. Tests hand results in here, having no Bonjour.
+    func browsed(_ results: [(name: String, endpoint: NWEndpoint, advertisement: LinkAdvertisement)]) {
+        browseResults = results
+        // Something on the network answered, so it's searching whatever the browser said before.
+        if !results.isEmpty, discovery == .localNetworkDenied { setDiscovery(.searching) }
         refreshDiscovered()
         for link in links.values where link.state == .searching { attempt(link) }
     }
 
-    /// Only Macs that share this phone's library are offered, plus Macs already paired.
+    /// Every Mac on the network: those that share this phone's library, Macs already paired, and the
+    /// rest marked as using another library (`LinkDiscoveredMac.usesAnotherLibrary`), for the pairing
+    /// screen to show without offering them.
     private func refreshDiscovered() {
-        let paired = (try? keyStore.records().map(\.deviceID)) ?? []
+        let paired = (try? keyStore.pairedDevices().map(\.deviceID)) ?? []
         let macs = browseResults.map {
             $0.advertisement.discovered(serviceName: $0.name, endpoint: $0.endpoint, libraryID: identity.libraryID, pairedMacs: paired)
         }
-        .filter { identity.libraryID == nil || $0.sharesLibrary == true || $0.pairedDeviceID != nil }
         .sorted { $0.serviceName < $1.serviceName }
         guard macs != discoveredMacs else { return }
         discoveredMacs = macs
@@ -491,8 +512,11 @@ public actor LinkClient {
         discoveredMacs.first { $0.pairedDeviceID == macID }?.endpoint
     }
 
-    /// A Mac that dropped may come back at another address; look it up again.
-    private func forgetEndpoint(for macID: UUID) {
+    /// A Mac that dropped may come back at another address: browse again (the link without an
+    /// endpoint now needs it), and its Bonjour service is resolved afresh at the next attempt. Its entry
+    /// stays in `discoveredMacs`, since a browser that's already running reports no new result for a
+    /// service it still sees.
+    private func browseAgain() {
         guard configuration.discovery == .bonjour else { return }
         updateBrowser()
     }

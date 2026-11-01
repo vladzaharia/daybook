@@ -425,7 +425,7 @@ final class PhoneLink {
             onMacsChanged?()
         case .received(let message, let from):
             receive(message, from: from)
-        case .pairingCode, .pairingFailed:
+        case .pairingCode, .pairingFailed, .discovery:
             break
         }
     }

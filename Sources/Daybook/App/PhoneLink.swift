@@ -291,7 +291,7 @@ final class PhoneLink {
                 }
             }
             onMessage?(message, from)
-        case .discovered, .connectionState:
+        case .discovered, .discovery, .connectionState:
             break
         }
     }

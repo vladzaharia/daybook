@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 // MARK: Code
 
@@ -33,8 +34,22 @@ public struct LinkPairingCode: Sendable, Hashable, CustomStringConvertible {
         return String(repeating: "0", count: LinkProtocol.pairingCodeDigits - text.count) + text
     }
 
-    /// "048 213", for display.
-    public var formatted: String { "\(digits.prefix(3)) \(digits.suffix(3))" }
+    /// Digits per group, as both devices show a code: "482 913", or three boxes, a gap, three boxes.
+    public static let groupSize = 3
+    /// Between the groups: the one separator a code is shown and typed with on both devices.
+    public static let separator = " "
+
+    /// "048", "213".
+    public var groups: [String] {
+        stride(from: 0, to: digits.count, by: Self.groupSize).map { start in
+            let from = digits.index(digits.startIndex, offsetBy: start)
+            let to = digits.index(from, offsetBy: min(Self.groupSize, digits.count - start))
+            return String(digits[from..<to])
+        }
+    }
+
+    /// "048 213", for display: its `groups` with the one `separator`.
+    public var formatted: String { groups.joined(separator: Self.separator) }
 
     public var description: String { formatted }
 
@@ -52,14 +67,13 @@ public protocol LinkBurnedCodeStore: Sendable {
 }
 
 /// For tests: forgotten with the process.
-public final class MemoryLinkBurnedCodeStore: LinkBurnedCodeStore, @unchecked Sendable {
-    private let lock = NSLock()
-    private var data: Data?
+public final class MemoryLinkBurnedCodeStore: LinkBurnedCodeStore, Sendable {
+    private let data = Mutex<Data?>(nil)
 
     public init() {}
 
-    public func load() -> Data? { lock.withLock { data } }
-    public func save(_ data: Data?) { lock.withLock { self.data = data } }
+    public func load() -> Data? { data.withLock { $0 } }
+    public func save(_ data: Data?) { self.data.withLock { $0 = data } }
 }
 
 /// In UserDefaults, under `daybook.link.burnedCodes`.
@@ -277,6 +291,8 @@ final class PasskeyExchange {
         case refused(PairingMessage.Refuse.Reason)
         case peerFailed(String)
         case invalidKey
+        /// The attempt outlasted `LinkConfiguration.pairingTimeout`.
+        case timedOut
         case unexpected(String)
     }
 

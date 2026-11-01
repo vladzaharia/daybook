@@ -277,7 +277,9 @@ final class LinkSession: @unchecked Sendable {
             let reply = LinkRecordReply(requestID: request.id, outcome: outcome, sentAt: self.configuration.clock.now())
             self.answered[request.id] = reply
             self.answeredOrder.append(request.id)
-            if self.answeredOrder.count > 64 { self.answered.removeValue(forKey: self.answeredOrder.removeFirst()) }
+            if self.answeredOrder.count > LinkRecordReply.rememberedReplies {
+                self.answered.removeValue(forKey: self.answeredOrder.removeFirst())
+            }
             self.send(.recordReply(reply))
         }
     }
@@ -290,7 +292,7 @@ final class LinkSession: @unchecked Sendable {
             answered[id] = reply
             answeredOrder.append(id)
         }
-        while answeredOrder.count > 64 { answered.removeValue(forKey: answeredOrder.removeFirst()) }
+        while answeredOrder.count > LinkRecordReply.rememberedReplies { answered.removeValue(forKey: answeredOrder.removeFirst()) }
     }
 
     // MARK: Send
@@ -481,10 +483,127 @@ final class LinkSession: @unchecked Sendable {
 }
 
 extension LinkRecordReply {
-    /// Keeps a reply a device's requests may be repeated against, and only the latest 64 of them.
+    /// How many of a device's answered requests are kept to answer repeats: by a session, and by the
+    /// service or client across a device's sessions.
+    static let rememberedReplies = 64
+
+    /// Keeps a reply a device's requests may be repeated against, and only the latest
+    /// `rememberedReplies` of them.
     static func remember(_ reply: LinkRecordReply, in replies: inout [UUID: LinkRecordReply]) {
         replies[reply.requestID] = reply
-        guard replies.count > 64 else { return }
-        for old in replies.values.sorted(by: { $0.sentAt < $1.sentAt }).prefix(replies.count - 64) { replies[old.requestID] = nil }
+        trim(&replies)
+    }
+
+    /// Drops all but the latest `rememberedReplies`.
+    static func trim(_ replies: inout [UUID: LinkRecordReply]) {
+        guard replies.count > rememberedReplies else { return }
+        for old in replies.values.sorted(by: { $0.sentAt < $1.sentAt }).prefix(replies.count - rememberedReplies) {
+            replies[old.requestID] = nil
+        }
+    }
+}
+
+/// How each device's record requests were answered, across its connections: a request repeated on a
+/// new connection (a lost reply, a reconnect) gets the first answer, and one still being worked out (a
+/// microphone prompt) reaches the app once, with every connection that asked getting its answer. The
+/// Mac's `LinkService` and the iPhone's `LinkClient` each keep one, on their queue, so both sides treat
+/// a repeated Start the same way.
+struct LinkRecordAnswers {
+    typealias Reply = (LinkRecordReply.Outcome) -> Void
+
+    private var answered: [UUID: [UUID: LinkRecordReply]] = [:]
+    /// Requests the app is still answering, by device, with every connection waiting for the answer.
+    private var answering: [UUID: [UUID: [Reply]]] = [:]
+
+    /// A request from `device` arrived. True when the app is to answer it; false when it's a repeat,
+    /// answered from before or joined to the answer still being worked out.
+    mutating func begin(_ request: LinkRecordRequest, from device: UUID, reply: @escaping Reply) -> Bool {
+        if let earlier = answered[device]?[request.id] {
+            reply(earlier.outcome)
+            return false
+        }
+        if answering[device]?[request.id] != nil {
+            answering[device]?[request.id]?.append(reply)
+            return false
+        }
+        answering[device, default: [:]][request.id] = [reply]
+        return true
+    }
+
+    /// The app answered: the answer is kept for repeats, and returned are the connections waiting for
+    /// it, to call once this is done changing.
+    mutating func finish(_ request: LinkRecordRequest, from device: UUID, outcome: LinkRecordReply.Outcome, at now: Date) -> [Reply] {
+        let waiting = answering[device]?.removeValue(forKey: request.id) ?? []
+        LinkRecordReply.remember(LinkRecordReply(requestID: request.id, outcome: outcome, sentAt: now), in: &answered[device, default: [:]])
+        return waiting
+    }
+
+    /// The replies a session gave, kept for the device's next one.
+    mutating func keep(_ replies: [UUID: LinkRecordReply], from device: UUID) {
+        guard !replies.isEmpty else { return }
+        answered[device, default: [:]].merge(replies) { old, _ in old }
+        LinkRecordReply.trim(&answered[device, default: [:]])
+    }
+
+    /// What a new session for `device` answers repeats with.
+    func replies(for device: UUID) -> [UUID: LinkRecordReply]? { answered[device] }
+
+    /// The pair is gone: nothing it asked is answered again.
+    mutating func forget(_ device: UUID) { answered[device] = nil }
+}
+
+/// The Mac's `LinkService` and the iPhone's `LinkClient`: actors whose executor is the queue their
+/// sessions run on, so a session's delegate calls back into them with `assumeIsolated`.
+protocol LinkSessionOwner: Actor {
+    nonisolated var hub: LinkEventHub { get }
+    nonisolated var configuration: LinkConfiguration { get }
+    var recordHandler: LinkRecordControlHandler? { get }
+    var recordAnswers: LinkRecordAnswers { get set }
+
+    func sessionEstablished(_ session: LinkSession)
+    func sessionEnded(_ session: LinkSession, reason: LinkDisconnectReason)
+    /// The peer removed the pair (an authenticated `unpair`).
+    func sessionUnpaired(_ session: LinkSession)
+}
+
+extension LinkSessionOwner {
+    /// Answers a record request with the app's handler, once per request however often it's asked.
+    func answer(_ request: LinkRecordRequest, from session: LinkSession, reply: @escaping LinkRecordAnswers.Reply) {
+        guard let handler = recordHandler, let peer = session.peer else {
+            reply(.refused(LinkRecordRefusal(reason: .unsupported)))
+            return
+        }
+        let device = peer.deviceID
+        guard recordAnswers.begin(request, from: device, reply: reply) else { return }
+        Task {
+            let outcome = await handler(peer, request)
+            let waiting = recordAnswers.finish(request, from: device, outcome: outcome, at: configuration.clock.now())
+            for reply in waiting { reply(outcome) }
+        }
+    }
+}
+
+extension LinkSession.Delegate {
+    /// A session's delegate that hands everything to its owner, on the owner's queue: app messages and
+    /// peer updates go out as events, and record requests are answered once each (`LinkRecordAnswers`).
+    static func forwarding<Owner: LinkSessionOwner>(to owner: Owner) -> Self {
+        var delegate = Self()
+        let hub = owner.hub
+        delegate.established = { [weak owner] session in owner?.assumeIsolated { $0.sessionEstablished(session) } }
+        delegate.ended = { [weak owner] session, reason in owner?.assumeIsolated { $0.sessionEnded(session, reason: reason) } }
+        delegate.received = { session, message in
+            guard let deviceID = session.deviceID else { return }
+            hub.yield(.received(message, from: deviceID))
+        }
+        delegate.peerUpdated = { session in
+            guard let peer = session.peer else { return }
+            hub.yield(.peerUpdated(peer))
+        }
+        delegate.unpaired = { [weak owner] session in owner?.assumeIsolated { $0.sessionUnpaired(session) } }
+        delegate.recordRequest = { [weak owner] session, request, reply in
+            guard let owner else { reply(.refused(LinkRecordRefusal(reason: .unsupported))); return }
+            owner.assumeIsolated { $0.answer(request, from: session, reply: reply) }
+        }
+        return delegate
     }
 }

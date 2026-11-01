@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Network
+import Synchronization
 
 // MARK: Identity and configuration
 
@@ -168,6 +169,31 @@ public struct LinkDiscoveredMac: Sendable, Equatable, Identifiable {
     /// Whether it's showing a pairing code right now.
     public var isPairing: Bool
     public var protocolVersions: ClosedRange<Int>?
+
+    public init(serviceName: String, endpoint: LinkEndpoint, pairedDeviceID: UUID? = nil, sharesLibrary: Bool? = nil,
+                isPairing: Bool = false, protocolVersions: ClosedRange<Int>? = nil) {
+        self.serviceName = serviceName
+        self.endpoint = endpoint
+        self.pairedDeviceID = pairedDeviceID
+        self.sharesLibrary = sharesLibrary
+        self.isPairing = isPairing
+        self.protocolVersions = protocolVersions
+    }
+
+    /// A Mac with another library open (another Apple ID, or another library), never paired here: it's
+    /// shown, so the person can tell it from no Mac at all, but it isn't offered for pairing.
+    public var usesAnotherLibrary: Bool { pairedDeviceID == nil && sharesLibrary == false }
+}
+
+/// Whether the phone can find Macs on the network.
+public enum LinkDiscoveryState: Sendable, Equatable {
+    /// Not browsing.
+    case idle
+    /// Browsing; Macs arrive as `.discovered`.
+    case searching
+    /// The person declined (or turned off) Local Network for Daybook, so no Mac can be found until
+    /// it's allowed in the system's Settings.
+    case localNetworkDenied
 }
 
 // MARK: States and events
@@ -225,8 +251,10 @@ public enum LinkActivity: Sendable, Equatable {
 }
 
 public enum LinkEvent: Sendable {
-    /// Phone: Macs on the network that share this library (or all, when the phone has none).
+    /// Phone: Macs on the network, each saying whether it shares this library.
     case discovered([LinkDiscoveredMac])
+    /// Phone: whether Macs can be found (browsing, not, or refused Local Network).
+    case discovery(LinkDiscoveryState)
     /// Mac: show this code; nil when pairing closes.
     case pairingCode(LinkPairingCode?)
     case paired(LinkPairedDevice)
@@ -248,7 +276,6 @@ public enum LinkError: Error, Sendable, Equatable {
     case timedOut
     case disconnected
     case listenerFailed(String)
-    case pairing(LinkPairingError)
 }
 
 /// Answers record requests from the other side.
@@ -257,28 +284,26 @@ public typealias LinkRecordControlHandler = @Sendable (LinkPeer, LinkRecordReque
 // MARK: Event fan-out
 
 /// Hands each event to every subscriber. Each `events()` call gets its own stream.
-final class LinkEventHub: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuations: [UUID: AsyncStream<LinkEvent>.Continuation] = [:]
+final class LinkEventHub: Sendable {
+    private let continuations = Mutex<[UUID: AsyncStream<LinkEvent>.Continuation]>([:])
 
     func stream() -> AsyncStream<LinkEvent> {
         let (stream, continuation) = AsyncStream<LinkEvent>.makeStream(bufferingPolicy: .bufferingNewest(512))
         let id = UUID()
-        lock.withLock { continuations[id] = continuation }
+        continuations.withLock { $0[id] = continuation }
         continuation.onTermination = { [weak self] _ in
-            guard let self else { return }
-            self.lock.withLock { _ = self.continuations.removeValue(forKey: id) }
+            self?.continuations.withLock { _ = $0.removeValue(forKey: id) }
         }
         return stream
     }
 
     func yield(_ event: LinkEvent) {
-        let targets = lock.withLock { Array(continuations.values) }
+        let targets = continuations.withLock { Array($0.values) }
         for continuation in targets { continuation.yield(event) }
     }
 
     func finish() {
-        let targets = lock.withLock { () -> [AsyncStream<LinkEvent>.Continuation] in
+        let targets = continuations.withLock { continuations in
             defer { continuations.removeAll() }
             return Array(continuations.values)
         }
