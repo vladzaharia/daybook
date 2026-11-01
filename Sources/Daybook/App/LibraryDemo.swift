@@ -60,6 +60,9 @@ enum LibraryDemo {
             if !state.meetings.contains(where: { $0.title == ready }) { await seed(state) }
             if SpeakerProfileDemo.isRequested { await SpeakerProfileDemo.seed(state.library) }
             settle(state)
+            if FloatingNotesDemo.scenario == nil {
+                PlacementDemo.apply(to: state, processing: state.meetings.first { $0.title == transcribing }?.id)
+            }
             // Seeding is asynchronous: the launch's own `--select` and `--place` ran before it.
             if let title = LaunchOptions.value(after: "--select"), let id = state.meetings.first(where: { $0.title == title })?.id {
                 state.selectedID = id

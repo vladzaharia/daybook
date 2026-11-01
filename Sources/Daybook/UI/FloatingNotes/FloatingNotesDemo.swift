@@ -46,6 +46,8 @@ enum FloatingNotesDemo {
             state.update(id) { $0.status = .transcribing; $0.date = Date().addingTimeInterval(-900) }
             state.processingID = id
             state.processingProgress = IntelligenceProgress(0.4, "Transcribing")
+            // `--placement-demo countdown|cloud`: its summary's countdown, or the cloud at work.
+            PlacementDemo.apply(to: state, processing: id)
             show(state, id, afterStop: true)
         case .stopped:
             let id = conversation(state, title: "Design review", notes: notes)
