@@ -66,6 +66,8 @@ extension AppState {
                     if running.requestID == nil, Self.covers(running.mode, request.mode), let claimed = claim(request) {
                         runningJob = running.carrying(claimed)
                         startClaimHeartbeat()
+                        // Another device asked for its summary (its own countdown ran out): no second countdown here.
+                        if request.mode != .newAudio, request.requestedBy.id != me.id { placements.begin(meeting.id, immediately: true) }
                     }
                     continue
                 }
@@ -249,17 +251,22 @@ extension AppState {
     // MARK: Presence
 
     /// Other devices see this Mac in its presence record and over the link, with whether it can
-    /// process: it has the models automatic processing needs and transcribes synced recordings.
+    /// process (it has the models automatic processing needs and transcribes synced recordings) and
+    /// what it does for them with which models (`advertisedCapabilities`).
     func presenceChanged() {
         let processes = canProcess && processSyncedAudio
-        let identity = SyncDeviceIdentity(deviceClass: .mac, displayName: library.thisDevice.name, canProcess: processes)
+        // What it does for other devices, role by role, with the models it would use (docs/multipoint.md,
+        // "Where summaries run").
+        let capabilities = advertisedCapabilities
+        let identity = SyncDeviceIdentity(deviceClass: .mac, displayName: library.thisDevice.name, canProcess: processes,
+                                          capabilities: capabilities.presence)
         if sync.replica.device != identity {
             let gained = sync.replica.device?.canProcess == false && processes
             sync.updatePresence(identity)
             sync.requestSync()
             if gained { pickUpRequests() }
         }
-        Task { await phoneLink.update { $0.canProcess = processes } }
+        Task { await phoneLink.update { $0.canProcess = processes; $0.processing = capabilities.link } }
     }
 
     /// The link carries the sync library's ID, so a phone offers the Mac that shares its library.
