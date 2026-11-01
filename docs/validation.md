@@ -1,5 +1,23 @@
 # Validation record
 
+## Release review for 0.5.0 (2026-11-01)
+
+Window snapshots of the Mac (library, summary, transcript, inspector, the summary countdown, Upgrade, Floating Notes,
+every Settings pane, Add Key) and iPhone screenshots (library, status sheet at each height, a Mac's countdown, waiting
+for a Mac, Upgrade, Settings, Cloud, Models), light and dark, from debug builds with the demo libraries.
+
+- **A status detail cut to a letter.** With three chips beside it, Floating Notes' "Recording · MacBook Pro Microphone"
+  read "Recording · M…". `RecordingPhaseLabel` now shows a yielding detail whole, cut after a readable start (seven
+  times its type size), or not at all.
+- **Privacy wording.** Settings › Library, the Welcome window, the iPhone's About, and the README said nothing leaves
+  the device. They now say a summary goes to a cloud model only when the person chooses one.
+- **A summary dimmed while it waited.** An iPhone holds its due summary's request through the countdown and the wait
+  for a Mac, with the summarizing stage, so its page dimmed the summary for as long as no Mac came. The Mac marks a
+  conversation summarizing before its countdown, the same way. Both pages dim only once a summary is being written.
+  Covered by the screenshots; the dimming is a view property with no test seam.
+- Everything else looked right in both appearances. The Add Key sheet's Add button draws plain only because snapshots
+  render the window inactive; it is the default button.
+
 ## Floating Notes: room in the title band, the recorder's tape, and a meter for every source (2026-11-01)
 
 From the owner's review of Floating Notes: the "Saved" and "Summarizing" header sat tight, the hardware recorder's glyph
