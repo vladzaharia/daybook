@@ -132,31 +132,26 @@ public final class CloudSetup {
 
 extension CloudSetup {
     /// Settings as it looks with keys and models, for screenshots and previews: an in-memory key per provider in
-    /// `providers` and their lists from the bundled snapshot. It never reaches a provider.
+    /// `providers`, their lists from the catalog, and the bundled prices. It never reaches a provider or the keychain.
     public static func demo(providers: [CloudProvider], preferences: CloudSummaryPreferences = .init(), defaults: UserDefaults,
-                            check: [CloudProvider: Check] = [:]) async -> CloudSetup {
+                            checks: [CloudProvider: Check] = [:]) -> CloudSetup {
         let store = MemoryCloudKeyStore(Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
             CloudAPIKey(provider == .anthropic ? "sk-ant-api03-demoDEMOdemoDEMOdemo-gDAA" : "sk-proj-demoDEMOdemoDEMOdemoDEMO-x9Qa").map { (provider, $0) }
         }))
-        defaults.removeObject(forKey: CloudDirectory.listingsKey)
+        let listings = Dictionary(uniqueKeysWithValues: providers.map { provider in
+            (provider.rawValue, CloudDirectory.Listing(fetchedAt: Date(), models: CloudCatalog.builtIn.models.filter { $0.provider == provider }.map {
+                CloudListedModel(id: $0.id, displayName: $0.name)
+            }))
+        })
+        defaults.set(try? JSONEncoder().encode(listings), forKey: CloudDirectory.listingsKey)
         defaults.removeObject(forKey: CloudDirectory.pricesKey)
         preferences.save(to: defaults)
         let setup = CloudSetup(keys: store, client: CloudClient(endpoints: CloudEndpoints(base: URL(string: "https://invalid.invalid")!)), defaults: defaults)
         setup.fetches = false
-        for provider in providers {
-            await setup.directory.seed(CloudCatalog.builtIn.models.filter { $0.provider == provider }.map {
-                CloudListedModel(id: $0.id, displayName: $0.name)
-            }, for: provider)
-        }
-        setup.checks = check
-        await setup.refresh()
+        setup.checks = checks
+        setup.offers = CloudCatalog.builtIn.offers(listings: listings.reduce(into: [:]) { result, entry in
+            if let provider = CloudProvider(rawValue: entry.key) { result[provider] = entry.value.models }
+        }, prices: .snapshot)
         return setup
-    }
-}
-
-extension CloudDirectory {
-    /// Keeps `models` as the provider's list, as a fetch would: for demos.
-    public func seed(_ models: [CloudListedModel], for provider: CloudProvider) {
-        remember(models, for: provider)
     }
 }

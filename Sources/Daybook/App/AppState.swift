@@ -191,6 +191,14 @@ final class AppState: ObservableObject {
     let monitor = MeetingMonitor()
     let storageURL: URL
     private let preferences: UserDefaults
+    /// Cloud summaries' keys, models, and this Mac's preferences (Settings › Cloud; docs/cloud.md). Made when first
+    /// used, so a launch that never opens it never reads the keychain.
+    lazy var cloud: CloudSetup = {
+        #if DEBUG
+        if let demo = CloudSettingsDemo.setup(defaults: preferences) { return demo }
+        #endif
+        return CloudSetup(keys: KeychainCloudKeyStore.system, defaults: preferences)
+    }()
     let runtime: LocalIntelligenceRuntime
     /// Keeps speaker profiles and conversations in step (AppState+SpeakerProfiles.swift).
     lazy var speakerProfileCoordinator = makeSpeakerProfileCoordinator()
