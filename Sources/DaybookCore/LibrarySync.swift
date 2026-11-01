@@ -1034,17 +1034,37 @@ public actor LibrarySyncEngine {
         try LocalFiles.atomicWrite(Data(contentsOf: from), to: to)
         return true
     }
-    /// Whether the sync folder at `remoteRoot` holds the journal this device synced `localRoot` with: its manifest, already
-    /// downloaded, names a library (or one it replaced) this device has a checkpoint for. Reads only; false when the
-    /// manifest isn't there, is still in iCloud, or names another library.
-    public static func holdsJournal(localRoot: URL, deviceID: String, remoteRoot: URL, cloud: SyncCloudFiles = .system) -> Bool {
+    /// Whose journal a sync folder holds, as far as its manifest says (`journalOwnership`).
+    public enum JournalOwnership: Equatable, Sendable {
+        /// The manifest names a library (or one it replaced) this device has a checkpoint for.
+        case thisLibrary
+        /// The manifest names another library, or can't be read.
+        case anotherLibrary
+        /// The manifest is in iCloud and not downloaded yet; a download was requested.
+        case inCloud
+        /// There's no manifest, not even a placeholder.
+        case absent
+    }
+
+    /// Whether the sync folder at `remoteRoot` holds the journal this device synced `localRoot` with. Reads only, apart
+    /// from asking iCloud for a manifest that isn't downloaded yet.
+    public static func journalOwnership(localRoot: URL, deviceID: String, remoteRoot: URL, cloud: SyncCloudFiles = .system) -> JournalOwnership {
         let url = remoteRoot.appendingPathComponent("daybook-sync.json")
-        guard SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
-              let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)) else { return false }
+        switch SyncFiles.itemState(url) {
+        case .absent: return .absent
+        case .inCloud:
+            try? SyncFiles.available(url, cloud: cloud)
+            return .inCloud
+        case .local: break
+        }
+        let bytes: Data
+        do { bytes = try SyncFiles.read(url, below: remoteRoot, cloud: cloud) } catch { return .inCloud }
+        guard let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)) else { return .anotherLibrary }
         let sync = localRoot.standardizedFileURL.appendingPathComponent("Sync", isDirectory: true)
-        return ([manifest.libraryID] + (manifest.supersedes ?? [])).contains {
+        let held = ([manifest.libraryID] + (manifest.supersedes ?? [])).contains {
             FileManager.default.fileExists(atPath: sync.appendingPathComponent("\(checkpointStem(libraryID: $0, deviceID: deviceID)).json").path)
         }
+        return held ? .thisLibrary : .anotherLibrary
     }
     /// Whether one of this device's checkpoints (for any library) records `id` as deleted through sync.
     public static func recordsDeletion(of id: UUID, localRoot: URL, deviceID: String) -> Bool {
