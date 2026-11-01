@@ -171,6 +171,8 @@ public enum MeetingMerge {
         // Requests aren't edits: every device's requests survive, a finished outcome is final, and
         // the newest claim wins, so two Macs never both keep one.
         result.processingRequests = ProcessingRequest.merged(local.processingRequests, remote.processingRequests)
+        // Dismissed "Upgrade" offers are never taken back: every device's, once each.
+        result.upgradeDismissals = UpgradeDismissal.merged(local.upgradeDismissals, remote.upgradeDismissals)
         if let base {
             result.$status = choose("status", local.$status, remote.$status, base.$status)
             result.errorMessage = choose("processing-message", local.errorMessage, remote.errorMessage, base.errorMessage)

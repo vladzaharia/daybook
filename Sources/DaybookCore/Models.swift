@@ -489,6 +489,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     /// Which speaker profile each speaker is, and whether the person or Daybook decided
     /// (`SpeakerProfiles.swift`). Nil until a speaker is named or recognized.
     public var speakerIdentities: [SpeakerIdentity]?
+    /// "Upgrade" offers the person dismissed (`UpgradeDismissal`). Nil until the first; merged as a union.
+    public var upgradeDismissals: [UpgradeDismissal]?
     /// Keys a newer Daybook wrote that this version doesn't know, written back as they came.
     public var unknownFields = UnknownFields()
     public init(id: UUID = UUID(), title: String = "Untitled meeting", date: Date = Date(),
@@ -582,7 +584,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
             placement, tracks, transcripts, unifiedTranscript, alignmentReports, summary, revisions, highlights,
             speakers, status, errorMessage, correctionTransferIssues, speakerMatches, companions, sourceSuggestions,
             audioAlignments, fusionSummary, processingRequests, photos, backgroundPassages, includesBackgroundAudio,
-            speakerIdentities
+            speakerIdentities, upgradeDismissals
     }
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
@@ -621,6 +623,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         backgroundPassages = try values.decodeIfPresent([TranscriptSegment].self, forKey: .backgroundPassages)
         includesBackgroundAudio = try values.decodeIfPresent(Bool.self, forKey: .includesBackgroundAudio)
         speakerIdentities = try values.decodeIfPresent([SpeakerIdentity].self, forKey: .speakerIdentities)
+        // A dismissal a newer Daybook wrote differently is dropped: at worst an offer shows again.
+        upgradeDismissals = (try? values.decodeIfPresent([UpgradeDismissal].self, forKey: .upgradeDismissals)) ?? nil
         unknownFields = try UnknownFields(from: decoder, known: Self.knownKeys)
     }
 
@@ -659,6 +663,7 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         try values.encodeIfPresent(backgroundPassages, forKey: .backgroundPassages)
         try values.encodeIfPresent(includesBackgroundAudio, forKey: .includesBackgroundAudio)
         try values.encodeIfPresent(speakerIdentities, forKey: .speakerIdentities)
+        try values.encodeIfPresent(upgradeDismissals, forKey: .upgradeDismissals)
         try unknownFields.encode(to: encoder)
     }
 }

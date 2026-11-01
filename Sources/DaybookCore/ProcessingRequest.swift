@@ -68,6 +68,25 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    /// What an "Upgrade" asks for (docs/multipoint.md, "Upgrade"): the step it redoes with a better model, the model
+    /// it was offered for and how good the catalog says that model is, and the device that has it. The work is the
+    /// mode's own (Transcribe Everything Again, Identify Speakers Again, Summarize Again), with every later step after
+    /// it; only the device named, or one whose own model for the role is at least as good, carries it out.
+    public struct Upgrade: Codable, Equatable, Sendable {
+        /// The step it redoes (`ModelRole.rawValue`): "transcription", "diarization", or "summarization".
+        public var role: String
+        /// The better model: a catalog key ("parakeet/ultra") or a cloud one ("anthropic/claude-sonnet-5-5").
+        public var model: String
+        /// Its rank for the role (0–100, docs/models.md, "Quality ranks").
+        public var quality: Int
+        /// The device that has it; nil for the cloud, which the device that accepted it runs at once.
+        public var device: Device?
+
+        public init(role: String, model: String, quality: Int, device: Device? = nil) {
+            self.role = role; self.model = model; self.quality = quality; self.device = device
+        }
+    }
+
     /// How a request ended. Final: a finished request is never claimed again.
     public struct Outcome: Codable, Equatable, Sendable {
         public enum Result: String, Codable, Sendable { case completed, failed }
@@ -94,12 +113,15 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
     public var createdAt: Date
     public var claim: Claim?
     public var outcome: Outcome?
+    /// Set when the request redoes a step with a better model ("Upgrade"); nil for every other request.
+    public var upgrade: Upgrade?
 
     /// A new, open request.
     public init(id: UUID = UUID(), meetingID: UUID, mode: Mode, templateID: String? = nil, requestedBy: Device,
-                createdAt: Date = Date(), claim: Claim? = nil, outcome: Outcome? = nil) {
+                createdAt: Date = Date(), claim: Claim? = nil, outcome: Outcome? = nil, upgrade: Upgrade? = nil) {
         self.id = id; self.meetingID = meetingID; self.mode = mode; self.templateID = templateID
         self.requestedBy = requestedBy; self.createdAt = createdAt; self.claim = claim; self.outcome = outcome
+        self.upgrade = upgrade
     }
 
     // MARK: State
@@ -242,7 +264,9 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
     }
 
     /// The parts fixed when the request was made.
-    private var request: Asked { Asked(id: id, meetingID: meetingID, mode: mode, templateID: templateID, requestedBy: requestedBy, createdAt: createdAt) }
+    private var request: Asked {
+        Asked(id: id, meetingID: meetingID, mode: mode, templateID: templateID, requestedBy: requestedBy, createdAt: createdAt, upgrade: upgrade)
+    }
     private struct Asked: Codable, Equatable {
         var id: UUID
         var meetingID: UUID
@@ -250,6 +274,7 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         var templateID: String?
         var requestedBy: Device
         var createdAt: Date
+        var upgrade: Upgrade?
     }
 }
 

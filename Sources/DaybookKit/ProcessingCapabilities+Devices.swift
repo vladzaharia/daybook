@@ -85,3 +85,41 @@ extension SummaryOptions {
         self.init(thisDeviceCanSummarize: thisDeviceCanSummarize, reachableMacs: macs.map { (id: $0.id, name: $0.name) }, cloud: cloud)
     }
 }
+
+/// A Mac reachable now, with what it would run for other devices: what an "Upgrade" offer compares a conversation's
+/// models with (docs/multipoint.md, "Upgrade"). Reachable as for summaries (`SummarizingMac.reachable`): connected over
+/// the link, or seen through sync within `SummarizingMac.presenceWindow`.
+public struct ProcessingMac: Equatable, Sendable {
+    /// Its sync replica ID, as requests name devices.
+    public var id: String
+    public var name: String
+    public var capabilities: ProcessingCapabilities
+
+    public init(id: String, name: String, capabilities: ProcessingCapabilities) {
+        self.id = id; self.name = name; self.capabilities = capabilities
+    }
+
+    /// The Macs reachable now that say what they run, connected ones first, each once. One from an earlier Daybook, which
+    /// doesn't name its models, offers nothing.
+    public static func reachable(connected: [SummarizingMac.Connected], presence: [KnownSyncDevice], now: Date = Date()) -> [ProcessingMac] {
+        var result: [ProcessingMac] = []
+        var seen = Set<String>()
+        for mac in connected {
+            guard let capabilities = mac.capabilities, capabilities.models != nil else { continue }
+            let key = mac.syncDeviceID ?? mac.id.uuidString
+            guard seen.insert(key).inserted else { continue }
+            result.append(ProcessingMac(id: key, name: mac.name, capabilities: capabilities))
+        }
+        let present = presence.filter { device in
+            guard !device.isCurrentDevice, device.deviceClass == .mac, device.supersededBy == nil, let seen = device.lastSeen,
+                  now.timeIntervalSince(seen) <= SummarizingMac.presenceWindow else { return false }
+            return device.capabilities?.models != nil
+        }
+        .sorted { ($0.lastSeen ?? .distantPast) > ($1.lastSeen ?? .distantPast) }
+        for device in present {
+            guard let capabilities = device.capabilities, seen.insert(device.id).inserted else { continue }
+            result.append(ProcessingMac(id: device.id, name: device.displayName ?? "your Mac", capabilities: ProcessingCapabilities(capabilities)))
+        }
+        return result
+    }
+}
