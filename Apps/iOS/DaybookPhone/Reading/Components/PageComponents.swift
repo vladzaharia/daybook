@@ -1,10 +1,10 @@
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
+// The side of a page that meets the iPhone Duo's crease is DaybookUI's `creaseEdge`, which its pages read too.
+
 extension EnvironmentValues {
-    /// The side of this page that meets the iPhone Duo's crease, if any. Pages keep their content
-    /// clear of it (`PhoneStyle.Page.creaseClearance`).
-    @Entry var creaseEdge: Edge? = nil
     /// The library search's text, so the page can mark its matches.
     @Entry var findQuery: String = ""
     /// True when this page is one of two (the notebook): links between the pages work by scrolling

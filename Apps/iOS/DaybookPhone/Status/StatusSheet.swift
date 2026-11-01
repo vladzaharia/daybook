@@ -1,6 +1,7 @@
 import DaybookCaptions
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import SwiftUI
 
 // The status sheet (docs/iphone.md, "Status sheet"): the recorder, your Mac, and sync at a glance,
@@ -701,19 +702,6 @@ struct StatusRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(configuration.isPressed ? Color.primary.opacity(0.06) : .clear)
-    }
-}
-
-extension String {
-    /// "Connected · 80%" with the dot kept on the end of a line when it wraps, never starting one.
-    var keepingSeparators: String { replacingOccurrences(of: " · ", with: "\u{00A0}· ") }
-
-    /// A device's name, wrapping without leaving a short last word alone on a line: "Vlad’s MacBook /
-    /// Pro (755)", not "Vlad’s MacBook Pro / (755)". Names wrap only at spaces.
-    var wrappingAsName: String {
-        let words = split(separator: " ", omittingEmptySubsequences: false)
-        guard words.count >= 3, let last = words.last, last.count <= 5 else { return self }
-        return words.dropLast().joined(separator: " ") + "\u{00A0}" + last
     }
 }
 
