@@ -375,6 +375,56 @@ iOS grants the continued-processing task after Stop, how its Live Activity reads
 the `processing` background mode's need (added for the task); the memory limit `PhoneMemory` reads; a
 Gemma summary's time and peak on a phone; Parakeet Redux and Nemotron Compact on a 4 GB iPhone.
 
+## Where summaries run, and the countdown before them (2026-10-31)
+
+A summary that's due now has a place: this device, a Mac another device sends it to, or the cloud with the
+person's own key, decided by one planner both apps share, with a countdown (15 s, or 30) that lets the person
+choose the cloud first (docs/multipoint.md, "Where summaries run"). Built against `CloudSummarizing` with a
+fake: the concrete cloud, its keys, and Settings › Cloud are the cloud work's.
+
+**What changed.**
+
+- `SummaryPlacementPlanner` (DaybookKit, pure) and `SummaryPlacements` (a planner per conversation, one timer).
+  Counting down to this device or a reachable Mac, waiting for a Mac with Use the Cloud, started, or waiting as
+  before; Use the Cloud, Start Now, Wait for a Mac; Always and Never; asked-for summaries start at once; a
+  change of what's on offer reaches every countdown.
+- The Mac's summary step goes through it, on the page, the list row, the inspector, and Floating Notes, and
+  connected iPhones see the countdown (`processing.progress`, `summaryCountdown`) and may choose
+  (`processing.choice`). Without a key nothing changes.
+- The iPhone sends a summary to a reachable Mac after a countdown (a Summarize request, nudged), waits for one
+  with Use the Cloud, runs it in the cloud or on its own summarizer (the `LocalSummarizing` seam, nil until the
+  iPhone's processing lands; `summaryIsDue` is the call it makes) with a claim, shows a Mac's countdown, and
+  starts each countdown's default when it leaves the screen. The page, the list row, and the status sheet say it.
+- One summary per conversation: claims through Summarize requests (with the summarizing stage), standing down
+  for another device's claim, the merge's newest claim winning, and a summary another device wrote meanwhile kept.
+- Macs advertise `ProcessingCapabilities` (with the model per role) over the link and in presence; earlier
+  peers read as unknown. A summary records where it ran and the model behind each role; the colophon says it.
+
+**Verified.**
+
+- `swift test`: 1,406 tests, 0 failures (1 skipped, as before); `swift build --build-tests` clean. New: `SummaryPlacementTests` (35: every transition with a clock of the test's own,
+  the words, preferences, the coordinator), `SummaryClaimTests` (8), `SummaryPlacementProcessingTests` (16:
+  the Mac's countdown, Start Now, Use the Cloud, Always, Never, Summarize Again and another device's request
+  starting at once, pausing during a countdown, standing down for a phone's claim, a phone's summary kept, a
+  late Mac leaving a phone's cloud summary alone, a phone choosing the cloud over a loopback link,
+  capabilities in presence and over the link), `LinkWireTests.testBehaviorSummaryPlacementIsAdditive`,
+  `LibrarySyncReplicaTests.testBehaviorPresenceCarriesWhatAMacDoesForOthers`, and Floating Notes' chip and line.
+- `scripts/build-ios.sh --test` on an iPhone 18 Pro simulator clone (iOS 27.1): 202 tests, 0 failures. New:
+  `PhoneSummaryPlacementTests` (14: a countdown to a Mac then the request; without a key; waiting then a Mac
+  arriving; a Mac's presence going stale; Use the Cloud with a claim and the provenance; Use the Cloud taking a
+  waiting request; Always; its own summarizer and Wait for a Mac; a Mac already on it; a Mac claiming it during
+  the countdown; losing the claim in a merge; leaving the screen; a loopback Mac's countdown shown and the
+  choice reaching it; the status sheet).
+- Window snapshots, before (5dac69e) and after, light and dark: the Mac's page, list row, and inspector
+  counting down and in the cloud, Floating Notes' chip, and the colophon from the cloud and from another Mac
+  (`--placement-demo`); the iPhone's page counting down to a Mac, waiting for one, in the cloud, and showing a
+  Mac's countdown, the list row, the status sheet, and the colophon (`--placement-demo`).
+
+**Needs hardware or the cloud work.** A real key and provider (the fake stands in); a Mac and an iPhone on a
+real network choosing over the link while both count down; iCloud's latency between two devices that start
+summarizing before either's claim arrives (the merge keeps one; Version History the other); the iPhone in the
+background with a cloud summary under way (a suspended app's claim expires after 10 minutes and a Mac takes it).
+
 ## Long summaries on the other models, and a three-hour meeting (2026-10-31)
 
 The long-summary fixes below (#34) were checked on Gemma 4 26B A4B only. The same check on the catalog's
