@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCaptions
 import Foundation
+import Synchronization
 
 /// The audio every live model takes: 16 kHz mono, 32-bit float.
 public enum LiveAudio {
@@ -23,75 +24,77 @@ final class LiveResampler: @unchecked Sendable {
 
 /// The bounded wait between a capture's audio thread and a live pipeline's worker: `append` never
 /// blocks, the oldest audio is dropped when the worker falls behind, and `fill` says how far behind.
-final class LiveInput: @unchecked Sendable {
+final class LiveInput: Sendable {
     struct Item: @unchecked Sendable {
         var buffer: AVAudioPCMBuffer
         /// Seconds on the source's timeline, when known.
         var time: TimeInterval?
     }
 
+    private struct Counts {
+        var remaining: Int
+        var taken = 0
+    }
+
     let stream: AsyncStream<Item>
     private let continuation: AsyncStream<Item>.Continuation
     let capacity: Int
-    private let lock = NSLock()
-    private var remaining: Int
-    private var takenCount = 0
+    private let counts: Mutex<Counts>
 
     init(capacity: Int) {
         self.capacity = max(1, capacity)
-        remaining = self.capacity
+        counts = Mutex(Counts(remaining: self.capacity))
         (stream, continuation) = AsyncStream<Item>.makeStream(bufferingPolicy: .bufferingNewest(self.capacity))
     }
 
     func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) {
-        let result = continuation.yield(Item(buffer: buffer, time: time?.liveSeconds))
-        if case .enqueued(let left) = result { lock.withLock { remaining = left } }
+        let result = continuation.yield(Item(buffer: buffer, time: time?.captionSeconds))
+        if case .enqueued(let left) = result { counts.withLock { $0.remaining = left } }
     }
 
     /// The worker took one: room for one more.
-    func took() { lock.withLock { remaining = min(capacity, remaining + 1); takenCount += 1 } }
+    func took() {
+        let capacity = self.capacity
+        counts.withLock { counts in
+            counts.remaining = min(capacity, counts.remaining + 1)
+            counts.taken += 1
+        }
+    }
 
     /// Buffers the worker has taken so far (tests).
-    var taken: Int { lock.withLock { takenCount } }
+    var taken: Int { counts.withLock { $0.taken } }
 
     /// How full the wait is, 0…1.
-    var fill: Double { lock.withLock { 1 - Double(remaining) / Double(capacity) } }
+    var fill: Double {
+        let capacity = self.capacity
+        return counts.withLock { 1 - Double($0.remaining) / Double(capacity) }
+    }
 
     func finish() { continuation.finish() }
-}
-
-extension AVAudioTime {
-    /// Seconds on the source's timeline: sample time at its rate when valid, else host time (as
-    /// DaybookCaptions reads a buffer's time).
-    var liveSeconds: TimeInterval? {
-        if isSampleTimeValid, sampleRate > 0 { return Double(sampleTime) / sampleRate }
-        if isHostTimeValid { return AVAudioTime.seconds(forHostTime: hostTime) }
-        return nil
-    }
 }
 
 /// Maps a live model's timeline (the audio it was fed, back to back) onto the capture's (which has
 /// gaps where audio was dropped or shed), counting from `origin`, else from the first buffer
 /// *appended*: every captioner wrapping the same capture then counts from the same moment, even
-/// when one of them drops audio while its model loads. Thread-safe.
-final class LiveTimeline: @unchecked Sendable {
-    private let lock = NSLock()
+/// when one of them drops audio while its model loads.
+final class LiveTimeline: Sendable {
     private let origin: TimeInterval?
-    private var map: CaptionTimeMap?
+    private let map: Mutex<CaptionTimeMap?>
 
     init(origin: TimeInterval?) {
         self.origin = origin
-        if let origin { map = CaptionTimeMap(origin: origin) }
+        map = Mutex(origin.map { CaptionTimeMap(origin: $0) })
     }
 
     /// A buffer was appended at `time` (source seconds): the first one fixes the origin.
     func appended(at time: TimeInterval?) {
         guard origin == nil else { return }
-        lock.withLock { if map == nil { map = CaptionTimeMap(origin: time) } }
+        map.withLock { map in if map == nil { map = CaptionTimeMap(origin: time) } }
     }
 
     private var current: CaptionTimeMap {
-        lock.withLock {
+        let origin = self.origin
+        return map.withLock { map in
             if let map { return map }
             let created = CaptionTimeMap(origin: origin)
             map = created

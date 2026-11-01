@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // Live captions: tentative, on-device text made while audio is being captured (an iPhone recording,
 // a Mac's microphone or call, a recorder's live listening). They show that the audio is being heard
@@ -138,44 +139,46 @@ public struct LiveCaptionAssembler: Equatable, Sendable {
 /// Maps the analyzer's timeline (audio fed back to back) onto the source's (which may have gaps:
 /// a paused recording, a recorder sending in bursts). Source times are seconds from an arbitrary
 /// start; the origin is fixed when given, else the first buffer's time. Thread-safe.
-public final class CaptionTimeMap: @unchecked Sendable {
+public final class CaptionTimeMap: Sendable {
     private struct Anchor { var analyzer: TimeInterval; var source: TimeInterval }
-    private let lock = NSLock()
-    private var anchors: [Anchor] = []
-    private var origin: TimeInterval?
-    private var nextSource: TimeInterval?
-    private var fed: TimeInterval = 0
+    private struct State {
+        var anchors: [Anchor] = []
+        var origin: TimeInterval?
+        var nextSource: TimeInterval?
+        var fed: TimeInterval = 0
+    }
+    private let state: Mutex<State>
     /// A jump this large between where a buffer was expected and where it is marks a gap.
     public static let tolerance: TimeInterval = 0.25
 
     /// `origin`: the source time that is zero on the captions' timeline (a recording's start, in
     /// the buffers' own units). Nil makes it the first buffer fed, which comes later than the first
     /// appended when audio was dropped while the recognizer started.
-    public init(origin: TimeInterval? = nil) { self.origin = origin }
+    public init(origin: TimeInterval? = nil) { state = Mutex(State(origin: origin)) }
 
     /// Notes a buffer about to be fed: its source time (nil continues from the last one) and length.
     public func feed(sourceTime: TimeInterval?, duration: TimeInterval) {
-        lock.withLock {
-            let time = sourceTime ?? nextSource ?? 0
-            if origin == nil { origin = time }
-            if nextSource.map({ abs(time - $0) > Self.tolerance }) ?? true {
-                anchors.append(Anchor(analyzer: fed, source: time - (origin ?? time)))
+        state.withLock { state in
+            let time = sourceTime ?? state.nextSource ?? 0
+            if state.origin == nil { state.origin = time }
+            if state.nextSource.map({ abs(time - $0) > Self.tolerance }) ?? true {
+                state.anchors.append(Anchor(analyzer: state.fed, source: time - (state.origin ?? time)))
             }
-            fed += duration
-            nextSource = time + duration
+            state.fed += duration
+            state.nextSource = time + duration
         }
     }
 
     /// Where a buffer stamped `time` (the source's own units) sits on the captions' timeline, once the
     /// origin is known.
     public func captureTime(ofSource time: TimeInterval) -> TimeInterval? {
-        lock.withLock { origin.map { max(0, time - $0) } }
+        state.withLock { state in state.origin.map { max(0, time - $0) } }
     }
 
     /// Seconds from the first buffer, on the source's timeline.
     public func sourceTime(_ analyzerTime: TimeInterval) -> TimeInterval {
-        lock.withLock {
-            guard let anchor = anchors.last(where: { $0.analyzer <= analyzerTime + 0.001 }) ?? anchors.first else { return analyzerTime }
+        state.withLock { state in
+            guard let anchor = state.anchors.last(where: { $0.analyzer <= analyzerTime + 0.001 }) ?? state.anchors.first else { return analyzerTime }
             return max(0, anchor.source + (analyzerTime - anchor.analyzer))
         }
     }

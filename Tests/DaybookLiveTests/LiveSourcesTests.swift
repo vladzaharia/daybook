@@ -121,6 +121,79 @@ final class LiveSourcesTests: XCTestCase {
         XCTAssertEqual(loaded, 0, "models released after both end")
     }
 
+    // MARK: Stopping while models load
+
+    /// A capture that stops while its recognizer still loads (Core ML compiling, the first seconds after
+    /// launch) ends its captions at once and gives back what the load returns: nothing stays loaded or
+    /// leased for the rest of the process. `slowCapture` is the wait before the shared model is asked
+    /// for; `slowModel` the shared model's own load.
+    private func stopWhileLoading(slowCapture: Duration, slowModel: Duration) async throws {
+        let loads = Loads()
+        let host = LiveModelHost(idleRelease: .zero)
+        var captioners = LiveCaptioners(host: host, policy: .iPhone)
+        captioners.parts = LiveParts(transcriber: { use, installation, _ in
+            try await Task.sleep(for: slowCapture)
+            let shared = try await use.shared(.transcription, installation) {
+                try await Task.sleep(for: slowModel)
+                loads.add("recognizer")
+                return SharedModel()
+            }
+            loads.add("capture")
+            return LevelTranscriber(shared: shared)
+        }, diarizer: { _, _ in throw CancellationError() }, embedding: { _, _, _ in throw CancellationError() })
+        let models = LiveModelSet(transcription: try install("nemotron-3.5-asr-streaming/latin-1120ms"))
+        let locale = Locale(identifier: "en_US")
+        let captioner = try XCTUnwrap(captioners.captioner(models: models, locale: locale, backlog: 16, timelineOrigin: 0, fallback: { nil }))
+        XCTAssertTrue(captioner is LocalStreamingCaptioner)
+        let states = Task { var all: [LiveCaptionState] = []; for await state in captioner.states { all.append(state) }; return all }
+        let starting = Task { await captioner.start(locale: locale, sourceFormat: nil) }
+        // Well inside the load; then stop, as a short recording does, from a task of its own.
+        try await Task.sleep(for: .milliseconds(50))
+        await captioner.finish()
+        await starting.value
+        let said = await states.value
+        XCTAssertEqual(said.last, .finished, "the captions end when the capture does")
+        XCTAssertFalse(said.contains(.listening), "and never start afterwards: \(said)")
+        XCTAssertFalse(said.contains { if case .failed = $0 { return true } else { return false } }, "stopping isn't a failure")
+        XCTAssertEqual(loads["recognizer"], 1, "the load ran to its end")
+        XCTAssertEqual(loads["capture"], 0, "but no capture was made over it")
+        var loaded = await host.loadedCount
+        for _ in 0..<200 where loaded > 0 {
+            try await Task.sleep(for: .milliseconds(10))
+            loaded = await host.loadedCount
+        }
+        XCTAssertEqual(loaded, 0, "nothing stays loaded or leased once the load returns")
+    }
+
+    func testStoppingBeforeTheRecognizerIsAskedForLeavesNothingLoaded() async throws {
+        try await stopWhileLoading(slowCapture: .milliseconds(300), slowModel: .zero)
+    }
+
+    func testStoppingWhileTheSharedModelLoadsLeavesNothingLoaded() async throws {
+        try await stopWhileLoading(slowCapture: .zero, slowModel: .milliseconds(300))
+    }
+
+    func testAStopBeforeTheStartBeginsNothing() async throws {
+        let loads = Loads()
+        let host = LiveModelHost(idleRelease: .zero)
+        var captioners = LiveCaptioners(host: host, policy: .mac)
+        captioners.parts = parts(loads)
+        let models = LiveModelSet(transcription: try install("nemotron-3.5-asr-streaming/latin-1120ms"),
+                                  diarization: try install("nemotron-3-diarization/live"))
+        let locale = Locale(identifier: "en_US")
+        let captioner = try XCTUnwrap(captioners.captioner(models: models, locale: locale, backlog: 16, timelineOrigin: 0, fallback: { nil }))
+        XCTAssertTrue(captioner is SpeakerLabelledCaptioner)
+        let heard = collect(captioner)
+        // The Mac's Call captioner: finished before its turn to start came.
+        await captioner.finish()
+        await captioner.start(locale: locale, sourceFormat: nil)
+        let segments = await heard.value
+        XCTAssertTrue(segments.isEmpty)
+        XCTAssertEqual(loads["recognizer"] + loads["speakers"], 0, "a finished captioner loads nothing")
+        let loaded = await host.loadedCount
+        XCTAssertEqual(loaded, 0)
+    }
+
     static func tone(_ format: AVAudioFormat, frames: Int, level: Float) -> AVAudioPCMBuffer {
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))!
         buffer.frameLength = AVAudioFrameCount(frames)

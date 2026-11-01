@@ -3,6 +3,7 @@ import DaybookKit
 import DaybookModelStore
 import FluidAudio
 import Foundation
+import Synchronization
 
 /// Builds each capture's captioner from the live models a device has (docs/model-runtime.md, "Live"):
 ///
@@ -109,29 +110,35 @@ public struct LiveCaptioners: Sendable {
     }
 }
 
-/// The models one captioner took from the host, given back exactly once when it ends.
-final class LiveModelUse: @unchecked Sendable {
+/// The models one captioner took from the host, given back exactly once when it ends. A model that
+/// finishes loading after that (the capture stopped while it loaded) goes straight back, and its
+/// load throws `CancellationError`, so nothing stays held for a captioner that has gone.
+final class LiveModelUse: Sendable {
     private let host: LiveModelHost
-    private let lock = NSLock()
-    private var held: [(LiveModelHost.Kind, ModelInstallation)] = []
+    private let state = Mutex(State())
+
+    private struct State {
+        var held: [(LiveModelHost.Kind, ModelInstallation)] = []
+        var released = false
+    }
 
     init(host: LiveModelHost) { self.host = host }
 
     func transcription(_ installation: ModelInstallation) async throws -> SharedNemotronMultilingualModels {
         let value = try await host.useTranscription(installation)
-        hold(.transcription, installation)
+        try await hold(.transcription, installation)
         return value
     }
 
     func diarization(_ installation: ModelInstallation) async throws -> LoadedDiarizer {
         let value = try await host.useDiarization(installation)
-        hold(.diarization, installation)
+        try await hold(.diarization, installation)
         return value
     }
 
     func embedding(_ installation: ModelInstallation) async throws -> WeSpeakerEmbedder {
         let value = try await host.useEmbedding(installation)
-        hold(.embedding, installation)
+        try await hold(.embedding, installation)
         return value
     }
 
@@ -139,17 +146,30 @@ final class LiveModelUse: @unchecked Sendable {
     func shared<Value: Sendable>(_ kind: LiveModelHost.Kind, _ installation: ModelInstallation,
                                  load: @escaping @Sendable () async throws -> Value) async throws -> Value {
         let value = try await host.use(kind, installation, load: load)
-        hold(kind, installation)
+        try await hold(kind, installation)
         return value
     }
 
+    /// Gives back every model held, and any that finishes loading later.
     func release() async {
-        let items = lock.withLock { () -> [(LiveModelHost.Kind, ModelInstallation)] in defer { held = [] }; return held }
+        let items = state.withLock { state -> [(LiveModelHost.Kind, ModelInstallation)] in
+            state.released = true
+            defer { state.held = [] }
+            return state.held
+        }
         for (kind, installation) in items { await host.done(kind, installation) }
     }
 
-    private func hold(_ kind: LiveModelHost.Kind, _ installation: ModelInstallation) {
-        lock.withLock { held.append((kind, installation)) }
+    private func hold(_ kind: LiveModelHost.Kind, _ installation: ModelInstallation) async throws {
+        let kept = state.withLock { state -> Bool in
+            guard !state.released else { return false }
+            state.held.append((kind, installation))
+            return true
+        }
+        guard kept else {
+            await host.done(kind, installation)
+            throw CancellationError()
+        }
     }
 }
 

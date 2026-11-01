@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// What the device is going through while it captions live: heat, power, battery, and whether
 /// anyone can see the captions. The apps fill in what only they know (an iPhone's battery and
@@ -93,15 +94,18 @@ public struct LiveLoadPolicy: Equatable, Sendable {
 
 /// Applies a `LiveLoadPolicy` over time: the conditions, plus how far the pipeline has fallen behind,
 /// with hysteresis so a backlog near the line doesn't flap speakers on and off. Thread-safe.
-public final class LiveLoadGovernor: @unchecked Sendable {
+public final class LiveLoadGovernor: Sendable {
     public let policy: LiveLoadPolicy
     private let conditions: @Sendable () -> LiveConditions
-    private let lock = NSLock()
-    private var behind = false
     /// Conditions are read at most this often (they change slowly; reading them costs a little).
     private let interval: TimeInterval
-    private var lastRead: Date = .distantPast
-    private var lastLevel: LiveWorkLevel = .full
+    private let state = Mutex(State())
+
+    private struct State {
+        var behind = false
+        var lastRead: Date = .distantPast
+        var lastLevel: LiveWorkLevel = .full
+    }
 
     public init(policy: LiveLoadPolicy, interval: TimeInterval = 2, conditions: @escaping @Sendable () -> LiveConditions) {
         self.policy = policy; self.interval = interval; self.conditions = conditions
@@ -109,12 +113,14 @@ public final class LiveLoadGovernor: @unchecked Sendable {
 
     /// The level now, given the input queue's fill (0…1).
     public func level(backlog: Double, now: Date = Date()) -> LiveWorkLevel {
-        let (stale, previous) = lock.withLock { (now.timeIntervalSince(lastRead) >= interval, lastLevel) }
+        let interval = self.interval, policy = self.policy
+        let (stale, previous) = state.withLock { (now.timeIntervalSince($0.lastRead) >= interval, $0.lastLevel) }
+        // Read outside the lock: the app's conditions may take a moment.
         let fromConditions = stale ? policy.level(for: conditions()) : previous
-        return lock.withLock {
-            if stale { lastRead = now; lastLevel = fromConditions }
-            if backlog >= policy.behindBacklog { behind = true } else if backlog <= policy.recoveredBacklog { behind = false }
-            return behind ? min(fromConditions, .transcriptionOnly) : fromConditions
+        return state.withLock { state in
+            if stale { state.lastRead = now; state.lastLevel = fromConditions }
+            if backlog >= policy.behindBacklog { state.behind = true } else if backlog <= policy.recoveredBacklog { state.behind = false }
+            return state.behind ? min(fromConditions, .transcriptionOnly) : fromConditions
         }
     }
 }

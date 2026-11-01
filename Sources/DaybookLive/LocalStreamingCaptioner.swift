@@ -1,6 +1,7 @@
 import AVFoundation
 import DaybookCaptions
 import Foundation
+import Synchronization
 
 /// Live captions from a local streaming recognizer (Nemotron 3.5 ASR Streaming on the Mac and the
 /// iPhone), in place of the system's: words appear about a second behind the audio, a passage stays
@@ -10,7 +11,10 @@ import Foundation
 /// audio is dropped when the recognizer falls behind), the recognizer runs on its own task at
 /// utility priority, and a failure ends only the captions. Under heat or a low battery the governor
 /// pauses it; captions resume, with a gap, when conditions improve.
-public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable {
+///
+/// `finish` never waits for a recognizer still loading: it ends the captions at once, and the load,
+/// when it returns, sees that and gives its models back (`onEnd`) without starting.
+public final class LocalStreamingCaptioner: LiveCaptioning, Sendable {
     public let updates: AsyncStream<[LiveCaptionSegment]>
     public let states: AsyncStream<LiveCaptionState>
     private let updatesContinuation: AsyncStream<[LiveCaptionSegment]>.Continuation
@@ -21,12 +25,17 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
     private let governor: LiveLoadGovernor?
     private let vocabulary: LiveVocabulary?
     private let onEnd: (@Sendable () async -> Void)?
-    private let lock = NSLock()
-    private var builder = LiveTranscriptBuilder()
-    private var worker: Task<Void, Never>?
-    private var transcriber: (any LiveTranscribing)?
-    private var started = false
-    private var ended = false
+    private let state = Mutex(State())
+
+    private struct State {
+        var builder = LiveTranscriptBuilder()
+        var started = false
+        /// `finish` has begun: a start still loading keeps nothing it loads.
+        var finishing = false
+        var ended = false
+        var worker: Task<Void, Never>?
+        var transcriber: (any LiveTranscribing)?
+    }
 
     /// Samples gathered before each call into the recognizer, which decodes in fixed chunks anyway.
     static let feedSamples = Int(LiveAudio.sampleRate / 2)
@@ -38,7 +47,8 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
     /// `makeTranscriber` loads the recognizer for a locale (`start` calls it). `timelineOrigin`: the
     /// buffers' time captions count from (`CaptionTimeMap`). `vocabulary`: terms to bias the
     /// recognizer toward, followed as they change. `onEnd` runs once captioning has ended, to release
-    /// the models.
+    /// the models, and again after a load that returned once captioning had ended; giving models back
+    /// twice must be harmless.
     public init(backlog: Int = 64, timelineOrigin: TimeInterval? = nil, governor: LiveLoadGovernor? = nil,
                 vocabulary: LiveVocabulary? = nil,
                 makeTranscriber: @escaping @Sendable (Locale) async throws -> any LiveTranscribing,
@@ -54,65 +64,93 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
     }
 
     public func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) {
-        times.appended(at: time?.liveSeconds)
+        times.appended(at: time?.captionSeconds)
         input.append(buffer, at: time)
     }
 
+    private var isFinishing: Bool { state.withLock { $0.finishing } }
+
     public func start(locale: Locale, sourceFormat: AVAudioFormat?) async {
-        guard lock.withLock({ () -> Bool in defer { started = true }; return !started }) else { return }
+        guard state.withLock({ state -> Bool in
+            guard !state.started, !state.finishing else { return false }
+            state.started = true
+            return true
+        }) else { return }
         statesContinuation.yield(.preparing)
         let transcriber: any LiveTranscribing
         do {
             transcriber = try await makeTranscriber(locale)
         } catch {
+            // Finished meanwhile: `finish` has said so; whatever the load kept goes back.
+            if isFinishing {
+                await onEnd?()
+                return
+            }
             await end(.failed("Live transcription couldn’t start: \(error.localizedDescription)"))
             return
         }
-        lock.withLock { self.transcriber = transcriber }
         // The vocabulary as the capture starts; changes are applied between batches, on the worker,
         // which is the only caller of the recognizer.
         let initial = vocabulary?.current
         if let initial, !initial.terms.isEmpty { await transcriber.setVocabulary(initial.terms) }
         let input = self.input, times = self.times, governor = self.governor, vocabulary = self.vocabulary
-        worker = Task.detached(priority: .utility) { [weak self] in
-            var applied = initial?.version
-            let resampler = LiveResampler()
-            var pending: [Float] = []
-            var fed: TimeInterval = 0
-            for await item in input.stream {
-                input.took()
-                if let governor, governor.level(backlog: input.fill) == .paused { continue }
-                let samples = resampler.samples(item.buffer)
-                guard !samples.isEmpty else { continue }
-                times.feed(sourceTime: item.time, duration: Double(item.buffer.frameLength) / item.buffer.format.sampleRate)
-                pending += samples
-                guard pending.count >= Self.feedSamples else { continue }
-                if let vocabulary, vocabulary.current.version != applied {
-                    let latest = vocabulary.current
-                    await transcriber.setVocabulary(latest.terms)
-                    applied = latest.version
+        // The recognizer and its worker are kept in one step with the check for `finish`, so `finish`
+        // either sees both or neither, and then the models it loaded go back here.
+        let running = state.withLock { state -> Bool in
+            guard !state.finishing else { return false }
+            state.transcriber = transcriber
+            state.worker = Task.detached(priority: .utility) { [weak self] in
+                var applied = initial?.version
+                let resampler = LiveResampler()
+                var pending: [Float] = []
+                var fed: TimeInterval = 0
+                for await item in input.stream {
+                    input.took()
+                    if let governor, governor.level(backlog: input.fill) == .paused { continue }
+                    let samples = resampler.samples(item.buffer)
+                    guard !samples.isEmpty else { continue }
+                    times.feed(sourceTime: item.time, duration: Double(item.buffer.frameLength) / item.buffer.format.sampleRate)
+                    pending += samples
+                    guard pending.count >= Self.feedSamples else { continue }
+                    if let vocabulary, vocabulary.current.version != applied {
+                        let latest = vocabulary.current
+                        await transcriber.setVocabulary(latest.terms)
+                        applied = latest.version
+                    }
+                    fed += Double(pending.count) / LiveAudio.sampleRate
+                    do {
+                        let tokens = try await transcriber.transcribe(pending)
+                        pending.removeAll(keepingCapacity: true)
+                        self?.received(tokens, decodedThrough: fed - Self.decodeLag)
+                    } catch {
+                        await self?.end(.failed("Live transcription stopped: \(error.localizedDescription)"))
+                        return
+                    }
                 }
-                fed += Double(pending.count) / LiveAudio.sampleRate
-                do {
-                    let tokens = try await transcriber.transcribe(pending)
-                    pending.removeAll(keepingCapacity: true)
-                    self?.received(tokens, decodedThrough: fed - Self.decodeLag)
-                } catch {
-                    await self?.end(.failed("Live transcription stopped: \(error.localizedDescription)"))
-                    return
-                }
+                if !pending.isEmpty, let tokens = try? await transcriber.transcribe(pending) { self?.received(tokens, decodedThrough: nil) }
             }
-            if !pending.isEmpty, let tokens = try? await transcriber.transcribe(pending) { self?.received(tokens, decodedThrough: nil) }
+            return true
+        }
+        guard running else {
+            await onEnd?()
+            return
         }
         statesContinuation.yield(.listening)
     }
 
     public func finish() async {
+        // A start still loading sees this and keeps nothing; one that got further is finished here.
+        let (worker, transcriber) = state.withLock { state in
+            state.finishing = true
+            return (state.worker, state.transcriber)
+        }
         input.finish()
         await worker?.value
-        let transcriber = lock.withLock { self.transcriber }
         if let transcriber, let tokens = try? await transcriber.finish() { received(tokens, decodedThrough: nil) }
-        let snapshot = lock.withLock { () -> [LiveCaptionSegment] in builder.finish(); return mapped(builder.segments) }
+        let snapshot = state.withLock { state -> [LiveCaptionSegment] in
+            state.builder.finish()
+            return mapped(state.builder.segments)
+        }
         updatesContinuation.yield(snapshot)
         await end(.finished)
     }
@@ -120,10 +158,10 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
     // MARK: Results
 
     private func received(_ tokens: [LiveToken], decodedThrough time: TimeInterval?) {
-        let snapshot = lock.withLock { () -> [LiveCaptionSegment]? in
-            var changed = builder.add(tokens)
-            if let time { changed = builder.advance(to: time) || changed }
-            return changed ? mapped(builder.segments) : nil
+        let snapshot = state.withLock { state -> [LiveCaptionSegment]? in
+            var changed = state.builder.add(tokens)
+            if let time { changed = state.builder.advance(to: time) || changed }
+            return changed ? mapped(state.builder.segments) : nil
         }
         if let snapshot { updatesContinuation.yield(snapshot) }
     }
@@ -138,9 +176,9 @@ public final class LocalStreamingCaptioner: LiveCaptioning, @unchecked Sendable 
         }
     }
 
-    private func end(_ state: LiveCaptionState) async {
-        guard lock.withLock({ () -> Bool in defer { ended = true }; return !ended }) else { return }
-        statesContinuation.yield(state)
+    private func end(_ value: LiveCaptionState) async {
+        guard state.withLock({ state -> Bool in defer { state.ended = true }; return !state.ended }) else { return }
+        statesContinuation.yield(value)
         input.finish()
         updatesContinuation.finish()
         statesContinuation.finish()
