@@ -14,7 +14,7 @@ public struct OtherRecorderIntegration: DeviceIntegration {
         name: "Other Recorder",
         shortName: "recorder",
         vendor: nil,
-        systemImage: "mic.and.signal.meter",
+        systemImage: "recordingtape",
         summary: "Any recorder that saves audio files.",
         methods: [
             ConnectionMethod(kind: .files, title: "From a folder",
