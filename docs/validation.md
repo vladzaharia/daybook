@@ -1,5 +1,58 @@
 # Validation record
 
+## Floating Notes: room in the title band, the recorder's tape, and a meter for every source (2026-11-01)
+
+From the owner's review of Floating Notes: the "Saved" and "Summarizing" header sat tight, the hardware recorder's glyph
+(`waveform.badge.microphone`) read as the Call chip's `waveform`, and the meters showed only You and Call
+([interface](interface.md#window-structure), [link](link.md#messages)).
+
+**What changed.**
+
+- **Title band:** 4 pt taller than the system's title bar (`FloatingLayout.bandRoom`), the phase, the chips, Compact, and
+  close on its centre line. AppKit puts the close button back wherever it lays the title bar out, on every resize, so
+  `FloatingNotesPanel` moves it again each layout pass, before anything is drawn. Content below follows `chrome.band` as
+  before. The title bar itself differs by build: 28 pt for `swift build` (it links with SDK version 15.0, which AppKit gives
+  the earlier bar), 32 pt for the packaged app on macOS 27 (SDK 27.0), so the band is 32 or 36 pt.
+- **Recorder glyph:** `recordingtape` for hardware recorders everywhere: Soundcore Work's and Other Recorder's kinds, a
+  recorder's track (`AudioSource.systemImage`, the iPhone's `SourceDescription`), the Mac's Settings › Devices tab and its
+  empty state, and the iPhone's status-sheet recorder line, Add Recorder, and Recorder Removed. At chip size it reads as a tape, apart
+  from Call's waveform, the microphone, and the iPhone.
+- **A meter for every source** (`FloatingStatus.meters`, `PanelLevels`): the microphone, call audio when it's included,
+  each recorder recording along, and each iPhone recording along, each row labelled with its chip's glyph (its name in the
+  tooltip and for VoiceOver), "Microphone silent" and "No call audio" on their rows. A source whose levels haven't arrived
+  (an older iPhone, a recorder before its audio, one still starting, a paused iPhone) keeps a flat, grey row. They share
+  the meter area (`MeterStack`): one takes all 40 pt (24 compact); two split it as before (17 and 10 pt); more split it down
+  to 10 pt rows (8 compact), the area growing to 56 pt (42); past that rows thin to a floor of 4 pt (3) so the notes keep
+  their room. Four sources fit beside the clock at every size down to 280 × 196.
+- **A recorder's level** from the live audio it saves into the recording (`LiveCapture.level(at:)`, each buffer's level,
+  current for a second, not published; `DeviceSession.liveLevel(into:)`).
+- **An iPhone's level** over the link: `levels` (`LinkLevels`), behind the Mac's `liveLevels` feature. The iPhone gathers
+  its meter's readings (15 a second) and sends a few at a time about five times a second (`LevelShare`), only to a
+  connected Mac recording the same conversation that lists the feature, on their own (one still on its way drops the next,
+  so they're never late behind captions). The Mac plays them back a reading a tick, fading between messages, and drops a
+  phone's after 1.5 s of silence (`PhoneLevels`).
+- **The iPhone's own recording screen** is unchanged: it has one large unlabelled meter for its microphone in each posture
+  (pocket, notebook, table; its own `RollingMeter`), not the Mac's two-meter rows, so a row per source would be a new
+  design there rather than this change.
+
+**How it was checked.** `swift build --build-tests` clean. `swift test`: 1,532 XCTest cases passed (one skipped, as
+before): Captions 13, Core 425, Devices 120, Intelligence 188, Kit 326, Link 76, Live 39, Mac app 345. New:
+`FloatingNotesPanelTests` (the band's room and close on its centre line through resizes), `FloatingNotesStatusTests` (the
+meters per source, their warnings and resting rows), `FloatingNotesMetersTests` (sharing the area, sampling and resting,
+stopping, an iPhone's levels played back, the Mac taking them only for its recording), `LinkWireTests` (the message, the
+feature, an older build, a body read safely), `SoundcoreSharedRecordingTests` (a recorder's level from its live audio).
+`scripts/build-ios.sh --test` on a clone of the iPhone 17 Pro simulator (deleted afterwards): all 229 passed, with
+`CascadingRecordingTests` sending levels to a loopback Mac that lists `liveLevels` and none to one that doesn't, and
+`LevelShare` batching. Window snapshots before and after, light and dark (`--snapshot`, scratch libraries): Floating
+Notes recording with four sources (`--simulate-recording --notes-demo multipoint --device-demo connected --phone-demo
+connected`), with only the microphone (computer audio off), compact (340 × 212, and 280 × 196), Saved with a countdown
+(`--notes-demo processing --placement-demo countdown`, full and compact, with `--notes-hover`), Settings › Devices, and
+the iPhone's status sheet (`--device-simulator --device-autopilot`) with the tape.
+
+**Still needs hardware.** A real Soundcore's level during a shared recording (its live audio arrives in bursts; the meter
+shows the latest buffer's level), a real iPhone's levels over Wi-Fi during a call (latency, and how a busy link drops
+them), the packaged app's close button and band on macOS 15 and 26 as well as 27, and VoiceOver reading the meter rows.
+
 ## Upgrade: a better model redoes a conversation's step, and every step after it (2026-10-31)
 
 When a clearly better model than the one that made a conversation's transcript, speakers, or summary is within reach,
