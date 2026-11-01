@@ -264,6 +264,61 @@
           "gemma-4/e4b-4bit"
         ]
       }
+    },
+    "platforms": {
+      "iOS": {
+        "transcription": [
+          "parakeet/ultra",
+          "parakeet/redux"
+        ],
+        "diarization": [
+          "nemotron-3-diarization/offline",
+          "nemotron-3-diarization/compact",
+          "community-1/offline"
+        ],
+        "speakerEmbedding": [
+          "community-1/offline"
+        ],
+        "summarization": [],
+        "smallTasks": [
+          "apple-foundation-models/system"
+        ],
+        "imageDescription": [
+          "apple-vision/system"
+        ]
+      }
+    },
+    "platformTiers": {
+      "iOS": {
+        "small": {
+          "transcription": [
+            "parakeet/redux",
+            "parakeet/ultra"
+          ],
+          "diarization": [
+            "nemotron-3-diarization/compact",
+            "community-1/offline"
+          ]
+        },
+        "medium": {
+          "diarization": [
+            "nemotron-3-diarization/compact",
+            "nemotron-3-diarization/offline",
+            "community-1/offline"
+          ]
+        },
+        "standard": {
+          "summarization": [
+            "gemma-4/e2b-4bit"
+          ]
+        },
+        "large": {
+          "summarization": [
+            "gemma-4/e4b-4bit",
+            "gemma-4/e2b-4bit"
+          ]
+        }
+      }
     }
   },
   "liveSelection": {

@@ -32,6 +32,7 @@
           "recommendedMemoryGB": 8,
           "capabilities": {
             "contextLength": 131072,
+            "memoryGB": 3.2,
             "structuredOutput": true,
             "languages": [
               "*"
@@ -122,6 +123,7 @@
           "recommendedMemoryGB": 16,
           "capabilities": {
             "contextLength": 131072,
+            "memoryGB": 5.0,
             "structuredOutput": true,
             "languages": [
               "*"

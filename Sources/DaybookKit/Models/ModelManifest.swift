@@ -246,10 +246,13 @@ public struct ModelChoiceTable: Equatable, Sendable {
     /// Platform ("macOS", "iOS") → role → choices, replacing `roles` and `tiers` for that role on
     /// that platform: an iPhone's defaults differ from a Mac's of the same memory.
     public var platforms: [String: [String: [String]]]
+    /// Platform → that platform's own tier → role → choices, replacing the platform's list for that
+    /// role on that tier: an iPhone's memory tiers (`PhoneTier`) aren't a Mac's.
+    public var platformTiers: [String: [String: [String: [String]]]]
 
     public init(roles: [String: [String]] = [:], tiers: [String: [String: [String]]] = [:],
-                platforms: [String: [String: [String]]] = [:]) {
-        self.roles = roles; self.tiers = tiers; self.platforms = platforms
+                platforms: [String: [String: [String]]] = [:], platformTiers: [String: [String: [String: [String]]]] = [:]) {
+        self.roles = roles; self.tiers = tiers; self.platforms = platforms; self.platformTiers = platformTiers
     }
 
     /// The choices for `role` on `tier`, on any platform the table doesn't single out.
@@ -260,6 +263,13 @@ public struct ModelChoiceTable: Equatable, Sendable {
     /// The choices for `role` on `platform` and `tier`: the platform's own list first, then the tier's.
     public func choices(for role: ModelRole, tier: String, platform: ModelPlatform) -> [String] {
         platforms[platform.rawValue]?[role.rawValue] ?? choices(for: role, tier: tier)
+    }
+
+    /// The choices for `role` on `platform` in one of that platform's own tiers: the tier's list, then
+    /// the platform's, then the table's own roles.
+    public func choices(for role: ModelRole, platform: ModelPlatform, platformTier: String) -> [String] {
+        platformTiers[platform.rawValue]?[platformTier]?[role.rawValue] ?? platforms[platform.rawValue]?[role.rawValue]
+            ?? roles[role.rawValue] ?? []
     }
 }
 
@@ -689,18 +699,20 @@ extension ModelCapabilities: Codable {
 }
 
 extension ModelChoiceTable: Codable {
-    private enum CodingKeys: String, CodingKey { case roles, tiers, platforms }
+    private enum CodingKeys: String, CodingKey { case roles, tiers, platforms, platformTiers }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         roles = (try? values.decodeIfPresent([String: [String]].self, forKey: .roles)) ?? [:]
         tiers = (try? values.decodeIfPresent([String: [String: [String]]].self, forKey: .tiers)) ?? [:]
         platforms = (try? values.decodeIfPresent([String: [String: [String]]].self, forKey: .platforms)) ?? [:]
+        platformTiers = (try? values.decodeIfPresent([String: [String: [String: [String]]]].self, forKey: .platformTiers)) ?? [:]
     }
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(roles, forKey: .roles)
         if !tiers.isEmpty { try values.encode(tiers, forKey: .tiers) }
         if !platforms.isEmpty { try values.encode(platforms, forKey: .platforms) }
+        if !platformTiers.isEmpty { try values.encode(platformTiers, forKey: .platformTiers) }
     }
 }
 
