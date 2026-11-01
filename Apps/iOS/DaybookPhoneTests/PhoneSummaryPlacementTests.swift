@@ -130,13 +130,21 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let planner = try XCTUnwrap(rig.placement.planners[id])
         XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on Studio Mac in 15 s")
         XCTAssertEqual(planner.actions, [.useCloud, .startNow])
-        XCTAssertTrue(summaryRequests(rig.library, id).isEmpty, "Nothing sent while it counts down")
+        // Written down before the countdown, and held here so no Mac takes it while it counts down.
+        // (Claims are read from their fields: the tests share a clock that starts at the same moment.)
+        let held = try XCTUnwrap(summaryRequests(rig.library, id).first)
+        XCTAssertEqual(held.claim?.device, rig.library.thisDevice)
+        XCTAssertEqual(held.claim?.expiresAt, rig.clock.now.addingTimeInterval(ProcessingRequest.defaultLease))
+        XCTAssertEqual(held.claim?.stage, .summarizing)
         rig.clock.now.addTimeInterval(15)
         rig.placement.placements.advance()
         XCTAssertNil(rig.placement.planners[id])
         let sent = try XCTUnwrap(summaryRequests(rig.library, id).first)
-        XCTAssertNil(sent.claim, "Sent as a Summarize request, for the Mac to claim")
-        XCTAssertEqual(StatusPresentation.page(ProcessingStatus(try XCTUnwrap(rig.library.meeting(id))), meeting: try XCTUnwrap(rig.library.meeting(id)),
+        XCTAssertEqual(sent.id, held.id, "The same request")
+        XCTAssertEqual(sent.claim?.lease, 0, "Given back, for the Mac to claim")
+        XCTAssertEqual(summaryRequests(rig.library, id).count, 1)
+        XCTAssertEqual(StatusPresentation.page(ProcessingStatus(try XCTUnwrap(rig.library.meeting(id)), now: rig.clock.now),
+                                               meeting: try XCTUnwrap(rig.library.meeting(id)),
                                                sighting: nil)?.title, "Waiting for your Mac to summarize", "Its first summary")
     }
 
@@ -162,14 +170,18 @@ final class PhoneSummaryPlacementTests: XCTestCase {
                                                               cloudOffered: true, sighting: nil, now: rig.clock.now))
         XCTAssertEqual(page.title, "Waiting for a Mac to summarize")
         XCTAssertEqual(page.actions, [.placement(.useCloud)])
-        XCTAssertTrue(summaryRequests(rig.library, id).isEmpty, "Not sent: a Mac arriving counts down first")
-        // A Mac syncs again (or connects): a fresh countdown, then it's sent.
+        let held = try XCTUnwrap(summaryRequests(rig.library, id).first)
+        XCTAssertEqual(held.claim?.device, rig.library.thisDevice, "Held: a Mac arriving counts down first")
+        XCTAssertEqual(held.claim?.lease, ProcessingRequest.defaultLease)
+        // A Mac syncs again (or connects): a fresh countdown, then it's sent. Meanwhile the hold was renewed.
         rig.clock.now.addTimeInterval(300)
         rig.presence.devices = [studio(at: rig.clock.now)]
         rig.placement.refresh()
+        XCTAssertEqual(summaryRequests(rig.library, id).first?.claim?.heartbeat, rig.clock.now, "Renewed while it waits")
         XCTAssertEqual(rig.placement.planners[id]?.deadline, rig.clock.now.addingTimeInterval(15))
         rig.placement.perform(.startNow, for: id)
         XCTAssertEqual(summaryRequests(rig.library, id).count, 1)
+        XCTAssertEqual(summaryRequests(rig.library, id).first?.claim?.lease, 0, "Given back to the Mac")
     }
 
     func testBehaviorAMacGoingAwayMidCountdownLeavesItWaiting() async throws {
@@ -291,7 +303,10 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         rig.library.update(id) { $0.upsertProcessingRequest(request.claimed(by: mac, at: rig.clock.now)!) }
         rig.placement.syncApplied()
         XCTAssertNil(rig.placement.planners[id])
-        XCTAssertEqual(summaryRequests(rig.library, id).count, 1, "No second request")
+        let requests = summaryRequests(rig.library, id)
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.filter { ($0.claim?.lease ?? 0) > 0 }.compactMap(\.claim?.device), [mac],
+                       "The one it held is given back; the Mac's carries the work")
     }
 
     func testBehaviorLosingTheClaimInAMergeStopsTheCloudHere() async throws {
@@ -312,6 +327,58 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         try await waitUntil("it to stop") { rig.placement.runs[id] == nil }
         XCTAssertNil(rig.library.meeting(id)?.summary, "The Mac writes the one summary")
         XCTAssertNil(summaryRequests(rig.library, id).first?.outcome)
+    }
+
+    // MARK: Never stranded
+
+    func testBehaviorASummaryHeldWhenDaybookStoppedIsPlacedAgainAtLaunch() async throws {
+        let cloud = Cloud(models: [sonnet])
+        let rig = try await rig(cloud: cloud, macSeen: false)
+        let id = transcribed(rig.library)
+        await rig.placement.summaryIsDue(id)
+        XCTAssertEqual(rig.placement.planners[id]?.phase, .waitingForMac)
+        let held = try XCTUnwrap(summaryRequests(rig.library, id).first)
+        // A second conversation whose hold a Mac took over meanwhile (this iPhone stayed away past its lease).
+        let taken = transcribed(rig.library, "Taken over")
+        await rig.placement.summaryIsDue(taken)
+        let mac = ProcessingRequest.Device(id: studioID.uuidString, name: "Studio Mac")
+        var takenOver = try XCTUnwrap(summaryRequests(rig.library, taken).first)
+        takenOver.claim = ProcessingRequest.Claim(device: mac, claimedAt: rig.clock.now.addingTimeInterval(1), heartbeat: rig.clock.now.addingTimeInterval(1),
+                                                  expiresAt: rig.clock.now.addingTimeInterval(600))
+        rig.library.update(taken) { $0.upsertProcessingRequest(takenOver) }
+
+        // Daybook is killed: everything in memory goes. The next launch finds what it held.
+        let relaunched = PhoneSummaryPlacement(library: rig.library, link: rig.link, presence: { [] }, clock: { rig.clock.now }, runsTimer: false)
+        relaunched.cloud = CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults("PhoneSummaryPlacementTests"))
+        relaunched.cloudSummarizer = cloud
+        XCTAssertEqual(relaunched.heldRequest(id)?.id, held.id)
+        XCTAssertNil(relaunched.heldRequest(taken), "The Mac has that one")
+        await relaunched.resumeHeldSummaries()
+        XCTAssertEqual(relaunched.planners[id]?.phase, .waitingForMac, "Placed again: Use the Cloud, or a Mac when one comes")
+        XCTAssertNil(relaunched.planners[taken])
+        relaunched.perform(.useCloud, for: id)
+        try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
+        XCTAssertEqual(cloud.asked, [id])
+        XCTAssertEqual(summaryRequests(rig.library, id).map(\.id), [held.id], "On the request it held")
+        XCTAssertEqual(summaryRequests(rig.library, id).first?.outcome?.result, .completed)
+        XCTAssertEqual(summaryRequests(rig.library, taken).first?.claim?.device, mac, "Left to the Mac")
+    }
+
+    func testBehaviorASummaryHeldHereGoesToAMacIfThisIPhoneNeverComesBack() async throws {
+        let rig = try await rig(cloud: Cloud(models: [sonnet]))
+        let id = transcribed(rig.library)
+        await rig.placement.summaryIsDue(id)
+        XCTAssertNotNil(rig.placement.planners[id]?.deadline)
+        let held = try XCTUnwrap(summaryRequests(rig.library, id).first)
+        // A Mac that first sees the hold as the countdown starts leaves it while its lease lasts, then may take it.
+        let mac = ProcessingRequest.Device(id: studioID.uuidString, name: "Studio Mac")
+        let macsView = ClaimObservations()
+        XCTAssertFalse(held.isClaimable(by: mac, at: rig.clock.now, observations: macsView))
+        XCTAssertFalse(held.isClaimable(by: mac, at: rig.clock.now.addingTimeInterval(ProcessingRequest.defaultLease - 1), observations: macsView))
+        let takenOver = try XCTUnwrap(held.claimed(by: mac, at: rig.clock.now.addingTimeInterval(ProcessingRequest.defaultLease + 1), observations: macsView),
+                                      "The iPhone never came back: the Mac takes it")
+        XCTAssertEqual(takenOver.mode, .summaryOnly)
+        XCTAssertEqual(takenOver.requestedBy, rig.library.thisDevice)
     }
 
     // MARK: The background
@@ -379,7 +446,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(StatusPresentation.placementRow(nil, run: nil, live: live, now: live.receivedAt)?.text, "Summarizing in 12 s")
         rig.placement.perform(.useCloud, for: id)
         try await waitUntil("the choice at the Mac") { choices.received.contains { $0.meetingID == id && $0.choice == .useCloud } }
-        XCTAssertTrue(summaryRequests(rig.library, id).isEmpty, "The Mac runs it; nothing is claimed here")
+        XCTAssertTrue(summaryRequests(rig.library, id).allSatisfy { ($0.claim?.lease ?? 0) == 0 }, "The Mac runs it; nothing is held here")
     }
 
     // MARK: The status sheet

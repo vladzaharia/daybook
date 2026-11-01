@@ -1077,9 +1077,12 @@ final class PhoneLinkTests: XCTestCase {
         try rig.inference.script(macAudio, [(0, "Same room, heard by the Mac.")])
         state.awaitingModels.remove(id)
 
-        // The iPhone recorded on its own, transcribed it, and summarizes it itself: it asks this Mac for nothing.
+        // The iPhone recorded on its own and transcribed it, and counts down to summarizing it itself, holding a
+        // Summarize request meanwhile: it asks this Mac for nothing.
         let own = try await library.file(phoneAudio, recordingID: UUID(), start: start.addingTimeInterval(0.1), duration: 0.5)
         let phoneTrack = try await transcribeOnThePhone(library, own, text: "Same room, heard by the iPhone.")
+        let held = try XCTUnwrap(library.library.claimSummary(own))
+        await library.library.flush()
         await library.synchronize()
         await state.synchronizeLibrary()
         try await waitUntil("the phone's recording to join with its transcript", timeout: 20) {
@@ -1096,6 +1099,7 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertTrue(meeting.unifiedTranscript.contains { $0.text == "Same room, heard by the iPhone." }, "Fused into this conversation")
         XCTAssertEqual(rig.inference.summarized.count, 1, "Summarized once, here")
         XCTAssertTrue(state.sources.hasChecked(phoneRecording: phoneTrack))
+        XCTAssertNotEqual(held.claim?.device, state.library.thisDevice, "The iPhone's hold was never this Mac's to run")
 
         // On the iPhone: its own conversation goes, and the Mac's holds its recording.
         await state.synchronizeLibrary()

@@ -26,6 +26,11 @@ extension LibraryController {
 /// (`localSummarizer`), the Macs that summarize and are reachable now (over the link, or seen through sync in
 /// the last 15 minutes), and the cloud model Settings › Cloud resolves to (`cloud`, the app's `CloudSetup`).
 ///
+/// - **Held in the library.** A summary that's due is written down first: a Summarize request this iPhone claims
+///   (`claimSummary`) and keeps through the countdown or the wait for a Mac, renewing it while it waits. Sending it
+///   to a Mac gives that request back; running it here or in the cloud carries it out. If Daybook is killed meanwhile,
+///   the next launch places it again (`resumeHeldSummaries`); if this iPhone never comes back, the claim lapses
+///   and a Mac takes the request, as it would any other.
 /// - **Due** (`summaryIsDue`, once `PhoneProcessor` has transcribed and fused a conversation): with the cloud on offer it
 ///   counts down 15 s (or the setting) to its default: this iPhone, else "Summarizing on Vlad's MacBook
 ///   Pro". With nowhere to run it: "Waiting for a Mac to summarize · Use the Cloud", counting down when a
@@ -77,6 +82,11 @@ final class PhoneSummaryPlacement {
     @ObservationIgnored private let link: PhoneLink
     @ObservationIgnored private let presence: () -> [KnownSyncDevice]
     @ObservationIgnored private let clock: () -> Date
+    @ObservationIgnored private let runsTimer: Bool
+    /// Renews the claims held while summaries count down or wait for a Mac (`keepHolding`).
+    @ObservationIgnored private var holding: Task<Void, Never>?
+    /// How often a held claim is renewed while it waits: well inside its lease.
+    static let holdRenewal: TimeInterval = 60
     /// Summaries running here or in the cloud, with the request this iPhone claimed for each.
     @ObservationIgnored private var running: [UUID: (request: UUID, task: Task<Void, Never>)] = [:]
     /// The template each was asked for with; nil uses the conversation's own.
@@ -89,6 +99,7 @@ final class PhoneSummaryPlacement {
         self.link = link
         self.presence = presence
         self.clock = clock
+        self.runsTimer = runsTimer
         placements = SummaryPlacements(waitsForMacs: true, clock: clock, runsTimer: runsTimer)
         subscription = placements.$planners.sink { [weak self] planners in self?.planners = planners }
         placements.onSettled = { [weak self] id, phase in self?.settled(id, phase) }
@@ -123,7 +134,12 @@ final class PhoneSummaryPlacement {
     /// conversation of the same meeting), stops here.
     func refresh() {
         placements.update(options: options, preferences: preferences)
-        for id in placements.undecided where isTakenElsewhere(id) { placements.end(id) }
+        for id in placements.undecided where isTakenElsewhere(id) {
+            // Another device has it: the request this iPhone held goes back, for whichever device finishes the work.
+            giveBackHeld(id)
+            placements.end(id)
+        }
+        renewHeld()
         // A summary this iPhone runs in the cloud that another device took over in a merge, or whose conversation
         // went: it stands down.
         for (id, run) in running {
@@ -148,10 +164,63 @@ final class PhoneSummaryPlacement {
     /// calls this). A Mac already working on it keeps it.
     func summaryIsDue(_ id: UUID, templateID: String? = nil) async {
         await reloadCloud()
-        guard !isTakenElsewhere(id) else { return }
+        guard placements[id] == nil, running[id] == nil, !isTakenElsewhere(id) else { return }
+        // Written down before anything else: if Daybook stops now, the next launch, or a Mac, takes it from here.
+        guard library.claimSummary(id, templateID: templateID, at: clock()) != nil else { return }
         if let templateID { templates[id] = templateID }
         refresh()
         placements.begin(id)
+        keepHolding()
+    }
+
+    /// At launch: the summaries this iPhone held when Daybook stopped (counting down, waiting for a Mac, or under way
+    /// here or in the cloud) are placed again, so none is left with nobody to make it. One a Mac took over meanwhile,
+    /// or that has a summary now, is left alone.
+    func resumeHeldSummaries() async {
+        for meeting in library.meetings where placements[meeting.id] == nil && running[meeting.id] == nil {
+            guard let held = heldRequest(meeting.id) else { continue }
+            await summaryIsDue(meeting.id, templateID: held.templateID)
+        }
+    }
+
+    /// The Summarize request this iPhone holds for a conversation: claimed by it and never given back (its lease may
+    /// have run out while Daybook was stopped, as long as nobody else took it), not finished, and not yet satisfied.
+    func heldRequest(_ id: UUID) -> ProcessingRequest? {
+        guard let meeting = library.meeting(id) else { return nil }
+        let me = library.thisDevice, now = clock()
+        return meeting.openProcessingRequests.first { request in
+            guard request.mode == .summaryOnly, let claim = request.claim, claim.device.id == me.id, claim.lease > 0 else { return false }
+            return request.isClaimable(by: me, at: now) && !request.isSatisfied(by: meeting)
+        }
+    }
+
+    /// Gives a held request back: a Mac may take it now.
+    @discardableResult
+    private func giveBackHeld(_ id: UUID) -> ProcessingRequest? {
+        guard let held = heldRequest(id) else { return nil }
+        return library.releaseProcessingRequest(held.id, in: id, at: clock())
+    }
+
+    /// Renews the claims on summaries still counting down or waiting for a Mac, so no Mac takes one meanwhile.
+    func renewHeld() {
+        let now = clock()
+        for id in placements.undecided {
+            guard let held = heldRequest(id), let claim = held.claim, now.timeIntervalSince(claim.heartbeat) >= Self.holdRenewal else { continue }
+            library.renewProcessingClaim(held.id, in: id, stage: .summarizing, at: now)
+        }
+    }
+
+    /// While anything waits here, its claim is renewed once a minute (only with a timer: tests renew by hand).
+    private func keepHolding() {
+        guard runsTimer, holding == nil else { return }
+        holding = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.holdRenewal))
+                guard let self, !self.placements.undecided.isEmpty else { break }
+                self.renewHeld()
+            }
+            self?.holding = nil
+        }
     }
 
     /// The person asked for a summary (Summarize, Summarize Again, a template): it starts at once wherever it
@@ -223,11 +292,13 @@ final class PhoneSummaryPlacement {
         }
     }
 
-    /// Hands the summary to a Mac: a Summarize request in the library (a Mac that's here hears of it now).
+    /// Hands the summary to a Mac: a Summarize request in the library (a Mac that's here hears of it now). The
+    /// request this iPhone held through the countdown is the one given back.
     private func send(_ id: UUID) {
         defer { placements.end(id) }
+        let templateID = templates.removeValue(forKey: id)
         guard library.meeting(id) != nil, !isTakenElsewhere(id) else { return }
-        if let request = library.requestProcessing(id, mode: .summaryOnly, templateID: templates.removeValue(forKey: id)) {
+        if let request = giveBackHeld(id) ?? library.requestProcessing(id, mode: .summaryOnly, templateID: templateID) {
             link.nudge(request)
         }
     }
@@ -273,11 +344,11 @@ final class PhoneSummaryPlacement {
     private func finished(_ id: UUID, request: UUID, output: SummaryProcessingOutput, place: SummaryPlace, started: Date) async {
         running[id] = nil
         runs[id] = nil
-        if library.applyPlacedSummary(output.summary, to: id, place: place, started: started) {
-            library.update(id) { $0.errorMessage = output.warnings.isEmpty ? nil : output.warnings.joined(separator: "\n") }
-            try? await library.proposeTerms(output.suggestedTerms, for: id)
-        }
+        let applied = library.applyPlacedSummary(output.summary, to: id, place: place, started: started)
         library.completeProcessingRequest(request, in: id, at: clock())
+        guard applied else { return }
+        library.update(id) { $0.errorMessage = output.warnings.isEmpty ? nil : output.warnings.joined(separator: "\n") }
+        try? await library.proposeTerms(output.suggestedTerms, for: id)
     }
 
     /// Cancelled (given back: a Mac may take it) or failed (with the reason, for Try Again).
