@@ -34,17 +34,17 @@ public struct SettingsTile: View {
 
     private let systemImage: String
     private let tone: Tone
-    private let size: CGFloat?
+    private let size: DaybookTileSize
 
-    /// - Parameter size: A larger tile (a device page's header, 56 pt); nil for the row column.
-    public init(systemImage: String, tone: Tone = .neutral, size: CGFloat? = nil) {
+    /// - Parameter size: The row column's tile, or a device page's header (`.header`, 56 pt).
+    public init(systemImage: String, tone: Tone = .neutral, size: DaybookTileSize = .row) {
         self.systemImage = systemImage
         self.tone = tone
         self.size = size
     }
 
     public var body: some View {
-        DaybookTile(symbol: systemImage, tone: tone, size: size == nil ? .row : .header)
+        DaybookTile(symbol: systemImage, tone: tone, size: size)
     }
 }
 
@@ -137,7 +137,7 @@ public struct DevicePageHeader: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: DaybookSpacing.s3))
             : AnyLayout(HStackLayout(alignment: .center, spacing: 14))
         layout {
-            SettingsTile(systemImage: systemImage, tone: isActive ? .active : .neutral, size: DaybookTileSize.header.base)
+            SettingsTile(systemImage: systemImage, tone: isActive ? .active : .neutral, size: .header)
             VStack(alignment: .leading, spacing: 4) {
                 // On one line when it fits; else a size smaller, wrapping at spaces (a page of the open Duo).
                 ViewThatFits(in: .horizontal) {

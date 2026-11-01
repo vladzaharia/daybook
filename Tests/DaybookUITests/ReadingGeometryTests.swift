@@ -98,6 +98,17 @@ final class ReadingGeometryTests: XCTestCase {
     }
 
     @MainActor
+    func testASettingsTileDrawsTheSizeItIsGiven() {
+        func side(_ tile: SettingsTile) -> CGSize {
+            let host = NSHostingView(rootView: tile.environment(\.daybookDensity, .window))
+            return host.fittingSize
+        }
+        XCTAssertEqual(side(SettingsTile(systemImage: "mic")), CGSize(width: 30, height: 30), "The row column's")
+        XCTAssertEqual(side(SettingsTile(systemImage: "mic", size: .header)), CGSize(width: 56, height: 56), "A device page's header")
+        XCTAssertEqual(side(SettingsTile(systemImage: "mic", size: .card)), CGSize(width: 32, height: 32))
+    }
+
+    @MainActor
     func testTheNavigatorReachesItsApp() {
         var opened: [Meeting.ID] = [], tags: [String] = [], transcripts: [(Meeting.ID, TimeInterval?)] = []
         let id = UUID()
