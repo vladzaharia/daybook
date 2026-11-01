@@ -20,11 +20,19 @@ final class PhoneLibrary {
     private(set) var revision = 0
     @ObservationIgnored private let installation: String
     @ObservationIgnored private var subscription: AnyCancellable?
+    /// This iPhone, when it processes its own recordings (`PhoneProcessor`): a recording it files that it
+    /// can transcribe is claimed in the same save, so a Mac that receives it leaves it. Nil: nothing is
+    /// claimed, and recordings wait for a Mac.
+    @ObservationIgnored var processesHere: (@MainActor () -> OnDeviceProcessing.Device?)?
+    /// Recordings brought in on this iPhone (imports, recorder transfers), besides its microphone's,
+    /// which its device identity names (`ownsTrack`). Kept beside the library, never synced.
+    @ObservationIgnored private var broughtIn: Set<UUID>
 
     init(rootURL: URL = LibraryLocation.defaultRoot, sync: LibrarySyncController? = nil,
          installation: String = PhoneDevice.installationID()) {
         self.rootURL = rootURL.standardizedFileURL
         self.installation = installation
+        broughtIn = Self.readBroughtIn(at: rootURL.standardizedFileURL.appendingPathComponent(Self.broughtInFile))
         controller = LibraryController(rootURL: self.rootURL, sync: sync)
         // objectWillChange fires before the change lands; count it on the next turn.
         subscription = controller.objectWillChange.sink { [weak self] _ in
@@ -145,6 +153,7 @@ final class PhoneLibrary {
         }
         try await addCapturedPhotos(recording, track: track.id)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
+        claimIfProcessedHere(request, in: id)
         // This conversation is on disk before its staging goes; another one that can't be saved
         // doesn't hold this recording up.
         try await controller.flushDurably([id])
@@ -207,8 +216,10 @@ final class PhoneLibrary {
         let title = url.deletingPathExtension().lastPathComponent
         let date = Self.recordingDate(of: url) ?? Date()
         let id = controller.newMeeting(title: title.isEmpty ? "Imported recording" : title, date: date)
-        _ = try await controller.ingest(staged, into: id, provenance: .file(source: .imported, duration: duration))
+        let ingested = try await controller.ingest(staged, into: id, provenance: .file(source: .imported, duration: duration))
+        noteBroughtIn(ingested.track)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
+        claimIfProcessedHere(request, in: id)
         try await controller.flushDurably([id])
         guard let meeting = controller.meeting(id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)
@@ -230,9 +241,11 @@ final class PhoneLibrary {
         var target = attachTo.flatMap { controller.meeting($0) != nil ? $0 : nil }
         if target == nil { target = try await controller.existingMeeting(containingAudioAt: url)?.id }
         let id = target ?? controller.newMeeting(title: Self.deviceTitle(identity, fallback: url), date: Self.deviceStart(identity) ?? Date())
-        _ = try await controller.ingest(url, into: id, provenance: .file(source: source, device: identity, duration: duration,
-                                                                        recorderClock: DeviceRecordingStart.clock(of: identity)))
+        let ingested = try await controller.ingest(url, into: id, provenance: .file(source: source, device: identity, duration: duration,
+                                                                                   recorderClock: DeviceRecordingStart.clock(of: identity)))
+        noteBroughtIn(ingested.track)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
+        claimIfProcessedHere(request, in: id)
         try await controller.flushDurably([id])
         guard let meeting = controller.meeting(id) else { throw DaybookError.libraryUnavailable }
         return Filed(meeting: meeting, request: request)
@@ -285,6 +298,39 @@ final class PhoneLibrary {
 
     /// Soundcore recording IDs are their Unix start times.
     static func deviceStart(_ identity: DeviceRecordingIdentity) -> Date? { DeviceRecordingStart.date(of: identity) }
+
+    // MARK: This iPhone's own recordings
+
+    static let broughtInFile = "brought-in-recordings.json"
+
+    /// Whether a recording was made or brought in on this iPhone: its microphone's (by its device
+    /// identity) or one it imported or took from a recorder. Only these are transcribed here; a Mac's
+    /// recording is the Mac's.
+    var ownsTrack: @Sendable (RecordingTrack) -> Bool {
+        let installation = self.installation, broughtIn = self.broughtIn
+        return { track in
+            (track.deviceKind == PhoneDevice.kind && track.deviceSerial == installation) || broughtIn.contains(track.id)
+        }
+    }
+
+    private func noteBroughtIn(_ track: RecordingTrack?) {
+        guard let track, broughtIn.insert(track.id).inserted else { return }
+        let url = rootURL.appendingPathComponent(Self.broughtInFile)
+        if let data = try? JSONEncoder().encode(broughtIn.map(\.uuidString).sorted()) { try? data.write(to: url, options: .atomic) }
+    }
+
+    private static func readBroughtIn(at url: URL) -> Set<UUID> {
+        guard let data = try? Data(contentsOf: url), let ids = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(ids.compactMap(UUID.init(uuidString:)))
+    }
+
+    /// A Transcribe request this iPhone will carry out itself is claimed in the save that files the
+    /// recording, before the first sync pass takes it to a Mac (`OnDeviceProcessing`).
+    private func claimIfProcessedHere(_ request: ProcessingRequest?, in id: UUID) {
+        guard let request, let device = processesHere?(), let meeting = controller.meeting(id),
+              OnDeviceProcessing.work(for: request, in: meeting, device: device) != nil else { return }
+        controller.claimProcessingRequest(request.id, in: id)
+    }
 
     // MARK: Reading
 

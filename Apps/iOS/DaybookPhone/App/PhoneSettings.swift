@@ -7,8 +7,13 @@ import Observation
 @MainActor
 @Observable
 final class PhoneSettings {
-    /// Each recording asks a Mac to transcribe it (a `ProcessingRequest`, mode `.newAudio`).
+    /// Each recording asks to be transcribed (a `ProcessingRequest`, mode `.newAudio`): here, when this
+    /// iPhone has the models and transcribes on it, else by a Mac.
     var requestsTranscription: Bool { didSet { defaults.set(requestsTranscription, forKey: Keys.requestsTranscription) } }
+    /// This iPhone transcribes its own recordings, and summarizes them where it can, with its own models
+    /// once they're downloaded (docs/iphone.md, "Processing on this iPhone"). On by default; off, they
+    /// wait for a Mac as before.
+    var processesOnThisIPhone: Bool { didSet { defaults.set(processesOnThisIPhone, forKey: Keys.processesOnThisIPhone) } }
     /// Recording shows on the Lock Screen and in the Dynamic Island. When the system starts a
     /// recording from the background (an intent, a Mac's request) it needs one, so it's shown then
     /// whatever this says.
@@ -76,6 +81,7 @@ final class PhoneSettings {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         requestsTranscription = defaults.object(forKey: Keys.requestsTranscription) as? Bool ?? true
+        processesOnThisIPhone = defaults.object(forKey: Keys.processesOnThisIPhone) as? Bool ?? true
         showsLiveActivity = defaults.object(forKey: Keys.showsLiveActivity) as? Bool ?? true
         acceptsMacRecordRequests = defaults.object(forKey: Keys.acceptsMacRecordRequests) as? Bool ?? true
         let stored = (defaults.object(forKey: Keys.audioCacheBudget) as? NSNumber)?.int64Value ?? 0
@@ -99,6 +105,7 @@ final class PhoneSettings {
 
     enum Keys {
         static let requestsTranscription = "phone.requestsTranscription"
+        static let processesOnThisIPhone = "phone.processesOnThisIPhone"
         static let showsLiveActivity = "phone.showsLiveActivity"
         static let acceptsMacRecordRequests = "phone.acceptsMacRecordRequests"
         static let audioCacheBudget = "phone.audioCacheBudget"

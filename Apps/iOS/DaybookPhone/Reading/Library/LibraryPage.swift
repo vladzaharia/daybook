@@ -101,7 +101,7 @@ struct LibraryPage: View {
                 Section {
                     ForEach(group.meetings) { meeting in
                         ConversationRow(meeting: meeting,
-                                        status: StatusPresentation.row(ProcessingStatus(meeting, now: now)),
+                                        status: StatusPresentation.row(ProcessingStatus.phone(meeting, now: now)),
                                         timeLabel: RowDate.format(meeting.date, group: group.title, now: now),
                                         isPlaying: session.player.meetingID == meeting.id && session.player.isPlaying)
                             .tag(meeting.id)

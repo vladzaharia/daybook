@@ -427,7 +427,7 @@ private struct EmptyTranscript: View {
                     .buttonStyle(.glass)
                     .tint(PhoneStyle.accent)
                     // On two pages the summary's page leaves "Not transcribed yet" to this one, with its fix.
-                    if twoPage, case .recorded = ProcessingStatus(meeting) {
+                    if twoPage, case .recorded = ProcessingStatus.phone(meeting) {
                         Button { library.requestProcessing(meeting.id, mode: .newAudio) } label: {
                             Label("Transcribe", systemImage: "waveform").font(.subheadline.weight(.semibold))
                                 .padding(.horizontal, 6).padding(.vertical, 2)
@@ -446,12 +446,12 @@ private struct EmptyTranscript: View {
 
     private var title: String {
         if meeting.tracks.isEmpty { return "No recording yet" }
-        if case .failed = ProcessingStatus(meeting) { return "No transcript" }
+        if case .failed = ProcessingStatus.phone(meeting) { return "No transcript" }
         return "Not transcribed yet"
     }
 
     private var message: String? {
-        if case .failed(let failure) = ProcessingStatus(meeting) {
+        if case .failed(let failure) = ProcessingStatus.phone(meeting) {
             return FriendlyError.isNoSpeech(failure.reason) ? "No speech was found in this recording. The audio is saved." : "Your Mac couldn’t finish transcribing it. The audio is saved."
         }
         return nil
