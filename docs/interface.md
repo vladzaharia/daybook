@@ -95,13 +95,15 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
 
 Tokens live in the `DaybookDesign` library, which the Mac, the iPhone, and the iPhone's widgets and Live Activity all link: `DaybookPalette` (colour), `DaybookSpacing`, `DaybookRadius`, `DaybookTileSize`, `DaybookMotion`, `DaybookType` and `DaybookFont` (type), `DaybookDensity`, and `DaybookTime` (the widgets' times, DaybookKit's `TimeLabel` rule). The Mac's `DaybookStyle` (with `Ink`, `Space`, `Motion`, `TypeStyle`) and the iPhone's `PhoneStyle` (with `RecordingStyle`) are names for these, never copies, so a token changed once changes on both devices. The library is SwiftUI and plain values with no models, so the widget extension can link it.
 
-Its components are what both apps draw:
+Its components, for both apps:
 
 - the button family: `.daybookLink` (a text link), `.daybookTinted` (link ink on a 14% accent wash), `.daybookProminent` (white on `prominentFill`), each dimming to 45% when disabled, taking the link pointer and a hover lift on the Mac, and a 44 pt target under touch;
 - `WorkProgress` (`.line` 2 pt, `.bar` 4 pt; `ProgressView` draws it with `.progressViewStyle(.brand)`), and `WorkProgressLine` in status lines and chips;
 - `DaybookChip` (`.tag`, `.owner`, `.fact`, `.status`), `AttentionBox` (`.problem`, `.accent`, `.info`: a state that needs the person, in one box, its actions beside the words or under them below 520 pt), `ProblemLine` and `DetailsButton` (a popover on the Mac, a sheet on the iPhone; "Details…" on the Mac, "Details" on the iPhone, see [copy-pass-2026-10.md](copy-pass-2026-10.md));
 - `DaybookTile`, `FigureTile`, and the cards of rows (`StatusCard`, `StatusRow`, `StatusDivider`); `DaybookEmptyState` and `DaybookMark`; `DoneMark`; `FlowLayout`; `FindHighlight`;
 - the recorder's: `RollingLevelMeter` and `LevelTrail`, `ElapsedClock`, `RecordingPhaseLabel`, `LiveCaptionStrip`, `StatusLineView` and `StatusChip`, and the Record, Bookmark, and Stop labels with `daybookControl(_:shape:)` (Liquid Glass on iPhone, Daybook's own fills on the Mac).
+
+Both apps draw `.daybookLink`, `WorkProgress` (through `.progressViewStyle(.brand)` and `WorkProgressLine`), `FlowLayout`, and `FindHighlight`; the Mac draws `DaybookMark`, and its Floating Notes draws the recorder's components and `AttentionBox`. The apps' own copies (listed in `SharedNameTests.movingOver`) and the rest move over in a later pass.
 
 The screens both apps show over the library's models belong in `DaybookUI` (docs/architecture.md, "Layers"), which links DaybookDesign and DaybookKit: the page's geometry (`ReadingPage`, `MarginRow`, `PageSpread`, `ReadingGeometry`), how a surface says its layout and density (`SurfaceLayout`, `PlatformMetrics`, `daybookSurface`), the seams each app fills (`ReadingContext`, `ReadingNavigator`, `ReadingPlayer`, `ScreenServices`), and Settings' rows (`SettingsRow`, `SettingsTile`, `SettingsActionLabel`, `DevicePageHeader`, `SettingsFooter`). A type, environment value, or extension member an app declares hides the library's of the same name without a warning, so `SharedNameTests` fails on a new one; the few types still moving over are listed there.
 
