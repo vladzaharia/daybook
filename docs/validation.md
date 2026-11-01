@@ -108,7 +108,9 @@ docs/sandbox.md "Changing bundle ID").
   `LibrarySyncContainerTests.testAnotherAppsAccountCarriesOverWhenTheContainerHoldsThisLibrary` and
   `testAnotherAppsAccountWithAnotherLibraryOrTheSameAppPauses`. `swift test`: 1,527 tests, 1 skipped, 0 failures.
   `scripts/ci/tests/run-tests.sh --require-all`: 346 passed (with `--app-store`, `--upload`, the sandboxed bundle ID in
-  `check-mac-app.sh` and `package-mac.sh`, the renaming manifest, and `--platform`).
+  `check-mac-app.sh` and `package-mac.sh`, the renaming manifest, and `--platform`). `scripts/build-app.sh --debug
+  --ad-hoc` builds and passes `check-mac-app.sh --kind adhoc` (icon, `default.metallib`, the export-compliance key);
+  `scripts/build-ios.sh --test` on an iPhone 18 Pro clone: 227 tests, 0 failures.
 - Prototypes (research, commit `d0f1033`): one XcodeGen spec including both apps built the Mac target ad hoc and the
   iPhone app for the Simulator; a single multiplatform target built for both after SDK-conditional bundle ID and
   Info.plist and an excluded resource; the Mac's App Store kind built unsigned as `local.daybook.phone` with the manifest.
