@@ -36,6 +36,9 @@ extension AppState {
     /// within reach is clearly better.
     func upgradeOffer(for meeting: Meeting) -> UpgradeOffer? {
         guard recordingID != meeting.id, placements[meeting.id] == nil else { return nil }
+        #if DEBUG
+        guard UpgradeDemo.showsOffers else { return nil }
+        #endif
         return Upgrades.offer(for: meeting, status: processingStatus(for: meeting), candidates: upgradeCandidates, ranks: upgradeRanks)
     }
 

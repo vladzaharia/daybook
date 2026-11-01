@@ -63,6 +63,7 @@ enum LibraryDemo {
             if FloatingNotesDemo.scenario == nil {
                 PlacementDemo.apply(to: state, processing: state.meetings.first { $0.title == transcribing }?.id)
             }
+            UpgradeDemo.apply(to: state)
             // Seeding is asynchronous: the launch's own `--select` and `--place` ran before it.
             if let title = LaunchOptions.value(after: "--select"), let id = state.meetings.first(where: { $0.title == title })?.id {
                 state.selectedID = id
