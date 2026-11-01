@@ -80,7 +80,7 @@ ModelChoiceTable    roles{role: keys[]}, tiers{tier: {role: keys[]}}, platforms{
                     platformTiers{"iOS": {phone tier: {role: keys[]}}}
 ModelFamilyEntry    id, name, maker, engine, roles[], summary, homepage, license, variants[]
 ModelVariantEntry   id, name, detail, engine?, roles?, license?, homepage, releaseDate,
-                    recommendedMemoryGB, capabilities, engineOptions{},
+                    recommendedMemoryGB, quality{role: 0–100}, capabilities, engineOptions{},
                     minimumAppVersion, minimumEngineVersion, supersedes[], supersededBy,
                     systemProvided, revisions[]
 ModelRevisionEntry  id, releaseDate, summary, artifacts[], legacy{ids[], artifactPaths{}}
@@ -120,6 +120,66 @@ Every entry carries its license, release dates (the variant's upstream publicati
 - **Removing a selected model** falls back to the preset's next installed choice, with a notice saying so, or keeps the choice and shows "Download" (`ModelSelections.removing`). Processing never silently switches models: a job whose frozen revision is gone fails with "Download … in Models" rather than running another one.
 - **Provenance:** every transcript, speaker run, and summary records the exact family, variant, revision, engine, and engine version in `ProcessingSettings.model`, and the variant key in `modelID`. A model the catalog no longer lists, or one only another device had, is still named from the recorded provenance. A cloud summary records the provider as the family and the provider's model ID as the variant, with engine `cloud` and no revision ("anthropic/claude-sonnet-5-5"), and its tokens, estimated cost, and sending device in the parameters (`CloudProvenance`).
 - **Migration:** before the model system, Daybook stored catalog IDs (`whisper-base`, `qwen-7b`, `speaker-community-1`, …). Each built-in revision's `legacy.ids` is the migration table: stored preferences map through it once at launch (`ModelSelections.migrating`; the old keys are left for an older build), and old results still resolve to their variant and exact revision (`ModelCatalog.provenance(of:modelID:)`, engine version "legacy").
+
+## Quality ranks
+
+Each variant ranks how good it is at each step it serves, 0–100, in its manifest entry (`quality`: `ModelRole.rawValue`
+→ rank; `CatalogModel.quality(for:)`), for "Upgrade" offers ([multipoint](multipoint.md#upgrade)): a conversation whose
+transcript, speakers, or summary a clearly better model within reach could redo says so on its page. Ranks compare
+within a step only. Summaries share the cloud catalog's `summaryQuality` scale ([cloud](cloud.md#summary-quality)), so
+a local summary and a cloud one compare. A model retired from a step keeps its rank there, so what it made still
+compares (Qwen 2.5 1.5B). An unranked model (one the person added, or a rank outside 0–100, which reading drops) makes
+no offer, and a result it made gets none. Ranks are data: a new model or a new measurement is a manifest edit, with
+its basis here. `UpgradeRanks` reads both catalogs; a cloud model the catalog didn't measure ranks as its family's
+newest measured one (Claude Sonnet 6 as Sonnet 5.5), and one whose family was never measured (GPT-6 Luna) is unranked.
+
+Where nothing was measured the rank is conservative: no higher than the evidence supports, so an unmeasured model
+is offered over another only when the catalog's own order puts it clearly ahead. How much higher "clearly" is, per
+step, is the margin ([multipoint](multipoint.md#upgrade): 10 for each).
+
+**Transcripts.** Nothing yet compares the recognizers on the same real meetings (docs/validation.md, "Speech models"),
+so the ranks keep the catalog's order with room between.
+
+| Model | Rank | Based on |
+| --- | --- | --- |
+| Parakeet Ultra | 90 | Every preset's first transcription model. Daybook's one check (2026-10-24): every word of a two-speaker synthetic meeting, 4 of 56 wrong with three voices overlapping |
+| Whisper Large v3 Turbo | 85 | Detailed's second and the other-languages model, "most accurate on difficult audio and accents"; not measured here. Within the margin of Ultra, so neither is offered over the other |
+| Parakeet Redux | 80 | Ultra's post-train with a ternary encoder (220 MB against 632); no published or local measurement. A 0.6B encoder squeezed that far loses words, so a margin below Ultra: a 4 GB iPhone's transcript is offered a Mac's Ultra |
+| Whisper Small | 70 | "More accurate" than Base, after Large v3 Turbo; not measured |
+| Whisper Base | 60 | "Fastest. Best for clear audio."; not measured |
+
+A transcription model is offered only for recordings in languages it covers (`languages`), so a transcript Whisper made
+because Parakeet doesn't know the language is never offered Parakeet.
+
+**Speakers**, 100 less a published AMI diarization error rate where there is one:
+
+| Model | Rank | Based on |
+| --- | --- | --- |
+| Nemotron 3 | 89 | NVIDIA's card: AMI-SDM DER 11.14 |
+| Nemotron 3 · Compact | 88 | FluidInference: AMI DER 9.63 against 9.47 for the offline build in the same run; not verified here, so a point below |
+| Community-1 | 85 | No AMI figure in Daybook's records. Balanced and Detailed put Nemotron 3 first, Quick keeps Community-1, and no real-recording evaluation shows either better, so within the margin of Nemotron 3, and above Sortformer (at most four speakers, no voice profiles). Also 85 for voice profiles (`speakerEmbedding`), the one model that makes them, so voice profiles never make an offer of their own: they're made again with the speakers |
+| Sortformer 2.1 · Full Precision | 79 | NVIDIA, on Nemotron 3's card: AMI-SDM DER 21.42 |
+| Sortformer 2.1 · Compact | 77 | The same weights palettized to 6 bits, "can lose detail"; unmeasured, so two below |
+
+**Summaries**, on the cloud's scale: `35 × topics kept / 22 + 45 × commitments with the right owner / 66 + 10 × notes
+handled right / 6 + 10 × right-owner commitments / commitments listed` on the three-hour offsite (docs/cloud.md,
+"Summary quality"). Models not run on the offsite are placed from the 22-minute weekly (docs/validation.md,
+2026-10-31) between the two measured on both, E4B (24 of the weekly's 38 commitments with their owners, 53) and the
+26B A4B (36, 90): `53 + (commitments − 24) × 37 / 12`, rounded down to a multiple of five.
+
+| Model | Rank | Based on |
+| --- | --- | --- |
+| Gemma 4 31B 8-bit | 94 | Offsite (2026-10-31): 22 topics, 66 commitments with their owners, every note right, 83 listed, which is 98. That run had the restated-commitments merge, which lifted the 26B A4B on the same fixture from 90 to about 94 (90 listed, one more note right), so 4 less keeps it on the scale the catalog's 26B A4B, E4B, and cloud models were scored on |
+| Gemma 4 26B A4B | 90 | Offsite, measured (docs/cloud.md) |
+| Qwen 3.6 35B A3B | 87 | Offsite (2026-10-31): 22 topics, 66 commitments, 2 notes right (three written as fact, one left out), 81 listed, which is 91; less the same 4 |
+| Qwen 3.5 9B | 65 | Weekly: 13 of 13 topics, 29 commitments with their owners: 68. Writes most of what only notes say as said |
+| Gemma 4 12B | 60 | Weekly: 13 topics, 27 commitments with their owners: 62 |
+| Gemma 4 E4B | 53 | Offsite, measured (docs/cloud.md) |
+| Qwen 3.5 4B | 45 | Weekly: 9 topics, 23 commitments with their owners: 49 |
+| Qwen 2.5 7B | 30 | Weekly: 12 topics, 17 commitments with their owners: 31 |
+| Gemma 4 E2B | 25 | Weekly (brief commitments): 13 topics, 16 commitments with their owners: 28 |
+| Qwen 2.5 3B | 20 | Never run on the harness; superseded and smaller than the 7B, so below it |
+| Qwen 2.5 1.5B | 10 | Serves no role since catalog 2026.10.31: it missed most topics and commitments; ranked for what it made |
 
 ## Routing
 
@@ -307,7 +367,7 @@ The iPhone processes its own recordings with the same engines (docs/iphone.md, "
 
 The speech and speaker models fit every tier: Parakeet Ultra is a 632 MB download and Redux 220 MB, Nemotron 3 199 MB (Compact 102 MB), Community-1 22 MB. On the iPhone they run on the Neural Engine and CPU (`MLComputeUnits.processing`), as live captions' do, so they keep working in the background. Settings › Models lists, per role, the models any tier names (`PhoneProcessingModels.options`), and shows what can't run with the reason ("Needs an iPhone with more memory").
 
-`ProcessingCapabilities.models` names the model the iPhone would use for each role it can run, and each result records its model, so a later Upgrade offer can compare an iPhone's transcript with a Mac's model.
+`ProcessingCapabilities.models` names the model the iPhone would use for each role it can run, and each result records its model, so an "Upgrade" offer compares an iPhone's transcript with a Mac's model ("Quality ranks", above; [multipoint](multipoint.md#upgrade)).
 
 ## Photos
 
@@ -315,7 +375,7 @@ The `imageDescription` role uses Apple Vision by default (`apple-vision/system`,
 
 ## Cloud models
 
-Summaries can also run on a cloud model ([cloud](cloud.md)); nothing else does. `CloudCatalog.json` (DaybookKit) is the cloud's counterpart to the manifest, slimmer: family rules that place a model ID in a tier (Best: Claude Opus, GPT Astra; Balanced: Claude Sonnet, GPT Sol; Economy: Claude Haiku, GPT Terra and Luna), and, for the models measured on our prompt, their rank within the tier, a `summaryQuality` (0–100, the scale the local summary models will share for "Upgrade" offers: Gemma 4 26B A4B is 90 and E4B 53 on it), and how many tokens they write. Prices come from OpenRouter's model list, kept a day, over a bundled snapshot (`CloudPrices.json`). What's offered is what a person's key reaches: the measured models, newer versions of their families, and "-pro" variants a provider lists.
+Summaries can also run on a cloud model ([cloud](cloud.md)); nothing else does. `CloudCatalog.json` (DaybookKit) is the cloud's counterpart to the manifest, slimmer: family rules that place a model ID in a tier (Best: Claude Opus, GPT Astra; Balanced: Claude Sonnet, GPT Sol; Economy: Claude Haiku, GPT Terra and Luna), and, for the models measured on our prompt, their rank within the tier, a `summaryQuality` (0–100, the scale the local summary models share for "Upgrade" offers: Gemma 4 26B A4B is 90 and E4B 53 on it; "Quality ranks", above), and how many tokens they write. Prices come from OpenRouter's model list, kept a day, over a bundled snapshot (`CloudPrices.json`). What's offered is what a person's key reaches: the measured models, newer versions of their families, and "-pro" variants a provider lists.
 
 ## What the next changes touch
 
