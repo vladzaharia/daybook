@@ -211,6 +211,22 @@ final class AppState: ObservableObject {
     private(set) var currentRequest: Task<Void, Error>?
     /// How requests from other devices are claimed and kept (tests shorten these).
     var requestTiming = RequestTiming()
+    /// Where each summary runs, with the countdown before it (AppState+SummaryPlacement.swift). Views that
+    /// show a countdown observe it directly.
+    let placements: SummaryPlacements
+    /// Summaries in the cloud, with the person's own keys. Nil until there's a cloud to use; demos and tests
+    /// set a fake.
+    var cloudSummarizer: (any CloudSummarizing)? { didSet { Task { await refreshCloudModels() } } }
+    /// The cloud models the person's keys reach, as the cloud last said.
+    var cloudModels: [CloudModel] = [] { didSet { placementOptionsChanged() } }
+    /// How the person wants summaries placed (Settings › Cloud).
+    @Published var cloudPreferences: CloudSummaryPreferences {
+        didSet {
+            guard cloudPreferences != oldValue else { return }
+            cloudPreferences.store(in: preferences)
+            placementOptionsChanged()
+        }
+    }
     /// Conversations whose running job stopped because another device took its request over.
     var claimsLost: Set<UUID> = []
     var claimHeartbeat: Task<Void, Never>?
@@ -258,6 +274,9 @@ final class AppState: ObservableObject {
         processingPreferences.speakerModelID = selections[.diarization] ?? processingPreferences.speakerModelID
         modelSelections = selections
         self.processingPreferences = processingPreferences
+        let cloudPreferences = CloudSummaryPreferences.stored(in: defaults)
+        self.cloudPreferences = cloudPreferences
+        placements = SummaryPlacements(preferences: cloudPreferences, waitsForMacs: false)
         let sync = LibrarySyncController(localRoot: libraryURL, defaults: defaults)
         // Presence: other devices see this Mac and whether it can process. Updated as models change.
         sync.replica = .mac(displayName: ProcessingRequest.Device.currentName, canProcess: false)
@@ -333,6 +352,7 @@ final class AppState: ObservableObject {
         wireDevices()
         wirePhones()
         wireCaptions()
+        wireSummaryPlacements()
         libraryMoveOffer = launch.offer
         launchNotice = launch.notice
     }
@@ -882,21 +902,33 @@ final class AppState: ObservableObject {
         if await sourcesAfterTranscription(id) { return }
         _ = try await readPhotos(id, engine: engine, progress: progress)
         await labelSpeakers(before: id)
-        guard let current = meetings.first(where: { $0.id == id }) else { return }
-        let transcript = MeetingEvidence.transcript(current)
+        guard let before = meetings.first(where: { $0.id == id }) else { return }
+        let transcript = MeetingEvidence.transcript(before)
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.noSpeech }
         update(id) { $0.status = .summarizing }
         renewRunningClaim(force: false)
         reportToPhones(id)
-        let template = template(for: request, meeting: current)
-        let generated = try await engine.summarize(current, template: template, vocabulary: terms, progress: progress)
+        let template = template(for: request, meeting: before)
+        // Where it runs: here, or in the cloud if the person chooses during the countdown (AppState+SummaryPlacement.swift).
+        guard let placed = try await placedSummary(id, job: request, engine: engine, template: template, vocabulary: terms, progress: progress) else {
+            // Another device is summarizing it; its summary arrives through sync.
+            update(id) { $0.status = $0.summary == nil ? .imported : .ready }
+            return
+        }
         try Task.checkCancellation()
+        let current = placed.meeting, generated = placed.output
         let inputsChanged = meetings.first(where: { $0.id == id }).map {
             $0.notes != current.notes || $0.kind != current.kind || $0.templateID != current.templateID || $0.tracks != current.tracks ||
             $0.unifiedTranscript != current.unifiedTranscript || $0.speakers != current.speakers || $0.highlights != current.highlights || $0.timedNotes != current.timedNotes || $0.photos != current.photos
         } ?? false
+        // A summary another device wrote meanwhile stays: one summary per conversation.
+        if meetings.first(where: { $0.id == id })?.summaryWrittenElsewhere(after: placed.started, excluding: library.thisDevice.id) == true {
+            update(id) { $0.status = .ready }
+            return
+        }
+        let summary = generated.summary.placed(placed.place, by: library.thisDevice, inputs: current.modelsBehindTranscript)
         update(id) { meeting in
-            meeting.setSummary(generated.summary)
+            meeting.setSummary(summary)
             // Keep Auto selected so a new source or revised context can change the inferred kind.
             meeting.status = .ready
             meeting.errorMessage = generated.warnings.isEmpty ? nil : generated.warnings.joined(separator: "\n")

@@ -29,7 +29,7 @@ extension AppState {
         return LinkIdentity(deviceID: id, name: ProcessingRequest.Device.currentName, deviceClass: .mac, appVersion: version,
                             canProcess: false, features: ["recordControl", "processingProgress", LinkCapabilities.recorderHandoffFeature,
                                                           LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
-                                                          LinkCapabilities.liveCaptionsFeature],
+                                                          LinkCapabilities.liveCaptionsFeature, LinkCapabilities.summaryPlacementFeature],
                             syncDeviceID: sync.deviceID)
     }
 
@@ -150,6 +150,8 @@ extension AppState {
             phoneReported(state, from: phone)
         case .processingProgress:
             break
+        case .summaryChoice(let choice):
+            phoneChoseSummaryPlacement(choice)
         case .recorderHandoffRequest, .recorderHandoffReply, .recorderRelease:
             recorderHandoff.receive(message, from: phone)
         case .libraryKeyRequest(let request):
@@ -237,6 +239,11 @@ extension AppState {
     /// request's claim; this is the live version.
     func reportToPhones(_ meetingID: UUID, phase: LinkProcessingProgress.Phase? = nil, detail: String? = nil, force: Bool = false) {
         guard phoneLink.hasConnectedPhones, let meeting = meetings.first(where: { $0.id == meetingID }) else { return }
+        // While a summary is placed, its countdown (or the cloud at work) is what phones see.
+        if phase == nil, let placing = placementProgress(meetingID) {
+            send(placing, force: force)
+            return
+        }
         var fraction: Double?
         let resolved: LinkProcessingProgress.Phase
         if let phase {
@@ -254,9 +261,15 @@ extension AppState {
             }
             fraction = min(1, max(0, processingProgress.fraction))
         }
-        let message = LinkProcessingProgress(meetingID: meetingID, phase: resolved, fraction: fraction, macName: library.thisDevice.name, detail: detail)
-        if !force, let last = lastPhoneProgress, last.message.meetingID == meetingID, last.message.phase == resolved {
-            let moved = abs((fraction ?? 0) - (last.message.fraction ?? 0))
+        send(LinkProcessingProgress(meetingID: meetingID, phase: resolved, fraction: fraction, macName: library.thisDevice.name, detail: detail),
+             force: force)
+    }
+
+    /// Sends progress to every connected phone, in order; the same phase moving less than a percent, or
+    /// within half a second, waits for the next.
+    private func send(_ message: LinkProcessingProgress, force: Bool) {
+        if !force, let last = lastPhoneProgress, last.message.meetingID == message.meetingID, last.message.phase == message.phase {
+            let moved = abs((message.fraction ?? 0) - (last.message.fraction ?? 0))
             guard moved >= 0.01, Date().timeIntervalSince(last.at) >= 0.5 else { return }
         }
         lastPhoneProgress = (message, Date())
