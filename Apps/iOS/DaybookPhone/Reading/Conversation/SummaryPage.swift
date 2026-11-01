@@ -141,6 +141,8 @@ struct SummaryPage: View {
 
     /// Summarize Again: the old summary steps back while the new one is written.
     private var isResummarizing: Bool {
+        // Counting down, or waiting for a Mac, this iPhone holds the Summarize request, but nothing is being written yet.
+        if let placement, placement.planners[meeting.id] != nil, placement.runs[meeting.id] == nil { return false }
         if case .processing(let progress) = ProcessingStatus.phone(meeting), progress.stage == .summarizing { return true }
         return false
     }
