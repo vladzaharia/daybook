@@ -62,6 +62,20 @@ public final class SummaryPlacements: ObservableObject {
         return planner.started
     }
 
+    /// A summary the person asked the cloud for (an "Upgrade" to the cloud's better model, docs/multipoint.md): it starts
+    /// there at once, with no countdown, while the cloud is on offer; otherwise it's placed as a due one is.
+    @discardableResult
+    public func beginInCloud(_ id: UUID) -> SummaryPlace? {
+        if planners[id] != nil {
+            perform(.useCloud, for: id)
+            return planners[id]?.started
+        }
+        var planner = SummaryPlacementPlanner(options: options, preferences: preferences, at: clock(), waitsForMacs: waitsForMacs)
+        planner.perform(.useCloud, at: clock())
+        set(id, planner)
+        return planner.started
+    }
+
     /// Begins placing and waits until it has started somewhere: the place, or nil when it was ended first
     /// (cancelled, paused, or it settled with nowhere to run it). Cancelling the waiting task ends it.
     public func place(_ id: UUID, immediately: Bool = false) async -> SummaryPlace? {

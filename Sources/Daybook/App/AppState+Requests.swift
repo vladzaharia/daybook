@@ -46,6 +46,8 @@ extension AppState {
         let me = library.thisDevice, now = Date()
         for meeting in meetings {
             for request in meeting.openProcessingRequests where request.isClaimable(by: me, at: now) && !isCarried(request.id) {
+                // An upgrade is for the device with the better model (or one as good): another Mac's is left to it.
+                guard mayCarryOut(request) else { continue }
                 let held = request.isClaimed(by: me, at: now)
                 // Done already (this Mac transcribed the audio as it arrived, say): say so.
                 if request.isSatisfied(by: meeting) {
@@ -97,7 +99,7 @@ extension AppState {
         guard job.requestID == nil else { return job }
         let me = library.thisDevice, now = Date()
         guard let request = meeting.openProcessingRequests.first(where: {
-            $0.isClaimable(by: me, at: now) && !isCarried($0.id) && !$0.isSatisfied(by: meeting) && Self.covers(job.mode, $0.mode)
+            $0.isClaimable(by: me, at: now) && !isCarried($0.id) && !$0.isSatisfied(by: meeting) && Self.covers(job.mode, $0.mode) && mayCarryOut($0)
         }) else { return job }
         return job.carrying(request)
     }
@@ -109,6 +111,13 @@ extension AppState {
         case (.newAudio, .summaryOnly), (.fullRetranscription, .newAudio), (.fullRetranscription, .summaryOnly): return true
         default: return false
         }
+    }
+
+    /// Whether this Mac may carry out `request`: any request, except an upgrade asked of another device whose model
+    /// for the step is better than this Mac's (docs/multipoint.md, "Upgrade").
+    func mayCarryOut(_ request: ProcessingRequest) -> Bool {
+        guard let upgrade = request.upgrade else { return true }
+        return upgrade.mayBeCarriedOut(by: library.thisDevice, models: processingCapabilities.models, ranks: upgradeRanks)
     }
 
     private func claim(_ request: ProcessingRequest) -> ProcessingRequest? {

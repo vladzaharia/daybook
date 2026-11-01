@@ -121,6 +121,9 @@ final class AppState: ObservableObject {
     }
     /// Variant keys ("whisper/base") with a verified revision on this Mac.
     @Published var installedModels: Set<String> = [] { didSet { presenceChanged() } }
+    /// The devices in the library's presence records, as of the last sync pass: other Macs and the models they run, for
+    /// "Upgrade" offers (AppState+Upgrade.swift).
+    @Published var syncDevices: [KnownSyncDevice] = []
     /// Variant key → the revision a new job freezes (the newest verified one).
     @Published var installedRevisions: [String: String] = [:]
     /// Every model Daybook knows here: built in plus the ones the person added.
@@ -742,9 +745,9 @@ final class AppState: ObservableObject {
         return ImportSidecar(url: nil, scoped: false)
     }
 
-    func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio) {
+    func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio, upgrade: ProcessingRequest.Upgrade? = nil) {
         guard id != recordingID, !queuedIDs.contains(id), let meeting = meetings.first(where: { $0.id == id }) else { return }
-        let job = makeJob(meetingID: id, mode: mode)
+        let job = makeJob(meetingID: id, mode: mode, upgrade: upgrade)
         let hasNew = meeting.hasUntranscribedTranscribableAudio
         let missing = job.requiredModelIDs(hasUntranscribedAudio: hasNew).subtracting(installedModels)
         guard missing.isEmpty else {
@@ -978,6 +981,7 @@ final class AppState: ObservableObject {
         if selectedID == nil || !meetings.contains(where: { $0.id == selectedID }) { selectedID = meetings.sorted { $0.date > $1.date }.first?.id }
         reconcileClaims()
         await syncedLibraryIdentity()
+        await refreshSyncDevices()
         guard applied.acknowledged else { return }
         if canProcess {
             // Only newly received sources trigger automatic work. Failed or paused local

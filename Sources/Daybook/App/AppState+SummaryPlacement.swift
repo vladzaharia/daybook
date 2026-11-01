@@ -70,6 +70,9 @@ extension AppState {
     /// a template, Identify Speakers Again, Transcribe Everything Again), here or from another device. New
     /// audio's summary is due, and counts down.
     func summaryIsAskedFor(_ job: ProcessingJob) -> Bool {
+        // An upgrade's summary is due like new audio's: it counts down while the cloud is on offer (docs/multipoint.md,
+        // "Upgrade"), unless the cloud was the better model, which it goes to at once.
+        if job.upgrade != nil { return false }
         if job.mode != .newAudio { return true }
         guard let requestID = job.requestID, let request = request(requestID, in: job.meetingID) else { return false }
         return request.mode != .newAudio && request.requestedBy.id != library.thisDevice.id
@@ -96,6 +99,11 @@ extension AppState {
         await cloud.reload()
         placementOptionsChanged()
         defer { placements.end(id) }
+        if let upgrade = job.upgrade, UpgradeRanks.isCloud(upgrade.model) {
+            // The person chose the cloud's better summary: no countdown. Without the cloud on offer now (the key went), it
+            // places as any due summary does.
+            placements.beginInCloud(id)
+        }
         guard let place = await placements.place(id, immediately: summaryIsAskedFor(job)) else { throw CancellationError() }
         try Task.checkCancellation()
         // Taken by another device while it counted down (an iPhone chose the cloud and claimed it).

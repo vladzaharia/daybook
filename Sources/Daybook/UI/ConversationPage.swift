@@ -260,6 +260,8 @@ struct ConversationStatus: View {
         ActivityReader(processing: state.processingActivity, download: state.downloadActivity) { content }
             .transition(.opacity.combined(with: .move(edge: .top)))
             .animation(.easeOut(duration: 0.2), value: state.processingID)
+            // Settings › Cloud, when the cloud could upgrade this summary.
+            .task(id: meeting.id) { await state.prepareUpgradeOffer(for: meeting) }
     }
 
     /// Recording is this Mac's own state; everything else reads from `ProcessingStatus`, which the
@@ -322,8 +324,11 @@ struct ConversationStatus: View {
                 }
             case .requested(.device(let request)):
                 // Asked for on another device and waiting for a Mac: this one can take it. A recording
-                // still on its way says so, whatever this Mac transcribes.
-                if meeting.hasUntranscribedAudio { transcribe(title: "Requested from \(request.requestedBy.name)") }
+                // still on its way says so, whatever this Mac transcribes. An upgrade waits for the Mac it named.
+                if let upgrade = request.upgrade, !meeting.hasUntranscribedAudio {
+                    line(symbol: "clock") { Text(upgrade.waitingLine) }
+                    info
+                } else if meeting.hasUntranscribedAudio { transcribe(title: "Requested from \(request.requestedBy.name)") }
                 else if !meeting.awaitedRecordings().isEmpty {
                     line(symbol: "clock") { Text(ProcessingStatus.awaitingDetail(meeting.awaitedRecordings())) }
                     info
@@ -333,8 +338,11 @@ struct ConversationStatus: View {
             case .awaitingRecordings(let recordings):
                 line(symbol: "clock") { Text(ProcessingStatus.awaitingDetail(recordings)) }
                 info
-            case .transcribed, .done:
+            case .transcribed:
                 // A transcript without a summary offers Summarize in the colophon, with its template.
+                info
+            case .done:
+                if let offer = state.upgradeOffer(for: meeting) { upgrade(offer) }
                 info
             }
         }
@@ -354,6 +362,19 @@ struct ConversationStatus: View {
                     Text(error).font(.callout).textSelection(.enabled).padding(14).frame(width: 320, alignment: .leading)
                 }
             if !silent && !meeting.tracks.isEmpty { primary("Try Again") { state.enqueue(meeting.id, mode: state.defaultProcessingMode(for: meeting)) } }
+        }
+    }
+
+    /// A clearly better model is within reach (docs/multipoint.md, "Upgrade"): one quiet line naming what improves
+    /// and where, with Upgrade and Dismiss.
+    private func upgrade(_ offer: UpgradeOffer) -> some View {
+        line(symbol: "arrow.up.circle") {
+            Text(offer.line)
+            Spacer(minLength: Space.s2)
+            HStack(spacing: Space.s3) {
+                Button("Upgrade") { state.acceptUpgrade(offer, for: meeting.id) }.buttonStyle(.daybookLink)
+                Button("Dismiss") { state.dismissUpgrade(offer, for: meeting.id) }.buttonStyle(.daybookLink)
+            }
         }
     }
 
