@@ -216,7 +216,7 @@ The curves are `DaybookMotion`'s (`Motion` on the Mac, `PhoneStyle.Motion` on th
 - Times in the interface use `TimeLabel.short` (`0:14`). Model evidence and exports keep `TimeLabel.format` (`00:14`), so summaries aren't affected by display changes.
 - A time before the start (a note an iPhone took before the Mac started recording) reads "−0:12", and VoiceOver says "12 seconds before the start" (`SpokenTime`), on both apps. Both count whole seconds toward zero, so what's heard matches what's seen, and less than a second before the start is "0:00".
 - Playback is disabled while recording, so computer-audio capture doesn't record it.
-- The library's notice can end with one text link that acts on what it says (Undo, Show, Show in Finder: `AppState.post(_:action:)`). The link stays while the notice still says those words, and acting on it closes the notice.
+- The library's notice says each thing on a line of its own. One line can end with a text link that acts on what it says (Undo, Show, Show in Finder: `AppState.post(_:action:)`). The link stays while the notice still says those words, and acting on it takes that line away; the others stay.
 - The library window publishes the conversation on its page as `FocusedValues.shownConversation` (the selected one, or on a device's page the conversation of the imported recording it shows), for menus and windows that act on what the person is looking at.
 - `AppState` and everything it holds (the library, sync, devices, the recorder, multipoint sources, the iPhone link, placements) are `@Observable`: a view redraws for the properties it reads and nothing else, so a sync pass or a progress report redraws only what shows it, and nothing is forwarded by hand. A view takes the state as `let state: AppState`, or `@Bindable` when it binds to it. What's worked out from the library (the visible list, search) is kept until the library's `revision` changes, and reading it follows that revision. Code that isn't a view follows the models with `ObservationWatch`.
 - What keeps the window quick while a job runs (measurements in validation.md, 2026-10-29):
@@ -261,7 +261,8 @@ Debug builds accept launch arguments that open a specific surface against a sepa
                                       ReadingDemo), with this Mac's queue states on top (LibraryDemo.swift);
                                       --demo-library still works. With it: --inspector-all (every inspector
                                       section open), --multi-select "<title>|<title>", --notice "<text>"
-                                      [--notice-action "<title>"] (the notice with its text link)
+                                      [--notice-action "<title>"] (the notice with its text link on its last line;
+                                      lines before it, split by newlines, have none)
   --speaker-demo                      with --library-demo, speakers named, recognized, and suggested, and a second
                                       profile of one person; see SpeakerProfileDemo.swift (the iPhone takes it too)
   --speaker-profile <name> [--profile-name <name>] [--merge-into <name> [--confirm-merge]]

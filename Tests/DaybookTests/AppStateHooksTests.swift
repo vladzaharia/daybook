@@ -23,12 +23,21 @@ final class AppStateHooksTests: XCTestCase {
         state.post(["Exported Standup.md"])
         XCTAssertEqual(state.notice, "Moved “Standup” to the Trash.\nExported Standup.md")
         XCTAssertEqual(state.shownNoticeAction?.title, "Undo")
+        XCTAssertEqual(state.noticeAction(on: "Moved “Standup” to the Trash.")?.title, "Undo")
+        XCTAssertNil(state.noticeAction(on: "Exported Standup.md"))
         state.performNoticeAction()
         XCTAssertEqual(undone, 1)
-        XCTAssertNil(state.notice, "Acting on it closes the notice")
+        XCTAssertEqual(state.notice, "Exported Standup.md", "Acting on it takes its own line away, and only that")
         XCTAssertNil(state.shownNoticeAction)
         state.performNoticeAction()
         XCTAssertEqual(undone, 1, "Once")
+        state.notice = nil
+
+        // Alone in the notice, acting on it closes the notice.
+        state.post("Moved “Standup” to the Trash.", action: LibraryNoticeAction(title: "Undo") { undone += 1 })
+        state.performNoticeAction()
+        XCTAssertEqual(undone, 2)
+        XCTAssertNil(state.notice)
 
         // Dismissed, the action goes with it, even if the same words come back later without one.
         state.post("Moved “Standup” to the Trash.", action: LibraryNoticeAction(title: "Undo") { undone += 1 })
@@ -39,6 +48,21 @@ final class AppStateHooksTests: XCTestCase {
         state.post("Exported Standup.md", action: LibraryNoticeAction(title: "Show in Finder") {})
         state.notice = "Something else happened."
         XCTAssertNil(state.shownNoticeAction)
+        await state.flush()
+    }
+
+    func testBehaviorANoticesActionPostedAfterAnotherLineEndsItsOwnLine() async throws {
+        let state = await state()
+        var restored: [String] = []
+        state.post(["Exported Standup.md"])
+        state.post("Moved “Roadmap” to the Trash.", action: LibraryNoticeAction(title: "Undo") { restored.append("Roadmap") })
+        XCTAssertEqual(state.noticeLines, ["Exported Standup.md", "Moved “Roadmap” to the Trash."])
+        XCTAssertNil(state.noticeAction(on: "Exported Standup.md"), "The first line has nothing to undo")
+        XCTAssertEqual(state.noticeAction(on: "Moved “Roadmap” to the Trash.")?.title, "Undo")
+        state.performNoticeAction()
+        XCTAssertEqual(restored, ["Roadmap"])
+        XCTAssertEqual(state.notice, "Exported Standup.md", "The export line stays")
+        XCTAssertNil(state.noticeAction(on: "Exported Standup.md"))
         await state.flush()
     }
 

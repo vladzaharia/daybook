@@ -418,23 +418,21 @@ private struct RowMenu: View {
 
 // MARK: - Notices and drop targets
 
-/// One library-wide notice at the top of the list column; the newest wins. It ends with its one action as a
-/// text link when it has one (Undo, Show, Show in Finder: `AppState.post(_:action:)`).
+/// One library-wide notice at the top of the list column, a line for each thing it says, newest last. The line its
+/// one action came with ends with it as a text link (Undo, Show, Show in Finder: `AppState.post(_:action:)`).
 private struct LibraryNotice: View {
     let state: AppState
     var body: some View {
-        if let notice = state.notice {
+        if state.notice != nil {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 // Information, not an action: the glyph stays quiet rather than taking the accent.
                 Image(systemName: "info.circle.fill").symbolRenderingMode(.hierarchical).foregroundStyle(.secondary)
-                // The words take the room the link and the close button leave, which keep theirs at the trailing edge.
-                Text(notice).font(TypeStyle.status).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if let action = state.shownNoticeAction {
-                    Button(action.title) { withAnimation(.easeOut(duration: 0.2)) { state.performNoticeAction() } }
-                        .buttonStyle(.daybookLink)
-                        .font(TypeStyle.status)
-                        .fixedSize()
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(state.noticeLines.enumerated()), id: \.offset) { _, line in
+                        LibraryNoticeLine(text: line, action: state.noticeAction(on: line)) {
+                            withAnimation(.easeOut(duration: 0.2)) { state.performNoticeAction() }
+                        }
+                    }
                 }
                 Button { withAnimation(.easeOut(duration: 0.2)) { state.notice = nil } } label: { Image(systemName: "xmark") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -445,6 +443,35 @@ private struct LibraryNotice: View {
             .padding(.horizontal, 10).padding(.vertical, 6)
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
+    }
+}
+
+/// One of the library notice's lines, ending with its action when it came with one.
+private struct LibraryNoticeLine: View {
+    let text: String
+    let action: LibraryNoticeAction?
+    let perform: () -> Void
+    var body: some View {
+        if let action {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                words
+                Button(action.title, action: perform)
+                    .buttonStyle(.daybookLink)
+                    .font(TypeStyle.status)
+                    .fixedSize()
+            }
+            // Heard as one: the line, then what it offers.
+            .accessibilityElement(children: .combine)
+            .accessibilityAction(named: action.title, perform)
+        } else {
+            words
+        }
+    }
+
+    /// The words take the room the link leaves, which keeps its own at the trailing edge.
+    private var words: some View {
+        Text(text).font(TypeStyle.status).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

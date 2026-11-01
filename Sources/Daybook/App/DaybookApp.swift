@@ -455,9 +455,12 @@ private struct DebugLaunchActions: ViewModifier {
             PhotoDemo.apply(to: state)
             LibraryDemo.apply(to: state)
             CloudSettingsDemo.apply(to: state)
-            // `--notice <text> --notice-action <title>`: the library notice with its text link.
+            // `--notice <text> --notice-action <title>`: the library notice with its text link on the last line. Lines
+            // before it (`$'Exported Standup.md\nMoved “Roadmap” to the Trash.'`) are posted first, without one.
             if let notice = LaunchOptions.value(after: "--notice"), let title = LaunchOptions.value(after: "--notice-action") {
-                state.post(notice, action: LibraryNoticeAction(title: title) {})
+                let lines = notice.components(separatedBy: "\n")
+                state.post(Array(lines.dropLast()))
+                state.post(lines.last ?? notice, action: LibraryNoticeAction(title: title) {})
             }
             if let query = LaunchOptions.value(after: "--search") { state.search = query }
             PerfProbe.stage = {

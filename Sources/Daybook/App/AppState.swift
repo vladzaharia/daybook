@@ -1043,7 +1043,7 @@ final class AppState {
     /// Adds notices to the one the window shows, keeping every distinct one (the newest last, at
     /// most five) rather than letting each replace the one before.
     func post(_ messages: [String]) {
-        var lines = (notice ?? "").components(separatedBy: "\n").filter { !$0.isEmpty }
+        var lines = noticeLines
         for message in messages where !message.isEmpty {
             lines.removeAll { $0 == message }
             lines.append(message)
@@ -1052,24 +1052,33 @@ final class AppState {
         notice = lines.suffix(5).joined(separator: "\n")
     }
 
-    /// Adds `message` to the library notice with `action` as a text button at its end (Undo, Show, Show in Finder).
-    /// The button stays while the notice still says `message`, and goes with it.
+    /// Adds `message` to the library notice with `action` as a text button at the end of its line (Undo, Show,
+    /// Show in Finder). The button stays while the notice still says `message`, and goes with it.
     func post(_ message: String, action: LibraryNoticeAction) {
         post([message])
         noticeAction = (message, action)
     }
 
+    /// The library notice's lines, oldest first.
+    var noticeLines: [String] { (notice ?? "").components(separatedBy: "\n").filter { !$0.isEmpty } }
+
     /// The library notice's button, while the notice still says what it came with.
     var shownNoticeAction: LibraryNoticeAction? {
-        guard let noticeAction, let notice, notice.components(separatedBy: "\n").contains(noticeAction.message) else { return nil }
+        guard let noticeAction, noticeLines.contains(noticeAction.message) else { return nil }
         return noticeAction.action
     }
 
-    /// Runs the notice's button, and the notice goes.
+    /// The button that ends `line`, if it's the one the notice's action came with.
+    func noticeAction(on line: String) -> LibraryNoticeAction? {
+        noticeAction?.message == line ? shownNoticeAction : nil
+    }
+
+    /// Runs the notice's button, and its line goes; the notice's other lines stay.
     func performNoticeAction() {
-        guard let action = shownNoticeAction else { return }
-        notice = nil
-        noticeAction = nil
+        guard let noticeAction, let action = shownNoticeAction else { return }
+        let rest = noticeLines.filter { $0 != noticeAction.message }
+        notice = rest.isEmpty ? nil : rest.joined(separator: "\n")
+        self.noticeAction = nil
         action.perform()
     }
 
