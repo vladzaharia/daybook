@@ -1,0 +1,2025 @@
+{
+ "source": "https://openrouter.ai/api/v1/models",
+ "fetched": "2026-10-31",
+ "data": [
+  {
+   "id": "openai/gpt-6.1-terra-pro",
+   "canonical_slug": "openai/gpt-6.1-terra-pro-20261026",
+   "name": "OpenAI: GPT-6.1 Terra Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000001",
+    "completion": "0.000005",
+    "input_cache_read": "0.00000005",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000002",
+      "completion": "0.0000075"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6.1-terra",
+   "canonical_slug": "openai/gpt-6.1-terra-20261026",
+   "name": "OpenAI: GPT-6.1 Terra",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000001",
+    "completion": "0.000005",
+    "input_cache_read": "0.00000005",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000002",
+      "completion": "0.0000075"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-haiku-5.5",
+   "canonical_slug": "anthropic/claude-haiku-5.5-20261007",
+   "name": "Anthropic: Claude Haiku 5.5",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.0000001",
+    "completion": "0.0000005",
+    "input_cache_read": "0.00000001",
+    "overrides": [
+     {
+      "min_prompt_tokens": 100000,
+      "prompt": "0.0000005",
+      "completion": "0.0000025"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6.1-sol-pro",
+   "canonical_slug": "openai/gpt-6.1-sol-pro-20260929",
+   "name": "OpenAI: GPT-6.1 Sol Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.00001",
+    "input_cache_read": "0.0000001",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000004",
+      "completion": "0.000015"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6.1-sol",
+   "canonical_slug": "openai/gpt-6.1-sol-20260929",
+   "name": "OpenAI: GPT-6.1 Sol",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.00001",
+    "input_cache_read": "0.0000001",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000004",
+      "completion": "0.000015"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-sonnet-5.5",
+   "canonical_slug": "anthropic/claude-sonnet-5.5-20260928",
+   "name": "Anthropic: Claude Sonnet 5.5",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.00001",
+    "input_cache_read": "0.0000001"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6-luna-pro",
+   "canonical_slug": "openai/gpt-6-luna-pro-20260922",
+   "name": "OpenAI: GPT-6 Luna Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.0000001",
+    "completion": "0.0000005",
+    "input_cache_read": "0.00000001",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.0000002",
+      "completion": "0.00000075"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6-luna",
+   "canonical_slug": "openai/gpt-6-luna-20260922",
+   "name": "OpenAI: GPT-6 Luna",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.0000001",
+    "completion": "0.0000005",
+    "input_cache_read": "0.00000001",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.0000002",
+      "completion": "0.00000075"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6-sol-pro",
+   "canonical_slug": "openai/gpt-6-sol-pro-20260922",
+   "name": "OpenAI: GPT-6 Sol Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.00001",
+    "input_cache_read": "0.0000002",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000004",
+      "completion": "0.000015"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6-sol",
+   "canonical_slug": "openai/gpt-6-sol-20260922",
+   "name": "OpenAI: GPT-6 Sol",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.00001",
+    "input_cache_read": "0.0000002",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000004",
+      "completion": "0.000015"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-opus-5.5",
+   "canonical_slug": "anthropic/claude-opus-5.5-20260921",
+   "name": "Anthropic: Claude Opus 5.5",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000004",
+    "completion": "0.00002",
+    "input_cache_read": "0.0000002"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6-astra",
+   "canonical_slug": "openai/gpt-6-astra-20260903",
+   "name": "OpenAI: GPT-6 Astra",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.00001",
+    "completion": "0.00005",
+    "input_cache_read": "0.000001",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.00002",
+      "completion": "0.000075"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-6-astra-pro",
+   "canonical_slug": "openai/gpt-6-astra-pro-20260903",
+   "name": "OpenAI: GPT-6 Astra Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.00001",
+    "completion": "0.00005",
+    "input_cache_read": "0.000001",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.00002",
+      "completion": "0.000075"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-fable-5.1",
+   "canonical_slug": "anthropic/claude-fable-5.1-20260831",
+   "name": "Anthropic: Claude Fable 5.1",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.00001",
+    "completion": "0.00005",
+    "input_cache_read": "0.00000025"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-opus-5",
+   "canonical_slug": "anthropic/claude-opus-5-20260723",
+   "name": "Anthropic: Claude Opus 5",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000005",
+    "completion": "0.000025",
+    "input_cache_read": "0.0000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.6-luna-pro",
+   "canonical_slug": "openai/gpt-5.6-luna-pro-20260709",
+   "name": "OpenAI: GPT-5.6 Luna Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.0000002",
+    "completion": "0.0000012",
+    "input_cache_read": "0.00000002",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.0000004",
+      "completion": "0.0000018"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.6-luna",
+   "canonical_slug": "openai/gpt-5.6-luna-20260709",
+   "name": "OpenAI: GPT-5.6 Luna",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.0000002",
+    "completion": "0.0000012",
+    "input_cache_read": "0.00000002",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.0000004",
+      "completion": "0.0000018"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.6-terra-pro",
+   "canonical_slug": "openai/gpt-5.6-terra-pro-20260709",
+   "name": "OpenAI: GPT-5.6 Terra Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.000012",
+    "input_cache_read": "0.0000002",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000004",
+      "completion": "0.000018"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.6-terra",
+   "canonical_slug": "openai/gpt-5.6-terra-20260709",
+   "name": "OpenAI: GPT-5.6 Terra",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.000012",
+    "input_cache_read": "0.0000002",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000004",
+      "completion": "0.000018"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.6-sol-pro",
+   "canonical_slug": "openai/gpt-5.6-sol-pro-20260709",
+   "name": "OpenAI: GPT-5.6 Sol Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000004",
+    "completion": "0.00002",
+    "input_cache_read": "0.0000004",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000008",
+      "completion": "0.00003"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.6-sol",
+   "canonical_slug": "openai/gpt-5.6-sol-20260709",
+   "name": "OpenAI: GPT-5.6 Sol",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000004",
+    "completion": "0.00002",
+    "input_cache_read": "0.0000004",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000008",
+      "completion": "0.00003"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-sonnet-5",
+   "canonical_slug": "anthropic/claude-sonnet-5-20260630",
+   "name": "Anthropic: Claude Sonnet 5",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.00001",
+    "input_cache_read": "0.0000002"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-fable-5",
+   "canonical_slug": "anthropic/claude-5-fable-20260609",
+   "name": "Anthropic: Claude Fable 5",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.00001",
+    "completion": "0.00005",
+    "input_cache_read": "0.000001"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-opus-4.8",
+   "canonical_slug": "anthropic/claude-4.8-opus-20260528",
+   "name": "Anthropic: Claude Opus 4.8",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000005",
+    "completion": "0.000025",
+    "input_cache_read": "0.0000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-chat-latest",
+   "canonical_slug": "openai/gpt-chat-latest-20260505",
+   "name": "OpenAI: GPT Chat Latest",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.000005",
+    "completion": "0.00003",
+    "input_cache_read": "0.0000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.5-pro",
+   "canonical_slug": "openai/gpt-5.5-pro-20260423",
+   "name": "OpenAI: GPT-5.5 Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.00003",
+    "completion": "0.00018",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.00006",
+      "completion": "0.00027"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.5",
+   "canonical_slug": "openai/gpt-5.5-20260423",
+   "name": "OpenAI: GPT-5.5",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.000005",
+    "completion": "0.00003",
+    "input_cache_read": "0.0000005",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.00001",
+      "completion": "0.000045"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.4-image-2",
+   "canonical_slug": "openai/gpt-5.4-image-2-20260421",
+   "name": "OpenAI: GPT-5.4 Image 2",
+   "context_length": 272000,
+   "pricing": {
+    "prompt": "0.000008",
+    "completion": "0.000015",
+    "input_cache_read": "0.000002"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-opus-4.7",
+   "canonical_slug": "anthropic/claude-4.7-opus-20260416",
+   "name": "Anthropic: Claude Opus 4.7",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000005",
+    "completion": "0.000025",
+    "input_cache_read": "0.0000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.4-nano",
+   "canonical_slug": "openai/gpt-5.4-nano-20260317",
+   "name": "OpenAI: GPT-5.4 Nano",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.0000002",
+    "completion": "0.00000125",
+    "input_cache_read": "0.00000002"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.4-mini",
+   "canonical_slug": "openai/gpt-5.4-mini-20260317",
+   "name": "OpenAI: GPT-5.4 Mini",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000075",
+    "completion": "0.0000045",
+    "input_cache_read": "0.000000075"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.4-pro",
+   "canonical_slug": "openai/gpt-5.4-pro-20260305",
+   "name": "OpenAI: GPT-5.4 Pro",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.00003",
+    "completion": "0.00018",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.00006",
+      "completion": "0.00027"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.4",
+   "canonical_slug": "openai/gpt-5.4-20260305",
+   "name": "OpenAI: GPT-5.4",
+   "context_length": 1050000,
+   "pricing": {
+    "prompt": "0.0000025",
+    "completion": "0.000015",
+    "input_cache_read": "0.00000025",
+    "overrides": [
+     {
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000005",
+      "completion": "0.0000225"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.3-codex",
+   "canonical_slug": "openai/gpt-5.3-codex-20260224",
+   "name": "OpenAI: GPT-5.3-Codex",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000175",
+    "completion": "0.000014",
+    "input_cache_read": "0.000000175"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-sonnet-4.6",
+   "canonical_slug": "anthropic/claude-4.6-sonnet-20260217",
+   "name": "Anthropic: Claude Sonnet 4.6",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000003",
+    "completion": "0.000015",
+    "input_cache_read": "0.0000003"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-opus-4.6",
+   "canonical_slug": "anthropic/claude-4.6-opus-20260205",
+   "name": "Anthropic: Claude Opus 4.6",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000005",
+    "completion": "0.000025",
+    "input_cache_read": "0.0000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "max",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-audio",
+   "canonical_slug": "openai/gpt-audio",
+   "name": "OpenAI: GPT Audio",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.0000025",
+    "completion": "0.00001"
+   },
+   "top_provider": {
+    "max_completion_tokens": 16384
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-audio-mini",
+   "canonical_slug": "openai/gpt-audio-mini",
+   "name": "OpenAI: GPT Audio Mini",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.0000006",
+    "completion": "0.0000024"
+   },
+   "top_provider": {
+    "max_completion_tokens": 16384
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.2-codex",
+   "canonical_slug": "openai/gpt-5.2-codex-20260114",
+   "name": "OpenAI: GPT-5.2-Codex",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000175",
+    "completion": "0.000014",
+    "input_cache_read": "0.000000175"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.2-chat",
+   "canonical_slug": "openai/gpt-5.2-chat-20251211",
+   "name": "OpenAI: GPT-5.2 Chat",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.00000175",
+    "completion": "0.000014",
+    "input_cache_read": "0.000000175"
+   },
+   "top_provider": {
+    "max_completion_tokens": 32000
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.2-pro",
+   "canonical_slug": "openai/gpt-5.2-pro-20251211",
+   "name": "OpenAI: GPT-5.2 Pro",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.000021",
+    "completion": "0.000168"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.2",
+   "canonical_slug": "openai/gpt-5.2-20251211",
+   "name": "OpenAI: GPT-5.2",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000175",
+    "completion": "0.000014",
+    "input_cache_read": "0.000000175"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.1-codex-max",
+   "canonical_slug": "openai/gpt-5.1-codex-max-20251204",
+   "name": "OpenAI: GPT-5.1-Codex-Max",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000125",
+    "completion": "0.00001",
+    "input_cache_read": "0.000000125"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-opus-4.5",
+   "canonical_slug": "anthropic/claude-4.5-opus-20251124",
+   "name": "Anthropic: Claude Opus 4.5",
+   "context_length": 200000,
+   "pricing": {
+    "prompt": "0.000005",
+    "completion": "0.000025",
+    "input_cache_read": "0.0000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 64000
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.1",
+   "canonical_slug": "openai/gpt-5.1-20251113",
+   "name": "OpenAI: GPT-5.1",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000125",
+    "completion": "0.00001",
+    "input_cache_read": "0.000000125"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.1-codex",
+   "canonical_slug": "openai/gpt-5.1-codex-20251113",
+   "name": "OpenAI: GPT-5.1-Codex",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000125",
+    "completion": "0.00001",
+    "input_cache_read": "0.00000013"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5.1-codex-mini",
+   "canonical_slug": "openai/gpt-5.1-codex-mini-20251113",
+   "name": "OpenAI: GPT-5.1-Codex-Mini",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000025",
+    "completion": "0.000002",
+    "input_cache_read": "0.00000003"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-oss-safeguard-20b",
+   "canonical_slug": "openai/gpt-oss-safeguard-20b",
+   "name": "OpenAI: gpt-oss-safeguard-20b",
+   "context_length": 131072,
+   "pricing": {
+    "prompt": "0.000000075",
+    "completion": "0.0000003",
+    "input_cache_read": "0.0000000375"
+   },
+   "top_provider": {
+    "max_completion_tokens": 65536
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5-image-mini",
+   "canonical_slug": "openai/gpt-5-image-mini",
+   "name": "OpenAI: GPT-5 Image Mini",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.0000025",
+    "completion": "0.000002",
+    "input_cache_read": "0.00000025"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-haiku-4.5",
+   "canonical_slug": "anthropic/claude-4.5-haiku-20251001",
+   "name": "Anthropic: Claude Haiku 4.5",
+   "context_length": 200000,
+   "pricing": {
+    "prompt": "0.000001",
+    "completion": "0.000005",
+    "input_cache_read": "0.0000001"
+   },
+   "top_provider": {
+    "max_completion_tokens": 64000
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5-image",
+   "canonical_slug": "openai/gpt-5-image",
+   "name": "OpenAI: GPT-5 Image",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00001",
+    "completion": "0.00001",
+    "input_cache_read": "0.00000125"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5-pro",
+   "canonical_slug": "openai/gpt-5-pro-2025-10-06",
+   "name": "OpenAI: GPT-5 Pro",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.000015",
+    "completion": "0.00012"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high"
+    ],
+    "default_effort": "high"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-sonnet-4.5",
+   "canonical_slug": "anthropic/claude-4.5-sonnet-20250929",
+   "name": "Anthropic: Claude Sonnet 4.5",
+   "context_length": 1000000,
+   "pricing": {
+    "prompt": "0.000003",
+    "completion": "0.000015",
+    "input_cache_read": "0.0000003",
+    "overrides": [
+     {
+      "min_prompt_tokens": 200000,
+      "prompt": "0.000006",
+      "completion": "0.0000225"
+     }
+    ]
+   },
+   "top_provider": {
+    "max_completion_tokens": 64000
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5",
+   "canonical_slug": "openai/gpt-5-2025-08-07",
+   "name": "OpenAI: GPT-5",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000125",
+    "completion": "0.00001",
+    "input_cache_read": "0.000000125"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low",
+     "minimal"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5-mini",
+   "canonical_slug": "openai/gpt-5-mini-2025-08-07",
+   "name": "OpenAI: GPT-5 Mini",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000025",
+    "completion": "0.000002",
+    "input_cache_read": "0.000000025"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low",
+     "minimal"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-5-nano",
+   "canonical_slug": "openai/gpt-5-nano-2025-08-07",
+   "name": "OpenAI: GPT-5 Nano",
+   "context_length": 400000,
+   "pricing": {
+    "prompt": "0.00000005",
+    "completion": "0.0000004",
+    "input_cache_read": "0.000000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 128000
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low",
+     "minimal"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-oss-120b",
+   "canonical_slug": "openai/gpt-oss-120b",
+   "name": "OpenAI: gpt-oss-120b",
+   "context_length": 131072,
+   "pricing": {
+    "prompt": "0.00000015",
+    "completion": "0.0000006",
+    "input_cache_read": "0.000000075"
+   },
+   "top_provider": {
+    "max_completion_tokens": 65536
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-oss-20b",
+   "canonical_slug": "openai/gpt-oss-20b",
+   "name": "OpenAI: gpt-oss-20b",
+   "context_length": 131072,
+   "pricing": {
+    "prompt": "0.000000018",
+    "completion": "0.00000009",
+    "input_cache_read": "0.000000009"
+   },
+   "top_provider": {
+    "max_completion_tokens": 32768
+   },
+   "reasoning": {
+    "supported_efforts": [
+     "high",
+     "medium",
+     "low"
+    ],
+    "default_effort": "medium"
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "anthropic/claude-opus-4.1",
+   "canonical_slug": "anthropic/claude-4.1-opus-20250805",
+   "name": "Anthropic: Claude Opus 4.1",
+   "context_length": 200000,
+   "pricing": {
+    "prompt": "0.000015",
+    "completion": "0.000075",
+    "input_cache_read": "0.0000015"
+   },
+   "top_provider": {
+    "max_completion_tokens": 32000
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning"
+   ]
+  },
+  {
+   "id": "openai/o3-pro",
+   "canonical_slug": "openai/o3-pro-2025-06-10",
+   "name": "OpenAI: o3 Pro",
+   "context_length": 200000,
+   "pricing": {
+    "prompt": "0.00002",
+    "completion": "0.00008"
+   },
+   "top_provider": {
+    "max_completion_tokens": 100000
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/o3",
+   "canonical_slug": "openai/o3-2025-04-16",
+   "name": "OpenAI: o3",
+   "context_length": 200000,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.000008",
+    "input_cache_read": "0.0000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 100000
+   },
+   "reasoning": {
+    "supported_efforts": null,
+    "default_effort": null
+   },
+   "supported_parameters": [
+    "reasoning",
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4.1",
+   "canonical_slug": "openai/gpt-4.1-2025-04-14",
+   "name": "OpenAI: GPT-4.1",
+   "context_length": 1047576,
+   "pricing": {
+    "prompt": "0.000002",
+    "completion": "0.000008",
+    "input_cache_read": "0.0000005"
+   },
+   "top_provider": {
+    "max_completion_tokens": 32768
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4.1-mini",
+   "canonical_slug": "openai/gpt-4.1-mini-2025-04-14",
+   "name": "OpenAI: GPT-4.1 Mini",
+   "context_length": 1047576,
+   "pricing": {
+    "prompt": "0.0000004",
+    "completion": "0.0000016",
+    "input_cache_read": "0.0000001"
+   },
+   "top_provider": {
+    "max_completion_tokens": 32768
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4.1-nano",
+   "canonical_slug": "openai/gpt-4.1-nano-2025-04-14",
+   "name": "OpenAI: GPT-4.1 Nano",
+   "context_length": 1047576,
+   "pricing": {
+    "prompt": "0.0000001",
+    "completion": "0.0000004",
+    "input_cache_read": "0.00000003"
+   },
+   "top_provider": {
+    "max_completion_tokens": 942818
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4o-2024-11-20",
+   "canonical_slug": "openai/gpt-4o-2024-11-20",
+   "name": "OpenAI: GPT-4o (2024-11-20)",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.0000025",
+    "completion": "0.00001",
+    "input_cache_read": "0.00000125"
+   },
+   "top_provider": {
+    "max_completion_tokens": 16384
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4o-2024-08-06",
+   "canonical_slug": "openai/gpt-4o-2024-08-06",
+   "name": "OpenAI: GPT-4o (2024-08-06)",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.0000025",
+    "completion": "0.00001",
+    "input_cache_read": "0.00000125"
+   },
+   "top_provider": {
+    "max_completion_tokens": 16384
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4o-mini",
+   "canonical_slug": "openai/gpt-4o-mini",
+   "name": "OpenAI: GPT-4o-mini",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.00000015",
+    "completion": "0.0000006",
+    "input_cache_read": "0.000000075"
+   },
+   "top_provider": {
+    "max_completion_tokens": 16384
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4o-mini-2024-07-18",
+   "canonical_slug": "openai/gpt-4o-mini-2024-07-18",
+   "name": "OpenAI: GPT-4o-mini (2024-07-18)",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.00000015",
+    "completion": "0.0000006",
+    "input_cache_read": "0.000000075"
+   },
+   "top_provider": {
+    "max_completion_tokens": 16384
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4o",
+   "canonical_slug": "openai/gpt-4o",
+   "name": "OpenAI: GPT-4o",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.0000025",
+    "completion": "0.00001",
+    "input_cache_read": "0.00000125"
+   },
+   "top_provider": {
+    "max_completion_tokens": 16384
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4o-2024-05-13",
+   "canonical_slug": "openai/gpt-4o-2024-05-13",
+   "name": "OpenAI: GPT-4o (2024-05-13)",
+   "context_length": 128000,
+   "pricing": {
+    "prompt": "0.000005",
+    "completion": "0.000015"
+   },
+   "top_provider": {
+    "max_completion_tokens": 4096
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-3.5-turbo-0613",
+   "canonical_slug": "openai/gpt-3.5-turbo-0613",
+   "name": "OpenAI: GPT-3.5 Turbo (older v0613)",
+   "context_length": 4095,
+   "pricing": {
+    "prompt": "0.000001",
+    "completion": "0.000002"
+   },
+   "top_provider": {
+    "max_completion_tokens": 3685
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-3.5-turbo-16k",
+   "canonical_slug": "openai/gpt-3.5-turbo-16k",
+   "name": "OpenAI: GPT-3.5 Turbo 16k",
+   "context_length": 16385,
+   "pricing": {
+    "prompt": "0.000003",
+    "completion": "0.000004"
+   },
+   "top_provider": {
+    "max_completion_tokens": 4096
+   },
+   "supported_parameters": [
+    "response_format",
+    "structured_outputs"
+   ]
+  },
+  {
+   "id": "openai/gpt-4",
+   "canonical_slug": "openai/gpt-4",
+   "name": "OpenAI: GPT-4",
+   "context_length": 8191,
+   "pricing": {
+    "prompt": "0.00003",
+    "completion": "0.00006"
+   },
+   "top_provider": {
+    "max_completion_tokens": 4096
+   },
+   "supported_parameters": [
+    "response_format"
+   ]
+  }
+ ]
+}

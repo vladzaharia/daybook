@@ -54,9 +54,10 @@ let package = Package(
         .target(name: "DaybookDevices", dependencies: ["DaybookCore", "DaybookCaptions"]),
         // DaybookLink for the recorder handoff's fast path (RecorderHandoff.swift). Resources/ModelCatalog
         // is the built-in model manifest (docs/models.md), shared so the iPhone can name the models behind
-        // a result and list their licenses.
+        // a result and list their licenses. CloudCatalog.json and CloudPrices.json are the cloud models'
+        // family rules and measurements, and a snapshot of OpenRouter's prices (docs/cloud.md).
         .target(name: "DaybookKit", dependencies: ["DaybookCore", "DaybookDevices", "DaybookLink"],
-                resources: [.copy("Resources/ModelCatalog")]),
+                resources: [.copy("Resources/ModelCatalog"), .copy("Resources/CloudCatalog.json"), .copy("Resources/CloudPrices.json")]),
         // Downloads, verification, and installs (docs/models.md, "Storage"); the iPhone links it for its
         // live models without the Mac's engines. Hub: swift-transformers' downloader.
         .target(name: "DaybookModelStore", dependencies: [

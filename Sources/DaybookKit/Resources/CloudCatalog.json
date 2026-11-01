@@ -1,0 +1,70 @@
+{
+ "version": 1,
+ "measured": "2026-10-31",
+ "providers": {
+  "anthropic": {
+   "name": "Anthropic",
+   "inputTokensPerMinute": 311,
+   "charactersPerToken": 2.8,
+   "visibleCharactersPerOutputToken": 2.4,
+   "outputTokensPerMinute": 160
+  },
+  "openai": {
+   "name": "OpenAI",
+   "inputTokensPerMinute": 214,
+   "charactersPerToken": 4.0,
+   "visibleCharactersPerOutputToken": 4.4,
+   "outputTokensPerMinute": 80
+  }
+ },
+ "families": [
+  {"provider": "anthropic", "prefix": "claude-opus-", "suffix": "", "tier": "best", "name": "Claude Opus {version}"},
+  {"provider": "anthropic", "prefix": "claude-sonnet-", "suffix": "", "tier": "balanced", "name": "Claude Sonnet {version}"},
+  {"provider": "anthropic", "prefix": "claude-haiku-", "suffix": "", "tier": "economy", "name": "Claude Haiku {version}"},
+  {"provider": "openai", "prefix": "gpt-", "suffix": "-astra", "tier": "best", "name": "GPT-{version} Astra"},
+  {"provider": "openai", "prefix": "gpt-", "suffix": "-sol", "tier": "balanced", "name": "GPT-{version} Sol"},
+  {"provider": "openai", "prefix": "gpt-", "suffix": "-terra", "tier": "economy", "name": "GPT-{version} Terra"},
+  {"provider": "openai", "prefix": "gpt-", "suffix": "-luna", "tier": "economy", "name": "GPT-{version} Luna"}
+ ],
+ "models": [
+  {
+   "provider": "anthropic", "id": "claude-opus-5-5", "name": "Claude Opus 5.5", "tier": "best", "rank": 1,
+   "summaryQuality": 95, "refusalFallback": true,
+   "outputTokens": [[15, 4168], [30, 6796], [60, 11627], [120, 17849], [186, 23934]],
+   "effortScale": {"low": 0.70, "high": 1.29}
+  },
+  {
+   "provider": "openai", "id": "gpt-6-astra", "name": "GPT-6 Astra", "tier": "best", "rank": 2,
+   "summaryQuality": 93,
+   "outputTokens": [[15, 1886], [30, 3462], [60, 5501], [120, 8734], [186, 12297]],
+   "effortScale": {"low": 0.95, "high": 2.02}
+  },
+  {
+   "provider": "anthropic", "id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "tier": "balanced", "rank": 1,
+   "summaryQuality": 94, "refusalFallback": true,
+   "outputTokens": [[15, 2276], [30, 3361], [60, 4875], [120, 10917], [186, 10434]],
+   "effortScale": {"low": 1.10, "high": 1.72}
+  },
+  {
+   "provider": "openai", "id": "gpt-6.1-sol", "name": "GPT-6.1 Sol", "tier": "balanced", "rank": 2,
+   "summaryQuality": 94,
+   "outputTokens": [[15, 2049], [30, 2997], [60, 5228], [120, 8132], [186, 11838]],
+   "effortScale": {"low": 0.88, "high": 1.59}
+  },
+  {
+   "provider": "anthropic", "id": "claude-haiku-5-5", "name": "Claude Haiku 5.5", "tier": "economy", "rank": 1,
+   "summaryQuality": 92,
+   "outputTokens": [[15, 3538], [30, 6220], [60, 11336], [120, 18822], [186, 28402]],
+   "effortScale": {"low": 0.89, "high": 1.83}
+  },
+  {
+   "provider": "openai", "id": "gpt-6.1-terra", "name": "GPT-6.1 Terra", "tier": "economy", "rank": 2,
+   "summaryQuality": 95,
+   "outputTokens": [[15, 1941], [30, 2656], [60, 3648], [120, 5710], [186, 7970]],
+   "effortScale": {"low": 0.89, "high": 1.38}
+  },
+  {
+   "provider": "openai", "id": "gpt-6-luna", "name": "GPT-6 Luna", "tier": "economy", "rank": 3
+  }
+ ]
+}
