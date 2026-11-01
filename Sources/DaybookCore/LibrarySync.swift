@@ -115,6 +115,10 @@ public actor LibrarySyncEngine {
     private let decoder = JSONDecoder()
     private var checkpointURL: URL? { didSet { if checkpointURL != oldValue { savedCheckpoint = nil } } }
     private var basesURL: URL?
+    /// The conversations with a base file under `basesURL`. `state.bases` holds only those read so far (`base(_:)`): a
+    /// base is read when a pass first compares a conversation with it, and one equal to the library's copy is kept as
+    /// that copy, sharing its storage, so the engine doesn't hold a second decoded copy of the library.
+    private var baseKeys: Set<String> = []
     /// The bytes of the checkpoint as last written here, so an unchanged one isn't written again.
     private var savedCheckpoint: Data?
     private var mayCreateLibrary: Bool
@@ -410,6 +414,9 @@ public actor LibrarySyncEngine {
         let inJournal = Set(events.values.map(\.meetingID)), deletedInJournal = Set(events.values.filter(\.deleted).map(\.meetingID))
         /// Conversations changed here whose applied heads are gone from the journal, merged below against their stored base.
         var rebases: [UUID: Rebase] = [:]
+        /// Conversations the library holds just as they were last applied here: one whose heads haven't moved either needs no
+        /// merge, so its snapshots are never read.
+        var unchangedHere = Set<UUID>()
         let publishedAt = publicationClock()
         var nextPublication: Date?
         let retiredKeyLeftovers = heldAsideEntries.keys.contains(where: heldAsideLately)
@@ -439,9 +446,13 @@ public actor LibrarySyncEngine {
                 // With a publication of this conversation not applied yet (the pass held it back), the base is behind
                 // the journal: matching the base is then a revert, which must be published too.
                 let baseIsCurrent = state.submittedHashes[key] == nil
-                if !force, (baseIsCurrent && supplied == state.bases[key]) || pendingBase == supplied { continue }
+                if baseIsCurrent, supplied == base(key) {
+                    // Kept as the library's copy, which shares its storage (and makes the next comparison quick).
+                    state.bases[key] = supplied
+                    if !force { unchangedHere.insert(supplied.id); continue }
+                } else if !force, pendingBase == supplied { continue }
                 let encoded = try SyncEncoding.data(supplied), fingerprint = SyncDigest.sha256(data: encoded)
-                guard force || (fingerprint != state.submittedHashes[key] && (!baseIsCurrent || fingerprint != state.bases[key].flatMap({ try? hash($0) }))
+                guard force || (fingerprint != state.submittedHashes[key] && (!baseIsCurrent || fingerprint != base(key).flatMap({ try? hash($0) }))
                       && fingerprint != pendingBase.flatMap({ try? hash($0) })) else { continue }
                 // A large conversation edited again soon after this device published it waits (`publicationInterval`): one
                 // publication carries the burst, rather than a full snapshot every time the person pauses typing. What
@@ -456,7 +467,7 @@ public actor LibrarySyncEngine {
                     if journalIncomplete, !gone.allSatisfy(prunedIDs.contains) { pendingUploads += 1; failedPublications.insert(supplied.id); continue }
                     if inJournal.contains(supplied.id) {
                         // Merged against what this device applied (when that's history others built on), and published next pass.
-                        rebases[supplied.id] = Rebase(base: gone.allSatisfy(prunedIDs.contains) ? state.bases[key] : nil)
+                        rebases[supplied.id] = Rebase(base: gone.allSatisfy(prunedIDs.contains) ? base(key) : nil)
                         continue
                     }
                     // Nothing of it is left in the journal: it's published as new.
@@ -556,7 +567,7 @@ public actor LibrarySyncEngine {
                     trashOrphanFolder(meetingID)
                 }
                 output.removeValue(forKey: meetingID)
-                if ids.contains(where: { events[$0]?.deleted == false }), state.bases[meetingID.uuidString] != nil {
+                if ids.contains(where: { events[$0]?.deleted == false }), hasBase(meetingID.uuidString) {
                     // The immutable journal remains a recovery archive for edit/delete races.
                     removedBases.insert(meetingID.uuidString)
                 }
@@ -578,7 +589,10 @@ public actor LibrarySyncEngine {
                !applied.allSatisfy({ events[$0] != nil || prunedIDs.contains($0) }) { continue }
             memo.warnings = []
             do {
-                guard var merged = try mergedSnapshot(of: headIDs, events: events, memo: &memo) else { continue }
+                // Applied here as it is, its one head unmoved: no merge to make, and no snapshot to read.
+                let unmoved = headIDs.count == 1 && state.heads[meetingID.uuidString] == headIDs && unchangedHere.contains(meetingID)
+                    && rebases[meetingID] == nil
+                guard var merged = unmoved ? output[meetingID] : try mergedSnapshot(of: headIDs, events: events, memo: &memo) else { continue }
                 warnings += memo.warnings
                 let assets = mergedAssets(for: merged, eventIDs: ids, events: events)
                 try validate(snapshot: merged, assets: assets)
@@ -603,7 +617,7 @@ public actor LibrarySyncEngine {
                 }
                 if output[meetingID] != merged { changed.insert(meetingID) }
                 output[meetingID] = merged
-                if state.bases[meetingID.uuidString] != applied { baseChanges[meetingID.uuidString] = applied }
+                if base(meetingID.uuidString) != applied { baseChanges[meetingID.uuidString] = applied }
                 proposedHeads[meetingID.uuidString] = headIDs
             } catch is SyncPendingDownload { pendingDownloads += 1 }
             catch is SyncDeferredWork { budget.deferred += 1 }
@@ -830,7 +844,7 @@ public actor LibrarySyncEngine {
             // or a commit listing them, parents that aren't there are gone, not on their way. Unchanged here since this
             // device last synced it, the deletion applies; with changes of its own, those are kept as a new conversation.
             guard parentsMayBeRetired || missing.allSatisfy(prunedIDs.contains) else { throw SyncPendingDownload() }
-            if state.bases[local.id.uuidString] == local { return nil }
+            if base(local.id.uuidString) == local { return nil }
             retiredParents = true
         }
         let parents = allParents.filter { events[$0]?.deleted == false }
@@ -838,7 +852,7 @@ public actor LibrarySyncEngine {
         if !retiredParents, parents.count < allParents.filter({ events[$0]?.deleted != true }).count { return nil }
         // With what the deletion saw gone, what this device last synced stands for it: only what it added since is kept,
         // never derived work, and never the whole conversation again.
-        let seen = retiredParents ? state.bases[local.id.uuidString]
+        let seen = retiredParents ? base(local.id.uuidString)
             : parents.isEmpty ? nil : try mergedSnapshot(of: Array(parents), events: events, memo: &memo)
         guard local.hasContent(notIn: seen) else { return nil }
         let forkID = SyncEncoding.uuid("\(local.id.uuidString):kept-after-deletion:\(deletions.sorted().joined(separator: ","))")
@@ -883,11 +897,12 @@ public actor LibrarySyncEngine {
         let previous = state
         // Forget what was published only where the applied base moved. A conversation held back this pass
         // (audio pending, a parent missing, an unread journal) keeps it, so the same edit isn't published again.
-        for (id, base) in pending.changedBases ?? [:] where state.bases[id] != base {
-            state.submittedHashes.removeValue(forKey: id); state.bases[id] = base
+        let previousKeys = baseKeys
+        for (id, changed) in pending.changedBases ?? [:] where base(id) != changed {
+            state.submittedHashes.removeValue(forKey: id); state.bases[id] = changed; baseKeys.insert(id)
         }
-        for id in pending.removedBases ?? [] where state.bases[id] != nil {
-            state.submittedHashes.removeValue(forKey: id); state.bases.removeValue(forKey: id)
+        for id in pending.removedBases ?? [] where hasBase(id) {
+            state.submittedHashes.removeValue(forKey: id); state.bases.removeValue(forKey: id); baseKeys.remove(id)
         }
         state.heads = pending.heads; state.metadataHeads = pending.metadataHeads
         state.pending = nil
@@ -897,7 +912,7 @@ public actor LibrarySyncEngine {
             // Base files first: a crash before the checkpoint leaves bases ahead of heads, which only republishes.
             try saveBases(Array((pending.changedBases ?? [:]).keys), removing: pending.removedBases ?? [])
             try saveCheckpoint()
-        } catch { state = previous; throw error }
+        } catch { state = previous; baseKeys = previousKeys; throw error }
         // Presence says so; advisory, so a failure is ignored.
         if state.compactionAck != previous.compactionAck { try? writePresence(now: Date(), force: false) }
     }
@@ -1147,7 +1162,8 @@ public actor LibrarySyncEngine {
         if fm.fileExists(atPath: url.path), let decoded = try readCheckpoint(url, stem: stem, bases: bases) {
             var decoded = decoded
             if decoded.baseFiles == true {
-                decoded.bases = try loadBases(from: bases)
+                decoded.bases = [:]
+                baseKeys = baseFileKeys(in: bases)
                 state = decoded; checkpointURL = url
             } else {
                 // Inline bases (and a full copy in an unacknowledged pass) from an earlier version.
@@ -1158,6 +1174,7 @@ public actor LibrarySyncEngine {
                 decoded.pending?.bases = [:]
                 decoded.baseFiles = true
                 state = decoded; checkpointURL = url
+                baseKeys = Set(state.bases.keys)
                 do {
                     try saveBases(Array(state.bases.keys), removing: [])
                     try saveCheckpoint()
@@ -1171,6 +1188,7 @@ public actor LibrarySyncEngine {
             state = SyncCheckpoint(); state.baseFiles = true
             // Bases left from an earlier checkpoint here would only be stale.
             try? fm.removeItem(at: bases)
+            baseKeys = []
             checkpointURL = url
         }
     }
@@ -1328,17 +1346,24 @@ public actor LibrarySyncEngine {
         try DurableFiles.write(bytes, to: checkpointURL)
         savedCheckpoint = bytes
     }
-    private func loadBases(from directory: URL) throws -> [String: Meeting] {
-        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return [:] }
-        var bases: [String: Meeting] = [:]
-        for name in names where name.hasSuffix(".json") {
-            let key = String(name.dropLast(5))
-            guard UUID(uuidString: key) != nil else { continue }
-            // A base that can't be read only means the next pass publishes that conversation again.
-            if let base = try? decoder.decode(Meeting.self, from: Data(contentsOf: directory.appendingPathComponent(name))) { bases[key] = base }
-        }
-        return bases
+    /// The conversations with a base file in `directory`.
+    private func baseFileKeys(in directory: URL) -> Set<String> {
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return [] }
+        return Set(names.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }.filter { UUID(uuidString: $0) != nil })
     }
+    /// A conversation's applied base: from memory, or read from its file the first time it's needed. A base that can't
+    /// be read only means the next pass publishes that conversation again.
+    func base(_ key: String) -> Meeting? {
+        if let cached = state.bases[key] { return cached }
+        guard baseKeys.contains(key), let basesURL else { return nil }
+        guard let read = try? decoder.decode(Meeting.self, from: Data(contentsOf: basesURL.appendingPathComponent("\(key).json"))) else {
+            baseKeys.remove(key)
+            return nil
+        }
+        state.bases[key] = read
+        return read
+    }
+    func hasBase(_ key: String) -> Bool { state.bases[key] != nil || baseKeys.contains(key) }
     /// Writes changed bases, then flushes them and their folder to storage at once (`DurableFiles.synchronize`), before
     /// the checkpoint that names their heads is written.
     private func saveBases(_ keys: [String], removing removed: [String]) throws {
@@ -1361,7 +1386,9 @@ public actor LibrarySyncEngine {
     /// After a pass: snapshots the pass used stay (heads, bases of merges), others are read again if needed, and
     /// only the library settings that are heads keep their data.
     private func retainCaches(heads: Set<String>, metadataHeads: Set<String>) {
-        let keep = snapshotsUsed.union(heads)
+        // Only snapshots this pass used: a head's is read again (and checked against its name) when a merge needs it, so
+        // the engine never holds a decoded copy of the library beside the library's own.
+        let keep = snapshotsUsed
         snapshotCache = snapshotCache.filter { keep.contains($0.key) }
         snapshotsUsed = []
         for (id, record) in metadataCache where !metadataHeads.contains(id) && !record.data.isEmpty {

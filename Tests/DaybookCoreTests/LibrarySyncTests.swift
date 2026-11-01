@@ -287,6 +287,19 @@ final class LibrarySyncTests: XCTestCase {
         let again = try await restarted.synchronize(meetings: pulled.meetings)
         XCTAssertEqual(again.publishedEvents, 0)
         XCTAssertTrue(again.changedMeetingIDs.isEmpty)
+        try await restarted.acknowledge(again.checkpointID)
+        // Nothing moved, here or in iCloud: no snapshot is read, and none stays in memory beside the library's own copy.
+        let quiet = await restarted.cacheCounts()
+        XCTAssertEqual(quiet.snapshots, 0)
+        XCTAssertEqual(again.meetings.map(\.id).sorted { $0.uuidString < $1.uuidString },
+                       pulled.meetings.map(\.id).sorted { $0.uuidString < $1.uuidString })
+        // One that changes elsewhere is merged as before.
+        var edited = meeting
+        edited.setNotes("Revision from A")
+        _ = try await publish(edited, using: a, name: "A")
+        let moved = try await restarted.synchronize(meetings: again.meetings)
+        XCTAssertEqual(moved.meetings.first { $0.id == meeting.id }?.notes, "Revision from A")
+        XCTAssertEqual(moved.changedMeetingIDs, [meeting.id])
     }
 
     func testFailedLocalUploadPreservesUnsentEdits() async throws {
