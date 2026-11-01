@@ -172,6 +172,9 @@ Tests: `DesignTokenTests` (every ink's contrast on its surface, each chip kind's
   - Errors: the alert's title names what couldn't be done ("Couldn’t Import Audio"), its message is one plain sentence with what to do, and the system's own words are behind Details… (`AppState.report`, `AppProblem`).
   - Diarization, alignment, offset, and provenance never appear in the main interface.
   - The inspector's Audio and the iPhone's Info › Audio say each thing about a recording once: its name ("Microphone", "Soundcore Work", "Alex's iPhone"), then where it was made when the name doesn't say ("This Mac" on the Mac, "Your Mac" on the iPhone), then, only when the conversation has several, how it lines up ("Lined up by sound · starts 0:12", "The main recording", "Couldn't line up"). A 0:00 start, confidence, and clock drift aren't shown. Both apps take the words from DaybookKit's `RecordingWords`.
+  - What a conversation's processing says on the page and in its row, how it looks (a line, or a problem, accent, or info box), and what it offers come from DaybookKit's `ConversationStatusPresentation`, the same on both apps: the step the engine reports ("Identifying speakers · 40%"; whole percents, rounded down), another device's work with its figure ("Transcribing on Studio Mac · 40%"), and a failure worded from its stored kind (`FailureWords`: the device named, ending "The recording is saved."). Download and Choose Models… appear where this device manages its models, not by platform.
+  - A conversation's menus (More, a row's, a selection's, a recording's) list DaybookKit's `ConversationActions` in one order: share, add, reprocess, history, filing, the Trash. What doesn't apply now is dimmed on the Mac and left out on the iPhone.
+  - A recorder's status reads from `RecorderStatusWords` wherever it's shown, with one recency verb: "Last seen today, 3:25 AM". Settings' role names, sizes ("632 MB"), and counts come from `SettingsWords`, written in sentence case; the iPhone title-cases its labels where it draws them.
 
 ## Motion
 
@@ -232,7 +235,7 @@ Debug builds accept launch arguments that open a specific surface against a sepa
 ```
 .build/debug/Daybook --library <dir> [options]
   --place work|personal|all|device|device:<name>|folder:<name>
-  --select "<conversation title>"     --page transcript     --inspector
+  --select "<conversation title>"     --page transcript     --inspector (or --info, the iPhone's word)
   --search "<query>"                  --sheet history|timing|corrections
   --open-settings general|models|cloud|devices|library
   --cloud-demo none|anthropic|both|never|failed|summary
@@ -250,10 +253,12 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --notes-contrast                    Floating Notes as Increase Contrast draws it (simulated: the shared tokens and SwiftUI's contrast)
   --play-muted                        plays the selected conversation silently
   --library-demo                      fills the library with conversations in every list, page, and inspector
-                                      state; see LibraryDemo.swift. With it: --inspector-all (every inspector
+                                      state, the same ones the iPhone's --library-demo seeds (DaybookKit's
+                                      ReadingDemo), with this Mac's queue states on top (LibraryDemo.swift);
+                                      --demo-library still works. With it: --inspector-all (every inspector
                                       section open), --multi-select "<title>|<title>", --notice "<text>"
   --speaker-demo                      with --library-demo, speakers named, recognized, and suggested, and a second
-                                      profile of one person; see SpeakerProfileDemo.swift (the iPhone's --demo-library takes it too)
+                                      profile of one person; see SpeakerProfileDemo.swift (the iPhone takes it too)
   --speaker-profile <name> [--profile-name <name>] [--merge-into <name> [--confirm-merge]]
                                       with --open-window speaker-profiles: a profile selected, a name typed into it,
                                       a merge asked for (or made)
