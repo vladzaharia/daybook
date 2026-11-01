@@ -69,6 +69,37 @@ public enum MeetingExport {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// The most a file name made from a title may take, in UTF-8 bytes: room under the 255 a volume allows for what
+    /// an export adds to it (" 2", ".md", " Photos", a recording's " (Soundcore Work).m4a").
+    public static let fileNameBytes = 200
+
+    /// A conversation's title as an export's file name, the same on both apps: no folder separators, nothing Files,
+    /// Finder, or Mail refuse (`\ ? % * | " < >`, line breaks, control characters), no leading or trailing dots or
+    /// spaces (a leading dot would hide the file), and at most `maxBytes` UTF-8 bytes, cut between characters and
+    /// words where it can. Never empty: "Conversation".
+    public static func fileName(for title: String, maxBytes: Int = fileNameBytes) -> String {
+        let refused = CharacterSet(charactersIn: "/\\:?%*|\"<>").union(.newlines).union(.controlCharacters)
+        let edges = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "."))
+        var name = title.unicodeScalars.map { refused.contains($0) ? "-" : String($0) }.joined()
+            .trimmingCharacters(in: edges)
+        if name.utf8.count > maxBytes {
+            var cut = ""
+            for character in name {
+                guard cut.utf8.count + character.utf8.count <= maxBytes else { break }
+                cut.append(character)
+            }
+            // A cut mid-word steps back to the last space, unless that leaves too little.
+            if let space = cut.lastIndex(of: " "), cut.distance(from: cut.startIndex, to: space) >= cut.count / 2 {
+                cut = String(cut[..<space])
+            }
+            name = cut.trimmingCharacters(in: edges)
+        }
+        return name.isEmpty ? "Conversation" : name
+    }
+
+    /// The same for a conversation.
+    public static func fileName(for meeting: Meeting) -> String { fileName(for: meeting.title) }
+
     /// Title, byline, overview, next steps, and sections, for Copy Summary.
     public static func summaryMarkdown(_ meeting: Meeting) -> String {
         let safe = ModelText.escapingMarkdown
