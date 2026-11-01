@@ -237,12 +237,6 @@ public final class RecorderHandoff {
         return link.peers().filter { $0.handsOffRecorders && $0.syncID != nil && $0.syncID != thisDevice.id }
     }
 
-    /// The owner is on the local link and understands handoffs, so asking takes seconds.
-    public func ownerIsOnLink(_ session: DeviceSession) -> Bool {
-        guard let owner = owner(of: session), owner.ownerID != thisDevice.id else { return false }
-        return peer(syncID: owner.ownerID) != nil
-    }
-
     /// Waiting through sync for longer than `Timing.patience`.
     public func isOverdue(_ state: State, now: Date = Date()) -> Bool {
         if case .waitingForSync(_, let since) = state { return now.timeIntervalSince(since) > timing.patience }
