@@ -25,8 +25,32 @@ public struct SyncDeviceIdentity: Codable, Equatable, Sendable {
     public var displayName: String
     /// Whether this device has models and can transcribe, identify speakers, and summarize.
     public var canProcess: Bool
-    public init(deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool) {
-        self.deviceClass = deviceClass; self.displayName = displayName; self.canProcess = canProcess
+    /// What it does with its own models for other devices, role by role. Nil: it doesn't say.
+    public var capabilities: SyncDeviceCapabilities?
+    public init(deviceClass: SyncDeviceClass, displayName: String, canProcess: Bool, capabilities: SyncDeviceCapabilities? = nil) {
+        self.deviceClass = deviceClass; self.displayName = displayName; self.canProcess = canProcess; self.capabilities = capabilities
+    }
+}
+
+/// What a device does with its own models for other devices, in its presence record (DaybookKit's
+/// `ProcessingCapabilities`): a phone reads which Macs summarize, and with which models, from it.
+public struct SyncDeviceCapabilities: Codable, Equatable, Sendable {
+    public var transcribes: Bool
+    public var findsSpeakers: Bool
+    public var summarizes: Bool
+    /// The model it would use for each role (a role's name to the model's catalog key). Nil: it didn't say.
+    public var models: [String: String]?
+
+    public init(transcribes: Bool, findsSpeakers: Bool, summarizes: Bool, models: [String: String]? = nil) {
+        self.transcribes = transcribes; self.findsSpeakers = findsSpeakers; self.summarizes = summarizes; self.models = models
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        transcribes = (try? values.decodeIfPresent(Bool.self, forKey: .transcribes)) ?? false
+        findsSpeakers = (try? values.decodeIfPresent(Bool.self, forKey: .findsSpeakers)) ?? false
+        summarizes = (try? values.decodeIfPresent(Bool.self, forKey: .summarizes)) ?? false
+        models = (try? values.decodeIfPresent([String: String].self, forKey: .models)) ?? nil
     }
 }
 
@@ -213,6 +237,9 @@ public struct KnownSyncDevice: Equatable, Identifiable, Sendable {
     /// A later identity of the same device: the same name and class, first seen after this one was last seen. A device
     /// reinstalled with the same sync folder takes a new device ID, and its earlier one is superseded by it.
     public var supersededBy: String?
+    /// What it does with its own models for other devices, as its presence record says. Nil: unknown (an earlier
+    /// Daybook, or a device that doesn't say).
+    public var capabilities: SyncDeviceCapabilities?
     public var reportsPresence: Bool { lastSeen != nil }
     /// Its Daybook reads and writes encrypted libraries. A device without presence (an older Daybook) doesn't.
     public var readsEncryptedLibraries: Bool { features.contains(LibrarySyncEngine.sealingFeature) }

@@ -45,9 +45,13 @@ public struct LinkCapabilities: Codable, Sendable, Equatable {
     /// (recorder ownership, processing requests) use. Optional: older builds don't send it, and on a
     /// Mac it equals the link device ID.
     public var syncDeviceID: String?
+    /// What it does with its own models for other devices: transcribes, finds speakers, summarizes,
+    /// and with which model for each role. Optional: older builds don't send it, so it's unknown.
+    public var processing: LinkProcessingCapabilities?
 
     public init(deviceClass: LinkDeviceClass, name: String, appVersion: String, libraryID: UUID? = nil,
-                canProcess: Bool = false, features: [String] = [], syncDeviceID: String? = nil) {
+                canProcess: Bool = false, features: [String] = [], syncDeviceID: String? = nil,
+                processing: LinkProcessingCapabilities? = nil) {
         self.deviceClass = deviceClass
         self.name = name
         self.appVersion = appVersion
@@ -55,6 +59,7 @@ public struct LinkCapabilities: Codable, Sendable, Equatable {
         self.canProcess = canProcess
         self.features = features
         self.syncDeviceID = syncDeviceID
+        self.processing = processing
     }
 
     public init(from decoder: Decoder) throws {
@@ -66,6 +71,34 @@ public struct LinkCapabilities: Codable, Sendable, Equatable {
         canProcess = try c.decodeIfPresent(Bool.self, forKey: .canProcess) ?? false
         features = try c.decodeIfPresent([String].self, forKey: .features) ?? []
         syncDeviceID = try c.decodeIfPresent(String.self, forKey: .syncDeviceID)
+        // A newer build's capabilities this one can't read are unknown, never a reason to drop the rest.
+        processing = (try? c.decodeIfPresent(LinkProcessingCapabilities.self, forKey: .processing)) ?? nil
+    }
+}
+
+/// What a device does with its own models for other devices (`ProcessingCapabilities` in DaybookKit):
+/// a Mac says so in its capabilities, so a phone knows which Macs can summarize what it sends them.
+public struct LinkProcessingCapabilities: Codable, Sendable, Equatable {
+    public var transcribes: Bool
+    public var findsSpeakers: Bool
+    public var summarizes: Bool
+    /// The model it would use for each role (a role's name, "transcription", to the model's catalog key,
+    /// "whisper/large-v3"). Nil when it didn't say.
+    public var models: [String: String]?
+
+    public init(transcribes: Bool, findsSpeakers: Bool, summarizes: Bool, models: [String: String]? = nil) {
+        self.transcribes = transcribes
+        self.findsSpeakers = findsSpeakers
+        self.summarizes = summarizes
+        self.models = models
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        transcribes = try c.decodeIfPresent(Bool.self, forKey: .transcribes) ?? false
+        findsSpeakers = try c.decodeIfPresent(Bool.self, forKey: .findsSpeakers) ?? false
+        summarizes = try c.decodeIfPresent(Bool.self, forKey: .summarizes) ?? false
+        models = (try? c.decodeIfPresent([String: String].self, forKey: .models)) ?? nil
     }
 }
 
@@ -316,11 +349,15 @@ extension LinkCapabilities {
     public static let sharedNotesFeature = "sharedNotes"
     /// Shows the other device's live captions of a shared recording beside its own (`captions`).
     public static let liveCaptionsFeature = "liveCaptions"
+    /// Counts down before summarizing and says so (`processing.progress` with `summaryCountdown`), and takes
+    /// the person's choice from the other device (`processing.choice`: Use the Cloud, Start Now).
+    public static let summaryPlacementFeature = "summaryPlacement"
 
     public var controlsRecorders: Bool { features.contains(Self.recorderControlFeature) }
     public var cascades: Bool { features.contains(Self.cascadeFeature) }
     public var sharesNotes: Bool { features.contains(Self.sharedNotesFeature) }
     public var showsCaptions: Bool { features.contains(Self.liveCaptionsFeature) }
+    public var placesSummaries: Bool { features.contains(Self.summaryPlacementFeature) }
 }
 
 /// The receiver did what was asked.
@@ -573,6 +610,9 @@ public struct LinkProcessingProgress: Codable, Sendable, Equatable {
         public static let waitingForModels: Self = "waitingForModels"
         public static let finished: Self = "finished"
         public static let failed: Self = "failed"
+        /// The transcript is ready and the summary starts on the Mac when `countdown` runs out, unless the
+        /// person chooses otherwise (`LinkSummaryChoice`). Sent only by a Mac listing `summaryPlacement`.
+        public static let summaryCountdown: Self = "summaryCountdown"
     }
 
     public var meetingID: UUID
@@ -582,13 +622,67 @@ public struct LinkProcessingProgress: Codable, Sendable, Equatable {
     public var macName: String
     /// The Mac's own words, for failures in particular.
     public var detail: String?
+    /// While it counts down (`summaryCountdown`): how long is left and what the person may choose. Optional:
+    /// older builds neither send nor read it.
+    public var countdown: LinkSummaryCountdown?
+    /// Summarizing in the cloud: the model's name ("Claude Sonnet 5.5"). Optional, as `countdown`.
+    public var cloudModel: String?
 
-    public init(meetingID: UUID, phase: Phase, fraction: Double? = nil, macName: String, detail: String? = nil) {
+    public init(meetingID: UUID, phase: Phase, fraction: Double? = nil, macName: String, detail: String? = nil,
+                countdown: LinkSummaryCountdown? = nil, cloudModel: String? = nil) {
         self.meetingID = meetingID
         self.phase = phase
         self.fraction = fraction
         self.macName = macName
         self.detail = detail
+        self.countdown = countdown
+        self.cloudModel = cloudModel
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        meetingID = try c.decode(UUID.self, forKey: .meetingID)
+        phase = try c.decode(Phase.self, forKey: .phase)
+        fraction = try c.decodeIfPresent(Double.self, forKey: .fraction)
+        macName = try c.decode(String.self, forKey: .macName)
+        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+        countdown = (try? c.decodeIfPresent(LinkSummaryCountdown.self, forKey: .countdown)) ?? nil
+        cloudModel = (try? c.decodeIfPresent(String.self, forKey: .cloudModel)) ?? nil
+    }
+}
+
+/// A Mac's countdown before it summarizes a conversation, as it sends it to a phone.
+public struct LinkSummaryCountdown: Codable, Sendable, Equatable {
+    /// Seconds left when it was sent; the phone counts on from when it arrives.
+    public var secondsLeft: Double
+    /// Use the Cloud is on offer there (a key, and the policy isn't Never).
+    public var cloudOffered: Bool
+
+    public init(secondsLeft: Double, cloudOffered: Bool) {
+        self.secondsLeft = secondsLeft
+        self.cloudOffered = cloudOffered
+    }
+}
+
+/// The person's choice, on a phone, for a summary a Mac counts down to: Use the Cloud, or Start Now. The Mac
+/// acts on it as if the person had chosen there; a choice for a countdown that has ended does nothing.
+public struct LinkSummaryChoice: Codable, Sendable, Equatable {
+    public struct Choice: LinkOpenValue {
+        public let rawValue: String
+        public init(rawValue: String) { self.rawValue = rawValue }
+        public static let useCloud: Self = "useCloud"
+        public static let startNow: Self = "startNow"
+    }
+
+    public var meetingID: UUID
+    public var choice: Choice
+    /// When it was made, on the sender's clock.
+    public var sentAt: Date
+
+    public init(meetingID: UUID, choice: Choice, sentAt: Date = Date()) {
+        self.meetingID = meetingID
+        self.choice = choice
+        self.sentAt = sentAt
     }
 }
 
@@ -644,4 +738,7 @@ public enum LinkMessage: Sendable, Equatable {
     /// Live captions of a shared recording, for a device that shows them (`liveCaptionsFeature`).
     /// Additive within version 1: an older build ignores them.
     case captions(LinkCaptions)
+    /// The person's choice on a phone for a summary a Mac counts down to (`summaryPlacementFeature`).
+    /// Additive within version 1: an older build ignores it.
+    case summaryChoice(LinkSummaryChoice)
 }
