@@ -418,7 +418,7 @@ extension AudioSource {
         switch self {
         case .microphone: return "mic"
         case .systemAudio: return "desktopcomputer"
-        case .soundcore: return "waveform.badge.microphone"
+        case .soundcore: return "recordingtape"
         case .imported: return "doc"
         }
     }
