@@ -33,6 +33,8 @@ final class PhoneUpgrades {
     @ObservationIgnored var owns: () -> @Sendable (RecordingTrack) -> Bool = { { _ in false } }
     /// Starts this iPhone's processor on a request it made for itself.
     @ObservationIgnored var pickUp: () -> Void = {}
+    /// Bumped when what this iPhone's own models can do changes (`refresh`), so a page showing an offer reads it again.
+    private var revision = 0
 
     init(library: LibraryController, placement: PhoneSummaryPlacement, link: PhoneLink, presence: @escaping () -> [KnownSyncDevice],
          clock: @escaping () -> Date = Date.init) {
@@ -58,9 +60,14 @@ final class PhoneUpgrades {
     /// The offer the page makes now; nil while the conversation's summary is held, counts down, or runs here or in the
     /// cloud, while anything works or waits, or when nothing within reach is clearly better.
     func offer(for meeting: Meeting, now: Date = Date()) -> UpgradeOffer? {
+        _ = revision
         guard placement.planners[meeting.id] == nil, placement.runs[meeting.id] == nil else { return nil }
         return Upgrades.offer(for: meeting, status: ProcessingStatus.phone(meeting, now: now), candidates: candidates)
     }
+
+    /// This iPhone's processing models changed (downloaded, removed, or Transcribe on This iPhone switched): offers are
+    /// worked out again.
+    func refresh() { revision &+= 1 }
 
     /// Upgrade: the work goes to the device with the better model.
     func accept(_ offer: UpgradeOffer, for id: UUID) async {

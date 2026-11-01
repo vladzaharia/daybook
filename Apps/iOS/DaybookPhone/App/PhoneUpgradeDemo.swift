@@ -42,6 +42,7 @@ enum PhoneUpgradeDemo {
             }
             upgrades.owns = { { _ in true } }
             upgrades.pickUp = {}
+            upgrades.refresh()
         case "cloud":
             // Made on this iPhone with Gemma 4 E2B, as the processor applies one.
             guard var summary = meeting.summary else { return }
