@@ -4,10 +4,23 @@ import Foundation
 import UIKit
 #endif
 
+/// What one save writes. The queue keeps at most one save of each waiting.
+enum SaveKey: Hashable, Sendable {
+    /// A conversation (`meeting.json`).
+    case meeting(UUID)
+    /// The library's settings (`library.json`).
+    case settings
+    /// The vocabulary's own file.
+    case glossary
+    /// This device's record of the work it's doing (`local-work.json`, never synced).
+    case localWork
+}
+
 /// The library's saves, written in the background and coalesced: each conversation (and the
-/// library's settings and vocabulary) has at most one save waiting, and the latest snapshot is the
-/// one written. A save starts after a short pause (`delay`), so a burst of edits (typing notes)
-/// writes once, and saves run one at a time, in the order things first changed.
+/// library's settings, vocabulary, and record of this device's work) has at most one save waiting,
+/// and the latest snapshot is the one written. A save starts after a short pause (`delay`), so a
+/// burst of edits (typing notes) writes once, and saves run one at a time, in the order things
+/// first changed.
 ///
 /// A failed save is remembered under its key until a later save of the same thing succeeds or it
 /// becomes moot (`forget`: the conversation went to the Trash).
@@ -15,23 +28,23 @@ import UIKit
 final class LibrarySaveQueue {
     typealias Write = @MainActor () async throws -> Void
 
-    /// What failed, by key: a conversation's UUID string, "library-settings", or "glossary".
-    private(set) var failures: [String: String] = [:]
+    /// What failed, by key, in the system's words.
+    private(set) var failures: [SaveKey: String] = [:]
     var delay: Duration = .milliseconds(500)
     /// After each failed save, with its key.
-    var onFailure: (String, Error) -> Void = { _, _ in }
+    var onFailure: (SaveKey, Error) -> Void = { _, _ in }
     /// Each time the queue runs empty.
     var onIdle: () -> Void = {}
     /// Saves carried out, for tests.
     private(set) var completed = 0
 
-    private var pending: [String: Write] = [:]
-    private var order: [String] = []
+    private var pending: [SaveKey: Write] = [:]
+    private var order: [SaveKey] = []
     private var worker: Task<Void, Never>?
     private var timer: Task<Void, Never>?
 
     /// Queues `write` under `key`, replacing a save of the same thing that hasn't started.
-    func enqueue(_ key: String, write: @escaping Write) {
+    func enqueue(_ key: SaveKey, write: @escaping Write) {
         if pending.updateValue(write, forKey: key) == nil { order.append(key) }
         guard worker == nil, timer == nil else { return }
         timer = Task { [weak self, delay] in
@@ -53,7 +66,7 @@ final class LibrarySaveQueue {
     }
 
     /// Drops a waiting save and a remembered failure: there's nothing left to save.
-    func forget(_ key: String) {
+    func forget(_ key: SaveKey) {
         pending[key] = nil
         order.removeAll { $0 == key }
         failures[key] = nil

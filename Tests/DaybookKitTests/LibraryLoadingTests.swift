@@ -1,6 +1,6 @@
-import DaybookCore
 import Foundation
 import XCTest
+@testable import DaybookCore
 @testable import DaybookKit
 
 /// Opening the library isn't all-or-nothing: damaged, unreadable, or newer settings and a
@@ -121,9 +121,8 @@ final class LibraryLoadingTests: XCTestCase {
         let library = try await open()
         let id = library.newMeeting(title: "Was transcribing")
         library.update(id) { $0.status = .transcribing }
+        // The record of this device's work is saved with the edits; reopening reads it.
         await library.flush()
-        // The record of this device's work is written in the background; reopening reads it.
-        LibraryController.drainLocalWorkWrites()
         let folder = root.appendingPathComponent("Meetings/\(id.uuidString)")
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
         let reopened = try await open()
@@ -140,7 +139,6 @@ final class LibraryLoadingTests: XCTestCase {
         let own = library.newMeeting(title: "Transcribing here")
         library.update(own) { $0.status = .transcribing }
         await library.flush()
-        LibraryController.drainLocalWorkWrites()
         // Another Mac's job, as a sync pass saves it: the status describes that Mac, not this one.
         var remote = Meeting(title: "Transcribing on Studio Mac")
         remote.status = .transcribing
@@ -152,7 +150,6 @@ final class LibraryLoadingTests: XCTestCase {
         XCTAssertEqual(reopened.meeting(remote.id)?.status, .transcribing, "another device's work is left alone")
         XCTAssertNil(reopened.meeting(remote.id)?.errorMessage)
         await reopened.flush()
-        LibraryController.drainLocalWorkWrites()
 
         // The sweep cleared the record: the reset conversation, now processed elsewhere, isn't swept again.
         var elsewhere = try XCTUnwrap(reopened.meeting(own))
@@ -160,6 +157,34 @@ final class LibraryLoadingTests: XCTestCase {
         try await MeetingStore(rootURL: root).save(elsewhere)
         let again = try await open()
         XCTAssertEqual(again.meeting(own)?.status, .summarizing)
+    }
+
+    /// The record of this device's work is a save like the others: flushed by the durability barrier, and when it
+    /// can't be written, kept as a failure that a barrier over everything reports, and written at the next flush.
+    func testBehaviorTheWorkRecordIsSavedWithTheLibraryAndTriedAgainAfterAFailure() async throws {
+        let library = try await open()
+        let store = try XCTUnwrap(library.store)
+        let record = root.appendingPathComponent("local-work.json")
+        try await library.flushDurably()
+        // A folder where the record goes: it can't be replaced.
+        try FileManager.default.removeItem(at: record)
+        try FileManager.default.createDirectory(at: record, withIntermediateDirectories: false)
+        let id = library.newMeeting(title: "Transcribing here")
+        library.update(id) { $0.status = .transcribing }
+        try await library.flushDurably([id])
+        XCTAssertNil(library.errorMessage, "Nothing the person made failed")
+        do { try await library.flushDurably(); XCTFail("A barrier over everything counts it") } catch {}
+
+        try FileManager.default.removeItem(at: record)
+        try await library.flushDurably()
+        let saved = await store.loadLocalWork()
+        XCTAssertEqual(saved, [id])
+        library.update(id) { $0.status = .ready }
+        await library.flush()
+        let pending = await store.unsynchronizedWrites
+        XCTAssertTrue(pending.contains(record.standardizedFileURL), "\(pending.map(\.path))")
+        let cleared = await store.loadLocalWork()
+        XCTAssertEqual(cleared, [])
     }
 
     func testALibraryFromBeforeTheRecordResetsEveryInterruptedConversation() async throws {

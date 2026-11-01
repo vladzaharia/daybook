@@ -123,6 +123,24 @@ extension MeetingStore {
     }
 }
 
+/// The conversations this device put into recording, transcribing, or summarizing (`local-work.json`), kept beside
+/// the library and never synced, so a launch after a crash resets only its own interrupted work.
+extension MeetingStore {
+    private var localWorkURL: URL { rootURL.appendingPathComponent("local-work.json") }
+
+    /// Nil when the library has no record yet (one an earlier Daybook wrote).
+    public func loadLocalWork() -> Set<UUID>? {
+        guard let data = try? Data(contentsOf: localWorkURL), let ids = try? JSONDecoder().decode([String].self, from: data) else { return nil }
+        return Set(ids.compactMap(UUID.init(uuidString:)))
+    }
+
+    /// Replaces the record, atomically; the next durability barrier flushes it with everything else.
+    public func saveLocalWork(_ ids: Set<UUID>) throws {
+        try LocalFiles.atomicWrite(JSONEncoder().encode(ids.map(\.uuidString).sorted()), to: localWorkURL)
+        noteWrite(localWorkURL)
+    }
+}
+
 private struct LibrarySchemaHeader: Decodable { var schemaVersion: Int }
 
 private struct LenientLibraryMetadata: Decodable {

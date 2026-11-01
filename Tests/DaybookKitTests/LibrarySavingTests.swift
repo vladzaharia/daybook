@@ -47,9 +47,9 @@ final class LibrarySavingTests: XCTestCase {
         let saves = library.savesCompleted
         let changes = ObservationCount { _ = library.meetings }
         defer { changes.cancel() }
-        library.update(id) { $0.status = .transcribing }
+        library.update(id) { $0.tags = ["Weekly"] }
         XCTAssertEqual(changes.count, 1, "One change for observers, its time stamp included: every view of the library redraws per change")
-        library.update(id) { $0.status = .transcribing; $0.errorMessage = nil }
+        library.update(id) { $0.tags = ["Weekly"]; $0.errorMessage = nil }
         XCTAssertEqual(changes.count, 1, "Nothing changed: no redraw, and no save")
         let stamped = try XCTUnwrap(library.meeting(id)?.updatedAt)
         await library.flush()

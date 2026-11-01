@@ -45,8 +45,8 @@ public final class LibraryController {
     @ObservationIgnored private var glossaryStore: GlossaryStore?
     /// Saves, coalesced and written in the background (`LibrarySaveQueue`).
     private let saves = LibrarySaveQueue()
-    /// Saves that failed, by conversation ID, "library-settings", or "glossary", until one succeeds.
-    private var persistenceErrors: [String: String] { saves.failures }
+    /// Saves that failed, until one of the same thing succeeds.
+    private var persistenceErrors: [SaveKey: String] { saves.failures }
     /// Edits since the last sync request; the request goes out once they're written.
     @ObservationIgnored private var syncWanted = false
     /// False when `library.json` couldn't be read or a newer Daybook wrote it: never overwritten.
@@ -109,7 +109,7 @@ public final class LibraryController {
         }
         // Only work this device was doing: a status synced from another device's job stays as it is.
         // A library that predates the record (nil) treats every such status as this device's, as before.
-        let ownWork = Self.loadLocalWork(at: localWorkURL)
+        let ownWork = await store.loadLocalWork()
         localWork = []
         for index in meetings.indices where [.transcribing, .summarizing, .recording].contains(meetings[index].status)
             && ownWork?.contains(meetings[index].id) != false {
@@ -204,7 +204,7 @@ public final class LibraryController {
         trackLocalWork(meeting)
         noteChange(meeting.id, requestingSync: requestingSync)
         let id = meeting.id
-        saves.enqueue(id.uuidString) { [weak self] in
+        saves.enqueue(.meeting(id)) { [weak self] in
             // A conversation that left the library (the Trash, a deletion that synced) has nothing to save.
             guard let self, self.meeting(id) != nil else { return }
             do { try await store.save(meeting) }
@@ -226,16 +226,18 @@ public final class LibraryController {
         // Settings that couldn't be read, or that a newer Daybook wrote, are never overwritten.
         guard let store, metadataWritable else { return }
         let snapshot = metadata
-        saves.enqueue("library-settings") { try await store.saveLibraryMetadata(snapshot) }
+        saves.enqueue(.settings) { try await store.saveLibraryMetadata(snapshot) }
     }
 
     /// What couldn't be saved, in plain words; the system's own words go to `errorDetails`.
-    private func reportSaveFailure(_ key: String, _ error: Error) {
+    private func reportSaveFailure(_ key: SaveKey, _ error: Error) {
         switch key {
-        case "library-settings": errorMessage = "Your folders and templates couldn’t be saved. Daybook tries again with your next change."
-        case "glossary": errorMessage = "Your vocabulary couldn’t be saved. Daybook tries again with your next change."
-        default:
-            let title = meetings.first { $0.id.uuidString == key }?.title ?? "a conversation"
+        case .settings: errorMessage = "Your folders and templates couldn’t be saved. Daybook tries again with your next change."
+        case .glossary: errorMessage = "Your vocabulary couldn’t be saved. Daybook tries again with your next change."
+        // Nothing the person made: it's tried again at the next flush, and a barrier over everything reports it.
+        case .localWork: return
+        case .meeting(let id):
+            let title = meeting(id)?.title ?? "a conversation"
             errorMessage = "Changes to “\(title)” couldn’t be saved. Daybook tries again with your next change."
         }
         errorDetails = error.localizedDescription
@@ -244,9 +246,8 @@ public final class LibraryController {
     // MARK: Work this device is doing
 
     /// Conversations this device put into recording, transcribing, or summarizing, kept beside the library
-    /// (never synced), so a launch after a crash resets only its own interrupted work.
+    /// (never synced; `MeetingStore.saveLocalWork`), so a launch after a crash resets only its own interrupted work.
     private var localWork = Set<UUID>()
-    private var localWorkURL: URL { rootURL.appendingPathComponent("local-work.json") }
 
     private func trackLocalWork(_ meeting: Meeting) {
         // A status that arrived through sync describes another device's job.
@@ -256,21 +257,12 @@ public final class LibraryController {
         if changed { saveLocalWork() }
     }
 
-    /// Written in order on a serial queue, so an older record never lands after a newer one.
+    /// A save like the others: coalesced, so an older record never lands after a newer one, in order with the
+    /// saves around it, tried again after a failure, and flushed by the durability barrier.
     private func saveLocalWork() {
-        let ids = localWork.map(\.uuidString).sorted(), url = localWorkURL
-        Self.localWorkQueue.async { try? JSONEncoder().encode(ids).write(to: url, options: .atomic) }
-    }
-
-    private static let localWorkQueue = DispatchQueue(label: "local.daybook.library.local-work", qos: .utility)
-
-    /// Waits for record writes queued so far (tests).
-    static func drainLocalWorkWrites() { localWorkQueue.sync {} }
-
-    /// Nil when the library has no record yet (written by an earlier Daybook).
-    static func loadLocalWork(at url: URL) -> Set<UUID>? {
-        guard let data = try? Data(contentsOf: url), let ids = try? JSONDecoder().decode([String].self, from: data) else { return nil }
-        return Set(ids.compactMap(UUID.init(uuidString:)))
+        guard let store else { return }
+        let ids = localWork
+        saves.enqueue(.localWork) { try await store.saveLocalWork(ids) }
     }
 
     /// Every save asks for a sync pass (once the saves are written), except the saves that apply one. An
@@ -289,11 +281,11 @@ public final class LibraryController {
         for id in Array(noteOriginals.keys) { finishNoteEdit(id) }
         for key in persistenceErrors.keys {
             switch key {
-            case "library-settings": persistMetadata(requestingSync: false)
-            case "glossary": persistGlossaryFile()
-            default:
-                if let id = UUID(uuidString: key), let meeting = meeting(id) { persist(meeting, requestingSync: false) }
-                else { saves.forget(key) }
+            case .settings: persistMetadata(requestingSync: false)
+            case .glossary: persistGlossaryFile()
+            case .localWork: saveLocalWork()
+            case .meeting(let id):
+                if let meeting = meeting(id) { persist(meeting, requestingSync: false) } else { saves.forget(key) }
             }
         }
         await saves.drain()
@@ -303,7 +295,8 @@ public final class LibraryController {
     /// every save is written, and everything written since the last barrier is flushed to permanent
     /// storage (`MeetingStore.synchronizeWrites`). Waiting for the save queue alone does not mean its
     /// writes succeeded. With `ids`, only those conversations' failed saves count (an unrelated
-    /// conversation that can't be saved doesn't stop an import); without, every failure does.
+    /// conversation that can't be saved doesn't stop an import), and the settings' and vocabulary's
+    /// with `includingSettings`; without, every failure does.
     public func flushDurably(_ ids: Set<UUID>? = nil, includingSettings: Bool = false) async throws {
         await flush()
         // What the saves and imports wrote since the last barrier reaches permanent storage.
@@ -312,7 +305,11 @@ public final class LibraryController {
         }
         let failures = persistenceErrors.filter { key, _ in
             guard let ids else { return true }
-            return UUID(uuidString: key).map(ids.contains) ?? includingSettings
+            switch key {
+            case .meeting(let id): return ids.contains(id)
+            case .settings, .glossary: return includingSettings
+            case .localWork: return false
+            }
         }
         guard failures.isEmpty else {
             throw DaybookError.saveFailed(failures.values.sorted().joined(separator: "\n"))
@@ -664,7 +661,7 @@ public final class LibraryController {
     private func persistGlossaryFile() {
         guard let glossaryStore else { return }
         let snapshot = glossary
-        saves.enqueue("glossary") { try await glossaryStore.save(snapshot) }
+        saves.enqueue(.glossary) { try await glossaryStore.save(snapshot) }
     }
 
     // MARK: Trash
@@ -680,7 +677,7 @@ public final class LibraryController {
         _ = try await store.moveToTrash(id)
         meetings.removeAll { $0.id == id }
         // A save queued during the move, or one that failed before it, has nothing left to save.
-        saves.forget(id.uuidString)
+        saves.forget(.meeting(id))
         sync?.requestSync()
         return true
     }
@@ -887,7 +884,7 @@ public final class LibraryController {
                 if merged != local {
                     if let index = meetings.firstIndex(where: { $0.id == merged.id }) { meetings[index] = merged } else { meetings.append(merged) }
                     persist(merged)
-                } else if persistenceErrors[merged.id.uuidString] != nil {
+                } else if persistenceErrors[.meeting(merged.id)] != nil {
                     // Retry a prior failed save even when the in-memory snapshot is unchanged.
                     persist(merged)
                 }
@@ -904,7 +901,7 @@ public final class LibraryController {
             if metadata.hasUnreadableValues { mergeWarnings.append(Self.newerSettingsWarning) }
             let mergedGlossary = metadata.vocabulary.compactMap(\.value)
             if mergedGlossary != glossary || metadata != metadataBeforeMerge ||
-                persistenceErrors["library-settings"] != nil || persistenceErrors["glossary"] != nil {
+                persistenceErrors[.settings] != nil || persistenceErrors[.glossary] != nil {
                 glossary = mergedGlossary
                 persistGlossary()
             }
