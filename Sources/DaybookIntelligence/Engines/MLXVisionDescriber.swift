@@ -7,20 +7,20 @@ import Foundation
 import MLX
 import MLXLMCommon
 import MLXVLM
+import Synchronization
 
 /// A vision-language model through mlx-swift-lm's MLXVLM (Gemma 4 E2B and E4B, whose MLX conversions
 /// carry the vision tower beside the language model): one short caption per photo. The same install
 /// that writes summaries, loaded with `VLMModelFactory` instead of `LLMModelFactory`, so describing
 /// photos needs no second download. Text the photo contains (from Apple Vision) goes in the prompt as
 /// untrusted context.
-final class MLXVisionDescriber: DescribingImages, @unchecked Sendable {
-    private let lock = NSLock()
-    private var container: ModelContainer?
+final class MLXVisionDescriber: DescribingImages, Sendable {
+    private let container: Mutex<ModelContainer?>
     private let chatTemplateContext: [String: any Sendable]?
     let loadSeconds: Double
 
     init(container: ModelContainer, chatTemplateContext: [String: any Sendable]?, loadSeconds: Double) {
-        self.container = container
+        self.container = Mutex(container)
         self.chatTemplateContext = chatTemplateContext
         self.loadSeconds = loadSeconds
     }
@@ -34,7 +34,7 @@ final class MLXVisionDescriber: DescribingImages, @unchecked Sendable {
     }
 
     func describe(_ requests: [ImageDescriptionRequest], progress: @escaping IntelligenceProgressHandler) async throws -> [ImageDescription] {
-        guard let container = lock.withLock({ container }) else { throw LocalIntelligenceError.emptyResponse }
+        guard let container = container.withLock({ $0 }) else { throw LocalIntelligenceError.emptyResponse }
         var results: [ImageDescription] = []
         for (index, request) in requests.enumerated() {
             try Task.checkCancellation()
@@ -57,7 +57,7 @@ final class MLXVisionDescriber: DescribingImages, @unchecked Sendable {
     }
 
     func unload() {
-        lock.withLock { container = nil }
+        container.withLock { $0 = nil }
         Memory.clearCache()
     }
 }

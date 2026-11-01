@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookKit
 import Foundation
+import Synchronization
 
 /// Summarizes a conversation with a cloud model (docs/cloud.md, "The summary"): `CloudSynthesis`'s single pass,
 /// streamed, with the reply's limit raised once when it runs into it, and the provider and model, tokens, estimated
@@ -136,16 +137,15 @@ extension CloudSummarizing {
 
 /// Passes progress on only when it moves by a percent or more, and never backwards: a reply streams in
 /// hundreds of pieces a second.
-private final class ProgressGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var last = 0.0
+private final class ProgressGate: Sendable {
+    private let last = Mutex(0.0)
     private let report: @Sendable (Double) -> Void
 
     init(_ report: @escaping @Sendable (Double) -> Void) { self.report = report }
 
     func report(_ fraction: Double) {
         let value = min(0.95, fraction)
-        let send: Bool = lock.withLock {
+        let send = last.withLock { last -> Bool in
             guard value >= last + 0.01 else { return false }
             last = value
             return true

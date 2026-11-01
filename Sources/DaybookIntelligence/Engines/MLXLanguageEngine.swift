@@ -5,6 +5,7 @@ import MLX
 import MLXGuidedGeneration
 import MLXLLM
 import MLXLMCommon
+import Synchronization
 #if canImport(MLXVLM)
 import MLXVLM
 #endif
@@ -141,21 +142,20 @@ public struct MLXLanguageEngine: ModelEngine {
 }
 
 /// A loaded MLX language model.
-final class MLXSummarizer: Summarizing, @unchecked Sendable {
-    private let lock = NSLock()
-    private var model: MLXSynthesisModel?
+final class MLXSummarizer: Summarizing, Sendable {
+    private let model: Mutex<MLXSynthesisModel?>
     private let loadSeconds: Double
 
     init(container: ModelContainer, structuredOutput: Bool, chatTemplateContext: [String: any Sendable]?, briefCommitments: Bool, checksNotes: Bool,
          contextLength: Int?, outputTokens: Int?, loadSeconds: Double) {
-        model = MLXSynthesisModel(container: container, supportsStructuredOutput: structuredOutput,
-                                  chatTemplateContext: chatTemplateContext, briefCommitments: briefCommitments, checksNotes: checksNotes,
-                                  contextLength: contextLength, outputTokens: outputTokens)
+        model = Mutex(MLXSynthesisModel(container: container, supportsStructuredOutput: structuredOutput,
+                                        chatTemplateContext: chatTemplateContext, briefCommitments: briefCommitments, checksNotes: checksNotes,
+                                        contextLength: contextLength, outputTokens: outputTokens))
         self.loadSeconds = loadSeconds
     }
 
     func summarize(_ request: SummaryRequest, progress: @escaping IntelligenceProgressHandler) async throws -> GeneratedMeetingNotes {
-        guard let model = lock.withLock({ model }) else { throw LocalIntelligenceError.modelNotInstalled(request.modelID) }
+        guard let model = model.withLock({ $0 }) else { throw LocalIntelligenceError.modelNotInstalled(request.modelID) }
         model.resetStatistics()
         let source = request.source ?? .legacy(transcript: request.transcript, notes: request.notes, highlights: request.highlightEvidence)
         var notes = try await MeetingSynthesis.generate(model: model, modelID: request.modelID, source: source, template: request.template,
@@ -169,26 +169,32 @@ final class MLXSummarizer: Summarizing, @unchecked Sendable {
 
     /// Drops the weights, then the MLX allocator's cache, which otherwise keeps freed buffers.
     func unload() {
-        lock.withLock { model = nil }
+        model.withLock { $0 = nil }
         Memory.clearCache()
     }
 }
 
 /// `SynthesisModel` over an MLX container: fresh chat sessions for free-form replies, and
 /// mlx-swift-lm's XGrammar-backed guided generation for schema-constrained ones.
-final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
+final class MLXSynthesisModel: SynthesisModel, Sendable {
     let container: ModelContainer
     let supportsStructuredOutput: Bool
     /// Chat-template variables, such as `enable_thinking: false`.
     let chatTemplateContext: [String: any Sendable]?
-    private let lock = NSLock()
-    /// What guided generation needs from the tokenizer, built on first use (each is a full pass over
-    /// the vocabulary): XGrammar's view of it, and the logit biases that close JSON near the token
-    /// limit and keep whitespace runs short.
-    private var grammar: Grammar?
-    private var _statistics = GenerationStatistics()
-    var statistics: GenerationStatistics { lock.withLock { _statistics } }
-    func resetStatistics() { lock.withLock { _statistics = GenerationStatistics() } }
+    private let state = Mutex(State())
+
+    private struct State {
+        /// What guided generation needs from the tokenizer, built on first use (each is a full pass over
+        /// the vocabulary): XGrammar's view of it, and the logit biases that close JSON near the token
+        /// limit and keep whitespace runs short.
+        var grammar: Grammar?
+        /// With thinking off, the tokens that open a thought block (`thoughtOpeners`), found on first use.
+        var openers: [Int]?
+        var statistics = GenerationStatistics()
+    }
+
+    var statistics: GenerationStatistics { state.withLock { $0.statistics } }
+    func resetStatistics() { state.withLock { $0.statistics = GenerationStatistics() } }
 
     let briefCommitments: Bool
     let checksNotes: Bool
@@ -230,12 +236,12 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
                     break stream
                 }
             case .info(let info):
-                lock.withLock {
-                    _statistics.passes += 1
-                    _statistics.promptTokens += info.promptTokenCount
-                    _statistics.promptSeconds += info.promptTime
-                    _statistics.generatedTokens += info.generationTokenCount
-                    _statistics.generationSeconds += info.generateTime
+                state.withLock { state in
+                    state.statistics.passes += 1
+                    state.statistics.promptTokens += info.promptTokenCount
+                    state.statistics.promptSeconds += info.promptTime
+                    state.statistics.generatedTokens += info.generationTokenCount
+                    state.statistics.generationSeconds += info.generateTime
                 }
             default: break
             }
@@ -271,11 +277,11 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
             }
             try Task.checkCancellation()
             let promptTokens = input.text.tokens.size
-            self.lock.withLock {
-                self._statistics.passes += 1
-                self._statistics.constrainedPasses += 1
-                self._statistics.constrainedTokens += promptTokens + generated
-                self._statistics.constrainedSeconds += Date().timeIntervalSince(started)
+            self.state.withLock { state in
+                state.statistics.passes += 1
+                state.statistics.constrainedPasses += 1
+                state.statistics.constrainedTokens += promptTokens + generated
+                state.statistics.constrainedSeconds += Date().timeIntervalSince(started)
             }
             // A loop is cut back to what came before it: its complete sections or commitments. With none, the
             // caller runs the pass free-form, with its repetition penalty.
@@ -294,10 +300,8 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
     /// found in the tokenizer on first use. Gemma 4 12B's template ends the prompt with an empty thought
     /// block, and free-form, the model once answered with nothing but more of them until its token limit
     /// (docs/validation.md); a reply can't open one now. Constrained replies start with the JSON.
-    private var openers: [Int]?
-
     private func thoughtOpeners() async -> [Int] {
-        if let openers = lock.withLock({ openers }) { return openers }
+        if let openers = state.withLock({ $0.openers }) { return openers }
         var found: [Int] = []
         if (chatTemplateContext?["enable_thinking"] as? Bool) == false {
             found = await container.perform { context in
@@ -306,7 +310,7 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
                 }
             }
         }
-        lock.withLock { openers = found }
+        state.withLock { $0.openers = found }
         return found
     }
 
@@ -323,8 +327,8 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
     }
 
     private func grammar(for tokenizer: any MLXLMCommon.Tokenizer) throws -> Grammar {
-        try lock.withLock {
-            if let grammar { return grammar }
+        try state.withLock { state in
+            if let grammar = state.grammar { return grammar }
             let vocabulary = TokenizerVocabExtractor.extractForGrammar(from: tokenizer)
             let whitespace = WhitespaceTokenBias.compute(tokenizer: tokenizer)
             let made = Grammar(
@@ -332,7 +336,7 @@ final class MLXSynthesisModel: SynthesisModel, @unchecked Sendable {
                                                 eosTokenId: Int32(tokenizer.eosTokenId ?? 0)),
                 closingBias: ClosingTokenBias.compute(tokenizer: tokenizer, eosTokenId: tokenizer.eosTokenId),
                 whitespaceBias: whitespace.bias, whitespaceTokens: whitespace.tokenIDs)
-            grammar = made
+            state.grammar = made
             return made
         }
     }

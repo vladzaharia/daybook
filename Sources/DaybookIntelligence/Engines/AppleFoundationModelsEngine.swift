@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookKit
 import Foundation
+import Synchronization
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -144,15 +145,15 @@ public struct AppleFoundationModelsEngine: ModelEngine {
 }
 
 /// A value recomputed once it's older than `lifetime` seconds.
-final class RecentValue<Value: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
+final class RecentValue<Value: Sendable>: Sendable {
     private let lifetime: TimeInterval
-    private var stored: (value: Value, at: Date)?
+    private let stored = Mutex<(value: Value, at: Date)?>(nil)
 
     init(lifetime: TimeInterval) { self.lifetime = lifetime }
 
     func value(_ compute: () -> Value) -> Value {
-        lock.withLock {
+        let lifetime = self.lifetime
+        return stored.withLock { stored in
             if let stored, Date().timeIntervalSince(stored.at) < lifetime { return stored.value }
             let value = compute()
             stored = (value, Date())

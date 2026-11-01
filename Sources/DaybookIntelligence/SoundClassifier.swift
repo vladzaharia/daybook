@@ -2,6 +2,7 @@ import AVFoundation
 import DaybookCore
 import Foundation
 import SoundAnalysis
+import Synchronization
 
 /// Apple's built-in sound classifier (SoundAnalysis, `SNClassifySoundRequest` `.version1`) over a
 /// whole recording: per one-second frame, how much it sounds like speech, music, and an audience,
@@ -101,12 +102,14 @@ public enum SoundClassifier {
         var audience: Double
     }
 
-    private final class Collector: NSObject, SNResultsObserving, @unchecked Sendable {
-        private let lock = NSLock()
-        private var _results: [Scores] = []
-        private var _error: Error?
-        var results: [Scores] { lock.withLock { _results.sorted { $0.start < $1.start } } }
-        var error: Error? { lock.withLock { _error } }
+    private final class Collector: NSObject, SNResultsObserving, Sendable {
+        private struct State {
+            var results: [Scores] = []
+            var error: Error?
+        }
+        private let state = Mutex(State())
+        var results: [Scores] { state.withLock { $0.results.sorted { $0.start < $1.start } } }
+        var error: Error? { state.withLock { $0.error } }
 
         func request(_ request: SNRequest, didProduce result: SNResult) {
             guard let result = result as? SNClassificationResult else { return }
@@ -117,11 +120,11 @@ public enum SoundClassifier {
                 else if SoundClassifier.audienceLabels.contains(item.identifier) { audience = max(audience, item.confidence) }
             }
             let scores = Scores(start: result.timeRange.start.seconds, speech: speech, music: music, audience: audience)
-            lock.withLock { _results.append(scores) }
+            state.withLock { $0.results.append(scores) }
         }
 
         func request(_ request: SNRequest, didFailWithError error: Error) {
-            lock.withLock { _error = error }
+            state.withLock { $0.error = error }
         }
     }
 }
