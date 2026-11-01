@@ -11,8 +11,9 @@ public struct SummaryEvidenceIndex: Sendable {
     private let documents: [Set<String>]
     private let frequency: [String: Int]
 
-    /// The index for a conversation, built once per version of it: by its ID and when it last changed
-    /// (`Meeting.updatedAt`, which every edit to its transcript or speaker names moves).
+    /// The index for a conversation, built once per version of what it reads: its passages and speakers' names, and
+    /// when it last changed. A sync merge can bring in another device's older edit without moving `updatedAt`
+    /// (`MeetingMerge` keeps the later of the two), so the content counts too.
     public static func cached(for meeting: Meeting) -> SummaryEvidenceIndex {
         cache.index(for: meeting)
     }
@@ -89,12 +90,28 @@ public struct SummaryEvidenceIndex: Sendable {
 
     /// The last few conversations' indexes, safe from any thread.
     private final class IndexCache: @unchecked Sendable {
-        private struct Key: Hashable { var id: UUID; var updatedAt: Date }
+        private struct Key: Hashable {
+            var id: UUID
+            var updatedAt: Date
+            var passages: Int
+            /// Each passage's ID, words, and speaker, and each speaker's name.
+            var content: Int
+
+            init(_ meeting: Meeting) {
+                id = meeting.id; updatedAt = meeting.updatedAt; passages = meeting.unifiedTranscript.count
+                var hasher = Hasher()
+                for segment in meeting.unifiedTranscript {
+                    hasher.combine(segment.id); hasher.combine(segment.text); hasher.combine(segment.speakerID)
+                }
+                for speaker in meeting.speakers { hasher.combine(speaker.id); hasher.combine(speaker.name) }
+                content = hasher.finalize()
+            }
+        }
         private let lock = NSLock()
         private var entries: [Key: SummaryEvidenceIndex] = [:]
 
         func index(for meeting: Meeting) -> SummaryEvidenceIndex {
-            let key = Key(id: meeting.id, updatedAt: meeting.updatedAt)
+            let key = Key(meeting)
             if let hit = lock.withLock({ entries[key] }) { return hit }
             let index = SummaryEvidenceIndex(meeting)
             lock.withLock {

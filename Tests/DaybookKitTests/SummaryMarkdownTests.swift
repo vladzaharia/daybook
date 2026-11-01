@@ -76,6 +76,17 @@ final class SummaryMarkdownTests: XCTestCase {
         meeting.unifiedTranscript[1].text = "Lunch is on Friday."
         meeting.updatedAt = Date(timeIntervalSinceReferenceDate: 2)
         XCTAssertNil(SummaryEvidenceIndex.cached(for: meeting).segment(for: "Post a status update on the conflict fix", owner: "Daniel"))
+
+        // So does an older edit a merge brings in, which keeps the later `updatedAt`: the words, or a speaker's name.
+        meeting.unifiedTranscript[1].text = "I'll post a status update about the conflict fix on Thursday."
+        XCTAssertEqual(SummaryEvidenceIndex.cached(for: meeting).segment(for: "Post a status update on the conflict fix"), passages[1].id)
+        meeting.unifiedTranscript[0].text = "We should post a status update about the conflict fix."
+        XCTAssertEqual(SummaryEvidenceIndex.cached(for: meeting).segment(for: "Post a status update on the conflict fix", owner: "Daniel"),
+                       passages[1].id, "the same words: Daniel's own passage")
+        meeting.speakers[0].name = "Daniel"
+        meeting.speakers[1].name = "Sam"
+        XCTAssertEqual(SummaryEvidenceIndex.cached(for: meeting).segment(for: "Post a status update on the conflict fix", owner: "Daniel"),
+                       passages[0].id, "renamed: now the other one is Daniel's")
         XCTAssertEqual(SummaryEvidenceIndex.words("The drafted notes"), ["draft", "note"])
     }
 }
