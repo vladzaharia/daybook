@@ -35,13 +35,17 @@ public enum LibrarySearch {
                 }
             }
         }
-        let results = scoped.compactMap { meeting -> (SearchHit, Int)? in
+        var results: [(SearchHit, Int)] = []
+        for meeting in scoped {
+            // A search run off the main actor stops between conversations once a newer one replaces it.
+            if Task.isCancelled { return [] }
             guard !query.isEmpty else {
                 let preview = meeting.summary?.overview ?? meeting.notes
-                return (SearchHit(meetingID: meeting.id, field: .title, snippet: String(preview.prefix(160)), match: nil,
-                                  segmentID: nil, speaker: nil, time: nil, matchCount: 0), 0)
+                results.append((SearchHit(meetingID: meeting.id, field: .title, snippet: String(preview.prefix(160)), match: nil,
+                                          segmentID: nil, speaker: nil, time: nil, matchCount: 0), 0))
+                continue
             }
-            return hit(in: meeting, query: query)
+            if let found = hit(in: meeting, query: query) { results.append(found) }
         }
         // Best field first, then the newest conversation.
         let dates = Dictionary(scoped.map { ($0.id, $0.date) }, uniquingKeysWith: { first, _ in first })
@@ -96,7 +100,8 @@ public enum LibrarySearch {
 /// Library search results, kept until the query or the library changes, so drawing the list (which
 /// asks for them more than once) doesn't search every transcript each time. A small library is
 /// searched at once; a large one off the main actor, keeping the previous results on screen until
-/// the new ones are ready (`onUpdate`).
+/// the new ones are ready (`onUpdate`). A newer query cancels the search it replaces, which stops
+/// between conversations, so typing never piles up searches of the whole library.
 @MainActor
 public final class LibrarySearchMemo {
     public struct Key: Equatable, Sendable {
@@ -119,6 +124,10 @@ public final class LibrarySearchMemo {
     private var key: Key?
     private var hits: [SearchHit] = []
     private var pending: Task<Void, Never>?
+    /// The search run off the main actor (tests replace it).
+    var search: @Sendable ([Meeting], Key) -> [SearchHit] = { meetings, key in
+        LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope)
+    }
 
     public init() {}
 
@@ -132,10 +141,10 @@ public final class LibrarySearchMemo {
             hits = LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope)
             return hits
         }
+        let search = search
         pending = Task { [weak self] in
-            let found = await Task.detached(priority: .userInitiated) {
-                LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope)
-            }.value
+            // Cancelling `pending` reaches the search itself (`detachedWork`).
+            let found = await detachedWork(priority: .userInitiated) { search(meetings, key) }
             guard let self, !Task.isCancelled, self.key == key else { return }
             self.hits = found
             self.pending = nil

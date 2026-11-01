@@ -1,6 +1,7 @@
 import DaybookCore
 import DaybookTestSupport
 import Foundation
+import Synchronization
 import XCTest
 @testable import DaybookKit
 
@@ -436,4 +437,49 @@ final class LibraryControllerTests: XCTestCase {
         let hits = LibrarySearch.hits(in: library.meetings, text: "new", tokens: [], scope: .all)
         XCTAssertEqual(hits.map(\.meetingID), [newer])
     }
+
+    // MARK: Searching a large library
+
+    func testBehaviorACancelledSearchStopsBetweenConversations() async {
+        let meetings = (0..<50).map { Meeting(title: "Standup \($0)") }
+        XCTAssertEqual(LibrarySearch.hits(in: meetings, text: "standup", tokens: [], scope: .all).count, 50)
+        let cancelled = await Task.detached { () -> [SearchHit] in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return LibrarySearch.hits(in: meetings, text: "standup", tokens: [], scope: .all)
+        }.value
+        XCTAssertEqual(cancelled, [])
+    }
+
+    func testBehaviorANewerQueryStopsTheSearchItReplaces() async throws {
+        let memo = LibrarySearchMemo()
+        memo.backgroundThreshold = 0
+        let first = SearchProbe()
+        memo.search = { meetings, key in
+            guard key.text == "s" else { return LibrarySearch.hits(in: meetings, text: key.text, tokens: key.tokens, scope: key.scope) }
+            // The first keystroke's search runs until it's cancelled (or a minute passes).
+            first.started()
+            let deadline = Date().addingTimeInterval(60)
+            while !Task.isCancelled, Date() < deadline { usleep(1_000) }
+            first.finished(cancelled: Task.isCancelled)
+            return []
+        }
+        let meetings = [Meeting(title: "Standup")]
+        _ = memo.hits(for: .init(text: "s", tokens: [], scope: .all, revision: 0), in: meetings)
+        try await waitUntil("the first keystroke's search to start") { first.hasStarted }
+        _ = memo.hits(for: .init(text: "st", tokens: [], scope: .all, revision: 0), in: meetings)
+        try await waitUntil("the first keystroke's search to end") { first.wasCancelled != nil }
+        XCTAssertEqual(first.wasCancelled, true, "Typing on cancels the search the keystroke before started")
+        await memo.settle()
+        XCTAssertEqual(memo.hits(for: .init(text: "st", tokens: [], scope: .all, revision: 0), in: meetings).map(\.snippet), ["Standup"])
+    }
+}
+
+/// What a search run off the main actor saw.
+private final class SearchProbe: Sendable {
+    private let state = Mutex<(began: Bool, cancelled: Bool?)>((false, nil))
+
+    var hasStarted: Bool { state.withLock { $0.began } }
+    var wasCancelled: Bool? { state.withLock { $0.cancelled } }
+    func started() { state.withLock { $0.began = true } }
+    func finished(cancelled: Bool) { state.withLock { $0.cancelled = cancelled } }
 }
