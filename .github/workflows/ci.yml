@@ -175,7 +175,8 @@ jobs:
   iphone:
     name: iPhone app
     runs-on: xcode-27
-    timeout-minutes: 75
+    # About 45 minutes on a quick runner now that the app compiles MLX; a slow one takes 1.6 times as long.
+    timeout-minutes: 100
     permissions:
       contents: read
     outputs:
