@@ -306,6 +306,21 @@ final class UpgradeTests: XCTestCase {
         XCTAssertEqual(here.request(by: library.thisDevice).device, library.thisDevice)
     }
 
+    func testBehaviorAniPhoneLeavesAnUpgradeItAskedOfAMacToTheMac() {
+        let phone = ProcessingRequest.Device(id: "phone", name: "Vlad's iPhone")
+        var meeting = conversation(transcription: ["parakeet/redux"])
+        let device = OnDeviceProcessing.Device(identity: phone, capabilities: capabilities(transcription: "parakeet/ultra",
+                                               speakers: "nemotron-3-diarization/offline"), owns: { _ in true })
+        let ofTheMac = ProcessingRequest(meetingID: meeting.id, mode: .fullRetranscription, requestedBy: phone,
+                                         upgrade: ProcessingRequest.Upgrade(role: "transcription", model: "parakeet/ultra", quality: 90, device: studio))
+        let ofItself = ProcessingRequest(meetingID: meeting.id, mode: .fullRetranscription, requestedBy: phone,
+                                         upgrade: ProcessingRequest.Upgrade(role: "transcription", model: "parakeet/ultra", quality: 90, device: phone))
+        meeting.upsertProcessingRequest(ofTheMac)
+        meeting.upsertProcessingRequest(ofItself)
+        XCTAssertNil(OnDeviceProcessing.work(for: ofTheMac, in: meeting, device: device), "The Mac's to carry out")
+        XCTAssertEqual(OnDeviceProcessing.work(for: ofItself, in: meeting, device: device), .transcribe(meeting.tracks.map(\.id)))
+    }
+
     func testBehaviorAFinishedUpgradeNeverOffersTheSameAgain() throws {
         var meeting = conversation(transcription: ["parakeet/redux"], speakers: "nemotron-3-diarization/offline", summary: "gemma-4/26b-a4b-qat-4bit")
         let offer = try XCTUnwrap(offer(meeting, macs: [mac()]))

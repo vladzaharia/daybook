@@ -20,6 +20,7 @@ struct SummaryPage: View {
     @Environment(\.audioProvider) private var provider
     @Environment(\.macSighting) private var sightingOverride
     @Environment(\.summaryPlacement) private var placement
+    @Environment(\.upgrades) private var upgrades
     @Environment(\.isTwoPage) private var twoPage
     @State private var consumedToken = 0
     /// The status line's symbol column (`StatusView`).
@@ -126,7 +127,10 @@ struct SummaryPage: View {
                                                                       cloudOffered: placement.cloudOffer != nil, sighting: sighting, now: now) {
             return placing
         }
-        return StatusPresentation.page(processing, meeting: meeting, sighting: sighting, pause: PhoneProcessor.current?.pause)
+        let page = StatusPresentation.page(processing, meeting: meeting, sighting: sighting, pause: PhoneProcessor.current?.pause)
+        // A clearly better model within reach, when there's nothing else to say.
+        if page == nil, let offer = upgrades?.offer(for: meeting, now: now) { return .upgrade(offer) }
+        return page
     }
 
     /// Recorded and nothing asked yet: two pages say so on the transcript's page, with Transcribe.
@@ -153,6 +157,8 @@ struct SummaryPage: View {
         case .dismiss: library.update(meeting.id) { $0.errorMessage = nil }
         case .placement(let choice): placement?.perform(choice, for: meeting.id)
         case .stopSummary: placement?.stop(meeting.id)
+        case .upgrade(let offer): Task { await upgrades?.accept(offer, for: meeting.id) }
+        case .dismissUpgrade(let offer): upgrades?.dismiss(offer, for: meeting.id)
         }
     }
 }

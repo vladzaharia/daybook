@@ -87,6 +87,7 @@ struct DaybookPhoneApp: App {
             .environment(model.posture)
             .environment(\.audioProvider, model.audio)
             .environment(\.summaryPlacement, model.placement)
+            .environment(\.upgrades, model.upgrades)
             .task { await model.launch() }
             // Files shared to Daybook (Voice Memos, call recordings saved from Notes, Files' Share).
             .onOpenURL { url in

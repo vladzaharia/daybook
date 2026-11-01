@@ -60,6 +60,8 @@ public enum OnDeviceProcessing {
         // A summary placed here, on whichever Summarize request the placement claimed for it.
         if device.summariesHere.contains(request.id) { return request.mode == .summaryOnly && can.summarizes ? .summarize : nil }
         guard request.requestedBy.id == device.identity.id else { return nil }
+        // An upgrade it asked of a Mac, whose model is the better one, is the Mac's (docs/multipoint.md, "Upgrade").
+        if let upgrade = request.upgrade, upgrade.device?.id != device.identity.id { return nil }
         let tracks = meeting.transcribableTracks
         switch request.mode {
         case .newAudio:

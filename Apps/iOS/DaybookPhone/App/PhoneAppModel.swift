@@ -51,6 +51,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     let processor: PhoneProcessor
     /// Where this iPhone's summaries run, with the countdown before them (docs/multipoint.md, "Where summaries run").
     let placement: PhoneSummaryPlacement
+    /// "Upgrade" offers on the conversation page (docs/multipoint.md, "Upgrade").
+    let upgrades: PhoneUpgrades
     /// One line for the person, when something needs saying: what happened, in plain words.
     private(set) var notice: String? {
         didSet { noticeDetails = nil; noticeFix = nil }
@@ -168,6 +170,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             continued: ContinuedProcessing(scheduler: LaunchOptions.isTestHost || options.isRunningTests ? nil : SystemContinuedProcessingScheduler()))
         let sync = self.sync, link = self.link
         placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices })
+        upgrades = PhoneUpgrades(library: library.controller, placement: placement, link: link, presence: { sync.devices })
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models))
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
@@ -542,6 +545,10 @@ final class PhoneAppModel: RecordingCommandHandling {
         }
         placement.runHere = { [weak processor] id, request in processor?.summarizeHere(id, request: request) }
         placement.localSummarizer = processingSummarizer
+        // An upgrade of this iPhone's own recordings is its processor's work; what it can do is what its models can.
+        upgrades.capabilities = { [weak self] in self?.processingCapabilities ?? .none }
+        upgrades.owns = { [weak self] in self?.library.ownsTrack ?? { _ in false } }
+        upgrades.pickUp = { [weak processor] in processor?.pickUp() }
         processor.services.willStart = { [weak self] in
             self?.speakerPass?.task.cancel()
             self?.speakerPass = nil

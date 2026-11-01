@@ -37,6 +37,9 @@ struct StatusPresentation: Equatable {
         case placement(SummaryPlacementPlanner.Action)
         /// Stops a summary running here or in the cloud.
         case stopSummary
+        /// Redoes a step with the better model (docs/multipoint.md, "Upgrade"), or puts the offer away.
+        case upgrade(UpgradeOffer)
+        case dismissUpgrade(UpgradeOffer)
     }
 
     var kind: Kind
@@ -68,6 +71,10 @@ struct StatusPresentation: Equatable {
             return StatusPresentation(kind: .line, symbol: "text.alignleft", title: "Not summarized yet",
                                       actions: [.request(.summaryOnly)])
         case .requested(let waiting):
+            if case .device(let request) = waiting, let upgrade = request.upgrade {
+                // An upgrade waits for the device with the better model: "Waiting for Studio Mac to upgrade the transcript".
+                return StatusPresentation(kind: .line, symbol: "clock", title: upgrade.waitingLine)
+            }
             let mode: ProcessingRequest.Mode
             if case .device(let request) = waiting { mode = request.mode } else { mode = .newAudio }
             return StatusPresentation(kind: .line, symbol: "clock", title: waitingTitle(mode, summarized: meeting.summary != nil),
@@ -115,11 +122,17 @@ struct StatusPresentation: Equatable {
         if let live, live.phase == .summarizing, live.cloudModel != nil {
             return StatusPresentation(kind: .line, symbol: nil, title: live.line(at: now), isWorking: true)
         }
-        if cloudOffered, case .requested(.device(let request)) = status, request.mode == .summaryOnly {
+        if cloudOffered, case .requested(.device(let request)) = status, request.mode == .summaryOnly, request.upgrade == nil {
             return StatusPresentation(kind: .line, symbol: "clock", title: "Waiting for a Mac to summarize",
                                       detail: MacSighting.line(sighting, now: now), actions: [.placement(.useCloud)])
         }
         return nil
+    }
+
+    /// A clearly better model is within reach (docs/multipoint.md, "Upgrade"): one quiet line naming what improves and
+    /// where ("Upgrade transcript on Vlad's MacBook Pro"), with Upgrade and Dismiss.
+    static func upgrade(_ offer: UpgradeOffer) -> StatusPresentation {
+        StatusPresentation(kind: .line, symbol: "arrow.up.circle", title: offer.line, actions: [.upgrade(offer), .dismissUpgrade(offer)])
     }
 
     /// The row's words for the same, when there are any: "Summarizing in 12 s", "Waiting for a Mac to summarize".
@@ -145,7 +158,7 @@ struct StatusPresentation: Equatable {
         case .requested(.paused): return RowStatus(kind: .waiting, text: "Paused")
         case .requested(let waiting):
             if case .device(let request) = waiting {
-                return RowStatus(kind: .waiting, text: waitingTitle(request.mode, summarized: meeting?.summary != nil))
+                return RowStatus(kind: .waiting, text: request.upgrade?.waitingLine ?? waitingTitle(request.mode, summarized: meeting?.summary != nil))
             }
             return RowStatus(kind: .waiting, text: "Waiting for your Mac")
         case .processing(let progress):
