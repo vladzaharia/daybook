@@ -426,6 +426,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         await placement.reloadCloud()
         // Work a previous run claimed or paused carries on, and anything filed since is picked up.
         processor.pickUp()
+        // Summaries this iPhone held when Daybook stopped (mid-countdown, say) are placed again.
+        await placement.resumeHeldSummaries()
         let libraryID = await sync.libraryID()
         await link.updateLibrary(libraryID)
         await audio.setBudget(settings.audioCacheBudget)

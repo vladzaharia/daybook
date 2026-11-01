@@ -246,7 +246,10 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on this iPhone in 15 s")
         XCTAssertEqual(planner.actions, [.useCloud, .startNow, .waitForMac])
         XCTAssertTrue(rig.summarizer.summarized.isEmpty, "nothing runs while it counts down")
-        XCTAssertNil(summaryRequest(rig, meeting.id), "nor is anything claimed")
+        XCTAssertTrue(summaryRequest(rig, meeting.id)?.isClaimed(by: rig.library.controller.thisDevice, at: Date()) == true,
+                      "a Summarize request is held for it, so it's never stranded")
+        rig.processor.pickUp()
+        XCTAssertNil(rig.processor.running, "and it isn't the processor's until it's placed here")
         // The countdown runs out while the iPhone is hot: the summary is placed here and waits for it to cool.
         rig.processor.conditions.live = LiveConditions(thermal: .serious)
         rig.clock.now.addTimeInterval(15)

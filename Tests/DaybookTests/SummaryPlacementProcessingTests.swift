@@ -433,6 +433,31 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(rig.state.processingStatus(for: try XCTUnwrap(rig.meeting(id))), .done)
     }
 
+    func testBehaviorASummaryAPhoneHeldAndNeverCameBackForIsTakenOver() async throws {
+        let rig = try await rig(cloud: nil)
+        let id = try await conversation(rig, "Stranded", frequency: 475)
+        rig.state.enqueue(id, mode: .newAudio)
+        try await rig.processed(id)
+        rig.state.update(id) { $0.summary = nil }
+        let before = rig.inference.summarized.count
+        // The phone wrote down a Summarize request and held it through its countdown, then was never seen again:
+        // its claim ran out an hour ago.
+        let phone = ProcessingRequest.Device.phone
+        let past = Date().addingTimeInterval(-3_600)
+        var held = ProcessingRequest(meetingID: id, mode: .summaryOnly, requestedBy: phone, createdAt: past)
+        held.claim = ProcessingRequest.Claim(device: phone, claimedAt: past, heartbeat: past, expiresAt: past.addingTimeInterval(ProcessingRequest.defaultLease),
+                                             stage: .summarizing)
+        rig.state.update(id) { $0.upsertProcessingRequest(held) }
+        XCTAssertFalse(rig.state.isHeldElsewhere(id))
+        rig.state.pickUpRequests()
+        try await rig.processed(id)
+        XCTAssertEqual(rig.inference.summarized.count, before + 1, "This Mac took it over and summarized it")
+        let request = try XCTUnwrap(rig.meeting(id)?.processingRequests?.first { $0.id == held.id })
+        XCTAssertEqual(request.outcome?.result, .completed)
+        XCTAssertEqual(request.outcome?.device, rig.state.library.thisDevice)
+        XCTAssertNotNil(rig.meeting(id)?.summary)
+    }
+
     // MARK: A phone
 
     func testBehaviorAPhoneSeesTheCountdownAndChoosesTheCloud() async throws {

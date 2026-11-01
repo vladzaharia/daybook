@@ -418,10 +418,11 @@ extension AppState {
     /// iPhone's countdown or summary for it stands down. Each is checked once (`MultiSourceCoordinator.markChecked`).
     ///
     /// Returns true when this job has nothing more to do: it moved, or it stays and nothing asked this Mac for more.
-    /// Runs before the job touches the conversation, so a summary the iPhone made stays as it is.
+    /// Runs before the job touches the conversation, so a summary the iPhone made stays as it is. The iPhone may be
+    /// holding the summary meanwhile (counting down to it, or making it): moving the recording ends that there.
     func phoneTranscriptArrived(_ id: UUID, job: ProcessingJob) async -> Bool {
         guard let meeting = meetings.first(where: { $0.id == id }), let track = phoneTranscriptToCheck(meeting),
-              job.requestID != nil || meeting.openProcessingRequests.isEmpty,
+              job.requestID != nil || !hasRequestThisMacCouldTake(meeting),
               await audioURL(for: track, meetingID: id) != nil else { return false }
         sources.markChecked(phoneRecording: track.id)
         // A conversation a Mac recorded with this phone (its link is here) waits for that Mac's recording.
@@ -433,6 +434,12 @@ extension AppState {
             return false
         }
         return true
+    }
+
+    /// An open request this Mac could carry out: unclaimed, its own, or one whose claim ran out.
+    private func hasRequestThisMacCouldTake(_ meeting: Meeting) -> Bool {
+        let me = library.thisDevice, now = Date()
+        return meeting.openProcessingRequests.contains { $0.isClaimable(by: me, at: now) && !$0.isSatisfied(by: meeting) }
     }
 
     /// The recording to check in a conversation of the iPhone's own: its one recording, transcribed on the iPhone
@@ -448,12 +455,13 @@ extension AppState {
         return transcribedOnThePhone ? track : nil
     }
 
-    /// Conversations to check after a sync pass: an iPhone recording it transcribed itself, with nothing open (an
-    /// open request brings its own job; one the iPhone holds is checked once it's done), when this Mac takes other
-    /// devices' work or the recording was made with one of this Mac's conversations (its link).
+    /// Conversations to check after a sync pass: an iPhone recording it transcribed itself, with no request this Mac
+    /// could take (one it could take brings its own job; one the iPhone holds, counting down or summarizing, doesn't
+    /// stop the check), when this Mac takes other devices' work or the recording was made with one of this Mac's
+    /// conversations (its link).
     func phoneTranscriptsToCheck() -> [UUID] {
         meetings.compactMap { meeting in
-            guard meeting.openProcessingRequests.isEmpty, !movedPhoneRecordings.contains(meeting.id), processingID != meeting.id,
+            guard !hasRequestThisMacCouldTake(meeting), !movedPhoneRecordings.contains(meeting.id), processingID != meeting.id,
                   !queuedIDs.contains(meeting.id), let track = phoneTranscriptToCheck(meeting) else { return nil }
             if processSyncedAudio { return meeting.id }
             guard let identity = track.device else { return nil }
