@@ -68,7 +68,7 @@ struct DevicePage: View {
         if let session = model.devices.sessions.first(where: { $0.id == sessionID }) {
             DevicePageContent(session: session)
         } else {
-            ContentUnavailableView("Recorder Removed", systemImage: "waveform.badge.microphone", description: Text("Recordings it brought in stay in your library."))
+            ContentUnavailableView("Recorder Removed", systemImage: "recordingtape", description: Text("Recordings it brought in stay in your library."))
         }
     }
 }
@@ -552,7 +552,7 @@ struct AddDeviceSheet: View {
                     .navigationBarTitleDisplayMode(.inline)
             } else {
                 // Until a kind is chosen the left page says what to do; this one shows only the mark.
-                Image(systemName: "waveform.badge.microphone")
+                Image(systemName: "recordingtape")
                     .font(.system(size: 40, weight: .light))
                     .foregroundStyle(PhoneStyle.Ink.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -716,7 +716,7 @@ private struct SetupScreen: View {
                         ForEach(soundcore.discovered) { recorder in
                             Button { soundcore.connect(to: recorder) } label: {
                                 HStack {
-                                    SettingsRow(title: recorder.name, detail: recorder.signal.word, systemImage: "waveform.badge.microphone")
+                                    SettingsRow(title: recorder.name, detail: recorder.signal.word, systemImage: "recordingtape")
                                     Spacer(minLength: 0)
                                     if soundcore.connectingTo == recorder.id { ProgressView() }
                                 }

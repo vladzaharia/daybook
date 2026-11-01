@@ -308,10 +308,10 @@ enum StatusSheetModel {
 
     static func recorderLine(_ recorder: StatusInputs.Recorder?, now: Date = Date()) -> StatusLine {
         guard let recorder else {
-            return StatusLine(kind: .recorder, symbol: "waveform.badge.microphone", title: "Recorder",
+            return StatusLine(kind: .recorder, symbol: "recordingtape", title: "Recorder",
                               text: "None added", tone: .calm)
         }
-        let symbol = "waveform.badge.microphone"
+        let symbol = "recordingtape"
         func line(_ text: String, _ tone: StatusLine.Tone, progress: Double? = nil, short: String? = nil) -> StatusLine {
             StatusLine(kind: .recorder, symbol: symbol, title: recorder.name, text: text, tone: tone, progress: progress, shortText: short)
         }

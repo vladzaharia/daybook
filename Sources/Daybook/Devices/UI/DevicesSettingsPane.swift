@@ -19,7 +19,7 @@ struct DevicesSettingsPane: View {
             if hub.sessions.isEmpty {
                 Section {
                     HStack(spacing: Space.s3) {
-                        Image(systemName: "waveform.badge.microphone")
+                        Image(systemName: "recordingtape")
                             .font(.system(size: 22))
                             .foregroundStyle(.secondary)
                             .frame(width: 32)

@@ -14,7 +14,7 @@ final class FloatingNotesStatusTests: XCTestCase {
 
     private func soundcore(_ state: ConnectionState = .connected, battery: Int? = 80) -> FloatingStatusInputs.Recorder {
         var recorder = FloatingStatusInputs.Recorder(id: "sc", name: "Soundcore Work", shortName: "Soundcore",
-                                                     symbol: "waveform.badge.microphone", state: state)
+                                                     symbol: "recordingtape", state: state)
         recorder.isLinked = state == .connected
         recorder.battery = battery
         return recorder

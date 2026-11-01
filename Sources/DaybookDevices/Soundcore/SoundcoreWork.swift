@@ -13,7 +13,7 @@ public struct SoundcoreWorkIntegration: DeviceIntegration {
         name: "Soundcore Work",
         shortName: "Soundcore",
         vendor: "Anker",
-        systemImage: "waveform.badge.microphone",
+        systemImage: "recordingtape",
         summary: "Over Bluetooth, or from the Soundcore app.",
         methods: [
             ConnectionMethod(kind: .direct, transport: .bluetoothLE, title: "Directly over Bluetooth",

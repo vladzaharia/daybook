@@ -25,7 +25,7 @@ struct SettingsView: View {
             Tab("Cloud", systemImage: "cloud", value: SettingsPane.cloud) {
                 CloudSettings(state: state).settingsPane()
             }
-            Tab("Devices", systemImage: "waveform.badge.microphone", value: SettingsPane.devices) {
+            Tab("Devices", systemImage: "recordingtape", value: SettingsPane.devices) {
                 DevicesSettingsPane(state: state).settingsPane()
             }
             Tab("Library", systemImage: "books.vertical", value: SettingsPane.library) {
