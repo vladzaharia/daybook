@@ -6,7 +6,8 @@ import XCTest
 
 /// What an iPhone processes itself, under the same claims a Mac uses (docs/iphone.md, "Processing on
 /// this iPhone"): its own recordings, never a Mac's; never what another device holds; fusion only
-/// when every recording is on the timeline; a summary only where it can make one.
+/// when every recording is on the timeline; the summary placed once it's fused, and run here only when
+/// the placement put it here.
 final class OnDeviceProcessingTests: XCTestCase {
     private let phone = ProcessingRequest.Device(id: "phone", name: "Alex’s iPhone")
     private let mac = ProcessingRequest.Device(id: "mac", name: "Studio Mac")
@@ -75,19 +76,27 @@ final class OnDeviceProcessingTests: XCTestCase {
                                                                                                              summarizes: false), owning: [mine.id]), at: now))
     }
 
-    func testBehaviorOnceTranscribedItSummarizesHereOnlyWhenItCan() {
+    func testBehaviorOnceTranscribedItsSummaryIsPlacedAndRunsHereOnlyWhenPlacedHere() throws {
         let mine = track("phone")
         var (meeting, request) = recorded([mine])
         meeting.transcripts = [transcript(mine, at: now)]
         XCTAssertTrue(OnDeviceProcessing.fusesHere(meeting), "its one recording starts the timeline")
-        XCTAssertEqual(OnDeviceProcessing.work(for: request, in: meeting, device: device(all, owning: [mine.id]), at: now), .summarize)
-        XCTAssertNil(OnDeviceProcessing.work(for: request, in: meeting, device: device(noSummaries, owning: [mine.id]), at: now),
-                     "the summary is a Mac's")
-        // Summarize Again from this iPhone runs here when it can summarize, whoever recorded the conversation.
+        XCTAssertEqual(OnDeviceProcessing.work(for: request, in: meeting, device: device(all, owning: [mine.id]), at: now), .placeSummary)
+        XCTAssertEqual(OnDeviceProcessing.work(for: request, in: meeting, device: device(noSummaries, owning: [mine.id]), at: now), .placeSummary,
+                       "the placement sends it to a Mac or the cloud")
+        // Summarize Again from this iPhone waits for a Mac, unless the placement put it here.
         var (macs, again) = recorded([track("mac")], request: .summaryOnly)
         macs.transcripts = [transcript(macs.tracks[0], at: now)]
-        XCTAssertEqual(OnDeviceProcessing.work(for: again, in: macs, device: device(all, owning: []), at: now), .summarize)
-        XCTAssertNil(OnDeviceProcessing.work(for: again, in: macs, device: device(noSummaries, owning: []), at: now))
+        XCTAssertNil(OnDeviceProcessing.work(for: again, in: macs, device: device(all, owning: []), at: now))
+        var placed = device(all, owning: [])
+        placed.summariesHere = [again.id]
+        XCTAssertEqual(OnDeviceProcessing.work(for: again, in: macs, device: placed, at: now), .summarize)
+        placed.capabilities = noSummaries
+        XCTAssertNil(OnDeviceProcessing.work(for: again, in: macs, device: placed, at: now), "the summary model went meanwhile")
+        // One the placement claimed among a Mac's requests runs here too.
+        var (other, asked) = recorded([track("mac")], request: .summaryOnly, by: mac)
+        other.transcripts = [transcript(other.tracks[0], at: now)]
+        XCTAssertEqual(OnDeviceProcessing.work(for: asked, in: other, device: device(all, owning: []).placing(asked.id), at: now), .summarize)
     }
 
     func testBehaviorARecordingStillToLineUpLeavesFusionToAMac() {
@@ -106,7 +115,7 @@ final class OnDeviceProcessingTests: XCTestCase {
         // Placed, it fuses here: the last recording arrived on this iPhone.
         meeting.tracks[1].alignment = SourceAlignment(method: .audio, offset: 12, confidence: 0.9)
         XCTAssertTrue(OnDeviceProcessing.fusesHere(meeting))
-        XCTAssertEqual(OnDeviceProcessing.work(for: request, in: meeting, device: device(all, owning: [mine.id]), at: now), .summarize)
+        XCTAssertEqual(OnDeviceProcessing.work(for: request, in: meeting, device: device(all, owning: [mine.id]), at: now), .placeSummary)
     }
 
     func testBehaviorTranscribingAgainAndFindingSpeakersAgainNeedEveryRecordingToBeItsOwn() {
@@ -119,10 +128,10 @@ final class OnDeviceProcessingTests: XCTestCase {
         XCTAssertEqual(OnDeviceProcessing.work(for: refresh, in: speakers, device: device(all, owning: [mine.id]), at: now), .identifySpeakers([mine.id]))
         // Each recording once: done since the request, what's left is the summary, here or a Mac's.
         meeting.transcripts.append(transcript(mine, at: now.addingTimeInterval(30)))
-        XCTAssertEqual(OnDeviceProcessing.work(for: again, in: meeting, device: device(all, owning: [mine.id]), at: now), .summarize)
-        XCTAssertNil(OnDeviceProcessing.work(for: again, in: meeting, device: device(noSummaries, owning: [mine.id]), at: now))
+        XCTAssertEqual(OnDeviceProcessing.work(for: again, in: meeting, device: device(all, owning: [mine.id]), at: now), .placeSummary)
+        XCTAssertEqual(OnDeviceProcessing.work(for: again, in: meeting, device: device(noSummaries, owning: [mine.id]), at: now), .placeSummary)
         speakers.transcripts.append(transcript(mine, at: now.addingTimeInterval(30)))
-        XCTAssertEqual(OnDeviceProcessing.work(for: refresh, in: speakers, device: device(all, owning: [mine.id]), at: now), .summarize)
+        XCTAssertEqual(OnDeviceProcessing.work(for: refresh, in: speakers, device: device(all, owning: [mine.id]), at: now), .placeSummary)
         var (mixed, retranscribe) = recorded([mine, macs], request: .fullRetranscription)
         mixed.transcripts = [transcript(mine, at: now), transcript(macs, at: now)]
         XCTAssertNil(OnDeviceProcessing.work(for: retranscribe, in: mixed, device: device(all, owning: [mine.id]), at: now))
@@ -146,5 +155,14 @@ final class OnDeviceProcessingTests: XCTestCase {
         XCTAssertEqual(ProcessingStatus(meeting, queue: .init(running: meeting.id, fraction: 0.1, stage: .summarizing), now: now),
                        .processing(.init(stage: .summarizing, fraction: 0.1)), "the queue's stage, without marking the conversation")
         XCTAssertEqual(ProcessingStatus(meeting, queue: .init(paused: [meeting.id]), now: now), .requested(.paused))
+    }
+}
+
+private extension OnDeviceProcessing.Device {
+    /// The same device, with a summary placed on it.
+    func placing(_ request: UUID) -> Self {
+        var device = self
+        device.summariesHere.insert(request)
+        return device
     }
 }

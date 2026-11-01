@@ -6,9 +6,10 @@ import XCTest
 
 /// Where the iPhone's summaries run (docs/multipoint.md, "Where summaries run"; docs/iphone.md): the same
 /// planner as the Mac's, sending a summary to a reachable Mac after a countdown, waiting for one with Use the
-/// Cloud, running it in the cloud or on a local summarizer with a claim, a Mac's countdown shown here with the
-/// choice sent to it, and the default happening when the app leaves the screen. A temporary library, a fake
-/// cloud and summarizer, presence records, and a loopback Mac; no network, no models.
+/// Cloud, running it in the cloud or, through the processor, on a local summarizer with a claim, a Mac's
+/// countdown shown here with the choice sent to it, and the default happening when the app leaves the screen.
+/// Settings › Cloud is the app's `CloudSetup` with an in-memory key. A temporary library, a fake cloud and
+/// summarizer, presence records, and a loopback Mac; no network, no models.
 @MainActor
 final class PhoneSummaryPlacementTests: XCTestCase {
     private let studioID = UUID()
@@ -52,12 +53,17 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         }
     }
 
-    private struct Rig {
+    @MainActor private struct Rig {
         let library: LibraryController
         let link: PhoneLink
         let placement: PhoneSummaryPlacement
         let presence: PresenceBox
         let clock: ClockBox
+        /// Runs the summaries placed on this iPhone, as the app's does.
+        let processor: PhoneProcessor?
+
+        /// Settings › Cloud.
+        var cloud: CloudSetup { placement.cloud! }
     }
 
     final class PresenceBox { var devices: [KnownSyncDevice] = [] }
@@ -69,16 +75,28 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let link = link ?? PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
                                      keyStore: MemoryLinkKeyStore(), configuration: .loopback())
         let presence = PresenceBox(), clock = ClockBox()
-        let placement = PhoneSummaryPlacement(library: library, link: link, presence: { presence.devices },
-                                              defaults: makeTestDefaults("PhoneSummaryPlacementTests"), clock: { clock.now }, runsTimer: false)
+        let placement = PhoneSummaryPlacement(library: library, link: link, presence: { presence.devices }, clock: { clock.now }, runsTimer: false)
         if macSeen { presence.devices = [studio(at: clock.now)] }
-        placement.localSummarizer = local
+        // Settings › Cloud: an Anthropic key with the catalog's models when there's a cloud, none otherwise.
+        placement.cloud = CloudSetup.demo(providers: cloud == nil ? [] : [.anthropic], defaults: makeTestDefaults("PhoneSummaryPlacementTests"))
         if let cloud {
             placement.cloudSummarizer = cloud
-            try await waitUntil("the cloud's models") { placement.cloudOffer != nil }
+            XCTAssertEqual(placement.cloudOffer?.name, "Claude Sonnet 5.5", "Balanced's recommendation")
         }
+        // A local summarizer runs through the processor, as in the app.
+        var processor: PhoneProcessor?
+        if let local {
+            let made = PhoneProcessor(library: library, services: PhoneProcessor.Services(
+                engine: { nil }, summarizer: { local },
+                capabilities: { ProcessingCapabilities(transcribes: false, findsSpeakers: false, summarizes: local.canSummarize) },
+                owns: { { _ in false } }, audio: { _, _ in throw CancellationError() }, release: {}),
+                continued: ContinuedProcessing(scheduler: nil))
+            placement.runHere = { [weak made] id, request in made?.summarizeHere(id, request: request) }
+            processor = made
+        }
+        placement.localSummarizer = local
         placement.refresh()
-        return Rig(library: library, link: link, placement: placement, presence: presence, clock: clock)
+        return Rig(library: library, link: link, placement: placement, presence: presence, clock: clock, processor: processor)
     }
 
     /// A Mac that summarizes, seen through sync at `date`.
@@ -92,8 +110,9 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     private func transcribed(_ library: LibraryController, _ title: String = "Walk and talk") -> UUID {
         let track = RecordingTrack(source: .microphone, relativePath: "Originals/a.m4a", fileName: "a.m4a", sha256: UUID().uuidString)
         var meeting = Meeting(title: title, tracks: [track], status: .imported)
-        meeting.transcripts = [TrackTranscript(trackID: track.id, segments: [TranscriptSegment(trackID: track.id, start: 0, end: 2, text: "Ship it Friday.")],
-                                               modelID: "parakeet/v3")]
+        let words = TranscriptSegment(trackID: track.id, start: 0, end: 2, text: "Ship it Friday.")
+        meeting.transcripts = [TrackTranscript(trackID: track.id, segments: [words], modelID: "parakeet/v3")]
+        meeting.unifiedTranscript = [words]
         library.add(meeting)
         return meeting.id
     }
@@ -107,7 +126,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     func testBehaviorADueSummaryCountsDownToAReachableMacThenSendsIt() async throws {
         let rig = try await rig(cloud: Cloud(models: [sonnet]))
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         let planner = try XCTUnwrap(rig.placement.planners[id])
         XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on Studio Mac in 15 s")
         XCTAssertEqual(planner.actions, [.useCloud, .startNow])
@@ -124,20 +143,20 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     func testBehaviorWithoutAKeyItGoesToTheMacAtOnce() async throws {
         let rig = try await rig()
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         XCTAssertNil(rig.placement.planners[id], "Nothing to choose: no countdown")
         XCTAssertEqual(summaryRequests(rig.library, id).count, 1)
         // With no Mac reachable either, it waits for one through the library, as before.
         rig.presence.devices = []
         let other = transcribed(rig.library, "Second")
-        rig.placement.summaryIsDue(other)
+        await rig.placement.summaryIsDue(other)
         XCTAssertEqual(summaryRequests(rig.library, other).count, 1)
     }
 
     func testBehaviorWithNoMacItWaitsWithTheCloudOfferedThenCountsDownWhenOneArrives() async throws {
         let rig = try await rig(cloud: Cloud(models: [sonnet]), macSeen: false)
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         XCTAssertEqual(rig.placement.planners[id]?.phase, .waitingForMac)
         let page = try XCTUnwrap(StatusPresentation.placement(rig.placement.planners[id], run: nil, live: nil, status: .transcribed,
                                                               cloudOffered: true, sighting: nil, now: rig.clock.now))
@@ -156,7 +175,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     func testBehaviorAMacGoingAwayMidCountdownLeavesItWaiting() async throws {
         let rig = try await rig(cloud: Cloud(models: [sonnet]))
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         rig.clock.now.addTimeInterval(20 * 60)
         rig.placement.refresh()
         XCTAssertEqual(rig.placement.planners[id]?.phase, .waitingForMac, "Its presence is too old to count on")
@@ -168,11 +187,11 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let cloud = Cloud(models: [sonnet])
         let rig = try await rig(cloud: cloud, macSeen: false)
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         cloud.hold()
         rig.placement.perform(.useCloud, for: id)
         try await waitUntil("the cloud to be asked") { cloud.isWaiting }
-        XCTAssertEqual(rig.placement.runs[id], .cloud(sonnet))
+        XCTAssertEqual(rig.placement.runs[id], rig.placement.cloudOffer.map(SummaryPlace.cloud))
         // Held by this iPhone: no Mac takes it meanwhile, and Macs read it as summarizing here.
         let claimed = try XCTUnwrap(summaryRequests(rig.library, id).first)
         XCTAssertEqual(claimed.claim?.device, rig.library.thisDevice)
@@ -215,11 +234,9 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     func testBehaviorAlwaysSendsItToTheCloudWithoutACountdown() async throws {
         let cloud = Cloud(models: [sonnet])
         let rig = try await rig(cloud: cloud)
-        var preferences = rig.placement.preferences
-        preferences.policy = .always
-        rig.placement.preferences = preferences
+        rig.cloud.preferences.policy = .always
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
         XCTAssertEqual(cloud.asked, [id])
     }
@@ -229,20 +246,22 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     func testBehaviorWithItsOwnSummarizerItCountsDownHereAndOffersWaitForAMac() async throws {
         let rig = try await rig(cloud: Cloud(models: [sonnet]), local: Local())
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         let planner = try XCTUnwrap(rig.placement.planners[id])
         XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on this iPhone in 15 s")
         XCTAssertEqual(planner.actions, [.useCloud, .startNow, .waitForMac])
         rig.placement.perform(.startNow, for: id)
         try await waitUntil("the summary") { rig.library.meeting(id)?.summary != nil }
+        XCTAssertNil(rig.placement.runs[id], "the processor's work: its status says it")
         let summary = try XCTUnwrap(rig.library.meeting(id)?.summary)
         XCTAssertEqual(summary.overview, "From this iPhone")
+        XCTAssertEqual(summaryRequests(rig.library, id).first?.outcome?.result, .completed, "on the request claimed for it")
         XCTAssertEqual(summary.origin.colophon(thisDeviceID: rig.library.thisDevice.id, thisDevice: "this iPhone", unknown: "your Mac"),
                        "Summarized on this iPhone")
 
         // Wait for a Mac passes over this iPhone: the reachable Mac gets it.
         let other = transcribed(rig.library, "Second")
-        rig.placement.summaryIsDue(other)
+        await rig.placement.summaryIsDue(other)
         rig.placement.perform(.waitForMac, for: other)
         XCTAssertEqual(summaryRequests(rig.library, other).count, 1)
         XCTAssertNil(rig.library.meeting(other)?.summary)
@@ -256,7 +275,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let mac = ProcessingRequest.Device(id: studioID.uuidString, name: "Studio Mac")
         let request = ProcessingRequest(meetingID: id, mode: .newAudio, requestedBy: rig.library.thisDevice)
         rig.library.update(id) { $0.upsertProcessingRequest(request.claimed(by: mac, at: rig.clock.now)!) }
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         XCTAssertNil(rig.placement.planners[id], "The Mac's work ends with a summary: no countdown here")
         XCTAssertNil(rig.library.claimSummary(id))
     }
@@ -264,7 +283,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     func testBehaviorAMacClaimingItDuringTheCountdownEndsItHere() async throws {
         let rig = try await rig(cloud: Cloud(models: [sonnet]))
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         XCTAssertNotNil(rig.placement.planners[id])
         // Through sync: a Mac took a request for it (its own countdown ran out first).
         let mac = ProcessingRequest.Device(id: studioID.uuidString, name: "Studio Mac")
@@ -279,7 +298,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         let cloud = Cloud(models: [sonnet])
         let rig = try await rig(cloud: cloud, macSeen: false)
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         cloud.hold()
         rig.placement.perform(.useCloud, for: id)
         try await waitUntil("the cloud to be asked") { cloud.isWaiting }
@@ -300,7 +319,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
     func testBehaviorLeavingTheScreenStartsEachCountdownsDefault() async throws {
         let rig = try await rig(cloud: Cloud(models: [sonnet]))
         let counting = transcribed(rig.library, "Counting")
-        rig.placement.summaryIsDue(counting)
+        await rig.placement.summaryIsDue(counting)
         XCTAssertNotNil(rig.placement.planners[counting]?.deadline)
         rig.placement.leftForeground()
         XCTAssertNil(rig.placement.planners[counting])
@@ -309,7 +328,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         rig.presence.devices = []
         rig.placement.refresh()
         let waiting = transcribed(rig.library, "Waiting")
-        rig.placement.summaryIsDue(waiting)
+        await rig.placement.summaryIsDue(waiting)
         XCTAssertEqual(rig.placement.planners[waiting]?.phase, .waitingForMac)
         rig.placement.leftForeground()
         XCTAssertTrue(rig.placement.planners.isEmpty)
@@ -346,7 +365,7 @@ final class PhoneSummaryPlacementTests: XCTestCase {
         XCTAssertEqual(rig.placement.reachableMacs.map(\.name), ["Studio Mac"], "Connected now")
 
         let id = transcribed(rig.library)
-        rig.placement.summaryIsDue(id)
+        await rig.placement.summaryIsDue(id)
         XCTAssertNotNil(rig.placement.planners[id])
         try await service.send(.processingProgress(LinkProcessingProgress(meetingID: id, phase: .summaryCountdown, macName: "Studio Mac",
                                                                           countdown: LinkSummaryCountdown(secondsLeft: 12, cloudOffered: true))))

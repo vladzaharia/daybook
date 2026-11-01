@@ -5,11 +5,14 @@ import Foundation
 import Observation
 
 /// Processing this iPhone's own recordings with its own models (docs/iphone.md, "Processing on this
-/// iPhone"): transcription, speakers, voice profiles, the background-audio check, fusion, speaker
-/// labels from the synced profiles, and a summary when this iPhone can make one. The engine is the
-/// Mac's (`InferenceProcessingEngine` through the `ProcessingEngine` seam), and the work runs under the
-/// same `ProcessingRequest` claims (`OnDeviceProcessing`), so a Mac and this iPhone never both
-/// transcribe a recording.
+/// iPhone"): transcription, speakers, voice profiles, the background-audio check, fusion, and speaker
+/// labels from the synced profiles. The engine is the Mac's (`InferenceProcessingEngine` through the
+/// `ProcessingEngine` seam), and the work runs under the same `ProcessingRequest` claims
+/// (`OnDeviceProcessing`), so a Mac and this iPhone never both transcribe a recording.
+///
+/// - **The summary is placed.** Once a conversation is fused here its summary is due, and the summary
+///   placement decides where it runs (`Services.summaryDue`; docs/multipoint.md, "Where summaries run").
+///   One placed on this iPhone comes back as its own work (`summarizeHere`), with these same rules.
 ///
 /// - **One at a time, never in a recording's way.** One conversation runs at once. A recording starting
 ///   pauses it, and nothing starts while one is under way.
@@ -70,6 +73,10 @@ final class PhoneProcessor {
         var release: @MainActor () async -> Void
         /// After work changed the library, and when a job ends.
         var changed: @MainActor () -> Void = {}
+        /// A conversation is transcribed and fused here: where its summary runs is the placement's. `askedFor`
+        /// when the person asked for the work (Transcribe Everything Again, Identify Speakers Again), so it starts
+        /// at once; otherwise it's due, and may count down. The template the request asked for comes with it.
+        var summaryDue: @MainActor (_ meetingID: UUID, _ templateID: String?, _ askedFor: Bool) -> Void = { _, _, _ in }
         /// Just before a job starts: other heavy work (the live speaker pass) gives way.
         var willStart: @MainActor () -> Void = {}
     }
@@ -85,6 +92,8 @@ final class PhoneProcessor {
     private(set) var pause: Pause?
     /// Conversations a pause stopped partway; they go first when work resumes.
     private(set) var paused: Set<UUID> = []
+    /// Summarize requests the placement put on this iPhone (`summarizeHere`), until they finish here.
+    @ObservationIgnored private(set) var summariesHere: Set<UUID> = []
 
     let library: LibraryController
     let continued: ContinuedProcessing
@@ -105,7 +114,9 @@ final class PhoneProcessor {
     enum Outcome: Equatable, Sendable {
         /// Done here, summary and all.
         case completed
-        /// Transcribed here; the rest (lining recordings up, or the summary) is a Mac's.
+        /// Transcribed and fused here: the summary goes to the placement.
+        case summaryDue
+        /// Transcribed here; the rest (lining recordings up, fusing, and the summary) is a Mac's.
         case handedBack
         case failed(String)
         case paused(Pause)
@@ -126,7 +137,16 @@ final class PhoneProcessor {
 
     /// This iPhone as the claims know it, with what it can do now.
     var device: OnDeviceProcessing.Device {
-        OnDeviceProcessing.Device(identity: library.thisDevice, capabilities: services.capabilities(), owns: services.owns())
+        OnDeviceProcessing.Device(identity: library.thisDevice, capabilities: services.capabilities(), owns: services.owns(),
+                                  summariesHere: summariesHere)
+    }
+
+    /// The placement put a conversation's summary on this iPhone, on `request` (which it claimed): it runs
+    /// as this iPhone's own work, one conversation at a time, while Daybook is on the screen, and backing off
+    /// as the rest does.
+    func summarizeHere(_ meetingID: UUID, request: ProcessingRequest) {
+        summariesHere.insert(request.id)
+        pickUp()
     }
 
     /// The app's processor, for status lines anywhere in the interface (`ProcessingStatus.phone`).
@@ -139,7 +159,10 @@ final class PhoneProcessor {
     /// what this iPhone can't do waits for a Mac.
     func queue(for meeting: Meeting, at now: Date = Date()) -> ProcessingStatus.LocalQueue? {
         let id = meeting.id
-        let claimedHere = meeting.openProcessingRequests.contains { $0.isClaimed(by: library.thisDevice, at: now) }
+        // A Summarize request claimed for the cloud isn't this queue's: the placement says where that runs.
+        let claimedHere = meeting.openProcessingRequests.contains {
+            $0.isClaimed(by: library.thisDevice, at: now) && ($0.mode != .summaryOnly || summariesHere.contains($0.id))
+        }
         guard running?.meetingID == id || paused.contains(id) || claimedHere else { return nil }
         let waiting = running?.meetingID != id && !paused.contains(id)
         return ProcessingStatus.LocalQueue(running: running?.meetingID, fraction: running?.fraction ?? 0,
@@ -221,10 +244,13 @@ final class PhoneProcessor {
             guard let meeting = library.meeting(id), let request = meeting.processingRequests?.first(where: { $0.id == requestID }) else {
                 return .lost
             }
-            // The rest: a summary here, or the request goes back for a Mac (recordings to line up,
-            // or no summary model here).
-            guard services.capabilities().summarizes, request.mode == .summaryOnly || OnDeviceProcessing.fusesHere(meeting),
-                  let summarizer = services.summarizer() else { return .handedBack }
+            guard work == .summarize else {
+                // Fused here: the placement decides where the summary runs. Otherwise the request goes back
+                // for a Mac, which lines the recordings up, fuses, and summarizes.
+                return OnDeviceProcessing.fusesHere(meeting) ? .summaryDue : .handedBack
+            }
+            // The summary placed here.
+            guard services.capabilities().summarizes, let summarizer = services.summarizer() else { return .handedBack }
             if let reason = blocking(summarizing: true) { return .paused(reason) }
             try await summarize(id, request: request, with: summarizer)
             return .completed
@@ -247,7 +273,8 @@ final class PhoneProcessor {
         switch work {
         case .transcribe(let ids): tracks = ids; mode = request.mode == .fullRetranscription ? .fullRetranscription : .newAudio
         case .identifySpeakers(let ids): tracks = ids; mode = .speakerRefresh
-        case .summarize: tracks = []; mode = request.mode
+        case .placeSummary: tracks = []; mode = request.mode
+        case .summarize: tracks = []; mode = .summaryOnly
         }
         if !tracks.isEmpty {
             guard let engine = services.engine() else { throw PhoneProcessingError.modelsMissing }
@@ -292,15 +319,14 @@ final class PhoneProcessor {
         guard let meeting = library.meeting(id) else { return }
         let template = request.templateID.map { SummaryTemplate.resolved(id: $0, kind: meeting.kind, templates: library.templates) }
             ?? library.resolvedTemplate(for: meeting)
+        let started = Date()
         let output = try await summarizer.summarize(meeting, template: template, vocabulary: vocabulary(for: id)) { [weak self] fraction in
             Task { @MainActor in self?.progressed(fraction, message: nil) }
         }
         try Task.checkCancellation()
-        library.update(id) { current in
-            current.setSummary(output.summary)
-            current.status = .ready
-            current.errorMessage = output.warnings.isEmpty ? nil : output.warnings.joined(separator: "\n")
-        }
+        // With where it ran ("Summarized on this iPhone"), unless another device's summary arrived meanwhile.
+        guard library.applyPlacedSummary(output.summary, to: id, place: .thisDevice, started: started) else { return }
+        library.update(id) { $0.errorMessage = output.warnings.isEmpty ? nil : output.warnings.joined(separator: "\n") }
         try? await library.proposeTerms(output.suggestedTerms, for: id)
     }
 
@@ -328,6 +354,9 @@ final class PhoneProcessor {
     private func finish(_ id: UUID, requestID: UUID, outcome: Outcome) async {
         stopHeartbeat()
         let now = Date()
+        // Where the summary goes next, once the models are let go.
+        var summaryDue: (templateID: String?, askedFor: Bool)?
+        if case .paused = outcome {} else { summariesHere.remove(requestID) }
         switch outcome {
         case .completed:
             library.completeProcessingRequest(requestID, in: id, at: now)
@@ -338,6 +367,11 @@ final class PhoneProcessor {
                     library.completeProcessingRequest(request.id, in: id, at: now)
                 }
             }
+        case .summaryDue:
+            // This iPhone's part is done; the summary is the placement's (a countdown, then here, a Mac, or the cloud).
+            let request = library.meeting(id)?.processingRequests?.first { $0.id == requestID }
+            library.completeProcessingRequest(requestID, in: id, at: now)
+            summaryDue = (request?.templateID, request.map { $0.mode != .newAudio } ?? false)
         case .handedBack:
             let request = library.meeting(id)?.processingRequests?.first { $0.id == requestID }
             if let request, request.mode == .fullRetranscription || request.mode == .speakerRefresh {
@@ -355,13 +389,15 @@ final class PhoneProcessor {
         case .lost:
             paused.remove(id)
         }
-        continued.end(success: outcome == .completed || outcome == .handedBack)
+        continued.end(success: outcome == .completed || outcome == .handedBack || outcome == .summaryDue)
         lastOutcome = (id, outcome)
         running = nil
         job = nil
         stopping = nil
+        // The transcription models go before a summary model loads.
         await services.release()
         services.changed()
+        if let summaryDue { services.summaryDue(id, summaryDue.templateID, summaryDue.askedFor) }
         if case .paused(let reason) = outcome { pause = reason } else { pickUp() }
     }
 
@@ -431,8 +467,10 @@ final class PhoneProcessor {
         }
     }
 
-    /// After a sync pass: work another device now holds, or that finished elsewhere, stops here.
+    /// After a sync pass: work another device now holds, or that finished elsewhere, stops here, and so does
+    /// work on a conversation that went (a Mac moved its recording into its own conversation of the meeting).
     func reconcileClaims(at now: Date = Date()) {
+        for id in paused where library.meeting(id) == nil { paused.remove(id) }
         guard let current = running, stopping == nil else { pickUp(); return }
         let request = library.meeting(current.meetingID)?.processingRequests?.first { $0.id == current.requestID }
         if request?.isClaimable(by: library.thisDevice, at: now) != true { stop(.lost) }
@@ -462,7 +500,8 @@ final class PhoneProcessor {
         stop(.pause(.background))
     }
 
-    /// The conversation went to the Trash, or its recording was removed: its work stops.
+    /// The conversation went to the Trash (on this iPhone, or a Mac moved its recording into another
+    /// conversation), or its recording was removed: its work stops.
     func cancel(_ meetingID: UUID) {
         if running?.meetingID == meetingID { stop(.lost) }
         paused.remove(meetingID)

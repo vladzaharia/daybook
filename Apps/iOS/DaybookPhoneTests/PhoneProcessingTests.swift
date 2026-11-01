@@ -1,5 +1,6 @@
 import DaybookCore
 import DaybookKit
+import DaybookLink
 import DaybookLive
 import DaybookModelStore
 import Foundation
@@ -7,7 +8,8 @@ import XCTest
 @testable import DaybookPhone
 
 /// Processing this iPhone's own recordings (docs/iphone.md, "Processing on this iPhone"), with the
-/// engines' fakes: claimed as it's filed, transcribed, fused, summarized here or handed to a Mac;
+/// engines' fakes: claimed as it's filed, transcribed, fused, then the summary placed (the app's
+/// `PhoneSummaryPlacement`: here, a Mac, or the cloud) and, placed here, summarized under the same rules;
 /// paused for a recording, heat, Low Power Mode, a low battery, and the screen; going on under the
 /// system's continued-processing task, with its progress, until that expires; stopped when another
 /// device takes the request; one conversation at a time. Nothing is downloaded.
@@ -50,11 +52,14 @@ final class PhoneProcessingTests: XCTestCase {
         }
     }
 
-    /// The local summarizer seam, scripted.
+    /// The local summarizer seam, scripted. Can be held mid-summary, as a long one is.
     final class ScriptedSummarizer: LocalSummarizing, @unchecked Sendable {
         private let lock = NSLock()
         private var _summarized: [UUID] = []
+        private var _holding = false, _waiting = false
         var summarized: [UUID] { lock.withLock { _summarized } }
+        var isWaiting: Bool { lock.withLock { _waiting } }
+        func hold(_ on: Bool) { lock.withLock { _holding = on } }
         let model = "gemma-4/e4b-4bit"
         let canSummarize = true
 
@@ -62,6 +67,12 @@ final class PhoneProcessingTests: XCTestCase {
                        progress: @escaping @Sendable (Double) -> Void) async throws -> SummaryProcessingOutput {
             lock.withLock { _summarized.append(meeting.id) }
             progress(0.5)
+            defer { lock.withLock { _waiting = false } }
+            while lock.withLock({ _holding }) {
+                lock.withLock { _waiting = true }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try Task.checkCancellation()
             var summary = MeetingSummary(title: "Beta on Friday", overview: "The beta ships Friday.", modelID: model)
             summary.processingSettings = ProcessingSettings(modelID: model, parameters: [:])
             return SummaryProcessingOutput(summary: summary, suggestedTerms: ["beta"])
@@ -95,13 +106,16 @@ final class PhoneProcessingTests: XCTestCase {
     private struct Rig {
         let library: PhoneLibrary
         let processor: PhoneProcessor
+        let placement: PhoneSummaryPlacement
         let engine: ScriptedEngine
         let summarizer: ScriptedSummarizer
         let scheduler: ScriptedScheduler
+        let clock: PhoneSummaryPlacementTests.ClockBox
     }
 
-    /// A library with a processor that can transcribe (and, with `summarizes`, summarize) here.
-    private func rig(summarizes: Bool = true) async throws -> Rig {
+    /// A library with a processor that can transcribe (and, with `summarizes`, summarize) here, and the summary
+    /// placement wired to it as the app wires them, with an Anthropic key (`cloud`) or none, and no Mac.
+    private func rig(summarizes: Bool = true, cloud: PhoneSummaryPlacementTests.Cloud? = nil) async throws -> Rig {
         let library = PhoneLibrary(rootURL: try temporaryDirectory().appendingPathComponent("library"), installation: "INSTALL-1")
         try await library.reload()
         let engine = ScriptedEngine(), summarizer = ScriptedSummarizer(), scheduler = ScriptedScheduler()
@@ -120,7 +134,23 @@ final class PhoneProcessingTests: XCTestCase {
         let previous = PhoneProcessor.current
         PhoneProcessor.current = processor
         addTeardownBlock { @MainActor in PhoneProcessor.current = previous }
-        return Rig(library: library, processor: processor, engine: engine, summarizer: summarizer, scheduler: scheduler)
+        // The summary placement, as `PhoneAppModel.wireProcessing` wires it.
+        let clock = PhoneSummaryPlacementTests.ClockBox()
+        clock.now = Date()
+        let link = PhoneLink(identity: PhoneLink.identity(installation: UUID().uuidString, name: "Test iPhone", libraryID: nil),
+                             keyStore: MemoryLinkKeyStore(), configuration: .loopback())
+        let placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { [] }, clock: { clock.now }, runsTimer: false)
+        placement.cloud = CloudSetup.demo(providers: cloud == nil ? [] : [.anthropic], defaults: makeTestDefaults("PhoneProcessingTests"))
+        if let cloud { placement.cloudSummarizer = cloud }
+        placement.runHere = { [weak processor] id, request in processor?.summarizeHere(id, request: request) }
+        placement.localSummarizer = summarizes ? summarizer : nil
+        processor.services.summaryDue = { [weak placement] id, templateID, askedFor in
+            guard let placement else { return }
+            if askedFor { placement.summarize(id, templateID: templateID) }
+            else { Task { await placement.summaryIsDue(id, templateID: templateID) } }
+        }
+        return Rig(library: library, processor: processor, placement: placement, engine: engine, summarizer: summarizer,
+                   scheduler: scheduler, clock: clock)
     }
 
     /// Records a few seconds on synthetic audio and files it, as stopping a recording does.
@@ -165,34 +195,163 @@ final class PhoneProcessingTests: XCTestCase {
         XCTAssertEqual(done.summary?.overview, "The beta ships Friday.")
         XCTAssertEqual(done.summary?.processingSettings?.modelID, "gemma-4/e4b-4bit")
         XCTAssertEqual(done.status, .ready)
-        XCTAssertEqual(done.processingRequests?.first?.outcome?.result, .completed)
-        XCTAssertEqual(done.processingRequests?.first?.outcome?.device, me)
+        // Its Transcribe request is done here, and the summary ran on the Summarize request the placement claimed.
+        XCTAssertEqual(done.processingRequests?.first { $0.mode == .newAudio }?.outcome?.result, .completed)
+        XCTAssertEqual(done.processingRequests?.first { $0.mode == .newAudio }?.outcome?.device, me)
+        XCTAssertEqual(done.processingRequests?.first { $0.mode == .summaryOnly }?.outcome?.result, .completed)
         XCTAssertEqual(ProcessingStatus.phone(done), .done)
         XCTAssertEqual(rig.library.controller.glossary.map(\.term), ["beta"], "its suggested terms, for approval")
+        // Where it ran, as the colophon says it.
+        let origin = try XCTUnwrap(done.summary?.origin)
+        XCTAssertEqual(origin.deviceID, me.id)
+        XCTAssertEqual(origin.colophon(thisDeviceID: me.id, thisDevice: PhoneSummaryPlacement.thisDeviceWords, unknown: "your Mac"),
+                       "Summarized on this iPhone")
+        XCTAssertEqual(done.summary?.modelsByRole["summarization"], "gemma-4/e4b-4bit")
+        XCTAssertEqual(done.summary?.modelsByRole["transcription"], "parakeet/ultra")
     }
 
-    func testBehaviorWithoutASummaryModelTheRequestGoesBackForAMac() async throws {
+    func testBehaviorWithoutASummaryModelTheSummaryGoesToAMac() async throws {
         let rig = try await rig(summarizes: false)
         let meeting = try await record(into: rig.library)
         rig.processor.pickUp()
-        try await waitUntil("the job to finish") { outcome(rig, meeting.id) == .handedBack }
+        try await waitUntil("the job to finish") { outcome(rig, meeting.id) == .summaryDue }
+        try await waitUntil("the summary to be sent") {
+            rig.library.controller.meeting(meeting.id)?.openProcessingRequests.contains { $0.mode == .summaryOnly } == true
+        }
         let handed = try XCTUnwrap(rig.library.controller.meeting(meeting.id))
         XCTAssertEqual(handed.transcripts.count, 1, "transcribed here")
-        XCTAssertFalse(handed.unifiedTranscript.isEmpty)
+        XCTAssertFalse(handed.unifiedTranscript.isEmpty, "and fused here")
         XCTAssertNil(handed.summary)
-        let open = try XCTUnwrap(handed.processingRequests?.first)
-        XCTAssertTrue(open.isOpen)
-        XCTAssertNil(open.activeClaim(at: Date()), "given back: a Mac that summarizes takes it")
+        XCTAssertEqual(handed.processingRequests?.first { $0.mode == .newAudio }?.outcome?.result, .completed, "this iPhone's part is done")
+        let open = try XCTUnwrap(handed.openProcessingRequests.first { $0.mode == .summaryOnly })
+        XCTAssertNil(open.activeClaim(at: Date()), "a Summarize request: a Mac that summarizes takes it")
         guard case .requested(.device) = ProcessingStatus.phone(handed) else { return XCTFail("waits for a Mac") }
         rig.processor.pickUp()
-        XCTAssertNil(rig.processor.running, "never picked up again here")
+        XCTAssertNil(rig.processor.running, "never picked up here")
+    }
+
+    // MARK: The summary's placement
+
+    private func summaryRequest(_ rig: Rig, _ id: UUID) -> ProcessingRequest? {
+        rig.library.controller.meeting(id)?.processingRequests?.first { $0.mode == .summaryOnly }
+    }
+
+    func testBehaviorWithAKeyTheSummaryCountsDownThenRunsHereUnderTheProcessorsRules() async throws {
+        let rig = try await rig(cloud: PhoneSummaryPlacementTests.Cloud(models: []))
+        let meeting = try await record(into: rig.library)
+        rig.processor.pickUp()
+        try await waitUntil("the countdown") { rig.placement.planners[meeting.id]?.deadline != nil }
+        XCTAssertEqual(outcome(rig, meeting.id), .summaryDue, "transcribed and fused: the summary is the placement's")
+        let planner = try XCTUnwrap(rig.placement.planners[meeting.id])
+        XCTAssertEqual(planner.line(at: rig.clock.now, thisDevice: PhoneSummaryPlacement.thisDeviceWords), "Summarizing on this iPhone in 15 s")
+        XCTAssertEqual(planner.actions, [.useCloud, .startNow, .waitForMac])
+        XCTAssertTrue(rig.summarizer.summarized.isEmpty, "nothing runs while it counts down")
+        XCTAssertNil(summaryRequest(rig, meeting.id), "nor is anything claimed")
+        // The countdown runs out while the iPhone is hot: the summary is placed here and waits for it to cool.
+        rig.processor.conditions.live = LiveConditions(thermal: .serious)
+        rig.clock.now.addTimeInterval(15)
+        rig.placement.placements.advance()
+        try await waitUntil("held for the heat") { rig.processor.pause == .heat }
+        XCTAssertNil(rig.processor.running)
+        XCTAssertTrue(rig.summarizer.summarized.isEmpty)
+        let claimed = try XCTUnwrap(summaryRequest(rig, meeting.id))
+        XCTAssertTrue(claimed.isClaimed(by: rig.library.controller.thisDevice, at: Date()), "held here, so no Mac takes it")
+        XCTAssertEqual(ProcessingStatus.phone(try XCTUnwrap(rig.library.controller.meeting(meeting.id))), .requested(.queued(position: 0, after: nil)))
+        rig.processor.conditions.live = LiveConditions()
+        try await waitUntil("the summary") { outcome(rig, meeting.id) == .completed }
+        XCTAssertEqual(rig.summarizer.summarized, [meeting.id])
+        let done = try XCTUnwrap(rig.library.controller.meeting(meeting.id))
+        XCTAssertEqual(summaryRequest(rig, meeting.id)?.outcome?.result, .completed)
+        XCTAssertEqual(done.summary?.origin.colophon(thisDeviceID: rig.library.controller.thisDevice.id,
+                                                     thisDevice: PhoneSummaryPlacement.thisDeviceWords, unknown: "your Mac"),
+                       "Summarized on this iPhone")
+        XCTAssertNil(done.summary?.cloudProvenance)
+    }
+
+    func testBehaviorASummaryPlacedHereWaitsForTheRecordingAndRunsOneAtATime() async throws {
+        let rig = try await rig()
+        let first = try await record(into: rig.library, title: "First")
+        rig.summarizer.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("summarizing the first") { rig.summarizer.isWaiting }
+        XCTAssertEqual(rig.processor.running?.stage, .summarizing)
+        XCTAssertEqual(rig.processor.running?.work, .summarize)
+        // A recording starts: the summary stops, keeping its claim, and nothing runs beside the recording.
+        rig.processor.conditions.isRecording = true
+        try await waitUntil("the pause") { outcome(rig, first.id) == .paused(.recording) }
+        XCTAssertTrue(summaryRequest(rig, first.id)?.isClaimed(by: rig.library.controller.thisDevice, at: Date()) == true)
+        let second = try await record(into: rig.library, title: "Second")
+        rig.processor.pickUp()
+        XCTAssertNil(rig.processor.running)
+        rig.summarizer.hold(false)
+        rig.processor.conditions.isRecording = false
+        try await waitUntil("both") { rig.library.controller.meetings.allSatisfy { $0.summary != nil } }
+        XCTAssertEqual(rig.engine.mostAtOnce, 1)
+        XCTAssertEqual(rig.summarizer.summarized.filter { $0 == first.id }.count, 2, "the stopped summary ran again")
+        XCTAssertTrue(rig.summarizer.summarized.contains(second.id))
+    }
+
+    func testBehaviorUseTheCloudDuringTheCountdownRunsItThereAndNotHere() async throws {
+        let cloud = PhoneSummaryPlacementTests.Cloud(models: [])
+        let rig = try await rig(cloud: cloud)
+        let meeting = try await record(into: rig.library)
+        rig.processor.pickUp()
+        try await waitUntil("the countdown") { rig.placement.planners[meeting.id]?.deadline != nil }
+        cloud.hold()
+        rig.placement.perform(.useCloud, for: meeting.id)
+        try await waitUntil("the cloud to be asked") { cloud.isWaiting }
+        rig.processor.pickUp()
+        XCTAssertNil(rig.processor.running, "the cloud's claim isn't this queue's to run")
+        XCTAssertNil(rig.processor.queue(for: try XCTUnwrap(rig.library.controller.meeting(meeting.id))), "nor shown as waiting here")
+        cloud.release()
+        try await waitUntil("the summary") { rig.library.controller.meeting(meeting.id)?.summary != nil }
+        XCTAssertEqual(cloud.asked, [meeting.id])
+        XCTAssertTrue(rig.summarizer.summarized.isEmpty)
+        let summary = try XCTUnwrap(rig.library.controller.meeting(meeting.id)?.summary)
+        XCTAssertEqual(summary.origin.cloudModel, "Claude Sonnet 5.5")
+        XCTAssertEqual(summary.cloudProvenance?.sentBy, rig.library.controller.thisDevice.name)
+        XCTAssertEqual(summary.origin.colophon(thisDeviceID: rig.library.controller.thisDevice.id,
+                                               thisDevice: PhoneSummaryPlacement.thisDeviceWords, unknown: "your Mac"),
+                       "Summarized with Claude Sonnet 5.5")
+    }
+
+    func testBehaviorAConversationThatWentAwayStandsDownCleanly() async throws {
+        // A Mac moved this iPhone's recording into its own conversation of the meeting, and this one went to the
+        // Trash: what this iPhone was doing for it stops, and nothing is sent or claimed.
+        let rig = try await rig(cloud: PhoneSummaryPlacementTests.Cloud(models: []))
+        let counting = try await record(into: rig.library, title: "Counting")
+        rig.processor.pickUp()
+        try await waitUntil("the countdown") { rig.placement.planners[counting.id]?.deadline != nil }
+        _ = try await rig.library.controller.moveToTrash(counting.id)
+        rig.placement.syncApplied()
+        rig.processor.reconcileClaims()
+        XCTAssertNil(rig.placement.planners[counting.id], "its countdown ends")
+        rig.clock.now.addTimeInterval(15)
+        rig.placement.placements.advance()
+        XCTAssertTrue(rig.summarizer.summarized.isEmpty)
+
+        // The same while its summary runs here.
+        let running = try await record(into: rig.library, title: "Running")
+        rig.summarizer.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("the countdown") { rig.placement.planners[running.id]?.deadline != nil }
+        rig.placement.perform(.startNow, for: running.id)
+        try await waitUntil("summarizing") { rig.summarizer.isWaiting }
+        _ = try await rig.library.controller.moveToTrash(running.id)
+        rig.placement.syncApplied()
+        rig.processor.reconcileClaims()
+        try await waitUntil("the stop") { outcome(rig, running.id) == .lost }
+        rig.summarizer.hold(false)
+        XCTAssertNil(rig.processor.running)
+        XCTAssertTrue(rig.library.controller.meetings.isEmpty)
+        XCTAssertFalse(rig.processor.paused.contains(running.id))
     }
 
     func testBehaviorTranscribingEverythingAgainHereLeavesTheMacOnlyTheSummary() async throws {
         let rig = try await rig(summarizes: false)
         let meeting = try await record(into: rig.library)
         rig.processor.pickUp()
-        try await waitUntil("the first pass") { outcome(rig, meeting.id) == .handedBack }
+        try await waitUntil("the first pass") { outcome(rig, meeting.id) == .summaryDue }
         rig.library.controller.update(meeting.id) { $0.setSummary(MeetingSummary(overview: "From a Mac", modelID: "gemma-4/26b-a4b-qat-4bit")) }
         try await Task.sleep(for: .milliseconds(5))
         let again = try XCTUnwrap(rig.library.controller.requestProcessing(meeting.id, mode: .fullRetranscription))
@@ -201,7 +360,7 @@ final class PhoneProcessingTests: XCTestCase {
         let after = try XCTUnwrap(rig.library.controller.meeting(meeting.id))
         XCTAssertEqual(after.processingRequests?.first { $0.id == again.id }?.outcome?.result, .completed,
                        "done here: a Mac carrying it out would transcribe everything again")
-        let summarize = try XCTUnwrap(after.openProcessingRequests.first { $0.mode == .summaryOnly }, "the summary is left for a Mac")
+        let summarize = try XCTUnwrap(after.openProcessingRequests.last { $0.mode == .summaryOnly }, "the summary is left for a Mac")
         XCTAssertNil(summarize.activeClaim(at: Date()))
         rig.processor.pickUp()
         XCTAssertNil(rig.processor.running)
@@ -289,7 +448,7 @@ final class PhoneProcessingTests: XCTestCase {
         rig.engine.hold(false)
         rig.processor.conditions.screen = .active
         try await waitUntil("the job to finish") { outcome(rig, meeting.id) == .completed }
-        XCTAssertEqual(rig.scheduler.tasks.count, 2, "a new task for the work resumed on the screen")
+        XCTAssertEqual(rig.scheduler.tasks.count, 3, "a new task for the work resumed on the screen, and one for the summary")
         try await waitUntil("the second task to end") { rig.scheduler.tasks.last?.completed != nil }
         XCTAssertEqual(rig.scheduler.tasks.last?.completed, true)
     }
@@ -317,7 +476,8 @@ final class PhoneProcessingTests: XCTestCase {
         // Pulled down from the top: transcribing goes on, the summary (the graphics processor) waits.
         rig.processor.conditions.screen = .inactive
         rig.engine.hold(false)
-        try await waitUntil("the pause") { outcome(rig, meeting.id) == .paused(.background) }
+        try await waitUntil("the summary to wait") { outcome(rig, meeting.id) == .summaryDue && rig.processor.pause == .background }
+        XCTAssertNil(rig.processor.running)
         XCTAssertEqual(rig.library.controller.meeting(meeting.id)?.transcripts.count, 1)
         XCTAssertTrue(rig.summarizer.summarized.isEmpty)
         rig.processor.conditions.screen = .active

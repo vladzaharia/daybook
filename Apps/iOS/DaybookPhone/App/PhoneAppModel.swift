@@ -38,8 +38,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// The models live captions run on this iPhone, and those that process its recordings, when
     /// downloaded (Settings › Models).
     let models: PhoneModels
-    /// Cloud summaries' keys, models, and this iPhone's preferences (Settings › Cloud; docs/cloud.md). Made when first used,
-    /// so a launch that never opens Settings never reads the keychain; tests keep keys in memory.
+    /// Cloud summaries' keys, models, and this iPhone's preferences (Settings › Cloud; docs/cloud.md): the one place the
+    /// summary placement reads them (`placement.cloud`, set at launch). Tests keep keys in memory.
     @ObservationIgnored lazy var cloudSummaries: CloudSetup = {
         #if DEBUG
         if let demo = PhoneCloudDemo.setup(defaults: .standard) { return demo }
@@ -167,8 +167,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             // The system's continued-processing task, never in tests.
             continued: ContinuedProcessing(scheduler: LaunchOptions.isTestHost || options.isRunningTests ? nil : SystemContinuedProcessingScheduler()))
         let sync = self.sync, link = self.link
-        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices },
-                                          defaults: LaunchOptions.isTestHost ? Self.testDefaults() : .standard)
+        placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices })
         captions = LiveCaptionsController(store: LiveCaptionStore(libraryRoot: library.rootURL),
                                           makeCaptioner: Self.captioner(settings: settings, options: options, models: models))
         models.voices.metadata = { [weak library] in library?.controller.metadata ?? LibraryMetadata() }
@@ -422,6 +421,9 @@ final class PhoneAppModel: RecordingCommandHandling {
             if options.demoLink || options.demoMultipointMac != nil { applyLinkDemo() } else { await link.start() }
         }
         await sync.synchronize(.launch)
+        // Settings › Cloud: whether a summary can go to the cloud, and which model.
+        placement.cloud = cloudSummaries
+        await placement.reloadCloud()
         // Work a previous run claimed or paused carries on, and anything filed since is picked up.
         processor.pickUp()
         let libraryID = await sync.libraryID()
@@ -463,6 +465,8 @@ final class PhoneAppModel: RecordingCommandHandling {
                 await link.setActivity(.foreground)
                 let libraryID = await sync.libraryID()
                 await link.updateLibrary(libraryID)
+                // A key added on another device meanwhile arrives through iCloud Keychain.
+                await placement.reloadCloud()
             }
         case .background:
             // A countdown can't run in the background: each one's default happens now.
@@ -508,13 +512,34 @@ final class PhoneAppModel: RecordingCommandHandling {
     /// What this iPhone can do with its own models now, for the summary step and other devices.
     var processingCapabilities: ProcessingCapabilities { models.capabilities(enabled: settings.processesOnThisIPhone) }
 
+    /// This iPhone's own summarizer: its summary model, downloaded and fitting, while Transcribe on This iPhone is on.
+    private var processingSummarizer: (any LocalSummarizing)? {
+        settings.processesOnThisIPhone && processingCapabilities.summarizes ? models.summarizer() : nil
+    }
+
+    /// A processing model was downloaded or removed, or Transcribe on This iPhone changed: the placement learns whether
+    /// this iPhone can summarize, and the processor picks up what it can do now.
+    func processingChanged() {
+        placement.localSummarizer = processingSummarizer
+        processor.pickUp()
+    }
+
     /// The processor's ties to the rest of the app: which recordings it may claim as they're filed, the
     /// models changing, the speaker pass giving way, and the heat, power, and battery it backs off for.
     private func wireProcessing() {
         PhoneProcessor.current = processor
-        let processor = self.processor, models = self.models
+        let processor = self.processor, models = self.models, placement = self.placement
         library.processesHere = { [weak self] in self?.processor.device }
-        models.changed = { [weak processor] in processor?.pickUp() }
+        models.changed = { [weak self] in self?.processingChanged() }
+        // One summary path: transcribed and fused here, the summary goes to the placement (a countdown, then this
+        // iPhone, a Mac, or the cloud); one placed here comes back to the processor, under its rules.
+        processor.services.summaryDue = { [weak placement] id, templateID, askedFor in
+            guard let placement else { return }
+            if askedFor { placement.summarize(id, templateID: templateID) }
+            else { Task { await placement.summaryIsDue(id, templateID: templateID) } }
+        }
+        placement.runHere = { [weak processor] id, request in processor?.summarizeHere(id, request: request) }
+        placement.localSummarizer = processingSummarizer
         processor.services.willStart = { [weak self] in
             self?.speakerPass?.task.cancel()
             self?.speakerPass = nil
