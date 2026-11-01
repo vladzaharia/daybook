@@ -25,6 +25,10 @@ enum DaybookEntry {
         if CommandLine.arguments.contains("--speaker-report") {
             Darwin.exit(SpeakerReport.run(arguments: CommandLine.arguments))
         }
+        // One synthetic conversation summarized with a cloud model, with its tokens and cost (docs/cloud.md).
+        if CommandLine.arguments.contains("--cloud-check") {
+            Darwin.exit(await CloudCheck.run(arguments: CommandLine.arguments))
+        }
         // Whether process taps work in the App Sandbox (docs/sandbox.md): the tap alone, nothing recorded.
         if CommandLine.arguments.contains("--capture-probe") {
             let code = await CaptureProbe.run(arguments: CommandLine.arguments)
