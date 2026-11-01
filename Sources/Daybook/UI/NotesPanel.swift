@@ -5,8 +5,8 @@ import SwiftUI
 
 // Floating Notes (docs/interface.md, "Floating Notes"): a floating version of the iPhone's main
 // screen, on a non-activating panel that sits over someone else's full-screen call without taking
-// focus from it. A status bar across the title band; while recording, the clock, You and Call
-// meters, your notes with their times, live captions, and large Bookmark and Stop; afterwards,
+// focus from it. A status bar across the title band; while recording, the clock, a meter for each
+// source, your notes with their times, live captions, and large Bookmark and Stop; afterwards,
 // what's becoming of the recording; with nothing recording, a small home: status lines, Record and
 // Import, and recent conversations. The views live in `FloatingNotes/`.
 

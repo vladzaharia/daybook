@@ -342,6 +342,11 @@ Tests drive the controller with fakes, so no device, tap, or stream is opened.
 | `recorder.levels.isMicrophoneSilent` | `Bool` | After 3 s, not one non-zero microphone sample has arrived. The input is muted in hardware, unplugged, or denied. |
 | `recorder.levels.isCapturingCall` | `Bool` | Call audio is part of this recording. It's false after the call track stops. |
 
+Floating Notes meters every source a recording has, not only these two (docs/interface.md, "Meters"): a
+recorder recording along from the live audio it saves into the recording (`LiveCapture.level(at:)`, the
+latest buffer's level, current for a second after it arrived, through `DeviceSession.liveLevel(into:)`),
+and a paired iPhone from the levels it sends over the link (`LinkLevels`; docs/link.md).
+
 `CaptureLevelMonitor` updates 15 times a second and publishes only changes of at least 0.5 dB.
 Observe `recorder.levels` directly as an `@ObservedObject`. `AppState` forwards
 `recorder.objectWillChange`, and doing the same for meters would redraw the whole app 15 times a
