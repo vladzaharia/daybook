@@ -71,6 +71,54 @@ the iPhone's status sheet (`--device-simulator --device-autopilot`) with the tap
 shows the latest buffer's level), a real iPhone's levels over Wi-Fi during a call (latency, and how a busy link drops
 them), the packaged app's close button and band on macOS 15 and 26 as well as 27, and VoiceOver reading the meter rows.
 
+## One app on both platforms: the Mac's App Store build as local.daybook.phone (2026-11-01)
+
+Universal purchase needs the Mac app's App Store build to share the iPhone app's bundle ID, so sandboxed signed Mac
+builds now run as `local.daybook.phone` (docs/research/one-bundle.md, docs/release.md "Mac on TestFlight",
+docs/sandbox.md "Changing bundle ID").
+
+**What changed.**
+
+- `Apps/macOS/Config/Signing.xcconfig`: signed builds are `local.daybook.app` unsandboxed and `local.daybook.phone`
+  with `DAYBOOK_SANDBOX = YES`. `scripts/build-app.sh --app-store` archives that build and exports it for App Store
+  Connect (`--upload` sends it). `Resources/container-migration.plist` moves `local.daybook.app.plist` under the new name.
+  The Mac's Info.plist has `ITSAppUsesNonExemptEncryption` false.
+- The app: `AppIdentity`; `SingleInstance` counts `local.daybook.phone` running `Daybook`; `SandboxMigration` finds the
+  old library for it; `LegacyLibraryReturn` takes the library and preferences back out of either container, the one that
+  changed last.
+- Sync: the recorded iCloud account keeps the app that recorded it (`syncICloudAccountApp`). Another app's token (iCloud's
+  token is per app) is the same account when the container's manifest names a library this device has a checkpoint for
+  (`LibrarySyncEngine.holdsJournal`); anything else pauses as before.
+- Checks: `check-mac-app.sh --kind signed-sandbox` expects `local.daybook.phone` and the renaming manifest; `mac-export.sh`
+  and the manual Developer ID export take the archived app's bundle ID; `asc-testflight.sh --platform MAC_OS`.
+- Not changed: `release.yml` (a proposal is in the research doc), the default Developer ID release, the iPhone app.
+
+**How it was verified.**
+
+- A sandboxed probe app, ad hoc, under its own bundle ID (`local.daybook.research.manifest1`), with a manifest moving a
+  library folder under another name and `local.daybook.research.source.plist` to `${BundleId}.plist`: on its first launch
+  on macOS 27.0, both moved, and `UserDefaults.standard` in the sandboxed app read the moved values. Sources gone; the
+  container's protected metadata file remains (29 KB).
+- `xcodebuild -showBuildSettings` on the generated Mac project: signed unsandboxed is `local.daybook.app` with
+  `Daybook.entitlements` and no manifest; signed sandboxed is `local.daybook.phone` with `Daybook-Sandbox.entitlements` and
+  `container-migration.plist`; ad hoc and rehearsal keep their own IDs.
+- New tests: `SandboxMigrationTests.testTheAppStoreBuildTakesTheLibraryFromTheUnsandboxedApp`,
+  `LibraryMoveTests.testTheLibraryComesBackFromTheAppStoreBuild`, `testWithTwoContainersTheNewerLibraryComesBack`,
+  `SingleInstanceTests` (the App Store build counts, the iPhone app on a Mac doesn't),
+  `LibrarySyncContainerTests.testAnotherAppsAccountCarriesOverWhenTheContainerHoldsThisLibrary` and
+  `testAnotherAppsAccountWithAnotherLibraryOrTheSameAppPauses`. `swift test`: 1,527 tests, 1 skipped, 0 failures.
+  `scripts/ci/tests/run-tests.sh --require-all`: 346 passed (with `--app-store`, `--upload`, the sandboxed bundle ID in
+  `check-mac-app.sh` and `package-mac.sh`, the renaming manifest, and `--platform`).
+- Prototypes (research, commit `d0f1033`): one XcodeGen spec including both apps built the Mac target ad hoc and the
+  iPhone app for the Simulator; a single multiplatform target built for both after SDK-conditional bundle ID and
+  Info.plist and an excluded resource; the Mac's App Store kind built unsigned as `local.daybook.phone` with the manifest.
+
+**Still needs the owner or hardware.** The App Store Connect and portal steps (docs/release.md, "Mac on TestFlight"); a
+signed `--app-store` build's first launch on a real library (the manifest's rename on the real preferences, the keychain
+group in a Mac App Store profile, the iCloud account carrying over without "the account changed", the iPhone reconnecting
+without pairing again); the first upload (icon and privacy-manifest findings, if any); and the App Sandbox's own checks
+(docs/sandbox.md).
+
 ## Upgrade: a better model redoes a conversation's step, and every step after it (2026-10-31)
 
 When a clearly better model than the one that made a conversation's transcript, speakers, or summary is within reach,

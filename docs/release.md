@@ -8,6 +8,8 @@ Three GitHub Actions workflows build Daybook on GitHub-hosted Macs:
 
 Signing uses an App Store Connect API key with Xcode's cloud-managed signing. A Developer ID `.p12` is an optional fallback for the Mac app.
 
+The Mac app can also go to TestFlight and the Mac App Store in the iPhone app's record, as one app on both platforms (universal purchase): `scripts/build-app.sh --app-store` builds it, sandboxed, under the iPhone app's bundle ID. See [Mac on TestFlight](#mac-on-testflight); `release.yml` doesn't send it yet.
+
 ## Pipeline
 
 | Workflow | Job | Runner | What it does |
@@ -136,15 +138,16 @@ scripts/asc-certificates.sh --revoke             # revokes the ones older than 3
 
 | App ID | Capabilities on the account | Signed entitlements |
 |---|---|---|
-| `local.daybook.app` (Mac) | iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications | `Resources/Daybook.entitlements`: audio input; `com.apple.developer.icloud-services` = `CloudDocuments`, `CloudKit`; the container in `com.apple.developer.icloud-container-identifiers` and `com.apple.developer.ubiquity-container-identifiers`; `com.apple.developer.aps-environment`; `keychain-access-groups` = `<team>.local.daybook.app`, `<team>.local.daybook.shared`. With `sandbox` (`--sandbox`), `Resources/Daybook-Sandbox.entitlements`: the same plus the App Sandbox ([docs/sandbox.md](sandbox.md)); no new capability on the App ID |
-| `local.daybook.phone` (iPhone) | App Groups (`group.local.daybook.phone`); iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications | `Apps/iOS/project.yml`: the same iCloud keys, `aps-environment`, the app group, `keychain-access-groups` = `<team>.local.daybook.phone`, `<team>.local.daybook.shared`. Info.plist's `UIBackgroundModes` adds `remote-notification` (not a capability) |
+| `local.daybook.app` (Mac, unsandboxed: Developer ID, Apple Development) | iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications | `Resources/Daybook.entitlements`: audio input; `com.apple.developer.icloud-services` = `CloudDocuments`, `CloudKit`; the container in `com.apple.developer.icloud-container-identifiers` and `com.apple.developer.ubiquity-container-identifiers`; `com.apple.developer.aps-environment`; `keychain-access-groups` = `<team>.local.daybook.app`, `<team>.local.daybook.shared` |
+| `local.daybook.phone` (iPhone) | App Groups (`group.local.daybook.phone`); iCloud with iCloud Documents and CloudKit, container `iCloud.local.daybook`; Push Notifications; Hotspot | `Apps/iOS/project.yml`: the same iCloud keys, `aps-environment`, the app group, `keychain-access-groups` = `<team>.local.daybook.phone`, `<team>.local.daybook.shared`, Hotspot. Info.plist's `UIBackgroundModes` adds `remote-notification` (not a capability) |
+| `local.daybook.phone` (Mac, sandboxed: the App Store and TestFlight, `--app-store`; Developer ID with `--sandbox`) | the same App ID and capabilities as the iPhone app; App Groups and Hotspot aren't in the Mac's entitlements | `Resources/Daybook-Sandbox.entitlements`: everything in `Daybook.entitlements`, the Mac's own keychain group (`<team>.local.daybook.app`) first, plus the App Sandbox ([docs/sandbox.md](sandbox.md)); no new capability |
 | `local.daybook.phone.widgets` | App Groups | the app group only |
 
 - CloudKit and push serve the courier (`docs/icloud-sync.md`, "Courier (CloudKit)"). `CKSyncEngine` needs both; CloudKit sends its own pushes, so there's no APNs key or certificate.
 - **Push is `development` in the files and `production` in what ships.** `DAYBOOK_APS_ENVIRONMENT` in each `Config/Signing.xcconfig` is `development`, which is what Apple Development profiles grant, and archives are signed that way. The exports re-sign with the distribution profile, so TestFlight (App Store profile) and Developer ID builds carry `production` and use CloudKit's **Production** environment, Xcode setting `com.apple.developer.icloud-container-environment` to `Production`. Writing `production` into the files instead fails development signing: "the provisioning profile grants it for the value 'development'". Apple's guidance is the same: keep `development` and let the export re-sign it.
-- **Keychain groups** need no capability: a profile grants `keychain-access-groups` = `<team>.*`, which covers both. Each app lists its own group first, so items stored without a group (link pairing keys, the sync device ID) stay where they were; the shared group holds an encrypted library's key in iCloud Keychain, where both apps read it (`docs/icloud-sync.md`, "Encryption"). Check a profile with `security cms -D -i <profile> | plutil -p - | grep -A2 keychain-access-groups`: it lists `48H7CLBV8Y.*`. The "Daybook Developer ID" profile does; `scripts/ci/check-ios-archive.sh` checks a signed iPhone archive's groups and their order. If a profile ever didn't, signing fails with the group named, and the fallback is to share the Mac's own group (`<team>.local.daybook.app`) instead, listing it on the iPhone.
+- **Keychain groups** need no capability: a profile grants `keychain-access-groups` = `<team>.*`, which covers both. The Mac's sandboxed build, under the iPhone's bundle ID, still lists `<team>.local.daybook.app` first, so it keeps the pairing keys and sync identity the unsandboxed app stored. Each app lists its own group first, so items stored without a group (link pairing keys, the sync device ID) stay where they were; the shared group holds an encrypted library's key in iCloud Keychain, where both apps read it (`docs/icloud-sync.md`, "Encryption"). Check a profile with `security cms -D -i <profile> | plutil -p - | grep -A2 keychain-access-groups`: it lists `48H7CLBV8Y.*`. The "Daybook Developer ID" profile does; `scripts/ci/check-ios-archive.sh` checks a signed iPhone archive's groups and their order. If a profile ever didn't, signing fails with the group named, and the fallback is to share the Mac's own group (`<team>.local.daybook.app`) instead, listing it on the iPhone.
 - Ad hoc and local builds (`build-app.sh --ad-hoc`, `Resources/Daybook-Local.entitlements`, `swift run`), simulator builds, and CI's unsigned builds carry neither CloudKit nor push, create no courier, and need no profile. They have no keychain groups either, so they can't open an encrypted library (they can't sync at all).
-- Ad hoc builds run in the App Sandbox under their own bundle ID, `local.daybook.app.adhoc`, with no migration manifest; signed builds stay unsandboxed unless built with `--sandbox` ([docs/sandbox.md](sandbox.md)).
+- Ad hoc builds run in the App Sandbox under their own bundle ID, `local.daybook.app.adhoc`, with no migration manifest; signed builds stay unsandboxed, as `local.daybook.app`, unless built with `--sandbox` or `--app-store`, which run as `local.daybook.phone` ([docs/sandbox.md](sandbox.md)).
 
 ### Secrets on the runner
 
@@ -287,6 +290,7 @@ In order, by the owner or their delegate:
       - Both: record on the iPhone with the Mac open. In CloudKit Console › **Production** › **Records** (Private Database, signed in with **Act as iCloud Account** as the test account), zone `Courier`, a `CourierFile` record appears when the recording is filed and is gone once the Mac has stored it.
 
 8. **The pipeline's development certificate** (done 2026-10-28: `JG37U8P26Q`, expires 2027-10-29; renew before then). With the Admin key's variables set ([Development certificates](#development-certificates)), run `scripts/asc-development-certificate.sh`, then `scripts/asc-certificates.sh --older-than 0` and, after reading the list, `--revoke` for the certificates earlier runs made. Release runs then sign their archives with this one. Again each year, before it expires.
+9. **The Mac on TestFlight** (not done; [Mac on TestFlight](#mac-on-testflight) has the steps).
 
 ## Dependency updates
 
@@ -322,7 +326,7 @@ If Daybook ever adds non-exempt encryption (its own algorithms, or encryption be
 - Add the `ITSEncryptionExportComplianceCode` it issues.
 - Update the check in `check-ios-archive.sh`.
 
-The Mac app is distributed outside the App Store, so the key doesn't apply to it.
+The Mac's Info.plist (`Resources/Info.plist`) carries the same key: App Store Connect asks the Mac App Store build too, and a Developer ID build ignores it.
 
 ## Cutting a release
 
@@ -394,10 +398,53 @@ xcrun stapler validate /Applications/Daybook.app
 
 The Mac job attests every file in `SHA256SUMS.txt` with `actions/attest-build-provenance`: a Sigstore-signed SLSA provenance statement naming the repository, `release.yml`, the commit, and the run that built it. `gh attestation verify` checks the file's digest against it, so a download that didn't come from this workflow fails. The attestations are listed under the repository's Actions › Attestations.
 
+## Mac on TestFlight
+
+The Mac app joins the iPhone app's App Store Connect record as its macOS platform, so TestFlight and the App Store ship both, and one purchase covers both (universal purchase). Apple requires one bundle ID for every platform of a record, and the record's is `local.daybook.phone`, which can't change once builds were uploaded. So the Mac's App Store build is `local.daybook.phone` too. The Mac App Store requires the App Sandbox, and TestFlight requires a provisioning profile in the app ([App Store Connect Help: Add platforms](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-platforms/); docs/research/one-bundle.md has the sources).
+
+### Bundle IDs
+
+| Build | Bundle ID | Sandboxed | Ships through |
+|---|---|---|---|
+| Developer ID (the default) | `local.daybook.app` | no | the GitHub Release, notarized |
+| Developer ID with `--sandbox` (`sandbox` input) | `local.daybook.phone` | yes | a GitHub prerelease |
+| App Store (`--app-store`) | `local.daybook.phone` | yes | TestFlight, then the Mac App Store |
+| Ad hoc, rehearsal, `swift run` | their own | as before | nowhere |
+
+Every sandboxed build is the same app on disk: one container, `~/Library/Containers/local.daybook.phone`, one preferences domain, and one set of privacy permissions. The first sandboxed launch moves the library and the unsandboxed app's preferences (`local.daybook.app.plist`, renamed) into that container, and the app finds its identity, pairing keys, iCloud account, and sync journal as before ([docs/sandbox.md](sandbox.md), "Changing bundle ID"). Going back to the Developer ID release offers **Move Library Back**.
+
+### Building and uploading
+
+```sh
+scripts/build-app.sh --app-store --archive-only     # the sandboxed archive, as local.daybook.phone
+scripts/build-app.sh --app-store --export-only      # exports a .pkg for App Store Connect to build/macOS/AppStore
+scripts/build-app.sh --app-store --upload           # archives and uploads it to App Store Connect
+scripts/ci/asc-testflight.sh --bundle-id local.daybook.phone --platform MAC_OS --version 1.4.0 --build 1057 --group "Daybook team"
+```
+
+`--app-store` is a signed Release build only (it refuses `--debug` and ad hoc builds, like `--sandbox`), and is never launched on a development Mac: the first sandboxed launch as `local.daybook.phone` creates that Mac's container, and macOS runs the migration manifest only then. `scripts/ci/check-mac-app.sh --kind signed-sandbox` checks the archived app. Each platform has its own versions and builds in the record, so the Mac uses the same marketing version and build number as the iPhone.
+
+`release.yml` has no Mac TestFlight job yet: changing the release workflow is for the owner, and the job docs/research/one-bundle.md proposes is the iPhone job's steps with these commands, behind a `mac_testflight` input (off by default). Until then, the owner uploads from their own Mac with their Xcode account (the first time with `--allow-provisioning-updates`, which only the account owner passes).
+
+### One-time setup
+
+In order, by the account owner:
+
+1. **Turn off the iPhone app on Macs.** App Store Connect › the app › Pricing and Availability › iPhone and iPad Apps on Apple Silicon Mac: clear **Make this app available**, and in TestFlight don't make iOS builds available on Mac. The iPhone app run on a Mac would use the same container as the Mac app, and once the macOS platform ships Apple replaces it with the Mac app anyway.
+2. **The App ID for macOS.** developer.apple.com › Identifiers › `local.daybook.phone`: it already has iCloud (`iCloud.local.daybook`, CloudKit), Push Notifications, App Groups, and Hotspot. Nothing changes for the Mac; check that iCloud and Push are on. If the identifier's page offers platforms, make sure macOS is included.
+3. **Profiles.** On the owner's Mac, signed in to Xcode: `DAYBOOK_TEAM_ID=48H7CLBV8Y ./scripts/build-app.sh --app-store --allow-provisioning-updates` creates the Mac App Store profile for `local.daybook.phone`, and the Mac Installer Distribution certificate that signs the `.pkg` if the team has none (not verified here: if Xcode doesn't offer it, create one in Xcode › Settings › Accounts › Manage Certificates). Check the profile: `security cms -D -i <profile> | plutil -p -` lists `48H7CLBV8Y.*` under `keychain-access-groups`, `iCloud.local.daybook`, and CloudKit.
+4. **Add the macOS platform.** App Store Connect › the app › **Add Platform** › macOS. It takes the record's bundle ID and SKU; the Mac version starts at 1.0, and can be set to the iPhone's. A platform can be deleted only until a build is uploaded for it, and once App Review approves two platforms the app is a universal purchase for good.
+5. **The first upload**, from the owner's Mac: `DAYBOOK_TEAM_ID=48H7CLBV8Y ./scripts/build-app.sh --app-store --upload --marketing-version <X.Y.Z> --build-number <N>`, with a build number above every upload so far.
+6. **TestFlight.** Add the Mac build to the beta group (or `asc-testflight.sh --platform MAC_OS`). Testers install it with TestFlight for Mac.
+7. **Sandboxed Developer ID**, only if it's wanted beside the App Store: a manually managed Developer ID profile for `local.daybook.phone` (as "Daybook Developer ID" is for `local.daybook.app`), which `scripts/ci/mac-export.sh` picks by the archived bundle ID.
+
+What the first TestFlight build should be checked for: the library, devices, and models arrive without Welcome; the iPhone reconnects without pairing again; sync carries on without "the iCloud account changed"; process taps or ScreenCaptureKit record a call; and Settings › Library shows the container's path. The App Sandbox's own checks are in docs/sandbox.md.
+
 ## Known blockers
 
 - **The iPhone app has no app icon.** `ASSETCATALOG_COMPILER_APPICON_NAME` is empty and the asset catalog has no AppIcon, so App Store Connect would reject the upload (ITMS-90713 / ITMS-90022). The release job stops at the archive check until there is one: add an AppIcon to `DaybookPhone/Resources/Assets.xcassets` and set `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` in `Apps/iOS/project.yml`.
 - **Mac provisioning** (step 1 of One-time setup) must be done before the Mac export can get its Developer ID profile with iCloud.
+- **The Mac on TestFlight** needs the owner's steps in [Mac on TestFlight](#mac-on-testflight), and the App Sandbox's hardware checks (docs/sandbox.md), before its first upload.
 - **The CloudKit courier** (step 7 of One-time setup): until Push Notifications and CloudKit are on both App IDs and the "Daybook Developer ID" profile is regenerated, both exports fail, because the apps' entitlements now include them. Until the schema is deployed to Production, released apps sync through iCloud Drive alone.
 
 ## Troubleshooting

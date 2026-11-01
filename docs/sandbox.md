@@ -5,7 +5,8 @@ an ordinary entitlement or to a permission macOS already asks for; nothing needs
 build, and the provisioning profile doesn't change. What makes it a project rather than a switch:
 
 1. **The library moves, once.** A sandboxed app's `Application Support` is inside its container,
-   `~/Library/Containers/local.daybook.app/Data/Library/Application Support/Daybook`. On the owner's Mac the library is
+   `~/Library/Containers/local.daybook.phone/Data/Library/Application Support/Daybook` (sandboxed builds run under the
+   iPhone app's bundle ID: "Changing bundle ID", below). On the owner's Mac the library is
    about 21 GB, mostly models, and the move is one-way: the container is created once, by whichever build with the
    bundle ID launches sandboxed first.
 2. **Process taps.** Recording only the call app uses a Core Audio process tap. Credible reports say taps work with
@@ -54,13 +55,15 @@ and that a lost device ID republishes everything without deleting anything.
 ### Going back (`LegacyLibraryReturn`)
 
 An unsandboxed build (an earlier release, or a later one built without the sandbox) whose own library is missing,
-or older than the one in `~/Library/Containers/<bundle ID>/Data/Library/Application Support/Daybook`, asks before it
-opens anything: **Move Library Back** or **Not Now**.
+or older than the one in a sandboxed build's container, asks before it opens anything: **Move Library Back** or
+**Not Now**. It looks in `~/Library/Containers/local.daybook.phone/Data/Library/Application Support/Daybook` (every
+sandboxed build since the bundle ID change) and in its own bundle ID's container (a sandboxed build from before it);
+with a library in both, the one that changed last.
 
 - Moving renames the container's library into place (same volume, instant). Anything already at the place is set
   aside as `Daybook (Older Copy <date>)`, never deleted, and put back if the move fails.
-- The sandboxed app's own preferences are copied from its container (the system's window and panel state stays
-  behind), then the app relaunches; `replica.json` brings the identity along.
+- The sandboxed app's own preferences are copied from its container (`<bundle ID>.plist` there; the system's window
+  and panel state stays behind), then the app relaunches; `replica.json` brings the identity along.
 - Not Now opens the library where it is, and the question comes back only once the container's library changes.
 - Only the app's own library is considered: never `--library`, `swift run`, or tests.
 
@@ -88,20 +91,41 @@ No login item, App Intents, Apple Events, XPC services, or helpers.
 ### Builds
 
 A container is created once, by whichever sandboxed build with the bundle ID launches first, and macOS moves files
-into it (the container migration manifest) only then. So only one kind of build ever uses `local.daybook.app`
-sandboxed, and only it carries the manifest that moves the real library:
+into it (the container migration manifest) only then. So only signed Release builds ever run sandboxed under the app's
+bundle ID, and only they carry the manifest that moves the real library:
 
 | Build | Bundle ID | Sandboxed | Manifest | Library |
 |---|---|---|---|---|
 | Signed (Developer ID, Apple Development), the default | `local.daybook.app` | no | none | `~/Library/Application Support/Daybook` |
-| Signed with `--sandbox` / `DAYBOOK_SANDBOX=1` (release only) | `local.daybook.app` | yes | `Resources/container-migration.plist`: moves `${ApplicationSupport}/Daybook` and `${Library}/Preferences/${BundleId}.plist` | the container's |
+| Signed with `--sandbox` / `DAYBOOK_SANDBOX=1`, or `--app-store` (release only) | `local.daybook.phone` | yes | `Resources/container-migration.plist`: moves `${ApplicationSupport}/Daybook`, and `${Library}/Preferences/local.daybook.app.plist` to `${Library}/Preferences/${BundleId}.plist` | the container's |
 | Ad hoc (`--ad-hoc`, or no team) | `local.daybook.app.adhoc` | yes | none | its own container's, empty at first |
 | Rehearsal (`--sandbox-rehearsal`) | `local.daybook.app.rehearsal` (or `DAYBOOK_REHEARSAL_BUNDLE_ID`) | yes | `Resources/container-migration-rehearsal.plist`: moves `${ApplicationSupport}/Daybook Rehearsal` to `${ApplicationSupport}/Daybook`, and its preferences | its own container's |
 | `swift run`, `.build/debug/Daybook` | none | no | none | `~/Library/Application Support/Daybook Development` |
 
 `Apps/macOS/Config/Signing.xcconfig` derives all of it from `DAYBOOK_SIGNING` (`signed`, `local`, `rehearsal`) and
 `DAYBOOK_SANDBOX` (`NO` by default): `PRODUCT_BUNDLE_IDENTIFIER`, `CODE_SIGN_ENTITLEMENTS`, and
-`DAYBOOK_MIGRATION_MANIFEST`. The target's "Embed container migration manifest" script copies the manifest into
+`DAYBOOK_MIGRATION_MANIFEST`.
+
+### Changing bundle ID
+
+Sandboxed signed builds run as `local.daybook.phone`, the iPhone app's bundle ID, because the Mac App Store build has to
+share it for one App Store Connect record to ship both apps (docs/release.md, "Mac on TestFlight"). Developer ID with
+`--sandbox` uses it too, so every sandboxed build has one container, one preferences domain, and one set of privacy
+permissions. What follows the bundle ID, and what carries it over:
+
+| What | Unsandboxed (`local.daybook.app`) | Sandboxed (`local.daybook.phone`) | Carried over by |
+|---|---|---|---|
+| Library | `~/Library/Application Support/Daybook` | the container's `Application Support/Daybook` | the manifest; else **Move Library…** (below) |
+| Preferences | `~/Library/Preferences/local.daybook.app.plist` | the container's `Library/Preferences/local.daybook.phone.plist` | the manifest moves the file under the new name; a probe showed macOS doing it and the app reading it (docs/validation.md) |
+| Sync identity, pairing keys | keychain group `<team>.local.daybook.app` | the same group, listed first in `Daybook-Sandbox.entitlements` | nothing to do; the identity item named after the old place is copied to the new one (below) |
+| Library and cloud keys | `<team>.local.daybook.shared` | the same | nothing to do |
+| iCloud container | `iCloud.local.daybook` | the same | nothing to do |
+| iCloud account | the account token this app recorded | iCloud's token is per app, so it differs | the token records its app; another app's is the same account when the container holds this library's journal (docs/icloud-sync.md) |
+| Privacy permissions (microphone, System Audio Recording, Bluetooth, local network, notifications) | granted to `local.daybook.app` | asked again | the person, once |
+| Window positions, saved state | the app's | start over | nothing (cosmetic) |
+
+`SingleInstance` counts `local.daybook.phone` as Daybook when its executable is `Daybook` (the iPhone app on a Mac is
+`DaybookPhone`), so the Developer ID and App Store builds never run side by side. The target's "Embed container migration manifest" script copies the manifest into
 `Contents/Resources/container-migration.plist` (after `plutil -lint`), or removes a stale one, before signing.
 
 A container can't be fully removed from the command line: the files inside can, but macOS protects
@@ -180,7 +204,7 @@ scoped one opens), and still says where the folder is:
 
 Signed builds stay unsandboxed until the owner ships the switch. The gate is one setting, `DAYBOOK_SANDBOX`:
 `scripts/build-app.sh --sandbox` (or `DAYBOOK_SANDBOX=1`) sets it, only for a signed Release build (it refuses
-`--debug` and ad hoc builds, so a development build can never be the one that creates `local.daybook.app`'s
+`--debug` and ad hoc builds, so a development build can never be the one that creates `local.daybook.phone`'s
 container); `release.yml`'s manual `sandbox` input sets it for the release, and makes the GitHub Release a
 prerelease whatever the tag says.
 
@@ -203,6 +227,10 @@ Before the first sandboxed prerelease, on real hardware:
 
 Then the prerelease:
 
+The sandboxed Developer ID build runs as `local.daybook.phone`, so its export needs a manually managed Developer ID
+profile for that bundle ID (docs/release.md, "Mac on TestFlight", step 7). The App Store build is the same sandboxed
+app, so a TestFlight build can carry the switch instead of a GitHub prerelease.
+
 1. Tag the commit on `main`, e.g. `git tag -a v0.4.0-rc.1 -m "Daybook 0.4.0 RC 1: the App Sandbox"` and push it.
    The push starts an ordinary (unsandboxed) release run: in Actions › Release, open it and **Reject** its
    deployment (or cancel it), so it never builds.
@@ -210,7 +238,9 @@ Then the prerelease:
    job says "App Sandbox" in its notice; `package-mac.sh` checks the signed app is the `signed-sandbox` kind before
    notarizing; the draft is published as a prerelease, so it never becomes "Latest".
 3. Quit Daybook, then install it over the current app, after the backup. The first launch moves the library and the
-   preferences into the container (the manifest), and the app opens it; Settings › Library shows the container's path. Run the owner checks below.
+   preferences (renamed to `local.daybook.phone.plist`) into the container (the manifest), and the app opens it;
+   Settings › Library shows the container's path. macOS asks again for the microphone, System Audio Recording,
+   Bluetooth, and the local network: the permissions belong to the bundle ID. Run the owner checks below.
 4. To go back: install the previous (unsandboxed) release. It offers **Move Library Back** (above).
 
 Owner checks with the sandboxed prerelease: the first launch on the real library (nothing asked, library intact,
@@ -222,7 +252,8 @@ Bluetooth; captions and Foundation Models; Continuity Camera; re-granting the im
 **Making it the default** later, in one commit: `sandbox=1` as `build-app.sh`'s default (with a way to turn it off for
 a while, e.g. `DAYBOOK_SANDBOX=0`), `DAYBOOK_SANDBOX = YES` in `Signing.xcconfig` (for builds from Xcode),
 `release.yml`'s input default `true` without forcing a prerelease, CI's `check-mac-app.sh` kinds (a signed default is
-`signed-sandbox`), and this document and docs/release.md. The rollback path (`LegacyLibraryReturn`) and
+`signed-sandbox`), and this document and docs/release.md. The default Developer ID build then becomes
+`local.daybook.phone` too, with its Developer ID profile. The rollback path (`LegacyLibraryReturn`) and
 `replica.json` stay in every build, sandboxed or not, so any later unsandboxed build can still go back.
 
 ## The process-tap probe
