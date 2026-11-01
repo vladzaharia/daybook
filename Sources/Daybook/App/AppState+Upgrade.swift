@@ -39,7 +39,10 @@ extension AppState {
         #if DEBUG
         guard UpgradeDemo.showsOffers else { return nil }
         #endif
-        return Upgrades.offer(for: meeting, status: processingStatus(for: meeting), candidates: upgradeCandidates, ranks: upgradeRanks)
+        // Only a conversation with nothing working or waiting is compared, so a busy page never works out routes.
+        let status = processingStatus(for: meeting)
+        guard status == .done else { return nil }
+        return Upgrades.offer(for: meeting, status: status, candidates: upgradeCandidates, ranks: upgradeRanks)
     }
 
     /// The page asks before it shows a conversation whose summary the cloud could do clearly better: Settings › Cloud is
