@@ -24,8 +24,8 @@ struct SummaryPage: View {
             if let summary = meeting.summary {
                 SummaryBody(state: state, meeting: meeting, summary: summary, revealing: summary.createdAt != openedWith)
                     .id(summary.createdAt)
-                    // Summarize Again: the old summary steps back while the new one is written.
-                    .opacity(meeting.status == .summarizing ? 0.5 : 1)
+                    // Summarize Again: the old summary steps back while the new one is written (not while it counts down).
+                    .opacity(meeting.status == .summarizing && state.placements[meeting.id]?.deadline == nil ? 0.5 : 1)
                     .transition(.opacity)
             } else if meeting.tracks.isEmpty && state.recordingID != meeting.id {
                 // The byline already says "Notes only"; this line offers the ways to add audio.
