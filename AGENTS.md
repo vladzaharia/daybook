@@ -36,4 +36,4 @@ History currently has one imperative commit: `Build Daybook local-first macOS me
 
 ## Privacy & Configuration
 
-Keep inference local. Never commit recordings, transcripts, model weights, or credentials. Store notarization credentials in Keychain; configure signing through `DAYBOOK_TEAM_ID` (or the ignored `Apps/*/Config/Signing.local.xcconfig`) and `DAYBOOK_NOTARY_PROFILE`. Preserve originals, provenance, corrections, and sync recovery history when changing processing or storage.
+Keep transcription, speaker detection, voice profiles, and audio on the device. Summaries may use a cloud model only when the person has added their own key and chosen it; only the transcript text, notes, bookmarks, template, and vocabulary are sent (`docs/cloud.md`). Never commit recordings, transcripts, model weights, or credentials. Store notarization credentials in Keychain; configure signing through `DAYBOOK_TEAM_ID` (or the ignored `Apps/*/Config/Signing.local.xcconfig`) and `DAYBOOK_NOTARY_PROFILE`. Preserve originals, provenance, corrections, and sync recovery history when changing processing or storage.
