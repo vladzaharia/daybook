@@ -104,4 +104,50 @@ final class ConversationActionsTests: XCTestCase {
         let busy = ConversationActions.track(track, in: two, context: .init(platform: .mac, isProcessingHere: true))
         XCTAssertEqual(busy[3].actions[0].availability, .unavailable("Processing now"))
     }
+
+    func testBehaviorEverySymbolIsOnTheOldestSystemThatShowsIt() throws {
+        // SF Symbols' own record: the release each name arrived in, and each release's first system.
+        let url = URL(fileURLWithPath: "/System/Library/CoreServices/CoreGlyphs.bundle/Contents/Resources/name_availability.plist")
+        guard let data = try? Data(contentsOf: url),
+              let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let symbols = plist["symbols"] as? [String: String],
+              let releases = plist["year_to_release"] as? [String: [String: String]] else {
+            throw XCTSkip("This system has no record of SF Symbols' releases")
+        }
+        func version(_ text: String) -> [Int] { Array((text.split(separator: ".").map { Int($0) ?? 0 } + [0, 0, 0]).prefix(3)) }
+        // Package.swift and both apps' projects: macOS 15, iOS 26.
+        let oldest: [(platform: ConversationAction.Platform, key: String, minimum: String)] = [(.mac, "macOS", "15.0"), (.iPhone, "iOS", "26.0")]
+        func check(_ symbol: String, title: String, on platforms: Set<ConversationAction.Platform>) throws {
+            let release = try XCTUnwrap(symbols[symbol], "\(title): “\(symbol)” isn't a symbol")
+            for (platform, key, minimum) in oldest where platforms.contains(platform) {
+                let first = try XCTUnwrap(releases[release]?[key], "\(release) has no \(key) release")
+                XCTAssertFalse(version(minimum).lexicographicallyPrecedes(version(first)), "\(title): “\(symbol)” first shipped in \(key) \(first)")
+            }
+        }
+
+        var two = meeting(transcribed: false)
+        two.tracks.append(RecordingTrack(source: .soundcore, relativePath: "Originals/b.wav", fileName: "b.wav", duration: 60))
+        var other = Meeting(title: "Notes")
+        other.placement = .personal
+        var groups: [ConversationActionGroup] = []
+        for platform in [ConversationAction.Platform.mac, .iPhone] {
+            let context = ConversationActions.Context(platform: platform, canTakePhoto: true)
+            for conversation in [meeting(), two, other] { groups += ConversationActions.actions(for: conversation, context: context) }
+            groups += ConversationActions.batch([two.id, other.id], in: [two, other], context: context)
+            groups += ConversationActions.track(two.tracks[0], in: two, context: context)
+        }
+        func all(_ actions: [ConversationAction]) -> [ConversationAction] { actions.flatMap { [$0] + all($0.children) } }
+        let actions = all(groups.flatMap(\.actions))
+        XCTAssertTrue(actions.contains { $0.id == .process(.newAudio) } && actions.contains { $0.id == .moveTo(.work) })
+        for action in actions {
+            guard action.id != .showInFinder else {
+                XCTAssertEqual(action.symbol, ConversationAction.showInFinderSymbol, "Finder's symbol goes through its check of the system")
+                continue
+            }
+            try check(action.symbol, title: action.title, on: action.platforms)
+        }
+        // Finder's own symbol only where the system has it; macOS 15 gets one it has.
+        try check(ConversationAction.finderFallbackSymbol, title: "Show in Finder", on: [.mac])
+        XCTAssertEqual(releases[try XCTUnwrap(symbols[ConversationAction.finderSymbol])]?["macOS"], "26.0")
+    }
 }

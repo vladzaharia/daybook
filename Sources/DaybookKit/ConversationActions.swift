@@ -70,6 +70,15 @@ public struct ConversationAction: Equatable, Identifiable, Sendable {
     }
 
     public var isAvailable: Bool { availability.isAvailable }
+
+    /// Show in Finder's symbol: Finder's own where the system has it (SF Symbols 7, macOS 26), and on macOS 15 an
+    /// arrow out to another app. Every other action's symbol is on both apps' oldest systems.
+    public static var showInFinderSymbol: String {
+        if #available(macOS 26, iOS 26, *) { return finderSymbol }
+        return finderFallbackSymbol
+    }
+    static let finderSymbol = "finder"
+    static let finderFallbackSymbol = "arrow.up.forward.app"
 }
 
 /// The actions of one group, between dividers.
@@ -145,7 +154,7 @@ public enum ConversationActions {
             ConversationAction(id: .moveToFolder, title: mac ? "Move to Folder" : "Move to Folder…", symbol: "folder"),
             ConversationAction(id: .tags, title: "Tags…", symbol: "tag"),
             placement(personal),
-            ConversationAction(id: .showInFinder, title: "Show in Finder", symbol: "finder", platforms: [.mac]),
+            ConversationAction(id: .showInFinder, title: "Show in Finder", symbol: ConversationAction.showInFinderSymbol, platforms: [.mac]),
         ]
 
         let trash = [ConversationAction(id: .moveToTrash, title: "Move to Trash…", symbol: "trash", role: .destructive, availability: locked)]
@@ -232,7 +241,7 @@ public enum ConversationActions {
             ConversationActionGroup(id: .filing, actions: [
                 ConversationAction(id: .moveToNewConversation, title: "Move to New Conversation", symbol: "rectangle.portrait.and.arrow.right",
                                    availability: locked.map { .unavailable($0) } ?? (only ? .unavailable("The only recording") : .available)),
-                ConversationAction(id: .showInFinder, title: "Show in Finder", symbol: "finder", platforms: [.mac]),
+                ConversationAction(id: .showInFinder, title: "Show in Finder", symbol: ConversationAction.showInFinderSymbol, platforms: [.mac]),
             ]),
             ConversationActionGroup(id: .trash, actions: [
                 ConversationAction(id: .removeRecording, title: "Remove Recording…", symbol: "trash", role: .destructive,
