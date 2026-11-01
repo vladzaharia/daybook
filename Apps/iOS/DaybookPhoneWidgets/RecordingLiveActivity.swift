@@ -1,5 +1,6 @@
 import ActivityKit
 import AppIntents
+import DaybookDesign
 import SwiftUI
 import WidgetKit
 
@@ -71,7 +72,7 @@ struct ActivityClock: View {
             Text(timerInterval: state.timerStart...Date.distantFuture, countsDown: false, showsHours: true)
                 .multilineTextAlignment(.trailing)
         } else {
-            Text(TimeLabel.short(state.frozenElapsed ?? 0))
+            Text(DaybookTime.short(state.frozenElapsed ?? 0))
         }
     }
 }

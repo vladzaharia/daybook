@@ -426,7 +426,7 @@ Code: `Sources/Daybook/Captions/` (controller, echo rule, store, views, settings
   and are deleted, as are captions of conversations moved to the Trash (`prune`, a second after the
   library changes).
 - **Where they show.** Floating Notes, while recording: a fixed-height strip above Bookmark and
-  Stop (`LiveCaptionStrip`, `.panel` style, shared with the iPhone through `DaybookDesign`) with
+  Stop (`LiveCaptionStrip`, `.panel` style, from `DaybookDesign`, which the iPhone links too; there it follows Dynamic Type) with
   "Live captions · tentative" and the newest two lines: the newest larger, in body ink, keeping its
   latest words; the one before smaller, in Secondary; still-revised words lighter. The source (You
   or Call) sits in the time lane, so arriving words never move the notes. Compact, it shows the

@@ -168,18 +168,3 @@ protocol LocalPasteboardWriting {
 }
 
 extension UIPasteboard: LocalPasteboardWriting {}
-
-/// Marks every match of the library search on the page and in the transcript.
-enum FindHighlight {
-    static func mark(_ text: AttributedString, query: String) -> AttributedString {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return text }
-        var text = text
-        var cursor = text.startIndex
-        while cursor < text.endIndex, let range = text[cursor...].range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) {
-            text[range].backgroundColor = Color(uiColor: .systemYellow).opacity(0.45)
-            cursor = range.upperBound
-        }
-        return text
-    }
-}

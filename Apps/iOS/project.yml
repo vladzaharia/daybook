@@ -27,9 +27,10 @@ settings:
 
 packages:
   # The repository's Swift package: DaybookKit (which re-exports DaybookCore and DaybookDevices),
-  # DaybookLink, DaybookLive and DaybookModelStore for live captions, and DaybookIntelligence for
+  # DaybookLink, DaybookLive and DaybookModelStore for live captions, DaybookIntelligence for
   # processing the iPhone's own recordings (docs/iphone.md, "Processing on this iPhone"), which
-  # builds for iOS without WhisperKit and MLXVLM (Package.swift).
+  # builds for iOS without WhisperKit and MLXVLM (Package.swift), and DaybookDesign and DaybookUI, the
+  # design and screens the Mac shares (docs/interface.md, "Design tokens").
   Daybook:
     path: ../..
 
@@ -58,6 +59,11 @@ targets:
       # Mac's engines (FluidAudio, MLX) and its ProcessingEngine.
       - package: Daybook
         product: DaybookIntelligence
+      # The design both apps draw (tokens and components), and the screens they share over the library.
+      - package: Daybook
+        product: DaybookDesign
+      - package: Daybook
+        product: DaybookUI
       - target: DaybookPhoneWidgets
         embed: true
         codeSign: true
@@ -166,6 +172,11 @@ targets:
     sources:
       - path: DaybookPhoneWidgets
       - path: Shared
+    dependencies:
+      # The tokens and the clock's format for the Live Activity and widgets: SwiftUI and plain values,
+      # extension-safe. Not DaybookUI, which reads the library's models.
+      - package: Daybook
+        product: DaybookDesign
     entitlements:
       path: DaybookPhoneWidgets/DaybookPhoneWidgets.entitlements
       properties:

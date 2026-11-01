@@ -75,6 +75,8 @@ targets:
         product: DaybookLink
       - package: Daybook
         product: DaybookDesign
+      - package: Daybook
+        product: DaybookUI
     postCompileScripts:
       - name: Generate app icon
         # The same drawing as before: scripts/make-icon.swift, then iconutil. Runs when the script changes.

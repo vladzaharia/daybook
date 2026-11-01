@@ -64,6 +64,9 @@ public struct StatusMetrics: Equatable, Sendable {
     /// Mac surfaces (Floating Notes): 12 pt, an 18 pt glyph column.
     public static let mac = StatusMetrics(titleSize: 12, textSize: 12, glyphSize: 12, glyphColumn: 18, spacing: 6, usesTextStyles: false)
 
+    /// A density's metrics: the iPhone's under touch, the Mac's in a window or the panel.
+    public static func `for`(_ density: DaybookDensity) -> StatusMetrics { density == .touch ? .phone : .mac }
+
     var titleFont: Font { usesTextStyles ? .subheadline.weight(.medium) : .system(size: titleSize, weight: .medium) }
     var textFont: Font { usesTextStyles ? .subheadline : .system(size: textSize) }
     var glyphFont: Font { usesTextStyles ? .subheadline.weight(.medium) : .system(size: glyphSize, weight: .medium) }
@@ -73,13 +76,17 @@ public struct StatusMetrics: Equatable, Sendable {
 /// work runs. Recording swaps the glyph for the red dot.
 public struct StatusLineView: View {
     private let line: StatusLineItem
-    private let metrics: StatusMetrics
+    private let override: StatusMetrics?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.daybookDensity) private var density
 
-    public init(_ line: StatusLineItem, metrics: StatusMetrics = .phone) {
+    /// - Parameter metrics: An explicit size; nil takes the surface's density's.
+    public init(_ line: StatusLineItem, metrics: StatusMetrics? = nil) {
         self.line = line
-        self.metrics = metrics
+        override = metrics
     }
+
+    private var metrics: StatusMetrics { override ?? .for(density) }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -150,33 +157,25 @@ struct StatusGlyph: View {
     }
 }
 
-/// Work in progress: the 2 pt brand-gradient line, as in a list row that's transcribing.
+/// Work in progress: the 2 pt brand-gradient line, as in a list row that's transcribing, filling its
+/// width. It steps without animating (`WorkProgress`); the words beside it carry the percent.
 public struct WorkProgressLine: View {
     private let fraction: Double
     private let height: CGFloat
 
-    public init(fraction: Double, height: CGFloat = 2) {
+    public init(fraction: Double, height: CGFloat = WorkProgress.Style.line.height) {
         self.fraction = fraction
         self.height = height
     }
 
     public var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(DaybookPalette.quietFill)
-                Capsule().fill(DaybookPalette.brandGradient())
-                    .frame(width: max(height, proxy.size.width * min(1, max(0, fraction))))
-                    .daybookGlow(DaybookPalette.neonCyan, radius: 3)
-            }
-        }
-        .frame(height: height)
-        .daybookMotion(.linear(duration: 0.3), value: fraction)
-        .accessibilityHidden(true)
+        WorkProgress(fraction: fraction, style: .init(height: height))
+            .accessibilityHidden(true)
     }
 }
 
-/// A compact status: glyph (or the red dot) and a short label in a quiet capsule. The iPhone's
-/// multipoint line ("● Also recording on Studio Mac") and the Mac's Floating Notes status bar.
+/// A compact status: glyph (or the red dot) and a short label in a quiet capsule: the Mac's Floating
+/// Notes status bar, and the shape the iPhone's multipoint line ("● Also recording on Studio Mac") takes.
 public struct StatusChip: View {
     public struct Metrics: Equatable, Sendable {
         public var textSize: CGFloat
@@ -195,6 +194,9 @@ public struct StatusChip: View {
         public static let phone = Metrics(textSize: 13, glyphSize: 13, horizontalPadding: 10, height: 30, usesTextStyles: true)
         /// A Mac title-bar chip: 11 pt, 20 pt tall.
         public static let mac = Metrics(textSize: 11, glyphSize: 10.5, horizontalPadding: 7, height: 20, usesTextStyles: false)
+
+        /// A density's metrics: the iPhone's under touch, the Mac's in a window or the panel.
+        public static func `for`(_ density: DaybookDensity) -> Metrics { density == .touch ? .phone : .mac }
     }
 
     private let symbol: String?
@@ -204,17 +206,19 @@ public struct StatusChip: View {
     private let progress: Double?
     private let filled: Bool
     private let truncates: Bool
-    private let metrics: Metrics
+    private let override: Metrics?
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.daybookDensity) private var density
 
     /// - Parameters:
     ///   - showsDot: The red recording dot after the glyph (a device recording along).
     ///   - progress: Work in progress: the gradient line along the chip's foot.
     ///   - filled: A quiet capsule behind it; off for a bare glyph and label.
     ///   - truncates: The label gives way to a narrow container (a sentence); chips in a row keep theirs.
+    ///   - metrics: An explicit size; nil takes the surface's density's.
     public init(symbol: String?, text: String?, tone: StatusTone, showsDot: Bool = false, progress: Double? = nil,
-                filled: Bool = true, truncates: Bool = false, metrics: Metrics = .phone) {
+                filled: Bool = true, truncates: Bool = false, metrics: Metrics? = nil) {
         self.symbol = symbol
         self.text = text
         self.tone = tone
@@ -222,10 +226,13 @@ public struct StatusChip: View {
         self.progress = progress
         self.filled = filled
         self.truncates = truncates
-        self.metrics = metrics
+        override = metrics
     }
 
+    private var metrics: Metrics { override ?? .for(density) }
+
     public var body: some View {
+        let metrics = self.metrics
         HStack(spacing: metrics.glyphSize * 0.4) {
             if let symbol {
                 StatusGlyph(symbol: symbol, tone: tone == .recording ? .linked : tone,
@@ -242,7 +249,9 @@ public struct StatusChip: View {
                 Text(text)
                     .font(metrics.usesTextStyles ? .footnote.weight(.medium) : .system(size: metrics.textSize, weight: .medium))
                     .monospacedDigit()
-                    .foregroundStyle(tone == .attention ? DaybookPalette.Ink.warning : DaybookPalette.Ink.secondary)
+                    // On the warning wash, warning words take the ink that keeps 4.5:1 there.
+                    .foregroundStyle(tone == .attention ? (filled ? DaybookPalette.Ink.onAttention : DaybookPalette.Ink.warning)
+                                     : DaybookPalette.Ink.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .fixedSize(horizontal: !truncates, vertical: false)
@@ -253,11 +262,11 @@ public struct StatusChip: View {
         .frame(minHeight: metrics.height)
         .background {
             if filled {
-                Capsule(style: .circular).fill(tone == .attention ? DaybookPalette.attentionFill : DaybookPalette.quietFill)
+                DaybookRadius.chip.fill(tone == .attention ? DaybookPalette.attentionFill : DaybookPalette.quietFill)
             }
         }
         .overlay {
-            if filled && contrast == .increased { Capsule(style: .circular).strokeBorder(DaybookPalette.Ink.meta.opacity(0.6), lineWidth: 1) }
+            if filled && contrast == .increased { DaybookRadius.chip.strokeBorder(DaybookPalette.Ink.meta.opacity(0.6), lineWidth: 1) }
         }
         .overlay(alignment: .bottom) {
             if let progress {

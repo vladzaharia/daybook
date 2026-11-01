@@ -5,13 +5,13 @@ import AppKit
 import UIKit
 #endif
 
-// Daybook's design tokens, shared by the Mac (`DaybookStyle`) and the iPhone (`PhoneStyle`), so the
-// two apps draw the same ink (docs/interface.md, "Design tokens"). Colour has one job each: red is
-// recording right now, amber is something you marked, teal is selected or actionable, neon mint is
-// playing now, and the brand gradient is Daybook itself or work in progress.
+// Daybook's colour tokens, the one palette both apps draw with (docs/interface.md, "Design tokens"). The
+// Mac's `DaybookStyle` and the iPhone's `PhoneStyle` name these values; neither keeps a copy. Colour has
+// one job each: red is recording right now, amber is something you marked, teal is selected or
+// actionable, neon mint is playing now, and the brand gradient is Daybook itself or work in progress.
 //
-// The public API is SwiftUI and plain values only. Each app builds its own AppKit or UIKit twin from
-// a token's `DaybookShade` (the notes text views need one), so nothing here names a platform type.
+// The public API is SwiftUI and plain values, plus each token's AppKit or UIKit twin (`nsColor`,
+// `uiColor`) for the notes text views.
 
 /// One colour token: its sRGB value in light and dark appearances, and with Increase Contrast.
 public struct DaybookShade: Hashable, Sendable {
@@ -38,8 +38,19 @@ public struct DaybookShade: Hashable, Sendable {
         }
     }
 
+    /// Light, dark, light with Increase Contrast, and dark with Increase Contrast.
+    public var variants: [UInt32] { [light, dark, lightContrast, darkContrast] }
+
     /// The token as a colour that follows the appearance and Increase Contrast.
     public var color: Color { Color(shade: self) }
+
+    #if canImport(AppKit)
+    /// The token for AppKit text views: the same values, following the appearance.
+    public var nsColor: NSColor { NSColor.daybookShade(self) }
+    #elseif canImport(UIKit)
+    /// The token for UIKit text views: the same values, following the traits.
+    public var uiColor: UIColor { UIColor.daybookShade(self) }
+    #endif
 
     #if DEBUG
     /// Debug: every token draws its Increase Contrast value, for snapshots. The system setting
@@ -89,7 +100,7 @@ public enum DaybookPalette {
         /// Stop's fill; white labels keep 4.5:1 on it.
         public static let recordFill = DaybookShade(light: 0xD92D20, dark: 0xE5243B)
 
-        /// Every token by name, for tests that keep the apps' own copies in step.
+        /// The core tokens by name: the twenty each app once kept its own copy of.
         public static let all: [String: DaybookShade] = [
             "accent": accent, "prominentFill": prominentFill, "paper": paper, "bookmark": bookmark,
             "neonMint": neonMint, "neonCyan": neonCyan, "neonViolet": neonViolet, "neonMagenta": neonMagenta,
@@ -97,6 +108,59 @@ public enum DaybookPalette {
             "title": title, "body": body, "secondary": secondary, "meta": meta, "faint": faint,
             "link": link, "warning": warning, "error": error, "record": record, "recordFill": recordFill
         ]
+
+        // MARK: Inks for one place each
+
+        /// Text on an accent wash (a tag chip, a tinted button, an action tile): `link` a step darker in
+        /// Light Mode, so it keeps 4.5:1 on the 12–14% wash.
+        public static let onWash = DaybookShade(light: 0x006B5E, dark: 0x34D9C3, lightContrast: 0x005F52, darkContrast: 0x5FE3D4)
+        /// A bookmark count on its 20% amber pill.
+        public static let bookmarkCount = DaybookShade(light: 0x8A5200, dark: 0xFFD23F, lightContrast: 0x6E4100, darkContrast: 0xFFDF70)
+        /// A glyph for audio that's live (playing, listening): neon mint in Dark Mode, where neon reads as
+        /// light; link ink in Light Mode, where mint is too faint (2.4:1) to read as a glyph.
+        public static let liveGlyph = DaybookShade(light: 0x00796B, dark: 0x3DFFD0, lightContrast: 0x005F52, darkContrast: 0x3DFFD0)
+        /// Behind a search match on the page and in the transcript: opaque, so the match's ink is the
+        /// same on any paper.
+        public static let findHighlight = DaybookShade(light: 0xFFE14D, dark: 0xE6C229, lightContrast: 0xFFD60A, darkContrast: 0xFFD60A)
+        /// A search match's words: dark in both appearances, on `findHighlight`.
+        public static let onFind = DaybookShade(light: 0x1A1917, dark: 0x1A1917, lightContrast: 0x000000, darkContrast: 0x000000)
+        /// Warning words on the 9% warning wash (an attention chip): `warning` a step darker in Light Mode,
+        /// where the wash takes it under 4.5:1.
+        public static let onAttention = DaybookShade(light: 0x9C4706, dark: 0xFFB054, lightContrast: 0x8A3F00, darkContrast: 0xFFC37A)
+
+        /// The inks above by name.
+        public static let roles: [String: DaybookShade] = [
+            "onWash": onWash, "bookmarkCount": bookmarkCount, "liveGlyph": liveGlyph,
+            "findHighlight": findHighlight, "onFind": onFind, "onAttention": onAttention
+        ]
+
+        /// Speaker inks, assigned by first appearance: speaker names, the inspector's dots and bars, and
+        /// an owner chip's fill. Tailwind 700s in Light Mode, deep enough for 12 pt names; 300s in Dark.
+        public static let speakers: [DaybookShade] = [
+            DaybookShade(light: 0x0369A1, dark: 0x7DD3FC), DaybookShade(light: 0xA21CAF, dark: 0xF0ABFC),
+            DaybookShade(light: 0x15803D, dark: 0x86EFAC), DaybookShade(light: 0xC2410C, dark: 0xFDBA74),
+            DaybookShade(light: 0x0E7490, dark: 0x67E8F9), DaybookShade(light: 0xBE123C, dark: 0xFDA4AF)
+        ]
+        /// An owner chip's text on its speaker's 14% wash: the Tailwind 800s in Light Mode (the 700s fall
+        /// to about 4.1:1 there), the same 300s in Dark.
+        public static let ownerText: [DaybookShade] = [
+            DaybookShade(light: 0x075985, dark: 0x7DD3FC), DaybookShade(light: 0x86198F, dark: 0xF0ABFC),
+            DaybookShade(light: 0x166534, dark: 0x86EFAC), DaybookShade(light: 0x9A3412, dark: 0xFDBA74),
+            DaybookShade(light: 0x155E75, dark: 0x67E8F9), DaybookShade(light: 0x9F1239, dark: 0xFDA4AF)
+        ]
+
+        /// Every token by name, the role inks, speakers, owners, and the Live Activity's fills and labels
+        /// included, for tests that resolve each one.
+        public static var every: [String: DaybookShade] {
+            var every = all.merging(roles) { first, _ in first }
+            for (index, shade) in speakers.enumerated() { every["speaker\(index)"] = shade }
+            for (index, shade) in ownerText.enumerated() { every["owner\(index)"] = shade }
+            for (name, ink) in ActivityInk.named {
+                every["activity.\(name).fill"] = ink.fill
+                every["activity.\(name).label"] = ink.label
+            }
+            return every
+        }
     }
 
     public static let accent = Shade.accent.color
@@ -109,13 +173,49 @@ public enum DaybookPalette {
     public static let neonMagenta = Shade.neonMagenta.color
     public static let playFill = Shade.playFill.color
     public static let onPlayFill = Shade.onPlayFill.color
+    /// A glyph for live audio: mint in Dark Mode, link ink in Light (`Shade.liveGlyph`).
+    public static let liveGlyph = Shade.liveGlyph.color
+    /// Behind a search match (`FindHighlight`).
+    public static let findHighlight = Shade.findHighlight.color
     /// The system's quaternary fill: chips, the meter's resting bars, the timeline's track.
     public static let quietFill = Color.platformQuaternaryFill
-    /// Something that needs the person: Ink.warning on a 9% wash (the pause box, problem boxes).
+    /// Something that needs the person: Ink.warning on a 9% wash (the pause box, problem chips).
     public static let attentionFill = Ink.warning.opacity(0.09)
+    /// An accent wash behind text in `Ink.onWash`: tag chips, tinted buttons (14%).
+    public static let accentWash = accent.opacity(0.14)
+
+    /// Speaker inks, assigned by first appearance (`Shade.speakers`).
+    public static let speakerInks: [Color] = Shade.speakers.map(\.color)
+    /// A speaker's ink; secondary ink for nobody in particular.
+    public static func speakerInk(_ index: Int?) -> Color {
+        guard let index else { return Ink.secondary }
+        return speakerInks[abs(index) % speakerInks.count]
+    }
+    /// The text of a speaker's owner chip, on `speakerInk(index)` at 14% (`Shade.ownerText`).
+    public static func ownerInk(_ index: Int?) -> Color {
+        guard let index else { return Ink.secondary }
+        return ownerInks[abs(index) % ownerInks.count]
+    }
+    private static let ownerInks: [Color] = Shade.ownerText.map(\.color)
 
     /// Mint into cyan into violet: Daybook itself, or work in progress. Never text or small glyphs.
     public static let brandColors = [neonMint, neonCyan, neonViolet]
+
+    /// What the brand gradient is drawing, which sets its direction.
+    public enum GradientRole: Sendable {
+        /// Progress bars and lines: left to right, the way the work goes.
+        case progress
+        /// The mark, an empty state's symbol, Welcome's bullets: corner to corner.
+        case mark
+    }
+
+    public static func brandGradient(_ role: GradientRole) -> LinearGradient {
+        switch role {
+        case .progress: return brandGradient(from: .leading, to: .trailing)
+        case .mark: return brandGradient(from: .topLeading, to: .bottomTrailing)
+        }
+    }
+
     public static func brandGradient(from start: UnitPoint = .leading, to end: UnitPoint = .trailing) -> LinearGradient {
         LinearGradient(colors: brandColors, startPoint: start, endPoint: end)
     }
@@ -132,85 +232,74 @@ public enum DaybookPalette {
         public static let error = Shade.error.color
         public static let record = Shade.record.color
         public static let recordFill = Shade.recordFill.color
-    }
-}
-
-/// The spacing scale: 4 · 8 · 12 · 16 · 24 · 32 · 48 · 64.
-public enum DaybookSpacing {
-    public static let s1: CGFloat = 4, s2: CGFloat = 8, s3: CGFloat = 12, s4: CGFloat = 16
-    public static let s5: CGFloat = 24, s6: CGFloat = 32, s7: CGFloat = 48, s8: CGFloat = 64
-}
-
-/// Three curves; motion answers only something the person did or a change of state.
-public enum DaybookMotion {
-    public static let hover = Animation.easeOut(duration: 0.12)
-    public static let state = Animation.snappy(duration: 0.25)
-    public static let page = Animation.easeInOut(duration: 0.35)
-    /// What every curve becomes under Reduce Motion.
-    public static let reduced = Animation.easeOut(duration: 0.15)
-}
-
-/// Type: New York for titles only, SF for everything else, monospaced digits for every time.
-public enum DaybookType {
-    public static func title(_ size: CGFloat) -> Font { .system(size: size, weight: .semibold, design: .serif) }
-    public static func clock(_ size: CGFloat, weight: Font.Weight = .medium) -> Font { .system(size: size, weight: weight).monospacedDigit() }
-    /// Times in a margin lane: a fixed size, so "1:02:03" always fits.
-    public static let marginTime = Font.system(size: 11).monospacedDigit()
-}
-
-extension View {
-    /// Animates `value` with `animation`, or a short fade under Reduce Motion.
-    public func daybookMotion<Value: Equatable>(_ animation: Animation, value: Value) -> some View {
-        modifier(DesignMotion(animation: animation, value: value))
+        /// Text on an accent wash (`Shade.onWash`).
+        public static let onWash = Shade.onWash.color
+        /// A bookmark count on its amber pill (`Shade.bookmarkCount`).
+        public static let bookmarkCount = Shade.bookmarkCount.color
+        /// A search match's words (`Shade.onFind`).
+        public static let onFind = Shade.onFind.color
+        /// Warning words on the warning wash (`Shade.onAttention`).
+        public static let onAttention = Shade.onAttention.color
     }
 
-    /// A soft halo for neon in Dark Mode only. Light Mode, Increase Contrast, and Reduce
-    /// Transparency get none, because there it reads as blur rather than light.
-    public func daybookGlow(_ color: Color, radius: CGFloat = 4) -> some View {
-        modifier(DesignGlow(color: color, radius: radius))
-    }
-}
+    /// A filled button's fill and label, as the Live Activity draws them on the Lock Screen and in the
+    /// Dynamic Island. Every label keeps 4.5:1 on its fill in every appearance.
+    public struct ActivityInk: Hashable, Sendable {
+        public let fill: DaybookShade
+        public let label: DaybookShade
 
-private struct DesignMotion<Value: Equatable>: ViewModifier {
-    let animation: Animation
-    let value: Value
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    func body(content: Content) -> some View {
-        content.animation(reduceMotion ? DaybookMotion.reduced : animation, value: value)
-    }
-}
-
-private struct DesignGlow: ViewModifier {
-    let color: Color
-    let radius: CGFloat
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    func body(content: Content) -> some View {
-        if scheme == .dark && contrast == .standard && !reduceTransparency {
-            content.shadow(color: color.opacity(0.6), radius: radius)
-        } else {
-            content
+        public init(fill: DaybookShade, label: DaybookShade) {
+            self.fill = fill
+            self.label = label
         }
+
+        /// Bookmark is amber, so its label is dark where the amber is light.
+        public static let bookmark = ActivityInk(fill: DaybookShade(light: 0xA86400, dark: 0xFFD23F, lightContrast: 0x8A5200, darkContrast: 0xFFDF70),
+                                                 label: DaybookShade(light: 0xFFFFFF, dark: 0x1F1600, lightContrast: 0xFFFFFF, darkContrast: 0x1F1600))
+        /// Resume isn't recording yet, so it isn't red: ink on paper, inverted.
+        public static let resume = ActivityInk(fill: DaybookShade(light: 0x1A1917, dark: 0xF5F4F0, lightContrast: 0x000000, darkContrast: 0xFFFFFF),
+                                               label: DaybookShade(light: 0xFFFFFF, dark: 0x1A1917, lightContrast: 0xFFFFFF, darkContrast: 0x000000))
+        public static let stop = ActivityInk(fill: DaybookShade(light: 0xD92D20, dark: 0xE5243B, lightContrast: 0xB4221A, darkContrast: 0xC81E30),
+                                             label: DaybookShade(light: 0xFFFFFF, dark: 0xFFFFFF, lightContrast: 0xFFFFFF, darkContrast: 0xFFFFFF))
+        public static let all = [bookmark, resume, stop]
+        static let named: [(String, ActivityInk)] = [("bookmark", bookmark), ("resume", resume), ("stop", stop)]
     }
 }
 
-// MARK: - Platform colours, kept out of the public API
+/// WCAG 2 contrast between two sRGB colours, 1...21: what the token tests hold every ink to.
+public enum DaybookContrast {
+    /// Relative luminance of `0xRRGGBB`.
+    public static func luminance(_ rgb: UInt32) -> Double {
+        func channel(_ value: UInt32) -> Double {
+            let c = Double(value & 0xFF) / 255
+            return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(rgb >> 16) + 0.7152 * channel(rgb >> 8) + 0.0722 * channel(rgb)
+    }
+
+    public static func ratio(_ a: UInt32, _ b: UInt32) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
+    /// `color` laid at `opacity` over `background`, as a wash draws it.
+    public static func composite(_ color: UInt32, opacity: Double, over background: UInt32) -> UInt32 {
+        func channel(_ shift: UInt32) -> UInt32 {
+            let top = Double((color >> shift) & 0xFF), bottom = Double((background >> shift) & 0xFF)
+            return UInt32((top * opacity + bottom * (1 - opacity)).rounded())
+        }
+        return channel(16) << 16 | channel(8) << 8 | channel(0)
+    }
+}
+
+// MARK: - Platform colours
 
 extension Color {
     init(shade: DaybookShade) {
         #if canImport(AppKit)
-        self.init(nsColor: NSColor(name: nil) { appearance in
-            let match = appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
-            let isDark = match == .darkAqua || match == .accessibilityHighContrastDarkAqua
-            let contrast = match == .accessibilityHighContrastAqua || match == .accessibilityHighContrastDarkAqua || DaybookShade.forcesContrast
-            return NSColor(rgb: shade.hex(dark: isDark, increasedContrast: contrast))
-        })
+        self.init(nsColor: shade.nsColor)
         #elseif canImport(UIKit)
-        self.init(uiColor: UIColor { traits in
-            UIColor(rgb: shade.hex(dark: traits.userInterfaceStyle == .dark,
-                                   increasedContrast: traits.accessibilityContrast == .high || DaybookShade.forcesContrast))
-        })
+        self.init(uiColor: shade.uiColor)
         #endif
     }
 
@@ -238,24 +327,28 @@ extension NSColor {
         self.init(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
                   blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
     }
+
+    fileprivate static func daybookShade(_ shade: DaybookShade) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let match = appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
+            let isDark = match == .darkAqua || match == .accessibilityHighContrastDarkAqua
+            let contrast = match == .accessibilityHighContrastAqua || match == .accessibilityHighContrastDarkAqua || DaybookShade.forcesContrast
+            return NSColor(rgb: shade.hex(dark: isDark, increasedContrast: contrast))
+        }
+    }
 }
 #elseif canImport(UIKit)
 extension UIColor {
-    fileprivate convenience init(rgb: UInt32) {
+    fileprivate convenience init(daybookRGB rgb: UInt32) {
         self.init(red: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
                   blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
     }
-}
-#endif
 
-/// Times as the interface shows them: "0:14", "12:31", "1:02:03". Internal, so neither app's own
-/// `TimeLabel` is shadowed.
-enum ClockFormat {
-    static func short(_ seconds: Double) -> String {
-        let safe = seconds.isFinite ? min(abs(seconds), Double(Int.max / 2)) : 0
-        let value = Int(safe), sign = seconds < 0 && value > 0 ? "−" : ""
-        return sign + (value >= 3600
-            ? String(format: "%d:%02d:%02d", value / 3600, (value % 3600) / 60, value % 60)
-            : String(format: "%d:%02d", value / 60, value % 60))
+    fileprivate static func daybookShade(_ shade: DaybookShade) -> UIColor {
+        UIColor { traits in
+            UIColor(daybookRGB: shade.hex(dark: traits.userInterfaceStyle == .dark,
+                                          increasedContrast: traits.accessibilityContrast == .high || DaybookShade.forcesContrast))
+        }
     }
 }
+#endif

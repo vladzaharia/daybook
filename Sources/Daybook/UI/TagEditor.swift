@@ -1,3 +1,4 @@
+import DaybookDesign
 import SwiftUI
 
 /// Tags as removable chips followed by a field for adding another.
@@ -43,9 +44,10 @@ private struct TagChip: View {
                 .accessibilityLabel("Remove tag \(tag)")
         }
         .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(Ink.link)
+        // Ink.onWash keeps 4.5:1 on the 14% wash, where link ink falls just under it.
+        .foregroundStyle(Ink.onWash)
         .padding(.leading, 7).padding(.trailing, 5).padding(.vertical, 2)
-        .background(DaybookStyle.accent.opacity(0.14), in: Capsule())
+        .background(DaybookPalette.accentWash, in: Capsule())
         .contentShape(Capsule())
         .onHover { hovering = $0 }
         .onTapGesture { show?() }

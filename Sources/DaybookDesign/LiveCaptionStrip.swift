@@ -86,6 +86,12 @@ public struct LiveCaptionStrip: View {
     private let status: String?
     private let style: CaptionStripStyle
     private let label: String
+    @Environment(\.daybookDensity) private var density
+    /// Under touch the lines follow Dynamic Type like body text, from the style's sizes at the default size.
+    @ScaledMetric(relativeTo: .body) private var typeScale: CGFloat = 1
+
+    /// How much the lines are scaled: Dynamic Type under touch, fixed on the Mac.
+    private var scale: CGFloat { density == .touch ? typeScale : 1 }
 
     public init(lines: [CaptionLine], status: String?, style: CaptionStripStyle, label: String = "Live captions · tentative") {
         self.lines = Array(lines.suffix(style.lines))
@@ -110,7 +116,7 @@ public struct LiveCaptionStrip: View {
                 if let status {
                     row(source: nil) {
                         Text(status)
-                            .font(.system(size: style.olderSize))
+                            .font(.system(size: style.olderSize * scale))
                             .foregroundStyle(DaybookPalette.Ink.meta)
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -124,13 +130,14 @@ public struct LiveCaptionStrip: View {
                             HStack(alignment: .firstTextBaseline, spacing: 5) {
                                 if let speaker = line.speaker {
                                     Text(speaker)
-                                        .font(.system(size: (newest ? style.newestSize : style.olderSize) * 0.8, weight: .semibold))
+                                        .font(.system(size: (newest ? style.newestSize : style.olderSize) * 0.8 * scale, weight: .semibold))
                                         .foregroundStyle(DaybookPalette.Ink.meta)
                                         .lineLimit(1)
                                         .fixedSize()
                                 }
                                 Text(line.text)
-                                    .font(.system(size: newest ? style.newestSize : style.olderSize, weight: newest ? style.newestWeight : .regular))
+                                    .font(.system(size: (newest ? style.newestSize : style.olderSize) * scale,
+                                                  weight: newest ? style.newestWeight : .regular))
                                     .foregroundStyle(line.isTentative ? DaybookPalette.Ink.meta
                                                      : newest ? DaybookPalette.Ink.body : DaybookPalette.Ink.secondary)
                                     .lineLimit(newest ? style.newestLineLimit : style.olderLineLimit)
@@ -142,7 +149,7 @@ public struct LiveCaptionStrip: View {
                         .transition(.opacity)
                     }
                 }
-                .daybookMotion(.easeOut(duration: 0.2), value: lines.map(\.id))
+                .daybookMotion(DaybookMotion.fade, value: lines.map(\.id))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

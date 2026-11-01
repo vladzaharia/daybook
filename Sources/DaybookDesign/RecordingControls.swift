@@ -24,7 +24,7 @@ public enum DaybookControlShape: Equatable, Sendable {
 extension View {
     /// Gives a recorder control its surface: Liquid Glass on iPhone, Daybook's own fills on the Mac.
     @ViewBuilder
-    public func daybookControl(_ role: DaybookControlRole, shape: DaybookControlShape = .roundedRectangle(radius: 20)) -> some View {
+    public func daybookControl(_ role: DaybookControlRole, shape: DaybookControlShape = .roundedRectangle(radius: DaybookRadius.control)) -> some View {
         #if os(iOS)
         switch role {
         case .standard: buttonStyle(.glass).buttonBorderShape(shape.borderShape)
@@ -54,7 +54,7 @@ public struct DaybookControlStyle: ButtonStyle {
     let role: DaybookControlRole
     let shape: DaybookControlShape
 
-    public init(role: DaybookControlRole, shape: DaybookControlShape = .roundedRectangle(radius: 20)) {
+    public init(role: DaybookControlRole, shape: DaybookControlShape = .roundedRectangle(radius: DaybookRadius.control)) {
         self.role = role
         self.shape = shape
     }
@@ -128,7 +128,6 @@ public struct BookmarkControlLabel: View {
     private let count: Int
     private let title: String
     private let size: CGFloat?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// - Parameter size: A fixed size (Mac); nil follows Dynamic Type (`.headline`, iPhone).
     public init(count: Int, title: String = "Bookmark", size: CGFloat? = nil) {
@@ -140,7 +139,7 @@ public struct BookmarkControlLabel: View {
     public var body: some View {
         HStack(spacing: (size ?? 17) * 0.47) {
             Image(systemName: "bookmark.fill")
-                .symbolEffect(.bounce, value: reduceMotion ? 0 : count)
+                .daybookBounce(value: count)
                 .daybookGlow(count > 0 ? DaybookPalette.bookmark : .clear, radius: 3)
             Text(title).lineLimit(1)
             if count > 0 {
@@ -148,7 +147,9 @@ public struct BookmarkControlLabel: View {
                     .font(size.map { .system(size: $0 - 2, weight: .bold).monospacedDigit() } ?? .subheadline.weight(.bold).monospacedDigit())
                     .padding(.horizontal, (size ?? 17) * 0.4)
                     .padding(.vertical, 1)
-                    .background(DaybookPalette.bookmark.opacity(0.2), in: Capsule())
+                    // The count in its own ink, which keeps 4.5:1 on the amber pill.
+                    .foregroundStyle(DaybookPalette.Ink.bookmarkCount)
+                    .background(DaybookPalette.bookmark.opacity(0.2), in: DaybookRadius.chip)
                     .contentTransition(.numericText(value: Double(count)))
             }
         }
@@ -206,56 +207,5 @@ public struct RecordControlLabel: View {
         }
         .font(size.map { .system(size: $0, weight: .semibold) } ?? .title3.weight(.semibold))
         .foregroundStyle(DaybookPalette.Ink.title)
-    }
-}
-
-/// Something that needs the person, in one quiet box: a warning headline, what happened and what
-/// happens next, and at most two actions. The iPhone's pause box; the Mac's stopped-with-a-problem.
-public struct AttentionBox<Actions: View>: View {
-    private let title: String
-    private let symbol: String
-    private let message: String?
-    private let compact: Bool
-    private let actions: Actions
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    public init(title: String, symbol: String = "exclamationmark.triangle.fill", message: String?, compact: Bool = false,
-                @ViewBuilder actions: () -> Actions) {
-        self.title = title
-        self.symbol = symbol
-        self.message = message
-        self.compact = compact
-        self.actions = actions()
-    }
-
-    public var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 6 : 10) {
-            Label(title, systemImage: symbol)
-                .font(compact ? .system(size: 12, weight: .semibold) : .headline)
-                .foregroundStyle(DaybookPalette.Ink.warning)
-                .fixedSize(horizontal: false, vertical: true)
-            if let message {
-                Text(message)
-                    .font(compact ? .system(size: 12) : .subheadline)
-                    .foregroundStyle(DaybookPalette.Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            actions
-        }
-        .padding(compact ? 10 : 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(DaybookPalette.attentionFill, in: RoundedRectangle(cornerRadius: compact ? 10 : 20, style: .continuous))
-        .overlay {
-            if contrast == .increased {
-                RoundedRectangle(cornerRadius: compact ? 10 : 20, style: .continuous).strokeBorder(DaybookPalette.Ink.warning, lineWidth: 1)
-            }
-        }
-        .accessibilityElement(children: .contain)
-    }
-}
-
-extension AttentionBox where Actions == EmptyView {
-    public init(title: String, symbol: String = "exclamationmark.triangle.fill", message: String?, compact: Bool = false) {
-        self.init(title: title, symbol: symbol, message: message, compact: compact) { EmptyView() }
     }
 }

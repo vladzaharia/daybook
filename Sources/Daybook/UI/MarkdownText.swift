@@ -62,7 +62,8 @@ struct MarkdownText: View {
     /// Inline Markdown from a model, with its links dropped (`ModelText.inlineMarkdown`).
     static func inline(_ text: String) -> AttributedString { ModelText.inlineMarkdown(text) }
 
-    /// Inline Markdown with the library search's matches marked, as transcript passages mark them.
+    /// Inline Markdown with the library search's matches marked (DaybookDesign's `FindHighlight`), as
+    /// transcript passages mark them.
     static func inline(_ text: String, highlighting query: String) -> AttributedString {
         FindHighlight.mark(inline(text), query: query)
     }
@@ -74,21 +75,5 @@ extension EnvironmentValues {
     var findQuery: String {
         get { self[FindQueryKey.self] }
         set { self[FindQueryKey.self] = newValue }
-    }
-}
-
-/// Marks every match of the search with the system find highlight, on the summary and in the transcript.
-enum FindHighlight {
-    static func mark(_ text: AttributedString, query: String) -> AttributedString {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return text }
-        var text = text
-        var cursor = text.startIndex
-        while cursor < text.endIndex, let range = text[cursor...].range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) {
-            text[range].backgroundColor = Color(nsColor: .findHighlightColor)
-            text[range].foregroundColor = .black
-            cursor = range.upperBound
-        }
-        return text
     }
 }

@@ -1,6 +1,11 @@
 import AppIntents
+import DaybookDesign
 import SwiftUI
 import WidgetKit
+
+/// The extension links DaybookDesign and not DaybookKit, so the shared files it compiles read times from
+/// `DaybookTime`, which has DaybookKit's `TimeLabel` rule (tests hold the two equal).
+typealias TimeLabel = DaybookTime
 
 /// A small Home Screen and Lock Screen widget: Record when idle (with the last conversation),
 /// the clock and Bookmark while recording.
@@ -48,7 +53,7 @@ private struct WidgetClock: View {
     var body: some View {
         switch display {
         case .recording(let since): Text(since, style: .timer)
-        case .paused(let elapsed): Text(TimeLabel.short(elapsed))
+        case .paused(let elapsed): Text(DaybookTime.short(elapsed))
         case .idle, .unconfirmed: Text("–")
         }
     }

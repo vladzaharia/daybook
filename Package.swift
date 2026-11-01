@@ -15,8 +15,12 @@ import PackageDescription
 //                        WhisperKit and MLXVLM, which the iPhone doesn't use)
 //   DaybookLink          the Mac <-> iPhone local-network channel: pairing, control, status (macOS + iOS)
 //   DaybookCaptions      tentative on-device live captions for any audio source (Speech framework; macOS + iOS)
-//   DaybookDesign        the design both apps share: tokens, the rolling meter, the clock, caption strip,
-//                        status lines and chips, and the recorder's controls (SwiftUI only; macOS + iOS)
+//   DaybookDesign        the design both apps share: tokens (colour, type, spacing, radii, motion), buttons,
+//                        progress, chips, boxes, tiles, the rolling meter, the clock, caption strip, status
+//                        lines and chips, and the recorder's controls (SwiftUI only, no models: the widgets
+//                        link it; macOS + iOS)
+//   DaybookUI            the screens both apps share, over DaybookKit's models: page geometry, layout and
+//                        density, the seams each app fills, and Settings' rows (SwiftUI; macOS + iOS)
 //   Daybook              the Mac app
 let package = Package(
     name: "Daybook",
@@ -31,7 +35,8 @@ let package = Package(
         .library(name: "DaybookIntelligence", targets: ["DaybookIntelligence"]),
         .library(name: "DaybookLink", targets: ["DaybookLink"]),
         .library(name: "DaybookCaptions", targets: ["DaybookCaptions"]),
-        .library(name: "DaybookDesign", targets: ["DaybookDesign"])
+        .library(name: "DaybookDesign", targets: ["DaybookDesign"]),
+        .library(name: "DaybookUI", targets: ["DaybookUI"])
     ],
     dependencies: [
         // argmax-oss-swift is the renamed WhisperKit repository; it vendors its own Hub and tokenizer code.
@@ -53,6 +58,9 @@ let package = Package(
         // SwiftUI only, no models: either app's views can use it without the other's code.
         .target(name: "DaybookDesign"),
         .target(name: "DaybookDevices", dependencies: ["DaybookCore", "DaybookCaptions"]),
+        // Shared screens over the library's models; not the model store or the engines, so it stays light
+        // for the iPhone. macOS 26 API behind availability checks: the Mac deploys to macOS 15.
+        .target(name: "DaybookUI", dependencies: ["DaybookDesign", "DaybookKit", "DaybookCaptions", "DaybookLink"]),
         // DaybookLink for the recorder handoff's fast path (RecorderHandoff.swift). Resources/ModelCatalog
         // is the built-in model manifest (docs/models.md), shared so the iPhone can name the models behind
         // a result and list their licenses. CloudCatalog.json and CloudPrices.json are the cloud models'
@@ -102,7 +110,8 @@ let package = Package(
             "DaybookIntelligence",
             "DaybookLink",
             "DaybookCaptions",
-            "DaybookDesign"
+            "DaybookDesign",
+            "DaybookUI"
         ]),
         // What every test bundle shares (Tests/DaybookTestSupport): waiting for something to happen, and
         // UserDefaults suites and folders that are removed when a test ends.
@@ -133,8 +142,12 @@ let package = Package(
             "DaybookLink",
             "DaybookCaptions",
             "DaybookDesign",
+            "DaybookUI",
             "DaybookTestSupport"
         ], resources: [.copy("Fixtures")]), // Fixtures/Shipped: files written by shipped versions.
+        // The tokens' values and contrast, and DaybookKit for the clock's rule (DaybookTime against TimeLabel).
+        .testTarget(name: "DaybookDesignTests", dependencies: ["DaybookDesign", "DaybookKit"]),
+        .testTarget(name: "DaybookUITests", dependencies: ["DaybookUI", "DaybookDesign", "DaybookKit"]),
         .testTarget(name: "DaybookLinkTests", dependencies: ["DaybookLink", "DaybookTestSupport"]),
         .testTarget(name: "DaybookCaptionsTests", dependencies: ["DaybookCaptions", "DaybookTestSupport"]),
         .testTarget(name: "DaybookLiveTests", dependencies: ["DaybookLive", "DaybookCaptions", "DaybookKit", "DaybookCore",

@@ -1,5 +1,5 @@
-import DaybookCaptions
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// Where a Settings row leads.
@@ -275,158 +275,16 @@ struct SettingsLink<Label: View>: View {
 
 // MARK: Rows
 
-/// The measurements every Settings row shares, so titles line up whatever the symbol.
-enum SettingsMetrics {
-    /// The symbol tile at the default text size; it grows with Dynamic Type, up to `tileLimit`.
-    static let tile: CGFloat = 30
-    static let tileLimit: CGFloat = 42
-    /// Between the tile column and the text.
-    static let gap: CGFloat = 12
-    /// Between a page and the open Duo's crease. Lists inset their cards a further 16–20 pt, so
-    /// cards end about `PhoneStyle.Page.creaseClearance` from the fold.
-    static let creaseGap: CGFloat = 8
-}
-
-/// The tile column's width at the person's text size.
-struct SettingsTileWidth: DynamicProperty {
-    @ScaledMetric(relativeTo: .body) private var scaled = SettingsMetrics.tile
-    var value: CGFloat { min(scaled, SettingsMetrics.tileLimit) }
-}
-
-/// A row's symbol on a neutral tile, like the status sheet's: teal only while the device it stands
-/// for is connected, orange while something needs you.
-struct SettingsTile: View {
-    enum Tone { case neutral, active, attention }
-
-    let systemImage: String
-    var tone: Tone = .neutral
-    /// A larger tile (a device page's header); nil for the row column.
-    var size: CGFloat?
-    private let column = SettingsTileWidth()
-    @ScaledMetric(relativeTo: .title) private var scale: CGFloat = 1
-
-    var body: some View {
-        let side = size.map { min($0 * scale, $0 * 1.35) } ?? column.value
-        Image(systemName: systemImage)
-            .font(.system(size: side * 0.5, weight: .medium))
-            .foregroundStyle(ink)
-            .frame(width: side, height: side)
-            .background(fill.opacity(0.12), in: RoundedRectangle(cornerRadius: side * 0.24, style: .continuous))
-            .accessibilityHidden(true)
-    }
-
-    private var ink: Color {
-        switch tone {
-        case .neutral: return PhoneStyle.Ink.secondary
-        case .active: return PhoneStyle.accent
-        case .attention: return PhoneStyle.Ink.warning
-        }
-    }
-
-    private var fill: Color {
-        switch tone {
-        case .neutral: return .gray
-        case .active: return PhoneStyle.accent
-        case .attention: return PhoneStyle.Ink.warning
-        }
-    }
-}
-
-/// A Settings row: its symbol on a tile, the title, and one line of what it's set to or doing.
-/// Explicit inks, so a row inside a button keeps them.
-struct SettingsRow: View {
-    let title: String
-    let detail: String?
-    let systemImage: String
-    var tone: SettingsTile.Tone = .neutral
-    /// The detail in orange: it needs you.
-    var detailNeedsAttention = false
-
-    var body: some View {
-        HStack(spacing: SettingsMetrics.gap) {
-            SettingsTile(systemImage: systemImage, tone: tone)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title.wrappingAsName)
-                    .foregroundStyle(PhoneStyle.Ink.title)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let detail {
-                    Text(detail.keepingSeparators)
-                        .font(.footnote)
-                        .foregroundStyle(detailNeedsAttention ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .padding(.vertical, 1)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// An action in a list of rows ("Pair with Your Mac…", "Sync Now"): its symbol in the tile column,
-/// then its title, both in the link's ink, so it lines up with the rows around it.
-struct SettingsActionLabel: View {
-    let title: String
-    let systemImage: String
-    private let column = SettingsTileWidth()
-
-    var body: some View {
-        HStack(spacing: SettingsMetrics.gap) {
-            Image(systemName: systemImage)
-                .font(.body.weight(.medium))
-                .frame(width: column.value)
-                .accessibilityHidden(true)
-            Text(title).fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundStyle(PhoneStyle.Ink.link)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// The top of a device's page (a recorder, a Mac): its tile, its name in New York, and its status.
-/// The bar stays quiet, so the name is shown once.
-struct DevicePageHeader: View {
-    let systemImage: String
-    let isActive: Bool
-    let title: String
-    let status: String
-    var statusNeedsAttention = false
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    var body: some View {
-        // At the accessibility sizes the tile sits above the name, which then has the page's width.
-        let layout = typeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: PhoneStyle.Space.s3))
-            : AnyLayout(HStackLayout(alignment: .center, spacing: 14))
-        layout {
-            SettingsTile(systemImage: systemImage, tone: isActive ? .active : .neutral, size: 56)
-            VStack(alignment: .leading, spacing: 4) {
-                // On one line when it fits; else a size smaller, wrapping at spaces (a page of the open Duo).
-                ViewThatFits(in: .horizontal) {
-                    Text(title).font(PhoneStyle.Typeface.title(.title)).lineLimit(1)
-                    Text(title.wrappingAsName)
-                        .font(PhoneStyle.Typeface.title(.title2))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .foregroundStyle(PhoneStyle.Ink.title)
-                .accessibilityAddTraits(.isHeader)
-                Text(status.keepingSeparators)
-                    .font(.subheadline)
-                    .foregroundStyle(statusNeedsAttention ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.horizontal, 4)
-        .accessibilityElement(children: .combine)
-    }
-}
+// The rows every Settings screen uses (SettingsTile, SettingsRow, SettingsActionLabel, DevicePageHeader)
+// are DaybookUI's, shared with the Mac; these names keep the screens that use them as they were.
+typealias SettingsMetrics = DaybookUI.SettingsMetrics
+typealias SettingsTileWidth = DaybookUI.SettingsTileWidth
+typealias SettingsTile = DaybookUI.SettingsTile
+typealias SettingsRow = DaybookUI.SettingsRow
+typealias SettingsActionLabel = DaybookUI.SettingsActionLabel
+typealias DevicePageHeader = DaybookUI.DevicePageHeader
 
 extension View {
-    /// A device page's header as a list row: on the list's background, not in a cell.
-    func devicePageHeaderRow() -> some View {
-        listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-    }
-
     /// `--scroll-end` (debug): the screen scrolled to its foot (`SettingsScrollEndMarker`), for screenshots.
     func settingsScrollEnd() -> some View { modifier(SettingsScrollEnd()) }
 }

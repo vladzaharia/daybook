@@ -48,12 +48,12 @@ public struct ElapsedClock: View {
     public var body: some View {
         TimelineView(.periodic(from: anchor ?? .now, by: anchor == nil ? 0.5 : 1)) { _ in
             let seconds = frozenAt ?? elapsed()
-            let text = ClockFormat.short(seconds)
+            let text = DaybookTime.short(seconds)
             Text(text)
                 .font(DaybookType.clock(size, weight: weight))
                 .foregroundStyle(isLive && frozenAt == nil ? DaybookPalette.Ink.record : DaybookPalette.Ink.title)
                 .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: false))
-                .animation(reduceMotion ? DaybookMotion.reduced : .snappy(duration: 0.3), value: Int(seconds))
+                .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion), value: Int(seconds))
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
                 .accessibilityLabel(isLive && frozenAt == nil ? spokenLive(text) : spokenFrozen(text))
@@ -85,6 +85,9 @@ public struct RecordingPhaseLabel: View {
         /// Floating Notes' title band.
         public static let panel = Metrics(size: 10.5, dot: 7, tracking: 0.5)
 
+        /// A density's metrics: the iPhone's header under touch, the title band's on the Mac.
+        public static func `for`(_ density: DaybookDensity) -> Metrics { density == .touch ? .phone : .panel }
+
         func font(weight: Font.Weight, plus: CGFloat = 0) -> Font {
             textStyle.map { Font.system($0).weight(weight) } ?? .system(size: size + plus, weight: weight)
         }
@@ -95,19 +98,24 @@ public struct RecordingPhaseLabel: View {
     private let detail: String?
     private let detailIsWarning: Bool
     private let detailYields: Bool
-    private let metrics: Metrics
+    private let override: Metrics?
+    @Environment(\.daybookDensity) private var density
 
-    /// - Parameter detailYields: The detail takes only the room left over (and truncates), so the
-    ///   label's ideal width is the phase alone. For a bar that fits its other items first.
+    /// - Parameters:
+    ///   - detailYields: The detail takes only the room left over (and truncates), so the label's ideal
+    ///     width is the phase alone. For a bar that fits its other items first.
+    ///   - metrics: An explicit size; nil takes the surface's density's.
     public init(_ phase: Phase, title: String, detail: String? = nil, detailIsWarning: Bool = false, detailYields: Bool = false,
-                metrics: Metrics = .phone) {
+                metrics: Metrics? = nil) {
         self.phase = phase
         self.title = title
         self.detail = detail
         self.detailIsWarning = detailIsWarning
         self.detailYields = detailYields
-        self.metrics = metrics
+        override = metrics
     }
+
+    private var metrics: Metrics { override ?? .for(density) }
 
     public var body: some View {
         HStack(spacing: metrics.dot * 0.65) {

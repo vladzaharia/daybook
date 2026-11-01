@@ -43,13 +43,17 @@ public struct RollingLevelMeter: View {
         public static let phone = Metrics()
         /// Floating Notes: finer bars for a short meter.
         public static let panel = Metrics(barWidth: 2, gap: 2)
+
+        /// A density's metrics: finer bars in the panel, the iPhone's elsewhere.
+        public static func `for`(_ density: DaybookDensity) -> Metrics { density == .panel ? .panel : .phone }
     }
 
     private let source: Source
     private let isLive: Bool
-    private let metrics: Metrics
+    private let override: Metrics?
     private let tint: Color
     private let label: String
+    @Environment(\.daybookDensity) private var density
 
     private enum Source {
         case trail(LevelTrail)
@@ -57,20 +61,21 @@ public struct RollingLevelMeter: View {
     }
 
     /// Reads the trail itself, so only the meter redraws as levels arrive.
-    public init(trail: LevelTrail, isLive: Bool, metrics: Metrics = .phone, tint: Color = DaybookPalette.accent,
+    /// - Parameter metrics: An explicit size; nil takes the surface's density's.
+    public init(trail: LevelTrail, isLive: Bool, metrics: Metrics? = nil, tint: Color = DaybookPalette.accent,
                 accessibilityLabel: String = "Input level") {
         source = .trail(trail)
         self.isLive = isLive
-        self.metrics = metrics
+        override = metrics
         self.tint = tint
         label = accessibilityLabel
     }
 
-    public init(values: [Double], isLive: Bool, metrics: Metrics = .phone, tint: Color = DaybookPalette.accent,
+    public init(values: [Double], isLive: Bool, metrics: Metrics? = nil, tint: Color = DaybookPalette.accent,
                 accessibilityLabel: String = "Input level") {
         source = .values(values)
         self.isLive = isLive
-        self.metrics = metrics
+        override = metrics
         self.tint = tint
         label = accessibilityLabel
     }
@@ -81,7 +86,7 @@ public struct RollingLevelMeter: View {
         case .trail(let trail): values = trail.values
         case .values(let given): values = given
         }
-        return MeterCanvas(values: values, isLive: isLive, metrics: metrics, tint: tint)
+        return MeterCanvas(values: values, isLive: isLive, metrics: override ?? .for(density), tint: tint)
             .accessibilityElement()
             .accessibilityLabel(label)
             .accessibilityValue(isLive ? "\(Int((values.last ?? 0) * 100)) percent" : "Paused")

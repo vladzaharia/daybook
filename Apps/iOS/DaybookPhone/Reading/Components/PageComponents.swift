@@ -254,49 +254,6 @@ struct TagChip: View {
     }
 }
 
-/// Wraps subviews onto new lines, like words in a paragraph.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 6
-    var lineSpacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(subviews, width: proposal.width ?? .infinity)
-        let width = rows.map(\.width).max() ?? 0
-        let height = rows.last.map { $0.y + $0.height } ?? 0
-        return CGSize(width: proposal.width.map { min($0, width) } ?? width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for row in arrange(subviews, width: bounds.width) {
-            var x = bounds.minX
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: bounds.minY + row.y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
-                x += size.width + spacing
-            }
-        }
-    }
-
-    private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0; var y: CGFloat = 0 }
-
-    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
-        var rows: [Row] = [Row()]
-        for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
-            let needed = rows[rows.count - 1].indices.isEmpty ? size.width : rows[rows.count - 1].width + spacing + size.width
-            if needed > width, !rows[rows.count - 1].indices.isEmpty {
-                let y = rows[rows.count - 1].y + rows[rows.count - 1].height + lineSpacing
-                rows.append(Row(y: y))
-            }
-            let last = rows.count - 1
-            rows[last].width = rows[last].indices.isEmpty ? size.width : rows[last].width + spacing + size.width
-            rows[last].height = max(rows[last].height, size.height)
-            rows[last].indices.append(index)
-        }
-        return rows.filter { !$0.indices.isEmpty }
-    }
-}
-
 /// Paper behind a page, under the status column and home indicator too.
 struct PaperBackground: ViewModifier {
     func body(content: Content) -> some View {
