@@ -5,13 +5,26 @@ import SwiftUI
 
 // MARK: - Models pane
 
+/// Holds the Models pane's `ModelManager`, made the first time the pane draws and kept while it shows. A `@State`
+/// initial value is built again each time the parent rebuilds the pane, and building a manager reads the catalog.
+private final class ModelManagerSlot {
+    private var made: ModelManager?
+
+    @MainActor func manager(for state: AppState) -> ModelManager {
+        if let made { return made }
+        let manager = ModelManager(state: state)
+        made = manager
+        return manager
+    }
+}
+
 /// Settings › Models: the quality preset; each role's model with the settings that belong to it;
 /// words and templates; then the model library (what's on this Mac, updates, every model by
 /// family, adding a model, and acknowledgements). Rendered from `ModelManagerSnapshot`, so the
 /// catalog decides which roles and models appear.
 struct ModelSettings: View {
     @Bindable var state: AppState
-    @State private var manager: ModelManager
+    @State private var slot = ModelManagerSlot()
     @Environment(\.openWindow) private var openWindow
     @State private var showingVoiceMatching = false
     @State private var removal: ModelRemoval?
@@ -22,8 +35,9 @@ struct ModelSettings: View {
 
     init(state: AppState) {
         self.state = state
-        _manager = State(initialValue: ModelManager(state: state))
     }
+
+    private var manager: ModelManager { slot.manager(for: state) }
 
     /// Roles with sections of their own; any other role gets a section after Summaries.
     private static let placedRoles: Set<ModelRole> = [.transcription, .diarization, .speakerEmbedding, .summarization, .smallTasks]
