@@ -151,6 +151,13 @@ jobs:
         env:
           DAYBOOK_TEST_TIMEOUT_SCALE: "2"
         run: swift test --skip-build --filter '^DaybookCaptionsTests\.' 2>&1 | tee build/test-results/captions.log
+      - name: Test DaybookDesign and DaybookUI
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          DAYBOOK_TEST_TIMEOUT_SCALE: "2"
+        run: |
+          swift test --skip-build --filter '^(DaybookDesignTests|DaybookUITests)\.' 2>&1 \
+            | tee build/test-results/design-ui.log
       - name: Test the Mac app target
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:

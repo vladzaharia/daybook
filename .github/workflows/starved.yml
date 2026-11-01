@@ -73,7 +73,8 @@ jobs:
           echo "${#pids[@]} busy loops at background priority; load average $(sysctl -n vm.loadavg)"
           status=0
           for bundle in DaybookCoreTests DaybookDevicesTests DaybookKitTests DaybookLinkTests \
-                        DaybookIntelligenceTests DaybookCaptionsTests DaybookTests; do
+                        DaybookIntelligenceTests DaybookCaptionsTests DaybookDesignTests DaybookUITests \
+                        DaybookTests; do
             echo "::group::$bundle"
             if ! taskpolicy -c background swift test --skip-build --filter "^$bundle\\." 2>&1 \
                 | tee "build/test-results/$bundle.log"; then
