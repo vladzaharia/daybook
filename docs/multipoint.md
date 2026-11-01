@@ -613,6 +613,107 @@ it was seen, so a Mac that went to sleep a few minutes ago can be counted on unt
 in the library for it. The iPhone summarizes itself only where a summary model fits its memory (docs/iphone.md),
 and only on the screen.
 
+## Upgrade
+
+When a clearly better model than the one that made a conversation's transcript, speakers, or summary is within reach,
+the conversation page offers to redo that step there, and every step after it: a better transcript means the speakers
+found again, voice profiles, fusion, and a new summary. The person can dismiss it. Each device works the offer out for
+itself from the conversation's synced provenance and what it can reach, so it shows on every device that sees a better
+option, and goes everywhere once the work is done or the offer dismissed.
+
+| Code | What it does | Where |
+| --- | --- | --- |
+| Ranks | Each local model's rank for each step it serves, and the cloud's `summaryQuality`, on one scale for summaries (docs/models.md, "Quality ranks"); `UpgradeRanks` reads them | [Families](../Sources/DaybookKit/Resources/ModelCatalog/Families), [CloudCatalog.json](../Sources/DaybookKit/Resources/CloudCatalog.json), [Upgrades.swift](../Sources/DaybookKit/Upgrades.swift) |
+| The comparison | `Upgrades.offer`: the steps (`UpgradeRole`: margins, modes, words), what a device reaches (`UpgradeCandidates`), the offer (`UpgradeOffer`), the model behind each step now (`Meeting.upgradeCurrent`). Pure | [Upgrades.swift](../Sources/DaybookKit/Upgrades.swift) |
+| Reachable Macs | `ProcessingMac.reachable`: connected, or seen through sync in the last 15 minutes, with the models they run | [ProcessingCapabilities+Devices.swift](../Sources/DaybookKit/ProcessingCapabilities+Devices.swift) |
+| Requests and dismissals | `ProcessingRequest.Upgrade` (the step, the model, its rank, the device), `requestUpgrade`, `UpgradeDismissal` and `dismissUpgrade`, merged with the conversation | [ProcessingRequest.swift](../Sources/DaybookCore/ProcessingRequest.swift), [UpgradeDismissal.swift](../Sources/DaybookCore/UpgradeDismissal.swift) |
+| The Mac | The page's line, accepting, which requests it takes, an upgrade's summary step | [AppState+Upgrade.swift](../Sources/Daybook/App/AppState+Upgrade.swift), [AppState+Requests.swift](../Sources/Daybook/App/AppState+Requests.swift), [AppState+SummaryPlacement.swift](../Sources/Daybook/App/AppState+SummaryPlacement.swift) |
+| The iPhone | The page's line, accepting, what its processor runs | [PhoneUpgrades.swift](../Apps/iOS/DaybookPhone/App/PhoneUpgrades.swift), [OnDeviceProcessing.swift](../Sources/DaybookKit/OnDeviceProcessing.swift) |
+
+**The comparison**, step by step (transcript, speakers, summary):
+
+- **Now:** the transcript's and the speakers' models are each recording's latest run (as `modelsBehindTranscript` reads
+  them), and with several recordings the weakest counts: a Mac's microphone with Parakeet Ultra and an iPhone's
+  recording with Parakeet Redux make a Redux transcript. The summary's is its provenance (`modelsByRole`, else its
+  `ProcessingSettings.model`, which for a cloud summary is "anthropic/claude-sonnet-5-5"). A step whose provenance is
+  missing or unranked (a run with no recorded model, a model the person added) offers nothing.
+- **Within reach:** this device's own models (`ProcessingCapabilities.models`; a Mac's whether or not it takes other
+  devices' work; the iPhone redoes only a conversation whose every recording is its own, as it transcribes only those),
+  the Macs reachable now that name their models (the placement's reachability; an earlier Daybook names none, so offers
+  nothing), and for the summary the cloud model Settings › Cloud resolves to, with a key and unless Never. The best rank
+  wins; on a tie this device, then the Macs in order, then the cloud, so the work stays nearest. A transcription model
+  must cover each recording's language as it was transcribed.
+- **Clearly better:** the best must rank at least the step's margin above what's there now. Without one, every Gemma 4
+  26B A4B summary (90) would nag toward the cloud's best (94–95).
+
+  | Step | Margin | Offered | Not offered |
+  | --- | --- | --- | --- |
+  | Transcript | 10 | Parakeet Redux (80) to Ultra (90); Whisper Small (70) to Ultra | Whisper Large v3 Turbo (85) to Ultra |
+  | Speakers | 10 | Sortformer 2.1 (79) to Nemotron 3 (89) | Community-1 (85) to Nemotron 3; Sortformer to Community-1 |
+  | Summary | 10 | Gemma 4 E2B (25), E4B (53), or 12B (60) to the 26B A4B (90) or the cloud | The 26B A4B to the cloud (95); Qwen 3.6 35B A3B (87) to the cloud |
+
+- **At rest only:** nothing is offered while the conversation records, works, or waits (`ProcessingStatus` other than
+  done: a request open, a job queued, a recording still to come) or while its summary is placed (counting down, in the
+  cloud, or held by the iPhone, whose claimed Summarize request every device reads as work under way).
+- **One line:** the most upstream step with an offer, since redoing it redoes the rest; when that one is dismissed, the
+  next step's.
+
+**The line.** One quiet line on the page, in the status line's idiom, on the Mac and the iPhone (never in list rows):
+what improves and where, then Upgrade and Dismiss.
+
+| The better model is | The page says |
+| --- | --- |
+| This device's | "Upgrade transcript", "Upgrade speakers", "Upgrade summary" |
+| A reachable Mac's | "Upgrade transcript on Studio Mac" (on the iPhone: "… on Vlad's MacBook Pro"; on that Mac: "Upgrade transcript") |
+| The cloud's | "Upgrade summary with Claude Sonnet 5.5" |
+
+**Upgrade** goes through the existing request and claim path, to the device with the better model:
+
+| Step | Better model | What happens |
+| --- | --- | --- |
+| Transcript | This Mac | Its queue runs Transcribe Everything Again, marked as an upgrade (`ProcessingJob.upgrade`) |
+| Transcript | Another Mac | A Transcribe Everything Again request naming it (`ProcessingRequest.upgrade`), which it claims; the iPhone nudges it over the link |
+| Transcript | This iPhone | A request naming itself, which its processor carries out |
+| Speakers | Any | The same with Identify Speakers Again |
+| Summary | This Mac | Summarize Again, marked as an upgrade: through the placement, with its countdown |
+| Summary | This iPhone | The placement's `summaryIsDue`, as any due summary: held, and counting down while the cloud is on offer |
+| Summary | Another Mac | A Summarize request naming it; that Mac's job counts down to it |
+| Summary | The cloud | At once, since the person chose it: `SummaryPlacements.beginInCloud` on the Mac; `summaryIsDue`, then Use the Cloud, on the iPhone |
+
+- **Every later step runs again.** Transcribe Everything Again transcribes every recording with that device's
+  transcription model, finds the speakers with its speaker model, makes voice profiles, lines the recordings up, fuses,
+  labels speakers from the profiles, and writes the summary; Identify Speakers Again starts at the speakers. Each later
+  step uses the best the device has for it then, and the summary goes through the placement: an upgrade's summary isn't
+  one the person asked for, so it's due as new audio's is, and counts down while the cloud is on offer (a better cloud
+  summary may then be offered as its own upgrade).
+- **Corrections are kept**, as the reprocess paths keep them: corrected passages carried by `CorrectionTransfer`,
+  renamed speakers matched by voice and kept, notes, bookmarks, and ticked next steps; the earlier runs and summary stay
+  in Version History.
+- **Who carries out a request:** the device named, or any device whose own model for the step ranks at least as high
+  (`ProcessingRequest.Upgrade.mayBeCarriedOut`). A Mac with a weaker model leaves it (`pickUpRequests`, and a job of its
+  own doesn't take it on); the iPhone runs only upgrades naming itself (`OnDeviceProcessing`). Older Daybooks: below.
+- **Waiting.** While the request waits, both apps' pages (and the iPhone's list row) say "Waiting for Studio Mac to
+  upgrade the transcript", and nothing more is offered. If the named Mac is gone before it takes the request, the
+  request stays and keeps saying so; a Mac with a model as good takes it instead when there is one.
+- **Done.** The new results record the better model, so the comparison finds nothing more for that step, here or
+  anywhere: a finished upgrade never offers itself again.
+
+**Dismiss** is kept on the conversation (`Meeting.upgradeDismissals`: the step, the model, its rank, when) and syncs
+with it. Dismissals merge as a union, once per step and model (the earlier), so two devices dismissing at once agree,
+with nothing in Version History. An offer stays away while its model, or one ranked at least as high, was dismissed for
+that step; a later, better model may offer again.
+
+**Limits.**
+
+- Older Daybooks don't know `ProcessingRequest.upgrade`: an earlier Mac may take an upgrade request and run it with its
+  own models (the offer then shows again), and one that saves the conversation drops the field from its copy (the merge
+  keeps one). They keep dismissals as they came (unknown fields).
+- A Mac that doesn't take other devices' work (Transcribe synced recordings off) names no models, so other devices
+  never offer it. Macs see each other only through presence, so one asleep for over 15 minutes isn't offered.
+- Ranks that weren't measured are estimates (docs/models.md, "Quality ranks"); the margins keep them from offering
+  what the evidence doesn't support.
+- The iPhone redoes only its own recordings; a Mac's recording is offered to a Mac.
+
 ## Preferences
 
 | Preference | Default | Where |

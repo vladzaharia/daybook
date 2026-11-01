@@ -53,7 +53,8 @@ and a bare `User-Agent: Daybook`. It's fetched only once a key has been added.
 
 ### Summary quality
 
-`summaryQuality` is 0–100, on the scale the local summary models will use for "Upgrade" offers. It comes from the
+`summaryQuality` is 0–100, on the scale the local summary models use for "Upgrade" offers (their `quality` in the model
+catalog, docs/models.md, "Quality ranks"; docs/multipoint.md, "Upgrade"). It comes from the
 three-hour offsite fixture (22 topics, 66 commitments, 6 notes), the same fixture and scorer for every model:
 
     summaryQuality = 35 × topics kept / 22
