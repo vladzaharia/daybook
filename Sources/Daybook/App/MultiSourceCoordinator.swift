@@ -61,6 +61,24 @@ final class MultiSourceCoordinator: ObservableObject {
     static let matchesImportedFilesKey = "matchesImportedFilesToConversations"
     /// Stops owed to devices that answer, kept across relaunches (never synced).
     static let owedStopsKey = "multipoint.owedStops"
+    /// iPhone recordings the iPhone transcribed that this Mac has checked for a conversation of its own, by track ID,
+    /// oldest first, kept across relaunches (never synced): each is checked once.
+    static let checkedPhoneRecordingsKey = "multipoint.checkedPhoneRecordings"
+    /// How many are remembered: far more than arrive between two looks.
+    static let checkedPhoneRecordingsLimit = 2_000
+
+    /// Whether this Mac has checked where an iPhone-transcribed recording belongs.
+    func hasChecked(phoneRecording track: UUID) -> Bool {
+        (defaults.stringArray(forKey: Self.checkedPhoneRecordingsKey) ?? []).contains(track.uuidString)
+    }
+
+    /// Remembers that it has, so it happens once.
+    func markChecked(phoneRecording track: UUID) {
+        var checked = defaults.stringArray(forKey: Self.checkedPhoneRecordingsKey) ?? []
+        guard !checked.contains(track.uuidString) else { return }
+        checked.append(track.uuidString)
+        defaults.set(Array(checked.suffix(Self.checkedPhoneRecordingsLimit)), forKey: Self.checkedPhoneRecordingsKey)
+    }
     private let defaults: UserDefaults
     private var subscription: AnyCancellable?
 

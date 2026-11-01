@@ -238,7 +238,8 @@ extension AppState {
     /// and as the fraction moves (at most every half second). Coarse progress also syncs with a
     /// request's claim; this is the live version.
     func reportToPhones(_ meetingID: UUID, phase: LinkProcessingProgress.Phase? = nil, detail: String? = nil, force: Bool = false) {
-        guard phoneLink.hasConnectedPhones, let meeting = meetings.first(where: { $0.id == meetingID }) else { return }
+        guard phoneLink.hasConnectedPhones, !checkingPhoneTranscripts.contains(meetingID),
+              let meeting = meetings.first(where: { $0.id == meetingID }) else { return }
         // While a summary is placed, its countdown (or the cloud at work) is what phones see.
         if phase == nil, let placing = placementProgress(meetingID) {
             send(placing, force: force)
@@ -406,10 +407,67 @@ extension AppState {
         return false
     }
 
+    // MARK: A recording the iPhone transcribed itself
+
+    /// A recording Daybook on iPhone recorded alone and transcribed itself (docs/iphone.md, "Processing on this
+    /// iPhone") arrives with its transcript, and with only a Summarize request, or none (the iPhone summarizes it
+    /// itself, or counts down to). The first time this Mac sees one it finds its conversation as it does for one it
+    /// transcribes: by its link, then overlap in time, then the sound (`deviceRecordingArrivedAlone`). Found, it moves
+    /// there with its transcript and speakers, so it isn't transcribed again, and that conversation fuses and
+    /// summarizes (through the placement); its own goes to the Trash unless the person worked in it, and the
+    /// iPhone's countdown or summary for it stands down. Each is checked once (`MultiSourceCoordinator.markChecked`).
+    ///
+    /// Returns true when this job has nothing more to do: it moved, or it stays and nothing asked this Mac for more.
+    /// Runs before the job touches the conversation, so a summary the iPhone made stays as it is.
+    func phoneTranscriptArrived(_ id: UUID, job: ProcessingJob) async -> Bool {
+        guard let meeting = meetings.first(where: { $0.id == id }), let track = phoneTranscriptToCheck(meeting),
+              job.requestID != nil || meeting.openProcessingRequests.isEmpty,
+              await audioURL(for: track, meetingID: id) != nil else { return false }
+        sources.markChecked(phoneRecording: track.id)
+        // A conversation a Mac recorded with this phone (its link is here) waits for that Mac's recording.
+        let recordedWithAMac = meeting.companions?.contains { $0.deviceKind == DaybookPhoneIntegration.id && $0.deviceID == track.deviceSerial } == true
+        if !recordedWithAMac, await deviceRecordingArrivedAlone(track, in: meeting) { return true }
+        guard job.requestID == nil else {
+            // It stays, and the iPhone asked this Mac to summarize it: the job goes on, and phones hear it.
+            checkingPhoneTranscripts.remove(id)
+            return false
+        }
+        return true
+    }
+
+    /// The recording to check in a conversation of the iPhone's own: its one recording, transcribed on the iPhone
+    /// that made it (its Transcribe request finished by the device that asked), never placed on another's timeline,
+    /// and not checked here yet. A recording a Mac transcribed was checked before the Mac transcribed it.
+    func phoneTranscriptToCheck(_ meeting: Meeting) -> RecordingTrack? {
+        guard meeting.tracks.count == 1, let track = meeting.tracks.first, track.deviceKind == DaybookPhoneIntegration.id,
+              track.alignment == nil, meeting.transcripts.contains(where: { $0.trackID == track.id }),
+              !sources.hasChecked(phoneRecording: track.id) else { return nil }
+        let transcribedOnThePhone = (meeting.processingRequests ?? []).contains { request in
+            request.mode != .summaryOnly && request.outcome?.result == .completed && request.outcome?.device.id == request.requestedBy.id
+        }
+        return transcribedOnThePhone ? track : nil
+    }
+
+    /// Conversations to check after a sync pass: an iPhone recording it transcribed itself, with nothing open (an
+    /// open request brings its own job; one the iPhone holds is checked once it's done), when this Mac takes other
+    /// devices' work or the recording was made with one of this Mac's conversations (its link).
+    func phoneTranscriptsToCheck() -> [UUID] {
+        meetings.compactMap { meeting in
+            guard meeting.openProcessingRequests.isEmpty, !movedPhoneRecordings.contains(meeting.id), processingID != meeting.id,
+                  !queuedIDs.contains(meeting.id), let track = phoneTranscriptToCheck(meeting) else { return nil }
+            if processSyncedAudio { return meeting.id }
+            guard let identity = track.device else { return nil }
+            let others = meetings.filter { $0.id != meeting.id }
+            return SourceMatcher.linked(Self.fullRecording(identity), start: trackStart(track) ?? track.createdAt, in: others,
+                                        policy: sources.policy) == nil ? nil : meeting.id
+        }
+    }
+
     /// A recording from Daybook on iPhone finds its conversation by its link, then overlap in time,
     /// then the sound. A recorder's recording another device imported (the phone, after a handoff)
     /// joins only by its multipoint link: this Mac would have matched it by time and sound if it had
-    /// imported it itself, and its link waits for it here.
+    /// imported it itself, and its link waits for it here. One the iPhone transcribed moves with its
+    /// transcript and speakers.
     private func deviceRecordingArrivedAlone(_ track: RecordingTrack, in meeting: Meeting) async -> Bool {
         guard let identity = track.device else { return false }
         let fromPhone = track.deviceKind == DaybookPhoneIntegration.id
@@ -424,7 +482,11 @@ extension AppState {
         if let target = plan.attachTo, canMoveSource(into: target), let title = meetings.first(where: { $0.id == target })?.title {
             let stays = meeting.hasPersonMadeContent
             if !stays { movedPhoneRecordings.insert(meeting.id) }
-            sources.carried[track.sha256] = .init(transcript: nil, speakers: [], highlights: Self.highlightsMoving(with: track, from: meeting),
+            // Transcribed on the iPhone: its transcript and speakers go with it.
+            let transcript = meeting.transcripts.filter { $0.trackID == track.id }.max { $0.createdAt < $1.createdAt }
+            let speakerIDs = Set(transcript?.segments.compactMap(\.speakerID) ?? [])
+            sources.carried[track.sha256] = .init(transcript: transcript, speakers: meeting.speakers.filter { speakerIDs.contains($0.id) },
+                                                  highlights: Self.highlightsMoving(with: track, from: meeting),
                                                   placement: plan.placement, clockOffset: nil, startedAt: start.date)
             defer { sources.carried[track.sha256] = nil }
             do { _ = try await importAudio([url], source: track.source, attachTo: target, device: identity) }

@@ -246,6 +246,9 @@ final class AppState: ObservableObject {
     var lastRenewedStage: ProcessingRequest.Stage?
     /// Conversations an iPhone recording moved out of, on their way to the Trash: not processed.
     var movedPhoneRecordings: Set<UUID> = []
+    /// Conversations of an iPhone's own queued only to check where its recording belongs (`phoneTranscriptArrived`):
+    /// phones aren't told, since this Mac doesn't summarize them (the iPhone does, or its countdown goes on).
+    var checkingPhoneTranscripts: Set<UUID> = []
     /// The last live progress sent to phones, and when; sends go out one after another, in order.
     var lastPhoneProgress: (message: LinkProcessingProgress, at: Date)?
     var phoneProgressSend: Task<Void, Never>?
@@ -795,6 +798,7 @@ final class AppState: ObservableObject {
                     self.reportToPhones(id, phase: .failed, detail: error.localizedDescription)
                 }
                 self.stopClaimHeartbeat()
+                self.checkingPhoneTranscripts.remove(id)
                 self.currentRequest = nil
                 self.runningJob = nil
                 self.processingID = nil
@@ -882,8 +886,11 @@ final class AppState: ObservableObject {
     /// arrives (so a pause keeps finished recordings), and moves recordings between conversations.
     private func process(_ request: ProcessingJob) async throws {
         let id = request.meetingID
-        guard library.isLoaded, let initial = meetings.first(where: { $0.id == id }) else { return }
+        guard library.isLoaded, meetings.contains(where: { $0.id == id }) else { return }
         await flush()
+        // A recording the iPhone transcribed itself finds its conversation first, once (AppState+Phone.swift).
+        if await phoneTranscriptArrived(id, job: request) { return }
+        guard let initial = meetings.first(where: { $0.id == id }) else { return }
         let options = request.preferences
         let engine = processingEngine(for: request)
         let terms = glossary.filter { $0.approved || $0.sourceMeetingIDs.contains(id) }.map(\.term)
@@ -978,6 +985,11 @@ final class AppState: ObservableObject {
             // it completes a recording made with this Mac (docs/multipoint.md, "Mac first").
             for id in applied.newAudio(in: meetings) where !isHeldElsewhere(id) && !movedPhoneRecordings.contains(id) {
                 guard processSyncedAudio || meetings.first(where: { $0.id == id })?.hasAwaitedRecordingToAdd() == true else { continue }
+                enqueue(id)
+            }
+            // A recording an iPhone transcribed itself may belong to a conversation of this Mac's: checked once.
+            for id in phoneTranscriptsToCheck() {
+                checkingPhoneTranscripts.insert(id)
                 enqueue(id)
             }
         }
