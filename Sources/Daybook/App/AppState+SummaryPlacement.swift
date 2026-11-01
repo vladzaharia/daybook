@@ -94,8 +94,10 @@ extension AppState {
     /// Places the job's summary and makes it: counts down when it's due and the cloud is on offer, then
     /// summarizes here or in the cloud. Nil when another device has it (this Mac stands down). Throws
     /// `CancellationError` when the job is paused or cancelled during the countdown.
-    func placedSummary(_ id: UUID, job: ProcessingJob, engine: any ProcessingEngine, template: SummaryTemplate?, vocabulary: [String],
+    func placedSummary(_ id: UUID, job started: ProcessingJob, engine: any ProcessingEngine, template: SummaryTemplate?, vocabulary: [String],
                        progress: @escaping ProcessingProgressHandler) async throws -> PlacedSummary? {
+        // The job as it is now: it may have taken on another device's request since it started.
+        let job = runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? started
         if summaryHolderElsewhere(id, job: job) != nil { return nil }
         placementOptionsChanged()
         defer { placements.end(id) }
