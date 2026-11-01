@@ -205,11 +205,17 @@ Working it out in the reply, rather than only being told to, is the same idea as
 
 **Provenance** (`CloudProvenance`): the summary's `modelID` and `ProcessingSettings.modelID` are
 "anthropic/claude-sonnet-5-5"; `ProcessingSettings.model` has family `anthropic`, variant `claude-sonnet-5-5`, engine
-`cloud`, and the name "Claude Sonnet 5.5"; the parameters keep `cloudProvider`, `cloudModel`, `effort`, `inputTokens`,
-`outputTokens`, `estimatedCostUSD` (from the price in force, long-prompt rates included), `priceIsEstimated`, `sentBy`
-(the device that sent it: `CloudSummarizer(directory:deviceName:)`, which callers give
-`ProcessingRequest.Device.currentName`), `templateID`, and `templateInstructions`. The page's colophon reads "Summarized with
-Claude Sonnet 5.5" on both apps.
+`cloud`, and the name "Claude Sonnet 5.5"; the parameters keep `cloudProvider`, `cloudModel` (the provider's model ID),
+`effort`, `inputTokens`, `outputTokens`, `estimatedCostUSD` (from the price in force, long-prompt rates included),
+`priceIsEstimated`, `sentBy` (the device that sent it: `CloudSummarizer(directory:deviceName:)`; the Mac gives
+`ProcessingRequest.Device.currentName`, the iPhone its library name), `templateID`, and `templateInstructions`
+(`CloudProvenance.Key`). The placement adds where it ran on the same summary (docs/multipoint.md, "Where summaries
+run"): `summarizedBy`, `summarizedByName`, `place` (`cloud`), and `model.<role>`, with `model.summarization`
+"anthropic/claude-sonnet-5-5". A summary placed in the cloud without the cloud's provenance (a test's or a demo's
+stand-in) gets the model it was sent to, so every cloud summary has both. `MeetingSummary.origin.cloudModel` is the
+model's name for any cloud summary, placed or not (`--cloud-check`'s, or one written before the placement). The
+page's colophon reads "Summarized with Claude Sonnet 5.5", with the cloud glyph, on both apps; the Mac inspector's
+Summary row names the model, with its tokens and cost under it ("12,700 tokens · $0.05", `CloudProvenance.usage`).
 
 ## Estimates
 
@@ -232,8 +238,10 @@ Settings › Cloud (a pane of its own on the Mac, between Models and Devices; a 
   Recommended or a model of the tier (with its cost when one is chosen); Effort, the efforts the model takes.
 - One footer line: "Sends the transcript and notes, never audio."
 
-Preferences (`CloudSummaryPreferences`) are each device's own, in its UserDefaults (`cloudSummaryPreferences`); the
-Mac's `--library` runs keep their own suite. Debug builds open the pane with `--open-settings cloud` and fill it with
+Preferences (`CloudSummaryPreferences`) are each device's own, in its UserDefaults (`cloudSummaryPreferences`), read and
+written only through `CloudSetup.preferences`; the Mac's `--library` runs keep their own suite. The countdown's length
+and the policy (Offer First, Always, Never) live here and nowhere else: the placement reads them from the same
+`CloudSetup`. Debug builds open the pane with `--open-settings cloud` and fill it with
 `--cloud-demo none|anthropic|both|never|failed` (in-memory keys, the catalog's models, no network); the iPhone also
 takes `--open-settings cloud-key`.
 
@@ -251,12 +259,25 @@ harness's scoring format. `DAYBOOK_CLOUD_BASE_URL` sends every request to anothe
 
 ## For callers
 
-The placement planner reaches the cloud through `CloudSummarizing` (`CloudSummarizer` conforms):
-`availableModels(refresh:)` and `summarize(_:template:vocabulary:model:effort:progress:)`. The app's `CloudSetup`
-(`AppState.cloud` on the Mac, `PhoneAppModel.cloudSummaries` on the iPhone) holds the preferences, `resolved` (the
-`CloudOffer` they choose, nil without a key), and `directory`, from which a summarizer is made. `CloudSummarizer.summary`
-also returns the suggested vocabulary, warnings, and provenance, and `estimatedCost(_:template:vocabulary:model:effort:)`
-prices a conversation before anything is sent.
+Both apps' summary placement (docs/multipoint.md, "Where summaries run") reaches the cloud through one `CloudSetup`
+each: `AppState.cloud` on the Mac (made when Settings › Cloud or a summary step first needs it) and
+`PhoneAppModel.cloudSummaries` on the iPhone (handed to `PhoneSummaryPlacement.cloud` at launch).
+
+- **What's on offer:** `resolved` (the `CloudOffer` the preferences choose, nil without a key) is the placement's
+  `SummaryOptions.cloud`; the planner leaves it out with Never. `preferences` give the policy, the countdown, and the
+  effort.
+- **Changes:** `onChange` fires when a key, the models offered, or the preferences change, and the placement updates
+  every countdown at once (a key removed or Never chosen mid-countdown starts its default now).
+- **Before a summary is placed:** `reload()` reads the keys again and the models kept for them. No provider is asked,
+  except once for a key this device never listed (one added on the other device, which iCloud Keychain brought). The
+  iPhone also reloads at launch and when it comes back to the screen.
+- **The summary:** `CloudSummarizer(directory: cloud.directory, deviceName:)`, the concrete `CloudSummarizing`; callers
+  use `summaryOutput(…)`, which keeps the suggested vocabulary and warnings `CloudSummarizer.summary` returns (a
+  `CloudSummarizing` fake gives the summary alone). The summary step applies it with `MeetingSummary.placed`, which
+  keeps the cloud's provenance and adds where it ran. Tests and demos set a summarizer of their own
+  (`AppState.cloudSummarizer`, `PhoneSummaryPlacement.cloudSummarizer`) and Settings with in-memory keys
+  (`CloudSetup.demo`).
+- `estimatedCost(_:template:vocabulary:model:effort:)` prices a conversation before anything is sent.
 
 ## Tests
 

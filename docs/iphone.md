@@ -67,30 +67,37 @@ A conversation's processing state comes from its data and is shown the same way 
 
 The iPhone places its summaries with the Mac's planner (docs/multipoint.md, "Where summaries run";
 `PhoneSummaryPlacement`, `model.placement`), from what it can offer: its own summarizer (`localSummarizer`, a
-`LocalSummarizing`; none until its processing models land), the Macs that summarize and are reachable now
-(connected over the link, or seen through sync in the last 15 minutes, by their `ProcessingCapabilities`),
-and the cloud model the person's keys and preferences resolve to (`cloudSummarizer`, set by the cloud work).
+`LocalSummarizing` from its processing models, while Transcribe on This iPhone is on), the Macs that summarize and
+are reachable now (connected over the link, or seen through sync in the last 15 minutes, by their
+`ProcessingCapabilities`), and the cloud model Settings › Cloud resolves to (`cloud`, the app's `CloudSetup`, whose
+preferences give the policy and the countdown; docs/cloud.md, "For callers").
 
 | Moment | The page says | Then |
 |---|---|---|
 | Its own transcript is ready (`summaryIsDue`), a Mac is reachable, a key is set | "Summarizing on Vlad's MacBook Pro in 12 s" · Use the Cloud · Start Now | A Summarize request, nudged to the Mac |
-| The same, with its own summarizer | "Summarizing on this iPhone in 12 s" · Use the Cloud · Start Now · Wait for a Mac | Summarized here, with a claim |
+| The same, with its own summarizer | "Summarizing on this iPhone in 12 s" · Use the Cloud · Start Now · Wait for a Mac | Summarized here by the processor, with a claim |
 | No Mac reachable, a key is set | "Waiting for a Mac to summarize" · Use the Cloud | A countdown when a Mac arrives |
 | Use the Cloud | "Summarizing with Claude Sonnet 5.5" · Stop | Summarized in the cloud, with a claim |
 | A Mac counts down to it (over the link) | "Summarizing on Studio Mac in 12 s" · Use the Cloud · Start Now | The choice goes to the Mac |
 | Summarize, Summarize Again, a template, with no Mac reachable and a key | "Waiting for a Mac to summarize" · Use the Cloud | The request waits for a Mac; Use the Cloud takes it |
 | No key | As before | A request for a Mac, at once |
 
-The list row says "Summarizing in 12 s" or "Waiting for a Mac to summarize", and the status sheet's Macs card
-lists it under the Mac it counts down to (or on its own while it waits), with the same choices. In the
+The list row says "Summarizing in 12 s" or "Waiting for a Mac to summarize", the status sheet's compact Mac line
+counts down too ("Studio Mac · Summarizing in 12 s"), and its Macs card lists it under the Mac it counts down to (or
+on its own while it waits), with the same choices. A first summary waiting for a Mac says "Waiting for your Mac to
+summarize"; Summarize Again's, "… to summarize again". In the
 background, where a countdown can't run, each countdown's default happens as the app leaves the screen, and a
 summary waiting for a Mac is left to one through the library. The colophon says where a summary ran:
 "Summarized on your Mac" (a summary that doesn't say), "on Studio Mac", "on this iPhone", or "with Claude
 Sonnet 5.5".
 
-For the iPhone's processing work: call `model.placement.summaryIsDue(id)` once a conversation's transcript made
-here is in, and set `model.placement.localSummarizer` to a `LocalSummarizing` when a summary model fits
-(`canSummarize` says whether it can run now). Everything else (countdown, Macs, cloud, claims) follows.
+How it's wired (`PhoneAppModel.wireProcessing`): the processor hands each conversation it fused to the placement
+(`Services.summaryDue` → `summaryIsDue`, or `summarize` for work the person asked for); the placement hands a summary
+placed here back to the processor (`runHere` → `PhoneProcessor.summarizeHere`); `localSummarizer` is
+`PhoneModels.summarizer()` while Transcribe on This iPhone is on, set again when a processing model is downloaded or
+removed or that setting changes (`processingChanged`); `cloud` is set at launch and read again when Daybook comes
+back. A conversation that goes away (a Mac moved its recording into its own conversation of the meeting, and this
+one went to the Trash) ends its countdown, its cloud run, or its summary here.
 
 ### On the Mac
 
@@ -130,7 +137,7 @@ Once its processing models are downloaded, the iPhone processes its own recordin
   - A Mac never transcribes again what the iPhone transcribed: its jobs only transcribe recordings without a transcript. Whether a better model elsewhere should redo one is for a later Upgrade offer; `ProcessingCapabilities.models` names each device's models for it.
   - Fusion runs where the last recording arrives. The iPhone fuses when every recording of the conversation is transcribed and on the timeline (its own recording, alone). A recording made with a Mac waits to be lined up by its sound, which the Mac does: the iPhone transcribes its own and gives the request back, and the Mac places, fuses, and summarizes.
   - Before summarizing, the iPhone labels the conversation's speakers from the synced profiles (that conversation only; the Mac reconciles the rest), so the summary has their names.
-  - The summary runs here when this iPhone can summarize (`LocalSummarizing`, filled by `LocalSummarizer`: the Mac's summary pipeline on MLX); otherwise the request goes back, unclaimed, and reads "Waiting for your Mac". That step is where summary placement (the countdown, the cloud, waiting for a Mac) plugs in.
+  - Once fused, its Transcribe request is done here and the summary goes to the placement ("Where summaries run", above): a countdown when the cloud is on offer, then this iPhone, a Mac (a Summarize request, "Waiting for your Mac to summarize"), or the cloud. One placed here runs as the processor's own work on the Summarize request the placement claimed (`summarizeHere`; `LocalSummarizing`, filled by `LocalSummarizer`: the Mac's summary pipeline on MLX), under the same rules as the rest: on the screen, one at a time, backing off, never beside a recording, after the transcription models are let go. It records where it ran ("Summarized on this iPhone") and proposes its terms for the vocabulary.
   - The claim is renewed with the stage and fraction at each stage and every minute, and kept through a pause. One that lapses (the iPhone away longer than the 10-minute lease) is a Mac's to take, and the iPhone stops as soon as a sync pass shows one has (`reconcileClaims`).
 - **When it runs** (`PhoneProcessor`): one conversation at a time, after a recording or import is filed, after sync passes and model downloads, and when Daybook comes back. Never beside a recording: starting one pauses the work and releases its models, and nothing starts until it's filed. The live speaker pass gives way to it. It backs off as live captions do: Serious heat, Low Power Mode, or a battery under 20% unplugged pause it until they pass.
 - **In the background:** work started on the screen asks for iOS 26's continued-processing task (`BGContinuedProcessingTask`, `ContinuedProcessing`: one request per job, `local.daybook.phone.processing.<UUID>`, failing at once rather than queueing), whose Live Activity shows the stage and the work's own progress; transcription goes on under it with Daybook out of sight. The speech and speaker models run on the Neural Engine and CPU (`MLComputeUnits.processing`), which iOS allows in the background. Where the system declines the task, or ends it, the work pauses, keeps its claim, and resumes when Daybook is back. A summary runs on the GPU (MLX), which iOS doesn't give a background app without the Background GPU Access entitlement, so it waits for the screen, and stops the moment Daybook leaves it, before iOS would refuse its GPU work.
@@ -138,7 +145,7 @@ Once its processing models are downloaded, the iPhone processes its own recordin
 - **Capabilities:** `PhoneAppModel.processingCapabilities` says what this iPhone can do now (`ProcessingCapabilities`: transcribes and finds speakers once the transcription, speaker, and voice-profile models are downloaded; summarizes once a fitting summary model is; `models` names each), for the summary step and other devices.
 - **Size and memory** (October 31, 2026; unsigned Release archive): the app grew from 23.1 MB (10.6 MB zipped) to 43.1 MB (16.2 MB zipped), the binary from 20.9 to 38.6 MB, mostly MLX and mlx-swift-lm; MLX's Metal library is 2.3 MB. Linking DaybookIntelligence as the Mac builds it would have made 46.0 MB: leaving WhisperKit and MLXVLM out saves 2.9 MB. In the simulator, transcribing a 3-minute recording with Parakeet Ultra, Nemotron 3, and Community-1 peaked at 165 MB of physical footprint (Core ML maps the weights from their files) and took 60 s on the CPU; the summary models peak at about 3 GB (E2B) and 5.0 GB (E4B) on a Mac, which is why they need the memory checks above.
 - **Needs the account owner:** the Increased Memory Limit capability (`com.apple.developer.kernel.increased-memory-limit`) for local summaries on 8 GB iPhones and E4B on 12 GB ones, and Background GPU Access (`com.apple.developer.background-tasks.continued-processing.gpu`) for summaries that go on in the background. Neither is in the entitlements yet.
-- **Limits:** recordings made with a Mac are lined up, fused, and summarized there; a phone recording made alone and transcribed here no longer moves into a Mac conversation of the same meeting when it arrives (the Mac checks that only for recordings without a transcript); before a local summary, photos are read with Apple Vision alone (text, what they show, near copies), since a vision model's captions are the Mac's. Still to check on a real iPhone: the Neural Engine's speed and battery for a long recording, the continued-processing task (whether iOS grants it after Stop, how it shows, when it expires), the memory limit `PhoneMemory` reads with and without the entitlement, and a Gemma summary's time and peak on a phone.
+- **Limits:** recordings made with a Mac are lined up, fused, and summarized there; a phone recording made alone and transcribed here still finds a Mac conversation of the same meeting when a Mac first sees it, and moves there with its transcript (docs/multipoint.md, "With Daybook on iPhone"), after this iPhone may already have summarized it; before a local summary, photos are read with Apple Vision alone (text, what they show, near copies), since a vision model's captions are the Mac's. Still to check on a real iPhone: the Neural Engine's speed and battery for a long recording, the continued-processing task (whether iOS grants it after Stop, how it shows, when it expires), the memory limit `PhoneMemory` reads with and without the entitlement, and a Gemma summary's time and peak on a phone.
 
 ## Architecture
 
