@@ -19,17 +19,10 @@ public struct KnownVoice: Equatable, Sendable {
 }
 
 /// Where live identification gets known voices: the library's voice profiles
-/// (`KnownVoices.fromProfiles`), or a closure in tests.
+/// (`KnownVoices.fromProfiles`), or a test's own.
 public protocol KnownVoiceSource: Sendable {
     /// Every known voice with embeddings in `space`.
     func knownVoices(in space: String) async -> [KnownVoice]
-}
-
-/// Known voices from a closure, for apps and tests.
-public struct KnownVoiceProvider: KnownVoiceSource {
-    private let provide: @Sendable (String) async -> [KnownVoice]
-    public init(_ provide: @escaping @Sendable (String) async -> [KnownVoice]) { self.provide = provide }
-    public func knownVoices(in space: String) async -> [KnownVoice] { await provide(space) }
 }
 
 public enum KnownVoices {

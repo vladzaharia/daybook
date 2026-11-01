@@ -353,14 +353,6 @@ public actor MeetingStore {
         return (try? AudioDigest.sha256(fileURL: url)) == digest
     }
 
-    public func updateNotes(_ notes: String, for id: UUID) throws -> Meeting {
-        var meeting = try load(id); meeting.setNotes(notes); try save(meeting); return meeting
-    }
-
-    public func correctSegment(_ segmentID: UUID, text: String, in meetingID: UUID) throws -> Meeting {
-        var meeting = try load(meetingID); meeting.correctSegment(id: segmentID, text: text); try save(meeting); return meeting
-    }
-
     // MARK: Durability
 
     /// The durability barrier: flushes every file and folder this store wrote since the last barrier

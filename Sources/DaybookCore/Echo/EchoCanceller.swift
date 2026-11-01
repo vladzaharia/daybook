@@ -28,8 +28,6 @@ public struct EchoCancellerConfiguration: Codable, Equatable, Sendable {
         self.echoSuppressionDB = echoSuppressionDB; self.doubleTalkSuppressionDB = doubleTalkSuppressionDB
         self.tailReverbSeconds = tailReverbSeconds
     }
-
-    public var filterSeconds: Double { Double(blockSize * partitions) / sampleRate }
 }
 
 /// Running measurements a report can use. Energies are in the canceller's internal scale.

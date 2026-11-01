@@ -285,16 +285,6 @@ public struct ProcessingRequest: Codable, Equatable, Identifiable, Sendable {
         return copy
     }
 
-    /// Drops a claim whose lease ran out by `now`, so the request reads as waiting again. Nil when
-    /// there's nothing to expire. Devices that still hold the old claim keep it until they merge,
-    /// where it is just as reclaimable.
-    public func expired(at now: Date, observations: ClaimObservations = .shared) -> ProcessingRequest? {
-        guard isOpen, let claim, claim.isExpired(at: now, observations: observations) else { return nil }
-        var copy = self
-        copy.claim = nil
-        return copy
-    }
-
     /// The work is done. Only refused while another device holds a live claim.
     public func completed(by device: Device, at now: Date, observations: ClaimObservations = .shared) -> ProcessingRequest? {
         finished(.completed, by: device, at: now, message: nil, observations: observations)

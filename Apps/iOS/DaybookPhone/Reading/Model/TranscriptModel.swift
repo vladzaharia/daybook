@@ -1,7 +1,7 @@
 import DaybookKit
 import Foundation
 
-// `PageMode`, `TranscriptBlock`, `BookmarkMarks`, `PlaybackTarget`, and `TranscriptFollow` live in
+// `PageMode`, `TranscriptBlock`, `BookmarkMarks`, `PlaybackTarget`, and `PlayheadIndex` live in
 // DaybookKit (TranscriptReading.swift), shared with the Mac.
 
 /// Finds the passage a summary line came from, so tapping a next step, a summary bullet, or a

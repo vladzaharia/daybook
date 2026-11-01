@@ -369,17 +369,18 @@ final class LibraryControllerTests: XCTestCase {
         let request = try XCTUnwrap(library.requestProcessing(id, mode: .newAudio, by: phone, at: now))
         XCTAssertEqual(library.requestProcessing(id, mode: .newAudio, by: phone, at: now)?.id, request.id, "No second request for the same work")
         XCTAssertEqual(library.processingStatus(for: id, at: now), .requested(.device(request)))
-        XCTAssertEqual(library.processingRequestsToRun(by: mac, at: now).map(\.id), [request.id])
+        let stored = { library.meeting(id)?.processingRequests?.first { $0.id == request.id } }
+        XCTAssertEqual(stored()?.isClaimable(by: mac, at: now), true)
 
         XCTAssertNotNil(library.claimProcessingRequest(request.id, in: id, by: mac, at: now, lease: 60))
         XCTAssertNil(library.claimProcessingRequest(request.id, in: id, by: phone, at: now), "Someone else holds it")
-        XCTAssertTrue(library.processingRequestsToRun(by: phone, at: now).isEmpty)
+        XCTAssertEqual(stored()?.isClaimable(by: phone, at: now), false)
         XCTAssertNotNil(library.renewProcessingClaim(request.id, in: id, stage: .summarizing, fraction: 0.8, by: mac,
                                                      at: now.addingTimeInterval(30), lease: 60))
         XCTAssertEqual(library.processingStatus(for: id, at: now.addingTimeInterval(31)),
                        .processing(.init(stage: .summarizing, fraction: 0.8, device: mac)))
-        XCTAssertEqual(library.expireStaleClaims(at: now.addingTimeInterval(31)), 0)
-        XCTAssertEqual(library.expireStaleClaims(at: now.addingTimeInterval(91)), 1, "The lease ran out a second ago")
+        XCTAssertEqual(stored()?.isClaimable(by: phone, at: now.addingTimeInterval(31)), false)
+        XCTAssertEqual(stored()?.isClaimable(by: phone, at: now.addingTimeInterval(91)), true, "The lease ran out a second ago")
         XCTAssertNotNil(library.claimProcessingRequest(request.id, in: id, by: mac, at: now.addingTimeInterval(92)))
         XCTAssertNotNil(library.failProcessingRequest(request.id, in: id, reason: "Download the speech model.", by: mac, at: now.addingTimeInterval(93)))
         XCTAssertNil(library.completeProcessingRequest(request.id, in: id, by: mac, at: now.addingTimeInterval(94)), "Finished is final")

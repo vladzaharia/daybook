@@ -306,8 +306,9 @@ final class ReadingTests: XCTestCase {
         XCTAssertEqual(PlaybackTarget.source(meeting.tracks[0], -3).resolve(in: meeting)?.seconds, 0)
         XCTAssertNil(PlaybackTarget.timeline(3).resolve(in: Meeting(title: "Notes only")))
 
-        XCTAssertEqual(TranscriptFollow.segmentID(at: 15, trackID: trackID, in: meeting), meeting.unifiedTranscript[2].id)
-        XCTAssertNil(TranscriptFollow.segmentID(at: 13.1, trackID: trackID, in: meeting), "between passages, nothing is playing")
+        let playhead = PlayheadIndex(meeting: meeting)
+        XCTAssertEqual(playhead.segmentID(at: 15, trackID: trackID), meeting.unifiedTranscript[2].id)
+        XCTAssertNil(playhead.segmentID(at: 13.1, trackID: trackID), "between passages, nothing is playing")
     }
 
     func testSummaryLinesSplitLikeTheMacsMarkdown() {

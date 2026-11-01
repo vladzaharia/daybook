@@ -156,13 +156,6 @@ public struct PlayheadIndex: Sendable {
     }
 }
 
-public enum TranscriptFollow {
-    /// The passage under the playhead, matched in the recording that is playing (`PlayheadIndex`).
-    public static func segmentID(at position: TimeInterval, trackID: UUID, in meeting: Meeting) -> UUID? {
-        PlayheadIndex(meeting: meeting).segmentID(at: position, trackID: trackID)
-    }
-}
-
 /// Something to play: a passage (from its original recording), a time on the conversation's
 /// timeline, or a time within one recording.
 public enum PlaybackTarget: Equatable, Sendable {

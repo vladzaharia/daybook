@@ -30,11 +30,6 @@ public actor GlossaryStore {
         } else if !FileManager.default.fileExists(atPath: backup.path) { try LocalFiles.atomicWrite(bytes, to: backup) }
         try LocalFiles.atomicWrite(bytes, to: url)
     }
-    /// Only explicitly approved vocabulary is eligible for prompts in other meetings.
-    public func approvedTerms() throws -> [GlossaryTerm] { try list().filter(\.approved) }
-    public func terms(for meetingID: UUID) throws -> [GlossaryTerm] {
-        try list().filter { $0.approved || $0.sourceMeetingIDs.contains(meetingID) }
-    }
     public func propose(_ candidates: [GlossaryTerm], for meetingID: UUID) throws {
         var terms = try list()
         for candidate in candidates {
@@ -60,8 +55,5 @@ public actor GlossaryStore {
             }
         }
         try save(terms)
-    }
-    public func recordCorrection(from original: String, to corrected: String, in meetingID: UUID) throws {
-        try propose([GlossaryTerm(term: corrected, aliases: [original])], for: meetingID)
     }
 }

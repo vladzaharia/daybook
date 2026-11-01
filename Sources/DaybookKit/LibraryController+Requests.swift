@@ -26,14 +26,6 @@ extension LibraryController {
         return request
     }
 
-    /// Open requests this device may take, oldest first: unclaimed, its own, or with an expired claim.
-    public func processingRequestsToRun(by device: ProcessingRequest.Device? = nil, at now: Date = Date()) -> [ProcessingRequest] {
-        let device = device ?? thisDevice
-        return meetings.flatMap { meeting in
-            meeting.openProcessingRequests.filter { $0.isClaimable(by: device, at: now) && !$0.isSatisfied(by: meeting) }
-        }.sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
-    }
-
     @discardableResult
     public func claimProcessingRequest(_ requestID: UUID, in meetingID: UUID, by device: ProcessingRequest.Device? = nil,
                                        at now: Date = Date(), lease: TimeInterval = ProcessingRequest.defaultLease) -> ProcessingRequest? {
@@ -75,18 +67,6 @@ extension LibraryController {
                                       at now: Date = Date()) -> ProcessingRequest? {
         failProcessingRequest(requestID, in: meetingID, reason: error.localizedDescription, kind: ProcessingRequest.FailureKind(error),
                               by: device, at: now)
-    }
-
-    /// Drops claims whose lease ran out, so their requests read as waiting. Returns how many.
-    @discardableResult
-    public func expireStaleClaims(at now: Date = Date()) -> Int {
-        var count = 0
-        for meeting in meetings {
-            for request in meeting.processingRequests ?? [] {
-                if change(request.id, in: meeting.id, { $0.expired(at: now) }) != nil { count += 1 }
-            }
-        }
-        return count
     }
 
     /// A conversation's status, with this device's queue when it processes.

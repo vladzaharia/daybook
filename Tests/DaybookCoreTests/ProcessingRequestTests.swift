@@ -116,16 +116,6 @@ final class ProcessingRequestTests: XCTestCase {
         XCTAssertNil(ProcessingRequest.merged([claimed], [released])?.first?.activeClaim(at: at(30)))
     }
 
-    func testExpiringDropsOnlyStaleClaims() throws {
-        let claimed = try XCTUnwrap(request().claimed(by: studio, at: at(0), lease: 60))
-        XCTAssertNil(claimed.expired(at: at(59)), "A live claim isn't expired")
-        let expired = try XCTUnwrap(claimed.expired(at: at(60)))
-        XCTAssertNil(expired.claim)
-        XCTAssertTrue(expired.isOpen)
-        XCTAssertNil(request().expired(at: at(60)), "Nothing to expire")
-        XCTAssertNil(ProcessingRequest.merged([claimed], [expired])?.first?.activeClaim(at: at(60)), "Merged, the stale claim is still free to take")
-    }
-
     func testCompletingAndFailingAreFinal() throws {
         let claimed = try XCTUnwrap(request().claimed(by: studio, at: at(0), lease: 60))
         XCTAssertNil(claimed.completed(by: laptop, at: at(10)), "Not while another Mac holds a live claim")

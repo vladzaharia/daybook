@@ -30,7 +30,7 @@ struct RequestTiming {
 ///
 /// Stale claims: a claim whose lease ran out (a Mac that vanished, or quit without syncing) is
 /// claimable, and claiming it starts a strictly newer claim that wins every merge. Claims are
-/// never cleared outright (`expireStaleClaims`): the merge keeps the newest claim, so a cleared one
+/// never cleared outright: the merge keeps the newest claim, so a cleared one
 /// would come back from the other copies at every pass.
 ///
 /// This Mac writes no requests for its own work. Its queue is live on this Mac, phones see it
