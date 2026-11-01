@@ -338,6 +338,17 @@ public struct LinkRecorderTarget: Codable, Sendable, Equatable {
 }
 
 extension LinkCapabilities {
+    /// Answers record requests (`record.request`). Both apps have always listed it; a peer may rely on
+    /// any Daybook answering, so nothing checks it.
+    public static let recordControlFeature = "recordControl"
+    /// Sends its processing progress (`processing.progress`): the Mac.
+    public static let processingProgressFeature = "processingProgress"
+    /// Sends bookmarks made during a recording (`bookmark`): the iPhone, since its first version.
+    public static let bookmarksFeature = "bookmarks"
+    /// Stops what it records when a paired device's page asks (a standalone stop: Stop on <device>), from
+    /// a device that can start recording on it (`PairingWords.canStartRecording`). Without it a device
+    /// stops only a recording it shares with the asker, so its page offers no Stop.
+    public static let pageStopFeature = "pageStop"
     /// Starts and stops the recorders it manages when another device asks (`LinkRecordRequest.recorder`).
     public static let recorderControlFeature = "recorderControl"
     /// Understands cascading starts and stops (`LinkRecordRequest.cascade`, a requester that records
@@ -361,6 +372,7 @@ extension LinkCapabilities {
     public var showsCaptions: Bool { features.contains(Self.liveCaptionsFeature) }
     public var showsLevels: Bool { features.contains(Self.liveLevelsFeature) }
     public var placesSummaries: Bool { features.contains(Self.summaryPlacementFeature) }
+    public var stopsForPages: Bool { features.contains(Self.pageStopFeature) }
 }
 
 /// The receiver did what was asked.

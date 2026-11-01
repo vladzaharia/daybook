@@ -29,7 +29,7 @@ final class PhoneLinkConnection: AnsweringRecordControl {
         watch = ObservationWatch.distinctValues(of: { [weak link] in
             guard let link else { return PhoneState() }
             return PhoneState(peer: link.peers[phoneID], recording: link.recordingStates[phoneID], paired: link.isPaired(phoneID),
-                              loaded: link.pairingsLoaded, lastConnected: link.lastConnected[phoneID],
+                              damaged: link.isDamaged(phoneID), loaded: link.pairingsLoaded, lastConnected: link.lastConnected[phoneID],
                               recorders: link.phoneRecorders[phoneID])
         }, initial: false) { [weak self] _ in self?.onChange?() }
     }
@@ -39,14 +39,20 @@ final class PhoneLinkConnection: AnsweringRecordControl {
         var peer: LinkPeer?
         var recording: LinkRecordingState?
         var paired = false
+        var damaged = false
         var loaded = false
         var lastConnected: Date?
         var recorders: [LinkRecorderState]?
     }
 
     var peer: LinkPeer? { link.peers[phoneID] }
-    /// Paired, or not known yet (the keychain is read once the link starts).
-    var isSetUp: Bool { !link.pairingsLoaded || link.isPaired(phoneID) }
+    /// Paired with a pairing it can read, or not known yet (the keychain is read once the link starts, and a
+    /// read that failed keeps what was known).
+    var isSetUp: Bool { !link.pairingsLoaded || (link.isPaired(phoneID) && !link.isDamaged(phoneID)) }
+    /// Its pairing is there but can't be read: Pair Again replaces it, Unpair removes it.
+    var isDamaged: Bool { link.isDamaged(phoneID) }
+    /// It stops what it records when this Mac's page for it asks (`LinkCapabilities.pageStopFeature`).
+    var stopsForPages: Bool { peer?.capabilities.stopsForPages == true }
 
     var state: ConnectionState {
         guard isSetUp else { return .notSetUp }
@@ -100,10 +106,10 @@ final class PhoneLinkConnection: AnsweringRecordControl {
     func refresh() {}
     func dismissProblem() {}
 
-    /// Forgetting the method unpairs the phone, on both sides.
+    /// Forgetting the method unpairs the phone, on both sides; a failure is said where Unpair is (`AppState.unpairPhone`).
     func forget() {
         let link = self.link, phoneID = self.phoneID
-        Task { await link.unpair(phoneID) }
+        Task { try? await link.unpair(phoneID) }
     }
 
     func transfer(_ recording: DeviceRecording, progress: @escaping @MainActor (TransferPhase, UInt64) -> Void) async throws -> TransferredAudio {
@@ -119,10 +125,12 @@ final class PhoneLinkConnection: AnsweringRecordControl {
         Task { _ = await requestStart(CompanionStart(conversationID: UUID(), standalone: true)) }
     }
 
-    /// The device page's Pause Recording on iPhone: stops what the phone is recording.
+    /// The device page's Stop on iPhone: stops what the phone is recording, as a page's stop (standalone), which a
+    /// phone listing `pageStopFeature` takes from a Mac that can start recording on it, and any phone takes from
+    /// the Mac it records with.
     func pauseRecording() {
-        guard let conversation = recordingConversationID else { return }
-        Task { _ = await requestStop(conversationID: conversation, macEndedAt: Date(), recorder: nil) }
+        guard let conversation = recordingConversationID, peer != nil else { return }
+        Task { _ = await send(LinkRecordRequest(action: .stop, conversationID: conversation, standalone: true)) }
     }
 
     /// Its clock against this Mac's, as the link measures it now.
@@ -181,7 +189,7 @@ final class PhoneLinkConnection: AnsweringRecordControl {
         case .permissionDenied: return "Daybook isn’t allowed to use its microphone."
         case .storageFull: return "It’s out of storage."
         case .busy: return "It’s busy."
-        case .declined: return "It’s set not to record along with this Mac."
+        case .declined: return PairingWords.declined("It", here: PairingWords.here(.mac))
         case .notRecording: return "It isn’t recording."
         default: return "It can’t record right now."
         }

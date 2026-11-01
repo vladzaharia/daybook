@@ -93,12 +93,11 @@ final class CascadingRecordingTests: XCTestCase {
         _ = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: conversation), from: phone.macID)
         XCTAssertNil(rig.state.recordingID)
 
-        // "Record along with Pocket iPhone" off on this Mac: its cascading starts are declined, while a
+        // Can start recording off for Pocket iPhone on this Mac: its cascading starts are declined, while a
         // start the person chose on the phone for this Mac still records.
         rig.state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
         let (_, declined) = try await phoneStarts(phone)
-        XCTAssertEqual(declined, .refused(LinkRecordRefusal(reason: .declined,
-                                                            message: "Recording along with \(PhoneLinkRig.phoneName) is turned off on this Mac.")))
+        XCTAssertEqual(declined, .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .iPhone))))
         XCTAssertNil(rig.state.recordingID)
         let chosen = UUID()
         let reply = try await phone.client.request(LinkRecordRequest(action: .start, conversationID: chosen,

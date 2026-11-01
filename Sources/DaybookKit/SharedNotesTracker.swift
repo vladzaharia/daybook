@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookLink
 import Foundation
 
 /// The notes and bookmarks of one shared recording, kept in step with the other devices recording it
@@ -6,6 +7,10 @@ import Foundation
 /// what this device last shared or was sent, by ID, so a change made here goes out once and one that
 /// arrived is never sent back: the device diffs its notes against it after every change, and records
 /// what arrives before applying it.
+///
+/// A change a device recording along didn't get (it was away for a moment, or the send failed) is owed to
+/// it (`owe(_:to:)`) and goes out, before anything newer, once it's back (`takeOwed(by:)`), until the
+/// recording ends.
 ///
 /// Notes and bookmarks that were there before the shared recording began aren't sent: sync carries them.
 @MainActor
@@ -20,9 +25,13 @@ public final class SharedNotesTracker {
     /// Paragraphs that just arrived, by when: an editor writing its text back a moment later may not
     /// have shown them yet (`keepingArrivals`).
     private var arrived: [UUID: Date] = [:]
+    /// Changes each device recording along hasn't received, in the order they were made.
+    private var owed: [UUID: [LinkMessage]] = [:]
 
     /// How long a paragraph that arrived is kept from an editor that may not have shown it yet.
     public static let arrivalGrace: TimeInterval = 1
+    /// The most changes kept for one device; past it the oldest go (sync still carries them).
+    public static let owedLimit = 500
 
     public init() {}
 
@@ -36,15 +45,41 @@ public final class SharedNotesTracker {
         bookmarks = Dictionary(highlights.map { ($0.id, $0.text) }, uniquingKeysWith: { first, _ in first })
         changedAt = [:]
         arrived = [:]
+        owed = [:]
     }
 
+    /// The recording ended: what's still owed goes with it (each device's own copy reaches the other through sync).
     public func end() {
         conversationID = nil
         notes = [:]
         bookmarks = [:]
         changedAt = [:]
         arrived = [:]
+        owed = [:]
     }
+
+    // MARK: Changes owed
+
+    /// Keeps changes for a device recording along that didn't get them (away, or a send failed), after any it's
+    /// already owed. A paragraph's newer text replaces what it was owed of that paragraph.
+    public func owe(_ messages: [LinkMessage], to device: UUID) {
+        guard isActive, !messages.isEmpty else { return }
+        var list = owed[device] ?? []
+        for message in messages {
+            if case .note(let note) = message {
+                list.removeAll { if case .note(let earlier) = $0 { return earlier.id == note.id } else { return false } }
+            }
+            list.append(message)
+        }
+        if list.count > Self.owedLimit { list.removeFirst(list.count - Self.owedLimit) }
+        owed[device] = list
+    }
+
+    /// What a device is owed, in order, taken to send now (it's owed again whatever doesn't go).
+    public func takeOwed(by device: UUID) -> [LinkMessage] { owed.removeValue(forKey: device) ?? [] }
+
+    /// Whether a device is owed changes.
+    public func isOwed(_ device: UUID) -> Bool { !(owed[device] ?? []).isEmpty }
 
     /// The text an editor wrote back, with any paragraph that arrived a moment ago and isn't in it put
     /// back at the end: the editor took its text before the paragraph reached it, so it can't have

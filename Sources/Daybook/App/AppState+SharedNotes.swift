@@ -36,13 +36,37 @@ extension AppState {
         }.map(\.deviceID)
     }
 
-    /// Sends what changed in the notes and bookmarks since they were last shared.
+    /// The phones recording this conversation with this Mac, connected now or not: the one it records for, and
+    /// each recording along with it.
+    func phonesRecordingAlong(_ id: UUID) -> [UUID] {
+        var phones = Set<UUID>()
+        if let lead = phoneLeads[id].flatMap({ UUID(uuidString: $0.sessionID) }) { phones.insert(lead) }
+        for session in phoneSessions where isRecording(id, with: session.id) {
+            if let phone = UUID(uuidString: session.id) { phones.insert(phone) }
+        }
+        return phones.sorted { $0.uuidString < $1.uuidString }
+    }
+
+    /// A phone (re)connected: what it missed of the shared recording's notes and bookmarks goes now, before
+    /// anything newer. One that doesn't take shared notes is owed nothing.
+    func sendOwedNotes(to phone: UUID) {
+        guard let id = sharedNotes.conversationID, sharedNotes.isOwed(phone) else { return }
+        guard phonesSharingNotes(id).contains(phone) else {
+            if phoneLink.peers[phone]?.capabilities.sharesNotes == false { _ = sharedNotes.takeOwed(by: phone) }
+            return
+        }
+        deliverSharedNotes([], to: [phone])
+    }
+
+    /// Sends what changed in the notes and bookmarks since they were last shared. A phone recording along that's
+    /// away for a moment, or that a send fails to reach, is owed the changes until it's back.
     private func shareNoteChanges(in meeting: Meeting) {
         let now = Date()
         let notes = sharedNotes.notesChanged(NoteTimeline.anchors(meeting.timedNotes, text: meeting.notes), at: now)
         let marks = sharedNotes.bookmarksChanged(meeting.highlights, at: now)
+        let along = phonesRecordingAlong(meeting.id)
+        guard !along.isEmpty, !(notes.isEmpty && marks.made.isEmpty && marks.changed.isEmpty && marks.deleted.isEmpty) else { return }
         let phones = phonesSharingNotes(meeting.id)
-        guard !phones.isEmpty, !(notes.isEmpty && marks.made.isEmpty && marks.changed.isEmpty && marks.deleted.isEmpty) else { return }
         let start = recordingStartedAt ?? now
         var messages: [LinkMessage] = notes.map { note in
             .note(LinkNote(id: note.id, conversationID: meeting.id, text: note.text, time: note.time,
@@ -54,11 +78,26 @@ extension AppState {
         }
         messages += marks.changed.map { .bookmarkChange(LinkBookmarkChange(id: $0.id, conversationID: meeting.id, label: $0.text, changedAt: now)) }
         messages += marks.deleted.map { .bookmarkChange(LinkBookmarkChange(id: $0, conversationID: meeting.id, deleted: true, changedAt: now)) }
-        let link = phoneLink, previous = sharedNotesSend
+        // Away now (not connected): owed until it's back. Connected without shared notes: an older Daybook.
+        for phone in along where phoneLink.peers[phone] == nil { sharedNotes.owe(messages, to: phone) }
+        deliverSharedNotes(messages, to: phones)
+    }
+
+    /// Sends each phone what it's owed, then `messages`, in order, one send after another; whatever a send
+    /// doesn't deliver is owed to that phone again.
+    private func deliverSharedNotes(_ messages: [LinkMessage], to phones: [UUID]) {
+        guard !phones.isEmpty else { return }
+        let link = phoneLink, tracker = sharedNotes, previous = sharedNotesSend
         sharedNotesSend = Task {
             await previous?.value
             for phone in phones {
-                for message in messages { try? await link.send(message, to: phone) }
+                let all = tracker.takeOwed(by: phone) + messages
+                for (index, message) in all.enumerated() {
+                    do { try await link.send(message, to: phone) } catch {
+                        tracker.owe(Array(all[index...]), to: phone)
+                        break
+                    }
+                }
             }
         }
     }

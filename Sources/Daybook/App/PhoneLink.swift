@@ -1,8 +1,10 @@
+import AppKit
 import DaybookCore
 import DaybookKit
 import DaybookLink
 import Foundation
 import Observation
+import os
 
 /// This Mac's end of Daybook's local link to paired iPhones (docs/link.md): the `LinkService`, the
 /// pairing window, which phones are connected, and what they last reported.
@@ -38,9 +40,17 @@ final class PhoneLink {
     private(set) var pairing: Pairing = .closed
     /// Why the last attempt didn't pair (a wrong code, too many tries), shown under the new code.
     private(set) var pairingProblem: String?
-    /// Phones this Mac shares a key with. Valid once `pairingsLoaded`.
+    /// Phones this Mac shares a key with, a pairing that can't be read among them (`LinkPairedDevice.isDamaged`).
+    /// Valid once `pairingsLoaded`. A read that fails keeps the list it had.
     private(set) var paired: [LinkPairedDevice] = []
     private(set) var pairingsLoaded = false
+    /// The last read of the pairings failed (the keychain didn't allow it yet, as just after login): they're read
+    /// again after `pairingsRetryDelay` (doubling), at wake, and at the next start.
+    private(set) var pairingsReadFailed = false
+    /// How long after a failed read the pairings are read again, at first.
+    @ObservationIgnored var pairingsRetryDelay: Duration = .seconds(5)
+    @ObservationIgnored private var pairingsRetry: Task<Void, Never>?
+    @ObservationIgnored private var pairingsRetries = 0
     /// Connected, authenticated phones, with their clock estimates.
     private(set) var peers: [UUID: LinkPeer] = [:]
     /// What each connected phone last said about its recorder.
@@ -64,6 +74,10 @@ final class PhoneLink {
     @ObservationIgnored var onConnected: ((LinkPeer) -> Void)?
     /// An app message from a phone: recording state, bookmarks, processing nudges.
     @ObservationIgnored var onMessage: ((LinkMessage, UUID) -> Void)?
+    /// The Mac woke from sleep: the app's wake work (`AppState.systemDidWake`, which wakes the link too). Without
+    /// it the link does only its own (`systemDidWake()`).
+    @ObservationIgnored var onWake: (@MainActor () async -> Void)?
+    @ObservationIgnored private var wakeWatch: Task<Void, Never>?
     /// Answers a phone asking this Mac to start or stop recording.
     @ObservationIgnored var recordHandler: (@MainActor (LinkPeer, LinkRecordRequest) async -> LinkRecordReply.Outcome)?
     /// This Mac's own recorder as phones should see it (`recording.state`), read each time it's sent.
@@ -76,17 +90,26 @@ final class PhoneLink {
     init(identity: LinkIdentity, environment: Environment = .app) {
         self.identity = identity
         self.environment = environment
+        watchWake()
     }
 
+    private static let log = Logger(subsystem: "local.daybook", category: "link")
+
     var hasConnectedPhones: Bool { !peers.isEmpty }
+    /// Paired, even when its pairing can't be read: Unpair removes it.
     func isPaired(_ phoneID: UUID) -> Bool { paired.contains { $0.deviceID == phoneID } }
+    /// Its pairing is there but can't be read: it can't connect until it's paired again.
+    func isDamaged(_ phoneID: UUID) -> Bool { paired.contains { $0.deviceID == phoneID && $0.isDamaged } }
 
     // MARK: Running
 
     /// Starts listening (once). False when the listener couldn't open.
     @discardableResult
     func start() async -> Bool {
-        if service != nil { return true }
+        if service != nil {
+            if pairingsReadFailed { await reloadPairings() }
+            return true
+        }
         if let starting { return await starting.value }
         let task = Task { await self.open() }
         starting = task
@@ -117,9 +140,10 @@ final class PhoneLink {
         return true
     }
 
-    /// Stops when there's no reason to run: pairing is closed and no phone is paired.
+    /// Stops when there's no reason to run: pairing is closed and no phone is paired. Never on a read that
+    /// failed, which says nothing about what's paired.
     func stopIfIdle() async {
-        guard let service, pairingsLoaded, paired.isEmpty, pairing == .closed || isFinished(pairing) else { return }
+        guard let service, pairingsLoaded, !pairingsReadFailed, paired.isEmpty, pairing == .closed || isFinished(pairing) else { return }
         self.service = nil
         await service.stop()
         listening?.cancel(); listening = nil
@@ -130,6 +154,9 @@ final class PhoneLink {
     /// Stops for good (tests, and quitting).
     func shutDown() async {
         stateBeat?.cancel(); stateBeat = nil
+        wakeWatch?.cancel(); wakeWatch = nil
+        pairingsRetry?.cancel(); pairingsRetry = nil
+        startRetry?.cancel(); startRetry = nil; startedLate = nil
         guard let service else { return }
         self.service = nil
         await service.stop()
@@ -138,7 +165,24 @@ final class PhoneLink {
         peers = [:]
     }
 
-    func systemDidWake() async { await service?.systemDidWake() }
+    /// After sleep: probes every phone and reopens the listener if it failed, and reads the pairings again if the
+    /// last read failed.
+    func systemDidWake() async {
+        if service == nil, startRetry != nil, await startLate() { return }
+        await service?.systemDidWake()
+        if pairingsReadFailed { await reloadPairings() }
+    }
+
+    /// Follows the Mac's wake for as long as the link lives: the one wake observer of the Mac app.
+    private func watchWake() {
+        let wakes = NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.didWakeNotification).map { _ in () }
+        wakeWatch = Task { [weak self] in
+            for await _ in wakes {
+                guard let self else { return }
+                if let onWake = self.onWake { await onWake() } else { await self.systemDidWake() }
+            }
+        }
+    }
 
     /// This Mac's name, library, or ability to process changed.
     func update(_ change: (inout LinkIdentity) -> Void) async {
@@ -173,17 +217,73 @@ final class PhoneLink {
         await stopIfIdle()
     }
 
-    /// Forgets a phone on both sides (the phone hears it when it's connected).
-    func unpair(_ phoneID: UUID) async {
-        guard await start(), let service else { return }
-        guard isPaired(phoneID) || !pairingsLoaded else { return }
-        try? await service.unpair(phoneID)
+    /// Forgets a phone on both sides (the phone hears it when it's connected). Throws when the link can't
+    /// start or the keychain refuses: the pairing is still there.
+    func unpair(_ phoneID: UUID) async throws {
+        guard await start(), let service else { throw LinkError.listenerFailed("The link couldn’t start.") }
+        guard isPaired(phoneID) || !pairingsLoaded || pairingsReadFailed else { return }
+        try await service.unpair(phoneID)
+        // Gone, whether or not the keychain lists the rest just now.
+        paired.removeAll { $0.deviceID == phoneID }
         await reloadPairings()
     }
 
+    /// Reads the pairings from the keychain. A read that fails keeps what was known (every phone stays as it
+    /// was, rather than looking unpaired) and tries again later.
     private func reloadPairings() async {
-        paired = ((try? await service?.pairedDevices()) ?? []).sorted { $0.pairedAt < $1.pairedAt }
-        pairingsLoaded = true
+        guard let service else { return }
+        do {
+            paired = try await service.pairedDevices().sorted { $0.pairedAt < $1.pairedAt }
+            pairingsLoaded = true
+            pairingsReadFailed = false
+            pairingsRetries = 0
+            pairingsRetry?.cancel(); pairingsRetry = nil
+        } catch {
+            Self.log.error("Couldn’t read the iPhone pairings: \(String(describing: error), privacy: .public)")
+            pairingsReadFailed = true
+            scheduleReloadPairings()
+        }
+    }
+
+    /// The link couldn't start (a keychain that won't read yet keeps its listener from opening): tries again after
+    /// `pairingsRetryDelay` (doubling, up to about five minutes) and at wake, until it starts, then runs `started`.
+    func keepStarting(then started: @escaping @MainActor () async -> Void) {
+        guard service == nil, startRetry == nil else { return }
+        startedLate = started
+        startRetry = Task { [weak self] in
+            var attempt = 0
+            while !Task.isCancelled {
+                guard let delay = self.map({ $0.pairingsRetryDelay * (1 << min(attempt, 6)) }) else { return }
+                guard (try? await Task.sleep(for: delay)) != nil, let self else { return }
+                attempt += 1
+                if await self.startLate() { return }
+            }
+        }
+    }
+
+    @ObservationIgnored private var startRetry: Task<Void, Never>?
+    @ObservationIgnored private var startedLate: (@MainActor () async -> Void)?
+
+    /// One more try for `keepStarting(then:)`. True once started.
+    private func startLate() async -> Bool {
+        guard await start() else { return false }
+        startRetry?.cancel(); startRetry = nil
+        let started = startedLate
+        startedLate = nil
+        await started?()
+        return true
+    }
+
+    /// Reads the pairings again after a failed read, waiting longer each time (up to about five minutes).
+    private func scheduleReloadPairings() {
+        guard pairingsRetry == nil else { return }
+        let delay = pairingsRetryDelay * (1 << min(pairingsRetries, 6))
+        pairingsRetries += 1
+        pairingsRetry = Task { [weak self] in
+            guard (try? await Task.sleep(for: delay)) != nil, let self else { return }
+            self.pairingsRetry = nil
+            await self.reloadPairings()
+        }
     }
 
     private func isFinished(_ pairing: Pairing) -> Bool {
@@ -253,7 +353,9 @@ final class PhoneLink {
         case .paired(let device):
             pairing = .paired(device)
             pairingProblem = nil
-            if !paired.contains(where: { $0.deviceID == device.deviceID }) { paired.append(device) }
+            // Pairing again replaces the pairing it had, one that couldn't be read among them.
+            paired.removeAll { $0.deviceID == device.deviceID }
+            paired.append(device)
             onPaired?(device)
         case .pairingFailed(let error):
             switch error {

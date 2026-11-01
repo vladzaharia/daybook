@@ -1,7 +1,9 @@
+import AppKit
 import DaybookCore
 @testable import DaybookKit
 import DaybookLink
 import DaybookTestSupport
+import DaybookUI
 import Foundation
 import XCTest
 @testable import Daybook
@@ -107,6 +109,208 @@ final class PhoneLinkTests: XCTestCase {
         try await waitUntil("the phone to hear it") { events.unpaired }
         try await waitUntil("the link to stop") { !state.phoneLink.isRunning }
         await client.disconnect(from: mac.deviceID)
+    }
+
+    // MARK: Pairings the keychain won't give
+
+    private func record(_ phoneID: UUID, name: String = PhoneLinkRig.phoneName) -> LinkPairingRecord {
+        LinkPairingRecord(deviceID: phoneID, name: name, deviceClass: .iPhone, pairedAt: Date(),
+                          linkKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) }), pskIdentity: Data((0..<16).map { _ in UInt8.random(in: 1...255) }))
+    }
+
+    func testBehaviorAPairingsReadThatFailsKeepsEveryPhoneAndIsTriedAgain() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let phoneID = UUID(), spare = UUID()
+        let store = FlakyLinkKeyStore([record(phoneID), record(spare, name: "Spare iPhone")])
+        state.phoneLink.environment = .init { identity in LinkService(identity: identity, keyStore: store, configuration: .loopback()) }
+        state.phoneLink.pairingsRetryDelay = .milliseconds(50)
+        state.devices.add(ConfiguredDevice(id: phoneID.uuidString, kind: DaybookPhoneIntegration().kind, name: PhoneLinkRig.phoneName))
+        let connection = try XCTUnwrap(state.devices.session(phoneID.uuidString)?.direct as? PhoneLinkConnection)
+
+        // Just after login the keychain lists nothing yet: the phone isn't taken for unpaired.
+        store.failsListing = true
+        await state.startPhoneLinkIfPaired()
+        XCTAssertTrue(state.phoneLink.isRunning)
+        XCTAssertTrue(state.phoneLink.pairingsReadFailed)
+        XCTAssertTrue(connection.isSetUp, "a read that failed says nothing about what's paired")
+        XCTAssertNotEqual(connection.state, .notSetUp)
+        await state.phoneLink.stopIfIdle()
+        XCTAssertTrue(state.phoneLink.isRunning, "never stops on a read that failed")
+
+        // The keychain allows reads again: the next try reads the pairing.
+        store.failsListing = false
+        try await waitUntil("the pairings are read again") { state.phoneLink.pairingsLoaded && !state.phoneLink.pairingsReadFailed }
+        XCTAssertEqual(Set(state.phoneLink.paired.map(\.deviceID)), [phoneID, spare])
+
+        // A later read that fails (after unpairing the spare) keeps the rest of the list it had.
+        store.failsListing = true
+        state.phoneLink.pairingsRetryDelay = .seconds(60)
+        try await state.phoneLink.unpair(spare)
+        XCTAssertTrue(state.phoneLink.pairingsReadFailed)
+        XCTAssertEqual(state.phoneLink.paired.map(\.deviceID), [phoneID], "the other phone stays paired")
+        XCTAssertTrue(connection.isSetUp)
+        // Waking reads them again.
+        store.failsListing = false
+        await state.phoneLink.systemDidWake()
+        XCTAssertFalse(state.phoneLink.pairingsReadFailed)
+        XCTAssertEqual(state.phoneLink.paired.map(\.deviceID), [phoneID])
+    }
+
+    func testBehaviorALinkThatCantStartForTheKeychainKeepsTryingAndKeepsItsPhones() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let phoneID = UUID()
+        let store = FlakyLinkKeyStore([record(phoneID)])
+        store.failsReads = true
+        state.phoneLink.environment = .init { identity in LinkService(identity: identity, keyStore: store, configuration: .loopback()) }
+        state.phoneLink.pairingsRetryDelay = .milliseconds(50)
+        state.devices.add(ConfiguredDevice(id: phoneID.uuidString, kind: DaybookPhoneIntegration().kind, name: PhoneLinkRig.phoneName))
+        let connection = try XCTUnwrap(state.devices.session(phoneID.uuidString)?.direct as? PhoneLinkConnection)
+
+        await state.startPhoneLinkIfPaired()
+        XCTAssertFalse(state.phoneLink.isRunning, "the listener needs the pairings' keys")
+        XCTAssertTrue(connection.isSetUp, "the phone isn't taken for unpaired meanwhile")
+        store.failsReads = false
+        try await waitUntil("the link to start once the keychain reads", timeout: 20) { state.phoneLink.isRunning && state.phoneLink.pairingsLoaded }
+        XCTAssertEqual(state.phoneLink.paired.map(\.deviceID), [phoneID])
+    }
+
+    func testBehaviorAnUnpairTheKeychainRefusesIsSaidAndThePhoneStays() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let phoneID = UUID()
+        let store = FlakyLinkKeyStore([record(phoneID)])
+        state.phoneLink.environment = .init { identity in LinkService(identity: identity, keyStore: store, configuration: .loopback()) }
+        state.devices.add(ConfiguredDevice(id: phoneID.uuidString, kind: DaybookPhoneIntegration().kind, name: PhoneLinkRig.phoneName))
+        await state.startPhoneLinkIfPaired()
+        XCTAssertEqual(state.phoneLink.paired.map(\.deviceID), [phoneID])
+
+        store.failsRemoving = true
+        state.unpairPhone(phoneID)
+        try await waitUntil("the problem") { state.problem != nil }
+        XCTAssertEqual(state.problem?.title, PairingWords.couldntUnpair(PhoneLinkRig.phoneName))
+        XCTAssertEqual(state.phoneLink.paired.map(\.deviceID), [phoneID], "the pairing is still there")
+        XCTAssertNotNil(state.devices.session(phoneID.uuidString), "and so is its device")
+    }
+
+    func testBehaviorAPairingThatCantBeReadIsListedAsNeedingPairingAgainAndUnpairs() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let readable = UUID()
+        let damaged = LinkPairedDevice(deviceID: UUID(), name: "", deviceClass: LinkDeviceClass(rawValue: "unknown"), pairedAt: Date())
+        let store = MemoryLinkKeyStore([record(readable)], damaged: [damaged])
+        state.phoneLink.environment = .init { identity in LinkService(identity: identity, keyStore: store, configuration: .loopback()) }
+        state.devices.add(ConfiguredDevice(id: readable.uuidString, kind: DaybookPhoneIntegration().kind, name: PhoneLinkRig.phoneName))
+
+        await state.startPhoneLinkIfPaired()
+        XCTAssertTrue(state.phoneLink.isRunning, "one pairing that can't be read never keeps the others from connecting")
+        XCTAssertEqual(Set(state.phoneLink.paired.map(\.deviceID)), [readable, damaged.deviceID])
+        let session = try XCTUnwrap(state.devices.session(damaged.deviceID.uuidString), "listed, to be unpaired")
+        XCTAssertEqual(session.device.name, "iPhone", "a pairing with no name left still has one")
+        let connection = try XCTUnwrap(session.direct as? PhoneLinkConnection)
+        XCTAssertTrue(connection.isDamaged)
+        XCTAssertFalse(connection.isSetUp)
+        XCTAssertTrue(state.phoneLink.isPaired(damaged.deviceID))
+        XCTAssertEqual((state.devices.session(readable.uuidString)?.direct as? PhoneLinkConnection)?.isSetUp, true)
+
+        state.unpairPhone(damaged.deviceID)
+        try await waitUntil("the damaged pairing to go") {
+            !state.phoneLink.isPaired(damaged.deviceID) && state.devices.session(damaged.deviceID.uuidString) == nil
+        }
+        XCTAssertEqual(try store.damagedDevices(), [])
+        XCTAssertEqual(state.phoneLink.paired.map(\.deviceID), [readable])
+    }
+
+    func testBehaviorTheMacsWakeIsFollowedByTheLinkAndHandedToTheApp() async throws {
+        let link = PhoneLink(identity: LinkIdentity(deviceID: UUID(), name: "Studio Mac", deviceClass: .mac, appVersion: "1"))
+        addTeardownBlock { await link.shutDown() }
+        let woke = WakeCount()
+        link.onWake = { woke.count += 1 }
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didWakeNotification, object: NSWorkspace.shared)
+        try await waitUntil("the wake to reach the app") { woke.count == 1 }
+        await link.shutDown()
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didWakeNotification, object: NSWorkspace.shared)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(woke.count, 1, "a link that's shut down follows nothing")
+    }
+
+    // MARK: A paired device's page
+
+    func testBehaviorThePeerPageSaysTheSameForAMacAndAnIPhone() {
+        let now = Date()
+        let start = now.addingTimeInterval(-600)
+        let recorder = LinkRecorderState(kind: "soundcore.work", name: "Soundcore Work", isRecording: true, startedAt: start, asOf: now)
+        let mac = PeerPage(PeerPage.Facts(id: "m", name: "Studio Mac", kind: .mac, isConnected: true, activity: .recording, recordingSince: start,
+                                          conversationTitle: "Design review", canStop: true, recorders: [recorder], transcribes: true,
+                                          appVersion: "2.0", pairedAt: now),
+                           here: PairingWords.here(.iPhone), now: now)
+        let phone = PeerPage(PeerPage.Facts(id: "p", name: "Alex’s iPhone", kind: .iPhone, isConnected: true, activity: .recording, recordingSince: start,
+                                            conversationTitle: "Design review", canStop: true, recorders: [recorder], appVersion: "2.0", pairedAt: now),
+                             here: PairingWords.here(.mac), now: now)
+        XCTAssertEqual(mac.symbol, "desktopcomputer")
+        XCTAssertEqual(phone.symbol, "iphone")
+        XCTAssertEqual(mac.status, "Recording")
+        XCTAssertEqual(phone.status, mac.status, "both sides in PeerStatusWords' words")
+        XCTAssertEqual(mac.recording?.line, PairingWords.recordingNow(since: start, paused: false))
+        XCTAssertEqual(mac.recording?.stop, "Stop on Studio Mac")
+        XCTAssertEqual(phone.recording?.stop, "Stop on Alex’s iPhone")
+        XCTAssertEqual(mac.recording?.conversation, "Design review")
+        XCTAssertEqual(mac.recorders, ["Soundcore Work · Recording since \(start.formatted(date: .omitted, time: .shortened))"])
+        XCTAssertEqual(phone.recorders, mac.recorders)
+        XCTAssertEqual(mac.facts.map(\.label), ["Transcribes", "Daybook", "Paired"], "no clock offset")
+        XCTAssertEqual(phone.facts.map(\.label), ["Daybook", "Paired"], "whether it transcribes shows once it has said")
+        XCTAssertNil(mac.problem)
+
+        // No Stop where it wouldn't be taken; nothing about recording while it's away.
+        let away = PeerPage(PeerPage.Facts(id: "m", name: "Studio Mac", kind: .mac, isConnected: false, activity: .recording,
+                                           lastSeen: now.addingTimeInterval(-3_600), canStop: false), here: "this iPhone", now: now)
+        XCTAssertNil(away.recording)
+        XCTAssertTrue(away.status.contains("Last seen"), away.status)
+        XCTAssertFalse(away.isActive)
+    }
+
+    func testBehaviorThePeerPageSaysWhatKeepsAPairFromWorkingAndOffersItsFix() {
+        func page(_ problem: PeerPage.Problem) -> PeerPage {
+            PeerPage(PeerPage.Facts(id: "m", name: "Studio Mac", kind: .mac, isConnected: false, problem: problem), here: "this iPhone")
+        }
+        XCTAssertEqual(page(.notRecognized).problem, "Studio Mac doesn’t recognize this iPhone anymore. Pair again to connect.")
+        XCTAssertTrue(page(.notRecognized).offersPairAgain)
+        XCTAssertTrue(page(.damaged).offersPairAgain)
+        XCTAssertEqual(page(.damaged).problem, PairingWords.cantRead("Studio Mac"))
+        XCTAssertEqual(PeerPage(PeerPage.Facts(id: "p", name: "Alex’s iPhone", kind: .iPhone, isConnected: false, problem: .notPaired),
+                                here: PairingWords.here(.mac)).problem, "This Mac isn’t paired with Alex’s iPhone.")
+        // Which side is older, when its versions say so.
+        let older = page(.incompatible(peerVersions: LinkProtocol.supportedVersions.lowerBound - 1...LinkProtocol.supportedVersions.lowerBound - 1))
+        XCTAssertEqual(older.problem, "Update Daybook on Studio Mac to connect.")
+        XCTAssertFalse(older.offersPairAgain)
+        let newer = page(.incompatible(peerVersions: LinkProtocol.supportedVersions.upperBound + 1...LinkProtocol.supportedVersions.upperBound + 2))
+        XCTAssertEqual(newer.problem, "Update Daybook on this iPhone to connect.")
+        XCTAssertEqual(page(.other("Turn on sync to get your iPhone’s recordings.")).problem, "Turn on sync to get your iPhone’s recordings.")
+    }
+
+    // MARK: Notes owed to a phone
+
+    func testBehaviorChangesOwedToADeviceKeepTheirOrderAndAParagraphsNewestText() {
+        let tracker = SharedNotesTracker()
+        let conversation = UUID(), phone = UUID(), paragraph = UUID()
+        func note(_ text: String) -> LinkMessage {
+            .note(LinkNote(id: paragraph, conversationID: conversation, text: text, time: 1, madeAt: Date(), changedAt: Date()))
+        }
+        let mark = LinkMessage.bookmark(LinkBookmark(id: UUID(), conversationID: conversation, recordingTime: 3, createdAt: Date()))
+        tracker.owe([note("Draft")], to: phone)
+        XCTAssertFalse(tracker.isOwed(phone), "nothing is owed outside a shared recording")
+        tracker.begin(conversation, notes: [], bookmarks: [])
+        tracker.owe([note("Draft"), mark], to: phone)
+        tracker.owe([note("Final")], to: phone)
+        let owed = tracker.takeOwed(by: phone)
+        XCTAssertEqual(owed.count, 2, "a paragraph's newer text replaces what was owed of it")
+        guard case .bookmark = owed[0], case .note(let latest) = owed[1] else { return XCTFail("\(owed)") }
+        XCTAssertEqual(latest.text, "Final")
+        XCTAssertFalse(tracker.isOwed(phone), "taken to send")
+        tracker.owe([mark], to: phone)
+        tracker.end()
+        XCTAssertFalse(tracker.isOwed(phone), "the recording ended: sync carries the rest")
     }
 
     // MARK: Record control
@@ -268,6 +472,70 @@ final class PhoneLinkTests: XCTestCase {
         try await phone.client.send(.recordingState(LinkRecordingState(phase: .idle)))
         try await waitUntil("idle") { control.recordingPhase == nil }
         XCTAssertEqual(control.status?.isRecording, false)
+    }
+
+    func testBehaviorThePhonesPageStopsThisMacOnlyWhenItCanStartRecordingHere() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let phone = try await PhoneLinkRig.connect(state)
+        defer { Task { await phone.tearDown(state) } }
+        state.phoneCapture = PhoneCapture(start: { id in _ = self.macStartsRecording(rig, into: id); return true },
+                                          stop: { id in self.macStopsRecording(rig, id) })
+        XCTAssertTrue(state.phoneLink.identity.features.contains(LinkCapabilities.pageStopFeature), "this Mac stops for a phone's page")
+        let session = try XCTUnwrap(state.devices.session(phone.phoneID.uuidString))
+
+        // A recording of this Mac's own, the phone not asked to join (Can start recording off).
+        session.update { $0.alsoRecordsWithMac = false }
+        let id = macStartsRecording(rig)
+        await state.sources.recorders.settle()
+        XCTAssertTrue(phone.recorder.requests.isEmpty)
+
+        // Off: the phone's page can't stop it, and says how to allow it.
+        let refused = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: id, standalone: true), from: phone.macID)
+        XCTAssertEqual(refused.outcome, .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStop(asker: .iPhone))))
+        XCTAssertEqual(state.recordingID, id)
+        // A stop that isn't a page's (it doesn't record this conversation) is refused whatever the setting.
+        session.update { $0.alsoRecordsWithMac = true }
+        let plain = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: id), from: phone.macID)
+        guard case .refused = plain.outcome else { return XCTFail("\(plain.outcome)") }
+        XCTAssertEqual(state.recordingID, id)
+
+        // On: Stop on Studio Mac stops it.
+        let stopped = try await phone.client.request(LinkRecordRequest(action: .stop, conversationID: id, standalone: true), from: phone.macID)
+        guard case .accepted = stopped.outcome else { return XCTFail("\(stopped.outcome)") }
+        XCTAssertNil(state.recordingID)
+    }
+
+    func testBehaviorNotesWrittenWhileThePhoneIsAwayReachItWhenItsBack() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let phone = try await PhoneLinkRig.connect(state, features: [LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature])
+        defer { Task { await phone.tearDown(state) } }
+        let id = macStartsRecording(rig)
+        await state.sources.recorders.settle()
+        XCTAssertEqual(rig.meeting(id)?.companions?.first?.state, .recording)
+
+        state.editNotes(id, text: "Agenda: launch")
+        try await waitUntil("the first paragraph on the phone") { phone.sentNotes.contains { $0.text == "Agenda: launch" } }
+
+        // The phone's Wi-Fi blips: what's written meanwhile is owed to it, not lost.
+        await phone.client.disconnect(from: phone.macID)
+        try await waitUntil("the phone to go") { state.phoneLink.peers[phone.phoneID] == nil }
+        state.editNotes(id, text: "Agenda: launch\nBudget: approved")
+        state.addHighlight(id)
+        try await waitUntil("the changes to be owed") { state.sharedNotes.isOwed(phone.phoneID) }
+        XCTAssertFalse(phone.sentNotes.contains { $0.text == "Budget: approved" })
+
+        // Back: it gets them, before anything newer.
+        try await phone.client.connect(to: phone.macID, via: phone.endpoint)
+        try await waitUntil("the missed paragraph") { phone.sentNotes.contains { $0.text == "Budget: approved" } }
+        try await waitUntil("the missed bookmark") { phone.sentBookmarks.count == 1 }
+        XCTAssertFalse(state.sharedNotes.isOwed(phone.phoneID))
+        state.editNotes(id, text: "Agenda: launch\nBudget: approved\nShip Friday")
+        try await waitUntil("the next paragraph") { phone.sentNotes.contains { $0.text == "Ship Friday" } }
+        let texts = phone.sentNotes.map(\.text)
+        XCTAssertLessThan(try XCTUnwrap(texts.firstIndex(of: "Budget: approved")), try XCTUnwrap(texts.firstIndex(of: "Ship Friday")))
+        macStopsRecording(rig, id)
     }
 
     func testAPhoneThatSaysNoIsReportedQuietly() async throws {
@@ -1166,6 +1434,56 @@ final class PhoneLinkTests: XCTestCase {
         XCTAssertTrue(state.queuedIDs.isEmpty)
         XCTAssertNil(state.processingID)
     }
+}
+
+/// A key store whose keychain refuses on cue, as one does just after login (`errSecInteractionNotAllowed`).
+final class FlakyLinkKeyStore: LinkKeyStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private let stored: MemoryLinkKeyStore
+    private var _failsReads = false, _failsListing = false, _failsRemoving = false
+
+    init(_ records: [LinkPairingRecord]) { stored = MemoryLinkKeyStore(records) }
+
+    /// Every read fails: the listener can't load its keys.
+    var failsReads: Bool { get { lock.withLock { _failsReads } } set { lock.withLock { _failsReads = newValue } } }
+    /// Listing the pairings to show fails, while the listener's own read works.
+    var failsListing: Bool { get { lock.withLock { _failsListing } } set { lock.withLock { _failsListing = newValue } } }
+    var failsRemoving: Bool { get { lock.withLock { _failsRemoving } } set { lock.withLock { _failsRemoving = newValue } } }
+
+    private static let refused = LinkKeyStoreError.keychain(errSecInteractionNotAllowed)
+
+    func records() throws -> [LinkPairingRecord] {
+        if failsReads { throw Self.refused }
+        return try stored.records()
+    }
+
+    func damagedDevices() throws -> [LinkPairedDevice] {
+        if failsReads || failsListing { throw Self.refused }
+        return try stored.damagedDevices()
+    }
+
+    func save(_ record: LinkPairingRecord) throws { try stored.save(record) }
+
+    func remove(deviceID: UUID) throws {
+        if failsRemoving { throw Self.refused }
+        try stored.remove(deviceID: deviceID)
+    }
+}
+
+extension PhoneLinkRig {
+    /// The notes and bookmarks the Mac sent the phone, in order.
+    var sentNotes: [LinkNote] {
+        events.all.compactMap { if case .received(.note(let note), _) = $0 { return note } else { return nil } }
+    }
+    var sentBookmarks: [LinkBookmark] {
+        events.all.compactMap { if case .received(.bookmark(let mark), _) = $0 { return mark } else { return nil } }
+    }
+}
+
+/// How often the app heard the Mac wake.
+@MainActor
+final class WakeCount {
+    var count = 0
 }
 
 /// Expected offsets the aligner was given.

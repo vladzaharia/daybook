@@ -1,10 +1,12 @@
 import AppKit
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import SwiftUI
 
-/// Add iPhone…: the six-digit code to type on the phone, then what happened, then the phones this
-/// Mac is paired with, each with Unpair. Pairing stays open only while this is showing.
+/// Pair with iPhone…: the shared pairing screen (`PairingView`) as the Mac takes part, showing its code to type on
+/// the phone, then who paired, then the phones this Mac is paired with, each with Unpair. Pairing stays open only
+/// while this is showing.
 struct PhonePairingStep: View {
     let state: AppState
     let link: PhoneLink
@@ -27,15 +29,13 @@ struct PhonePairingStep: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            DeviceGlyph(symbol: "iphone", size: 30, linked: pairedNow != nil)
-            Text(pairedNow.map { "Paired with \($0.name)" } ?? "Add iPhone").font(.title3.weight(.semibold)).padding(.top, Space.s3)
-            if pairedNow == nil {
+            PairingView(role: .showsCode, paired: pairedNow?.name, problem: link.pairingProblem) {
+                if !link.paired.isEmpty {
+                    PairedPhonesList(state: state, link: link, unpairing: $unpairing)
+                        .daybookTransition(.push(from: .top))
+                }
+            } code: {
                 stage
-                    .padding(.top, Space.s5)
-            }
-            if !link.paired.isEmpty {
-                PairedPhonesList(state: state, link: link, unpairing: $unpairing)
-                    .padding(.top, Space.s5)
             }
             HStack {
                 if let back {
@@ -54,37 +54,33 @@ struct PhonePairingStep: View {
         .padding(Space.s5)
         .onAppear { if link.pairing == .closed { state.beginPhonePairing() } }
         .onDisappear { state.endPhonePairing() }
-        .alert("Unpair \(unpairing?.name ?? "this iPhone")?", isPresented: Binding(get: { unpairing != nil }, set: { if !$0 { unpairing = nil } })) {
+        .alert(PairingWords.unpairQuestion(unpairing?.name ?? PairingWords.unnamed(.iPhone)),
+               isPresented: Binding(get: { unpairing != nil }, set: { if !$0 { unpairing = nil } })) {
             Button("Unpair", role: .destructive) { if let phone = unpairing { state.unpairPhone(phone.deviceID) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This Mac and the iPhone stop recording together. Its recordings stay in your library.")
+            Text(PairingWords.unpairConsequence)
         }
     }
 
+    /// The code and what to do with it; while it's coming, a line; when pairing closed, a new code.
     @ViewBuilder private var stage: some View {
         switch link.pairing {
         case .closed, .starting:
             HStack(spacing: Space.s2) {
                 ProgressView().controlSize(.small)
-                Text("Getting a code…").foregroundStyle(.secondary)
+                Text(PairingWords.gettingACode).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, minHeight: 96)
         case .showing(let code):
             VStack(spacing: Space.s3) {
-                Text(code.formatted)
-                    .font(.system(size: 40, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .tracking(2)
-                    .textSelection(.enabled)
-                    .accessibilityLabel("Pairing code \(code.digits.map(String.init).joined(separator: " "))")
-                // The Mac's name stays on one line ("Vlad’s MacBook Pro (755)"), never split across two.
-                Text("On your iPhone, open Daybook › Settings › Pair with Your Mac, choose “\(link.identity.name.replacingOccurrences(of: " ", with: "\u{00A0}"))”, and enter this code.")
+                PairingCodeView(code)
+                Text(PairingWords.onTheIPhone(macName: link.identity.name))
                     .font(TypeStyle.status).foregroundStyle(Ink.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    Text(expiry(code, now: context.date)).font(TypeStyle.status).foregroundStyle(Ink.meta)
+                    Text(PairingWords.expiry(code, now: context.date)).font(TypeStyle.status).foregroundStyle(Ink.meta)
                 }
                 if let problem = link.pairingProblem {
                     Label(problem, systemImage: "exclamationmark.triangle.fill")
@@ -100,19 +96,15 @@ struct PhonePairingStep: View {
             EmptyView()
         case .unavailable(let message):
             DeviceAttentionBox(kind: .problem, symbol: "exclamationmark.triangle.fill", title: message) {
-                DeviceBoxPrimaryButton(title: "Show New Code") { state.beginPhonePairing() }
+                DeviceBoxPrimaryButton(title: PairingWords.showNewCode) { state.beginPhonePairing() }
             }
             .padding(.top, -Space.s4)
         }
     }
-
-    private func expiry(_ code: LinkPairingCode, now: Date) -> String {
-        let minutes = Int((code.expiresAt.timeIntervalSince(now) / 60).rounded(.up))
-        return minutes <= 1 ? "Expires in about a minute" : "Expires in \(minutes) minutes"
-    }
 }
 
-/// The phones this Mac is paired with, each with whether it's connected and Unpair.
+/// The phones this Mac is paired with, each with whether it's connected and Unpair. A pairing that can't be read
+/// says so, to be paired again or unpaired.
 struct PairedPhonesList: View {
     let state: AppState
     let link: PhoneLink
@@ -120,7 +112,7 @@ struct PairedPhonesList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s2) {
-            Text("Paired iPhones").font(TypeStyle.statusLead).foregroundStyle(Ink.secondary)
+            Text(PairingWords.pairedIPhones).font(TypeStyle.statusLead).foregroundStyle(Ink.secondary)
             VStack(spacing: 0) {
                 ForEach(Array(link.paired.enumerated()), id: \.element.id) { index, phone in
                     if index > 0 { Divider() }
@@ -131,12 +123,12 @@ struct PairedPhonesList: View {
                             .frame(width: 20)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(phone.name)
-                            Text(link.peers[phone.deviceID] != nil ? "Connected" : "Paired \(phone.pairedAt.formatted(date: .abbreviated, time: .omitted))")
-                                .font(TypeStyle.status).foregroundStyle(Ink.secondary)
+                            Text(phone.name.isEmpty ? PairingWords.unnamed(.iPhone) : phone.name)
+                            Text(line(phone))
+                                .font(TypeStyle.status).foregroundStyle(phone.isDamaged ? Ink.warning : Ink.secondary)
                         }
                         Spacer()
-                        Button("Unpair…") { unpairing = phone }.controlSize(.small)
+                        Button(PairingWords.unpair) { unpairing = phone }.controlSize(.small)
                     }
                     .padding(.vertical, Space.s2)
                     .accessibilityElement(children: .combine)
@@ -146,5 +138,11 @@ struct PairedPhonesList: View {
             .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func line(_ phone: LinkPairedDevice) -> String {
+        if phone.isDamaged { return PairingWords.needsPairingAgain }
+        if link.peers[phone.deviceID] != nil { return "Connected" }
+        return "\(PairingWords.pairedOn) \(phone.pairedAt.formatted(date: .abbreviated, time: .omitted))"
     }
 }

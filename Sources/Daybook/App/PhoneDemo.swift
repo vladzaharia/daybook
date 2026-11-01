@@ -53,7 +53,10 @@ enum PhoneDemo {
         guard scenario != .notConnected, let port = await state.phoneLink.port else { return }
         let phoneStore = MemoryLinkKeyStore([LinkPairingRecord(deviceID: macID, name: state.phoneLink.identity.name, deviceClass: .mac,
                                                                pairedAt: Date(), linkKey: key, pskIdentity: psk)])
-        let client = LinkClient(identity: LinkIdentity(deviceID: phoneID, name: phoneName, deviceClass: .iPhone, appVersion: "1.0"),
+        // A phone that stops for this Mac's page (`pageStopFeature`), so the page offers Stop on it.
+        let client = LinkClient(identity: LinkIdentity(deviceID: phoneID, name: phoneName, deviceClass: .iPhone, appVersion: "1.0",
+                                                       features: [LinkCapabilities.recordControlFeature, LinkCapabilities.cascadeFeature,
+                                                                  LinkCapabilities.sharedNotesFeature, LinkCapabilities.pageStopFeature]),
                                 keyStore: phoneStore, configuration: .loopback())
         self.client = client
         try? await client.connect(to: macID, via: LinkEndpoint(host: "127.0.0.1", port: port))

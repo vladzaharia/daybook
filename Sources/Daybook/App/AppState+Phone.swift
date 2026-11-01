@@ -27,10 +27,11 @@ extension AppState {
         else { id = UUID(); defaults.set(id.uuidString, forKey: "linkDeviceID") }
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         return LinkIdentity(deviceID: id, name: ProcessingRequest.Device.currentName, deviceClass: .mac, appVersion: version,
-                            canProcess: false, features: ["recordControl", "processingProgress", LinkCapabilities.recorderHandoffFeature,
+                            canProcess: false, features: [LinkCapabilities.recordControlFeature, LinkCapabilities.processingProgressFeature,
+                                                          LinkCapabilities.recorderHandoffFeature,
                                                           LinkCapabilities.cascadeFeature, LinkCapabilities.sharedNotesFeature,
                                                           LinkCapabilities.liveCaptionsFeature, LinkCapabilities.liveLevelsFeature,
-                                                          LinkCapabilities.summaryPlacementFeature],
+                                                          LinkCapabilities.summaryPlacementFeature, LinkCapabilities.pageStopFeature],
                             syncDeviceID: sync.deviceID)
     }
 
@@ -59,9 +60,8 @@ extension AppState {
         watches.append(ObservationWatch({ [weak self] in _ = self?.sync.folder }) { [weak self] in
             self?.phoneSessions.forEach { $0.connection(.files)?.refresh() }
         })
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in await self?.systemDidWake() }
-        }
+        // The link follows the Mac's wake (the app's one wake observer) and hands it here.
+        phoneLink.onWake = { [weak self] in await self?.systemDidWake() }
         // Going to sleep while recording, the devices recording along hear the stop first.
         recorder.beforeSleep = { [weak self] in await self?.prepareForSleep(within: RecordingController.sleepGrace) }
     }
@@ -70,14 +70,24 @@ extension AppState {
     var phoneSessions: [DeviceSession] { devices.sessions.filter { $0.kind.id == DaybookPhoneIntegration.id } }
 
     /// At launch: the link runs when a phone is paired. The keychain is the record of pairings;
-    /// a pairing whose device was removed from preferences is added back.
+    /// a pairing whose device was removed from preferences is added back. A link that can't start yet (the
+    /// keychain won't read just after login) keeps trying, and its phones stay as they were meanwhile.
     func startPhoneLinkIfPaired() async {
-        guard !phoneSessions.isEmpty, await phoneLink.start() else { return }
+        guard !phoneSessions.isEmpty else { return }
+        guard await phoneLink.start() else {
+            phoneLink.keepStarting { [weak self] in self?.restorePairedPhones() }
+            return
+        }
+        restorePairedPhones()
+    }
+
+    private func restorePairedPhones() {
         for device in phoneLink.paired where devices.session(device.deviceID.uuidString) == nil { phonePaired(device) }
     }
 
-    /// After sleep the link probes every phone and reopens its listener; a claim this Mac holds is
-    /// renewed (it survives sleep unless another Mac took it over meanwhile), and a pass publishes it.
+    /// After sleep the link probes every phone, reopens its listener, and reads its pairings again if the
+    /// last read failed; a claim this Mac holds is renewed (it survives sleep unless another Mac took it over
+    /// meanwhile), and a pass publishes it.
     func systemDidWake() async {
         await phoneLink.systemDidWake()
         renewRunningClaim(force: true)
@@ -86,19 +96,30 @@ extension AppState {
 
     // MARK: Pairing
 
-    /// Add iPhone…: opens pairing; the sheet shows `phoneLink.pairing`.
+    /// Pair with iPhone…: opens pairing; the sheet shows `phoneLink.pairing`.
     func beginPhonePairing() { Task { await phoneLink.beginPairing() } }
     func endPhonePairing() { Task { await phoneLink.endPairing() } }
 
-    /// Unpairs a phone on both sides. Its device leaves the sidebar; its recordings stay.
-    func unpairPhone(_ phoneID: UUID) { Task { await phoneLink.unpair(phoneID) } }
+    /// Unpairs a phone on both sides. Its device leaves the sidebar; its recordings stay. When the keychain
+    /// refuses, the pairing stays and the window says so.
+    func unpairPhone(_ phoneID: UUID) {
+        let name = devices.session(phoneID.uuidString)?.device.name
+            ?? phoneLink.paired.first { $0.deviceID == phoneID }?.name ?? PairingWords.unnamed(.iPhone)
+        Task {
+            do { try await phoneLink.unpair(phoneID) } catch {
+                report(PairingWords.couldntUnpair(name), PairingWords.couldntUnpairMessage, error)
+            }
+        }
+    }
 
     private func phonePaired(_ device: LinkPairedDevice) {
         let kind = DaybookPhoneIntegration().kind
         if let session = devices.session(device.deviceID.uuidString) {
             session.connections.forEach { $0.refresh() }
         } else {
-            devices.add(ConfiguredDevice(id: device.deviceID.uuidString, kind: kind, name: device.name, addedAt: device.pairedAt))
+            // A pairing that can't be read may have no name left.
+            let name = device.name.isEmpty ? PairingWords.unnamed(.iPhone) : device.name
+            devices.add(ConfiguredDevice(id: device.deviceID.uuidString, kind: kind, name: name, addedAt: device.pairedAt))
         }
     }
 
@@ -111,8 +132,9 @@ extension AppState {
     private func phoneConnected(_ peer: LinkPeer) {
         // A phone that reconnects while this Mac processes sees where it is at once.
         if let id = processingID { reportToPhones(id, force: true) }
-        // A stop this Mac couldn't deliver goes now.
+        // A stop this Mac couldn't deliver goes now, and so do the notes and bookmarks it missed.
         sources.recorders.reconnected(peer.deviceID.uuidString)
+        sendOwedNotes(to: peer.deviceID)
     }
 
     /// This Mac's recorder, as phones see it.
@@ -295,10 +317,9 @@ extension AppState {
                 return .accepted(LinkRecordAck(conversationID: id, startedAt: recordingStartedAt, wasAlreadyRecording: true))
             }
             // A phone that started recording asks every Mac it's connected to (a cascading start); this
-            // Mac's "Record along with" for that phone (on by default) says whether it joins on its own.
-            if request.cascade != nil, devices.session(peer.deviceID.uuidString)?.device.recordsAlongsideMac == false {
-                return .refused(LinkRecordRefusal(reason: .declined,
-                    message: "Recording along with \(devices.session(peer.deviceID.uuidString)?.device.name ?? peer.name) is turned off on this Mac."))
+            // Mac's Can start recording for that phone (on by default) says whether it joins on its own.
+            if request.cascade != nil, !phoneMayStartRecording(peer.deviceID) {
+                return .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStart(asker: .iPhone)))
             }
             if let current = recordingID {
                 return .refused(LinkRecordRefusal(reason: .recordingSomethingElse, message: "This Mac is recording another conversation.", conversationID: current))
@@ -341,9 +362,11 @@ extension AppState {
         case .stop:
             guard recordingID == id else { return .refused(LinkRecordRefusal(reason: .notRecording)) }
             // The phone this Mac records for, or one recording this conversation with it (a cascading stop:
-            // stopping on any device stops the rest).
-            guard phoneLeads[id]?.sessionID == peer.deviceID.uuidString || isRecording(id, with: peer.deviceID.uuidString) else {
-                return .refused(LinkRecordRefusal(reason: .declined, message: "This recording was started on the Mac. Stop it there."))
+            // stopping on any device stops the rest), or the phone's page for this Mac (Stop on <Mac>) when it
+            // can start recording here.
+            let shared = phoneLeads[id]?.sessionID == peer.deviceID.uuidString || isRecording(id, with: peer.deviceID.uuidString)
+            guard shared || (request.isStandalone && phoneMayStartRecording(peer.deviceID)) else {
+                return .refused(LinkRecordRefusal(reason: .declined, message: PairingWords.notAllowedToStop(asker: .iPhone)))
             }
             stopCause = peer.deviceID.uuidString
             let end = Date()
@@ -352,6 +375,12 @@ extension AppState {
         default:
             return .refused(LinkRecordRefusal(reason: .unsupported))
         }
+    }
+
+    /// Can start recording for a paired phone, on its page and in Settings › Devices (on by default): it may start
+    /// a recording on this Mac, and stop one from its page.
+    func phoneMayStartRecording(_ phoneID: UUID) -> Bool {
+        devices.session(phoneID.uuidString)?.device.recordsAlongsideMac ?? true
     }
 
     /// Whether a phone records this Mac's recording `id` along with it: its link here says so.
