@@ -2,310 +2,87 @@ import DaybookCaptions
 import DaybookCore
 import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-extension LiveCaptionSource {
-    /// "You" or "Call", as the recording surfaces and the input levels name them.
-    var label: String {
-        switch self {
-        case .microphone: return "You"
-        case .call: return "Call"
-        default: return "Captions"
-        }
-    }
-}
-
-/// How a caption's source is named: You and Call for this Mac's own, the device for another's.
-enum LiveCaptionLabels {
-    static func label(for source: LiveCaptionSource?, names: [String: String]) -> String {
-        guard let source else { return "Captions" }
-        return names[source.rawValue] ?? source.label
-    }
-
-    /// A line as a caption strip draws it: You or Call in the time lane; before the words, the person
-    /// live speakers recognized, else, for another device's line, the device ("Soundcore", "iPhone").
-    static func line(_ segment: LiveCaptionSegment, names: [String: String]) -> CaptionLine {
-        let device = segment.source?.isDevice == true
-        return CaptionLine(id: segment.id, text: segment.text, isTentative: segment.isTentative,
-                           source: device ? nil : segment.source?.label,
-                           speaker: segment.speaker?.name ?? (device ? label(for: segment.source, names: names) : nil))
-    }
-}
-
-/// A run of consecutive captions from one source and voice, read like a turn in the transcript.
-struct LiveCaptionTurn: Identifiable, Equatable {
-    var source: LiveCaptionSource?
-    /// The voice live speakers heard ("S2"), and its name when it matched someone's voice profile.
-    var speaker: LiveCaptionSpeaker?
-    var segments: [LiveCaptionSegment]
-    /// The source's name: "You", "Call", or the device that heard it.
-    var sourceLabel: String
-    var id: UUID { segments[0].id }
-    var start: TimeInterval { segments[0].start }
-    /// The person when live speakers named them, else the source ("You", "Call", "Soundcore").
-    var label: String { speaker?.name ?? sourceLabel }
-
-    static func turns(_ segments: [LiveCaptionSegment], names: [String: String] = [:]) -> [LiveCaptionTurn] {
-        var turns: [LiveCaptionTurn] = []
-        for segment in segments where !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let last = turns.last, last.source == segment.source, last.speaker?.slot == segment.speaker?.slot,
-               last.speaker?.name == segment.speaker?.name { turns[turns.count - 1].segments.append(segment) }
-            else {
-                turns.append(LiveCaptionTurn(source: segment.source, speaker: segment.speaker, segments: [segment],
-                                             sourceLabel: LiveCaptionLabels.label(for: segment.source, names: names)))
-            }
-        }
-        return turns
-    }
-}
-
-/// Live captions in sentences a recording surface can show while there are none to read yet.
-enum LiveCaptionStatus {
-    static func line(_ state: LiveCaptionState, locale: Locale) -> String? {
-        switch state {
-        case .preparing: return "Getting captions ready…"
-        case .downloading(let fraction):
-            let percent = fraction.map { " · \(Int($0 * 100))%" } ?? ""
-            return "Downloading captions for \(LiveCaptionAvailability.name(locale))\(percent)"
-        case .listening: return "Listening…"
-        case .failed: return "Captions stopped"
-        case .unavailable(let reason): return reason
-        case .off, .finished: return nil
-        }
-    }
-}
+// Live captions on the Mac draw with the shared `LiveCaptionStrip` (DaybookUI's `CaptionLines.swift`
+// feeds it), as Floating Notes and the iPhone do; saved captions read in the transcript's place with
+// DaybookUI's `SavedCaptionsView`. Settings is DaybookUI's `LiveCaptionSettingsSection`.
 
 // MARK: - The conversation page
 
-/// Live captions on the conversation page, after your notes: while this Mac records the
-/// conversation, the newest lines as they're heard; afterwards, until the transcript exists,
-/// everything captioned. "Live captions · tentative", You and Call labelled, in a lighter ink than
-/// a transcript and never editable. Once the transcript lands they're gone.
+/// Live captions on the conversation page, after your notes, while this Mac records the conversation:
+/// the newest lines as they're heard, You and Call before their words. Once the recording stops they
+/// stand in for the transcript in its place until it exists (`SavedCaptionsView`).
 ///
 /// It reads the captions itself, so a revised word redraws only this section.
 struct LiveCaptionsSection: View {
     let captions: LiveCaptionsController
     let meeting: Meeting
     let isRecording: Bool
-    @State private var saved: LiveCaptions?
-    @Environment(\.readingScale) private var scale
 
-    /// While recording, the page keeps the newest lines; the whole set reads after Stop.
+    /// While recording, the page keeps the newest lines.
     static let liveLines = 8
 
-    private var isLive: Bool { isRecording && captions.isShowing(for: meeting.id) }
-
     var body: some View {
-        Group {
-            if isLive {
-                section(segments: captions.recent(Self.liveLines), names: captions.sourceNames, live: true)
-            } else if let shown = LiveCaptionStore.shown(saved, for: meeting) {
-                section(segments: shown.segments, names: shown.sourceNames ?? [:], live: false)
-            }
-        }
-        .task(id: "\(meeting.id)|\(isRecording)|\(captions.lastSave?.timeIntervalSince1970 ?? 0)|\(meeting.transcripts.count)") {
-            saved = isRecording ? nil : captions.store.captions(for: meeting.id)
+        if isRecording && captions.isShowing(for: meeting.id) {
+            LiveCaptionStrip(lines: Self.lines(captions.recent(Self.liveLines), names: captions.sourceNames,
+                                               listening: captions.state == .listening),
+                             status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
+                             style: Self.style)
+                .padding(.top, Space.s6)
         }
     }
 
-    private func section(segments: [LiveCaptionSegment], names: [String: String], live: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // The glyph hangs in the margin, so the heading starts on the text's edge.
-            MarginRow {
-                Image(systemName: "captions.bubble").font(.system(size: 11 * scale)).foregroundStyle(Ink.meta)
-                    .accessibilityHidden(true)
-            } content: {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("Live captions").font(TypeStyle.heading(scale)).foregroundStyle(Ink.secondary)
-                    Text("· tentative").font(TypeStyle.body(scale)).foregroundStyle(Ink.meta)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isHeader)
-            }
-            .padding(.top, Space.s6)
-            if live, segments.isEmpty, let status = LiveCaptionStatus.line(captions.state, locale: captions.locale) {
-                MarginRow { Text(status).font(TypeStyle.body(scale)).foregroundStyle(Ink.meta) }
-                    .padding(.top, Space.s3)
-            }
-            ForEach(LiveCaptionTurn.turns(segments, names: names)) { turn in
-                CaptionTurnView(turn: turn, showsTime: !live)
-                    .padding(.top, Space.s3)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeOut(duration: 0.2), value: segments.map(\.id))
+    /// The page's lines: in its body type, at its reading scale, each whole.
+    static var style: CaptionStripStyle {
+        var style = CaptionStripStyle.feed
+        style.lines = liveLines
+        return style
     }
-}
 
-/// One source's run of captions: its label (and, once saved, its time in the margin), then each line.
-private struct CaptionTurnView: View {
-    let turn: LiveCaptionTurn
-    let showsTime: Bool
-    @Environment(\.readingScale) private var scale
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            MarginRow {
-                if showsTime {
-                    Text(TimeLabel.short(turn.start)).font(TypeStyle.margin(scale)).foregroundStyle(Ink.meta)
-                }
-            } content: {
-                Text(turn.label).font(TypeStyle.speaker(scale)).foregroundStyle(Ink.secondary)
-            }
-            ForEach(turn.segments) { segment in
-                MarginRow {
-                    Text(segment.text)
-                        .font(TypeStyle.body(scale))
-                        .italic(segment.isTentative)
-                        .foregroundStyle(segment.isTentative ? Ink.meta : Ink.secondary)
-                        .lineSpacing(TypeStyle.bodyLineSpacing(scale))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+    /// The page has no lane for sources: You, Call, the person, or the device goes before the words.
+    static func lines(_ segments: [LiveCaptionSegment], names: [String: String], listening: Bool) -> [CaptionLine] {
+        guard listening else { return [] }
+        return segments.map { segment in
+            var line = CaptionLine(segment, names: names)
+            line.speaker = line.speaker ?? line.source
+            line.source = nil
+            return line
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(turn.label)\(showsTime ? " at \(SpokenTime.format(turn.start))" : ""), tentative: \(turn.segments.map(\.text).joined(separator: " "))")
     }
 }
 
 // MARK: - Listen Live
 
-/// Listen Live's captions on a recorder's page: a quiet label, then the newest lines as they arrive,
-/// the latest in Body and earlier ones in Secondary, words still being heard in Meta. When captions
-/// are off, or can't run on this Mac, it shows nothing.
+/// Listen Live's captions on a recorder's page: the shared strip at the page's body type, its label's
+/// glyph in the column the Listening line above it uses. When captions are off, or can't run on this
+/// Mac, it shows nothing.
 struct LiveCaptionFeed: View {
     let segments: [LiveCaptionSegment]
     let state: LiveCaptionState
     let locale: Locale
-    var lineCount = 6
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The label's glyph column, which Listen Live's Listening row shares, so their words start together.
-    static let glyphColumn: CGFloat = 24
+    static let glyphColumn: CGFloat = CaptionStripStyle.feed.glyphColumn ?? 24
 
     var body: some View {
-        if let content = content {
-            VStack(alignment: .leading, spacing: Space.s2) {
-                HStack(spacing: Space.s3) {
-                    Image(systemName: "captions.bubble").frame(width: Self.glyphColumn)
-                    Text("Live captions · tentative")
-                }
-                .font(TypeStyle.statusLead).foregroundStyle(Ink.meta)
-                content
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Live captions, tentative")
-            .accessibilityValue(segments.last.map { [$0.speaker?.name, $0.text].compactMap { $0 }.joined(separator: ": ") } ?? "")
+        if LiveCaptionStrip.shows(segments: segments, state: state, locale: locale) {
+            LiveCaptionStrip(segments: segments, state: state, locale: locale, style: .feed)
         }
-    }
-
-    private var content: AnyView? {
-        if state == .listening, !segments.isEmpty { return AnyView(lines) }
-        guard let line = LiveCaptionStatus.line(state, locale: locale) else { return nil }
-        return AnyView(Text(line).font(TypeStyle.status).foregroundStyle(Ink.secondary).fixedSize(horizontal: false, vertical: true))
-    }
-
-    private var lines: some View {
-        let recent = Array(segments.suffix(lineCount))
-        return VStack(alignment: .leading, spacing: Space.s1) {
-            ForEach(Array(recent.enumerated()), id: \.element.id) { index, segment in
-                let newest = index == recent.count - 1
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    // The person live speakers recognized, before the words, as Floating Notes shows them.
-                    if let name = segment.speaker?.name {
-                        Text(name).font(TypeStyle.speaker()).foregroundStyle(Ink.meta).lineLimit(1).fixedSize()
-                    }
-                    Text(segment.text)
-                        .font(TypeStyle.body())
-                        .lineSpacing(TypeStyle.bodyLineSpacing())
-                        .foregroundStyle(segment.isTentative ? Ink.meta : newest ? Ink.body : Ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .transition(.opacity)
-            }
-        }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: recent.map(\.id))
     }
 }
 
 // MARK: - Settings
 
-/// Settings › General › Live Captions: on or off and the language, with a plain word on whether
-/// they can run here. Asking never downloads anything.
-struct LiveCaptionSettingsSection: View {
-    @Bindable var settings: LiveCaptionSettings
-    @State private var availability: LiveCaptionAvailability?
-    @State private var speechLocales: [Locale] = []
+/// Settings › General › Live captions: DaybookUI's section with this Mac's settings.
+typealias LiveCaptionSettingsSection = DaybookUI.LiveCaptionSettingsSection<LiveCaptionSettings>
 
-    private var systemCaptions: Bool { MacCaptioners.systemSupportsCaptions }
-    /// The Speech framework (macOS 26), or downloaded live models (any macOS).
-    private var supported: Bool { LiveCaptionLanguages.supported(systemCaptions: systemCaptions, liveLanguages: settings.liveLanguages) }
-    private var locales: [Locale] {
-        LiveCaptionLanguages.options(speech: speechLocales, live: systemCaptions ? [] : settings.liveLanguages, selected: settings.localeIdentifier)
-    }
-
-    var body: some View {
-        Section {
-            Toggle("Show while recording", isOn: $settings.isEnabled)
-            .controlSize(.regular)
-            .disabled(!supported)
-            if supported && settings.isEnabled {
-                Picker("Language", selection: $settings.localeIdentifier) {
-                    Text("Same as This Mac").tag(String?.none)
-                    if !locales.isEmpty { Divider() }
-                    ForEach(locales, id: \.identifier) { locale in
-                        Text(LiveCaptionAvailability.name(locale)).tag(Optional(locale.identifier))
-                    }
-                }
-            }
-        } header: {
-            Text("Live Captions")
-        } footer: {
-            if let footer = LiveCaptionLanguages.footer(systemCaptions: systemCaptions, liveLanguages: settings.liveLanguages,
-                                                        liveCovers: settings.hasLiveModels, enabled: settings.isEnabled,
-                                                        locale: settings.locale, availability: availability) {
-                SettingsFooter(footer)
-            }
-        }
-        .task(id: settings.localeIdentifier) {
-            guard systemCaptions else { return }
-            if speechLocales.isEmpty { speechLocales = await LiveCaptionAvailability.supportedLocales() }
-            availability = await LiveCaptionAvailability.check(locale: settings.locale)
-        }
-    }
-}
-
-/// The languages live captions can be asked for on this Mac, and what Settings says about the choice.
-enum LiveCaptionLanguages {
-    /// Captions can run here: the Speech framework (macOS 26), or a downloaded live recognizer.
-    static func supported(systemCaptions: Bool, liveLanguages: [String]) -> Bool { systemCaptions || !liveLanguages.isEmpty }
-
-    /// The Speech framework's languages where it exists; without it (macOS 15), those the downloaded
-    /// live recognizers cover, by name. A language chosen earlier that's no longer offered (its model
-    /// was removed) stays listed, so the choice still reads and the footer can say why it's quiet.
-    static func options(speech: [Locale], live: [String], selected: String?) -> [Locale] {
-        var options = speech.isEmpty
-            ? live.map { Locale(identifier: $0) }.sorted { LiveCaptionAvailability.name($0) < LiveCaptionAvailability.name($1) }
-            : speech
-        if let selected, !options.contains(where: { $0.identifier == selected }) { options.append(Locale(identifier: selected)) }
-        return options
-    }
-
-    /// The footer: why captions can't run here, why they won't in the chosen language, or what the
-    /// Speech framework still has to download. Nil when there's nothing to say.
-    static func footer(systemCaptions: Bool, liveLanguages: [String], liveCovers: Bool, enabled: Bool, locale: Locale,
-                       availability: LiveCaptionAvailability?) -> String? {
-        guard supported(systemCaptions: systemCaptions, liveLanguages: liveLanguages) else {
-            return "Live captions need macOS 26, or Live transcription from Settings › Models."
-        }
-        guard enabled, !liveCovers else { return nil }
-        guard systemCaptions else { return "Live transcription doesn’t cover \(LiveCaptionAvailability.name(locale))." }
-        switch availability {
-        case .needsDownload(let locale)?:
-            return "Captions for \(LiveCaptionAvailability.name(locale)) download the first time you record with them on."
-        case .unavailable(let reason)?: return reason
-        case .ready?, nil: return nil
-        }
+extension DaybookUI.LiveCaptionSettingsSection where Settings == LiveCaptionSettings {
+    /// This Mac's: the languages its downloaded live recognizers cover, whether one covers the chosen
+    /// language, and whether this system's Speech framework captions (macOS 26).
+    init(settings: LiveCaptionSettings) {
+        self.init(settings: settings, liveLanguages: settings.liveLanguages, liveCovers: settings.hasLiveModels,
+                  deviceName: "This Mac", systemCaptions: MacCaptioners.systemSupportsCaptions)
     }
 }

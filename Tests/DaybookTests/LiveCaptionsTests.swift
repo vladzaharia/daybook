@@ -1,8 +1,10 @@
 import AVFoundation
 import DaybookCaptions
 import DaybookCore
+import DaybookDesign
 import DaybookLink
 import DaybookTestSupport
+import DaybookUI
 import XCTest
 @testable import Daybook
 
@@ -270,6 +272,9 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertNotNil(rig.captions.lastSave)
         let permissions = try FileManager.default.attributesOfItem(atPath: store.directory.path)[.posixPermissions] as? Int
         XCTAssertEqual(permissions, 0o700)
+        let file = try FileManager.default.attributesOfItem(atPath: store.url(for: meetingID).path)
+        XCTAssertEqual(file[.posixPermissions] as? Int, 0o600, "readable by this user only, as on the iPhone")
+        XCTAssertEqual(file[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication, "and protected as on the iPhone")
 
         var meeting = Meeting(id: meetingID, title: "Launch planning", date: saved.createdAt)
         let earlier = Meeting(id: UUID(), title: "Earlier")
@@ -278,22 +283,75 @@ final class LiveCaptionsTests: XCTestCase {
         let track = UUID()
         meeting.transcripts = [TrackTranscript(trackID: track, segments: [], createdAt: saved.createdAt.addingTimeInterval(-600))]
         XCTAssertNotNil(LiveCaptionStore.shown(saved, for: meeting))
-        store.prune(meetings: [meeting, earlier], keeping: nil)
+        await store.prune(meetings: [meeting, earlier], keeping: nil)
         XCTAssertNotNil(store.captions(for: meetingID))
 
         // The transcript lands: the captions are gone from the page and from this Mac.
         meeting.transcripts.append(TrackTranscript(trackID: track, segments: [], createdAt: Date()))
         XCTAssertNil(LiveCaptionStore.shown(saved, for: meeting))
-        store.prune(meetings: [meeting, earlier], keeping: nil)
+        await store.prune(meetings: [meeting, earlier], keeping: nil)
         XCTAssertNil(store.captions(for: meetingID))
 
         // A conversation moved to the Trash takes its captions; the one being recorded keeps them.
         let recording = UUID(), trashed = UUID()
-        try store.save(LiveCaptions(meetingID: recording, localeIdentifier: "en_US", segments: [line("Hi", 0, 1)]))
-        try store.save(LiveCaptions(meetingID: trashed, localeIdentifier: "en_US", segments: [line("Bye", 0, 1)]))
-        store.prune(meetings: [earlier], keeping: recording)
+        try await store.save(LiveCaptions(meetingID: recording, localeIdentifier: "en_US", segments: [line("Hi", 0, 1)]))
+        try await store.save(LiveCaptions(meetingID: trashed, localeIdentifier: "en_US", segments: [line("Bye", 0, 1)]))
+        await store.prune(meetings: [earlier], keeping: recording)
         XCTAssertNotNil(store.captions(for: recording))
         XCTAssertNil(store.captions(for: trashed))
+    }
+
+    // MARK: Read as the iPhone reads them
+
+    func testBehaviorSavedCaptionsStandInForTheTranscriptAndPlayTheirRecordingAsOnTheIPhone() async throws {
+        let began = Date().addingTimeInterval(-120)
+        let microphone = RecordingTrack(source: .microphone, relativePath: "m.m4a", fileName: "m.m4a", createdAt: began.addingTimeInterval(0.4))
+        let earlier = RecordingTrack(source: .microphone, relativePath: "e.m4a", fileName: "e.m4a", createdAt: began.addingTimeInterval(-3_600))
+        var meeting = Meeting(title: "Launch planning", date: began)
+        meeting.tracks = [earlier, microphone]
+        var heard = line("Can we lock the date?", 3, 5)
+        heard.source = .microphone
+        var device = line("The recorder heard this.", 6, 7)
+        device.source = .device("sim")
+        let captions = LiveCaptions(meetingID: meeting.id, localeIdentifier: "en_US", segments: [heard, device], createdAt: began,
+                                    sourceNames: [LiveCaptionSource.device("sim").rawValue: "Soundcore"])
+        XCTAssertTrue(SavedCaptions.mayStandIn(for: meeting))
+        XCTAssertEqual(SavedCaptions.shown(captions, for: meeting), captions)
+        // This Mac's captions aren't filed with a recording: their times play the one that began as they did.
+        XCTAssertEqual(SavedCaptions.recording(of: captions, in: meeting)?.id, microphone.id)
+        XCTAssertEqual(SavedCaptions.playback(heard, captions: captions, in: meeting), .source(microphone, 3))
+        XCTAssertEqual(SavedCaptions.playing(at: 4, trackID: microphone.id, captions: captions, in: meeting), heard.id)
+        XCTAssertNil(SavedCaptions.playing(at: 4, trackID: earlier.id, captions: captions, in: meeting), "another recording playing")
+        let store = LiveCaptionStore(libraryRoot: root)
+        try await store.save(captions)
+        XCTAssertEqual(SavedCaptions.hits(in: [meeting], query: "LOCK the", store: store).map(\.segment.id), [heard.id], "search finds them")
+
+        // Who each line is from, as every strip and the saved captions name them.
+        let lines = captions.segments.map { CaptionLine($0, names: captions.sourceNames ?? [:]) }
+        XCTAssertEqual(lines.map(\.source), ["You", nil])
+        XCTAssertEqual(lines.map(\.speaker), [nil, "Soundcore"])
+        XCTAssertEqual(LiveCaptionsSection.lines(captions.segments, names: captions.sourceNames ?? [:], listening: true).map(\.speaker),
+                       ["You", "Soundcore"], "the page while recording, with no lane: the source before the words")
+        XCTAssertFalse(LiveCaptionStrip.shows(segments: [], state: .off, locale: .current), "off: not even the label")
+        XCTAssertTrue(LiveCaptionStrip.shows(segments: [], state: .listening, locale: .current), "Listening…")
+
+        // The transcript arrives: they stop standing in, and pruning takes them.
+        meeting.unifiedTranscript = [TranscriptSegment(trackID: microphone.id, start: 3, end: 5, text: "Can we lock the date?")]
+        XCTAssertFalse(SavedCaptions.mayStandIn(for: meeting))
+        XCTAssertNil(SavedCaptions.shown(captions, for: meeting))
+        meeting.transcripts = [TrackTranscript(trackID: microphone.id, segments: meeting.unifiedTranscript)]
+        await store.prune(meetings: [meeting], keeping: nil)
+        XCTAssertNil(store.captions(for: meeting.id))
+    }
+
+    func testBehaviorPruningFollowsTranscriptsAndConversationsNeverNotes() {
+        var meeting = Meeting(title: "Launch planning")
+        let before = LiveCaptionStore.transcriptDates([meeting])
+        meeting.notes = "Typing notes changes nothing pruning reads."
+        XCTAssertEqual(LiveCaptionStore.transcriptDates([meeting]), before)
+        meeting.transcripts = [TrackTranscript(trackID: UUID(), segments: [])]
+        XCTAssertNotEqual(LiveCaptionStore.transcriptDates([meeting]), before, "a transcript does")
+        XCTAssertNotEqual(LiveCaptionStore.transcriptDates([meeting, Meeting(title: "Another")]).count, before.count, "and a conversation")
     }
 
     // MARK: macOS 15
@@ -304,9 +362,11 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertEqual(Set(offered.map(\.identifier)), Set(latin), "the downloaded recognizers' languages, not only Same as This Mac")
         XCTAssertEqual(offered.map { LiveCaptionAvailability.name($0) }, offered.map { LiveCaptionAvailability.name($0) }.sorted(), "by name")
         XCTAssertTrue(LiveCaptionLanguages.supported(systemCaptions: false, liveLanguages: latin), "the switch works whatever this Mac's language")
-        // Where the Speech framework exists, its languages are offered as before.
+        // Where the Speech framework exists, its languages come first, then those only a downloaded recognizer covers.
         let speech = [Locale(identifier: "en_US"), Locale(identifier: "ja_JP")]
-        XCTAssertEqual(LiveCaptionLanguages.options(speech: speech, live: latin, selected: "en_US"), speech)
+        let both = LiveCaptionLanguages.options(speech: speech, live: latin, selected: "en_US")
+        XCTAssertEqual(Array(both.prefix(2)), speech)
+        XCTAssertEqual(Set(both.dropFirst(2).map(\.identifier)), ["es", "fr", "it", "pt", "de"], "English is the Speech framework's already")
         // A language chosen before its model was removed stays chosen, and the footer says why it's quiet.
         XCTAssertEqual(LiveCaptionLanguages.options(speech: [], live: latin, selected: "ja").last?.identifier, "ja")
         XCTAssertEqual(LiveCaptionLanguages.footer(systemCaptions: false, liveLanguages: latin, liveCovers: false, enabled: true,

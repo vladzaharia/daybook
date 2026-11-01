@@ -1,39 +1,21 @@
 import DaybookCaptions
 import DaybookKit
+import DaybookUI
 import Foundation
 
-// The caption models (`LiveCaptionSegment`, `LiveCaptions`) and the engine live in the shared
-// DaybookCaptions library; the store and the `Meeting` rule below are the phone's own.
+// The caption models (`LiveCaptionSegment`, `LiveCaptions`), the engine, the store, and what both apps
+// do with a recording's captions (`LiveCaptionSession`) live in the shared DaybookCaptions library;
+// reading them (`SavedCaptions`, `SavedCaptionsView`) in DaybookUI. These names reach the files that
+// don't import those libraries.
+
+/// Where this iPhone keeps the live captions it made: DaybookCaptions' store, the Mac's too.
+typealias LiveCaptionStore = DaybookCaptions.LiveCaptionStore
+/// Saved captions as reading shows them, the same on the Mac.
+typealias SavedCaptions = DaybookUI.SavedCaptions
 
 extension Meeting {
-    /// Live captions stand in only while there is no official transcript; the Mac's replaces them.
-    var showsLiveCaptions: Bool { transcripts.isEmpty && unifiedTranscript.isEmpty }
-}
-
-/// Phone-local storage at `<library>/LiveCaptions/<meeting id>.json`. Outside `Meetings/`, so sync
-/// and the Mac never see it.
-@MainActor
-final class LiveCaptionStore {
-    let directory: URL
-
-    init(libraryRoot: URL) {
-        directory = libraryRoot.appendingPathComponent("LiveCaptions", isDirectory: true)
-    }
-
-    func url(for meetingID: UUID) -> URL { directory.appendingPathComponent("\(meetingID.uuidString).json") }
-
-    func captions(for meetingID: UUID) -> LiveCaptions? {
-        guard let data = try? Data(contentsOf: url(for: meetingID)) else { return nil }
-        return try? JSONDecoder().decode(LiveCaptions.self, from: data)
-    }
-
-    func save(_ captions: LiveCaptions) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let data = try JSONEncoder().encode(captions)
-        try data.write(to: url(for: captions.meetingID), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-    }
-
-    func remove(_ meetingID: UUID) {
-        try? FileManager.default.removeItem(at: url(for: meetingID))
-    }
+    /// Whether saved live captions may stand in for this conversation's transcript: it has none to read
+    /// yet. A cheap check before reading them; `SavedCaptions.shown` decides, by the one rule both apps
+    /// share (a transcript made after the captions began replaces them).
+    var showsLiveCaptions: Bool { SavedCaptions.mayStandIn(for: self) }
 }

@@ -4,6 +4,7 @@ import DaybookDevices
 import DaybookIntelligence
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import Foundation
 
 /// Live captions on this Mac: its own recordings (You and Call, `LiveCaptionsController`) and a
@@ -32,9 +33,11 @@ extension AppState {
         watches.append(ObservationWatch.values(of: { [weak self, weak settings] in
             _ = (self?.installedModels, self?.modelSelections, settings?.localeIdentifier)
         }, delay: .milliseconds(200)) { [weak self] _ in self?.refreshLiveModels() })
-        // Captions the transcript replaced, or whose conversation went to the Trash, go.
-        watches.append(ObservationWatch.values(of: { library.meetings }, delay: .seconds(1)) { [weak self] meetings in
-            self?.pruneCaptions(meetings)
+        // Captions the transcript replaced, or whose conversation went to the Trash, go: only when a
+        // transcript or the set of conversations changes, never as notes are typed.
+        watches.append(ObservationWatch.distinctValues(of: { LiveCaptionStore.transcriptDates(library.meetings) },
+                                                       delay: .seconds(1)) { [weak self] transcripts in
+            self?.pruneCaptions(transcripts)
         })
     }
 
@@ -92,9 +95,12 @@ extension AppState {
         }
     }
 
-    func pruneCaptions(_ meetings: [Meeting]) {
+    /// Removes the captions transcripts replaced and those of conversations gone to the Trash, off the
+    /// main actor. `transcripts`: when each conversation's transcripts were made.
+    func pruneCaptions(_ transcripts: [UUID: [Date]]) {
         guard library.isLoaded else { return }
-        captions.store.prune(meetings: meetings, keeping: captions.meetingID ?? recordingID)
+        let store = captions.store, keeping = Set([captions.meetingID, recordingID].compactMap { $0 })
+        Task { await store.prune(transcripts, keeping: keeping) }
     }
 
     #if DEBUG

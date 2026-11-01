@@ -106,9 +106,11 @@ bounded and continue a second later while there's more to read.
 While recording, tentative captions made on this iPhone show that it's hearing the conversation
 (`Captions/`, on the shared `DaybookCaptions` engine: `SpeechAnalyzer` + `SpeechTranscriber` with
 volatile and fast results). They're never the transcript: they're saved phone-locally in
-`<library>/LiveCaptions/<meeting>.json` (`LiveCaptionStore`, outside what syncs), tied to the phone
-track once filed, hidden once a Mac's transcript exists (`Meeting.showsLiveCaptions`), and removed
-with the conversation. The captioner is fed from the recorder's tap, drops audio when behind, and
+`<library>/LiveCaptions/<meeting>.json` (DaybookCaptions' `LiveCaptionStore`, the Mac's too, outside
+what syncs), tied to the phone track once filed, read in the transcript's place until a transcript made
+after them replaces them (`SavedCaptions`, DaybookUI), and removed then or with the conversation. The
+recording screen draws them with the shared `LiveCaptionStrip` (`LiveCaptionsView` picks the style), and
+Settings with DaybookUI's `LiveCaptionSettingsSection`. The captioner is fed from the recorder's tap, drops audio when behind, and
 can't stop a recording. Settings › Recording turns them on and picks the language; a language needs
 a system download (`AssetInventory`) the first time it's used, which starts only when recording.
 The simulator has no `SpeechTranscriber` (`isAvailable` is false), so `--demo-captions` scripts them

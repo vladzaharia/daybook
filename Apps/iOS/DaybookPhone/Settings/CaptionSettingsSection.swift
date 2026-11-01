@@ -1,42 +1,44 @@
 import DaybookCaptions
 import DaybookKit
+import DaybookLive
+import DaybookUI
 import SwiftUI
 
 // MARK: Live captions
 
-/// Live captions while recording, and their language, with an honest word on whether they can run.
+/// Settings › Recording › Live Captions: DaybookUI's section, as the Mac shows it, with this iPhone's
+/// downloaded live recognizers. They caption before the Speech framework does wherever they cover the
+/// language, so the footer and the languages count them.
 struct CaptionSettingsSection: View {
     @Environment(PhoneAppModel.self) private var model
-    @State private var availability: LiveCaptionAvailability?
-    @State private var locales: [Locale] = []
 
     var body: some View {
-        @Bindable var settings = model.settings
-        Section {
-            Toggle("Live Captions While Recording", isOn: $settings.liveCaptions)
-            if settings.liveCaptions {
-                Picker("Language", selection: $settings.captionLocaleIdentifier) {
-                    Text("Same as iPhone").tag(String?.none)
-                    ForEach(locales, id: \.identifier) { locale in
-                        Text(LiveCaptionAvailability.name(locale)).tag(Optional(locale.identifier))
-                    }
-                }
-            }
-        } footer: {
-            if let footer { Text(footer) }
-        }
-        .task(id: settings.captionLocaleIdentifier) {
-            if locales.isEmpty { locales = await LiveCaptionAvailability.supportedLocales() }
-            availability = await LiveCaptionAvailability.check(locale: settings.captionLocale)
-        }
+        let settings = model.settings, models = model.models
+        LiveCaptionSettingsSection(settings: settings, liveLanguages: models.liveCaptionLanguages,
+                                   liveCovers: models.installedSet(for: settings.captionLocale).transcribes(settings.captionLocale),
+                                   deviceName: "This iPhone")
+    }
+}
+
+extension PhoneSettings: LiveCaptionPreferences {
+    var captionsEnabled: Bool {
+        get { liveCaptions }
+        set { liveCaptions = newValue }
     }
 
-    private var footer: String? {
-        switch availability {
-        case .needsDownload(let locale)?:
-            return "Captions for \(LiveCaptionAvailability.name(locale)) download the first time you record with them on."
-        case .unavailable(let reason)?: return reason
-        case .ready?, nil: return nil
-        }
+    var captionLanguage: String? {
+        get { captionLocaleIdentifier }
+        set { captionLocaleIdentifier = newValue }
+    }
+}
+
+extension PhoneModels {
+    /// The languages ("en", "ja") the downloaded live recognizers that fit this iPhone cover: the chosen
+    /// one and the catalog's others, as a recording would try them.
+    var liveCaptionLanguages: [String] {
+        let defaults = LiveModelChoices.defaults(for: .liveTranscription, platform: .iOS, catalog: catalog, engines: LiveEngines.descriptors)
+        let keys = ([choice(for: .liveTranscription)].compactMap { $0 } + defaults.compactMap { catalog.model($0) })
+            .filter(fits).map(\.key)
+        return LiveModelSet.languages(of: keys, inventory: inventory)
     }
 }

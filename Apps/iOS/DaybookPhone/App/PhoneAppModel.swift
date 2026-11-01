@@ -241,8 +241,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         recorderCaptions.follow(self.devices.hub, conversation: { [weak self] in self?.captions.activeMeetingID }) { [weak self] update in
             self?.recorderCaptioned(update)
         }
-        // A conversation moved to the Trash takes its live captions with it.
-        watches.append(ObservationWatch.distinctValues(of: { controller.meetings.count }, initial: false) { [weak self] _ in
+        // A conversation moved to the Trash takes its live captions with it, and a transcript replaces them.
+        watches.append(ObservationWatch.distinctValues(of: { LiveCaptionStore.transcriptDates(controller.meetings) }, initial: false) { [weak self] _ in
             self?.pruneCaptions()
         })
         wireProcessing()
@@ -297,7 +297,8 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
 
     private func pruneCaptions() {
-        captions.prune(trashed: Set(library.controller.trashedMeetingIDs()))
+        guard library.controller.isLoaded else { return }
+        captions.prune(meetings: library.controller.meetings)
     }
 
     // MARK: Library keys

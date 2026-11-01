@@ -367,8 +367,9 @@ transcription on any macOS, speakers, and names for voices that match the librar
 (`MacLiveModels`; docs/model-runtime.md, "Live"). They are never the transcript: they stay on this
 Mac, aren't synced, fused, summarized, or used as evidence, and the transcript replaces them.
 
-Code: `Sources/Daybook/Captions/` (controller, echo rule, store, views, settings) and
-`Capture/CaptureCaptionTap.swift`.
+Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings), DaybookCaptions'
+`LiveCaptionSession` and `LiveCaptionStore` (what a recording's captions do on both apps), DaybookUI's
+`Captions/` (the strip's lines, saved captions, Settings' section), and `Capture/CaptureCaptionTap.swift`.
 
 ```
  microphone ──► microphone writer ──► microphone.caf
@@ -422,29 +423,37 @@ Code: `Sources/Daybook/Captions/` (controller, echo rule, store, views, settings
   recognized before its words, else the device ("Soundcore", "iPhone"); the conversation page reads
   them as turns labelled the same way. The devices' names are saved with the captions
   (`LiveCaptions.sourceNames`).
-- **Storage.** `LiveCaptionStore` keeps `<library>/LiveCaptions/<meeting id>.json` (directory 0700,
-  file 0600), laid out as on the iPhone: one `LiveCaptions` with You and Call as segments tagged
-  `source` (`.microphone`, `.call`), saved every 10 seconds while listening and at Stop (what stood
-  then is kept as heard). It's outside `Meetings/`, so sync never reads it. Captions are replaced by
-  any transcript made after they began (`LiveCaptionStore.isReplaced`): they disappear from the page
-  and are deleted, as are captions of conversations moved to the Trash (`prune`, a second after the
-  library changes).
-- **Where they show.** Floating Notes, while recording: a fixed-height strip above Bookmark and
-  Stop (`LiveCaptionStrip`, `.panel` style, from `DaybookDesign`, whose touch styles follow Dynamic Type; the iPhone still draws its own `LiveCaptionsView`) with
-  "Live captions · tentative" and the newest two lines: the newest larger, in body ink, keeping its
-  latest words; the one before smaller, in Secondary; still-revised words lighter. The source (You
-  or Call) sits in the time lane, so arriving words never move the notes. Compact, it shows the
-  newest line only, without the label. The conversation page, after your notes: the newest eight lines while recording,
-  then everything captioned until the transcript exists, as "Live captions · tentative" turns
-  labelled You and Call, in lighter ink than a transcript, with no editing. Both observe the captions
-  directly, so a revised word redraws only them.
-- **Settings › General › Live Captions.** "Show while recording" (on by default, as on the
-  iPhone) and the language ("Same as This Mac" or any `SpeechTranscriber` locale; on macOS 15, the
-  languages the downloaded live recognizers cover, `LiveModelSet.languages`: the Latin model's six,
-  the multilingual model's 35), with a footer that says whether the language is ready or downloads
-  the first time (never asking triggers a download), or, on macOS 15, that live transcription doesn't
-  cover the chosen language. A language chosen before its model was removed stays chosen and listed,
-  so the choice still reads, and captions return when a model covers it again (`LiveCaptionLanguages`). It's in General, beside the other recording choices, rather than Models: captions use
+- **Storage.** `LiveCaptionStore` (DaybookCaptions, the iPhone's too) keeps
+  `<library>/LiveCaptions/<meeting id>.json` (directory 0700, file 0600, protected until first
+  unlock): one `LiveCaptions` with You and Call as segments tagged `source` (`.microphone`, `.call`),
+  saved every 10 seconds while listening and at Stop (what stood then is kept as heard), on the
+  store's own queue, never the main thread, with a save still on its way never putting back what a
+  later one replaced. It's outside `Meetings/`, so sync never reads it. One rule on both apps:
+  captions are replaced by any transcript made after they began (`LiveCaptionStore.isReplaced`), and
+  then deleted, as are captions of conversations moved to the Trash (`prune`, off the main thread, a
+  second after a transcript or the set of conversations changes; typing notes never prunes).
+- **Where they show.** Every live caption on both apps is one renderer, `LiveCaptionStrip`
+  (DaybookDesign), in a style per surface: "LIVE CAPTIONS · TENTATIVE" on top, the newest line in
+  Body ink, earlier ones in Secondary, still-revised words in Meta, and "Listening…" before anything
+  is heard. Floating Notes, while recording: a fixed-height strip above Bookmark and Stop (`.panel`)
+  with the newest two lines, the newest larger and keeping its latest words; the source (You or
+  Call) sits in the time lane, so arriving words never move the notes. Compact, it shows the newest
+  line only, without the label (`.panelCompact`). The conversation page, after your notes: the newest
+  eight lines while this Mac records it, You or Call before the words. A recorder's Listen Live page:
+  six lines in the page's body type (`.feed`). Once the recording stops, saved captions read in the
+  transcript's place (DaybookUI's `SavedCaptionsView`, as on the iPhone): each caption with its time,
+  which plays the recording it was heard from, the person or device before its words, in lighter ink
+  than a transcript, with no editing. Each surface observes the captions directly, so a revised word
+  redraws only it.
+- **Settings › General › Live Captions.** DaybookUI's `LiveCaptionSettingsSection`, the iPhone's
+  too: "Show while recording" (on by default, as on the iPhone) and the language ("Same as This Mac",
+  any `SpeechTranscriber` locale, and those only the downloaded live recognizers cover,
+  `LiveModelSet.languages`: the Latin model's six, the multilingual model's 35; on macOS 15 only
+  those), with a footer, only while captions are on, that says whether the language downloads the
+  first time (never asking triggers a download), or, on macOS 15, that live transcription doesn't
+  cover the chosen language; none when a downloaded recognizer covers it. A language chosen before
+  its model was removed stays chosen and listed, so the choice still reads, and captions return when
+  a model covers it again (`LiveCaptionLanguages`, DaybookCaptions). It's in General, beside the other recording choices, rather than Models: captions use
   the system's speech assets, which Daybook doesn't download or manage, and they never feed the
   transcript that the Models pane is about. The same setting and language apply to a recorder's
   Listen Live.

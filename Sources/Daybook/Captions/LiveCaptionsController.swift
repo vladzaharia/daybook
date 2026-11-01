@@ -2,8 +2,12 @@ import AVFoundation
 import DaybookCaptions
 import DaybookCore
 import DaybookDevices
+import DaybookUI
 import Foundation
 import Observation
+
+/// Where this Mac keeps the live captions it made: DaybookCaptions' store, the iPhone's too.
+typealias LiveCaptionStore = DaybookCaptions.LiveCaptionStore
 
 /// The Mac's live captions while it records, on the shared DaybookCaptions engine the iPhone uses:
 /// one captioner for You (the microphone) and one for Call (the call or system track), fed by the
@@ -13,9 +17,9 @@ import Observation
 /// transcript exists. They're never the transcript: saved on this Mac only (`LiveCaptionStore`),
 /// never synced, fused, summarized, or used as evidence, and gone once the transcript lands.
 ///
-/// The recording never depends on them. Each captioner runs on its own tasks, keeps a bounded
-/// backlog and drops audio when it falls behind, and a captioner that can't start or fails changes
-/// only its own state; the other source keeps captioning.
+/// What the iPhone does too (the captioners, saving, other devices' lines, finishing) is the shared
+/// `LiveCaptionSession`; this adds the Mac's own: You and Call put together without the speakers' echo
+/// of the call (`CaptionEcho`), and when the recording surfaces show captions.
 ///
 /// Other devices recording the same conversation add their captions (`received`): a recorder
 /// recording along (its live audio, captioned on this Mac) and a paired iPhone (its captions, over
@@ -24,57 +28,49 @@ import Observation
 @MainActor
 @Observable
 final class LiveCaptionsController {
-    /// What's on screen: You and Call interleaved by time and tagged with their source, without
-    /// microphone lines that only echo the call through the speakers (`CaptionEcho`), and other
-    /// devices' lines that add something.
-    private(set) var segments: [LiveCaptionSegment] = []
-    /// Other devices' names by source (raw value), for their lines' labels.
-    private(set) var sourceNames: [String: String] = [:]
-    /// Each source's captioner, as it stands.
-    private(set) var states: [LiveCaptionSource: LiveCaptionState] = [:]
-    /// The conversation being captioned, from `prepare` until the captions are saved.
-    private(set) var meetingID: UUID?
-    /// When captions were last written to the store, so pages showing saved captions read them again.
-    private(set) var lastSave: Date?
+    /// The recording's captioners, what they've heard, and their saving.
+    let session: LiveCaptionSession
     /// The conversation whose recording surfaces show captions now (`isShowing(for:)`), so a surface
     /// can follow it without observing every word.
     private(set) var showing: UUID?
 
-    let store: LiveCaptionStore
     /// Makes the captioner for one source; nil when captions are off or can't run on this system.
     @ObservationIgnored var makeCaptioner: (LiveCaptionSource) -> (any LiveCaptioning)?
     /// The captions of recorders recording along, as they're made (`AppState.wireCaptions`).
     let recorders = LiveCaptureCaptions()
 
-    @ObservationIgnored private var captioners: [LiveCaptionSource: any LiveCaptioning] = [:]
-    @ObservationIgnored private var heard: [LiveCaptionSource: [LiveCaptionSegment]] = [:]
-    /// Other devices' captions of this recording, by source.
-    @ObservationIgnored private var feeds: [LiveCaptionSource: DeviceCaptionFeed] = [:]
-    @ObservationIgnored private var listeners: [Task<Void, Never>] = []
-    @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var routes: [(time: TimeInterval, echoes: Bool)] = []
     @ObservationIgnored private var routeWatch: ObservationWatch?
     /// You lines already judged, so an hour of captions isn't compared again on every word.
     @ObservationIgnored private var verdicts: [UUID: (text: String, isEcho: Bool)] = [:]
-    @ObservationIgnored private var saving: Task<Void, Never>?
-    @ObservationIgnored private var dirty = false
-    private var createdAt = Date()
-    private var localeIdentifier = Locale.current.identifier
 
-    /// While listening, what's heard is written this often, so a crash keeps most of it.
-    static let saveInterval: Duration = .seconds(10)
     /// You lines older than this (behind the newest caption) keep the echo verdict they were given.
     static let settledAfter: TimeInterval = 30
 
     init(store: LiveCaptionStore, makeCaptioner: @escaping (LiveCaptionSource) -> (any LiveCaptioning)?) {
-        self.store = store
+        session = LiveCaptionSession(store: store)
         self.makeCaptioner = makeCaptioner
+        session.merge = { [weak self] heard in self?.merged(heard) ?? [] }
+        session.statesChanged = { [weak self] in self?.updateShowing() }
     }
 
+    /// What's on screen: You and Call interleaved by time and tagged with their source, without
+    /// microphone lines that only echo the call through the speakers (`CaptionEcho`), and other
+    /// devices' lines that add something.
+    var segments: [LiveCaptionSegment] { session.segments }
+    /// Other devices' names by source (raw value), for their lines' labels.
+    var sourceNames: [String: String] { session.sourceNames }
+    /// Each source's captioner, as it stands.
+    var states: [LiveCaptionSource: LiveCaptionState] { session.states }
+    /// The conversation being captioned, from `prepare` until the captions are saved.
+    var meetingID: UUID? { session.meetingID }
+    /// When captions were last written to the store.
+    var lastSave: Date? { session.lastSave }
+    var store: LiveCaptionStore { session.store }
     /// Captioning this Mac's recording now.
-    var isActive: Bool { !captioners.isEmpty }
+    var isActive: Bool { session.isActive }
     /// The language captions listen in, for the surfaces' status lines.
-    var locale: Locale { Locale(identifier: localeIdentifier) }
+    var locale: Locale { Locale(identifier: session.localeIdentifier) }
 
     /// Where captions stand overall: listening while either source is; otherwise the most telling state.
     var state: LiveCaptionState {
@@ -102,27 +98,17 @@ final class LiveCaptionsController {
     }
 
     /// The newest lines, oldest first.
-    func recent(_ count: Int) -> [LiveCaptionSegment] { Array(segments.suffix(count)) }
+    func recent(_ count: Int) -> [LiveCaptionSegment] { session.recent(count) }
 
     /// What a line from `source` is labelled with: "You", "Call", or the device that heard it.
     func label(for source: LiveCaptionSource?) -> String { LiveCaptionLabels.label(for: source, names: sourceNames) }
 
     // MARK: Other devices
 
-    /// Another device's captions of this recording: `segments` are all it has heard (a recorder's
-    /// captioner), or, with `changesOnly`, the lines that changed (a phone's link). `offset` moves its
-    /// times onto this recording's. Ignored unless this Mac is captioning a recording.
+    /// Another device's captions of this recording (`LiveCaptionSession.received`).
     func received(_ segments: [LiveCaptionSegment], from source: LiveCaptionSource, name: String, offset: TimeInterval,
                   changesOnly: Bool = false) {
-        guard isActive, meetingID != nil else { return }
-        var feed = feeds[source] ?? DeviceCaptionFeed(source: source, name: name, offset: offset)
-        feed.name = name
-        feed.offset = offset
-        if changesOnly { feed.update(segments) } else { feed.segments = segments }
-        feeds[source] = feed
-        if sourceNames[source.rawValue] != name { sourceNames[source.rawValue] = name }
-        dirty = true
-        rebuild()
+        session.received(segments, from: source, name: name, offset: offset, changesOnly: changesOnly)
     }
 
     // MARK: A recording
@@ -130,13 +116,13 @@ final class LiveCaptionsController {
     /// Before the recorder starts: a captioner for each source (none when captions are off or the
     /// system can't make them) and the tap that hands them the recorder's audio. Nil means no captions.
     func prepare(meetingID: UUID, includesCall: Bool) -> CaptureCaptionTap? {
-        reset()
+        routes = []
+        verdicts = [:]
         var tap = CaptureCaptionTap()
+        var captioners: [(source: LiveCaptionSource, captioner: any LiveCaptioning)] = []
         for source in includesCall ? [LiveCaptionSource.microphone, .call] : [.microphone] {
             guard let captioner = makeCaptioner(source) else { continue }
-            captioners[source] = captioner
-            states[source] = .preparing
-            listen(to: captioner, as: source)
+            captioners.append((source, captioner))
             // Seconds since the recording started become the buffer's place on that timeline.
             let handler: CaptureBufferHandler = { buffer, seconds in
                 let rate = buffer.format.sampleRate
@@ -145,21 +131,13 @@ final class LiveCaptionsController {
             }
             if source == .microphone { tap.microphone = handler } else { tap.call = handler }
         }
-        guard !captioners.isEmpty else { return nil }
-        self.meetingID = meetingID
-        createdAt = Date()
-        updateShowing()
-        return tap
+        return session.begin(meetingID: meetingID, captioners: captioners) ? tap : nil
     }
 
     /// The recorder is running: listen in `locale`. The microphone's captioner starts first, so a
     /// language that needs a download is fetched once. Returns once both run or have said why not.
     func start(locale: Locale) async {
-        localeIdentifier = locale.identifier
-        for source in [LiveCaptionSource.microphone, .call] {
-            guard let captioner = captioners[source] else { continue }
-            await captioner.start(locale: locale, sourceFormat: nil)
-        }
+        await session.start(locale: locale)
     }
 
     /// Follows the recorder's output route: on speakers (or anything that might be), microphone lines
@@ -177,69 +155,22 @@ final class LiveCaptionsController {
         guard routes.last?.echoes != canEcho else { return }
         routes.append((time, canEcho))
         verdicts = [:]
-        rebuild()
+        session.rebuild()
     }
 
     /// The recording stopped (or never started): finish both captioners, keep what stands as heard,
     /// and save. Nothing about the recording waits for this.
     func finish() async {
-        guard isActive else { return }
-        let current = generation
-        let finishing = captioners
-        captioners = [:]
-        updateShowing()
-        for source in [LiveCaptionSource.microphone, .call] {
-            await finishing[source]?.finish()
-        }
-        for listener in listeners { await listener.value }
-        guard generation == current else { return }
-        listeners = []
-        saving?.cancel()
-        saving = nil
-        heard = heard.mapValues { $0.map { segment in var segment = segment; segment.isTentative = false; return segment } }
-        feeds = feeds.mapValues { feed in
-            var feed = feed
-            feed.segments = feed.segments.map { segment in var segment = segment; segment.isTentative = false; return segment }
-            return feed
-        }
-        rebuild()
-        save()
-        states = [:]
-        segments = []
-        heard = [:]
-        feeds = [:]
-        sourceNames = [:]
-        meetingID = nil
+        await session.finish()
     }
 
-    // MARK: Listening
+    // MARK: You and Call
 
-    private func listen(to captioner: any LiveCaptioning, as source: LiveCaptionSource) {
-        let current = generation
-        listeners += [
-            Task { [weak self] in
-                for await snapshot in captioner.updates {
-                    guard let self, self.generation == current else { return }
-                    self.heard[source] = snapshot
-                    self.dirty = true
-                    self.rebuild()
-                }
-            },
-            Task { [weak self] in
-                for await state in captioner.states {
-                    guard let self, self.generation == current else { return }
-                    self.states[source] = state
-                    self.updateShowing()
-                    if state == .listening { self.startSaving() }
-                }
-            }
-        ]
-    }
-
-    private func rebuild() {
+    /// You and Call as one list, without You lines that only echo the call.
+    private func merged(_ heard: [LiveCaptionSource: [LiveCaptionSegment]]) -> [LiveCaptionSegment] {
         let you = heard[.microphone] ?? [], call = heard[.call] ?? []
         let newest = max(you.last?.end ?? 0, call.last?.end ?? 0)
-        let merged = CaptionEcho.merge(you: you, call: call, echoes: canEcho(at:)) { line in
+        return CaptionEcho.merge(you: you, call: call, echoes: canEcho(at:)) { line in
             if let known = verdicts[line.id], known.text == line.text, !line.isTentative, line.end < newest - Self.settledAfter {
                 return known.isEcho
             }
@@ -247,115 +178,11 @@ final class LiveCaptionsController {
             verdicts[line.id] = (line.text, verdict)
             return verdict
         }
-        let all = LiveCaptionMix.adding(Array(feeds.values), to: merged)
-        if all != segments { segments = all }
     }
 
     /// Whether the output could echo into the microphone at `time`. Until a route is known, assume it can.
     private func canEcho(at time: TimeInterval) -> Bool {
         (routes.last { $0.time <= time } ?? routes.first)?.echoes ?? true
-    }
-
-    private func reset() {
-        generation = UUID()
-        listeners.forEach { $0.cancel() }
-        listeners = []
-        saving?.cancel()
-        saving = nil
-        captioners = [:]
-        heard = [:]
-        feeds = [:]
-        sourceNames = [:]
-        states = [:]
-        segments = []
-        routes = []
-        verdicts = [:]
-        meetingID = nil
-        dirty = false
-        updateShowing()
-    }
-
-    private func startSaving() {
-        guard saving == nil else { return }
-        let current = generation
-        saving = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: Self.saveInterval)
-                guard !Task.isCancelled, let self, self.generation == current else { return }
-                if self.dirty { self.save() }
-            }
-        }
-    }
-
-    private func save() {
-        guard let meetingID, !segments.isEmpty else { return }
-        let captions = LiveCaptions(meetingID: meetingID, localeIdentifier: localeIdentifier, segments: segments,
-                                    createdAt: createdAt, updatedAt: Date(), sourceNames: sourceNames.isEmpty ? nil : sourceNames)
-        do {
-            try store.save(captions)
-            dirty = false
-            lastSave = captions.updatedAt
-        } catch {
-            // Captions are a convenience: a failed write never reaches the recording.
-        }
-    }
-}
-
-// MARK: - Storage
-
-/// Mac-local storage at `<library>/LiveCaptions/<meeting id>.json`, laid out as on the iPhone:
-/// outside `Meetings/`, so sync never sees it, and removed once the transcript replaces it or the
-/// conversation goes to the Trash.
-@MainActor
-final class LiveCaptionStore {
-    let directory: URL
-
-    init(libraryRoot: URL) {
-        directory = libraryRoot.appendingPathComponent("LiveCaptions", isDirectory: true)
-    }
-
-    func url(for meetingID: UUID) -> URL { directory.appendingPathComponent("\(meetingID.uuidString).json") }
-
-    func captions(for meetingID: UUID) -> LiveCaptions? {
-        guard let data = try? Data(contentsOf: url(for: meetingID)) else { return nil }
-        return try? JSONDecoder().decode(LiveCaptions.self, from: data)
-    }
-
-    func save(_ captions: LiveCaptions) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let url = url(for: captions.meetingID)
-        try JSONEncoder().encode(captions).write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    }
-
-    func remove(_ meetingID: UUID) {
-        try? FileManager.default.removeItem(at: url(for: meetingID))
-    }
-
-    /// The captions to show for a conversation, or nil once its transcript has replaced them (a
-    /// transcript made after the captions began) or when there's nothing to read.
-    static func shown(_ captions: LiveCaptions?, for meeting: Meeting) -> LiveCaptions? {
-        guard let captions, captions.meetingID == meeting.id, !isReplaced(captions, in: meeting),
-              captions.segments.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return nil }
-        return captions
-    }
-
-    /// The official transcript replaces live captions: any transcript made since they began.
-    static func isReplaced(_ captions: LiveCaptions, in meeting: Meeting) -> Bool {
-        meeting.transcripts.contains { $0.createdAt >= captions.createdAt }
-    }
-
-    /// Removes captions the transcript has replaced, and those of conversations no longer in the
-    /// library (moved to the Trash). `keeping` is the conversation being recorded.
-    func prune(meetings: [Meeting], keeping: UUID?) {
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        guard !files.isEmpty else { return }
-        let byID = Dictionary(meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for file in files where file.pathExtension == "json" {
-            guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent), id != keeping else { continue }
-            guard let meeting = byID[id] else { remove(id); continue }
-            if let captions = captions(for: id), Self.isReplaced(captions, in: meeting) { remove(id) }
-        }
     }
 }
 
@@ -386,6 +213,18 @@ final class LiveCaptionSettings {
         self.defaults = defaults
         isEnabled = defaults.object(forKey: Keys.enabled) as? Bool ?? true
         localeIdentifier = defaults.string(forKey: Keys.locale)
+    }
+}
+
+extension LiveCaptionSettings: LiveCaptionPreferences {
+    var captionsEnabled: Bool {
+        get { isEnabled }
+        set { isEnabled = newValue }
+    }
+
+    var captionLanguage: String? {
+        get { localeIdentifier }
+        set { localeIdentifier = newValue }
     }
 }
 
