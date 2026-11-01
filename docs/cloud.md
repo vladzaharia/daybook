@@ -188,8 +188,8 @@ conversation (every catalog model's window holds far more than a day of talk), t
   `maxItems`, every object closed with all its properties required, action items with `evidence`, and, with notes, the
   notes' findings first. A test keeps it in step with the local schema.
 - **Commitments:** the reply's action items go through `MeetingSynthesis.verifiedActions`, the commitments pass's check:
-  only those whose quote is in the transcript, word for word, each with the owner the quote shows. A notes-only
-  conversation has none.
+  only those whose quote is in the transcript, word for word, each with the owner the quote shows, and a commitment
+  restated later in other words kept once (`RestatedCommitments`). A notes-only conversation has none.
 - **Parsing:** `MeetingSynthesis.parse`, so a cloud summary has the same shape, terms check, and fallbacks as a local
   one.
 - **Limit:** twice the expected output plus 8,000 tokens, at least 16,000, at most the model's; a reply cut off there
