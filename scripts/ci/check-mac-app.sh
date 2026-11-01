@@ -4,13 +4,12 @@
 #
 #   scripts/ci/check-mac-app.sh --app dist/Daybook.app --kind adhoc|rehearsal|signed|signed-sandbox
 #
-#   adhoc           sandboxed, local.daybook.app.adhoc, the /private/tmp/daybook/ exception and no other, no manifest
-#   rehearsal       sandboxed, local.daybook.app.rehearsal…, the same exception, the rehearsal's manifest
-#   signed          local.daybook.app, not sandboxed, no manifest (the default until the switch)
-#   signed-sandbox  local.daybook.phone (the iPhone app's bundle ID, which sandboxed builds share for universal
-#                   purchase), sandboxed, no temporary exceptions, the manifest that moves ${ApplicationSupport}/Daybook
-#                   and local.daybook.app's preferences under the new ID. Developer ID with --sandbox, and the App
-#                   Store and TestFlight build (build-app.sh --app-store), are both this kind
+#   adhoc           sandboxed, local.daybook.adhoc, the /private/tmp/daybook/ exception and no other, no manifest
+#   rehearsal       sandboxed, local.daybook.rehearsal…, the same exception, the rehearsal's manifest
+#   signed          local.daybook, not sandboxed, no manifest (the Developer ID default until the switch)
+#   signed-sandbox  local.daybook, sandboxed, no temporary exceptions, the manifest that moves ${ApplicationSupport}/Daybook,
+#                   ${BundleId}'s preferences, and local.daybook.app's (releases before the one bundle ID). The App Store
+#                   and TestFlight build (build-app.sh --app-store), and Developer ID with --sandbox, are this kind
 #
 # Every sandboxed kind needs the capabilities Daybook uses: audio input, microphone, Bluetooth, network client and
 # server, user-selected files, and app-scoped bookmarks. Exits 1 with every problem listed.
@@ -92,30 +91,30 @@ expect_no_manifest() {
 
 case "$kind" in
     adhoc)
-        expect_bundle local.daybook.app.adhoc
+        expect_bundle local.daybook.adhoc
         expect_sandboxed
         expect_scratch_exception_only
         expect_no_manifest
         ;;
     rehearsal)
-        expect_bundle 'local.daybook.app.rehearsal*'
+        expect_bundle 'local.daybook.rehearsal*'
         expect_sandboxed
         expect_scratch_exception_only
         # shellcheck disable=SC2016 # the manifest's own variables, never expanded here
         expect_manifest '[["${ApplicationSupport}/Daybook Rehearsal","${ApplicationSupport}/Daybook"],"${Library}/Preferences/${BundleId}.plist"]'
         ;;
     signed)
-        expect_bundle local.daybook.app
+        expect_bundle local.daybook
         [[ "$sandboxed" != true ]] || problem "the default signed build isn't sandboxed until the switch (DAYBOOK_SANDBOX)"
         [[ -z "$exceptions" ]] || problem "signed builds carry no temporary exceptions: [${exceptions//$'\n'/, }]"
         expect_no_manifest
         ;;
     signed-sandbox)
-        expect_bundle local.daybook.phone
+        expect_bundle local.daybook
         expect_sandboxed
         [[ -z "$exceptions" ]] || problem "signed builds carry no temporary exceptions: [${exceptions//$'\n'/, }]"
         # shellcheck disable=SC2016 # the manifest's own variables, never expanded here
-        expect_manifest '["${ApplicationSupport}/Daybook",["${Library}/Preferences/local.daybook.app.plist","${Library}/Preferences/${BundleId}.plist"]]'
+        expect_manifest '["${ApplicationSupport}/Daybook","${Library}/Preferences/${BundleId}.plist","${Library}/Preferences/local.daybook.app.plist"]'
         ;;
 esac
 

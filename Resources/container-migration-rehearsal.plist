@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- The migration rehearsal's manifest (scripts/build-app.sh --sandbox-rehearsal, docs/sandbox.md). The rehearsal
-     build has its own bundle ID (local.daybook.app.rehearsal…) and moves a synthetic library,
+     build has its own bundle ID (local.daybook.rehearsal…) and moves a synthetic library,
      ~/Library/Application Support/Daybook Rehearsal, to where the app expects its library inside that container, so
      the real move can be timed and checked without touching the real library. -->
 <plist version="1.0"><dict>

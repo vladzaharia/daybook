@@ -27,7 +27,7 @@ struct SharedRecordingState: Codable, Equatable, Sendable {
 
     var isActive: Bool { phase != .idle }
 
-    static let appGroup = "group.local.daybook.phone"
+    static let appGroup = "group.local.daybook"
     static let defaultsKey = "recording-state"
     static let controlKind = "local.daybook.phone.record-control"
     static let widgetKind = "local.daybook.phone.recorder"

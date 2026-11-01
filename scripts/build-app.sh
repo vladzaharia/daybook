@@ -8,27 +8,27 @@
 #   scripts/build-app.sh --debug          Debug build, signed with Apple Development (ad hoc without a team)
 #   scripts/build-app.sh --ad-hoc         sign to run locally: no team, no profile, no iCloud entitlements;
 #                                         the app runs and keeps sync off. Combine with --debug. Bundle ID
-#                                         local.daybook.app.adhoc, so it never uses the app's container.
+#                                         local.daybook.adhoc, so it never uses the app's container.
 #   scripts/build-app.sh --sandbox        Release, signed: run in the App Sandbox (Daybook-Sandbox.entitlements)
-#                                         as local.daybook.phone, the iPhone app's bundle ID, and embed the
-#                                         container migration manifest, so the first launch MOVES
-#                                         ~/Library/Application Support/Daybook (and the preferences) into that
-#                                         container, once and for good (docs/sandbox.md). Also DAYBOOK_SANDBOX=1.
-#                                         Needs a team; refuses --debug and --ad-hoc. Without it signed builds
-#                                         aren't sandboxed and stay local.daybook.app.
+#                                         and embed the container migration manifest, so the first launch MOVES
+#                                         ~/Library/Application Support/Daybook (and the preferences) into
+#                                         local.daybook's container, once and for good (docs/sandbox.md). Also
+#                                         DAYBOOK_SANDBOX=1. Needs a team; refuses --debug and --ad-hoc. Without it
+#                                         signed builds aren't sandboxed. Signed builds are local.daybook either way,
+#                                         the iPhone app's bundle ID too.
 #   scripts/build-app.sh --app-store      the Mac App Store and TestFlight build: --sandbox, exported with the
 #                                         app-store-connect method to build/macOS/AppStore (a .pkg) instead of
 #                                         Developer ID; nothing goes to dist/. Add --upload to send it to App Store
 #                                         Connect, where it joins the iPhone app's record (docs/release.md,
 #                                         "Mac on TestFlight").
 #   scripts/build-app.sh --sandbox-rehearsal
-#                                         ad hoc, bundle ID local.daybook.app.rehearsal (or
+#                                         ad hoc, bundle ID local.daybook.rehearsal (or
 #                                         $DAYBOOK_REHEARSAL_BUNDLE_ID), with a manifest that moves
 #                                         ~/Library/Application Support/Daybook Rehearsal into its container on
 #                                         first launch: the migration rehearsal (docs/sandbox.md)
 #   scripts/build-app.sh --allow-provisioning-updates
 #                                         let Xcode register what signing needs on the Apple Developer
-#                                         account: the local.daybook.app identifier with iCloud and its
+#                                         account: the local.daybook identifier with iCloud and its
 #                                         container, this Mac, a development profile, and the Developer ID
 #                                         profile. For the account owner, once (README.md, "First-time
 #                                         provisioning"). Without it the script never changes the account.
@@ -55,7 +55,7 @@
 #   DAYBOOK_SANDBOX           1 (or YES, true) is --sandbox; 0, NO, false, or unset leave signed builds
 #                             unsandboxed
 #   DAYBOOK_REHEARSAL_BUNDLE_ID
-#                             --sandbox-rehearsal's bundle ID, local.daybook.app.rehearsal…: a container can't be
+#                             --sandbox-rehearsal's bundle ID, local.daybook.rehearsal…: a container can't be
 #                             fully removed, so each rehearsal from scratch needs a new one
 #   XCODEGEN                  path to xcodegen (default: from PATH, then /opt/homebrew/bin)
 #   DAYBOOK_ASC_KEY_PATH, DAYBOOK_ASC_KEY_ID, DAYBOOK_ASC_ISSUER_ID
@@ -202,22 +202,22 @@ if [[ "$signing" == local || "$signing" == rehearsal ]]; then
     echo "Signing ad hoc: no team, so this build has no iCloud entitlements and keeps sync off."
 fi
 if (( sandbox )); then
-    # Only a signed Release build may run sandboxed as local.daybook.phone: its first launch creates the app's container
+    # Only a signed Release build may run sandboxed as local.daybook: its first launch creates the app's container
     # and moves the real library into it, once. A development build must never be the one that does (docs/sandbox.md).
     if [[ "$signing" != signed ]]; then
-        echo "--sandbox and --app-store are for signed builds (DAYBOOK_TEAM_ID). Ad hoc builds are always sandboxed, as local.daybook.app.adhoc." >&2
+        echo "--sandbox and --app-store are for signed builds (DAYBOOK_TEAM_ID). Ad hoc builds are always sandboxed, as local.daybook.adhoc." >&2
         exit 2
     fi
     if [[ "$configuration" == Debug ]]; then
         echo "--sandbox and --app-store are for Release builds: a Debug build must never create the app's container." >&2
         exit 2
     fi
-    echo "App Sandbox, as local.daybook.phone: this build's first launch moves ~/Library/Application Support/Daybook into its container (docs/sandbox.md)."
+    echo "App Sandbox: this build's first launch moves ~/Library/Application Support/Daybook into its container (docs/sandbox.md)."
 fi
-rehearsal_id="${DAYBOOK_REHEARSAL_BUNDLE_ID:-local.daybook.app.rehearsal}"
+rehearsal_id="${DAYBOOK_REHEARSAL_BUNDLE_ID:-local.daybook.rehearsal}"
 if [[ "$signing" == rehearsal ]]; then
-    if [[ ! "$rehearsal_id" =~ ^local\.daybook\.app\.rehearsal[A-Za-z0-9.-]*$ ]]; then
-        echo "DAYBOOK_REHEARSAL_BUNDLE_ID must start with local.daybook.app.rehearsal, not $rehearsal_id." >&2
+    if [[ ! "$rehearsal_id" =~ ^local\.daybook\.rehearsal[A-Za-z0-9.-]*$ ]]; then
+        echo "DAYBOOK_REHEARSAL_BUNDLE_ID must start with local.daybook.rehearsal, not $rehearsal_id." >&2
         exit 2
     fi
     echo "Migration rehearsal: bundle ID $rehearsal_id moves ~/Library/Application Support/Daybook Rehearsal into its container."
@@ -294,7 +294,7 @@ else
             plutil -insert signingStyle -string manual "$export_options"
             plutil -insert signingCertificate -string "Developer ID Application" "$export_options"
             plutil -insert provisioningProfiles -dictionary "$export_options"
-            # The archived app's bundle ID: local.daybook.app, or local.daybook.phone with --sandbox.
+            # The archived app's bundle ID (local.daybook), which names the profile.
             bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$archive/Products/Applications/Daybook.app/Contents/Info.plist")"
             plutil -insert "provisioningProfiles.${bundle_id//./\\.}" -string "$DAYBOOK_DEVELOPER_ID_PROFILE" "$export_options"
             export_provisioning=()

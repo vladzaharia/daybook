@@ -17,7 +17,7 @@
 #     never reaches TestFlight.
 #   - CFBundleShortVersionString or CFBundleVersion of the app or any extension differs from
 #     --version / --build (an extension must match its app).
-#   - a bundle identifier isn't the expected one (local.daybook.phone, local.daybook.phone.widgets).
+#   - a bundle identifier isn't the expected one (local.daybook, local.daybook.widgets).
 #   - the archive is signed and the app lacks the app group or iCloud container entitlements, or its keychain groups
 #     aren't its own and then the shared one (library keys for an encrypted library).
 set -euo pipefail
@@ -109,13 +109,13 @@ check_bundle() {
     ok "$(basename "$bundle"): $id $short ($long)"
 }
 
-check_bundle "$app" local.daybook.phone
+check_bundle "$app" local.daybook
 extensions=0
 while IFS= read -r appex; do
     [[ -n "$appex" ]] || continue
     extensions=$(( extensions + 1 ))
     case "$(basename "$appex")" in
-        DaybookPhoneWidgets.appex) check_bundle "$appex" local.daybook.phone.widgets ;;
+        DaybookPhoneWidgets.appex) check_bundle "$appex" local.daybook.widgets ;;
         *) check_bundle "$appex" "" ;;
     esac
 done < <(find "$app/PlugIns" "$app/Extensions" -maxdepth 1 -name '*.appex' 2>/dev/null)
@@ -123,21 +123,22 @@ done < <(find "$app/PlugIns" "$app/Extensions" -maxdepth 1 -name '*.appex' 2>/de
 
 if codesign --verify --strict "$app" >/dev/null 2>&1; then
     entitlements="$(codesign -d --entitlements - --xml "$app" 2>/dev/null || true)"
-    for needle in group.local.daybook.phone "$container"; do
+    for needle in group.local.daybook "$container"; do
         if printf '%s' "$entitlements" | grep -q "<string>$needle</string>"; then
             ok "entitlement: $needle"
         else
             problem "the signed app lacks the $needle entitlement"
         fi
     done
-    # Keychain groups: the app's own first (the default for items stored without a group), then the one the Mac app
-    # shares for an encrypted library's keys (docs/icloud-sync.md, "Encryption"). Each carries the team prefix.
+    # Keychain groups: the app's own first (the default for items stored without a group), then the iPhone app's from
+    # before the one bundle ID (its items stay readable), then the one the Mac app shares for library and cloud keys
+    # (docs/icloud-sync.md, "Encryption"). Each carries the team prefix.
     groups="$(printf '%s' "$entitlements" | plutil -extract keychain-access-groups json -o - - 2>/dev/null || true)"
-    pattern='^\["[A-Z0-9]{10}\.local\.daybook\.phone","[A-Z0-9]{10}\.local\.daybook\.shared"\]$'
+    pattern='^\["[A-Z0-9]{10}\.local\.daybook","[A-Z0-9]{10}\.local\.daybook\.phone","[A-Z0-9]{10}\.local\.daybook\.shared"\]$'
     if [[ "$groups" =~ $pattern ]]; then
         ok "keychain groups: $groups"
     else
-        problem "keychain-access-groups is ${groups:-missing}, not [<team>.local.daybook.phone, <team>.local.daybook.shared] in that order. The provisioning profile must grant <team>.* (docs/release.md, Capabilities and entitlements)."
+        problem "keychain-access-groups is ${groups:-missing}, not [<team>.local.daybook, <team>.local.daybook.phone, <team>.local.daybook.shared] in that order. The provisioning profile must grant <team>.* (docs/release.md, Capabilities and entitlements)."
     fi
 else
     echo "note: $(basename "$app") isn't signed; skipping the entitlement check"

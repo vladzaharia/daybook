@@ -65,7 +65,7 @@ targets:
       path: DaybookPhone/Resources/DaybookPhone.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.local.daybook.phone
+          - group.local.daybook
         # Sync uses the app's own iCloud ubiquity container (hidden from the Files app: no
         # NSUbiquitousContainers entry), resolved by LibrarySyncController from
         # DaybookICloudContainerIdentifier below. DAYBOOK_ICLOUD_CONTAINER is set in Config/Signing.xcconfig.
@@ -80,10 +80,13 @@ targets:
         com.apple.developer.ubiquity-container-identifiers:
           - $(DAYBOOK_ICLOUD_CONTAINER)
         aps-environment: $(DAYBOOK_APS_ENVIRONMENT)
-        # The app's own group first, so it stays the default for items stored without one (pairing keys, the sync
-        # device ID); then the group the Mac app also lists, for an encrypted library's keys in iCloud Keychain
-        # (KeychainLibraryKeyStore, docs/icloud-sync.md, "Encryption"). Automatic signing's profiles grant <team>.*.
+        # The app's own group first, the default for items stored without one (pairing keys, the sync device ID);
+        # then local.daybook.phone's, where the iPhone app stored them before the one bundle ID (docs/iphone.md,
+        # "Moving to the new app"), so they stay readable; then the group the Mac app also lists, for library and
+        # cloud keys in iCloud Keychain (KeychainLibraryKeyStore, docs/icloud-sync.md, "Encryption"). Automatic
+        # signing's profiles grant <team>.*.
         keychain-access-groups:
+          - $(AppIdentifierPrefix)local.daybook
           - $(AppIdentifierPrefix)local.daybook.phone
           - $(AppIdentifierPrefix)local.daybook.shared
         # Joining a Soundcore Work's own network for Wi-Fi Fast Transfer (NEHotspotConfiguration;
@@ -146,7 +149,9 @@ targets:
               - public.aiff-audio
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: local.daybook.phone
+        # One bundle ID for the iPhone and Mac apps: one App Store Connect record ships both (docs/release.md, "Bundle
+        # IDs"). The app was local.daybook.phone before.
+        PRODUCT_BUNDLE_IDENTIFIER: local.daybook
         PRODUCT_NAME: DaybookPhone
         # iPhone only. On iPad, App Store validation requires all four orientations for multitasking.
         TARGETED_DEVICE_FAMILY: "1"
@@ -165,7 +170,7 @@ targets:
       path: DaybookPhoneWidgets/DaybookPhoneWidgets.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.local.daybook.phone
+          - group.local.daybook
     info:
       path: DaybookPhoneWidgets/Info.plist
       properties:
@@ -176,7 +181,7 @@ targets:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: local.daybook.phone.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: local.daybook.widgets
         PRODUCT_NAME: DaybookPhoneWidgets
         TARGETED_DEVICE_FAMILY: "1"
         SKIP_INSTALL: YES
@@ -198,7 +203,7 @@ targets:
       - target: DaybookPhone
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: local.daybook.phone.tests
+        PRODUCT_BUNDLE_IDENTIFIER: local.daybook.tests
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1"
 

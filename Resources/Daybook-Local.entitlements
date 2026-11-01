@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Ad hoc ("Sign to Run Locally") development builds and the migration rehearsal. They run in the App Sandbox, under
-     bundle IDs of their own (local.daybook.app.adhoc, local.daybook.app.rehearsal…), so they never create or move
+     bundle IDs of their own (local.daybook.adhoc, local.daybook.rehearsal…), so they never create or move
      into the app's container (docs/sandbox.md). Everything the sandboxed signed build has except iCloud and push,
      which macOS only grants through a provisioning profile: these builds report that iCloud isn't available, keep
      sync off, and never create the CloudKit courier (docs/icloud-sync.md, "Development builds").

@@ -28,19 +28,17 @@ DAYBOOK_SIGNING = signed
 DAYBOOK_SANDBOX = NO
 
 // Bundle IDs. A container is created once, by whichever sandboxed build with the bundle ID launches first, and only
-// then does the manifest move anything. So development builds never use the app's IDs: an ad hoc build can't create
+// then does the manifest move anything. So development builds never use the app's ID: an ad hoc build can't create
 // the app's container or move the real library. scripts/build-app.sh can give a rehearsal another
-// local.daybook.app.rehearsal… ID (DAYBOOK_REHEARSAL_BUNDLE_ID), since a container can't be fully removed.
+// local.daybook.rehearsal… ID (DAYBOOK_REHEARSAL_BUNDLE_ID), since a container can't be fully removed.
 //
-// Signed builds are local.daybook.app unsandboxed and local.daybook.phone, the iPhone app's bundle ID, sandboxed: the
-// App Store and TestFlight build (scripts/build-app.sh --app-store), and Developer ID with --sandbox. One App Store
-// Connect record ships both apps only when they share a bundle ID (universal purchase), and every sandboxed build then
-// keeps its library in one container (docs/release.md, "Bundle IDs").
-DAYBOOK_BUNDLE_ID_signed_NO = local.daybook.app
-DAYBOOK_BUNDLE_ID_signed_YES = local.daybook.phone
-DAYBOOK_BUNDLE_ID_signed = $(DAYBOOK_BUNDLE_ID_signed_$(DAYBOOK_SANDBOX))
-DAYBOOK_BUNDLE_ID_local = local.daybook.app.adhoc
-DAYBOOK_BUNDLE_ID_rehearsal = local.daybook.app.rehearsal
+// Every signed build is local.daybook, the iPhone app's bundle ID too: the Developer ID download (unsandboxed) and the App
+// Store and TestFlight build (scripts/build-app.sh --app-store, sandboxed). One App Store Connect record ships both apps
+// only when they share a bundle ID (universal purchase). Signed Mac builds were local.daybook.app before; the app carries
+// their preferences over (PreferencesCarryOver, docs/sandbox.md, "One bundle ID").
+DAYBOOK_BUNDLE_ID_signed = local.daybook
+DAYBOOK_BUNDLE_ID_local = local.daybook.adhoc
+DAYBOOK_BUNDLE_ID_rehearsal = local.daybook.rehearsal
 DAYBOOK_BUNDLE_ID = $(DAYBOOK_BUNDLE_ID_$(DAYBOOK_SIGNING))
 
 // The container migration manifest copied into Contents/Resources/container-migration.plist ("Embed container
