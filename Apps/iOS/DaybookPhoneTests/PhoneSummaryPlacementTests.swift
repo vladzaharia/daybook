@@ -44,10 +44,11 @@ final class PhoneSummaryPlacementTests: XCTestCase {
 
     /// This iPhone's own summarizer, standing in for the iPhone's processing models.
     struct Local: LocalSummarizing {
+        let model = "gemma-4/e2b-4bit"
         var canSummarize = true
         func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],
-                       progress: @escaping @Sendable (Double) -> Void) async throws -> MeetingSummary {
-            MeetingSummary(title: meeting.title, overview: "From this iPhone", modelID: "gemma-4/e2b")
+                       progress: @escaping @Sendable (Double) -> Void) async throws -> SummaryProcessingOutput {
+            SummaryProcessingOutput(summary: MeetingSummary(title: meeting.title, overview: "From this iPhone", modelID: model))
         }
     }
 

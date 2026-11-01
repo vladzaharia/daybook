@@ -56,6 +56,7 @@ final class PhoneProcessingTests: XCTestCase {
         private var _summarized: [UUID] = []
         var summarized: [UUID] { lock.withLock { _summarized } }
         let model = "gemma-4/e4b-4bit"
+        let canSummarize = true
 
         func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String],
                        progress: @escaping @Sendable (Double) -> Void) async throws -> SummaryProcessingOutput {

@@ -223,7 +223,7 @@ final class AppState: ObservableObject {
     @Published var cloudPreferences: CloudSummaryPreferences {
         didSet {
             guard cloudPreferences != oldValue else { return }
-            cloudPreferences.store(in: preferences)
+            cloudPreferences.save(to: preferences)
             placementOptionsChanged()
         }
     }
@@ -274,7 +274,7 @@ final class AppState: ObservableObject {
         processingPreferences.speakerModelID = selections[.diarization] ?? processingPreferences.speakerModelID
         modelSelections = selections
         self.processingPreferences = processingPreferences
-        let cloudPreferences = CloudSummaryPreferences.stored(in: defaults)
+        let cloudPreferences = CloudSummaryPreferences.load(from: defaults)
         self.cloudPreferences = cloudPreferences
         placements = SummaryPlacements(preferences: cloudPreferences, waitsForMacs: false)
         let sync = LibrarySyncController(localRoot: libraryURL, defaults: defaults)

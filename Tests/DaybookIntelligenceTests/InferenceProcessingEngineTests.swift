@@ -137,6 +137,7 @@ final class InferenceProcessingEngineTests: XCTestCase {
         let inference = Scripted()
         let summarizer: any LocalSummarizing = LocalSummarizer(engine: InferenceProcessingEngine(inference: inference, configuration: configuration))
         XCTAssertEqual(summarizer.model, "qwen-1.5b")
+        XCTAssertTrue(summarizer.canSummarize)
         let fractions = Fractions()
         let output = try await summarizer.summarize(meeting(), template: nil, vocabulary: ["Daybook"]) { fractions.add($0) }
         XCTAssertEqual(inference.calls, ["summarize qwen-1.5b auto"])

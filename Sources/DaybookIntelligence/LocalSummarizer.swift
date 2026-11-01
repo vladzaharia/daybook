@@ -8,9 +8,15 @@ import Foundation
 /// Mac and records the same provenance (docs/iphone.md, "Processing on this iPhone").
 public struct LocalSummarizer: LocalSummarizing {
     public let engine: InferenceProcessingEngine
+    /// Whether it can run now: whoever made it says (the iPhone makes one only once its summary model is
+    /// downloaded and fits).
+    public let canSummarize: Bool
 
     /// `engine` is configured with the summary model (`Configuration.summaryModel`).
-    public init(engine: InferenceProcessingEngine) { self.engine = engine }
+    public init(engine: InferenceProcessingEngine, canSummarize: Bool = true) {
+        self.engine = engine
+        self.canSummarize = canSummarize
+    }
 
     public var model: String { engine.configuration.summaryModel.id }
 
