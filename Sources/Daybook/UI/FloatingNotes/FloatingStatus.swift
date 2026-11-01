@@ -93,6 +93,10 @@ struct FloatingStatusInputs: Equatable {
         case ready(summary: Bool)
         /// Done with this Mac's audio; a recording made alongside it hasn't arrived ("Waiting for iPhone audio").
         case awaiting(String)
+        /// Its summary starts on this Mac at `until`, unless the person chooses the cloud first (`cloud`: on offer).
+        case summaryCountdown(until: Date, cloud: Bool)
+        /// Summarizing in the cloud, with this model.
+        case summarizingWith(String)
     }
 
     /// This Mac's queue, for the home.
@@ -100,6 +104,10 @@ struct FloatingStatusInputs: Equatable {
         enum Stage: Equatable { case transcribing, identifyingSpeakers, summarizing }
         var running: Stage?
         var fraction: Double = 0
+        /// The running job's summary counts down to this Mac until then.
+        var countdown: Date?
+        /// The running job's summary is in the cloud, with this model.
+        var cloudModel: String?
         var waiting = 0
         var awaitingModels = 0
         var isEmpty: Bool { running == nil && waiting == 0 && awaitingModels == 0 }
@@ -201,8 +209,8 @@ enum FloatingStatus {
             chips += inputs.recorders.compactMap { recorderChip($0, recording: recording, now: now) }
             chips += inputs.phones.compactMap { phoneChip($0, recording: recording) }
         }
-        if kinds.contains(.work), !recording, let work = inputs.work.flatMap(workChip) { chips.append(work) }
-        if kinds.contains(.queue), !recording, let queue = queueChip(inputs.queue) { chips.append(queue) }
+        if kinds.contains(.work), !recording, let work = inputs.work.flatMap({ workChip($0, now: now) }) { chips.append(work) }
+        if kinds.contains(.queue), !recording, let queue = queueChip(inputs.queue, now: now) { chips.append(queue) }
         if kinds.contains(.sync), let problem = inputs.syncProblem {
             chips.append(FloatingChip(target: .sync, symbol: "exclamationmark.icloud", label: "Not syncing", tone: .attention, detail: problem))
         }
@@ -304,7 +312,7 @@ enum FloatingStatus {
         }
     }
 
-    static func workChip(_ work: FloatingStatusInputs.Work) -> FloatingChip? {
+    static func workChip(_ work: FloatingStatusInputs.Work, now: Date = Date()) -> FloatingChip? {
         func chip(_ symbol: String, _ label: String, short: String? = nil, _ tone: StatusTone, progress: Double? = nil, detail: String? = nil) -> FloatingChip {
             FloatingChip(target: .processing, symbol: symbol, label: label, shortLabel: short, tone: tone, progress: progress, detail: detail ?? label)
         }
@@ -328,11 +336,18 @@ enum FloatingStatus {
         case .failed(let reason): return chip("exclamationmark.triangle.fill", "Couldn’t finish", .attention, detail: reason.isEmpty ? "Couldn’t finish" : reason)
         case .ready(let summary): return chip("checkmark.circle.fill", summary ? "Summary ready" : "Transcript ready", short: "Ready", .linked)
         case .awaiting(let line): return chip("clock", line, short: "Waiting", .calm)
+        // Where its summary runs (docs/multipoint.md, "Where summaries run"): Use the Cloud and Start Now are in its menu.
+        case .summaryCountdown(let until, _):
+            let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
+            return chip("clock", "Summarizing in \(seconds) s", short: "\(seconds) s", .calm,
+                        detail: "Summarizing on \(AppState.thisDeviceWords) in \(seconds) s")
+        case .summarizingWith(let model):
+            return chip("cloud", "Summarizing with \(model)", short: "Summary…", .working)
         }
     }
 
-    static func queueChip(_ queue: FloatingStatusInputs.Queue) -> FloatingChip? {
-        guard let line = queueLine(queue) else { return nil }
+    static func queueChip(_ queue: FloatingStatusInputs.Queue, now: Date = Date()) -> FloatingChip? {
+        guard let line = queueLine(queue, now: now) else { return nil }
         return FloatingChip(target: .queue, symbol: "desktopcomputer", label: line.text, shortLabel: line.shortText, tone: line.tone,
                             progress: line.progress, detail: line.text)
     }
@@ -344,7 +359,7 @@ enum FloatingStatus {
     static func lines(_ inputs: FloatingStatusInputs, now: Date = Date()) -> [StatusLineItem] {
         var lines = inputs.recorders.compactMap { recorderLine($0, now: now) }
         lines += inputs.phones.map { phoneLine($0, now: now) }
-        if let queue = queueLine(inputs.queue) { lines.append(queue) }
+        if let queue = queueLine(inputs.queue, now: now) { lines.append(queue) }
         if inputs.syncProblem != nil {
             lines.append(StatusLineItem(id: "sync", symbol: "exclamationmark.icloud", title: "iCloud", text: "Not syncing", tone: .attention))
         }
@@ -405,12 +420,17 @@ enum FloatingStatus {
         }
     }
 
-    static func queueLine(_ queue: FloatingStatusInputs.Queue) -> StatusLineItem? {
+    static func queueLine(_ queue: FloatingStatusInputs.Queue, now: Date = Date()) -> StatusLineItem? {
         guard !queue.isEmpty else { return nil }
         func line(_ text: String, _ tone: StatusTone, progress: Double? = nil, short: String? = nil) -> StatusLineItem {
             StatusLineItem(id: "queue", symbol: "desktopcomputer", title: "This Mac", text: text, tone: tone, progress: progress, shortText: short)
         }
         let waiting = queue.waiting > 0 ? " · \(queue.waiting) waiting" : ""
+        if let until = queue.countdown {
+            let seconds = max(1, Int(until.timeIntervalSince(now).rounded(.up)))
+            return line("Summarizing in \(seconds) s\(waiting)", .calm, short: "Summarizing in \(seconds) s")
+        }
+        if let model = queue.cloudModel { return line("Summarizing with \(model)\(waiting)", .working, short: "Summarizing…") }
         switch queue.running {
         case .transcribing?:
             let percent = Int((queue.fraction * 100).rounded(.down))
