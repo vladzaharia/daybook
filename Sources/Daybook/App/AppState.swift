@@ -229,6 +229,8 @@ final class AppState: ObservableObject {
     private(set) var currentRequest: Task<Void, Error>?
     /// How requests from other devices are claimed and kept (tests shorten these).
     var requestTiming = RequestTiming()
+    /// The memory a summary model must fit in (tests set it, so they don't depend on the machine's).
+    var physicalMemory = ProcessInfo.processInfo.physicalMemory
     /// Where each summary runs, with the countdown before it (AppState+SummaryPlacement.swift). Views that
     /// show a countdown observe it directly.
     let placements: SummaryPlacements
