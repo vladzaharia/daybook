@@ -11,7 +11,8 @@ import Foundation
 public struct DeviceWords: Equatable, Sendable {
     /// "this Mac", "this iPhone".
     public var here: String
-    /// For work whose device isn't known: "this Mac" on a Mac (it's where work happens), "your Mac" on an iPhone.
+    /// For a failure whose device isn't known: "this Mac" on a Mac (it's where work happens), "your Mac" on an
+    /// iPhone. Work under way with no device named is always this device's own (`ConversationStatusPresentation`).
     public var unknown: String
     /// This device's sync ID (`LibraryController.thisDevice.id`), to tell its own work from another's.
     public var thisDeviceID: String?

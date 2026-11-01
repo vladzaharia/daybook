@@ -330,7 +330,7 @@ extension ConversationStatusPresentation {
         let words = inputs.words, local = inputs.local
         switch status {
         case .processing(let progress):
-            let here = words.isHere(progress.device)
+            let here = isHere(progress, words: words)
             var line = ConversationStatusPresentation(kind: .line, symbol: here ? words.symbol : symbol(forDevice: progress.device?.name),
                                                       title: workingTitle(progress, words: words), progress: progress.fraction,
                                                       isWorking: progress.fraction == nil)
@@ -339,9 +339,10 @@ extension ConversationStatusPresentation {
             if here, local.controlsQueue { line.actions = [progress.stage == .summarizing ? .stopSummary : .pause] }
             return line
 
-        case .requested(.queued(let position, _)):
+        case .requested(.queued(let position, let after)):
+            // Position 0 is next: after the conversation running now, when one is.
             let behind: ProcessingWords.QueuedBehind
-            if position > 0 { behind = .position(ahead: position + 1) }
+            if position > 0 { behind = .position(ahead: position + (after == nil ? 0 : 1)) }
             else if inputs.queueWaitsForDownload { behind = .download }
             else if let title = inputs.runningTitle { behind = .conversation(title) }
             else { behind = .nothing }
@@ -476,7 +477,9 @@ extension ConversationStatusPresentation {
         case .noSpeech, .recordingDidNotStart:
             break
         case .modelsMissing:
-            if here, local.managesModels { fix = [local.missingModelBytes > 0 ? .downloadModels(bytes: local.missingModelBytes) : .chooseModels] }
+            // Download what's still missing here; once nothing is, the work can simply run again.
+            if here, local.managesModels, local.missingModelBytes > 0 { fix = [.downloadModels(bytes: local.missingModelBytes)] }
+            else if here, local.managesModels { fix = retry.map { [$0] } ?? [.chooseModels] }
             else { fix = retry.map { [$0] } ?? [] }
         case .modelCouldNotStart:
             if here, local.managesModels { fix = [.chooseModels] + (retry.map { [$0] } ?? []) }
@@ -501,9 +504,17 @@ extension ConversationStatusPresentation {
     /// "Transcribing · 40%" for work here (on an iPhone, "Transcribing on this iPhone · 40%"), "Transcribing on
     /// Studio Mac · 40%" for another device's.
     public static func workingTitle(_ progress: ProcessingStatus.Progress, words: DeviceWords) -> String {
-        let here = words.isHere(progress.device)
-        if here && !words.namesItself { return ProcessingWords.progressLine(progress.stage, fraction: progress.fraction) }
-        return ProcessingWords.elsewhere(progress.stage, device: words.name(of: progress.device), fraction: progress.fraction)
+        guard isHere(progress, words: words) else {
+            return ProcessingWords.elsewhere(progress.stage, device: words.name(of: progress.device), fraction: progress.fraction)
+        }
+        if !words.namesItself { return ProcessingWords.progressLine(progress.stage, fraction: progress.fraction) }
+        return ProcessingWords.elsewhere(progress.stage, device: words.here, fraction: progress.fraction)
+    }
+
+    /// Work with no device named is this device's own queue's, on both apps (`ProcessingStatus(_:queue:)`); a
+    /// failure's unknown device is another matter (`DeviceWords.unknown`).
+    static func isHere(_ progress: ProcessingStatus.Progress, words: DeviceWords) -> Bool {
+        progress.device == nil || words.isHere(progress.device)
     }
 
     /// Who asked for the work this device does, when another device did: "Requested from Alex's iPhone".

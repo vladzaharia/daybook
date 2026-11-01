@@ -77,6 +77,26 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(page(.processing(.init(stage: .summarizing, fraction: nil)), nil, mac)?.isWorking, true)
     }
 
+    func testBehaviorEachDevicesOwnQueueReadsAsItsOwnWork() {
+        // A device's own queue names no device (`ProcessingStatus(_:queue:)`): it's this one, on both apps.
+        let meeting = recorded()
+        let status = ProcessingStatus(meeting, queue: .init(running: meeting.id, fraction: 0.4, stage: .transcribing), now: now)
+        guard case .processing(let progress) = status else { return XCTFail("\(status)") }
+        XCTAssertNil(progress.device)
+
+        let onPhone = page(status, meeting, phone)
+        XCTAssertEqual(onPhone?.title, "Transcribing on this iPhone · 40%")
+        XCTAssertEqual(onPhone?.symbol, "iphone")
+        XCTAssertEqual(onPhone?.actions, [], "an iPhone's queue runs itself")
+        XCTAssertEqual(row(status, meeting, phone), ConversationRowStatus(kind: .processing, text: "Transcribing on this iPhone · 40%", fraction: 0.4))
+
+        let onMac = page(status, meeting, mac)
+        XCTAssertEqual(onMac?.title, "Transcribing · 40%")
+        XCTAssertEqual(onMac?.symbol, "desktopcomputer")
+        XCTAssertEqual(onMac?.actions, [.pause])
+        XCTAssertEqual(row(status, meeting, mac)?.text, "Transcribing · 40%")
+    }
+
     func testBehaviorAnotherDevicesWorkReadsTheSameEverywhereWithItsFigure() {
         let elsewhere = ProcessingStatus.processing(.init(stage: .transcribing, fraction: 0.4, device: studio))
         let words = DeviceWords.mac(id: "this-mac")
@@ -101,7 +121,9 @@ final class ConversationStatusPresentationTests: XCTestCase {
                        Presentation(kind: .line, symbol: "clock", title: "Waiting to transcribe after “Roadmap review”", actions: [.cancel]))
         inputs.queueWaitsForDownload = true
         XCTAssertEqual(page(.requested(.queued(position: 0, after: nil)), nil, inputs)?.title, "Waiting to transcribe after the download")
-        XCTAssertEqual(page(.requested(.queued(position: 2, after: nil)), nil, inputs)?.title, "Waiting to transcribe · 3 ahead")
+        // Position 0 is next: two ahead of position 2, and the conversation running now, when one is.
+        XCTAssertEqual(page(.requested(.queued(position: 2, after: nil)), nil, inputs)?.title, "Waiting to transcribe · 2 ahead")
+        XCTAssertEqual(page(.requested(.queued(position: 2, after: UUID())), nil, inputs)?.title, "Waiting to transcribe · 3 ahead")
         XCTAssertEqual(page(.requested(.queued(position: 0, after: nil)), nil, phone)?.actions, [], "an iPhone's queue runs itself")
         XCTAssertEqual(row(.requested(.queued(position: 0, after: nil)), nil, inputs), ConversationRowStatus(kind: .waiting, text: "Waiting to transcribe"))
     }
@@ -183,6 +205,13 @@ final class ConversationStatusPresentationTests: XCTestCase {
                        Presentation(kind: .box(.problem), symbol: "exclamationmark.triangle.fill", title: "Couldn’t finish transcribing",
                                     detail: "The models it needs aren’t on Studio Mac yet. The recording is saved.",
                                     actions: [.details(transcribing.reason), .tryAgain(.newAudio)]))
+
+        // Once the models are here, the failure on this Mac offers to run again.
+        var downloaded = mac
+        downloaded.local.missingModelBytes = 0
+        XCTAssertEqual(page(.failed(transcribing), nil, downloaded)?.actions, [.details(transcribing.reason), .tryAgain(.newAudio)])
+        XCTAssertEqual(page(.failed(transcribing), Meeting(title: "Notes"), downloaded)?.actions,
+                       [.details(transcribing.reason), .chooseModels], "nothing to run again: choose models")
 
         // No speech: nothing to retry.
         let silent = ProcessingStatus.Failure(reason: "No speech was recognized.", hadTranscripts: false, kind: .noSpeech)
