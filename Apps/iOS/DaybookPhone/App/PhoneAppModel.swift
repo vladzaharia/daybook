@@ -37,6 +37,15 @@ final class PhoneAppModel: RecordingCommandHandling {
     let captions: LiveCaptionsController
     /// The models live captions run on this iPhone, when downloaded (Settings › Models).
     let models: PhoneModels
+    /// Cloud summaries' keys, models, and this iPhone's preferences (Settings › Cloud; docs/cloud.md). Made when first used,
+    /// so a launch that never opens Settings never reads the keychain; tests keep keys in memory.
+    @ObservationIgnored lazy var cloudSummaries: CloudSetup = {
+        #if DEBUG
+        if let demo = PhoneCloudDemo.setup(defaults: .standard) { return demo }
+        #endif
+        if LaunchOptions.isTestHost { return CloudSetup(keys: MemoryCloudKeyStore(), defaults: Self.testDefaults()) }
+        return CloudSetup(keys: KeychainCloudKeyStore.system, defaults: .standard)
+    }()
     /// One line for the person, when something needs saying: what happened, in plain words.
     private(set) var notice: String? {
         didSet { noticeDetails = nil; noticeFix = nil }

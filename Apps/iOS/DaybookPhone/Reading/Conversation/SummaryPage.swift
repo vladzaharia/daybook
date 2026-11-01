@@ -420,10 +420,11 @@ private struct Colophon: View {
             Rectangle().fill(PhoneStyle.Ink.faint).frame(width: 24, height: 1).padding(.bottom, PhoneStyle.Space.s1)
                 .accessibilityHidden(true)
             if let summary = meeting.summary {
+                let cloud = summary.cloudProvenance
                 Label {
-                    Text("Summarized on your Mac · \(summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))")
+                    Text("\(cloud?.label ?? "Summarized on your Mac") · \(summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))")
                 } icon: {
-                    Image(systemName: "laptopcomputer").symbolEffect(.bounce, value: summary.createdAt)
+                    Image(systemName: cloud == nil ? "laptopcomputer" : "cloud").symbolEffect(.bounce, value: summary.createdAt)
                 }
                 .labelStyle(CompactLabelStyle())
             }

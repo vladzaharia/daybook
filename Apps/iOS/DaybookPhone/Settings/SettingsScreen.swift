@@ -13,6 +13,8 @@ enum SettingsRoute: Hashable {
     case recording
     case storage
     case models
+    case cloud
+    case cloudKey(String)
     case templates
     case template(String)
     case vocabulary
@@ -22,8 +24,8 @@ enum SettingsRoute: Hashable {
     case acknowledgements
 }
 
-/// Settings: iCloud, your Macs, recorders, recording, storage, models, templates, vocabulary, and
-/// speaker profiles, and About.
+/// Settings: iCloud, your Macs, recorders, recording, storage, models, cloud summaries, templates, vocabulary,
+/// and speaker profiles, and About.
 /// `LibraryBrowser` presents it (`settingsSheet`). In the hand it's one column of pushed screens; on
 /// the open iPhone Duo, two pages: the list on the left, the chosen screen on the right.
 struct SettingsScreen: View {
@@ -105,6 +107,9 @@ struct SettingsScreen: View {
                 SettingsLink(route: .models) {
                     SettingsRow(title: "Models", detail: modelsSummary, systemImage: "cpu")
                 }
+                SettingsLink(route: .cloud) {
+                    SettingsRow(title: "Cloud", detail: model.cloudSummaries.summary, systemImage: "cloud")
+                }
             }
             Section {
                 SettingsLink(route: .templates) {
@@ -175,6 +180,8 @@ struct SettingsScreen: View {
         case "add-device", "add-recorder": if surface == .pocket { showingAddDevice = true } else { path = [.addRecorder] }
         case "storage": path = [.storage]
         case "models": path = [.models]
+        case "cloud": path = [.cloud]
+        case "cloud-key": path = [.cloud, .cloudKey(CloudProvider.anthropic.rawValue)]
         case "templates": path = [.templates]
         case "template": path = [.templates, .template("general")]
         case "vocabulary", "add-term": path = [.vocabulary]
@@ -216,6 +223,8 @@ struct SettingsDestination: View {
         case .recording: RecordingSettingsScreen()
         case .storage: StorageScreen()
         case .models: ModelsSettingsScreen()
+        case .cloud: CloudSettingsScreen()
+        case .cloudKey(let provider): CloudKeyScreen(provider: CloudProvider(rawValue: provider) ?? .anthropic)
         case .templates: TemplatesScreen()
         case .template(let id): TemplateEditor(templateID: id)
         case .vocabulary: VocabularyScreen()
