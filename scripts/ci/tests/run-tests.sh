@@ -270,6 +270,8 @@ expect_eq "one Apple Development certificate, from a CSR" "POST DEVELOPMENT ----
     "$(jq -r 'select(.method == "POST") | "\(.method) \(.body.data.attributes.certificateType) \(.body.data.attributes.csrContent | split("\n")[0])"' "$log")"
 secrets="$work/devcert-gh/secrets/release"
 expect_ok "both secrets in the release environment" test -s "$secrets/DEVELOPMENT_P12_BASE64" -a -s "$secrets/DEVELOPMENT_P12_PASSWORD"
+# What the script said, when it stopped before storing them (a runner once failed here without a trace).
+[[ -s "$secrets/DEVELOPMENT_P12_BASE64" ]] || sed 's/^/        /' "$work/devcert.out"
 base64 -d < "$secrets/DEVELOPMENT_P12_BASE64" > "$work/development.p12"
 expect_ok "the .p12 holds the certificate" sh -c "openssl pkcs12 -in '$work/development.p12' -nokeys -passin 'file:$secrets/DEVELOPMENT_P12_PASSWORD' 2>/dev/null | grep -q 'Apple Development: Created via API'"
 expect_ok "and its key" sh -c "openssl pkcs12 -in '$work/development.p12' -nocerts -nodes -passin 'file:$secrets/DEVELOPMENT_P12_PASSWORD' 2>/dev/null | grep -q 'PRIVATE KEY'"
