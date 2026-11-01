@@ -172,15 +172,16 @@ can copy the tags, but it can't complete TLS without the key.
 | Type | Body | Direction | Notes |
 | --- | --- | --- | --- |
 | `hello` / `welcome` / `refused` | handshake | phone → Mac / Mac → phone | always written at version 1 |
-| `capabilities` | `LinkCapabilities` | both | device class, name, app version, library ID, `canProcess`, features, `syncDeviceID` (optional) |
+| `capabilities` | `LinkCapabilities` | both | device class, name, app version, library ID, `canProcess`, features, `syncDeviceID` (optional), `processing` (optional: what it does for other devices, `transcribes`, `findsSpeakers`, `summarizes`, and `models`, the catalog key it would use for each role; absent from older builds, which reads as unknown) |
 | `recording.state` | `LinkRecordingState` | both | phase, conversation, start, elapsed, sent-at; the recorders the sender manages (optional); the shared recording it takes part in only through its recorders (`sharedConversationID`, optional) |
 | `record.request` / `record.reply` | `LinkRecordRequest` / `LinkRecordReply` | both | start or stop, conversation, prior timing (with where the timeline began), the conversation's title and date, standalone, a recorder the receiver manages, a cascading start (`cascade`: what started it, whether the requester records itself, its recorders) (all optional but the first two); reply is an ack or a refusal with a reason |
 | `bookmark` | `LinkBookmark` | both | conversation, recording time, created-at, label: a bookmark made during a shared recording, by its ID |
 | `bookmark.change` | `LinkBookmarkChange` | both | a shared bookmark's label changed, or it was deleted; changed-at |
 | `note` | `LinkNote` | both | a paragraph written, edited, or deleted during a shared recording: its anchor ID, text, the time its writer files it at, made-at, changed-at |
 | `captions` | `LinkCaptions` | iPhone → Mac | the live captions an iPhone makes of a shared recording, the lines that changed since it last sent (each with its ID, times in its recording, text, tentative, the voice and person live speakers heard, and the recorder that heard it, if not the phone), and when its recording began on its clock; only to a Mac recording the same conversation that lists `liveCaptions` |
-| `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail |
+| `processing.progress` | `LinkProcessingProgress` | Mac → phone | meeting, phase, fraction, Mac name, detail; while a summary counts down, phase `summaryCountdown` with `countdown` (seconds left as sent, whether Use the Cloud is on offer); in the cloud, `cloudModel` (both optional) |
 | `processing.nudge` | `LinkProcessingNudge` | phone → Mac | "I just wrote request X": the request itself travels through sync |
+| `processing.choice` | `LinkSummaryChoice` | phone → Mac | the person's choice for a summary the Mac counts down to: `useCloud` or `startNow`, the meeting, sent-at; only to a Mac listing `summaryPlacement` (docs/multipoint.md, "Where summaries run") |
 | `recorder.handoff.request` | `LinkRecorderHandoffRequest` | both | take (or give) a recorder, by kind and serial, addressed by the owner's sync ID |
 | `recorder.handoff.reply` | `LinkRecorderHandoffReply` | both | accepted (what it finishes first, time left) or refused with a reason; repeated as progress |
 | `recorder.release` | `LinkRecorderRelease` | both | the old owner let go: imports that were waiting, recordings it imported recently, the recording in progress and the conversation waiting for it (with whether it stops when that conversation's recording does; optional) |
@@ -485,6 +486,12 @@ the test process, and nothing is advertised.
   build that doesn't know them, and over a session both ways.
 - **Library keys:** a request and its grant over a loopback session, only the keys asked for; nothing for a device of
   another library, or without one (`LinkLibraryKeyTests`).
+- **Where summaries run:** round trips of capabilities with `processing`, a countdown and a cloud model in
+  `processing.progress`, and `processing.choice`; an older peer's capabilities and progress without them read as
+  unknown, and a `processing` this build can't read is dropped, never the capabilities it came in
+  (`LinkWireTests.testBehaviorSummaryPlacementIsAdditive`). Over a session: a Mac's countdown reaches a phone and
+  the phone's Use the Cloud reaches the Mac (`SummaryPlacementProcessingTests` on the Mac,
+  `PhoneSummaryPlacementTests` on the iPhone).
 - **Recorder handoff:** round trips of the request (take and give), both replies and the release;
   an unreadable reply is a refusal; earlier and later fields and values decode; capabilities carry
   the sync ID and feature, and older ones don't; the messages over a loopback session both ways.
