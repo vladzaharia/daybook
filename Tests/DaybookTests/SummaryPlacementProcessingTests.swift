@@ -62,6 +62,8 @@ final class SummaryPlacementProcessingTests: XCTestCase {
     private func rig(cloud: FakeCloud? = FakeCloud(), policy: CloudSummaryPreferences.Policy = .ask, seconds: Int = 15) async throws -> MultiSourceRig {
         let rig = try await MultiSourceRig.make(in: self)
         rig.state.requestTiming = RequestTiming(lease: 600, renewInterval: .milliseconds(40))
+        // A Mac the summary model fits, whatever runs the tests (CI's runners have 7 GB).
+        rig.state.physicalMemory = 64 << 30
         var preferences = CloudSummaryPreferences()
         preferences.policy = policy
         preferences.countdownSeconds = seconds

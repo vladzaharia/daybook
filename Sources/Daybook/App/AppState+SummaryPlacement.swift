@@ -45,7 +45,7 @@ extension AppState {
         let speakerModels = [route.speakerModel] + [route.voiceEmbedder].compactMap { $0 }
         let findsSpeakers = detectSpeakers && speakerModels.allSatisfy(installed.contains)
         let summary = summaryModel
-        let fits = modelCatalog.model(summary).map { LiveModelChoices.fitsMemory($0) } ?? true
+        let fits = modelCatalog.model(summary).map { LiveModelChoices.fitsMemory($0, physicalMemory: physicalMemory) } ?? true
         let summarizes = !summary.isEmpty && installed.contains(summary) && fits
         var models: [String: String] = [:]
         if transcribes { models[ModelRole.transcription.rawValue] = route.transcription.model }
