@@ -86,10 +86,27 @@ final class SummaryPlacementProcessingTests: XCTestCase {
 
     // MARK: On this Mac
 
+    func testBehaviorTheNoCountdownCheckSeesOneThatEndsInTheTurnItBegan() {
+        let placements = SummaryPlacements(options: SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: FakeCloud.sonnet),
+                                           preferences: CloudSummaryPreferences(), waitsForMacs: false, runsTimer: false)
+        var told: [UUID] = []
+        placements.onChange = { told.append($0) }
+        let id = UUID()
+        let counted = CountdownSeen(placements, for: id)
+        placements.begin(id)
+        XCTAssertNotNil(placements[id]?.deadline, "A cloud on offer: a countdown")
+        placements.end(id)
+        XCTAssertTrue(counted.happened, "Begun and ended in one turn, it still counts")
+        XCTAssertEqual(told, [id, id], "What heard each change before still does")
+        counted.cancel()
+        placements.begin(UUID())
+        XCTAssertEqual(told.count, 3, "Cancelled, the handler is the one it was")
+    }
+
     func testBehaviorWithoutAKeyTheSummaryStartsAtOnceAsBefore() async throws {
         let rig = try await rig(cloud: nil)
         let id = try await conversation(rig, "No key", frequency: 300)
-        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        let counted = CountdownSeen(rig.state.placements, for: id)
         defer { counted.cancel() }
         rig.state.enqueue(id)
         try await rig.processed(id)
@@ -287,7 +304,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await countingDown(rig, id)
         rig.state.chooseSummaryPlacement(.startNow, for: id)
         try await rig.processed(id)
-        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        let counted = CountdownSeen(rig.state.placements, for: id)
         defer { counted.cancel() }
         rig.state.enqueue(id, mode: .summaryOnly)
         try await waitUntil("the second summary") { rig.inference.summarized.count == 2 }
@@ -304,7 +321,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         try await rig.processed(id)
         // The phone counted down already (or the person asked there): this Mac starts at once.
         rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
-        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        let counted = CountdownSeen(rig.state.placements, for: id)
         defer { counted.cancel() }
         rig.state.pickUpRequests()
         try await rig.processed(id)
@@ -336,7 +353,7 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         rig.state.library.requestProcessing(id, mode: .summaryOnly, by: .phone)
         rig.state.pickUpRequests()
         XCTAssertNil(rig.state.placements[id], "Nothing placed before the summary is due")
-        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        let counted = CountdownSeen(rig.state.placements, for: id)
         defer { counted.cancel() }
         try rig.inference.unblock(audio)
         try await rig.processed(id)

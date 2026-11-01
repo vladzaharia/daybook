@@ -130,7 +130,7 @@ final class UpgradeProcessingTests: XCTestCase {
         madeWith(rig, id, summary: "gemma-4/e2b-4bit")
         let offer = try XCTUnwrap(try offer(rig, id))
         XCTAssertEqual(offer.line, "Upgrade summary with Claude Sonnet 5.5")
-        let counted = ObservedOnce { rig.state.placements[id]?.deadline != nil }
+        let counted = CountdownSeen(rig.state.placements, for: id)
         defer { counted.cancel() }
         let transcribed = rig.inference.transcribed.count
         rig.state.acceptUpgrade(offer, for: id)
