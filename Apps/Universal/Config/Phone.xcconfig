@@ -1,3 +1,0 @@
-// RESEARCH PROTOTYPE (docs/research/one-bundle.md): the project-level settings in Apps/Universal, which the iPhone
-// targets use as they are. The Mac target and DaybookOne have xcconfigs of their own.
-#include "../../iOS/Config/Signing.xcconfig"
