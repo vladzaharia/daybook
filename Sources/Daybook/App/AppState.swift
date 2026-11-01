@@ -112,7 +112,7 @@ final class AppState {
     var listenedRecordings = Set<UUID>()
     var backgroundListeningDelay: Duration = .seconds(20)
     /// The running job's progress, throttled (`ActivityProgress`). The window isn't redrawn by it: the
-    /// views that draw it observe `processingActivity`, and redraw when its percent or message changes.
+    /// views that draw it observe `processingActivity`, and redraw when its percent, message, or step changes.
     let processingActivity = ActivityProgress(IntelligenceProgress(0, "Ready"))
     var processingProgress: IntelligenceProgress {
         get { processingActivity.value }
