@@ -98,6 +98,21 @@ public struct CloudSummarizer: CloudSummarizing {
         return Result(summary: summary, suggestedTerms: notes.suggestedTerms, warnings: notes.warnings, provenance: provenance)
     }
 
+    /// What summarizing `meeting` with `model` should cost, in USD, before it's sent: the prompt's own length in the
+    /// provider's tokens, and what the model is expected to write for a conversation this long; nil without a price.
+    public func estimatedCost(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String], model: CloudModel,
+                              effort: CloudEffort) async -> Double? {
+        let catalog = directory.catalog
+        let offer = await directory.currentOffers().offer(model.id, provider: model.provider)
+        guard let price = offer?.price ?? model.inputPrice.map({ CloudPrice(input: $0, output: model.outputPrice ?? 0) }) else { return nil }
+        let built = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(meeting), template: template?.kind ?? meeting.kind,
+                                          glossary: vocabulary, templateInstructions: template?.instructions, provider: model.provider, catalog: catalog)
+        let input = catalog.estimatedTokens(built.instructions + built.prompt + built.schema, provider: model.provider)
+        let output = catalog.expectedOutputTokens(model.id, provider: model.provider, minutes: Self.minutes(meeting),
+                                                  effort: offer?.effort(effort) ?? effort)
+        return price.cost(inputTokens: input, outputTokens: output)
+    }
+
     /// The conversation's length in minutes, from its transcript.
     static func minutes(_ meeting: Meeting) -> Double {
         guard let first = meeting.unifiedTranscript.map(\.start).min(), let last = meeting.unifiedTranscript.map(\.end).max() else { return 0 }
