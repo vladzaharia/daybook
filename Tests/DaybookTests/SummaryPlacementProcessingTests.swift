@@ -65,9 +65,10 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         var preferences = CloudSummaryPreferences()
         preferences.policy = policy
         preferences.countdownSeconds = seconds
-        rig.state.cloudPreferences = preferences
-        rig.state.cloudSummarizer = cloud
-        if cloud != nil { try await waitUntil("the cloud's models") { !rig.state.cloudModels.isEmpty } }
+        // Settings › Cloud as the app has it: an in-memory Anthropic key (or none) and the catalog's models.
+        rig.state.cloud = CloudSetup.demo(providers: cloud == nil ? [] : [.anthropic], preferences: preferences,
+                                          defaults: makeTestDefaults("SummaryPlacementProcessingTests"))
+        if let cloud { rig.state.cloudSummarizer = cloud }
         addTeardownBlock { await rig.tearDown() }
         return rig
     }
@@ -166,9 +167,96 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(summary.overview, "From the cloud")
         XCTAssertEqual(summary.origin.cloudModel, "Claude Sonnet 5.5")
         XCTAssertEqual(summary.origin.deviceID, rig.state.library.thisDevice.id, "Sent by this Mac")
-        XCTAssertEqual(summary.modelsByRole["summarization"], "claude-sonnet-5-5")
+        XCTAssertEqual(summary.modelsByRole["summarization"], "anthropic/claude-sonnet-5-5")
+        XCTAssertEqual(summary.cloudProvenance?.model, "claude-sonnet-5-5", "Named the way the cloud names it")
+        XCTAssertEqual(summary.cloudProvenance?.sentBy, rig.state.library.thisDevice.name)
         XCTAssertEqual(summary.origin.colophon(thisDeviceID: rig.state.library.thisDevice.id, thisDevice: "this Mac", unknown: "this Mac"),
                        "Summarized with Claude Sonnet 5.5")
+    }
+
+    func testBehaviorTheRealCloudSummaryCarriesItsProvenanceAndWhereItRan() async throws {
+        // Settings › Cloud as on a Mac with an Anthropic key, against a fake Anthropic: the summarizer is the app's own.
+        let server = FakeCloudServer()
+        let reply = #"{"kind":"general","title":"Call","overview":"We ship on Friday.","sections":[],"actionItems":[],"terms":["Friday"]}"#
+        server.handle { request in
+            switch request.path {
+            case "/v1/models" where request.header("x-api-key") != nil:
+                return .json(["data": [["id": "claude-sonnet-5-5", "max_input_tokens": 1_000_000, "max_tokens": 128_000]]])
+            case "/v1/messages": return .anthropicReply([reply], inputTokens: 9_800, outputTokens: 2_900)
+            default: return .failure(.cannotFindHost)
+            }
+        }
+        var client = CloudClient(session: server.session, endpoints: CloudEndpoints(base: server.base))
+        client.wait = { _ in }
+        let rig = try await rig(cloud: nil, seconds: 30)
+        let key = try XCTUnwrap(CloudAPIKey("sk-ant-api03-TESTtestTESTtestTESTtest-gDAA"))
+        var preferences = CloudSummaryPreferences()
+        preferences.countdownSeconds = 30
+        let defaults = makeTestDefaults("SummaryPlacementProcessingTests")
+        preferences.save(to: defaults)
+        let setup = CloudSetup(keys: MemoryCloudKeyStore([.anthropic: key]), client: client, defaults: defaults)
+        await setup.refresh()
+        rig.state.cloud = setup
+        XCTAssertEqual(rig.state.summaryOptions.cloud?.name, "Claude Sonnet 5.5", "What Settings › Cloud resolves to")
+
+        let id = try await conversation(rig, "Real cloud", frequency: 365)
+        rig.state.enqueue(id)
+        try await countingDown(rig, id)
+        XCTAssertEqual(rig.state.placements[id]?.actions, [.useCloud, .startNow])
+        rig.state.chooseSummaryPlacement(.useCloud, for: id)
+        try await rig.processed(id)
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+        XCTAssertEqual(server.requests.filter { $0.path == "/v1/messages" }.count, 1)
+        let summary = try XCTUnwrap(rig.meeting(id)?.summary)
+        XCTAssertEqual(summary.overview, "We ship on Friday.")
+        // The cloud's provenance.
+        let cloud = try XCTUnwrap(summary.cloudProvenance)
+        XCTAssertEqual(cloud.model, "claude-sonnet-5-5")
+        XCTAssertEqual(cloud.effort, .medium)
+        XCTAssertEqual(cloud.inputTokens, 9_800)
+        XCTAssertEqual(cloud.outputTokens, 2_900)
+        XCTAssertNotNil(cloud.estimatedCost)
+        XCTAssertEqual(cloud.sentBy, ProcessingRequest.Device.currentName)
+        // Where it ran, the same summary.
+        XCTAssertEqual(summary.origin.deviceID, rig.state.library.thisDevice.id)
+        XCTAssertEqual(summary.origin.cloudModel, "Claude Sonnet 5.5")
+        XCTAssertEqual(summary.processingSettings?.parameters["place"], "cloud")
+        XCTAssertEqual(summary.modelsByRole["summarization"], "anthropic/claude-sonnet-5-5")
+        XCTAssertEqual(summary.modelsByRole["transcription"], rig.state.transcriptionModel)
+        XCTAssertEqual(summary.origin.colophon(thisDeviceID: rig.state.library.thisDevice.id, thisDevice: "this Mac", unknown: "this Mac"),
+                       "Summarized with Claude Sonnet 5.5")
+        XCTAssertNotNil(cloud.usage)
+        // What it suggests for the vocabulary, as a local summary's.
+        XCTAssertTrue(rig.state.glossary.contains { $0.term == "Friday" }, "\(rig.state.glossary.map(\.term))")
+    }
+
+    func testBehaviorSettingsChangesReachACountdownAtOnce() async throws {
+        let rig = try await rig(cloud: nil, seconds: 30)
+        XCTAssertNil(rig.state.summaryOptions.cloud, "No key: nothing to offer")
+        // A key is added in Settings › Cloud.
+        let cloud = CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults("SummaryPlacementProcessingTests"))
+        rig.state.cloud = cloud
+        rig.state.cloudSummarizer = FakeCloud()
+        cloud.preferences.countdownSeconds = 30
+        let first = try await conversation(rig, "Key removed", frequency: 370)
+        rig.state.enqueue(first)
+        try await countingDown(rig, first)
+        // The key is removed while it counts down: there's nothing to choose any more, so it starts here now.
+        await cloud.removeKey(for: .anthropic)
+        try await rig.processed(first)
+        XCTAssertEqual(rig.inference.summarized.count, 1)
+        XCTAssertNil(rig.state.summaryOptions.cloud)
+
+        // Never chosen mid-countdown does the same.
+        let again = CloudSetup.demo(providers: [.anthropic], defaults: makeTestDefaults("SummaryPlacementProcessingTests"))
+        again.preferences.countdownSeconds = 30
+        rig.state.cloud = again
+        let second = try await conversation(rig, "Never chosen", frequency: 375)
+        rig.state.enqueue(second)
+        try await countingDown(rig, second)
+        again.preferences.policy = .never
+        try await rig.processed(second)
+        XCTAssertEqual(rig.inference.summarized.count, 2)
     }
 
     func testBehaviorAlwaysUsesTheCloudWithoutACountdown() async throws {

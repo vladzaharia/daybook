@@ -19,29 +19,22 @@ extension AppState {
 
     func wireSummaryPlacements() {
         placements.onChange = { [weak self] id in self?.reportSummaryPlacement(id) }
-        placementOptionsChanged()
     }
 
     // MARK: What this Mac offers
 
     /// A job reaches the summary step only with the summary model here, so this Mac can always summarize its
-    /// own; the choice is whether to use the cloud first. It never waits for another Mac.
+    /// own; the choice is whether to use the cloud first: the model Settings › Cloud resolves to (`cloud`), none
+    /// without a key. It never waits for another Mac.
     var summaryOptions: SummaryOptions {
-        SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: cloudPreferences.resolve(in: cloudModels))
+        SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: cloud.resolved?.model)
     }
 
+    /// A key, the models offered, or the preferences changed (`CloudSetup.onChange`), or a summary is about to be
+    /// placed: every countdown follows. Nothing to do before the cloud is first needed.
     func placementOptionsChanged() {
-        placements.update(options: summaryOptions, preferences: cloudPreferences)
-    }
-
-    /// The models the person's keys reach, as the cloud says (cached there; `refresh` asks the providers).
-    func refreshCloudModels(refresh: Bool = false) async {
-        guard let cloud = cloudSummarizer else {
-            if !cloudModels.isEmpty { cloudModels = [] }
-            return
-        }
-        let models = await cloud.availableModels(refresh: refresh)
-        if models != cloudModels { cloudModels = models }
+        guard hasCloudSetup else { return }
+        placements.update(options: summaryOptions, preferences: cloud.preferences)
     }
 
     /// What this Mac can do with its own models: the routed models installed, and, for summaries, the memory
@@ -99,6 +92,8 @@ extension AppState {
         // The job as it is now: it may have taken on another device's request since it started.
         let job = runningJob.flatMap { $0.meetingID == id ? $0 : nil } ?? started
         if summaryHolderElsewhere(id, job: job) != nil { return nil }
+        // The keys and models as they are now (a key added on another device arrives through iCloud Keychain).
+        await cloud.reload()
         placementOptionsChanged()
         defer { placements.end(id) }
         guard let place = await placements.place(id, immediately: summaryIsAskedFor(job)) else { throw CancellationError() }
@@ -111,12 +106,12 @@ extension AppState {
         reportToPhones(id, force: true)
         switch place {
         case .cloud(let model):
-            if let cloud = cloudSummarizer {
-                let summary = try await cloud.summarize(meeting, template: template, vocabulary: vocabulary, model: model,
-                                                        effort: cloudPreferences.effort) { fraction in
+            if cloud.keys[model.provider] != nil {
+                let output = try await cloudSummarizer.summaryOutput(meeting, template: template, vocabulary: vocabulary, model: model,
+                                                                     effort: cloud.preferences.effort) { fraction in
                     progress(ProcessingProgress(fraction: fraction, message: "Summarizing with \(model.name)"))
                 }
-                return PlacedSummary(output: SummaryProcessingOutput(summary: summary), place: place, meeting: meeting, started: started)
+                return PlacedSummary(output: output, place: place, meeting: meeting, started: started)
             }
             // The key went away as it started: here, as without one.
             fallthrough

@@ -16,19 +16,17 @@ import Foundation
 /// - `colophon`, `colophon-mac`: with `--library-demo`, "Offsite retro"'s summary made in the cloud, or on
 ///   another Mac.
 ///
-/// The cloud is a stand-in that offers one model and never runs.
+/// The cloud is the real `CloudSetup` with an in-memory Anthropic key and the catalog's models (`CloudSetup.demo`,
+/// never reaching a provider or the keychain), and a summarizer that never runs.
 @MainActor
 enum PlacementDemo {
     enum Scenario: String { case countdown, cloud, colophon, colophonMac = "colophon-mac" }
 
     static let scenario = LaunchOptions.value(after: "--placement-demo").flatMap(Scenario.init(rawValue:))
 
-    nonisolated static let sonnet = CloudModel(provider: .anthropic, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", tier: .balanced,
-                                   inputPrice: 2, outputPrice: 10, priceIsEstimated: false, contextTokens: 200_000, rank: 1)
-
-    /// A cloud that offers Claude Sonnet 5.5 and is never asked.
+    /// A summarizer that's never asked: the countdown and the cloud at work are only shown.
     struct StandIn: CloudSummarizing {
-        func availableModels(refresh: Bool) async -> [CloudModel] { [PlacementDemo.sonnet] }
+        func availableModels(refresh: Bool) async -> [CloudModel] { [] }
         func summarize(_ meeting: Meeting, template: SummaryTemplate?, vocabulary: [String], model: CloudModel, effort: CloudEffort,
                        progress: @escaping @Sendable (Double) -> Void) async throws -> MeetingSummary {
             throw CancellationError()
@@ -38,11 +36,11 @@ enum PlacementDemo {
     /// Places the summary of `id`, the conversation this Mac is processing.
     static func apply(to state: AppState, processing id: UUID?) {
         guard let scenario else { return }
-        state.cloudSummarizer = StandIn()
-        state.cloudModels = [sonnet]
-        var preferences = state.cloudPreferences
+        var preferences = CloudSummaryPreferences()
         preferences.countdownSeconds = 30
-        state.cloudPreferences = preferences
+        state.cloud = CloudSetup.demo(providers: [.anthropic], preferences: preferences, defaults: LaunchOptions.defaults)
+        state.cloudSummarizer = StandIn()
+        guard let sonnet = state.cloud.resolved?.model else { return }
         switch scenario {
         case .countdown, .cloud:
             guard let id else { return }

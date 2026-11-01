@@ -191,14 +191,32 @@ final class AppState: ObservableObject {
     let monitor = MeetingMonitor()
     let storageURL: URL
     private let preferences: UserDefaults
-    /// Cloud summaries' keys, models, and this Mac's preferences (Settings › Cloud; docs/cloud.md). Made when first
-    /// used, so a launch that never opens it never reads the keychain.
-    lazy var cloud: CloudSetup = {
-        #if DEBUG
-        if let demo = CloudSettingsDemo.setup(defaults: preferences) { return demo }
-        #endif
-        return CloudSetup(keys: KeychainCloudKeyStore.system, defaults: preferences)
-    }()
+    /// Cloud summaries' keys, models, and this Mac's preferences (Settings › Cloud; docs/cloud.md): the one place the
+    /// summary step reads them. Made when first used (Settings, or a summary step), so a launch that never needs it
+    /// never reads the keychain. Demos and tests set their own (`CloudSetup.demo`).
+    var cloud: CloudSetup {
+        get {
+            if let cloudSetup { return cloudSetup }
+            #if DEBUG
+            return adopt(CloudSettingsDemo.setup(defaults: preferences) ?? CloudSetup(keys: KeychainCloudKeyStore.system, defaults: preferences))
+            #else
+            return adopt(CloudSetup(keys: KeychainCloudKeyStore.system, defaults: preferences))
+            #endif
+        }
+        set { adopt(newValue) }
+    }
+    private var cloudSetup: CloudSetup?
+
+    @discardableResult
+    private func adopt(_ setup: CloudSetup) -> CloudSetup {
+        cloudSetup = setup
+        // A key, the models offered, or the preferences changed: every countdown follows.
+        setup.onChange = { [weak self] in self?.placementOptionsChanged() }
+        placementOptionsChanged()
+        return setup
+    }
+    /// Whether `cloud` has been made: until then nothing is being placed with it.
+    var hasCloudSetup: Bool { cloudSetup != nil }
     let runtime: LocalIntelligenceRuntime
     /// Keeps speaker profiles and conversations in step (AppState+SpeakerProfiles.swift).
     lazy var speakerProfileCoordinator = makeSpeakerProfileCoordinator()
@@ -214,19 +232,13 @@ final class AppState: ObservableObject {
     /// Where each summary runs, with the countdown before it (AppState+SummaryPlacement.swift). Views that
     /// show a countdown observe it directly.
     let placements: SummaryPlacements
-    /// Summaries in the cloud, with the person's own keys. Nil until there's a cloud to use; demos and tests
-    /// set a fake.
-    var cloudSummarizer: (any CloudSummarizing)? { didSet { Task { await refreshCloudModels() } } }
-    /// The cloud models the person's keys reach, as the cloud last said.
-    var cloudModels: [CloudModel] = [] { didSet { placementOptionsChanged() } }
-    /// How the person wants summaries placed (Settings › Cloud).
-    @Published var cloudPreferences: CloudSummaryPreferences {
-        didSet {
-            guard cloudPreferences != oldValue else { return }
-            cloudPreferences.save(to: preferences)
-            placementOptionsChanged()
-        }
+    /// Summaries in the cloud with the person's own keys: `cloud`'s directory, sent as this Mac. Demos and tests set
+    /// one of their own.
+    var cloudSummarizer: any CloudSummarizing {
+        get { cloudSummarizerOverride ?? CloudSummarizer(directory: cloud.directory, deviceName: ProcessingRequest.Device.currentName) }
+        set { cloudSummarizerOverride = newValue }
     }
+    private var cloudSummarizerOverride: (any CloudSummarizing)?
     /// Conversations whose running job stopped because another device took its request over.
     var claimsLost: Set<UUID> = []
     var claimHeartbeat: Task<Void, Never>?
@@ -274,9 +286,8 @@ final class AppState: ObservableObject {
         processingPreferences.speakerModelID = selections[.diarization] ?? processingPreferences.speakerModelID
         modelSelections = selections
         self.processingPreferences = processingPreferences
-        let cloudPreferences = CloudSummaryPreferences.load(from: defaults)
-        self.cloudPreferences = cloudPreferences
-        placements = SummaryPlacements(preferences: cloudPreferences, waitsForMacs: false)
+        // The cloud's options and preferences reach it when a summary is placed (`placementOptionsChanged`).
+        placements = SummaryPlacements(waitsForMacs: false)
         let sync = LibrarySyncController(localRoot: libraryURL, defaults: defaults)
         // Presence: other devices see this Mac and whether it can process. Updated as models change.
         sync.replica = .mac(displayName: ProcessingRequest.Device.currentName, canProcess: false)
