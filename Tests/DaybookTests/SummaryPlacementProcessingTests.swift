@@ -295,6 +295,36 @@ final class SummaryPlacementProcessingTests: XCTestCase {
         XCTAssertEqual(rig.meeting(id)?.status, .ready)
     }
 
+    func testBehaviorAMacArrivingLateLeavesAPhonesCloudSummaryAlone() async throws {
+        let rig = try await rig(cloud: nil)
+        let id = try await conversation(rig, "Late", frequency: 470)
+        rig.state.enqueue(id, mode: .newAudio)
+        try await rig.processed(id)
+        let before = rig.inference.summarized.count
+        // The phone chose the cloud while no Mac was around: it holds the Summarize request it made.
+        let phone = ProcessingRequest.Device.phone
+        let request = ProcessingRequest(meetingID: id, mode: .summaryOnly, requestedBy: phone)
+        let held = try XCTUnwrap(request.claimed(by: phone, at: Date())?.renewed(by: phone, at: Date(), stage: .summarizing))
+        rig.state.update(id) { $0.upsertProcessingRequest(held) }
+        // This Mac comes back and looks for work.
+        rig.state.pickUpRequests()
+        try await rig.processed()
+        XCTAssertEqual(rig.inference.summarized.count, before, "Not summarized here too")
+        guard case .processing(let progress) = rig.state.processingStatus(for: try XCTUnwrap(rig.meeting(id))) else { return XCTFail("The phone's work") }
+        XCTAssertEqual(progress.stage, .summarizing)
+        XCTAssertEqual(progress.device, phone)
+        // The phone's summary arrives with its request finished: nothing is left to do here.
+        let summary = MeetingSummary(title: "Late", overview: "From the cloud", modelID: FakeCloud.sonnet.id).placed(.cloud(FakeCloud.sonnet), by: phone, inputs: [:])
+        rig.state.update(id) { meeting in
+            meeting.setSummary(summary)
+            meeting.upsertProcessingRequest(held.completed(by: phone, at: Date())!)
+        }
+        rig.state.pickUpRequests()
+        try await rig.processed()
+        XCTAssertEqual(rig.inference.summarized.count, before)
+        XCTAssertEqual(rig.state.processingStatus(for: try XCTUnwrap(rig.meeting(id))), .done)
+    }
+
     // MARK: A phone
 
     func testBehaviorAPhoneSeesTheCountdownAndChoosesTheCloud() async throws {

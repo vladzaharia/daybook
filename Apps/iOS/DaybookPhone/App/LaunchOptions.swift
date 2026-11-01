@@ -41,6 +41,7 @@ import Foundation
 ///                                (use with --synthetic-audio; nothing is recorded)
 ///     --demo-transfer wifi|other-app   with --device-simulator --device-autopilot: the next recording imports over the simulated
 ///                                recorder's Wi‑Fi, or waits for another app's transfer, for screenshots
+///     --placement-demo countdown|waiting|cloud|mac-countdown|colophon   where a summary runs (see `PhonePlacementDemo`)
 ///
 /// Release builds ignore all of them except --posture, which only changes layout.
 struct LaunchOptions {
