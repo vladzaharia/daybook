@@ -3,20 +3,22 @@ import Foundation
 
 /// Debug launch arguments that put a reading surface on screen for screenshots, without tapping:
 ///
-///     --select "<title prefix>"          open that conversation
+///     --select "<title>"                 open the conversation with exactly that title
 ///     --page summary|transcript          which side one column shows
 ///     --spread library|conversation      the notebook's spread (default: conversation when selected)
 ///     --place work|personal|trash|folder:<name>
 ///     --search "<query>"                 the library search
 ///     --select-many <n>                  multi-select the first n conversations
 ///     --sheet info|history|correct|heard|move|tags|photo|photos
+///     --info                             the selected conversation's Info (the Mac's inspector), as `--sheet info`
 ///     --scroll-to "<words>"              bring the passage containing these words into view
 ///     --summary-scroll notes|bookmarks|next-steps|colophon   bring that part of the summary into view
 ///     --play [<seconds>]                 start playback there, silently
 ///     --play-muted                       anything played plays silently (for UI tests)
 ///     --simulate-download                audio "downloads" slowly (see `SimulatedAudioProvider`)
 ///     --simulate-offline                 audio isn't on this iPhone and can't be fetched
-///     --demo-library                     fill an empty library with every reading state (see `DemoLibrary`)
+///     --library-demo                     fill a scratch library with every reading state, the Mac's demo too
+///                                        (DaybookKit's `ReadingDemo`; `--demo-library` still works)
 ///
 /// Release builds ignore all of them.
 struct ReadingLaunch {
@@ -45,7 +47,7 @@ struct ReadingLaunch {
         place = value("--place")
         search = value("--search")
         selectMany = value("--select-many").flatMap(Int.init)
-        sheet = value("--sheet")
+        sheet = value("--sheet") ?? (arguments.contains("--info") ? "info" : nil)
         scrollTo = value("--scroll-to")
         summaryScroll = value("--summary-scroll")
         muted = arguments.contains("--play-muted")
@@ -85,7 +87,8 @@ struct ReadingLaunch {
             session.isSelecting = true
             session.selection = Set(place.meetings(in: library.meetings).prefix(selectMany).map(\.id))
         }
-        guard let select, let meeting = library.meetings.first(where: { $0.title.localizedCaseInsensitiveContains(select) }) else { return }
+        // The exact title, as on the Mac, so one flag opens the same conversation on both.
+        guard let select, let meeting = library.meetings.first(where: { $0.title == select }) else { return }
         if spread == "library" {
             session.select(meeting.id)
         } else {
