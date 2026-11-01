@@ -98,7 +98,7 @@ enum ExportFiles {
     static func markdownWithPhotos(_ meeting: Meeting, originals: [UUID: URL],
                                    in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
         guard !meeting.visiblePhotos.isEmpty else { return try markdown(meeting, in: directory) }
-        let name = fileName(meeting.title)
+        let name = MeetingExport.fileName(for: meeting)
         let folder = root(in: directory).appendingPathComponent(UUID().uuidString, isDirectory: true)
         let package = folder.appendingPathComponent(name, isDirectory: true)
         try MeetingExport.write(meeting, to: package, name: name) { originals[$0.id] }
@@ -116,7 +116,7 @@ enum ExportFiles {
     static func markdown(_ meeting: Meeting, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
         let folder = root(in: directory).appendingPathComponent(meeting.id.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let url = folder.appendingPathComponent(fileName(meeting.title) + ".md")
+        let url = folder.appendingPathComponent(MeetingExport.fileName(for: meeting) + ".md")
         try MeetingExport.markdown(meeting).write(to: url, atomically: true, encoding: .utf8)
         return url
     }
@@ -126,7 +126,7 @@ enum ExportFiles {
     static func photo(_ original: URL, caption: String?, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
         let folder = root(in: directory).appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        guard let file = ExportPhoto.write(original, to: folder, name: fileName(caption.map { String($0.prefix(60)) } ?? "Photo")) else {
+        guard let file = ExportPhoto.write(original, to: folder, name: MeetingExport.fileName(for: caption.map { String($0.prefix(60)) } ?? "Photo")) else {
             try? FileManager.default.removeItem(at: folder)
             throw CocoaError(.fileReadCorruptFile)
         }
@@ -138,19 +138,13 @@ enum ExportFiles {
     static func audio(_ source: URL, meeting: Meeting, track: RecordingTrack, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
         let folder = root(in: directory).appendingPathComponent(meeting.id.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let suffix = meeting.tracks.count > 1 ? " (\(SourceDescription.name(track, in: meeting)))" : ""
-        let url = folder.appendingPathComponent(fileName(meeting.title) + fileName(suffix))
+        // One recording is the conversation's; of several, each says which it is: "Weekly sync (Soundcore Work).m4a".
+        let suffix = meeting.tracks.count > 1 ? " (\(MeetingExport.fileName(for: SourceDescription.name(track, in: meeting))))" : ""
+        let url = folder.appendingPathComponent(MeetingExport.fileName(for: meeting) + suffix)
             .appendingPathExtension(source.pathExtension.isEmpty ? "m4a" : source.pathExtension)
         try? FileManager.default.removeItem(at: url)
         try FileManager.default.copyItem(at: source, to: url)
         return url
-    }
-
-    /// A file name without path separators or characters Files and Mail refuse.
-    static func fileName(_ title: String) -> String {
-        let cleaned = title.components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>\n\r\t")).joined(separator: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
-        return cleaned.isEmpty ? "Conversation" : String(cleaned.prefix(120))
     }
 }
 

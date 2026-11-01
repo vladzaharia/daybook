@@ -1186,7 +1186,7 @@ final class AppState: ObservableObject {
         // Markdown with photos is a file and a folder beside it: the person chooses where both go.
         if !json && !meeting.visiblePhotos.isEmpty { exportWithPhotos(meeting, from: directory); return }
         let panel = NSSavePanel(); panel.allowedContentTypes = json ? [.json] : [.plainText]
-        panel.nameFieldStringValue = Self.exportName(meeting.title) + (json ? ".json" : ".md")
+        panel.nameFieldStringValue = MeetingExport.fileName(for: meeting) + (json ? ".json" : ".md")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
             do {
@@ -1212,7 +1212,7 @@ final class AppState: ObservableObject {
         panel.prompt = "Export Here"
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let folder = panel.url else { return }
-        let name = Self.exportName(meeting.title)
+        let name = MeetingExport.fileName(for: meeting)
         Task {
             do {
                 let written = try await Task.detached(priority: .userInitiated) {
@@ -1223,13 +1223,6 @@ final class AppState: ObservableObject {
                 notice = "Exported \(written.markdown.lastPathComponent)"
             } catch { report("Couldn’t Export the Conversation", "It couldn’t be exported. Try again, or choose another folder.", error) }
         }
-    }
-
-    /// A conversation's title as an export's file name: no folder separators, never empty.
-    nonisolated static func exportName(_ title: String) -> String {
-        let name = title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty || name == "." || name == ".." ? "Conversation" : name
     }
 
     func audioURL(for track: RecordingTrack, meetingID: UUID) async -> URL? {

@@ -335,7 +335,26 @@ final class ReadingTests: XCTestCase {
         let text = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(text.hasPrefix("# Q4: launch / beta?"))
         XCTAssertTrue(text.contains("**Daniel:** That works."))
-        XCTAssertEqual(ExportFiles.fileName("  ...  "), "Conversation")
+        XCTAssertEqual(MeetingExport.fileName(for: "  ...  "), "Conversation")
+    }
+
+    /// The recording shared under the conversation's name, the same as the Mac names an export; with several, each
+    /// says which it is.
+    func testAudioExportIsNamedAfterTheConversation() throws {
+        let directory = try temporaryDirectory()
+        let source = directory.appendingPathComponent("Microphone.wav")
+        try Data("RIFF".utf8).write(to: source)
+        var meeting = weekly()
+        meeting.title = "Q4: launch / beta?"
+        let one = try ExportFiles.audio(source, meeting: meeting, track: meeting.tracks[0], in: directory)
+        XCTAssertEqual(one.lastPathComponent, "Q4- launch - beta-.wav", "one recording: the conversation's name alone")
+
+        let soundcore = RecordingTrack(source: .soundcore, relativePath: "Originals/REC0042.wav", fileName: "REC0042.wav", duration: 38)
+        meeting.tracks.append(soundcore)
+        let second = try ExportFiles.audio(source, meeting: meeting, track: soundcore, in: directory)
+        let name = MeetingExport.fileName(for: RecordingWords.name(soundcore, in: meeting))
+        XCTAssertEqual(second.lastPathComponent, "Q4- launch - beta- (\(name)).wav")
+        ExportFiles.clear([one, second], in: directory)
     }
 
     /// Exports wait in tmp only until the share sheet is done; a library original handed to it

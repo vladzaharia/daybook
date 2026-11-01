@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookKit
 import Foundation
 import XCTest
 @testable import Daybook
@@ -52,11 +53,13 @@ final class SandboxReadinessTests: XCTestCase {
         XCTAssertEqual(LaunchPaths.problems(arguments: ["Daybook", "--library", "/anywhere"]), [])
     }
 
+    /// The Mac names an export as the iPhone does (`MeetingExport.fileName(for:)`).
     func testExportNamesHaveNoFolderSeparators() {
-        XCTAssertEqual(AppState.exportName("Q3/Q4 planning"), "Q3-Q4 planning")
-        XCTAssertEqual(AppState.exportName("10:30 sync"), "10-30 sync")
-        XCTAssertEqual(AppState.exportName("  "), "Conversation")
-        XCTAssertEqual(AppState.exportName(".."), "Conversation")
+        XCTAssertEqual(MeetingExport.fileName(for: "Q3/Q4 planning"), "Q3-Q4 planning")
+        XCTAssertEqual(MeetingExport.fileName(for: "10:30 sync"), "10-30 sync")
+        XCTAssertEqual(MeetingExport.fileName(for: "  "), "Conversation")
+        XCTAssertEqual(MeetingExport.fileName(for: ".."), "Conversation")
+        XCTAssertEqual(MeetingExport.fileName(for: ".hidden"), "hidden", "never a hidden file")
     }
 
     func testSettingsShowICloudPlacesByName() {
