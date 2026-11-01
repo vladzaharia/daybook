@@ -50,6 +50,14 @@ final class ReadingDemoTests: XCTestCase {
         }
         XCTAssertEqual(ready.visiblePhotos.count, 2)
         XCTAssertEqual(ready.tags, ["launch", "beta"])
+        // Its transcript is Whisper Small's, so a Mac with Parakeet Ultra offers the better one (`--upgrade-demo mac`).
+        let mac = ProcessingMac(id: "demo-mac", name: "Vlad's MacBook Pro",
+                                capabilities: ProcessingCapabilities(transcribes: true, findsSpeakers: true, summarizes: true,
+                                                                     models: ["transcription": "parakeet/ultra"]))
+        let offer = Upgrades.offer(for: ready, status: .done, candidates: UpgradeCandidates(
+            thisDevice: ProcessingCapabilities(transcribes: false, findsSpeakers: false, summarizes: false), macs: [mac]))
+        XCTAssertEqual(offer?.role, .transcription)
+        XCTAssertEqual(offer?.line, "Upgrade transcript on Vlad's MacBook Pro")
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(
             "Meetings/\(try meeting(ReadingDemo.Title.offline).id.uuidString)/Originals/Microphone.wav").path), "audio not on this device")
         XCTAssertEqual(captions.map(\.0), [try meeting(ReadingDemo.Title.captions).id])

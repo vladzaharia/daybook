@@ -108,7 +108,8 @@ public enum ReadingDemo {
             return TranscriptSegment(id: id, trackID: track, start: start, end: end, text: text, speakerID: "S\(speaker)",
                                      provenance: [SegmentProvenance(trackID: track, segmentID: id, start: start, end: end, text: text)])
         }
-        weekly.meeting.transcripts = [TrackTranscript(trackID: track, segments: segments, modelID: "parakeet/ultra", createdAt: ago(minutes: 100))]
+        // Whisper Small, so a Mac or an iPhone with Parakeet Ultra has a better transcript to offer (`--upgrade-demo`).
+        weekly.meeting.transcripts = [TrackTranscript(trackID: track, segments: segments, modelID: "whisper-small", createdAt: ago(minutes: 100))]
         weekly.meeting.unifiedTranscript = segments
         weekly.meeting.kind = .general
         weekly.meeting.summary = MeetingSummary(
