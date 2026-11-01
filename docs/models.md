@@ -24,12 +24,12 @@ A variant is named everywhere by its **key**, `family/variant`. Selections, queu
 | Target | Holds |
 | --- | --- |
 | `DaybookCore` | `ModelProvenance`, stored with results in `ProcessingSettings.model`; the evaluation harness's scoring (`Evaluation/`: WER, CER, cpWER, DER/JER, word-timing error) |
-| `DaybookKit` (Mac and iPhone) | The manifest format (`ModelManifest`, `ModelManifestReader`), the built-in `Resources/ModelCatalog` folder, the merged `ModelCatalog` and `CatalogModel`, availability, `ModelSelections`, `ModelRecommendations` (presets, device tiers), `ModelRouting` (with speaker routing), `TranscriptionRouting` and `LanguageCheck` (language routing), `ModelAcknowledgements`, and the shared vocabulary (`ModelRole`, `ModelEngineID`, `ModelEngineDescriptor`, `ModelReference`, `ModelVersion`) |
+| `DaybookKit` (Mac and iPhone) | The manifest format (`ModelManifest`, `ModelManifestReader`), the built-in `Resources/ModelCatalog` folder, the merged `ModelCatalog` and `CatalogModel`, availability, `ModelSelections`, `ModelRecommendations` (presets, device tiers), `PhoneProcessingModels` and `PhoneTier` (the iPhone's processing models), `ModelRouting` (with speaker routing), `TranscriptionRouting` and `LanguageCheck` (language routing), `ModelAcknowledgements`, and the shared vocabulary (`ModelRole`, `ModelEngineID`, `ModelEngineDescriptor`, `ModelReference`, `ModelVersion`) |
 | `DaybookModelStore` (Mac and iPhone) | `ModelStore` and legacy migration, `ModelInstallation` and receipts, `ModelFileDigest`, `ModelArtifactFetcher`, `HubSnapshotFetcher` (the Mac's downloads), and `BackgroundModelFetcher` (the iPhone's, in background sessions): downloads, verification, installs. Split out of DaybookIntelligence so the iPhone can download its live models without the Mac's engines; DaybookIntelligence re-exports it |
 | `DaybookLive` (Mac and iPhone) | Live captions from local models ("Live models", below): the live engines' descriptors and install checks (`LiveEngines`), `LiveModelHost`, the captioners, `LiveLoadPolicy`, and `WeSpeakerEmbedder`, the voice-profile recipe the Mac's final pipeline shares. FluidAudio only: no MLX, no WhisperKit |
-| `DaybookIntelligence` (Mac today) | The `ModelEngine` protocol, role protocols, `ModelEngineRegistry`, the eight engines, `TranscriptionRouter`, `MeetingSynthesis` and `SmallTasks`, `ModelHubClient`, `ModelUpdateChecker`, model addition, and `LocalIntelligenceRuntime`, which coordinates them |
+| `DaybookIntelligence` (Mac and iPhone) | The `ModelEngine` protocol, role protocols, `ModelEngineRegistry`, the engines, `TranscriptionRouter`, `MeetingSynthesis` and `SmallTasks`, `ModelHubClient`, `ModelUpdateChecker`, model addition, `LocalSummarizer`, and `LocalIntelligenceRuntime`, which coordinates them. On the iPhone without WhisperKit and MLXVLM (Package.swift): no Whisper, and no photo captions from Gemma |
 
-The iPhone links DaybookKit, so it names the model behind any result (Conversation Info) and can list acknowledgements, and DaybookLive and DaybookModelStore, so it downloads and runs live captions' models. It registers no processing engines: final transcription, speakers, and summaries run on a Mac.
+The iPhone links all of these: DaybookKit names the model behind any result (Conversation Info) and lists acknowledgements, DaybookLive and DaybookModelStore download and run live captions' models, and DaybookIntelligence processes its own recordings ("iPhone processing", below).
 
 Cloud models (Anthropic's and OpenAI's, for summaries only, with the person's own key) aren't manifest models: their catalog, keys, discovery, and requests are in `DaybookKit/Cloud`, and the summarizer is DaybookIntelligence's `CloudSummarizer` ("Cloud models", below; [cloud](cloud.md)).
 
@@ -67,7 +67,7 @@ Version 1 of `whisperKit` was WhisperKit 0.18.0 and version 1 of `mlxLanguage` w
 
 ## Manifests
 
-- **Built-in catalog:** `Sources/DaybookKit/Resources/ModelCatalog/`, a package resource of DaybookKit, shipped with each release. `Catalog.json` holds the presets, the recommended preset per tier, the initial selection, and the live roles' defaults per platform and tier (`liveSelection`). `Families/<family>.json` holds one family each, as a complete manifest. Adding a model family is adding a file. Each file declares its own `minimumReaderVersion`, so a family that needs a newer reader is skipped with a warning while the rest load. Families load in file-name order; the interface sorts as it needs (acknowledgements are alphabetical).
+- **Built-in catalog:** `Sources/DaybookKit/Resources/ModelCatalog/`, a package resource of DaybookKit, shipped with each release. `Catalog.json` holds the presets, the recommended preset per tier, the initial selection (with the iPhone's processing models under `platforms` and `platformTiers`, "iOS"), and the live roles' defaults per platform and tier (`liveSelection`). `Families/<family>.json` holds one family each, as a complete manifest. Adding a model family is adding a file. Each file declares its own `minimumReaderVersion`, so a family that needs a newer reader is skipped with a warning while the rest load. Families load in file-name order; the interface sorts as it needs (acknowledgements are alphabetical).
 - **The person's manifest:** `Models/UserModels.json`, beside the store, in the same format. It holds models added from Hugging Face ("Added by you") and revisions installed through update checks. `ModelCatalog` merges it into the built-in catalog: a family or variant with a built-in ID only gains variants or revisions; built-in metadata is never overridden. Presets come from the built-in manifest only.
 - **Revision checks (opt-in):** `LocalIntelligenceRuntime.checkForUpdates(client:)` asks Hugging Face, through an injectable `ModelHubClient`, whether each installed variant's tracked branch (`artifact.track`, default `main`) moved, and whether the files its `include` patterns select actually changed. It returns `ModelUpdate`s with the changed files, the size, and the publication date. Daybook never installs one by itself; `installUpdate(_:)` records the revision in the person's manifest and downloads it.
 
@@ -76,7 +76,8 @@ Version 1 of `whisperKit` was WhisperKit 0.18.0 and version 1 of `mlxLanguage` w
 ```text
 ModelManifest       schemaVersion, minimumReaderVersion, catalogVersion,
                     families[], presets[], recommendedPreset, initialSelection, liveSelection
-ModelChoiceTable    roles{role: keys[]}, tiers{tier: {role: keys[]}}, platforms{"macOS"|"iOS": {role: keys[]}}
+ModelChoiceTable    roles{role: keys[]}, tiers{tier: {role: keys[]}}, platforms{"macOS"|"iOS": {role: keys[]}},
+                    platformTiers{"iOS": {phone tier: {role: keys[]}}}
 ModelFamilyEntry    id, name, maker, engine, roles[], summary, homepage, license, variants[]
 ModelVariantEntry   id, name, detail, engine?, roles?, license?, homepage, releaseDate,
                     recommendedMemoryGB, capabilities, engineOptions{},
@@ -163,7 +164,7 @@ Nothing selected, Apple Intelligence off, a guardrail refusal, or any other fail
 ## Platforms
 
 - **Shared code:** the manifest, catalog, selection, and provenance types are in DaybookKit and DaybookCore, so the iPhone shows what produced a result; the store is in DaybookModelStore and the live engines in DaybookLive, which the iPhone links to run live captions' models.
-- **Engines** for processing are in DaybookIntelligence: the Mac only. Each declares its platforms; availability is `unsupportedPlatform` ("Not available on iPhone") where an engine doesn't run. The iPhone reads its live models' availability from `LiveEngines.descriptors`.
+- **Engines** for processing are in DaybookIntelligence, which both apps link; the iPhone registers the same engines less WhisperKit (built for the Mac only), and its MLX engine serves summaries only (MLXVLM is the Mac's). Each declares its platforms; availability is `unsupportedPlatform` ("Not available on iPhone") where an engine doesn't run. The iPhone reads its models' availability from the registry's descriptors plus `LiveEngines.descriptors`.
 - **System models:** a variant with `systemProvided: true` has no revisions; nothing is downloaded or removed, and its engine decides whether this device has it: its descriptor's `unavailableReason` becomes `ModelAvailability.unavailableOnDevice` ("Turn on Apple Intelligence", "Needs macOS 26 or later", "Not available on this Mac", "Apple Intelligence isn’t ready yet"), and `validate` refuses it. `installedModels()` includes a system model only while it's available.
 
 ## The model manager
@@ -290,6 +291,23 @@ Everything an iPhone needs is about 712 MB (live transcription 588, speakers 102
 - *The system's SpeechTranscriber*: remains the fallback (no download, every language Apple supports), but it gives no speakers and Daybook can't choose or pin its model.
 
 The live models are catalog entries like any other: `minimumEngineVersion`, revisions pinned to commits with a digest per file, `supersededBy`, Acknowledgements (the iPhone lists the live models it has downloaded beside the models behind its results). A better streaming model is a new variant and a `liveSelection` edit. On the Mac, Settings › Models shows Live transcription and Live speakers as roles of their own (the engines serve them), with the same Download and Remove; their defaults are filled in once (`modelSelections.liveAdded`).
+
+## iPhone processing
+
+The iPhone processes its own recordings with the same engines (docs/iphone.md, "Processing on this iPhone"). Its models are the catalog's `initialSelection` for iOS: `platforms.iOS` lists every role (an empty list means none), and `platformTiers.iOS` overrides it per memory tier (`PhoneTier`, from what the iPhone reports: under 4.5 GiB `small`, under 6.5 `medium`, under 9.5 `standard`, else `large`). `PhoneProcessingModels` reads them, keeps the person's choice when it can run there, and falls back to the first default that can. A Mac's tiers and presets ignore both tables.
+
+| Tier | Transcription | Speakers | Voice profiles | Summaries |
+| --- | --- | --- | --- | --- |
+| small (4 GB) | Parakeet Redux, then Ultra | Nemotron 3 · Compact, then Community-1 | Community-1 | none |
+| medium (6 GB) | Parakeet Ultra, then Redux | Nemotron 3 · Compact, then offline, then Community-1 | Community-1 | none |
+| standard (8 GB) | Parakeet Ultra, then Redux | Nemotron 3 (offline), then Compact, then Community-1 | Community-1 | Gemma 4 E2B |
+| large (12 GB and more) | Parakeet Ultra, then Redux | Nemotron 3 (offline), then Compact, then Community-1 | Community-1 | Gemma 4 E4B, then E2B |
+
+**Summaries and memory.** iOS ends an app that goes past its memory limit, so a summary model is offered (`PhoneProcessingModels.fits`) only when its peak, `capabilities.memoryGB`, plus `headroomGB` (1 GB: the app, audio buffers, MLX's 256 MB buffer cache) fits in that limit. The peaks are measured with weights included: E4B 5.0 GB on the three-hour meeting, E2B 3.0 GB on the 22-minute weekly ([validation](validation.md), 2026-10-31), declared as 3.2 to allow for a three-hour meeting's KV cache (6 KB a token). The language model is exclusive, so the speech models aren't loaded beside it. The limit is read on the device as the app runs (`PhoneMemory`: `os_proc_available_memory` plus the app's footprint); where it can't be (the simulator, tests), `AppMemoryLimit.estimate` uses published figures: about 45% of the phone's memory, 70% with the Increased Memory Limit entitlement. So an 8 GB iPhone (about 3.6 GB, or 5.6 with the entitlement) summarizes with E2B only with the entitlement, and a 12 GB one (5.4, or 8.4) gets E2B without it and E4B with it. The app doesn't have the entitlement yet (it needs the account owner); the device's own reading decides either way.
+
+The speech and speaker models fit every tier: Parakeet Ultra is a 632 MB download and Redux 220 MB, Nemotron 3 199 MB (Compact 102 MB), Community-1 22 MB. On the iPhone they run on the Neural Engine and CPU (`MLComputeUnits.processing`), as live captions' do, so they keep working in the background. Settings › Models lists, per role, the models any tier names (`PhoneProcessingModels.options`), and shows what can't run with the reason ("Needs an iPhone with more memory").
+
+`ProcessingCapabilities.models` names the model the iPhone would use for each role it can run, and each result records its model, so a later Upgrade offer can compare an iPhone's transcript with a Mac's model.
 
 ## Photos
 

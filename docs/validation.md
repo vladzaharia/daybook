@@ -289,6 +289,82 @@ A4B 90 and E4B 53 from the three-hour meeting above.
   the notes findings fix Claude Sonnet 5.5's and Haiku 5.5's note attribution on the offsite (3 of 6 before).
 - A key added on a signed Mac reaching a signed iPhone through iCloud Keychain, and removed from both.
 
+## Processing on the iPhone (2026-10-31)
+
+The iPhone now processes its own recordings as the Mac does: transcription, speakers, voice profiles,
+the background-audio check, fusion, speaker labels from the synced profiles, and a summary where it has
+the memory ([iPhone](iphone.md#processing-on-this-iphone), [models](models.md#iphone-processing),
+[model runtime](model-runtime.md#iphone)). DaybookIntelligence is linked on the iPhone without
+WhisperKit and MLXVLM. The models come per memory tier from the catalog (`initialSelection`'s iOS
+lists), with Settings › Models › Processing to download them. Work runs under the Mac's
+`ProcessingRequest` claims (`OnDeviceProcessing`): claimed as a recording is filed, its own recordings
+only, fused where the last recording arrives, handed back to a Mac for the summary when the iPhone
+can't make one. It goes on in the background under iOS 26's continued-processing task where allowed,
+and pauses for a recording, the screen, heat, Low Power Mode, and a low battery.
+
+**Size** (unsigned Release archives, `scripts/build-ios.sh --archive --no-sign`): 23.1 MB before (binary
+20.9 MB, 10.6 MB zipped); 46.0 MB with DaybookIntelligence as the Mac builds it (17.3 MB zipped); 43.1 MB
+with WhisperKit and MLXVLM left out (binary 38.6 MB, 16.2 MB zipped). MLX's Metal library is 2.3 MB.
+
+**Memory.** Summary peaks with weights included, from the long-summary runs above on a Mac: Gemma 4 E2B
+2.9 to 3.0 GB on the four short-to-22-minute conversations (declared 3.2 GB in the catalog, for a
+three-hour meeting's larger KV cache), E4B 5.0 GB on the three-hour meeting. With a gigabyte for the
+app, E2B needs about 4.2 GB and E4B 6.0 GB of the per-app limit. Published figures put that limit at a
+little under half the phone's memory, about seven tenths with the Increased Memory Limit entitlement,
+which the app doesn't have: so 8 GB iPhones summarize with E2B only with the entitlement, 12 GB ones
+get E2B without it and E4B with it. On a device the limit is read as the app runs
+(`os_proc_available_memory`), so the estimate only decides what the simulator and tests show. The speech
+models: the Mac smoke test with Parakeet Ultra, Nemotron 3 (offline), and Community-1 on a 10-second
+`say` recording (debug build) peaked at 859 MB of process footprint; in the simulator the iPhone app
+peaked at 106 MB on the same recording and 165 MB on a 3-minute one.
+
+**A real transcription in the simulator.** Parakeet Ultra, Nemotron 3 (offline), and Community-1 were
+downloaded through the store into scratch (`Daybook --smoke-test --download-models --models <scratch>`,
+every file checked by size and digest), copied into the simulator app's container, and the app was
+launched with a scratch library and `--import-file` of a 10-second `say` recording ("Thanks for joining.
+The beta ships on Friday. Alex will send the release notes…"). The import was claimed as it was filed,
+transcribed word for word (four passages, one speaker with a Community-1 voice profile, the
+background-audio analysis on the track, the unified transcript fused), and, since the simulator can't
+summarize, the request was given back, reading "Waiting for your Mac". A 3-minute recording took 60 s on
+the simulator's CPU (72 passages), with "Transcribing on this iPhone · 77%" in the list meanwhile. The
+transcript records `parakeet/ultra` at its pinned revision and FluidAudio 0.17.7. The Mac's own smoke test
+of the same models on the 10-second recording passed (mean word confidence 0.99). The models were
+deleted afterwards.
+
+**Automated.** `OnDeviceProcessingTests` (9): its own recording is transcribed here; a Mac's recording,
+or a request another device made, isn't; a claim another device holds is left alone; without the speaker
+models a recording waits for a Mac; it summarizes here only when it can; a recording still to line up
+leaves fusion to a Mac until it's placed; Transcribe Everything Again and Identify Speakers Again do
+each recording once; a satisfied or finished request is nothing to do; this device's queue shows its
+own work. `PhoneProcessingModelsTests` (8): tiers from memory, Ultra and Redux, Nemotron with
+Community-1, summaries only where the measured peak fits (with and without the entitlement), a choice
+that doesn't fit falls back, the Mac's choices unchanged, platform tiers round trip.
+`InferenceProcessingEngineTests.testBehaviorTheLocalSummarizerIsTheEnginesSummaryStep`.
+`ProcessingRequestQueueTests.testBehaviorAMacLeavesWhatAnIPhoneClaimedAndNeverTranscribesItAgain`: a Mac
+leaves a recording the iPhone claimed as it filed it, then summarizes without transcribing when the
+iPhone hands the request back. `PhoneProcessingTests` (13, on the simulator, with the engines' fakes):
+claimed as filed, then transcribed, fused, and summarized here, with the model in each result; handed
+back without a summary model; a Mac's recording left alone; Transcribe Everything Again done here leaves
+the Mac only the summary; a recording pauses the work, which keeps its claim and resumes; heat, Low Power
+Mode, and a low battery hold it; the continued-processing task gets the work's progress and stage,
+carries it in the background, and pauses it when it expires; without the task leaving the screen pauses
+it; the summary waits for the screen; another device taking the request stops the work; one conversation
+at a time; the models per tier and what they let the iPhone do, with synthetic installs.
+`swift test` passed 1,362 XCTest cases across the eight bundles (one skipped, as before): Captions 13, Core
+424, Devices 119, Intelligence 170, Kit 218, Link 74, Live 39, Mac app 305. `scripts/build-ios.sh --test`
+passed the iPhone's 201.
+
+**Needs the account owner:** the Increased Memory Limit capability
+(`com.apple.developer.kernel.increased-memory-limit`) and Background GPU Access
+(`com.apple.developer.background-tasks.continued-processing.gpu`) on the iPhone's App ID and
+entitlements. Without them, 8 GB iPhones don't summarize locally, 12 GB ones use E2B, and summaries run
+only with Daybook on the screen.
+
+**Still needs a real iPhone:** the Neural Engine's speed, heat, and battery on long recordings; whether
+iOS grants the continued-processing task after Stop, how its Live Activity reads, and when it expires;
+the `processing` background mode's need (added for the task); the memory limit `PhoneMemory` reads; a
+Gemma summary's time and peak on a phone; Parakeet Redux and Nemotron Compact on a 4 GB iPhone.
+
 ## Long summaries on the other models, and a three-hour meeting (2026-10-31)
 
 The long-summary fixes below (#34) were checked on Gemma 4 26B A4B only. The same check on the catalog's
