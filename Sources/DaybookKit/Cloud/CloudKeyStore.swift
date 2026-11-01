@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import Synchronization
 
 /// An API key for a cloud provider. It never prints: its description, debug description, and mirror are the
 /// masked form ("sk-ant-…gDAA"), so logging one, by accident or in a crash report, shows no more than
@@ -72,15 +73,14 @@ public enum CloudKeyStoreError: Error, Equatable, LocalizedError {
 }
 
 /// Keeps keys in memory. For tests and the Settings demos.
-public final class MemoryCloudKeyStore: CloudKeyStore, @unchecked Sendable {
-    private let lock = NSLock()
-    private var keys: [CloudProvider: CloudAPIKey]
+public final class MemoryCloudKeyStore: CloudKeyStore, Sendable {
+    private let keys: Mutex<[CloudProvider: CloudAPIKey]>
 
-    public init(_ keys: [CloudProvider: CloudAPIKey] = [:]) { self.keys = keys }
+    public init(_ keys: [CloudProvider: CloudAPIKey] = [:]) { self.keys = Mutex(keys) }
 
-    public func key(for provider: CloudProvider) throws -> CloudAPIKey? { lock.withLock { keys[provider] } }
-    public func store(_ key: CloudAPIKey, for provider: CloudProvider) throws { lock.withLock { keys[provider] = key } }
-    public func removeKey(for provider: CloudProvider) throws { lock.withLock { _ = keys.removeValue(forKey: provider) } }
+    public func key(for provider: CloudProvider) throws -> CloudAPIKey? { keys.withLock { $0[provider] } }
+    public func store(_ key: CloudAPIKey, for provider: CloudProvider) throws { keys.withLock { $0[provider] = key } }
+    public func removeKey(for provider: CloudProvider) throws { keys.withLock { _ = $0.removeValue(forKey: provider) } }
 }
 
 /// The Security calls `KeychainCloudKeyStore` makes, so tests can see the items it writes without a keychain.
@@ -110,7 +110,7 @@ struct SystemCloudKeychain: CloudKeychain {
 ///
 /// A build without the shared group (unsigned development and test builds on the Mac) keeps keys in the
 /// login keychain, on this Mac only, as the link's pairing keys do there.
-public final class KeychainCloudKeyStore: CloudKeyStore, @unchecked Sendable {
+public final class KeychainCloudKeyStore: CloudKeyStore, Sendable {
     public static let service = "local.daybook.cloud-key"
     public let accessGroup: String?
     private let keychain: any CloudKeychain

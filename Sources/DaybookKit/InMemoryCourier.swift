@@ -1,9 +1,10 @@
 import DaybookCore
 import Foundation
+import Synchronization
 
 /// A courier's server held in memory: what the private CloudKit database is to `CloudKitCourier`. Tests and
 /// previews use it with `InMemoryCourier`; nothing leaves the process.
-public final class InMemoryCourierService: @unchecked Sendable {
+public final class InMemoryCourierService: Sendable {
     public enum Failure: Sendable, Equatable {
         /// Saves fail as a network failure would: files keep waiting and go on the next flush.
         case network
@@ -12,64 +13,66 @@ public final class InMemoryCourierService: @unchecked Sendable {
     }
 
     private struct Stored { var file: CourierFile; var data: Data; var version: Int }
-    private let lock = NSLock()
-    private var stored: [String: Stored] = [:]
-    private var version = 0
-    private var _failure: Failure?
-    private var _isAvailable = true
-    private var _saves = 0
+    private struct State {
+        var stored: [String: Stored] = [:]
+        var version = 0
+        var failure: Failure?
+        var isAvailable = true
+        var saves = 0
+    }
+    private let state = Mutex(State())
 
     public init() {}
 
     /// Nil: saves succeed.
     public var failure: Failure? {
-        get { lock.withLock { _failure } }
-        set { lock.withLock { _failure = newValue } }
+        get { state.withLock { $0.failure } }
+        set { state.withLock { $0.failure = newValue } }
     }
     /// False: as if no iCloud account were signed in.
     public var isAvailable: Bool {
-        get { lock.withLock { _isAvailable } }
-        set { lock.withLock { _isAvailable = newValue } }
+        get { state.withLock { $0.isAvailable } }
+        set { state.withLock { $0.isAvailable = newValue } }
     }
     /// Successful saves, a resend of the same file included.
-    public var saveCount: Int { lock.withLock { _saves } }
-    public var fileIDs: [String] { lock.withLock { stored.keys.sorted() } }
-    public func file(_ id: String) -> CourierFile? { lock.withLock { stored[id]?.file } }
-    public func data(_ id: String) -> Data? { lock.withLock { stored[id]?.data } }
+    public var saveCount: Int { state.withLock { $0.saves } }
+    public var fileIDs: [String] { state.withLock { $0.stored.keys.sorted() } }
+    public func file(_ id: String) -> CourierFile? { state.withLock { $0.stored[id]?.file } }
+    public func data(_ id: String) -> Data? { state.withLock { $0.stored[id]?.data } }
 
     /// Replaces a stored file's bytes, as damage in transit would.
     public func corrupt(_ id: String, with data: Data) {
-        lock.withLock {
-            guard var entry = stored[id] else { return }
-            version += 1
-            entry.data = data; entry.version = version
-            stored[id] = entry
+        state.withLock { state in
+            guard var entry = state.stored[id] else { return }
+            state.version += 1
+            entry.data = data; entry.version = state.version
+            state.stored[id] = entry
         }
     }
 
     /// Makes a stored file look older, for expiry.
     public func backdate(_ id: String, by interval: TimeInterval) {
-        lock.withLock { stored[id]?.file.createdAt.addTimeInterval(-interval) }
+        state.withLock { $0.stored[id]?.file.createdAt.addTimeInterval(-interval) }
     }
 
     func save(_ file: CourierFile, data: Data) throws -> Failure? {
-        try lock.withLock {
-            if let failure = _failure { return failure }
-            guard _isAvailable else { throw CocoaError(.userCancelled) }
-            version += 1
-            stored[file.id] = Stored(file: file, data: data, version: version)
-            _saves += 1
+        try state.withLock { state in
+            if let failure = state.failure { return failure }
+            guard state.isAvailable else { throw CocoaError(.userCancelled) }
+            state.version += 1
+            state.stored[file.id] = Stored(file: file, data: data, version: state.version)
+            state.saves += 1
             return nil
         }
     }
 
-    func delete(_ id: String) { lock.withLock { _ = stored.removeValue(forKey: id) } }
+    func delete(_ id: String) { state.withLock { _ = $0.stored.removeValue(forKey: id) } }
 
     /// Files changed after `token`, and the new token.
     func changes(since token: Int) -> ([(CourierFile, Data)], Int) {
-        lock.withLock {
-            let changed = stored.values.filter { $0.version > token }.sorted { $0.version < $1.version }
-            return (changed.map { ($0.file, $0.data) }, version)
+        state.withLock { state in
+            let changed = state.stored.values.filter { $0.version > token }.sorted { $0.version < $1.version }
+            return (changed.map { ($0.file, $0.data) }, state.version)
         }
     }
 }

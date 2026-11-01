@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // The manifest format (docs/models.md, "Manifests"): the built-in ModelCatalog folder's files and the
 // person's own UserModels.json share it. Reading is deliberately forgiving:
@@ -346,12 +347,11 @@ public enum ModelManifestReader {
 }
 
 /// Shared by every decoder of one read, so nested entries can report what they skipped.
-final class WarningCollector: @unchecked Sendable {
+final class WarningCollector: Sendable {
     static let key = CodingUserInfoKey(rawValue: "daybook.modelManifest.warnings")!
-    private let lock = NSLock()
-    private var stored: [String] = []
-    var messages: [String] { lock.withLock { stored } }
-    func add(_ message: String) { lock.withLock { stored.append(message) } }
+    private let stored = Mutex<[String]>([])
+    var messages: [String] { stored.withLock { $0 } }
+    func add(_ message: String) { stored.withLock { $0.append(message) } }
     static func report(_ message: String, in decoder: Decoder) { (decoder.userInfo[key] as? WarningCollector)?.add(message) }
 }
 

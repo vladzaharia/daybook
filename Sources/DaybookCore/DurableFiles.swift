@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 
 /// Writes that survive a crash or power loss, for the few moments that need it: before a recording's
 /// staging folder is deleted and before a sync pass is acknowledged (`MeetingStore.synchronizeWrites`).
@@ -89,7 +90,7 @@ enum BlockingFileWork {
         let flag = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                queue.async { continuation.resume(with: Result { try work(flag.isSet) }) }
+                queue.async { continuation.resume(with: Result { try work { flag.isSet } }) }
             }
         } onCancel: { flag.set() }
     }
@@ -99,10 +100,9 @@ enum BlockingFileWork {
         try await run { isCancelled in try AudioDigest.sha256(fileURL: url, isCancelled: isCancelled) }
     }
 
-    private final class CancellationFlag: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value = false
-        func set() { lock.lock(); value = true; lock.unlock() }
-        func isSet() -> Bool { lock.lock(); defer { lock.unlock() }; return value }
+    private final class CancellationFlag: Sendable {
+        private let value = Atomic(false)
+        func set() { value.store(true, ordering: .releasing) }
+        var isSet: Bool { value.load(ordering: .acquiring) }
     }
 }

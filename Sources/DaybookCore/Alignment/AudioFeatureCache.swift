@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Keeps extracted alignment features so a recording is decoded once, however many other sources
 /// are aligned against it.
@@ -8,14 +9,13 @@ import Foundation
 /// features also persist as `<sha256>-v<version>.features` (about 800 bytes per second of audio).
 /// Features are derived data: they can't reproduce speech, and deleting them only costs a re-decode.
 /// Keep the directory local; it doesn't need to sync.
-public final class AudioFeatureCache: @unchecked Sendable {
+public final class AudioFeatureCache: Sendable {
     public static let shared = AudioFeatureCache()
 
     public let directory: URL?
     private let capacity: Int
-    private let lock = NSLock()
-    private var entries: [String: AudioFeatures] = [:]
-    private var order: [String] = []
+    /// Recently used last.
+    private let memory = Mutex<(entries: [String: AudioFeatures], order: [String])>(([:], []))
 
     public init(directory: URL? = nil, capacity: Int = 8) {
         self.directory = directory; self.capacity = max(1, capacity)
@@ -40,21 +40,24 @@ public final class AudioFeatureCache: @unchecked Sendable {
     }
 
     public func removeAll() {
-        lock.lock(); entries.removeAll(); order.removeAll(); lock.unlock()
+        memory.withLock { $0 = ([:], []) }
     }
 
     private func lookup(_ key: String) -> AudioFeatures? {
-        lock.lock(); defer { lock.unlock() }
-        guard let value = entries[key] else { return nil }
-        order.removeAll { $0 == key }; order.append(key)
-        return value
+        memory.withLock { memory in
+            guard let value = memory.entries[key] else { return nil }
+            memory.order.removeAll { $0 == key }; memory.order.append(key)
+            return value
+        }
     }
 
     private func store(_ value: AudioFeatures, key: String) {
-        lock.lock(); defer { lock.unlock() }
-        entries[key] = value
-        order.removeAll { $0 == key }; order.append(key)
-        while order.count > capacity { entries.removeValue(forKey: order.removeFirst()) }
+        let capacity = capacity
+        memory.withLock { memory in
+            memory.entries[key] = value
+            memory.order.removeAll { $0 == key }; memory.order.append(key)
+            while memory.order.count > capacity { memory.entries.removeValue(forKey: memory.order.removeFirst()) }
+        }
     }
 
     private func memoryKey(url: URL, digest: String?) -> String? {

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Processing one device asks for and another carries out: usually the iPhone asks and a Mac runs
 /// it. A request is synced library data on its conversation (`Meeting.processingRequests`), like
@@ -419,13 +420,12 @@ extension AudioFetchError: ProcessingFailureClassifying {
 /// (`Claim.isExpired`), so another device's clock never decides when a claim expires here. One per process is one
 /// per device (`shared`); tests give each simulated device its own. Kept in memory: after a relaunch a claim gets one
 /// more lease, which is the safe direction.
-public final class ClaimObservations: @unchecked Sendable {
+public final class ClaimObservations: Sendable {
     public static let shared = ClaimObservations()
     /// A claim whose holder's own expiry is this far behind this device's clock is stale whatever was observed.
     public static let staleAfter: TimeInterval = 30 * 60
     private struct Key: Hashable { var device: String; var claimedAt: Date; var heartbeat: Date; var expiresAt: Date }
-    private let lock = NSLock()
-    private var seen: [Key: Date] = [:]
+    private let seen = Mutex<[Key: Date]>([:])
 
     public init() {}
 
@@ -435,8 +435,8 @@ public final class ClaimObservations: @unchecked Sendable {
 
     /// When this device first saw the claim's current heartbeat: now, the first time it's asked.
     func firstSeen(_ claim: ProcessingRequest.Claim, at now: Date) -> Date {
-        lock.withLock {
-            let key = Self.key(claim)
+        let key = Self.key(claim)
+        return seen.withLock { seen in
             if let date = seen[key] { return date }
             seen[key] = now
             if seen.count > 10_000 { seen = seen.filter { now.timeIntervalSince($0.value) < 86_400 } }
@@ -446,10 +446,8 @@ public final class ClaimObservations: @unchecked Sendable {
 
     /// A heartbeat this device just wrote itself is seen from the moment it wrote it.
     func record(_ claim: ProcessingRequest.Claim, at now: Date) {
-        lock.withLock {
-            let key = Self.key(claim)
-            seen[key] = min(seen[key] ?? now, now)
-        }
+        let key = Self.key(claim)
+        seen.withLock { $0[key] = min($0[key] ?? now, now) }
     }
 }
 
