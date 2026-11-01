@@ -105,7 +105,7 @@ final class CloudDirectoryTests: XCTestCase {
         _ = await directory.offers()
         XCTAssertEqual(server.requests.count, fetched)
         _ = await directory.offers(refresh: true)
-        XCTAssertEqual(server.requests.count, fetched + 3, "Both lists and OpenRouter again")
+        XCTAssertEqual(server.requests.count, fetched + 2, "Both lists again; prices are kept for a day")
 
         try keys.removeKey(for: .openai)
         offers = await directory.offers()

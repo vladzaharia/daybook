@@ -194,6 +194,23 @@ final class CloudSummarizerTests: XCTestCase {
         }
     }
 
+    func testBehaviorACostIsEstimatedFromThePromptBeforeItIsSent() async throws {
+        let server = FakeCloudServer()
+        let summarizer = await summarizer(server, keys: [.anthropic: anthropicKey]) { _ in .anthropicReply(["{}"]) }
+        let sonnet = try await model("claude-sonnet-5-5", in: summarizer)
+        let before = server.requests.count
+        let medium = await summarizer.estimatedCost(meeting(), template: nil, vocabulary: [], model: sonnet, effort: .medium)
+        let estimate = try XCTUnwrap(medium)
+        XCTAssertEqual(server.requests.count, before, "Nothing is sent")
+        let built = CloudSynthesis.prompt(source: MeetingEvidence.summarySource(meeting()), template: .auto, glossary: [],
+                                          templateInstructions: nil, provider: .anthropic)
+        let input = Double((built.instructions + built.prompt + built.schema).count) / 2.8
+        let output = Double(CloudCatalog.builtIn.expectedOutputTokens("claude-sonnet-5-5", provider: .anthropic, minutes: 208.0 / 60, effort: .medium))
+        XCTAssertEqual(estimate, (input * 2 + output * 10) / 1e6, accuracy: 1e-5)
+        let high = await summarizer.estimatedCost(meeting(), template: nil, vocabulary: [], model: sonnet, effort: .high)
+        XCTAssertGreaterThan(try XCTUnwrap(high), estimate)
+    }
+
     func testBehaviorWithoutAKeyOrATranscriptThereIsNoSummary() async throws {
         let server = FakeCloudServer()
         let summarizer = await summarizer(server, keys: [:]) { _ in .anthropicReply(["{}"]) }

@@ -19,6 +19,7 @@ public actor CloudDirectory {
     private let now: @Sendable () -> Date
     private var listings: [CloudProvider: Listing]
     private var livePrices: CloudPriceBook?
+    private var lastPriceAttempt: Date?
     /// How long OpenRouter's prices are kept.
     static let priceLifetime: TimeInterval = 24 * 60 * 60
     static let listingsKey = "cloudModelListings"
@@ -37,7 +38,8 @@ public actor CloudDirectory {
     }
 
     /// The models offered now (`CloudCatalog.offers`). With `refresh`, or for a provider never listed, each provider
-    /// with a key is asked again first; a list that can't be fetched keeps the last one.
+    /// with a key is asked again first; a list that can't be fetched keeps the last one. Prices are fetched when the
+    /// last are over a day old.
     public func offers(refresh: Bool = false) async -> [CloudOffer] {
         let providers = keys.providersWithKeys()
         for provider in CloudProvider.allCases where !providers.contains(provider) && listings[provider] != nil { forget(provider) }
@@ -46,7 +48,7 @@ public actor CloudDirectory {
             guard let key = try? keys.key(for: provider) else { continue }
             if let models = try? await client.models(provider, key: key) { remember(models, for: provider) }
         }
-        await refreshPrices(force: refresh)
+        await refreshPrices()
         return currentOffers()
     }
 
@@ -81,10 +83,12 @@ public actor CloudDirectory {
     public var prices: CloudPriceBook { livePrices.map { $0.merged(over: .snapshot) } ?? .snapshot }
 
     /// Fetches OpenRouter's list when there's a key and the last is over a day old (or `force`). A failure keeps
-    /// what there was.
+    /// what there was, and isn't tried again for an hour.
     public func refreshPrices(force: Bool = false) async {
         guard !keys.providersWithKeys().isEmpty else { return }
         if !force, let fetched = livePrices?.fetchedAt, now().timeIntervalSince(fetched) < Self.priceLifetime { return }
+        if !force, let tried = lastPriceAttempt, now().timeIntervalSince(tried) < 60 * 60 { return }
+        lastPriceAttempt = now()
         guard let book = try? await client.openRouterPrices(fetchedAt: now()), !book.models.isEmpty else { return }
         livePrices = book
         defaults.set(try? JSONEncoder().encode(book), forKey: Self.pricesKey)
