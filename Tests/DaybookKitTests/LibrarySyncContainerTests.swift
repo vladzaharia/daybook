@@ -33,11 +33,13 @@ final class LibrarySyncContainerTests: XCTestCase {
         try? fm.removeItem(at: root)
     }
 
-    private func environment(identifier: String? = "iCloud.test.daybook", entitled: Bool = true, cloud: SyncCloudFiles = .system) -> SyncContainerEnvironment {
+    private func environment(identifier: String? = "iCloud.test.daybook", entitled: Bool = true, cloud: SyncCloudFiles = .system,
+                             app: String? = nil, earlierApp: String? = nil) -> SyncContainerEnvironment {
         let account = account!
         return SyncContainerEnvironment(containerIdentifier: identifier, hasEntitlement: { _ in entitled },
                                         accountIdentity: { account.identity }, accountSignedIn: { account.signedIn },
-                                        resolveContainer: { _ in account.container }, cloud: cloud, retryInterval: .milliseconds(20))
+                                        resolveContainer: { _ in account.container }, cloud: cloud, retryInterval: .milliseconds(20),
+                                        appIdentifier: app, earlierAccountApp: earlierApp)
     }
 
     private func controller(_ environment: SyncContainerEnvironment) -> LibrarySyncController {
@@ -266,6 +268,73 @@ final class LibrarySyncContainerTests: XCTestCase {
         NotificationCenter.default.post(name: .NSUbiquityIdentityDidChange, object: nil)
         try await waitUntil("signed out", state: syncState) { sync.iCloud == .signedOut }
         XCTAssertNil(sync.folder)
+    }
+
+    /// iCloud's account token is per app: the Mac's App Store build (`local.daybook.phone`) never sees the token its
+    /// Developer ID build (`local.daybook.app`) recorded, even for the same account. Taking over that build's library and
+    /// preferences, it keeps syncing when the container holds this library's journal, and records its own token.
+    func testAnotherAppsAccountCarriesOverWhenTheContainerHoldsThisLibrary() async throws {
+        try await librarySyncedThroughFolder()
+        let developerID = controller(environment(app: "local.daybook.app"))
+        developerID.restore()
+        await developerID.waitForContainer()
+        XCTAssertEqual(developerID.iCloud, .connected)
+        XCTAssertEqual(defaults.string(forKey: "syncICloudAccountApp"), "local.daybook.app")
+
+        // Preferences an earlier version wrote don't say which app recorded the account: on the Mac, the Developer ID build.
+        defaults.removeObject(forKey: "syncICloudAccountApp")
+        account.identity = Data("account-a, as the App Store build sees it".utf8)
+        let appStore = controller(environment(app: "local.daybook.phone", earlierApp: "local.daybook.app"))
+        appStore.restore()
+        await appStore.waitForContainer()
+        XCTAssertEqual(appStore.iCloud, .connected, appStore.status)
+        XCTAssertEqual(appStore.folder, journal)
+        XCTAssertEqual(defaults.data(forKey: "syncICloudAccount"), account.identity, "its own token from now on")
+        XCTAssertEqual(defaults.string(forKey: "syncICloudAccountApp"), "local.daybook.phone")
+
+        // Back to the Developer ID build (its own token again): the same.
+        account.identity = Data("account-a".utf8)
+        let back = controller(environment(app: "local.daybook.app", earlierApp: "local.daybook.app"))
+        back.restore()
+        await back.waitForContainer()
+        XCTAssertEqual(back.iCloud, .connected, back.status)
+    }
+
+    /// Another app's token with a container that doesn't hold this library (another account's, or one without a
+    /// journal), or a changed token recorded by this same app: paused, as for any change of account.
+    func testAnotherAppsAccountWithAnotherLibraryOrTheSameAppPauses() async throws {
+        try await librarySyncedThroughFolder()
+        let developerID = controller(environment(app: "local.daybook.app"))
+        developerID.restore()
+        await developerID.waitForContainer()
+        XCTAssertEqual(developerID.iCloud, .connected)
+
+        // Another account's container: a journal for another library.
+        let other = root.appendingPathComponent("Other Container", isDirectory: true)
+        let otherJournal = other.appendingPathComponent("Documents/Daybook", isDirectory: true)
+        try fm.createDirectory(at: otherJournal, withIntermediateDirectories: true)
+        try Data(#"{"format":"DaybookSync","schemaVersion":1,"libraryID":"\#(UUID().uuidString)"}"#.utf8)
+            .write(to: otherJournal.appendingPathComponent("daybook-sync.json"))
+        account.container = other
+        account.identity = Data("account-b, as the App Store build sees it".utf8)
+        let appStore = controller(environment(app: "local.daybook.phone", earlierApp: "local.daybook.app"))
+        appStore.restore()
+        try await waitUntil("the pause", state: syncState) { appStore.iCloud == .accountChanged }
+        XCTAssertEqual(appStore.status, "Sync paused: the iCloud account changed")
+        XCTAssertEqual(defaults.string(forKey: "syncICloudAccountApp"), "local.daybook.app", "nothing recorded")
+
+        // A container without a journal.
+        account.container = root.appendingPathComponent("Empty Container", isDirectory: true)
+        try fm.createDirectory(at: try XCTUnwrap(account.container), withIntermediateDirectories: true)
+        let empty = controller(environment(app: "local.daybook.phone", earlierApp: "local.daybook.app"))
+        empty.restore()
+        try await waitUntil("the pause without a journal", state: syncState) { empty.iCloud == .accountChanged }
+
+        // This app's own token, changed: another account, whatever the container holds.
+        account.container = containerURL
+        let same = controller(environment(app: "local.daybook.app", earlierApp: "local.daybook.app"))
+        same.restore()
+        try await waitUntil("the pause for this app", state: syncState) { same.iCloud == .accountChanged }
     }
 
     func testTheAccountNotificationWithTheSameAccountLeavesSyncAsItWas() async throws {

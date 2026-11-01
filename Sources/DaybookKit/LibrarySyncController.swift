@@ -102,14 +102,22 @@ public struct SyncContainerEnvironment: Sendable {
     public var cloud: SyncCloudFiles
     /// How long to wait before retrying a migration that's waiting for iCloud downloads.
     public var retryInterval: Duration
+    /// This app's bundle ID, kept with the account it records. iCloud's account token is per app, so a token another
+    /// app recorded can't be compared with this one's (`LibrarySyncController`, "Another app's account"). Nil: never
+    /// compared across apps.
+    public var appIdentifier: String?
+    /// Which app recorded an account before the app was kept with it: on the Mac the only signed build then,
+    /// `local.daybook.app`; on the iPhone the app itself.
+    public var earlierAccountApp: String?
 
     public init(containerIdentifier: String?, hasEntitlement: @escaping @Sendable (String) -> Bool,
                 accountIdentity: @escaping @Sendable () -> Data?, accountSignedIn: @escaping @Sendable () async -> Bool? = { nil },
                 resolveContainer: @escaping @Sendable (String) -> URL?, cloud: SyncCloudFiles = .system,
-                retryInterval: Duration = .seconds(5)) {
+                retryInterval: Duration = .seconds(5), appIdentifier: String? = nil, earlierAccountApp: String? = nil) {
         self.containerIdentifier = Self.valid(containerIdentifier)
         self.hasEntitlement = hasEntitlement; self.accountIdentity = accountIdentity; self.accountSignedIn = accountSignedIn
         self.resolveContainer = resolveContainer; self.cloud = cloud; self.retryInterval = retryInterval
+        self.appIdentifier = appIdentifier; self.earlierAccountApp = earlierAccountApp
     }
 
     public static var system: SyncContainerEnvironment {
@@ -135,7 +143,15 @@ public struct SyncContainerEnvironment: Sendable {
                 return nil
                 #endif
             },
-            resolveContainer: { FileManager.default.url(forUbiquityContainerIdentifier: $0) })
+            resolveContainer: { FileManager.default.url(forUbiquityContainerIdentifier: $0) },
+            appIdentifier: Bundle.main.bundleIdentifier,
+            earlierAccountApp: {
+                #if os(macOS)
+                return "local.daybook.app"
+                #else
+                return Bundle.main.bundleIdentifier
+                #endif
+            }())
     }
 
     static func valid(_ identifier: String?) -> String? {
@@ -243,6 +259,8 @@ public final class LibrarySyncController: ObservableObject {
         static let migratedFolderBookmark = "syncMigratedFolderBookmark"
         static let migration = "syncContainerMigration"
         static let account = "syncICloudAccount"
+        /// The bundle ID of the app that recorded `account`.
+        static let accountApp = "syncICloudAccountApp"
         static let turnedOff = "syncICloudTurnedOff"
         static let deviceID = "syncDeviceID"
         static let installation = "syncInstallation"
@@ -360,6 +378,7 @@ public final class LibrarySyncController: ObservableObject {
     /// After the iCloud account changed: sync this library with the account that's signed in now.
     public func useCurrentICloudAccount() {
         defaults.removeObject(forKey: Key.account)
+        defaults.removeObject(forKey: Key.accountApp)
         guard let identifier = containerIdentifier else { return }
         // The other account's library is another library: whether this one was encrypted says nothing about it.
         forgetsSealedLibrary = true
@@ -911,9 +930,18 @@ public final class LibrarySyncController: ObservableObject {
             }
             return
         }
+        // Another app's account: iCloud's account token is per app, so a token another app recorded never equals this
+        // one's, even for the same account. That's this Mac's Developer ID build (`local.daybook.app`) when the App Store
+        // build (`local.daybook.phone`) took over its library and preferences, or the other way round. The container
+        // decides, below: holding this library's journal, it's the same account.
+        var recordedByAnotherApp = false
         if let previous = defaults.data(forKey: Key.account), !Self.sameAccount(previous, account) {
-            iCloud = .accountChanged; status = "Sync paused: the iCloud account changed"
-            return
+            let recorder = defaults.string(forKey: Key.accountApp) ?? environment.earlierAccountApp
+            guard let recorder, let app = environment.appIdentifier, recorder != app else {
+                iCloud = .accountChanged; status = "Sync paused: the iCloud account changed"
+                return
+            }
+            recordedByAnotherApp = true
         }
         iCloud = .checking; status = "Connecting to iCloud…"
         let resolve = environment.resolveContainer
@@ -925,6 +953,17 @@ public final class LibrarySyncController: ObservableObject {
             return
         }
         let root = container.appendingPathComponent("Documents", isDirectory: true).appendingPathComponent("Daybook", isDirectory: true)
+        if recordedByAnotherApp {
+            let (localRoot, deviceID, cloud) = (localRoot, deviceID, environment.cloud)
+            let holds = await Task.detached(priority: .utility) {
+                LibrarySyncEngine.holdsJournal(localRoot: localRoot, deviceID: deviceID, remoteRoot: root, cloud: cloud)
+            }.value
+            guard isCurrent(generation) else { return }
+            guard holds else {
+                iCloud = .accountChanged; status = "Sync paused: the iCloud account changed"
+                return
+            }
+        }
         if forgetsSealedLibrary {
             forgetsSealedLibrary = false
             LibrarySyncEngine.forgetSealedLibrary(localRoot: localRoot, remoteRoot: root)
@@ -936,6 +975,7 @@ public final class LibrarySyncController: ObservableObject {
         }
         // The library is bound to this account from here on, so a change mid-migration pauses too.
         defaults.set(account, forKey: Key.account)
+        if let app = environment.appIdentifier { defaults.set(app, forKey: Key.accountApp) } else { defaults.removeObject(forKey: Key.accountApp) }
         guard await migrateFolder(into: root, identifier: identifier, generation: generation), isCurrent(generation) else { return }
         // An account change cancels the pass in flight, but it may still be unwinding (a long audio copy): attaching
         // now would be refused as busy and leave sync off. Wait for it.

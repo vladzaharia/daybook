@@ -1034,6 +1034,18 @@ public actor LibrarySyncEngine {
         try LocalFiles.atomicWrite(Data(contentsOf: from), to: to)
         return true
     }
+    /// Whether the sync folder at `remoteRoot` holds the journal this device synced `localRoot` with: its manifest, already
+    /// downloaded, names a library (or one it replaced) this device has a checkpoint for. Reads only; false when the
+    /// manifest isn't there, is still in iCloud, or names another library.
+    public static func holdsJournal(localRoot: URL, deviceID: String, remoteRoot: URL, cloud: SyncCloudFiles = .system) -> Bool {
+        let url = remoteRoot.appendingPathComponent("daybook-sync.json")
+        guard SyncFiles.itemState(url) == .local, let bytes = try? SyncFiles.read(url, below: remoteRoot, cloud: cloud),
+              let manifest = try? SyncManifest.checked(SyncManifest.decode(bytes)) else { return false }
+        let sync = localRoot.standardizedFileURL.appendingPathComponent("Sync", isDirectory: true)
+        return ([manifest.libraryID] + (manifest.supersedes ?? [])).contains {
+            FileManager.default.fileExists(atPath: sync.appendingPathComponent("\(checkpointStem(libraryID: $0, deviceID: deviceID)).json").path)
+        }
+    }
     /// Whether one of this device's checkpoints (for any library) records `id` as deleted through sync.
     public static func recordsDeletion(of id: UUID, localRoot: URL, deviceID: String) -> Bool {
         struct Deletions: Decodable { var deletedIDs: Set<UUID>? }
