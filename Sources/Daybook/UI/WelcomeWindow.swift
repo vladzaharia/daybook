@@ -103,7 +103,7 @@ private struct WelcomeIntro: View {
         ("mic.circle.fill", "Record calls, and conversations in the room."),
         ("magnifyingglass.circle.fill", "Read a short summary. Search every word."),
         ("play.circle.fill", "Play back any moment."),
-        ("lock.circle.fill", "Transcribed and summarized here. Nothing is uploaded.")
+        ("lock.circle.fill", "Transcribed and summarized on your devices, unless you choose a cloud model.")
     ]
 
     var body: some View {

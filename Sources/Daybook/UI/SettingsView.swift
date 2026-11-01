@@ -375,7 +375,7 @@ private struct LibrarySettings: View {
 
             Section {
                 Label {
-                    Text("Transcripts and summaries are made on this Mac. Nothing is uploaded except to your own iCloud, when sync is on.")
+                    Text("Recordings and transcripts stay on your devices, and in your own iCloud when sync is on. A summary goes to a cloud model only when you choose one.")
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "lock.fill").foregroundStyle(DaybookStyle.brandGradient)
