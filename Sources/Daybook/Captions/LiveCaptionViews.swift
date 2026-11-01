@@ -26,18 +26,23 @@ struct LiveCaptionsSection: View {
 
     var body: some View {
         if isRecording && captions.isShowing(for: meeting.id) {
-            LiveCaptionStrip(lines: Self.lines(captions.recent(Self.liveLines), names: captions.sourceNames,
-                                               listening: captions.state == .listening),
-                             status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
-                             style: Self.style)
-                .padding(.top, Space.s6)
+            // On the text's edge, as everything on the page is.
+            MarginRow {
+                LiveCaptionStrip(lines: Self.lines(captions.recent(Self.liveLines), names: captions.sourceNames,
+                                                   listening: captions.state == .listening),
+                                 status: LiveCaptionStatus.line(captions.state, locale: captions.locale),
+                                 style: Self.style)
+            }
+            .padding(.top, Space.s6)
         }
     }
 
-    /// The page's lines: in its body type, at its reading scale, each whole.
+    /// The page's lines: in its body type, at its reading scale, each whole; the label as any label, with
+    /// no row beside it to line its glyph up with.
     static var style: CaptionStripStyle {
         var style = CaptionStripStyle.feed
         style.lines = liveLines
+        style.glyphColumn = nil
         return style
     }
 
