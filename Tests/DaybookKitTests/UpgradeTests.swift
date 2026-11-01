@@ -200,6 +200,15 @@ final class UpgradeTests: XCTestCase {
         }
     }
 
+    func testBehaviorASummaryAnotherDeviceHoldsIsWorkUnderWay() throws {
+        // An iPhone holds the summary while it counts down (a claimed Summarize request): every device reads it as work.
+        var meeting = conversation(transcription: ["parakeet/redux"])
+        var held = ProcessingRequest(meetingID: meeting.id, mode: .summaryOnly, requestedBy: ProcessingRequest.Device(id: "phone", name: "Vlad's iPhone"))
+        held = try XCTUnwrap(held.claimed(by: held.requestedBy, at: Date()))
+        meeting.upsertProcessingRequest(held)
+        XCTAssertNil(offer(meeting, status: ProcessingStatus(meeting), macs: [mac()]))
+    }
+
     func testBehaviorTheMostUpstreamStepIsOfferedSinceItRedoesTheRest() throws {
         let meeting = conversation(transcription: ["parakeet/redux"], speakers: "sortformer-2.1/fp16", summary: "gemma-4/e2b-4bit")
         XCTAssertEqual(offer(meeting, macs: [mac()], cloud: sonnet)?.role, .transcription)
