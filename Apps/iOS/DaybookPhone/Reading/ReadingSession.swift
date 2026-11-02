@@ -1,4 +1,5 @@
 import DaybookKit
+import DaybookUI
 import Observation
 import SwiftUI
 
@@ -57,6 +58,10 @@ final class ReadingSession {
     var sheet: ReadingSheet?
     /// The camera is open to add a photo to this conversation.
     var cameraFor: UUID?
+    /// Files is open to add a recording to this conversation (Add Recording…).
+    var addingRecordingTo: UUID?
+    /// A moment's word over the page after something that leaves nothing else to see ("Copied").
+    var confirmation: ConfirmationBeat?
     /// A new note: its notes take the keyboard when the page appears.
     var focusNotesFor: UUID?
     /// Something couldn't be done (the audio isn't here to share): an alert naming it.

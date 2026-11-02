@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -19,11 +20,43 @@ import SwiftUI
 struct LibraryBrowser: View {
     let style: SurfaceStyle
     @Environment(PhoneAppModel.self) private var model
+    @Environment(ReadingSession.self) private var session
 
     var body: some View {
         ReadingLayout(style: style, library: model.library.controller, rootURL: model.library.rootURL,
                       openLatest: model.options.openLatest, statusDetent: model.options.statusDetent)
             .environment(\.liveCaptionsSaved, model.captions.lastSave)
+            // The player stands aside for a recording however it starts, before anything plays here.
+            .onAppear { [model] in session.player.follow { model.isRecordingActive } }
+            .fileImporter(isPresented: Binding(get: { session.addingRecordingTo != nil }, set: { if !$0 { session.addingRecordingTo = nil } }),
+                          allowedContentTypes: RecordStartButton.audioTypes, allowsMultipleSelection: true) { result in
+                guard let id = session.addingRecordingTo, case .success(let urls) = result else { return }
+                session.addingRecordingTo = nil
+                Task { await model.addRecordings(urls, to: id) }
+            }
+    }
+}
+
+extension PhoneAppModel {
+    /// Add Recording…: files from Files join a conversation as more of its recordings, each asking to be transcribed
+    /// as an import does. A file already in the library isn't copied again.
+    func addRecordings(_ urls: [URL], to id: UUID) async {
+        var failures: [(name: String, reason: String)] = []
+        for url in urls {
+            do {
+                let filed = try await library.importFile(url, requestTranscription: settings.requestsTranscription, attachTo: id)
+                if let request = filed.request { link.nudge(request) }
+            } catch {
+                failures.append((url.lastPathComponent, error.localizedDescription))
+            }
+        }
+        if !failures.isEmpty {
+            say(failures.count == 1 ? "Couldn’t add “\(failures[0].name)”." : "Couldn’t add \(failures.count) recordings.",
+                details: failures.map { "\($0.name): \($0.reason)" }.joined(separator: "\n"))
+        }
+        sync.synchronizeFinishing(.filed)
+        processor.pickUp()
+        publish()
     }
 }
 
@@ -143,19 +176,21 @@ private struct ReadingLayout: View {
         } trailing: {
             rightPage
                 .accessibilityHidden(sheetOnPage)
+                // On the right page, clear of the crease, as its sheets are.
+                .confirmationBeat(Bindable(session).confirmation)
                 .overlay {
                     if sheetOnPage, let sheet = session.sheet {
-                        PageSheet {
+                        PageSheet(close: { session.sheet = nil }) {
                             ReadingSheetContent(sheet: sheet, library: library)
                                 .environment(\.closePageSheet) { session.sheet = nil }
                         }
                         .id(sheet.id)
-                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                        .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                .animation(reduceMotion ? .easeOut(duration: 0.15) : PhoneStyle.Motion.state, value: session.sheet?.id)
+                .daybookMotion(PhoneStyle.Motion.state, value: session.sheet?.id)
         }
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : PhoneStyle.Motion.page, value: session.reading)
+        .daybookMotion(PhoneStyle.Motion.page, value: session.reading)
     }
 
     /// The sheet shows on the right page: two pages, and anything but the system's share sheet.
@@ -174,9 +209,12 @@ private struct ReadingLayout: View {
                     .environment(\.isTwoPage, true)
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
+                        // The system's back button, as one column shows it: the chevron alone, in title ink.
                         ToolbarItem(placement: .topBarLeading) {
                             Button { session.closeConversation() } label: { Label("Library", systemImage: "chevron.backward") }
-                                .labelStyle(.titleAndIcon)
+                                .labelStyle(.iconOnly)
+                                .tint(PhoneStyle.Ink.title)
+                                .accessibilityLabel("Library")
                         }
                         ConversationToolbar(library: library, meeting: meeting)
                     }
@@ -208,7 +246,9 @@ private struct ReadingLayout: View {
             if session.reading {
                 NavigationStack {
                     PhoneTranscriptPage(library: library, player: session.player, meeting: meeting, showsHeader: false)
-                        .safeAreaInset(edge: .bottom, spacing: 0) { PlayerBar(player: session.player, library: library, meeting: meeting) }
+                        // A bar, so the transcript under the player fades hard rather than reading sharp beneath it.
+                        .scrollEdgeEffectStyle(session.player.isActive(for: meeting.id) ? .hard : nil, for: .bottom)
+                        .safeAreaBar(edge: .bottom, spacing: 0) { ConversationPlayer(library: library, meeting: meeting) }
                         .navigationBarTitleDisplayMode(.inline)
                 }
                 .environment(\.isTwoPage, true)
@@ -220,7 +260,7 @@ private struct ReadingLayout: View {
                         // panel, hard, so the page doesn't read through its glass (as the list's under Record).
                         // The effect runs only under something drawn, so the bar's room is drawn, unseen.
                         SummaryPage(library: library, meeting: meeting, bottomEdgeEffect: .hard)
-                            .safeAreaInset(edge: .bottom, spacing: 0) { PlayerBar(player: session.player, library: library, meeting: meeting) }
+                            .safeAreaBar(edge: .bottom, spacing: 0) { ConversationPlayer(library: library, meeting: meeting) }
                             .safeAreaBar(edge: .bottom, spacing: 0) {
                                 Rectangle().fill(Color.primary.opacity(0.001)).frame(height: footprint).accessibilityHidden(true)
                             }
@@ -290,17 +330,24 @@ private struct ReadingLayout: View {
 }
 
 /// A reading sheet on the notebook's right page: a card on that page, clear of the crease, where one
-/// column would present a sheet. Its Done or Cancel closes it (`SheetDismiss`); the left page stays
-/// as it was.
+/// column would present a sheet. Its Done or Cancel closes it (`SheetDismiss`), and so do what closes
+/// a sheet: a swipe down from its grabber, and VoiceOver's escape (two fingers scrubbing). It isn't
+/// modal: the left page stays as it was, and stays in reach.
 private struct PageSheet<Content: View>: View {
+    let close: () -> Void
     @ViewBuilder var content: Content
+    @State private var drag: CGFloat = 0
     @Environment(\.creaseEdge) private var creaseEdge
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         content
             .background(Color(uiColor: .systemBackground))
+            .overlay(alignment: .top) { grabber }
             .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .shadow(color: .black.opacity(0.12), radius: 18, y: 4)
+            .offset(y: drag)
+            .accessibilityAction(.escape) { close() }
             .padding(.leading, creaseEdge == .leading ? PhoneStyle.Page.creaseClearance : PhoneStyle.Space.s3)
             .padding(.trailing, PhoneStyle.Space.s3)
             .padding(.vertical, PhoneStyle.Space.s2)
@@ -308,9 +355,46 @@ private struct PageSheet<Content: View>: View {
             .background {
                 Rectangle().fill(.ultraThinMaterial)
                     .overlay(Color.black.opacity(0.12))
+                    .opacity(PageSheetDrag.dimming(drag))
                     .ignoresSafeArea(edges: [.top, .bottom, .trailing])
                     .accessibilityHidden(true)
             }
+    }
+
+    /// A sheet's grabber, over the middle of the card's top edge, clear of its Done and Cancel: the card follows a
+    /// finger down and closes past a point, or springs back.
+    private var grabber: some View {
+        Capsule()
+            .fill(Color(uiColor: .tertiaryLabel))
+            .frame(width: 36, height: 5)
+            .padding(.top, 5)
+            .frame(width: 120, height: 24, alignment: .top)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                .onChanged { value in drag = max(0, value.translation.height) }
+                .onEnded { value in
+                    if PageSheetDrag.closes(translation: value.translation.height, predicted: value.predictedEndTranslation.height) {
+                        close()
+                    } else {
+                        withAnimation(DaybookMotion.resolved(DaybookMotion.land, reduceMotion: reduceMotion)) { drag = 0 }
+                    }
+                })
+            .accessibilityHidden(true)
+    }
+}
+
+/// When a swipe down on a page sheet's grabber closes it, and how much the page behind stays dimmed meanwhile.
+enum PageSheetDrag {
+    /// Past this far down, or flicked to land past twice it, the sheet closes.
+    static let closingDistance: CGFloat = 120
+
+    static func closes(translation: CGFloat, predicted: CGFloat) -> Bool {
+        translation >= closingDistance || predicted >= closingDistance * 2
+    }
+
+    /// The dimming fades as the card is pulled down, gone by twice the closing distance.
+    static func dimming(_ drag: CGFloat) -> Double {
+        max(0, 1 - Double(drag) / Double(closingDistance * 2))
     }
 }
 

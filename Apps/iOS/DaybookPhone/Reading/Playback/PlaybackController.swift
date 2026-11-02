@@ -1,52 +1,85 @@
 import AVFoundation
+import DaybookDevices
 import DaybookKit
+import DaybookUI
 import MediaPlayer
 import Observation
 import UIKit
 
-/// Plays one recording of one conversation, from local audio an `AudioProviding` hands it, with
-/// Lock Screen and Control Center controls. It lives in the reading session, above every layout,
-/// so folding or unfolding the iPhone Duo never interrupts it.
+/// Plays one recording of one conversation, from local audio an `AudioProviding` hands it, through DaybookKit's
+/// `PlaybackEngine` (the Mac's player plays through the same one), with Lock Screen and Control Center controls. It lives
+/// in the reading session, above every layout, so folding or unfolding the iPhone Duo never interrupts it. The shared
+/// `PlayerBar` draws it (`PlaybackControlling`).
+///
+/// The recorder owns the audio session. While a recording is under way (`isRecording`) the player won't play, never
+/// changes the session's category or activity, and has cleared the Lock Screen's Now Playing and turned off its remote
+/// commands (`suspendForRecording`), so a press on the Lock Screen or an AirPods stem can't take the microphone away
+/// from the recording.
 @MainActor
 @Observable
-final class PlaybackController: NSObject, AVAudioPlayerDelegate {
-    enum Phase: Equatable {
-        case idle
-        /// Getting the audio: downloading (with a fraction when known) or opening it.
-        case loading(Double?)
-        case ready
-        /// The audio can't play now; the words say why (offline, missing, undecodable).
-        case unavailable(String)
-    }
+final class PlaybackController: PlaybackControlling {
+    typealias Phase = PlaybackPhase
 
-    private(set) var phase: Phase = .idle
-    private(set) var isPlaying = false
-    private(set) var position: TimeInterval = 0
-    private(set) var duration: TimeInterval = 0
+    @ObservationIgnored let engine = PlaybackEngine()
+
+    private(set) var phase: PlaybackPhase = .idle
+    var isPlaying: Bool { engine.isPlaying }
+    var position: TimeInterval { engine.position }
+    var duration: TimeInterval { engine.duration }
+    var backSkips: Int { engine.backSkips }
+    var forwardSkips: Int { engine.forwardSkips }
     /// Playback speed, kept when another recording loads.
-    var rate: Float = 1 { didSet { player?.rate = rate; updateNowPlaying() } }
+    var rate: Float {
+        get { engine.rate }
+        set { engine.rate = newValue; updateNowPlaying() }
+    }
     private(set) var meetingID: UUID?
     private(set) var trackID: UUID?
     /// What the Lock Screen shows.
     private(set) var title = ""
     private(set) var subtitle = ""
     /// Debug screenshots play silently (`--play-muted`).
-    var muted = false { didSet { player?.volume = muted ? 0 : 1 } }
+    var muted = false { didSet { engine.volume = muted ? 0 : 1 } }
 
-    @ObservationIgnored private var player: AVAudioPlayer?
-    @ObservationIgnored private var currentURL: URL?
-    @ObservationIgnored private var timer: Timer?
+    /// Whether this iPhone is recording now; the recorder's state, followed once `follow(recording:)` is called.
+    @ObservationIgnored private var isRecording: @MainActor () -> Bool = { false }
+    @ObservationIgnored private var recordingWatch: ObservationWatch?
     @ObservationIgnored private var loading: Task<Void, Never>?
     @ObservationIgnored private var commandsInstalled = false
 
-    /// Changes `isPlaying` only when it differs, so the library's rows and the mini player redraw only when playback
-    /// starts or stops, never as `position` moves.
-    private func setPlaying(_ playing: Bool) {
-        if isPlaying != playing { isPlaying = playing }
+    init() {
+        engine.onEnding = { [weak self] ending in self?.ended(ending) }
     }
+
+    // The iPhone's problems are an unavailable phase.
+    var problem: String? { nil }
+    var problemDetails: String? { nil }
 
     /// Something is loaded or loading for this conversation, so its player shows.
     func isActive(for id: UUID) -> Bool { meetingID == id && phase != .idle }
+
+    // MARK: Recording
+
+    /// Follows the recorder: the moment a recording starts, playback stops for it (`suspendForRecording`), wherever it
+    /// starts from (the app, a Shortcut, the Lock Screen, a Mac's request, a recorder's button), with no view involved.
+    func follow(recording: @escaping @MainActor () -> Bool) {
+        isRecording = recording
+        recordingWatch = ObservationWatch.distinctValues(of: recording) { [weak self] recording in
+            if recording { self?.suspendForRecording() }
+        }
+    }
+
+    /// A recording started: the player pauses, takes its card off the Lock Screen and Control Center, and stops
+    /// answering their buttons and headphones' until the person plays something here again. It leaves the audio session
+    /// to the recorder: no category, no deactivation.
+    func suspendForRecording() {
+        loading?.cancel()
+        engine.pause()
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        setRemoteCommands(enabled: false)
+    }
+
+    // MARK: Playing
 
     /// Starts playing a passage, a time, or a recording of a conversation, fetching the audio
     /// through `provider` first when it isn't on this iPhone.
@@ -56,9 +89,10 @@ final class PlaybackController: NSObject, AVAudioPlayerDelegate {
             phase = .unavailable("This conversation has no recording to play.")
             return
         }
-        title = meeting.title.isEmpty ? "Untitled Conversation" : meeting.title
-        subtitle = [meeting.peopleLine, meeting.date.formatted(date: .abbreviated, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
-        if meetingID == meeting.id, trackID == track.id, player != nil, phase == .ready {
+        let (title, subtitle) = Self.nowPlaying(meeting)
+        self.title = title
+        self.subtitle = subtitle
+        if meetingID == meeting.id, trackID == track.id, engine.isLoaded, phase == .ready {
             seek(to: seconds)
             resume()
             return
@@ -76,7 +110,8 @@ final class PlaybackController: NSObject, AVAudioPlayerDelegate {
             do {
                 let url = try await provider.localAudio(for: track, in: meetingID, progress: report)
                 guard let self, !Task.isCancelled, self.meetingID == meetingID else { return }
-                try self.load(url)
+                try self.engine.load(url)
+                self.engine.volume = self.muted ? 0 : 1
                 self.phase = .ready
                 self.seek(to: seconds)
                 self.resume()
@@ -89,6 +124,14 @@ final class PlaybackController: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    /// What the Lock Screen and paired devices show: the title, and when it was. Never who was there, and a Personal
+    /// conversation by no name at all, since the Lock Screen shows it to anyone holding the phone.
+    static func nowPlaying(_ meeting: Meeting) -> (title: String, subtitle: String) {
+        let when = meeting.date.formatted(date: .abbreviated, time: .shortened)
+        if meeting.effectivePlacement == .personal { return ("Daybook conversation", when) }
+        return (meeting.title.isEmpty ? "Untitled Conversation" : meeting.title, when)
+    }
+
     private func reportDownload(_ fraction: Double, for id: UUID) {
         guard meetingID == id, case .loading(let previous) = phase else { return }
         let value = min(1, max(0, fraction.isFinite ? fraction : 0))
@@ -97,127 +140,64 @@ final class PlaybackController: NSObject, AVAudioPlayerDelegate {
         phase = .loading(value)
     }
 
-    private func load(_ url: URL) throws {
-        if currentURL == url, player != nil { return }
-        stopTimer()
-        player?.stop()
-        let loaded = try AVAudioPlayer(contentsOf: url)
-        loaded.delegate = self
-        loaded.enableRate = true
-        guard loaded.prepareToPlay() else {
-            throw NSError(domain: "DaybookPlayback", code: 1, userInfo: [NSLocalizedDescriptionKey: "This recording couldn’t be prepared for playback."])
-        }
-        loaded.rate = rate
-        loaded.volume = muted ? 0 : 1
-        player = loaded
-        currentURL = url
-        duration = loaded.duration
-        position = 0
-    }
-
     func toggle() { isPlaying ? pause() : resume() }
 
+    /// Plays, unless this iPhone is recording: then the microphone has the session, and nothing plays.
     func resume() {
-        guard let player else { return }
+        guard engine.isLoaded, !isRecording() else { return }
         activateSession()
-        if player.currentTime >= player.duration - 0.05 { player.currentTime = 0 }
-        guard player.play() else {
+        guard engine.play() else {
             phase = .unavailable("Playback couldn’t start. Check the sound output and try again.")
-            setPlaying(false)
             return
         }
-        setPlaying(true)
-        position = player.currentTime
-        startTimer()
         installRemoteCommands()
+        setRemoteCommands(enabled: true)
         updateNowPlaying()
     }
 
     func pause() {
-        guard let player else { return }
-        player.pause()
-        position = player.currentTime
-        setPlaying(false)
-        stopTimer()
-        updateNowPlaying()
+        guard engine.isLoaded else { return }
+        engine.pause()
+        if !isRecording() { updateNowPlaying() }
     }
 
-    func skip(_ seconds: TimeInterval) { seek(to: position + seconds) }
+    func skip(_ seconds: TimeInterval) {
+        engine.skip(seconds)
+        updateNowPlaying()
+    }
 
     func seek(to seconds: TimeInterval) {
-        guard let player else { return }
-        let target = seconds.isFinite ? min(max(0, seconds), duration) : 0
-        player.currentTime = target
-        position = target
+        engine.seek(to: seconds)
         updateNowPlaying()
     }
 
-    /// Stops and releases the recording, which hides the player.
+    /// Stops and releases the recording, which hides the player. The audio session goes back to the system only when
+    /// no recording holds it.
     func close() {
         loading?.cancel()
         loading = nil
-        player?.stop()
-        player = nil
-        currentURL = nil
-        stopTimer()
-        setPlaying(false)
-        position = 0
-        duration = 0
+        engine.unload()
         meetingID = nil
         trackID = nil
         phase = .idle
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        guard !isRecording() else { return }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    // MARK: Clock
-
-    private func startTimer() {
-        stopTimer()
-        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
-        }
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
-    }
-
-    private func tick() {
-        guard let player else { return }
-        position = min(player.currentTime, duration)
-        if !player.isPlaying, isPlaying {
-            setPlaying(false)
-            stopTimer()
-            updateNowPlaying()
-        }
-    }
-
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor [weak self] in
-            guard let self, self.player === player else { return }
-            self.setPlaying(false)
-            self.position = self.duration
-            self.stopTimer()
-            self.updateNowPlaying()
-        }
-    }
-
-    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        Task { @MainActor [weak self] in
-            guard let self, self.player === player else { return }
-            self.setPlaying(false)
-            self.stopTimer()
-            self.phase = .unavailable("This recording couldn’t be played.")
+    private func ended(_ ending: PlaybackEnding) {
+        switch ending {
+        case .reachedEnd, .cutShort, .stoppedElsewhere:
+            if !isRecording() { updateNowPlaying() }
+        case .undecodable:
+            phase = .unavailable("This recording couldn’t be played.")
         }
     }
 
     // MARK: Lock Screen and Control Center
 
     private func activateSession() {
+        guard !isRecording() else { return }
         let session = AVAudioSession.sharedInstance()
         // Spoken audio: the system pauses rather than ducks it for other speech.
         try? session.setCategory(.playback, mode: .spokenAudio)
@@ -259,8 +239,18 @@ final class PlaybackController: NSObject, AVAudioPlayerDelegate {
         center.previousTrackCommand.isEnabled = false
     }
 
+    /// The Lock Screen's and headphones' buttons answer while something of Daybook's can play, and not during a recording.
+    private func setRemoteCommands(enabled: Bool) {
+        guard commandsInstalled else { return }
+        let center = MPRemoteCommandCenter.shared()
+        for command in [center.playCommand, center.pauseCommand, center.togglePlayPauseCommand, center.skipBackwardCommand,
+                        center.skipForwardCommand, center.changePlaybackPositionCommand] {
+            command.isEnabled = enabled
+        }
+    }
+
     private func updateNowPlaying() {
-        guard player != nil else { return }
+        guard engine.isLoaded, !isRecording() else { return }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
             MPMediaItemPropertyTitle: title,
             MPMediaItemPropertyArtist: subtitle,
@@ -272,6 +262,4 @@ final class PlaybackController: NSObject, AVAudioPlayerDelegate {
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
         ]
     }
-
-    deinit { timer?.invalidate() }
 }

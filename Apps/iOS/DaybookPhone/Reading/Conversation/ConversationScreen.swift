@@ -1,5 +1,7 @@
 import DaybookCaptions
+import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// One column: the conversation with a Summary | Transcript switch, the player at the thumb.
@@ -18,18 +20,24 @@ struct ConversationScreen: View {
             // Saved live captions open the Transcript side until a transcript replaces them, as on the Mac.
             let hasTranscript = !meeting.unifiedTranscript.isEmpty || hasCaptions
             let mode: PageMode = hasTranscript ? session.pageMode : .summary
+            // While the player shows, the page's foot fades hard under it, as the list's does under Record, so lines
+            // don't read sharp beneath its glass.
+            let edge: ScrollEdgeEffectStyle? = session.player.isActive(for: meeting.id) ? .hard : nil
             Group {
                 switch mode {
-                case .summary: SummaryPage(library: library, meeting: meeting)
+                case .summary: SummaryPage(library: library, meeting: meeting, bottomEdgeEffect: edge)
                 case .transcript: PhoneTranscriptPage(library: library, player: session.player, meeting: meeting)
+                        .scrollEdgeEffectStyle(edge, for: .bottom)
                 }
             }
             .transition(.opacity)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: mode)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                PlayerBar(player: session.player, library: library, meeting: meeting)
+            .animation(DaybookMotion.resolved(.easeOut(duration: 0.15), reduceMotion: reduceMotion), value: mode)
+            // A bar, so the page under the player gets the scroll edge effect rather than running sharp beneath it.
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                ConversationPlayer(library: library, meeting: meeting)
             }
-            .motion(.snappy(duration: 0.25), value: session.player.isActive(for: meeting.id))
+            .daybookMotion(DaybookMotion.state, value: session.player.isActive(for: meeting.id))
+            .confirmationBeat($session.confirmation)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // The switch only when there's a second page to turn to; the page itself says why not.
@@ -56,7 +64,8 @@ struct ConversationScreen: View {
     }
 }
 
-/// Info and More, the same in every layout.
+/// Info and More, the same in every layout. Glyphs alone, in title ink like the system's back chevron: teal is for
+/// what's selected and for text you can act on.
 struct ConversationToolbar: ToolbarContent {
     let library: LibraryController
     let meeting: Meeting
@@ -65,6 +74,7 @@ struct ConversationToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Button { session.sheet = .info(meeting.id) } label: { Label("Info", systemImage: "info.circle") }
+                .tint(PhoneStyle.Ink.title)
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
@@ -72,98 +82,113 @@ struct ConversationToolbar: ToolbarContent {
             } label: {
                 Label("More", systemImage: "ellipsis")
             }
+            .tint(PhoneStyle.Ink.title)
         }
     }
 }
 
-/// The conversation's More menu: share, ask your Mac, history, then filing.
+/// The conversation's More menu: what DaybookKit's `ConversationActions` lists, in its order (share, add, reprocess,
+/// history, filing, the Trash), as the Mac's More menu lists it. What doesn't apply now is left out.
 struct ConversationMoreMenu: View {
     let library: LibraryController
     let meeting: Meeting
     @Environment(ReadingSession.self) private var session
+    @Environment(\.audioProvider) private var provider
+    @Environment(\.summaryPlacement) private var placement
 
     var body: some View {
-        if CameraPicker.isAvailable {
-            Button { session.cameraFor = meeting.id } label: { Label("Take Photo", systemImage: "camera") }
+        ConversationActionMenuItems(ConversationMoreActions.groups(meeting), platform: .iPhone) { id in
+            ConversationMoreActions.perform(id, meeting: meeting, library: library, session: session, provider: provider,
+                                            placement: placement)
         }
-        Button { session.sheet = .importPhotos(meeting.id) } label: { Label("Add Photos…", systemImage: "photo.badge.plus") }
-        ExportMenu(meeting: meeting)
-        if meeting.summary != nil {
-            Button { LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting)) } label: {
-                Label("Copy Summary", systemImage: "doc.on.doc")
-            }
-        }
-        Divider()
-        ReprocessMenu(library: library, meeting: meeting)
-        if !meeting.revisions.isEmpty {
-            Button { session.sheet = .history(meeting.id) } label: { Label("Version History", systemImage: "clock.arrow.circlepath") }
-        }
-        Divider()
-        Button { session.sheet = .move([meeting.id]) } label: { Label("Move to Folder…", systemImage: "folder") }
-        Button { session.sheet = .tags([meeting.id]) } label: { Label("Tags…", systemImage: "tag") }
-        let personal = meeting.effectivePlacement == .personal
-        Button { library.setPlacement([meeting.id], personal ? .work : .personal) } label: {
-            Label(personal ? "Move to Work" : "Move to Personal", systemImage: personal ? "briefcase" : "house")
-        }
-        Divider()
-        Button(role: .destructive) { session.confirmingTrash = [meeting.id] } label: { Label("Move to Trash…", systemImage: "trash") }
     }
 }
 
-/// Processing your Mac carries out. Each item writes a request; the page then says it's waiting.
-/// Only what can be asked for now: nothing without a recording or while a request is pending.
+/// What this iPhone does for each of a conversation's actions (`ConversationActions`).
+@MainActor
+enum ConversationMoreActions {
+    /// The conversation's actions on this iPhone: Take Photo where there's a camera, Reprocess unless it's waiting.
+    static func groups(_ meeting: Meeting) -> [ConversationActionGroup] {
+        ConversationActions.actions(for: meeting, context: .init(platform: .iPhone, status: ProcessingStatus.phone(meeting),
+                                                                 canTakePhoto: CameraPicker.isAvailable))
+    }
+
+    static func perform(_ id: ConversationAction.ID, meeting: Meeting, library: LibraryController, session: ReadingSession,
+                        provider: any AudioProviding, placement: PhoneSummaryPlacement?) {
+        switch id {
+        case .copySummary:
+            LocalPasteboard.copy(MeetingExport.summaryMarkdown(meeting))
+            session.confirmation = .copied
+        case .shareMarkdown, .shareJSON, .shareAudio:
+            ConversationShare.share(id, meeting: meeting, session: session, provider: provider)
+        case .takePhoto: session.cameraFor = meeting.id
+        case .addPhotos: session.sheet = .importPhotos(meeting.id)
+        case .addRecordingFromFile: session.addingRecordingTo = meeting.id
+        case .process(let mode):
+            if mode == .summaryOnly { library.summarize(meeting.id, placement: placement) }
+            else { library.requestProcessing(meeting.id, mode: mode) }
+        case .versionHistory: session.sheet = .history(meeting.id)
+        case .moveToFolder: session.sheet = .move([meeting.id])
+        case .tags: session.sheet = .tags([meeting.id])
+        case .moveTo(let placement): library.setPlacement([meeting.id], placement)
+        case .moveToTrash: session.confirmingTrash = [meeting.id]
+        case .share, .export, .exportMarkdown, .exportJSON, .addRecording, .reprocess:
+            break // Menus, or the Mac's own.
+        case .showFloatingNotes, .rename, .showInFinder:
+            break // The Mac's.
+        case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
+            break // A recording's, in Info › Audio.
+        }
+    }
+}
+
+/// Reprocess ▸, as the More menu has it, for Info and a row's menu: what can be asked for now, nothing while a request
+/// waits. Each item writes a request; the page then says it's waiting.
 struct ReprocessMenu: View {
     let library: LibraryController
-    @Environment(\.summaryPlacement) private var placement
     let meeting: Meeting
-
-    static func isAvailable(for meeting: Meeting) -> Bool {
-        !meeting.tracks.isEmpty && !ProcessingStatus.phone(meeting).isPending
-    }
+    @Environment(\.summaryPlacement) private var placement
+    @Environment(ReadingSession.self) private var session
+    @Environment(\.audioProvider) private var provider
 
     var body: some View {
-        if Self.isAvailable(for: meeting) {
-            Menu {
-                if meeting.hasUntranscribedAudio {
-                    Button { request(.newAudio) } label: { Label("Transcribe", systemImage: "waveform") }
-                }
-                if !meeting.unifiedTranscript.isEmpty {
-                    Button { request(.summaryOnly) } label: { Label("Summarize Again", systemImage: "text.alignleft") }
-                }
-                if !meeting.transcripts.isEmpty {
-                    Button { request(.speakerRefresh) } label: { Label("Identify Speakers Again", systemImage: "person.2") }
-                }
-                Button { request(.fullRetranscription) } label: { Label("Transcribe Everything Again", systemImage: "arrow.clockwise") }
-            } label: {
-                Label("Reprocess", systemImage: "laptopcomputer")
-            }
+        let groups = ConversationMoreActions.groups(meeting).filter { $0.id == .reprocess }
+        ConversationActionMenuItems(groups, platform: .iPhone) { id in
+            ConversationMoreActions.perform(id, meeting: meeting, library: library, session: session, provider: provider, placement: placement)
         }
-    }
-
-    private func request(_ mode: ProcessingRequest.Mode) {
-        if mode == .summaryOnly { library.summarize(meeting.id, placement: placement) }
-        else { library.requestProcessing(meeting.id, mode: mode) }
     }
 }
 
-/// Share › Markdown or the audio, through the share sheet.
+/// Share ▸, as the More menu has it, for a row's menu: the conversation as Markdown, its full data, or its audio,
+/// through the share sheet.
 struct ExportMenu: View {
     let meeting: Meeting
     @Environment(ReadingSession.self) private var session
     @Environment(\.audioProvider) private var provider
 
     var body: some View {
-        Menu {
-            Button { shareMarkdown() } label: { Label("Markdown", systemImage: "doc.richtext") }
-            if !meeting.tracks.isEmpty {
-                Button { shareAudio() } label: { Label("Audio", systemImage: "waveform") }
-            }
-        } label: {
-            Label("Share", systemImage: "square.and.arrow.up")
+        let share = ConversationActionMenuItems.action(.share, in: ConversationMoreActions.groups(meeting)).map {
+            ConversationActionGroup(id: .share, actions: [$0])
+        }
+        ConversationActionMenuItems(share.map { [$0] } ?? [], platform: .iPhone) { id in
+            ConversationShare.share(id, meeting: meeting, session: session, provider: provider)
+        }
+    }
+}
+
+/// Getting a conversation's files ready for the share sheet (DaybookKit's `ExportFiles`), off the main actor.
+@MainActor
+enum ConversationShare {
+    static func share(_ id: ConversationAction.ID, meeting: Meeting, session: ReadingSession, provider: any AudioProviding) {
+        switch id {
+        case .shareMarkdown: markdown(meeting, session: session, provider: provider)
+        case .shareJSON: json(meeting, session: session)
+        case .shareAudio: audio(meeting, session: session, provider: provider)
+        default: break
         }
     }
 
-    private func shareMarkdown() {
+    private static func markdown(_ meeting: Meeting, session: ReadingSession, provider: any AudioProviding) {
         Task {
             do {
                 var originals: [UUID: URL] = [:]
@@ -175,13 +200,24 @@ struct ExportMenu: View {
         }
     }
 
-    private func shareAudio() {
-        guard let track = meeting.transcribableTracks.first ?? meeting.tracks.first else { return }
-        let meeting = meeting
-        Task { @MainActor in
+    private static func json(_ meeting: Meeting, session: ReadingSession) {
+        Task {
             do {
-                let url = try await provider.localAudio(for: track, in: meeting.id) { _ in }
-                session.sheet = .share([try ExportFiles.audio(url, meeting: meeting, track: track)])
+                let url = try await Task.detached { try ExportFiles.json(meeting) }.value
+                session.sheet = .share([url])
+            } catch { session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The conversation couldn’t be prepared. Try again.") }
+        }
+    }
+
+    private static func audio(_ meeting: Meeting, session: ReadingSession, provider: any AudioProviding) {
+        guard let track = meeting.transcribableTracks.first ?? meeting.tracks.first else { return }
+        Task {
+            do {
+                let source = try await provider.localAudio(for: track, in: meeting.id) { _ in }
+                let name = ExportFiles.audioName(meeting, track: track, fileExtension: source.pathExtension)
+                let id = meeting.id
+                let url = try await Task.detached { try ExportFiles.audio(source, named: name, meetingID: id) }.value
+                session.sheet = .share([url])
             } catch {
                 session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The audio couldn’t be prepared. Try again.")
             }
