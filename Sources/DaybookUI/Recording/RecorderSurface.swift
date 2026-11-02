@@ -260,6 +260,13 @@ private struct CompactRecorder: View {
 private struct ColumnRecorder: View {
     let parts: RecorderPieces
     let touch: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// A line of notes at the person's text size.
+    @ScaledMetric(relativeTo: .body) private var notesLine: CGFloat = 22
+
+    /// In the hand at the accessibility sizes, a pause's box takes the captions' room: nothing is heard while it's
+    /// paused, and the notes keep theirs.
+    private var showsCaptions: Bool { !(touch && typeSize.isAccessibilitySize && parts.state.pause != nil) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -268,10 +275,12 @@ private struct ColumnRecorder: View {
                 .padding(.horizontal, touch ? RecorderInsets.touch : RecorderInsets.panel)
                 .opacity(touch ? 0.6 : 1)
             parts.slots.notes
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // In the hand, at least two lines of notes. Laid out last, as the most flexible piece, they take what
+                // the rest leaves; a higher priority would squeeze a notice to its first line instead.
+                .frame(maxWidth: .infinity, minHeight: touch ? notesLine * 2 : nil, maxHeight: .infinity)
             if touch {
                 VStack(spacing: DaybookSpacing.s3) {
-                    parts.slots.captions
+                    if showsCaptions { parts.slots.captions }
                     parts.slots.notice
                     parts.controls(.pocket)
                 }

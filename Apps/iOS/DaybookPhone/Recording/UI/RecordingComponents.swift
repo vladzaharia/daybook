@@ -118,6 +118,12 @@ enum PhoneRecorderStatus {
 
 // MARK: - Captions
 
+extension CaptionStripStyle {
+    /// iPhone, pocket, at the accessibility sizes: the strip's newest line only, so the notes keep their room.
+    static let stripNewest = CaptionStripStyle(lines: 1, newestSize: 19, olderSize: 15, newestLineLimit: 1, olderLineLimit: 1,
+                                               labelSize: 12, labelStyle: .caption, spacing: 6, lineSpacing: 4)
+}
+
 /// Live captions in a layout's style, from this iPhone's captions: the newest lines, the person live speakers
 /// recognized (or the recorder that heard it) before the words, and why there are none yet.
 struct PhoneCaptions: View {

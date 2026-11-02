@@ -23,6 +23,7 @@ struct RecorderScreen: View {
     /// Hands back to the library.
     var done: () -> Void = {}
     @Environment(PhoneAppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var levels = RecorderLevels()
     @AccessibilityFocusState private var clockFocused: Bool
 
@@ -103,9 +104,11 @@ struct RecorderScreen: View {
     private func slots(writing: Binding<Bool>) -> RecorderSlots {
         switch style {
         case .pocket:
-            // In the hand the notes come first: the captions' strip stops growing at the largest standard size.
+            // In the hand the notes come first: the captions' strip stops growing at the largest standard size, and
+            // at the accessibility sizes keeps only its newest line.
             return RecorderSlots(notes: AnyView(RecordingNotes().padding(.horizontal, DaybookSpacing.s4)),
-                                 captions: AnyView(PhoneCaptions(style: .strip).padding(.horizontal, DaybookSpacing.s2)
+                                 captions: AnyView(PhoneCaptions(style: typeSize.isAccessibilitySize ? .stripNewest : .strip)
+                                    .padding(.horizontal, DaybookSpacing.s2)
                                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge)),
                                  accessory: AnyView(CameraControl()), notice: AnyView(RecordingNotice()),
                                  menu: { AnyView(PhoneChipMenu(chip: $0)) })

@@ -346,6 +346,44 @@ final class RecorderScreenTests: XCTestCase {
         XCTAssertNil(NotesTimeline.paragraph(before: 1, notes: "One\nTwo", anchors: anchors))
     }
 
+    /// Regression: at the largest text size, a pause that offered Resume left the notes no room at all on the closed
+    /// Duo's cover screen. The captions give way while it's paused, and the notes keep at least two lines, paused or
+    /// recording, with nothing pushed off the screen.
+    func testBehaviorAtTheLargestTextSizeTheNotesKeepTwoLinesThroughAPause() throws {
+        final class Measured { var height: CGFloat = 0 }
+        let size = CGSize(width: 466, height: 636)  // the cover screen inside its safe area
+        let line = UIFont.preferredFont(forTextStyle: .body,
+                                        compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)).lineHeight
+        for paused in [true, false] {
+            let measured = Measured()
+            let notes = GeometryReader { proxy in
+                Color.clear
+                    .onAppear { measured.height = proxy.size.height }
+                    .onChange(of: proxy.size.height) { _, height in measured.height = height }
+            }
+            let pause = paused ? RecorderPause(title: "Paused for a call", message: "The call has ended. Everything so far is saved.", canResume: true) : nil
+            let state = RecorderSurfaceState(phase: RecorderPhase(phase: paused ? .paused : .recording, title: paused ? "Paused" : "Recording"),
+                                             title: "Conversation at 4:07 AM", clock: .since(Date()), isLive: !paused, bookmarkCount: 2, pause: pause)
+            let captions = Text("Then everything waits for the Mac to finish").font(.system(size: 26)).lineLimit(1)
+            let slots = RecorderSlots(notes: AnyView(notes), captions: AnyView(captions), accessory: AnyView(Circle().frame(width: 44, height: 44)))
+            let surface = RecorderSurface(state: state, levels: RecorderLevels(), actions: RecorderActions(bookmark: {}, stop: {}), slots: slots)
+                .daybookSurface(.column, density: .touch)
+                .dynamicTypeSize(.accessibility5)
+            let host = UIHostingController(rootView: surface)
+            host.safeAreaRegions = []
+            let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+            let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
+            window.frame = CGRect(origin: .zero, size: size)
+            window.rootViewController = host
+            window.isHidden = false
+            defer { window.isHidden = true }
+            host.view.frame = CGRect(origin: .zero, size: size)
+            host.view.layoutIfNeeded()
+            XCTAssertGreaterThanOrEqual(measured.height, line * 2, "two lines of notes (paused: \(paused))")
+            XCTAssertLessThanOrEqual(host.sizeThatFits(in: size).height, size.height + 0.5, "nothing pushed off the screen (paused: \(paused))")
+        }
+    }
+
     // MARK: The notes editor
 
     /// Regression: at the largest text sizes the lane of times grew to half the width and notes wrapped a word a
