@@ -76,6 +76,7 @@ The redesign was planned from UX, platform (macOS 26/27 Human Interface Guidelin
   - **Accessibility:** under Reduce Motion the meters stop scrolling (their bars light from the left up to the level), the clock fades rather than rolls, and surfaces fade. Increase Contrast uses the Ink scale's contrast values and outlines the chips, controls, and Stop; it and Reduce Transparency drop the neon glows.
 - **Menu bar extra:** a standard menu (`.menuBarExtraStyle(.menu)`). Its label is a symbol only, because a ticking text label re-lays out the status item every second. Personal conversations are never named in it.
 - **Settings** has five panes: General, Models, Cloud, Devices, and Library.
+  - **General**'s Recording has Open at login (`LoginItem`, `SMAppService.mainApp`), off until the person turns it on, since Record calls automatically and the menu bar item work only while Daybook is open. It's on while System Settings still waits to approve it, with "Allow Daybook in Login Items to open it at login." and Open Login Items Settings… under it (a `ProblemLine`, as is a refusal, with the system's words behind Details…).
   - **Models** is the model manager ([models.md](models.md#the-model-manager)), a grouped form generated from the catalog:
     - Quality: Quick, Balanced, and Detailed as radio rows, each with its models, size, and memory, and this Mac's recommendation marked; Custom appears when the choices match none.
     - A section per role (Transcription with its language rows, Speakers with the speaker settings, Summaries with titles and tags), each with a model pop-up whose items carry their state underneath.
@@ -293,6 +294,8 @@ Debug builds accept launch arguments that open a specific surface against a sepa
   --vocabulary-demo   --templates-demo
                                       fill the scratch library's vocabulary or templates (with --open-window; the
                                       iPhone takes them too, with --open-settings vocabulary|templates)
+  --login-item-demo approval|refused  with --open-settings general, Open at login waiting for approval or refused,
+                                      with a stand-in that never touches this Mac's login items
   --snapshot <dir> [--snapshot-delay <seconds>]
   --perf-log <file>                   once a second, a JSON line: the main thread's CPU use, the longest a ping
                                       waited for it, every wait over 100 ms, what's processing, and frames

@@ -5,6 +5,7 @@ import DaybookCore
 import DaybookDesign
 import DaybookKit
 import DaybookUI
+import ServiceManagement
 import SwiftUI
 
 /// The Settings panes, restored from `@AppStorage("settingsPane")`.
@@ -83,6 +84,7 @@ private struct GeneralSettings: View {
     @State private var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var screenCapture = CGPreflightScreenCaptureAccess()
     @State private var showingSupportedApps = false
+    @State private var loginItem = LoginItem.forSettings()
 
     init(state: AppState) {
         self.state = state
@@ -115,6 +117,16 @@ private struct GeneralSettings: View {
                 } label: {
                     Text("Record calls automatically")
                     if state.automaticRecording { DetectionStatusLine(state: state) }
+                }
+                // Record calls automatically and the menu bar item work only while Daybook is open.
+                Toggle("Open at login", isOn: Binding(get: { loginItem.isOn }, set: { loginItem.set($0) }))
+                    .controlSize(.regular)
+                if let problem = loginItem.problem {
+                    ProblemLine(text: problem.text, details: problem.details) {
+                        if problem.opensSettings {
+                            Button("Open Login Items Settings…") { loginItem.openSettings() }
+                        }
+                    }
                 }
                 Toggle("Show floating notes while recording", isOn: $showsFloatingNotes)
                     .controlSize(.regular)
@@ -192,8 +204,114 @@ private struct GeneralSettings: View {
     private func refreshPermissions() {
         microphone = AVCaptureDevice.authorizationStatus(for: .audio)
         screenCapture = CGPreflightScreenCaptureAccess()
+        loginItem.refresh()
     }
 }
+
+// MARK: Open at login
+
+/// What `LoginItem` asks of the system: SMAppService's main app, or a stand-in in tests.
+@MainActor
+protocol LoginItemService {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+    func openSystemSettings()
+}
+
+extension SMAppService: LoginItemService {
+    func openSystemSettings() { SMAppService.openSystemSettingsLoginItems() }
+}
+
+/// Open at login (Settings › General): Daybook as a login item, off until the person turns it on, so Record calls
+/// automatically and the menu bar item work after a restart. Its status is the system's, read again whenever
+/// Daybook comes to the front; one System Settings is still waiting to approve is on, with the way there.
+@MainActor
+@Observable
+final class LoginItem {
+    struct Problem: Equatable {
+        var text: String
+        var details: String?
+        /// Its fix is in System Settings › General › Login Items.
+        var opensSettings: Bool
+    }
+
+    private let service: any LoginItemService
+    private(set) var status: SMAppService.Status
+    /// The system refused to add or remove it.
+    private var failure: Problem?
+
+    init(service: any LoginItemService = SMAppService.mainApp) {
+        self.service = service
+        status = service.status
+    }
+
+    /// On once registered, whether or not System Settings has approved it yet.
+    var isOn: Bool { status == .enabled || status == .requiresApproval }
+
+    /// What stops it opening Daybook at login, said once under the toggle.
+    var problem: Problem? {
+        if let failure { return failure }
+        if status == .requiresApproval {
+            return Problem(text: "Allow Daybook in Login Items to open it at login.", details: nil, opensSettings: true)
+        }
+        return nil
+    }
+
+    func set(_ on: Bool) {
+        guard on != isOn else { return }
+        do {
+            if on { try service.register() } else { try service.unregister() }
+            failure = nil
+        } catch {
+            failure = Problem(text: on ? "Daybook couldn’t be added to Login Items." : "Daybook couldn’t be removed from Login Items.",
+                              details: (error as NSError).localizedDescription, opensSettings: true)
+        }
+        refresh()
+    }
+
+    func refresh() { status = service.status }
+
+    func openSettings() { service.openSystemSettings() }
+
+    /// The login item Settings › General shows: this app's, or (debug, `--login-item-demo approval|refused`) a stand-in
+    /// in that state, for screenshots, which never touches this Mac's login items.
+    static func forSettings(arguments: [String] = CommandLine.arguments) -> LoginItem {
+        #if DEBUG
+        if let index = arguments.firstIndex(of: "--login-item-demo") {
+            let demo = DemoLoginItem()
+            let item = LoginItem(service: demo)
+            switch arguments.dropFirst(index + 1).first {
+            case "refused":
+                demo.refuses = true
+                item.set(true)
+            default:
+                item.set(true)
+            }
+            return item
+        }
+        #endif
+        return LoginItem()
+    }
+}
+
+#if DEBUG
+/// A login item waiting for approval in System Settings, or one the system refuses (`--login-item-demo`).
+private final class DemoLoginItem: LoginItemService {
+    var status: SMAppService.Status = .notRegistered
+    var refuses = false
+
+    struct Refused: LocalizedError { var errorDescription: String? { "The operation couldn’t be completed. Operation not permitted" } }
+
+    func register() throws {
+        if refuses { throw Refused() }
+        status = .requiresApproval
+    }
+
+    func unregister() throws { status = .notRegistered }
+    func openSystemSettings() { }
+}
+#endif
 
 /// "✓ Allowed": the teal check Daybook uses for anything done (neon teal in dark).
 private struct AllowedLabel: View {
