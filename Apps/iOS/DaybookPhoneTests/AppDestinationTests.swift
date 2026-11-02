@@ -93,11 +93,12 @@ final class AppDestinationTests: XCTestCase {
         let unknown = Meeting(title: "Conversation at 10:15 AM", date: Date(timeIntervalSince1970: 1_800_000_200))
         XCTAssertEqual(ConversationIndex.entries([work, personal, unknown]).map(\.title), ["Conversation at 10:15 AM", "Pricing review"])
 
-        var indexed: [[String]] = [], removed: [[UUID]] = []
+        var indexed: [[String]] = [], removed: [[UUID]] = [], startedOver = 0
         let index = ConversationIndex(indexer: ConversationIndex.Indexer(isActive: true, index: { indexed.append($0.map(\.title)) },
-                                                                         remove: { removed.append($0) }))
+                                                                         remove: { removed.append($0) }, removeAll: { startedOver += 1 }))
         index.update(ConversationIndex.entries([work, unknown]))
         await index.settle()
+        XCTAssertEqual(startedOver, 1, "what an earlier run listed goes first: it may have been trashed or made Personal since")
         XCTAssertEqual(indexed, [["Conversation at 10:15 AM", "Pricing review"]], "newest first")
 
         // Renamed, and the other moved to Personal: one listed again, one taken out.
@@ -113,6 +114,7 @@ final class AppDestinationTests: XCTestCase {
         index.update(ConversationIndex.entries([nowPersonal, renamed]))
         await index.settle()
         XCTAssertEqual(indexed.count, 2, "nothing changed, nothing sent")
+        XCTAssertEqual(startedOver, 1, "once a run")
     }
 
     func testBehaviorAConversationIsAnEntityByItsTitleAndDate() {

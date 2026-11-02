@@ -125,19 +125,23 @@ final class ConversationIndex {
         var isActive: Bool
         var index: @MainActor ([Entry]) async -> Void
         var remove: @MainActor ([UUID]) async -> Void
+        /// Takes every conversation out, whatever an earlier run listed.
+        var removeAll: @MainActor () async -> Void
 
-        static let none = Indexer(isActive: false, index: { _ in }, remove: { _ in })
+        static let none = Indexer(isActive: false, index: { _ in }, remove: { _ in }, removeAll: {})
 
         static let system = Indexer(isActive: true, index: { entries in
             try? await CSSearchableIndex.default().indexAppEntities(entries.map(ConversationEntity.init))
         }, remove: { ids in
             try? await CSSearchableIndex.default().deleteAppEntities(identifiedBy: ids, ofType: ConversationEntity.self)
+        }, removeAll: {
+            try? await CSSearchableIndex.default().deleteAppEntities(ofType: ConversationEntity.self)
         })
     }
 
     private let indexer: Indexer
-    /// What Spotlight has now, by conversation.
-    private(set) var listed: [UUID: Entry] = [:]
+    /// What Spotlight has now, by conversation; nil until this run's first update.
+    private(set) var listed: [UUID: Entry]?
     private var updating: Task<Void, Never>?
 
     init(indexer: Indexer) {
@@ -150,15 +154,20 @@ final class ConversationIndex {
     }
 
     /// Lists what's new or changed and removes what went (Trash, Personal), after any update before it.
+    /// A run's first update starts Spotlight's list over: what changed while Daybook wasn't running (a
+    /// conversation trashed or made Personal on another device) never stays listed.
     func update(_ entries: [Entry]) {
         let wanted = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let changed = entries.filter { listed[$0.id] != $0 }
-        let gone = listed.keys.filter { wanted[$0] == nil }
+        let startsOver = listed == nil
+        let before = listed ?? [:]
+        let changed = entries.filter { before[$0.id] != $0 }
+        let gone = before.keys.filter { wanted[$0] == nil }
         listed = wanted
-        guard !changed.isEmpty || !gone.isEmpty else { return }
+        guard startsOver || !changed.isEmpty || !gone.isEmpty else { return }
         let previous = updating, indexer = self.indexer
         updating = Task {
             await previous?.value
+            if startsOver { await indexer.removeAll() }
             if !gone.isEmpty { await indexer.remove(Array(gone)) }
             if !changed.isEmpty { await indexer.index(changed) }
         }

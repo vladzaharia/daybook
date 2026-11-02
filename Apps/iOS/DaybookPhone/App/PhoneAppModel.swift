@@ -155,7 +155,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             audio: { track, id in try await audio.localAudio(for: track, in: id, progress: { _ in }) },
             release: { [weak models] in await models?.releaseProcessingModels() }),
             // The system's continued-processing task, never in tests.
-            continued: ContinuedProcessing(scheduler: options.isRunningTests ? nil : environment.continuedProcessing()))
+            continued: ContinuedProcessing(scheduler: environment.continuedProcessing()))
         let sync = self.sync, link = self.link
         placement = PhoneSummaryPlacement(library: library.controller, link: link, presence: { sync.devices })
         upgrades = PhoneUpgrades(library: library.controller, placement: placement, link: link, presence: { sync.devices })
