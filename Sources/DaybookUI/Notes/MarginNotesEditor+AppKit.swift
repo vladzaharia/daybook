@@ -65,20 +65,20 @@ extension MarginNotesEditor: NSViewRepresentable {
             textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
             scrollView.documentView = textView
             if focusOnAppear { DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) } }
-            return scrollView
+            return NotesContainerView(textView: textView, content: scrollView)
         }
         // Inside a page, SwiftUI sizes the view from `sizeThatFits`; the text view must not resize itself.
         textView.isVerticallyResizable = false
         textView.isHorizontallyResizable = false
         if focusOnAppear { DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) } }
-        return textView
+        return NotesContainerView(textView: textView, content: textView)
     }
 
     public func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
         configure(textView)
-        if let scrollView = view as? NSScrollView, scrollView.contentInsets.bottom != bottomInset {
+        if let scrollView = (view as? NotesContainerView)?.scrollView, scrollView.contentInsets.bottom != bottomInset {
             scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: bottomInset, right: 0)
         }
         // While typing, only a change from elsewhere (a phone's paragraph during a shared recording) is taken.
@@ -94,7 +94,7 @@ extension MarginNotesEditor: NSViewRepresentable {
     }
 
     public func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
-        guard !scrolls, let textView = nsView as? MarginTextView, let width = proposal.width, width.isFinite else { return nil }
+        guard !scrolls, let textView = (nsView as? NotesContainerView)?.textView, let width = proposal.width, width.isFinite else { return nil }
         return CGSize(width: width, height: textView.height(forWidth: width))
     }
 
@@ -139,6 +139,45 @@ extension MarginNotesEditor: NSViewRepresentable {
             textView.needsDisplay = true
             DispatchQueue.main.async { [weak self] in self?.isEditing = textView.window?.firstResponder === textView }
         }
+    }
+}
+
+/// Holds the notes for SwiftUI (the text view, or the scroll view around it), and gives VoiceOver what the text view
+/// itself can't: its times (buttons where they play) and its marks, beside the notes. An NSTextView reports no
+/// children, so elements under it are never reached.
+final class NotesContainerView: NSView {
+    let textView: MarginTextView
+    /// The text view, or the scroll view around it.
+    let content: NSView
+
+    init(textView: MarginTextView, content: NSView) {
+        self.textView = textView
+        self.content = content
+        super.init(frame: .zero)
+        content.frame = bounds
+        content.autoresizingMask = [.width, .height]
+        addSubview(content)
+        textView.gutter.container = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    var scrollView: NSScrollView? { content as? NSScrollView }
+
+    override var intrinsicContentSize: NSSize { scrollView == nil ? textView.intrinsicContentSize : super.intrinsicContentSize }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) { content.frame = bounds }
+
+    // MARK: Accessibility
+
+    override func isAccessibilityElement() -> Bool { false }
+
+    /// The notes first, then each time and mark in reading order.
+    override func accessibilityChildren() -> [Any]? { [content] + textView.gutter.accessibilityItems }
+
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        textView.gutter.accessibilityItem(at: point) ?? super.accessibilityHitTest(point)
     }
 }
 
@@ -255,6 +294,12 @@ final class MarginTextView: NSTextView {
         NSSize(width: NSView.noIntrinsicMetric, height: height(forWidth: bounds.width > 0 ? bounds.width : 400))
     }
 
+    /// Inside a page the container is what SwiftUI sizes, so it hears that the notes changed height.
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        (superview as? NotesContainerView)?.invalidateIntrinsicContentSize()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard string.isEmpty, !placeholder.isEmpty else { return }
@@ -342,6 +387,11 @@ final class MarginTextView: NSTextView {
         return menu
     }
 
+    /// A point over a time or a mark finds it, as the container lists it.
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        gutter.accessibilityItem(at: point) ?? super.accessibilityHitTest(point)
+    }
+
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         guard playTime != nil else { return super.accessibilityCustomActions() }
         let play = NSAccessibilityCustomAction(name: MarginNotesEditor.playFromHere) { [weak self] in
@@ -355,7 +405,8 @@ final class MarginTextView: NSTextView {
 
 /// Draws paragraph times in the editor's left margin, in the Meta ink, and the recording's marks beside them.
 /// Where times can play (the page), the one under the pointer turns link teal and plays from there when
-/// clicked. For VoiceOver each time is a button ("Play from 4 minutes 10 seconds") and each mark says itself.
+/// clicked. For VoiceOver each time is a button ("Play from 4 minutes 10 seconds") and each mark says itself; the
+/// container lists them beside the notes.
 final class MarginGutterView: NSView {
     struct Label: Equatable { var text: String; var baseline: CGFloat; var time: TimeInterval }
     struct Tick: Equatable { var mark: NoteMark; var rect: NSRect }
@@ -366,6 +417,8 @@ final class MarginGutterView: NSView {
     var playTime: ((TimeInterval) -> Void)? { didSet { if (playTime == nil) != (oldValue == nil) { hovered = nil; window?.invalidateCursorRects(for: self) } } }
     private var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
     private var elements: [NSAccessibilityElement] = []
+    /// What VoiceOver finds the times and marks in.
+    weak var container: NotesContainerView?
     override var isFlipped: Bool { true }
 
     func update(labels: [Label], ticks: [Tick]) {
@@ -376,7 +429,7 @@ final class MarginGutterView: NSView {
         elements = []
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
-        NSAccessibility.post(element: self, notification: .layoutChanged)
+        if let container { NSAccessibility.post(element: container, notification: .layoutChanged) }
     }
 
     /// Hour-long times ("1:02:03") can be wider than a narrow gutter; those step down in size
@@ -436,9 +489,16 @@ final class MarginGutterView: NSView {
 
     override func isAccessibilityElement() -> Bool { false }
 
-    override func accessibilityChildren() -> [Any]? {
+    /// Each time and mark, in reading order. The container lists them; the gutter, inside the text view, keeps no
+    /// children of its own.
+    var accessibilityItems: [NSAccessibilityElement] {
         if elements.isEmpty && (!labels.isEmpty || !ticks.isEmpty) { elements = makeElements() }
         return elements
+    }
+
+    /// The time or mark at a point on screen.
+    func accessibilityItem(at point: NSPoint) -> NSAccessibilityElement? {
+        accessibilityItems.last { NSPointInRect(point, $0.accessibilityFrame()) }
     }
 
     /// One element per time, a button when it plays, and one per mark, in reading order.
@@ -447,14 +507,14 @@ final class MarginGutterView: NSView {
         var items: [(y: CGFloat, element: NSAccessibilityElement)] = []
         for label in labels {
             let time = label.time
-            let element = GutterElement(parent: self, rect: { [weak self] in self.map { $0.rect(for: label).insetBy(dx: -4, dy: -3) } ?? .zero },
+            let element = GutterElement(gutter: self, rect: { [weak self] in self.map { $0.rect(for: label).insetBy(dx: -4, dy: -3) } ?? .zero },
                                         press: plays ? { [weak self] in self?.playTime?(time) } : nil)
             element.setAccessibilityRole(plays ? .button : .staticText)
             element.setAccessibilityLabel(MarginNotesEditor.spokenTime(time, plays: plays))
             items.append((rect(for: label).minY, element))
         }
         for tick in ticks {
-            let element = GutterElement(parent: self, rect: { tick.rect.insetBy(dx: -4, dy: -2) }, press: nil)
+            let element = GutterElement(gutter: self, rect: { tick.rect.insetBy(dx: -4, dy: -2) }, press: nil)
             element.setAccessibilityRole(.staticText)
             element.setAccessibilityLabel(tick.mark.spoken)
             items.append((tick.rect.minY - 0.5, element))
@@ -463,21 +523,29 @@ final class MarginGutterView: NSView {
     }
 }
 
-/// A time or a mark in the gutter, as VoiceOver finds it: where it is on screen now, and what pressing it does.
+/// A time or a mark in the gutter, as VoiceOver finds it: beside the notes in their container, where it is on screen
+/// now, and what pressing it does.
 private final class GutterElement: NSAccessibilityElement {
+    private weak var gutter: MarginGutterView?
     private let rect: () -> NSRect
     private let press: (() -> Void)?
 
-    init(parent: NSView, rect: @escaping () -> NSRect, press: (() -> Void)?) {
+    init(gutter: MarginGutterView, rect: @escaping () -> NSRect, press: (() -> Void)?) {
+        self.gutter = gutter
         self.rect = rect
         self.press = press
         super.init()
-        setAccessibilityParent(parent)
+    }
+
+    /// The container that lists it, or what stands for it in the tree when the container itself is left out.
+    override func accessibilityParent() -> Any? {
+        guard let container = gutter?.container else { return nil }
+        return NSAccessibility.unignoredAncestor(of: container) ?? container
     }
 
     override func accessibilityFrame() -> NSRect {
-        guard let view = accessibilityParent() as? NSView, let window = view.window else { return .zero }
-        return window.convertToScreen(view.convert(rect(), to: nil))
+        guard let gutter, let window = gutter.window else { return .zero }
+        return window.convertToScreen(gutter.convert(rect(), to: nil))
     }
 
     override func accessibilityPerformPress() -> Bool {

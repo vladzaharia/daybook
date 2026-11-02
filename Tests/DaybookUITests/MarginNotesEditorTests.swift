@@ -61,13 +61,21 @@ final class MarginNotesEditorTests: XCTestCase {
         return view
     }
 
+    /// What VoiceOver finds beside the notes: the container's children after the notes themselves.
+    private func items(_ view: MarginTextView) throws -> [NSAccessibilityElement] {
+        let container = NotesContainerView(textView: view, content: view)
+        let children = try XCTUnwrap(container.accessibilityChildren())
+        XCTAssertTrue(children.first as AnyObject === view, "the notes first")
+        return try XCTUnwrap(Array(children.dropFirst()) as? [NSAccessibilityElement])
+    }
+
     /// Regression: the margin's times were drawn only, so VoiceOver never heard them and nothing but a click played
     /// from them. Each is now a button that says where it plays from, and each mark says itself.
     func testBehaviorVoiceOverHearsEachTimeAsAButtonThatPlaysAndEachMark() throws {
         var played: [TimeInterval] = []
         let view = editor("Launch is two weeks out\nAnnual plan leads the pricing page", times: [250, 316],
                           marks: [NoteMark(id: "b", kind: .bookmark, time: 260)], plays: { played.append($0) })
-        let children = try XCTUnwrap(view.gutter.accessibilityChildren() as? [NSAccessibilityElement])
+        let children = try items(view)
         XCTAssertEqual(children.map { $0.accessibilityLabel() }, [
             "Play from \(SpokenTime.format(250))", "Bookmark at \(SpokenTime.format(260))", "Play from \(SpokenTime.format(316))"
         ], "in reading order")
@@ -80,10 +88,73 @@ final class MarginNotesEditorTests: XCTestCase {
 
     func testBehaviorTimesThatCantPlaySayWhenTheNoteWasTaken() throws {
         let view = editor("Written while recording", times: [12])
-        let children = try XCTUnwrap(view.gutter.accessibilityChildren() as? [NSAccessibilityElement])
+        let children = try items(view)
         XCTAssertEqual(children.map { $0.accessibilityLabel() }, ["Note at \(SpokenTime.format(12))"])
         XCTAssertEqual(children.first?.accessibilityRole(), .staticText)
         XCTAssertNil(view.accessibilityCustomActions()?.first { $0.name == MarginNotesEditor.playFromHere })
+    }
+
+    /// Regression: the times' elements sat under the NSTextView, which reports no children, so VoiceOver never
+    /// reached them however they were made. Through what SwiftUI hands VoiceOver for the editor (its host view's
+    /// children, the container left out), each time and mark is found beside the notes, on the page and in Floating
+    /// Notes, and pointing at one finds it.
+    func testBehaviorVoiceOverReachesTheTimesThroughTheEditorsHost() throws {
+        for scrolls in [false, true] {
+            var played: [TimeInterval] = []
+            let editor = MarginNotesEditor(text: .constant("Launch is two weeks out\nAnnual plan leads the pricing page"), times: [250, 316],
+                                           marks: [NoteMark(id: "b", kind: .bookmark, time: 260)], scrolls: scrolls,
+                                           playTime: { played.append($0) })
+            let host = NSHostingView(rootView: editor.frame(width: 360, height: 300))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 300), styleMask: [.borderless], backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            defer { window.contentView = nil }
+
+            let container = try XCTUnwrap(Self.find(NotesContainerView.self, in: host), "scrolls: \(scrolls)")
+            XCTAssertFalse(container.isAccessibilityElement(), "left out of the tree: its children stand in its place")
+            let representable = try XCTUnwrap(container.superview)
+            var reached: [NSObject] = []
+            Self.walk(representable, into: &reached)
+            let items = reached.filter { Self.label(of: $0)?.hasPrefix("Play from") == true || Self.label(of: $0)?.hasPrefix("Bookmark at") == true }
+            XCTAssertEqual(items.compactMap(Self.label(of:)), [
+                "Play from \(SpokenTime.format(250))", "Bookmark at \(SpokenTime.format(260))", "Play from \(SpokenTime.format(316))"
+            ], "scrolls: \(scrolls)")
+            XCTAssertTrue(reached.contains { $0 === container.textView }, "and the notes")
+            guard let last = items.last as? NSAccessibilityElement else { return XCTFail("scrolls: \(scrolls)") }
+            XCTAssertTrue(last.accessibilityPerformPress())
+            XCTAssertEqual(played, [316])
+            XCTAssertTrue(last.accessibilityParent() as AnyObject === NSAccessibility.unignoredAncestor(of: container) as AnyObject,
+                          "its parent is the notes' own")
+
+            let frame = last.accessibilityFrame()
+            XCTAssertFalse(frame.isEmpty)
+            let center = NSPoint(x: frame.midX, y: frame.midY)
+            XCTAssertTrue(representable.accessibilityHitTest(center) as AnyObject === last, "pointing at a time finds it (scrolls: \(scrolls))")
+            XCTAssertTrue(container.textView.accessibilityHitTest(center) as AnyObject === last, "from the notes too")
+        }
+    }
+
+    private static func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
+        if let found = view as? T { return found }
+        for subview in view.subviews { if let found = find(type, in: subview) { return found } }
+        return nil
+    }
+
+    private static func label(of object: NSObject) -> String? {
+        guard let element = object as? NSAccessibilityProtocol else { return nil }
+        let label: (() -> String?)? = element.accessibilityLabel
+        return label?() ?? nil
+    }
+
+    /// Every element under `object`, as an accessibility client walks children.
+    private static func walk(_ object: NSObject, into found: inout [NSObject], depth: Int = 0) {
+        guard depth < 60 else { return }
+        found.append(object)
+        guard let element = object as? NSAccessibilityProtocol else { return }
+        let accessibilityChildren: (() -> [Any]?)? = element.accessibilityChildren
+        let children = (accessibilityChildren?() ?? nil) ?? []
+        for case let child as NSObject in children { walk(child, into: &found, depth: depth + 1) }
     }
 
     func testBehaviorPlayFromHereIsInTheMenuAndAVoiceOverAction() throws {
