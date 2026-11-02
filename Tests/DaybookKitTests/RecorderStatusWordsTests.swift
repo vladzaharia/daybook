@@ -106,6 +106,13 @@ final class RecorderStatusWordsTests: XCTestCase {
         XCTAssertEqual(line.shortText, "Keep Daybook open")
         XCTAssertEqual(line.progress, 0.25)
         XCTAssertEqual(RecorderStatusWords.menuItem(facts, here: "this Mac"), "Importing from Soundcore Work · 1 of 3")
+        // While iOS asks to join the recorder's network, the page says whose network once, under the bar.
+        facts.fastTransfer = .joining(recorder: "Soundcore Work")
+        XCTAssertEqual(RecorderStatusWords.line(facts, here: "this iPhone", now: now).text, "Importing 1 of 3 · Joining Wi‑Fi…")
+        XCTAssertEqual(RecorderStatusWords.importTitle(facts), "Importing 1 of 3")
+        XCTAssertEqual(RecorderStatusWords.importNote(facts, wireless: true, on: .iPhone), "Joining Soundcore Work’s Wi‑Fi…")
+        facts.fastTransfer = .transferring
+        XCTAssertNil(RecorderStatusWords.importNote(facts, wireless: true, on: .iPhone), "the title says to keep Daybook open")
         facts.importing = .init(position: 1, total: 2, suspended: true)
         XCTAssertEqual(text(facts), "2 recordings wait to import")
         facts.importing = nil

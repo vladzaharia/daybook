@@ -459,13 +459,16 @@ extension RecorderStatusWords {
     // MARK: Fast Transfer
 
     /// An import over the recorder's own Wi‑Fi, which ends, and starts again from the beginning over Bluetooth, if
-    /// Daybook leaves the screen: "Importing 1 of 3 · Starting Wi‑Fi…", then "Importing · 64% · Keep Daybook open".
-    /// `short` is what a narrow line keeps ("Keep Daybook open").
+    /// Daybook leaves the screen: "Importing 1 of 3 · Starting Wi‑Fi…", "Importing · Joining Wi‑Fi…" while iOS asks
+    /// to join the recorder's network, then "Importing · 64% · Keep Daybook open". `short` is what a narrow line keeps
+    /// ("Keep Daybook open").
     public static func fastTransfer(_ stage: FastTransferStage, importing: RecorderFacts.Importing) -> (text: String, short: String?) {
-        let lead = importing.total > 1 ? "Importing \(importing.position) of \(importing.total)" : "Importing"
+        let lead = importLead(importing)
         switch stage {
-        case .opening, .starting, .joining, .connecting:
+        case .opening, .starting, .connecting:
             return ("\(lead) · Starting Wi‑Fi…", "Starting Wi‑Fi…")
+        case .joining:
+            return ("\(lead) · \(stage.label)", stage.label)
         case .transferring:
             let percent = importing.fraction.map(ProcessingWords.percentText)
             return ([lead, percent, "Keep Daybook open"].compactMap { $0 }.joined(separator: " · "), "Keep Daybook open")
@@ -505,7 +508,10 @@ extension RecorderStatusWords {
             return importing.total == 1 ? "1 recording waiting for \(facts.shortName)"
                 : "\(importing.total) recordings waiting for \(facts.shortName)"
         }
-        if let stage = facts.fastTransfer { return fastTransfer(stage, importing: importing).text }
+        if let stage = facts.fastTransfer {
+            // Joining: the line under the bar says it once, with whose Wi‑Fi (`importNote`), so the title doesn't.
+            return stage.sentence == nil ? fastTransfer(stage, importing: importing).text : importLead(importing)
+        }
         let text = "Importing \(importing.position) of \(importing.total)"
         if let wait = facts.otherAppWait { return "\(text) · \(wait)" }
         if importing.preparing { return "\(text) · Preparing…" }
@@ -516,8 +522,16 @@ extension RecorderStatusWords {
     /// The line under the import's bar while it comes over Bluetooth, the one thing that keeps it going: "Keep your
     /// Soundcore near this iPhone." Nothing over Wi‑Fi (the title says to keep Daybook open) or from a folder.
     public static func importNote(_ facts: RecorderFacts, wireless: Bool, on place: Place) -> String? {
-        guard let importing = facts.importing, !importing.suspended, facts.fastTransfer == nil, wireless else { return nil }
+        guard let importing = facts.importing, !importing.suspended else { return nil }
+        // Under iOS's question about a network called "WiFi-…": whose network it is ("Joining Soundcore Work’s Wi‑Fi…").
+        if let sentence = facts.fastTransfer?.sentence { return sentence }
+        guard facts.fastTransfer == nil, wireless else { return nil }
         return "Keep your \(facts.shortName) near \(place.here)."
+    }
+
+    /// "Importing", or "Importing 1 of 3" when more are queued.
+    private static func importLead(_ importing: RecorderFacts.Importing) -> String {
+        importing.total > 1 ? "Importing \(importing.position) of \(importing.total)" : "Importing"
     }
 
     // MARK: Problems

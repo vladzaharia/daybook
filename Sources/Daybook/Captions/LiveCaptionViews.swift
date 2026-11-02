@@ -59,26 +59,6 @@ struct LiveCaptionsSection: View {
     }
 }
 
-// MARK: - Listen Live
-
-/// Listen Live's captions on a recorder's page: the shared strip at the page's body type, its label's
-/// glyph in the column the Listening line above it uses. When captions are off, or can't run on this
-/// Mac, it shows nothing.
-struct LiveCaptionFeed: View {
-    let segments: [LiveCaptionSegment]
-    let state: LiveCaptionState
-    let locale: Locale
-
-    /// The label's glyph column, which Listen Live's Listening row shares, so their words start together.
-    static let glyphColumn: CGFloat = CaptionStripStyle.feed.glyphColumn ?? 24
-
-    var body: some View {
-        if LiveCaptionStrip.shows(segments: segments, state: state, locale: locale) {
-            LiveCaptionStrip(segments: segments, state: state, locale: locale, style: .feed)
-        }
-    }
-}
-
 // MARK: - Settings
 
 /// Settings › General › Live captions: DaybookUI's section with this Mac's settings.

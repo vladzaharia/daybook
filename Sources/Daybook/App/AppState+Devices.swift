@@ -1,4 +1,5 @@
 import AppKit
+import DaybookCaptions
 import DaybookCore
 import DaybookDevices
 import DaybookKit

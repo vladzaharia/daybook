@@ -146,15 +146,12 @@ struct ListenLiveCaptions: View {
     @Environment(\.daybookDensity) private var density
 
     /// The label's glyph column, which the Listening row above shares, so their words start together.
-    static let glyphColumn: CGFloat = 24
+    static let glyphColumn: CGFloat = CaptionStripStyle.feed.glyphColumn ?? 24
 
-    /// On the Mac, six lines in the page's body type; under touch the page's caption column. The label is drawn
-    /// above the strip, its glyph in the Listening row's column.
+    /// On the Mac, the strip's feed (six lines in the page's body type); under touch the page's caption column. The
+    /// label is drawn above the strip, its glyph in the Listening row's column.
     static func style(_ density: DaybookDensity) -> CaptionStripStyle {
-        var style = density == .touch ? CaptionStripStyle.page
-            : CaptionStripStyle(lines: 6, newestSize: DaybookFont.body.size(.window), newestWeight: .regular,
-                                olderSize: DaybookFont.body.size(.window), newestLineLimit: 4, olderLineLimit: 3,
-                                labelSize: 11, spacing: DaybookSpacing.s2, lineSpacing: DaybookSpacing.s1)
+        var style = density == .touch ? CaptionStripStyle.page : CaptionStripStyle.feed
         style.showsLabel = false
         return style
     }
