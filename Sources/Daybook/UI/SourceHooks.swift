@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookKit
 import SwiftUI
 
 /// Several recordings of one conversation, in the inspector's Audio section under its recordings:
@@ -10,8 +11,12 @@ struct SourceHooks: View {
     let meeting: Meeting
 
     var body: some View {
+        let recordingNow = state.recordingID == meeting.id
+        let awaited = meeting.awaitedRecordings()
         ForEach(meeting.companions ?? []) { link in
-            if let line = Self.companionLine(link, recordingNow: state.recordingID == meeting.id) {
+            // Once this Mac stopped, a link waits only while the page says so too (`awaitedRecordings`).
+            if (recordingNow && link.macEndedAt == nil) || awaited.contains(Self.awaited(link)),
+               let line = Self.companionLine(link, recordingNow: recordingNow) {
                 // Laid out like a recording row (glyph column, then words), since it is one to come.
                 row(symbol: "clock") { Text(line).foregroundStyle(.secondary) }
             }
@@ -66,17 +71,23 @@ struct SourceHooks: View {
     static let waitingLineLifetime: TimeInterval = 2 * 86_400
 
     /// The link's line, while this Mac records the conversation (`recordingNow`) or after. A link an
-    /// interrupted recording left open reads as waiting, and every waiting line goes after a while.
+    /// interrupted recording left open reads as waiting, and every waiting line goes after a while. Waiting reads
+    /// as the page's status line does (`ProcessingStatus.awaitingDetail`), and neither ends in a period.
     static func companionLine(_ link: CompanionRecording, recordingNow: Bool, now: Date = Date()) -> String? {
         let live = recordingNow && link.macEndedAt == nil
         if !live, now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) > waitingLineLifetime { return nil }
-        let waiting = "Waiting for audio from \(link.deviceName)."
+        let waiting = ProcessingStatus.awaitingDetail([awaited(link)])
         switch link.state {
         case .starting: return live ? "Starting \(link.deviceName)…" : nil
-        case .recording, .alreadyRecording: return live ? "Also recording on \(link.deviceName)." : waiting
+        case .recording, .alreadyRecording: return live ? "Also recording on \(link.deviceName)" : waiting
         case .stopping: return live ? "Stopping \(link.deviceName)…" : waiting
         case .stopped, .stopFailed: return waiting
         case .unavailable, .failed, .attached: return nil
         }
+    }
+
+    /// The recording a link waits for, as the conversation's status names it.
+    static func awaited(_ link: CompanionRecording) -> AwaitedRecording {
+        AwaitedRecording(deviceName: link.deviceName, deviceKind: link.deviceKind, since: link.macEndedAt ?? link.macStartedAt)
     }
 }

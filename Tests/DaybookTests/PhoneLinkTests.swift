@@ -1093,7 +1093,7 @@ final class PhoneLinkTests: XCTestCase {
                                       deviceName: PhoneLinkRig.phoneName, macStartedAt: start, state: .recording, startedByDaybook: true)
         link.recordingID = "R-1"
         rig.state.update(id) { $0.companions = [link] }
-        XCTAssertEqual(SourceHooks.companionLine(link, recordingNow: false), "Waiting for audio from \(PhoneLinkRig.phoneName).",
+        XCTAssertEqual(SourceHooks.companionLine(link, recordingNow: false), "Waiting for audio from \(PhoneLinkRig.phoneName)",
                        "not \"Also recording\" once this Mac isn't")
         rig.state.sources.recovered.append((id, start, start.addingTimeInterval(60)))
         rig.state.closeRecoveredLinks()

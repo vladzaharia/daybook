@@ -45,6 +45,23 @@ final class LibraryInspectorTests: XCTestCase {
         XCTAssertNotNil(inspector.viewController.view.superview, "The inspector is still in the window")
     }
 
+    /// Regression: the inspector said "Waiting for audio from Soundcore Work." under the page's line without the
+    /// period. A recording to come reads as the page's status does, and no line ends in a period.
+    func testBehaviorARecordingToComeReadsAsThePageSaysIt() {
+        let start = Date().addingTimeInterval(-600)
+        var link = CompanionRecording(deviceID: "work", deviceKind: SoundcoreWorkIntegration.id, deviceName: "Soundcore Work",
+                                      macStartedAt: start, state: .recording, startedByDaybook: true)
+        XCTAssertEqual(SourceHooks.companionLine(link, recordingNow: true), "Also recording on Soundcore Work")
+        link.macEndedAt = start.addingTimeInterval(300)
+        link.state = .stopped
+        let waiting = SourceHooks.companionLine(link, recordingNow: false)
+        XCTAssertEqual(waiting, ProcessingStatus.awaitingDetail([SourceHooks.awaited(link)]))
+        XCTAssertEqual(waiting, "Waiting for audio from Soundcore Work")
+        var meeting = Meeting(title: "Call")
+        meeting.companions = [link]
+        XCTAssertEqual(meeting.awaitedRecordings(), [SourceHooks.awaited(link)], "the inspector shows it while the page does")
+    }
+
     /// Lets SwiftUI update and its animations run.
     private func settle() async throws { try await Task.sleep(for: .milliseconds(600)) }
 
