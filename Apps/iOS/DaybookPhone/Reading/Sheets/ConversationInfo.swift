@@ -63,8 +63,6 @@ struct ConversationInfo: View {
             },
             availability: { track, meeting in Self.reading(await provider.availability(of: track, in: meeting.id)) },
             actionContext: { meeting in Self.context(meeting) },
-            // Adjust Timing and the original transcript are the Mac's sheets for now.
-            offers: { $0 != .adjustTiming && $0 != .showOriginalTranscript },
             now: { meeting, date in
                 var inputs = ConversationStatusPresentation.Inputs(words: words, local: .iPhone())
                 if let placement {
@@ -110,6 +108,11 @@ struct ConversationInfo: View {
                     session.alert = ReadingAlert(title: "Couldn’t Move the Recording", error: error, fallback: "Try again.")
                 }
             }
+        case .track(.adjustTiming, let track):
+            // The sheet becomes the transcript's tool, as Version History does.
+            session.sheet = .adjustTiming(meetingID: id, trackID: track.id)
+        case .track(.showOriginalTranscript, let track):
+            session.sheet = .originalTranscript(meetingID: id, trackID: track.id)
         case .track:
             break
         case .putBack(let track):
@@ -125,6 +128,8 @@ struct ConversationInfo: View {
             placement?.perform(choice, for: id)
         case .status(.stopSummary):
             placement?.stop(id)
+        case .status(.dontWait):
+            library.stopWaitingForRecordings(in: id, undoManager: undoManager)
         case .status:
             break
         case .searchTag(let tag):

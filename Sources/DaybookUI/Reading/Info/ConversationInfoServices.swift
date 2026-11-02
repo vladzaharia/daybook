@@ -74,7 +74,8 @@ public struct InfoNow: Equatable, Sendable {
     }
 
     /// The row's words for a status (`ConversationStatusPresentation.row`), with the choices of a summary that's
-    /// being placed (Use the Cloud, Start Now, Wait for a Mac) and Stop while one runs. Nil when everything is fine.
+    /// being placed (Use the Cloud, Start Now, Wait for a Mac), Stop while one runs, and Don’t Wait while it waits for
+    /// recordings, as the page offers. Nil when everything is fine.
     public static func make(_ status: ProcessingStatus, meeting: Meeting, inputs: ConversationStatusPresentation.Inputs,
                             now: Date = Date()) -> InfoNow? {
         guard let row = ConversationStatusPresentation.row(status, meeting: meeting, inputs: inputs, now: now), let text = row.text else { return nil }
@@ -84,6 +85,8 @@ public struct InfoNow: Equatable, Sendable {
         } else if let planner = inputs.placement.planner, planner.shortLine(at: now) != nil {
             actions = planner.actions.map(ConversationStatusPresentation.Action.placement)
             if planner.started != nil { actions.append(.stopSummary) }
+        } else if case .awaitingRecordings = status {
+            actions = [.dontWait]
         }
         return InfoNow(text: text, countdownUntil: row.countdownUntil, actions: actions)
     }

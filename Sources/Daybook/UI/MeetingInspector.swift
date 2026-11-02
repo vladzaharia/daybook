@@ -93,6 +93,8 @@ struct MeetingInspector: View {
             state.chooseSummaryPlacement(choice, for: id)
         case .status(.stopSummary):
             state.pauseProcessing(id)
+        case .status(.dontWait):
+            state.library.stopWaitingForRecordings(in: id, undoManager: undoManager)
         case .status:
             break
         case .searchTag(let tag):

@@ -41,6 +41,14 @@ final class ConversationInfoTests: XCTestCase {
         XCTAssertEqual(running?.actions, [.stopSummary])
     }
 
+    func testBehaviorTheNowRowOffersDontWaitWhileRecordingsAreAwaited() {
+        let meeting = Meeting(title: "Call", tracks: [RecordingTrack(source: .microphone, relativePath: "Originals/a.wav", fileName: "a.wav")])
+        let awaited = [AwaitedRecording(deviceName: "Alex’s iPhone", deviceKind: "daybook.iphone", since: start)]
+        let now = InfoNow.make(.awaitingRecordings(awaited), meeting: meeting, inputs: inputs(), now: start)
+        XCTAssertNotNil(now?.text)
+        XCTAssertEqual(now?.actions, [.dontWait], "as the page offers it")
+    }
+
     func testBehaviorWhereAudioIsReadsTheSameForTheDeviceAsking() {
         XCTAssertEqual(AudioRow.words(.local, thisDevice: "this iPhone").text, "On this iPhone")
         XCTAssertEqual(AudioRow.words(.local, thisDevice: "this iPhone").symbol, "iphone")
