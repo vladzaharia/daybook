@@ -325,11 +325,11 @@ What they show comes from the app, which can stop at any moment (a crash, the sy
 background relaunch that never reaches `launch`), so each says what it can still vouch for:
 
 - **The recording's Live Activity** has a rolling stale date (90 s while recording, two hours while
-  paused) that the app refreshes at least once a minute while it records. Stale, it says "Not
-  confirmed", with no running clock and only Stop.
+  paused) that the app refreshes at least once a minute while it records. Stale, it says "Open
+  Daybook to check", with no running clock and only Stop.
 - **Widgets and the Control Center control** read `SharedRecordingState`, which carries `asOf`; the
   app writes it at least once a minute while recording (`SharedStatePublisher`). The timeline adds an
-  entry where an unconfirmed recording turns into "Not confirmed", and the control is on only while
+  entry where an unconfirmed recording turns into "Open Daybook to check", and the control is on only while
   it's confirmed. Paused, the clock is frozen ("Paused · 12:03").
 - **Every launch** clears a recording state and activities an earlier run left (`App.init`).
 - **Privacy.** Conversation titles are `privacySensitive`: hidden on the Lock Screen while locked.
@@ -342,7 +342,7 @@ background relaunch that never reaches `launch`), so each says what it can still
   activity is stale.
 - **Soundcore Work** gets its own Live Activity (`RecorderLiveActivity`) for Listen Live (with Stop
   Listening) and for a recording this iPhone started on it: live while connected, "Recording · as
-  of 10:07 AM" after it lets the recorder go, and "Not confirmed" once that's 20 minutes old. Its updates
+  of 10:07 AM" after it lets the recorder go, and "Open Daybook to check" once that's 20 minutes old. Its updates
   and its end reach ActivityKit in the order they were made (`RecorderActivityController`), so an older
   state never lands after a newer one, or after the end.
 - Tests (`RecordingSurfacesTests`, `RecorderActivityTests`) cover the state and timeline logic, the

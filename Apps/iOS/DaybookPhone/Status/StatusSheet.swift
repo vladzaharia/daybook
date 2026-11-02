@@ -339,6 +339,13 @@ struct StatusSheetView: View {
             if detent != .large, !path.isEmpty { path = [] }
         }
         .task { await openRequestedScreen() }
+        // A recorder's notification (imported, almost full) opens its page here, where recorders' pages are.
+        .onChange(of: model.destination, initial: true) { _, request in
+            guard let request, case .device(let id) = request.destination,
+                  model.devices.sessions.contains(where: { $0.id == id }) else { return }
+            open(.device(id))
+            model.reached(request)
+        }
     }
 
     /// `--status-open device|mac|storage|icloud|add-recorder` (debug): that screen inside the sheet (or

@@ -64,6 +64,8 @@ struct RootView: View {
             recording = AfterStop(conversationID: id, title: model.recorder.title, startedAt: model.recorder.startedAt, before: model.lastFiling)
         }
         .onChange(of: model.recorder.title) { _, title in recording?.title = title }
+        // Where Daybook was asked to open: a notification's tap, Open Conversation, New Note.
+        .opensDestinations(reading)
         .modifier(HingeObserver(posture: posture))
         .modifier(GeometryProbe(enabled: model.options.logGeometry, posture: posture))
         .overlay(alignment: .top) {
@@ -76,6 +78,8 @@ struct RootView: View {
             }
         }
         .tint(PhoneStyle.accent)
+        // A first launch: Welcome in the app's place until it's done.
+        .phoneWelcome()
     }
 
     /// The environment's default reads the library's local files once it knows the library; an
