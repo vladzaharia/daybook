@@ -42,7 +42,7 @@ public struct ReviewCorrectionsSheet: View {
             #endif
             .toolbar {
                 if issues.isEmpty {
-                    ToolbarItem(placement: .confirmationAction) { Button("Done") { close() } }
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { close() }.keyboardShortcut(.defaultAction) }
                 } else {
                     // Closes it with nothing decided (Esc too); the transcript keeps offering Review….
                     ToolbarItem(placement: .cancellationAction) { Button("Later") { close() }.keyboardShortcut(.cancelAction) }
@@ -273,6 +273,7 @@ public struct AdjustTimingSheet: View {
                         if let id = track?.id { library.setOffset(meetingID, trackID: id, seconds: automatic ? nil : parsed) }
                         close()
                     }
+                    .keyboardShortcut(.defaultAction)
                     .disabled(track == nil || (!automatic && parsed == nil))
                 }
             }
@@ -373,7 +374,7 @@ public struct OriginalTranscriptSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { close() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { close() }.keyboardShortcut(.defaultAction) }
             }
         }
         .dismissesOnEscape { close() }
