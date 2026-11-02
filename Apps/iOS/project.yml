@@ -155,8 +155,34 @@ targets:
               - public.mp3
               - com.microsoft.waveform-audio
               - public.aiff-audio
+    postCompileScripts:
+      - name: Copy third-party notices
+        # THIRD_PARTY_NOTICES.md and every resolved package's license and NOTICE, as the Mac app carries them, for
+        # Settings › About › Acknowledgements (DaybookUI's SoftwareNotices). It reads the package checkouts, so this
+        # target's scripts run unsandboxed (ENABLE_USER_SCRIPT_SANDBOXING below).
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          resources="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "${resources}/Licenses"
+          /bin/cp -f "${SRCROOT}/../../THIRD_PARTY_NOTICES.md" "${resources}/ThirdPartyNotices.md"
+          checkouts="${DAYBOOK_SOURCE_PACKAGES:-${BUILD_DIR%/Build/*}/SourcePackages}/checkouts"
+          if [[ ! -d "${checkouts}" ]]; then
+            echo "warning: package checkouts not found at ${checkouts}; licenses not copied"
+            exit 0
+          fi
+          for package_dir in "${checkouts}"/*/; do
+            package="$(basename "${package_dir}")"
+            for name in LICENSE LICENSE.md LICENSE.txt LICENSE-MIT COPYING NOTICE NOTICE.txt NOTICES; do
+              if [[ -f "${package_dir}${name}" ]]; then
+                /bin/cp -f "${package_dir}${name}" "${resources}/Licenses/${package}-${name}.txt"
+              fi
+            done
+          done
     settings:
       base:
+        # The notices script reads package checkouts.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         # One bundle ID for the iPhone and Mac apps: one App Store Connect record ships both (docs/release.md, "Bundle
         # IDs"). The app was local.daybook.phone before.
         PRODUCT_BUNDLE_IDENTIFIER: local.daybook
