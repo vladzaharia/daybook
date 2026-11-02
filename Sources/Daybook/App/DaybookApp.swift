@@ -339,12 +339,43 @@ struct FolderMenuItems: View {
     }
 }
 
+/// What a request to quit does (`DaybookDelegate.applicationShouldTerminate`).
+enum QuitDecision: Equatable {
+    /// Nothing to finish (the library never opened): quit now.
+    case now
+    /// Quitting already: this request is turned down, and the first one quits once its work is done. A second ⌘Q, the
+    /// Dock's Quit, or a logout during a slow stop never cuts the stop and save short.
+    case alreadyQuitting
+    /// A recording is under way: ask before stopping it.
+    case askToStopRecording
+    /// Stop what's running, save, then quit.
+    case finishThenQuit
+
+    static func decide(quitting: Bool, hasState: Bool, recording: Bool, poweringOff: Bool) -> QuitDecision {
+        if quitting { return .alreadyQuitting }
+        guard hasState else { return .now }
+        // Logging out, restarting, or shutting down stops the recording without asking: nobody is there to answer.
+        return recording && !poweringOff ? .askToStopRecording : .finishThenQuit
+    }
+}
+
 @MainActor
 final class DaybookDelegate: NSObject, NSApplicationDelegate {
     weak var state: AppState?
     private var terminating = false
+    /// The Mac is logging out, restarting, or shutting down.
+    private var poweringOff = false
+    private var powerOffObserver: NSObjectProtocol?
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !terminating, let state else { return .terminateNow }
+        let recording = state.map { $0.isRecording || $0.isStartingRecording } ?? false
+        switch QuitDecision.decide(quitting: terminating, hasState: state != nil, recording: recording, poweringOff: poweringOff) {
+        case .now: return .terminateNow
+        case .alreadyQuitting: return .terminateCancel
+        case .askToStopRecording: guard askToStopRecording() else { return .terminateCancel }
+        case .finishThenQuit: break
+        }
+        guard let state else { return .terminateNow }
         terminating = true
         Task {
             // Cancelling gives back requests this Mac held, so another Mac can take them over once
@@ -360,6 +391,18 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
         }
         return .terminateLater
     }
+
+    /// QuickTime's question, before a quit ends a recording: the rest of the call wouldn't be recorded.
+    private func askToStopRecording() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Stop recording and quit?"
+        alert.addButton(withTitle: "Stop and Quit").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        // Quit can come from the menu bar extra or the Dock while another app is in front.
+        NSApp.activate()
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     /// A CloudKit push: the iPhone sent files by courier. CKSyncEngine fetches on its own pushes; asking too costs
@@ -374,6 +417,10 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification,
+                                                                             object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.poweringOff = true }
+        }
         #if DEBUG
         PerfProbe.start()
         switch LaunchOptions.value(after: "--appearance") {

@@ -325,6 +325,12 @@ sentence even when the recording's details then can't be saved, as on a full dis
 track and `capture-result.json` fail together. `AppState` keeps the sentence for the conversation
 (`unexpectedStops`) until the person has seen it (`dismissUnexpectedStop`).
 
+Quitting while recording asks first, as QuickTime does: "Stop recording and quit?" with Stop and Quit
+or Cancel. Logging out, restarting, or shutting down (`NSWorkspace.willPowerOffNotification`) stops it
+without asking. Quit then stops the recording, waits up to 5 s for recorders and iPhones that recorded
+along, saves, and only then quits; another quit meanwhile (a second ⌘Q, the Dock, a logout) is turned
+down rather than cutting that short (`QuitDecision`).
+
 `CaptureEnvironment` injects the following:
 
 - microphone permission;

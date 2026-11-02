@@ -106,6 +106,17 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: staged.appendingPathComponent("microphone.caf").path))
     }
 
+    func testBehaviorQuittingWhileRecordingAsksAndASecondQuitWaitsForTheFirst() {
+        XCTAssertEqual(QuitDecision.decide(quitting: false, hasState: true, recording: true, poweringOff: false), .askToStopRecording)
+        XCTAssertEqual(QuitDecision.decide(quitting: false, hasState: true, recording: true, poweringOff: true), .finishThenQuit,
+                       "Logging out or shutting down stops the recording without asking")
+        XCTAssertEqual(QuitDecision.decide(quitting: false, hasState: true, recording: false, poweringOff: false), .finishThenQuit)
+        XCTAssertEqual(QuitDecision.decide(quitting: false, hasState: false, recording: false, poweringOff: false), .now)
+        // A second ⌘Q, the Dock's Quit, or a logout while the first stops and saves is turned down, never quits at once.
+        XCTAssertEqual(QuitDecision.decide(quitting: true, hasState: true, recording: true, poweringOff: false), .alreadyQuitting)
+        XCTAssertEqual(QuitDecision.decide(quitting: true, hasState: true, recording: false, poweringOff: true), .alreadyQuitting)
+    }
+
     private func makeState() async throws -> (AppState, URL, UserDefaults) {
         let root = makeTemporaryFolder("DaybookAppTests")
         let defaults = makeTestDefaults()
