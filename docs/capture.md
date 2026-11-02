@@ -443,13 +443,20 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   Call) sits in the time lane, so arriving words never move the notes. Compact, it shows the newest
   line only, without the label (`.panelCompact`). The conversation page, after your notes: the newest
   eight lines while this Mac records it, You or Call before the words. A recorder's Listen Live page:
-  six lines in the page's body type (`.feed`). Once the recording stops, the saved captions read on
-  the conversation page after your notes until a transcript made after them replaces them
-  (`LiveCaptionStore.shown`), drawn as the iPhone's transcript page draws them (DaybookUI's
-  `SavedCaptionsView`): each caption with its time, which plays the recording it was heard from and
-  marks the caption under the playhead, the person or device before its words, in lighter ink than a
-  transcript, with no editing. Each surface observes the captions directly, so a revised word
-  redraws only it.
+  six lines in the page's body type (`.feed`). Each surface observes the captions directly, so a
+  revised word redraws only it.
+- **Saved captions.** Once the recording stops, both apps show saved captions by one rule
+  (`SavedCaptions.shown`, DaybookUI): a conversation's own, with words to read, until a transcript
+  made after they began replaces them. They read on the transcript's page: in the transcript's place
+  while there's none, with the Transcript switch (⌘2) on, else after the transcript (one from an
+  earlier recording of the conversation, which doesn't cover them; `SavedCaptions.standsIn`). Both
+  draw them with DaybookUI's `SavedCaptionsView`: each caption with its time, which plays the
+  recording it was heard from and marks the caption under the playhead, the person or device before
+  its words, in lighter ink than a transcript, with no editing. Search finds them in conversations
+  nothing else matched, labelled "Live captions · tentative" with the caption's time, and opens the
+  transcript's page at the caption. The Mac reads them off the main actor once they're saved and
+  after pruning (`LiveCaptionsController.readSaved`), and not while it records the conversation,
+  when the conversation page shows them live.
 - **Settings › General › Live Captions.** DaybookUI's `LiveCaptionSettingsSection`, the iPhone's
   too: "Show while recording" (on by default, as on the iPhone) and the language ("Same as This Mac",
   any `SpeechTranscriber` locale, and those only the downloaded live recognizers cover,

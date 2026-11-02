@@ -47,6 +47,12 @@ final class LiveCaptionsController {
     /// You lines older than this (behind the newest caption) keep the echo verdict they were given.
     static let settledAfter: TimeInterval = 30
 
+    /// Saved captions by conversation, as `readSaved` last read them off the main actor: what the
+    /// transcript's page, the view switch, and search show (`AppState.savedCaptions(for:)`).
+    private(set) var saved: [UUID: LiveCaptions] = [:]
+    /// Reads started, so one that finishes after a later one leaves what that read.
+    @ObservationIgnored private var savedReads = 0
+
     init(store: LiveCaptionStore, makeCaptioner: @escaping (LiveCaptionSource) -> (any LiveCaptioning)?) {
         session = LiveCaptionSession(store: store)
         self.makeCaptioner = makeCaptioner
@@ -102,6 +108,16 @@ final class LiveCaptionsController {
 
     /// What a line from `source` is labelled with: "You", "Call", or the device that heard it.
     func label(for source: LiveCaptionSource?) -> String { LiveCaptionLabels.label(for: source, names: sourceNames) }
+
+    /// Reads every conversation's saved captions again (`saved`), off the main actor: after captions
+    /// are saved, and after pruning.
+    func readSaved() async {
+        savedReads += 1
+        let read = savedReads, store = self.store
+        let found = await Task.detached(priority: .userInitiated) { store.allCaptions() }.value
+        guard read == savedReads, found != saved else { return }
+        saved = found
+    }
 
     // MARK: Other devices
 

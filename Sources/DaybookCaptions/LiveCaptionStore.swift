@@ -44,6 +44,12 @@ public final class LiveCaptionStore: Sendable {
         return files.compactMap { $0.pathExtension == "json" ? UUID(uuidString: $0.deletingPathExtension().lastPathComponent) : nil }
     }
 
+    /// Every conversation's saved captions, by conversation, read now: a few small files, since a
+    /// transcript's arrival deletes the ones it replaces.
+    public func allCaptions() -> [UUID: LiveCaptions] {
+        Dictionary(conversations().compactMap { id in captions(for: id).map { (id, $0) } }, uniquingKeysWith: { first, _ in first })
+    }
+
     // MARK: Writing
 
     /// Writes `captions` now, on the caller's thread: seeding a demo library, tests.

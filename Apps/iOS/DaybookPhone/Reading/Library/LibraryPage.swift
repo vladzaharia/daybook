@@ -171,7 +171,7 @@ struct LibraryPage: View {
 
     private var results: some View {
         let hits = LibrarySearch.hits(in: library.meetings, text: session.searchText, tokens: session.searchTokens, scope: session.searchScope)
-        // Saved live captions of conversations not transcribed yet, labelled as such.
+        // Saved live captions of conversations nothing else matched, labelled as such, as on the Mac.
         let found = Set(hits.map(\.meetingID))
         let scoped = LibrarySearch.hits(in: library.meetings, text: "", tokens: session.searchTokens, scope: session.searchScope).map(\.meetingID)
         let captionHits = SavedCaptions.hits(in: library.meetings.filter { scoped.contains($0.id) && !found.contains($0.id) },

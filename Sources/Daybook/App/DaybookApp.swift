@@ -220,7 +220,7 @@ struct DaybookCommands: Commands {
                 .disabled(meeting == nil)
             Button("Transcript") { state.pageMode = .transcript }
                 .keyboardShortcut("2")
-                .disabled(meeting?.unifiedTranscript.isEmpty != false)
+                .disabled(meeting.map { state.hasTranscriptPage($0) } != true)
             Divider()
             Button("Make Text Bigger") { state.readingScale = ReadingScale.bigger(state.readingScale) }
                 .keyboardShortcut("+")

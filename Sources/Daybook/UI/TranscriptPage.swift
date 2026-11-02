@@ -1,10 +1,14 @@
 import AppKit
+import DaybookCaptions
 import DaybookCore
 import DaybookDevices
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-/// The evidence behind the page: who said what, with your notes and bookmarks at their times.
+/// The evidence behind the page: who said what, with your notes and bookmarks at their times. Saved
+/// live captions read here too, as on the iPhone: in the transcript's place while there's none, else
+/// after it (`SavedCaptions`), each time playing the recording it was heard from.
 ///
 /// The page doesn't read the player, whose position moves ten times a second: it follows it apart
 /// (`ObservationWatch`, on the main queue, so it keeps up while a slider is dragged), keeps the passage
@@ -22,17 +26,22 @@ struct TranscriptPage: View {
     @State private var playing: UUID?
     @State private var isPlaying = false
     @State private var playerShown = false
+    /// The saved caption under the playhead.
+    @State private var playingCaption: UUID?
     @Environment(\.readingScale) private var scale
 
     var body: some View {
         let layout = TranscriptLayout.cached(for: meeting)
         let marks = layout.marks
+        let captions = state.savedCaptions(for: meeting)
+        let standsIn = SavedCaptions.standsIn(for: meeting)
         ScrollViewReader { proxy in
             PageScroll(lazy: true, bottomInset: playerShown ? 56 : 0) {
                 PageHeader(state: state, player: player, meeting: meeting, play: play)
                 // The same status line as the summary page, so turning the page keeps it in view.
                 ConversationStatus(state: state, meeting: meeting)
                 notices
+                if let captions, standsIn { savedCaptions(captions, spacingAbove: 0) }
                 ForEach(layout.blocks) { block in
                     switch block {
                     case .turn(_, let speakerID, let segments):
@@ -47,6 +56,8 @@ struct TranscriptPage: View {
                             .padding(.top, Space.s3)
                     }
                 }
+                // After an earlier recording's transcript, which doesn't cover them.
+                if let captions, !standsIn { savedCaptions(captions, spacingAbove: Space.s6 - Space.s4) }
             }
             .onScrollPhaseChange { _, phase in
                 if phase == .interacting || phase == .decelerating {
@@ -83,17 +94,37 @@ struct TranscriptPage: View {
                 guard !followSuspended else { return }
                 withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: 0.33)) }
             }
+            .onChange(of: playingCaption) { _, id in
+                guard let id, isPlaying else { return }
+                if Date().timeIntervalSince(lastUserScroll) > 5 { followSuspended = false }
+                guard !followSuspended else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(Self.captionID(id), anchor: UnitPoint(x: 0, y: 0.33)) }
+            }
         }
-        // Again for each version of the conversation, which the playhead's passages come from.
-        .task(id: meeting) {
-            followPlayhead(TranscriptLayout.cached(for: meeting))
+        // Again for each version of the conversation, which the playhead's passages come from, and of its captions.
+        .task(id: PlayheadSource(meeting: meeting, captions: captions?.updatedAt)) {
+            followPlayhead(TranscriptLayout.cached(for: meeting), captions: captions)
             let player = self.player
             let watch = ObservationWatch({ _ = (player.position, player.isPlaying, player.duration, player.trackID, player.meetingID) }) {
-                followPlayhead(TranscriptLayout.cached(for: meeting))
+                followPlayhead(TranscriptLayout.cached(for: meeting), captions: captions)
             }
             await watch.followWhileRunning()
         }
     }
+
+    /// What the playhead is followed through: the conversation's passages and its saved captions.
+    private struct PlayheadSource: Equatable {
+        var meeting: Meeting
+        var captions: Date?
+    }
+
+    /// Saved live captions, drawn as the iPhone draws them.
+    private func savedCaptions(_ captions: LiveCaptions, spacingAbove: CGFloat) -> some View {
+        SavedCaptionsReading(meeting: meeting, captions: captions, playing: playingCaption, spacingAbove: spacingAbove, play: play)
+    }
+
+    /// A saved caption's scroll ID (`SavedCaptionsView`).
+    static func captionID(_ id: UUID) -> String { "caption:\(id.uuidString)" }
 
     /// What the transcript needs from the person, in the page's status boxes.
     @ViewBuilder private var notices: some View {
@@ -120,17 +151,25 @@ struct TranscriptPage: View {
 
     private func scrollToTarget(_ proxy: ScrollViewProxy) {
         guard let target = state.pageScrollTarget else { return }
+        // A saved caption found by search scrolls to its row.
+        let caption = state.savedCaptions(for: meeting)?.segments.contains { $0.id == target } == true
         DispatchQueue.main.async {
-            proxy.scrollTo(target, anchor: UnitPoint(x: 0, y: 0.33))
+            if caption { proxy.scrollTo(Self.captionID(target), anchor: UnitPoint(x: 0, y: 0.33)) }
+            else { proxy.scrollTo(target, anchor: UnitPoint(x: 0, y: 0.33)) }
             state.pageScrollTarget = nil
         }
     }
 
-    /// The passage under the playhead, in the recording that is playing; state changes only when it does.
-    private func followPlayhead(_ layout: TranscriptLayout) {
+    /// The passage, or saved caption, under the playhead, in the recording that is playing; state
+    /// changes only when it does.
+    private func followPlayhead(_ layout: TranscriptLayout, captions: LiveCaptions?) {
         let here = player.meetingID == meeting.id && player.duration > 0
         let id = here ? player.trackID.flatMap { layout.playhead.segmentID(at: player.position, trackID: $0) } : nil
         if id != playing { playing = id }
+        let caption = here ? captions.flatMap {
+            SavedCaptions.playing(at: player.position, trackID: player.trackID, captions: $0, in: meeting)
+        } : nil
+        if caption != playingCaption { playingCaption = caption }
         if (here && player.isPlaying) != isPlaying { isPlaying = here && player.isPlaying }
         if here != playerShown { playerShown = here }
     }

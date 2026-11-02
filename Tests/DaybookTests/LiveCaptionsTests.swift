@@ -278,17 +278,17 @@ final class LiveCaptionsTests: XCTestCase {
 
         var meeting = Meeting(id: meetingID, title: "Launch planning", date: saved.createdAt)
         let earlier = Meeting(id: UUID(), title: "Earlier")
-        XCTAssertEqual(LiveCaptionStore.shown(saved, for: meeting), saved, "until the transcript exists")
+        XCTAssertEqual(SavedCaptions.shown(saved, for: meeting), saved, "until the transcript exists")
         // A transcript made before the captions (an earlier recording of the conversation) doesn't replace them.
         let track = UUID()
         meeting.transcripts = [TrackTranscript(trackID: track, segments: [], createdAt: saved.createdAt.addingTimeInterval(-600))]
-        XCTAssertNotNil(LiveCaptionStore.shown(saved, for: meeting))
+        XCTAssertNotNil(SavedCaptions.shown(saved, for: meeting))
         await store.prune(meetings: [meeting, earlier], keeping: nil)
         XCTAssertNotNil(store.captions(for: meetingID))
 
         // The transcript lands: the captions are gone from the page and from this Mac.
         meeting.transcripts.append(TrackTranscript(trackID: track, segments: [], createdAt: Date()))
-        XCTAssertNil(LiveCaptionStore.shown(saved, for: meeting))
+        XCTAssertNil(SavedCaptions.shown(saved, for: meeting))
         await store.prune(meetings: [meeting, earlier], keeping: nil)
         XCTAssertNil(store.captions(for: meetingID))
 
@@ -315,7 +315,7 @@ final class LiveCaptionsTests: XCTestCase {
         device.source = .device("sim")
         let captions = LiveCaptions(meetingID: meeting.id, localeIdentifier: "en_US", segments: [heard, device], createdAt: began,
                                     sourceNames: [LiveCaptionSource.device("sim").rawValue: "Soundcore"])
-        XCTAssertTrue(SavedCaptions.mayStandIn(for: meeting))
+        XCTAssertTrue(SavedCaptions.standsIn(for: meeting))
         XCTAssertEqual(SavedCaptions.shown(captions, for: meeting), captions)
         // This Mac's captions aren't filed with a recording: their times play the one that began as they did.
         XCTAssertEqual(SavedCaptions.recording(of: captions, in: meeting)?.id, microphone.id)
@@ -335,13 +335,79 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertFalse(LiveCaptionStrip.shows(segments: [], state: .off, locale: .current), "off: not even the label")
         XCTAssertTrue(LiveCaptionStrip.shows(segments: [], state: .listening, locale: .current), "Listening…")
 
-        // The transcript arrives: they stop standing in, and pruning takes them.
+        // The transcript arrives: it replaces them, and pruning takes them.
         meeting.unifiedTranscript = [TranscriptSegment(trackID: microphone.id, start: 3, end: 5, text: "Can we lock the date?")]
-        XCTAssertFalse(SavedCaptions.mayStandIn(for: meeting))
-        XCTAssertNil(SavedCaptions.shown(captions, for: meeting))
         meeting.transcripts = [TrackTranscript(trackID: microphone.id, segments: meeting.unifiedTranscript)]
+        XCTAssertFalse(SavedCaptions.standsIn(for: meeting))
+        XCTAssertNil(SavedCaptions.shown(captions, for: meeting))
         await store.prune(meetings: [meeting], keeping: nil)
         XCTAssertNil(store.captions(for: meeting.id))
+    }
+
+    /// The case where the apps once disagreed: a conversation transcribed before, recorded into again with
+    /// captions on. Both read `SavedCaptions.shown`, so both show the new captions, after the earlier
+    /// transcript; this Mac's transcript page, view switch, and search follow it.
+    func testBehaviorCaptionsOfARecordingIntoATranscribedConversationReadAfterItsTranscriptOnBothApps() async throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let state = AppState(libraryURL: root, defaults: makeTestDefaults("LiveCaptionsTests.transcribed"))
+        await state.initialize()
+        let id = state.newMeeting(title: "Launch planning")
+        let began = Date()
+        let track = UUID()
+        let passage = TranscriptSegment(trackID: track, start: 0, end: 4, text: "Last week we agreed on the date.")
+        state.update(id) { meeting in
+            meeting.transcripts = [TrackTranscript(trackID: track, segments: [passage], createdAt: began.addingTimeInterval(-600))]
+            meeting.unifiedTranscript = [passage]
+        }
+        var meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
+        var heard = line("Can we lock the venue too?", 3, 5)
+        heard.source = .microphone
+        let captions = LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [heard], createdAt: began)
+
+        // The one rule: their own, not replaced by a transcript from before them; after it, not in its place.
+        XCTAssertEqual(SavedCaptions.shown(captions, for: meeting), captions)
+        XCTAssertFalse(SavedCaptions.standsIn(for: meeting))
+        XCTAssertEqual(SavedCaptions.hits(in: [meeting], query: "venue", captions: [id: captions]).map(\.segment.id), [heard.id])
+
+        // This Mac reads them off the main actor once saved, and shows them as the iPhone does.
+        try await state.captions.store.save(captions)
+        XCTAssertNil(state.savedCaptions(for: meeting), "not read yet")
+        await state.captions.readSaved()
+        XCTAssertEqual(state.savedCaptions(for: meeting), captions)
+        XCTAssertTrue(state.hasTranscriptPage(meeting))
+        state.search = "venue"
+        XCTAssertTrue(state.searchHits.isEmpty, "nothing else in the conversation says it")
+        XCTAssertEqual(state.captionSearchHits.map(\.meeting.id), [id], "search finds them")
+        state.search = "agreed on the date"
+        XCTAssertTrue(state.captionSearchHits.isEmpty, "a conversation the search found is listed once")
+        state.search = ""
+        state.recordingID = id
+        XCTAssertNil(state.savedCaptions(for: meeting), "while this Mac records it, the page shows them live")
+        state.recordingID = nil
+
+        // The new recording's transcript replaces them on the page at once, and pruning takes them.
+        state.update(id) { $0.transcripts.append(TrackTranscript(trackID: UUID(), segments: [], createdAt: Date())) }
+        meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertNil(state.savedCaptions(for: meeting))
+        XCTAssertTrue(state.hasTranscriptPage(meeting), "the transcript's page still has the transcript")
+        try await waitUntil("pruned and read again") { state.captions.saved[id] == nil }
+        XCTAssertNil(state.captions.store.captions(for: id))
+    }
+
+    func testBehaviorSavedCaptionsAloneOpenTheTranscriptPage() async throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let state = AppState(libraryURL: root, defaults: makeTestDefaults("LiveCaptionsTests.alone"))
+        await state.initialize()
+        let id = state.newMeeting(title: "Onboarding design review")
+        let meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertFalse(state.hasTranscriptPage(meeting), "nothing to turn to")
+        try await state.captions.store.save(LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [line("Hi", 0, 1)]))
+        await state.captions.readSaved()
+        XCTAssertTrue(SavedCaptions.standsIn(for: meeting))
+        XCTAssertTrue(state.hasTranscriptPage(meeting), "the captions stand in for the transcript")
+        try await state.captions.store.save(LiveCaptions(meetingID: id, localeIdentifier: "en_US", segments: [line("  ", 0, 1)]))
+        await state.captions.readSaved()
+        XCTAssertFalse(state.hasTranscriptPage(meeting), "nothing to read, nothing to turn to")
     }
 
     func testBehaviorPruningFollowsTranscriptsAndConversationsNeverNotes() {

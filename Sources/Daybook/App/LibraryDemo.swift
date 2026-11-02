@@ -55,6 +55,8 @@ enum LibraryDemo {
                 }))
             }
             await finishing?.value
+            // The demo's captions were saved through a store of its own: the pages read them now.
+            await state.captions.readSaved()
             if finishing != nil, let id = state.meetings.first(where: { $0.title == ready })?.id { state.selectedID = id }
             if SpeakerProfileDemo.isRequested { await SpeakerProfileDemo.seed(state.library) }
             settle(state)

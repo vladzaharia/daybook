@@ -189,7 +189,7 @@ struct CaptionSearchRow: View {
                 Text(meeting.date.formatted(.dateTime.day().month(.abbreviated))).font(.subheadline).foregroundStyle(.secondary)
             }
             Text(snippet).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
-            Label { Text("Live captions · tentative · \(TimeLabel.short(segment.start))") } icon: { Image(systemName: "captions.bubble") }
+            Label { Text(SavedCaptions.searchLocation(segment)) } icon: { Image(systemName: "captions.bubble") }
                 .labelStyle(CompactLabelStyle())
                 .font(.footnote)
                 .foregroundStyle(.secondary)

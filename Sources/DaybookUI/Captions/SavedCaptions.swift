@@ -11,12 +11,6 @@ extension LiveCaptionStore {
         Dictionary(meetings.map { ($0.id, $0.transcripts.map(\.createdAt)) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// The captions to show for `meeting`: its own, until a transcript made after they began replaces
-    /// them (`isReplaced`), and only with words to read.
-    public static func shown(_ captions: LiveCaptions?, for meeting: Meeting) -> LiveCaptions? {
-        shown(captions, conversation: meeting.id, transcriptsMadeAt: meeting.transcripts.map(\.createdAt))
-    }
-
     /// Removes the captions a transcript has replaced, and those of conversations moved to the Trash
     /// (`prune(_:keeping:trashed:)`). `keeping`: the conversation being recorded.
     public func prune(meetings: [Meeting], keeping: UUID?, trashed: Set<UUID>? = nil) async {
@@ -24,18 +18,42 @@ extension LiveCaptionStore {
     }
 }
 
-/// Saved live captions as reading shows them, the same on both apps: in the transcript's place while
-/// there's no transcript to read, until one made after them replaces them; with times that play the
-/// recording they were heard from; and found by search. Never evidence, never summarized, never edited.
+/// Saved live captions as reading shows them, the same on both apps, by one rule (`shown`): a
+/// conversation's own, with words to read, until a transcript made after they began replaces them. They
+/// read on the transcript's page, in the transcript's place while there's none (`standsIn`), else after
+/// it (an earlier recording's, which doesn't cover them); with times that play the recording they were
+/// heard from; and found by search. Never evidence, never summarized, never edited.
 public enum SavedCaptions {
-    /// Whether a conversation's saved captions may stand in for its transcript: it has none to read yet.
-    /// A cheap check before reading them; `shown` decides.
-    public static func mayStandIn(for meeting: Meeting) -> Bool { meeting.unifiedTranscript.isEmpty }
-
-    /// The captions to show in the transcript's place, or nil when there are none to show.
+    /// The captions to show for `meeting`, or nil when there are none to show: the one rule both apps
+    /// read, for the page, its view switch, and search.
     public static func shown(_ captions: LiveCaptions?, for meeting: Meeting) -> LiveCaptions? {
-        guard mayStandIn(for: meeting) else { return nil }
-        return LiveCaptionStore.shown(captions, for: meeting)
+        LiveCaptionStore.shown(captions, conversation: meeting.id, transcriptsMadeAt: meeting.transcripts.map(\.createdAt))
+    }
+
+    /// Whether shown captions take the transcript's place: there's no transcript to read yet. Otherwise
+    /// they follow the transcript.
+    public static func standsIn(for meeting: Meeting) -> Bool { meeting.unifiedTranscript.isEmpty }
+
+    /// What a page reads a conversation's saved captions again for: another conversation, a transcript
+    /// made, or captions saved (`lastSave`).
+    public struct Reading: Hashable, Sendable {
+        public var meetingID: UUID
+        public var transcripts: [Date]
+        public var lastSave: Date?
+
+        public init(_ meeting: Meeting, lastSave: Date?) {
+            meetingID = meeting.id
+            transcripts = meeting.transcripts.map(\.createdAt)
+            self.lastSave = lastSave
+        }
+    }
+
+    /// Reads a conversation's saved captions off the caller's actor: those to show (`shown`), or nil.
+    public static func read(for meeting: Meeting, from store: LiveCaptionStore?) async -> LiveCaptions? {
+        guard let store else { return nil }
+        let id = meeting.id
+        let captions = await Task.detached(priority: .userInitiated) { store.captions(for: id) }.value
+        return shown(captions, for: meeting)
     }
 
     /// The recording the captions were heard from: the one they were filed with, else the one that
@@ -65,37 +83,56 @@ public enum SavedCaptions {
         return captions.segment(at: position)
     }
 
-    /// Search of saved captions, for conversations they stand in for: the first matching caption of
-    /// each, labelled "Live captions" in the results.
-    @MainActor
-    public static func hits(in meetings: [Meeting], query: String, store: LiveCaptionStore?) -> [(meeting: Meeting, segment: LiveCaptionSegment)] {
-        guard let store, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        return meetings.filter(mayStandIn).compactMap { meeting in
-            guard let captions = shown(store.captions(for: meeting.id), for: meeting), let segment = captions.firstMatch(query) else { return nil }
+    /// Search of saved captions, in the conversations they show for: the first matching caption of
+    /// each, labelled `searchLocation` in the results. `captions`: saved captions by conversation.
+    public static func hits(in meetings: [Meeting], query: String,
+                            captions: [UUID: LiveCaptions]) -> [(meeting: Meeting, segment: LiveCaptionSegment)] {
+        guard !captions.isEmpty, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        return meetings.compactMap { meeting in
+            guard let shown = shown(captions[meeting.id], for: meeting), let segment = shown.firstMatch(query) else { return nil }
             return (meeting, segment)
         }
+    }
+
+    /// The same, read from `store` now: only the conversations that have captions saved are read.
+    public static func hits(in meetings: [Meeting], query: String, store: LiveCaptionStore?) -> [(meeting: Meeting, segment: LiveCaptionSegment)] {
+        guard let store, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        let saved = Set(store.conversations())
+        var captions: [UUID: LiveCaptions] = [:]
+        for meeting in meetings where saved.contains(meeting.id) { captions[meeting.id] = store.captions(for: meeting.id) }
+        return hits(in: meetings, query: query, captions: captions)
+    }
+
+    /// Where search found a caption, under the result: labelled so it never passes for the transcript.
+    public static func searchLocation(_ segment: LiveCaptionSegment) -> String {
+        "Live captions · tentative · \(TimeLabel.short(segment.start))"
     }
 }
 
 // MARK: - The view
 
-/// Saved live captions in the transcript's place, on both apps: a quiet line saying what they are, then
-/// each caption with its time in the margin (a tap plays from there), the person live speakers recognized
-/// or the device that heard it before its words, in a lighter ink than a transcript. The caption under
-/// the playhead is marked in mint. Never editable. Each row has the scroll ID `caption:<id>`, the header
-/// `captions-header`.
+/// Saved live captions on the transcript's page, on both apps, in the transcript's place or after it
+/// (`SavedCaptions.standsIn`): a quiet line saying what they are, then each caption with its time in the
+/// margin (a tap plays from there), the person live speakers recognized or the device that heard it
+/// before its words, in a lighter ink than a transcript. The caption under the playhead is marked in
+/// mint. Never editable. Each row has the scroll ID `caption:<id>`, the header `captions-header`.
 public struct SavedCaptionsView: View {
     private let meeting: Meeting
     private let captions: LiveCaptions
     private let playing: UUID?
     private let play: (PlaybackTarget) -> Void
+    private let spacingAbove: CGFloat
     @Environment(\.daybookDensity) private var density
     @Environment(\.readingWidth) private var readingWidth
 
-    public init(meeting: Meeting, captions: LiveCaptions, playing: UUID?, play: @escaping (PlaybackTarget) -> Void) {
+    /// - Parameter spacingAbove: More room above the label, where they follow a transcript. (The rows are
+    ///   the page's own, so padding the view would pad each of them.)
+    public init(meeting: Meeting, captions: LiveCaptions, playing: UUID?, spacingAbove: CGFloat = 0,
+                play: @escaping (PlaybackTarget) -> Void) {
         self.meeting = meeting
         self.captions = captions
         self.playing = playing
+        self.spacingAbove = spacingAbove
         self.play = play
     }
 
@@ -110,7 +147,7 @@ public struct SavedCaptionsView: View {
                     .foregroundStyle(DaybookPalette.Ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.top, DaybookSpacing.s4)
+            .padding(.top, DaybookSpacing.s4 + spacingAbove)
             .padding(.bottom, DaybookSpacing.s2)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)

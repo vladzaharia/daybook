@@ -45,10 +45,9 @@ struct SummaryPage: View {
                 .padding(.top, meeting.summary == nil ? Space.s5 : Space.s2)
             // Every photo, in the order taken; the summary's sections show the ones they illustrate.
             PhotoStrip(state: state, meeting: meeting)
-            // Tentative captions while recording and until the transcript exists; after the notes,
-            // so arriving words never move what you're typing.
-            LiveCaptionsSection(captions: state.captions, meeting: meeting, isRecording: state.recordingID == meeting.id,
-                                player: player, play: play)
+            // Tentative captions while recording; after the notes, so arriving words never move what
+            // you're typing. Once saved, they read on the transcript's page.
+            LiveCaptionsSection(captions: state.captions, meeting: meeting, isRecording: state.recordingID == meeting.id)
             // How the page was made, once there is a page; never while recording. A transcript at rest
             // without a summary (one stopped while summarizing) offers Summarize there.
             if state.recordingID != meeting.id, meeting.summary != nil || state.processingStatus(for: meeting) == .transcribed {

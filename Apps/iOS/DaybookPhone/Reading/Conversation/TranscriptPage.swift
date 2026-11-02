@@ -27,7 +27,8 @@ struct TranscriptPage: View {
     @State private var renameDraft = ""
     @State private var playing: UUID?
     @State private var isPlaying = false
-    /// Saved live captions, shown in the transcript's place until the Mac's transcript arrives.
+    /// Saved live captions, shown until a transcript made after them arrives: in the transcript's place
+    /// while there's none, else after it (`SavedCaptions`, the Mac's rule too).
     @State private var captions: LiveCaptions?
     @State private var playingCaption: UUID?
 
@@ -36,6 +37,8 @@ struct TranscriptPage: View {
         // Worked out once per version of the conversation, not at every redraw.
         let layout = TranscriptLayout.cached(for: meeting)
         let marks = layout.marks
+        let shown = SavedCaptions.shown(captions, for: meeting)
+        let standsIn = SavedCaptions.standsIn(for: meeting)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -43,8 +46,8 @@ struct TranscriptPage: View {
                         PageHeader(library: library, meeting: meeting, play: play).padding(.bottom, PhoneStyle.Space.s2).id("header")
                     }
                     notices
-                    if meeting.unifiedTranscript.isEmpty {
-                        if let shown = SavedCaptions.shown(captions, for: meeting) {
+                    if standsIn {
+                        if let shown {
                             CaptionRows(meeting: meeting, captions: shown, playing: playingCaption, play: play)
                         } else {
                             EmptyTranscript(library: library, meeting: meeting, play: play).id("empty")
@@ -52,6 +55,11 @@ struct TranscriptPage: View {
                     }
                     ForEach(TranscriptRow.rows(from: layout.blocks)) { row in
                         rowView(row, playing: playing, marks: marks, corrected: layout.correctedSegmentIDs)
+                    }
+                    // After an earlier recording's transcript, which doesn't cover them.
+                    if !standsIn, let shown {
+                        CaptionRows(meeting: meeting, captions: shown, playing: playingCaption, spacingAbove: PhoneStyle.Space.s4,
+                                    play: play)
                     }
                 }
                 .scrollTargetLayout()
@@ -101,7 +109,7 @@ struct TranscriptPage: View {
             }
         }
         .paperBackground()
-        .modifier(PageTitle(title: showsHeader ? nil : SavedCaptions.shown(captions, for: meeting) == nil ? "Transcript" : "Live Captions"))
+        .modifier(PageTitle(title: showsHeader ? nil : standsIn && shown != nil ? "Live Captions" : "Transcript"))
         // Again for each version of the conversation, which the playhead's passages come from.
         .task(id: meeting) {
             followPlayhead()
@@ -111,9 +119,11 @@ struct TranscriptPage: View {
             }
             await watch.followWhileRunning()
         }
-        .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)-\(captionsSaved?.timeIntervalSince1970 ?? 0)") {
-            // reading: captions come from the store `LibraryBrowser` provides; the Mac's transcript replaces them.
-            captions = meeting.showsLiveCaptions ? captionStore?.captions(for: meeting.id) : nil
+        .task(id: SavedCaptions.Reading(meeting, lastSave: captionsSaved)) {
+            // From the store `LibraryBrowser` provides, off the main actor; a transcript made after them replaces them.
+            let read = await SavedCaptions.read(for: meeting, from: captionStore)
+            guard !Task.isCancelled else { return }
+            captions = read
         }
         .alert("Rename Speaker", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $renameDraft).textInputAutocapitalization(.words)

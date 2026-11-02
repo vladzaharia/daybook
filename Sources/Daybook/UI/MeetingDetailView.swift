@@ -19,7 +19,8 @@ struct MeetingDetailView: View {
 
     var body: some View {
         if let meeting {
-            let mode: PageMode = meeting.unifiedTranscript.isEmpty ? .summary : state.pageMode
+            // Saved live captions open the transcript's page until a transcript replaces them, as on the iPhone.
+            let mode: PageMode = state.hasTranscriptPage(meeting) ? state.pageMode : .summary
             Group {
                 switch mode {
                 case .summary: SummaryPage(state: state, player: state.playback, meeting: meeting, play: play)
@@ -103,7 +104,7 @@ struct DetailToolbar: ToolbarContent {
                 }
                 .help("Add Bookmark (⌘D)")
             } else {
-                let hasTranscript = meeting.map { !$0.unifiedTranscript.isEmpty } ?? false
+                let hasTranscript = meeting.map { state.hasTranscriptPage($0) } ?? false
                 Picker("View", selection: hasTranscript ? $state.pageMode : .constant(.summary)) {
                     ForEach(PageMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }

@@ -222,7 +222,29 @@ final class ReadingTests: XCTestCase {
         let hits = SavedCaptions.hits(in: [meeting, weekly()], query: "download", store: store)
         XCTAssertEqual(hits.map(\.meeting.id), [meeting.id])
         XCTAssertEqual(hits.first?.segment.text, "The model download moved")
+        XCTAssertEqual(SavedCaptions.searchLocation(captions.segments[1]), "Live captions · tentative · 0:03")
         XCTAssertTrue(SavedCaptions.hits(in: [transcribed], query: "download", store: store).isEmpty)
+    }
+
+    func testLiveCaptionsOfARecordingIntoATranscribedConversationReadAfterItsTranscript() throws {
+        // A conversation transcribed before, recorded into again with captions on: the earlier transcript
+        // doesn't cover what they heard, so they show after it, by the rule the Mac reads too.
+        var meeting = weekly()
+        let began = try XCTUnwrap(meeting.transcripts.map(\.createdAt).max()).addingTimeInterval(600)
+        let captions = LiveCaptions(meetingID: meeting.id, localeIdentifier: "en_US", segments: [
+            LiveCaptionSegment(start: 0.4, end: 3.1, text: "One more thing about the launch email.", isTentative: false),
+        ], createdAt: began)
+        XCTAssertFalse(meeting.unifiedTranscript.isEmpty)
+        XCTAssertEqual(SavedCaptions.shown(captions, for: meeting), captions)
+        XCTAssertFalse(SavedCaptions.standsIn(for: meeting), "after the transcript, not in its place")
+        let store = LiveCaptionStore(libraryRoot: try temporaryDirectory())
+        try store.save(captions)
+        XCTAssertEqual(SavedCaptions.hits(in: [meeting], query: "launch email", store: store).map(\.meeting.id), [meeting.id])
+
+        // The new recording's transcript replaces them.
+        meeting.transcripts.append(TrackTranscript(trackID: UUID(), segments: [], createdAt: began.addingTimeInterval(60)))
+        XCTAssertNil(SavedCaptions.shown(captions, for: meeting))
+        XCTAssertTrue(SavedCaptions.hits(in: [meeting], query: "launch email", store: store).isEmpty)
     }
 
     // MARK: The transcript

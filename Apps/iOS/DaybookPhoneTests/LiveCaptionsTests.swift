@@ -84,7 +84,9 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertEqual(saved.segments.map(\.isTentative), [false, false], "what stood at Stop is kept as heard")
         let file = try FileManager.default.attributesOfItem(atPath: model.captions.store.url(for: id).path)
         XCTAssertEqual(file[.posixPermissions] as? Int, 0o600, "readable by this user only, as on the Mac")
-        XCTAssertTrue(model.library.controller.meeting(id)?.showsLiveCaptions == true, "until a Mac's transcript arrives")
+        let filed = try XCTUnwrap(model.library.controller.meeting(id))
+        XCTAssertEqual(SavedCaptions.shown(saved, for: filed), saved, "until a Mac's transcript arrives")
+        XCTAssertTrue(SavedCaptions.standsIn(for: filed), "in the transcript's place")
         XCTAssertFalse(saved.segments.isEmpty)
         XCTAssertFalse(model.captions.store.url(for: id).path.contains("/Meetings/"), "never inside what syncs")
 
@@ -111,13 +113,13 @@ final class LiveCaptionsTests: XCTestCase {
         // A transcript from before the captions (an earlier recording of the conversation) doesn't cover them.
         let track = try XCTUnwrap(meeting.tracks.first)
         meeting.transcripts = [TrackTranscript(trackID: track.id, segments: [], createdAt: saved.createdAt.addingTimeInterval(-600))]
-        XCTAssertNotNil(LiveCaptionStore.shown(saved, for: meeting), "the rule the Mac uses")
+        XCTAssertEqual(SavedCaptions.shown(saved, for: meeting), saved, "the rule the Mac uses")
         await model.captions.store.prune(meetings: [meeting], keeping: nil)
         XCTAssertNotNil(model.captions.store.captions(for: id))
 
         // The Mac's transcript lands: the captions go from this iPhone, as they do from the Mac.
         meeting.transcripts.append(TrackTranscript(trackID: track.id, segments: [], createdAt: Date()))
-        XCTAssertNil(LiveCaptionStore.shown(saved, for: meeting))
+        XCTAssertNil(SavedCaptions.shown(saved, for: meeting))
         model.captions.prune(meetings: [meeting], trashed: [])
         try await waitUntil("replaced captions removed") { model.captions.store.captions(for: id) == nil }
     }

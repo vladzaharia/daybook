@@ -3066,7 +3066,7 @@ Still to check on a Mac running macOS 26 or later, in a real call:
   talk over the other side; tune `CaptionEcho.window` and `threshold` on real recognizer output.
   Headphones: both sources show in full.
 - Floating Notes over a full-screen call: the strip stays fixed and readable, and the notes don't move
-  as words arrive. The conversation page after Stop shows the saved captions until the transcript
+  as words arrive. The transcript's page after Stop shows the saved captions until the transcript
   lands, then drops them, and `<library>/LiveCaptions/` empties.
 - macOS 15: no captions, no Settings choices beyond the explanation, and no errors.
 - Soundcore Listen Live on hardware: how large the opening burst is, that captions catch up to the

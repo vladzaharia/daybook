@@ -26,6 +26,7 @@ struct SummaryPage: View {
     /// The status line's symbol column (`StatusView`).
     @ScaledMetric(relativeTo: .subheadline) private var statusGlyph: CGFloat = 20
     @Environment(\.liveCaptionStore) private var captionStore
+    @Environment(\.liveCaptionsSaved) private var captionsSaved
     /// Saved live captions take the transcript's page, which then doesn't say "Not transcribed yet".
     @State private var hasCaptions = false
 
@@ -91,8 +92,10 @@ struct SummaryPage: View {
             .onChange(of: session.summaryRequest) { _, _ in handleRequest(proxy) }
         }
         .paperBackground()
-        .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)") {
-            hasCaptions = SavedCaptions.shown(captionStore?.captions(for: meeting.id), for: meeting) != nil
+        .task(id: SavedCaptions.Reading(meeting, lastSave: captionsSaved)) {
+            let read = await SavedCaptions.read(for: meeting, from: captionStore) != nil
+            guard !Task.isCancelled else { return }
+            hasCaptions = read
         }
         .motion(PhoneStyle.Motion.page, value: meeting.summary?.createdAt)
         .motion(PhoneStyle.Motion.state, value: status)

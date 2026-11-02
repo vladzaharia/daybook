@@ -10,12 +10,5 @@ import Foundation
 
 /// Where this iPhone keeps the live captions it made: DaybookCaptions' store, the Mac's too.
 typealias LiveCaptionStore = DaybookCaptions.LiveCaptionStore
-/// Saved captions as reading shows them, the same on the Mac.
+/// Saved captions as reading shows them, by the Mac's rule too.
 typealias SavedCaptions = DaybookUI.SavedCaptions
-
-extension Meeting {
-    /// Whether saved live captions may stand in for this conversation's transcript: it has none to read
-    /// yet. A cheap check before reading them; `SavedCaptions.shown` decides, by the one rule both apps
-    /// share (a transcript made after the captions began replaces them).
-    var showsLiveCaptions: Bool { SavedCaptions.mayStandIn(for: self) }
-}

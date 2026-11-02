@@ -39,6 +39,33 @@ extension AppState {
                                                        delay: .seconds(1)) { [weak self] transcripts in
             self?.pruneCaptions(transcripts)
         })
+        // Saved captions are read again, off the main actor, each time captions are saved.
+        let captions = self.captions
+        watches.append(ObservationWatch.distinctValues(of: { captions.lastSave }, initial: false) { _ in
+            Task { await captions.readSaved() }
+        })
+    }
+
+    /// A conversation's saved live captions as its transcript page shows them (`SavedCaptions.shown`,
+    /// the iPhone's rule), from what was last read; none while this Mac records it, when its page shows
+    /// them live.
+    func savedCaptions(for meeting: Meeting) -> LiveCaptions? {
+        recordingID == meeting.id ? nil : SavedCaptions.shown(captions.saved[meeting.id], for: meeting)
+    }
+
+    /// Whether a conversation has a transcript page to turn to: a transcript, or saved captions in its place.
+    func hasTranscriptPage(_ meeting: Meeting) -> Bool {
+        !meeting.unifiedTranscript.isEmpty || savedCaptions(for: meeting) != nil
+    }
+
+    /// Saved captions that match the search, in conversations it found nothing else in and its scope and
+    /// tokens keep, as on the iPhone.
+    var captionSearchHits: [(meeting: Meeting, segment: LiveCaptionSegment)] {
+        guard isSearching, !captions.saved.isEmpty, !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        let found = Set(searchHits.map(\.meetingID))
+        let candidates = meetings.filter { captions.saved[$0.id] != nil && !found.contains($0.id) && recordingID != $0.id }
+        let scoped = Set(LibrarySearch.hits(in: candidates, text: "", tokens: searchTokens, scope: searchScope).map(\.meetingID))
+        return SavedCaptions.hits(in: candidates.filter { scoped.contains($0.id) }, query: search, captions: captions.saved)
     }
 
     /// Re-reads the live models captions use (`MacLiveModels`).
@@ -96,11 +123,14 @@ extension AppState {
     }
 
     /// Removes the captions transcripts replaced and those of conversations gone to the Trash, off the
-    /// main actor. `transcripts`: when each conversation's transcripts were made.
+    /// main actor, then reads what's left. `transcripts`: when each conversation's transcripts were made.
     func pruneCaptions(_ transcripts: [UUID: [Date]]) {
         guard library.isLoaded else { return }
-        let store = captions.store, keeping = Set([captions.meetingID, recordingID].compactMap { $0 })
-        Task { await store.prune(transcripts, keeping: keeping) }
+        let captions = self.captions, store = captions.store, keeping = Set([captions.meetingID, recordingID].compactMap { $0 })
+        Task {
+            await store.prune(transcripts, keeping: keeping)
+            await captions.readSaved()
+        }
     }
 
     #if DEBUG

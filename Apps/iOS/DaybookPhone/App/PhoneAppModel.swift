@@ -519,7 +519,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         let task = Task { [weak self] in
             for saved in waiting {
                 guard let self, !Task.isCancelled, self.isForeground, !self.recorder.isActive, !self.processor.isBusy else { break }
-                guard let meeting = self.library.controller.meeting(saved.meetingID), meeting.showsLiveCaptions,
+                guard let meeting = self.library.controller.meeting(saved.meetingID), SavedCaptions.shown(saved, for: meeting) != nil,
                       let track = meeting.tracks.first(where: { $0.id == saved.trackID }),
                       let url = try? await self.library.audioURL(for: track, in: meeting.id),
                       FileManager.default.fileExists(atPath: url.path) else { continue }

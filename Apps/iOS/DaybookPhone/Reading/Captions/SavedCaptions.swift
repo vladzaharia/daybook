@@ -10,7 +10,7 @@ extension EnvironmentValues {
     @Entry var liveCaptionsSaved: Date? = nil
 }
 
-/// The transcript's page while only live captions exist: DaybookUI's `SavedCaptionsView`, which the
-/// Mac shows in the transcript's place too. Times play the recording; the caption under the playhead is
-/// marked; nothing is editable.
+/// Saved live captions on the transcript's page, in its place or after it: DaybookUI's
+/// `SavedCaptionsView`, which the Mac shows the same way. Times play the recording; the caption under
+/// the playhead is marked; nothing is editable.
 typealias CaptionRows = DaybookUI.SavedCaptionsView

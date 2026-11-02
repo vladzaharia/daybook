@@ -9,12 +9,13 @@ struct ConversationScreen: View {
     @Environment(ReadingSession.self) private var session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.liveCaptionStore) private var captionStore
+    @Environment(\.liveCaptionsSaved) private var captionsSaved
     @State private var hasCaptions = false
 
     var body: some View {
         @Bindable var session = session
         if let meeting = library.meeting(id) {
-            // Saved live captions open the Transcript side until the Mac's transcript arrives.
+            // Saved live captions open the Transcript side until a transcript replaces them, as on the Mac.
             let hasTranscript = !meeting.unifiedTranscript.isEmpty || hasCaptions
             let mode: PageMode = hasTranscript ? session.pageMode : .summary
             Group {
@@ -43,8 +44,10 @@ struct ConversationScreen: View {
                 }
                 ConversationToolbar(library: library, meeting: meeting)
             }
-            .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)") {
-                hasCaptions = SavedCaptions.shown(captionStore?.captions(for: meeting.id), for: meeting) != nil
+            .task(id: SavedCaptions.Reading(meeting, lastSave: captionsSaved)) {
+                let read = await SavedCaptions.read(for: meeting, from: captionStore) != nil
+                guard !Task.isCancelled else { return }
+                hasCaptions = read
             }
         } else {
             ContentUnavailableView("Conversation Not Found", systemImage: "doc.questionmark")

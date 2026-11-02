@@ -1,5 +1,7 @@
+import DaybookCaptions
 import DaybookCore
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -83,8 +85,10 @@ struct ConversationList: View {
 
     private var results: some View {
         let hits = state.searchHits
+        // Saved live captions of conversations nothing else matched, labelled as such, as on the iPhone.
+        let captionHits = state.captionSearchHits
         let byID = Dictionary(state.meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return List(selection: Binding(get: { state.selectedID }, set: { id in open(id, in: hits) })) {
+        return List(selection: Binding(get: { state.selectedID }, set: { id in open(id, in: hits, captions: captionHits) })) {
             Picker("Search in", selection: $state.searchScope) {
                 Text("All").tag(SearchScope.all)
                 Text("Work").tag(SearchScope.work)
@@ -108,15 +112,24 @@ struct ConversationList: View {
                     SearchResultRow(meeting: meeting, hit: hit).tag(hit.meetingID).listRowSeparator(.hidden)
                 }
             }
+            ForEach(captionHits, id: \.meeting.id) { hit in
+                CaptionSearchRow(meeting: hit.meeting, segment: hit.segment, query: state.search)
+                    .tag(hit.meeting.id).listRowSeparator(.hidden)
+            }
         }
         .listStyle(.inset)
         .softTopScrollEdge()
-        .overlay { if hits.isEmpty { ContentUnavailableView.search(text: state.search) } }
+        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.search) } }
     }
 
-    private func open(_ id: UUID?, in hits: [SearchHit]) {
+    private func open(_ id: UUID?, in hits: [SearchHit], captions: [(meeting: Meeting, segment: LiveCaptionSegment)]) {
         state.multiSelection = []
         state.selectedID = id
+        if let caption = captions.first(where: { $0.meeting.id == id }) {
+            state.pageMode = .transcript
+            state.pageScrollTarget = caption.segment.id
+            return
+        }
         guard let hit = hits.first(where: { $0.meetingID == id }) else { return }
         if hit.field == .transcript, let segment = hit.segmentID {
             state.pageMode = .transcript
@@ -140,7 +153,7 @@ struct ConversationList: View {
     /// summary counts down, or runs in the cloud, it says that: "Summarizing in 12 s".
     private func subtitle(at now: Date) -> String {
         if state.isSearching {
-            let count = state.searchHits.count
+            let count = state.searchHits.count + state.captionSearchHits.count
             return count == 1 ? "1 result" : "\(count) results"
         }
         if state.isStoppingRecording { return "Saving recording…" }
@@ -350,7 +363,7 @@ private struct SearchResultRow: View {
         return Self.marked(text, match: match, weight: .bold, size: 13)
     }
 
-    private static func marked(_ string: String, match: Range<String.Index>?, weight: Font.Weight, size: CGFloat) -> AttributedString {
+    static func marked(_ string: String, match: Range<String.Index>?, weight: Font.Weight, size: CGFloat) -> AttributedString {
         var text = AttributedString(string)
         if let match, let lower = AttributedString.Index(match.lowerBound, within: text),
            let upper = AttributedString.Index(match.upperBound, within: text) {
@@ -369,6 +382,43 @@ private struct SearchResultRow: View {
             if hit.matchCount > 1 { return "Transcript · \(hit.matchCount) matches" }
             return (["Transcript", hit.speaker, hit.time.map(TimeLabel.short)].compactMap { $0 }).joined(separator: " · ")
         }
+    }
+}
+
+/// A match in a conversation's saved live captions, labelled so it never passes for the transcript (as
+/// on the iPhone).
+private struct CaptionSearchRow: View {
+    let meeting: Meeting
+    let segment: LiveCaptionSegment
+    let query: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title).font(TypeStyle.rowTitle).lineLimit(1)
+                Spacer(minLength: 6)
+                Text(meeting.date.formatted(.dateTime.day().month(.abbreviated))).font(TypeStyle.rowDetail).foregroundStyle(.secondary)
+            }
+            Text(snippet).font(TypeStyle.rowDetail).foregroundStyle(.secondary).lineLimit(2)
+            Label {
+                Text(SavedCaptions.searchLocation(segment))
+            } icon: {
+                Image(systemName: "captions.bubble").font(.system(size: 10))
+            }
+            .labelStyle(CompactLabelStyle())
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var snippet: AttributedString {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let range = segment.text.range(of: text, options: [.caseInsensitive, .diacriticInsensitive]) else {
+            return AttributedString(segment.text)
+        }
+        let (excerpt, match) = LibrarySearch.excerpt(segment.text, around: range)
+        return SearchResultRow.marked(excerpt, match: match, weight: .semibold, size: 12)
     }
 }
 
