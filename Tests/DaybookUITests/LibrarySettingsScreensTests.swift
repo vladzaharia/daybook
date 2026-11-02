@@ -69,6 +69,34 @@ final class LibrarySettingsScreensTests: XCTestCase {
         XCTAssertFalse(draft.catchUp(to: synced), "once is enough")
     }
 
+    func testBehaviorOpeningATemplateSavedWithoutANameWritesNothing() async throws {
+        let library = try await makeLibrary()
+        let templates = TemplateLibrary(library: library)
+        let nameless = SummaryTemplate(name: "", kind: .general, instructions: "")
+        library.saveTemplate(nameless)
+        let stored = try XCTUnwrap(templates.template(nameless.id))
+        XCTAssertEqual(stored.displayName, "Untitled Template")
+        var draft = try XCTUnwrap(templates.draft(nameless.id))
+        XCTAssertEqual(draft.template.name, "")
+        XCTAssertFalse(templates.save(&draft), "opened and left untouched, so nothing is written")
+        XCTAssertEqual(templates.template(nameless.id), stored)
+
+        // Another device names it while the editor is open: the untouched draft keeps out of its way.
+        var remote = stored
+        remote.name = "Board update"
+        library.saveTemplate(remote)
+        let synced = try XCTUnwrap(templates.template(nameless.id))
+        XCTAssertFalse(templates.save(&draft))
+        XCTAssertEqual(templates.template(nameless.id)?.name, "Board update", "the rename from the other device stays")
+        XCTAssertTrue(draft.catchUp(to: synced))
+        XCTAssertEqual(draft.template.name, "Board update", "and the editor shows it")
+
+        // Clearing the name the person sees is still a change, saved as Untitled Template.
+        draft.template.name = ""
+        XCTAssertTrue(templates.save(&draft))
+        XCTAssertEqual(templates.template(nameless.id)?.name, "Untitled Template")
+    }
+
     func testBehaviorSavingWritesOnlyTheFieldsThePersonChanged() async throws {
         let library = try await makeLibrary()
         let templates = TemplateLibrary(library: library)

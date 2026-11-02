@@ -80,10 +80,14 @@ public struct TemplateDraft: Equatable {
 
     public var id: SummaryTemplate.ID { template.id }
 
+    /// Whether the person changed the name since the base: it differs from the name the editor started with, so
+    /// a template saved without a name (shown as "Untitled Template") isn't renamed by being opened.
+    private var renamed: Bool { template.name != Self.editing(base).name }
+
     /// `current` with what the person changed since the base, and nothing else.
     func applied(to current: SummaryTemplate) -> SummaryTemplate {
         var value = current
-        if template.displayName != base.name { value.name = template.displayName }
+        if renamed { value.name = template.displayName }
         if template.kind != base.kind { value.kind = template.kind }
         if template.instructions != base.instructions { value.instructions = template.instructions }
         return value
@@ -95,7 +99,7 @@ public struct TemplateDraft: Equatable {
     public mutating func catchUp(to current: SummaryTemplate) -> Bool {
         guard current.id == id, current != base else { return false }
         var caught = Self.editing(current)
-        if template.displayName != base.name { caught.name = template.name }
+        if renamed { caught.name = template.name }
         if template.kind != base.kind { caught.kind = template.kind }
         if template.instructions != base.instructions { caught.instructions = template.instructions }
         template = caught
