@@ -97,10 +97,7 @@ private struct ReadingLayout: View {
 
     /// "Move “Weekly sync” to the Trash?", as on the Mac.
     private var trashTitle: String {
-        let ids = session.confirmingTrash
-        if ids.count > 1 { return "Move \(ids.count) conversations to the Trash?" }
-        let title = ids.first.flatMap { library.meeting($0)?.title }.flatMap { $0.isEmpty ? nil : $0 }
-        return title.map { "Move “\($0)” to the Trash?" } ?? "Move this conversation to the Trash?"
+        LibraryWords.trashTitle(library.meetings.filter { session.confirmingTrash.contains($0.id) })
     }
 
     private func trash(_ ids: [UUID]) {
@@ -214,11 +211,12 @@ private struct ReadingLayout: View {
                             }
                             .navigationBarTitleDisplayMode(.inline)
                             .toolbar {
+                                // Words, not a glyph the toolbar would show alone: it's the way across both pages
+                                // (a second tap on the row is the other).
                                 ToolbarItem(placement: .topBarLeading) {
-                                    Button { session.open(id) } label: {
-                                        Label(meeting.unifiedTranscript.isEmpty ? "Open" : "Open with Transcript", systemImage: "book.pages")
-                                    }
-                                    .labelStyle(.titleAndIcon)
+                                    Button("Open") { session.open(id) }
+                                        .buttonStyle(.glassProminent)
+                                        .tint(PhoneStyle.prominentFill)
                                 }
                                 ConversationToolbar(library: library, meeting: meeting)
                             }

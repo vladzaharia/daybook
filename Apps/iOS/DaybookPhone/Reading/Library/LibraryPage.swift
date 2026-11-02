@@ -1,26 +1,32 @@
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-/// The library: a place (All, Work, Personal, a folder, or the Trash) as a date-grouped list, or
-/// search results. Places are the title's menu, search is the system search field with tag and
-/// speaker suggestions, and Select turns on multi-select for moving, tagging, and the Trash.
+/// The library: a place (All, Work, Personal, a folder, or the Trash) as a date-grouped list, or search results.
+/// Places are the title's menu; search opens from Search beside Record (or on the status sheet), at the thumb, with
+/// tag and speaker suggestions; and Select turns on multi-select for what `ConversationActions.batch` offers. The
+/// rows, results, empty places, and the Trash's rows are DaybookUI's, the Mac's too.
 ///
 /// It reads the `LibraryController` directly, which is `@Observable`, as the player is: the list redraws for the
 /// conversations, and a row for whether it's playing.
 struct LibraryPage: View {
     let library: LibraryController
     let rootURL: URL
-    /// Two pages: a tap shows the conversation on the right page instead of opening it.
+    /// Two pages: a tap shows the conversation on the right page instead of opening it; a second tap opens it.
     var twoPage = false
     @Environment(ReadingSession.self) private var session
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.liveCaptionStore) private var captionStore
     /// The status sheet holds Record, Import, and Search while it's up (pocket); leave it room.
     @Environment(\.statusSheetInset) private var statusSheetInset
+    @Environment(\.creaseEdge) private var creaseEdge
+    @Environment(\.undoManager) private var undoManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingSettings = false
     @State private var naming: FolderNaming?
     @State private var folderName = ""
     @State private var deletingFolder: LibraryFolder?
+    @State private var captionHits: [LibraryCaptionSearch.Hit] = []
 
     private enum FolderNaming: Identifiable {
         case new([UUID]), rename(UUID)
@@ -32,23 +38,9 @@ struct LibraryPage: View {
         content
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            // The field opens under the title; the button that opens it sits beside Record, at the thumb.
-            .searchable(text: $session.searchText, tokens: $session.searchTokens, suggestedTokens: .constant(suggestedTokens),
-                        isPresented: $session.isSearchPresented, placement: .navigationBarDrawer(displayMode: .automatic),
-                        prompt: "Titles, notes, transcripts") { token in
-                switch token {
-                case .tag(let tag): Label(tag, systemImage: "tag")
-                case .speaker(let name): Label(name, systemImage: "person")
-                }
-            }
-            .searchScopes($session.searchScope, activation: .onSearchPresentation) {
-                Text("All").tag(SearchScope.all)
-                Text("Work").tag(SearchScope.work)
-                Text("Personal").tag(SearchScope.personal)
-                if case .library(.folder(let id)) = session.place, let folder = library.folders.first(where: { $0.id == id }) {
-                    Text(folder.name).tag(SearchScope.folder(id))
-                }
-            }
+            // One way into search, at the thumb (Search beside Record, or on the status sheet): the field opens under
+            // the title only while search is up, never at rest above the list.
+            .modifier(SearchWhilePresented(library: library))
             .toolbar { toolbar }
             // A bar, not an inset: the list's edge effect then runs under Record and the status sheet.
             .safeAreaBar(edge: .bottom, spacing: 0) { bottomBar }
@@ -63,7 +55,7 @@ struct LibraryPage: View {
             .alert("Delete the folder “\(deletingFolder?.name ?? "")”?", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } })) {
                 Button("Delete Folder", role: .destructive) {
                     if let folder = deletingFolder {
-                        library.removeFolder(folder.id)
+                        library.removeFolder(folder.id, undoManager: undoManager)
                         if session.place == .library(.folder(folder.id)) { session.place = .library(.section(.all)) }
                     }
                     deletingFolder = nil
@@ -74,6 +66,11 @@ struct LibraryPage: View {
             }
             .onChange(of: session.searchText) { _, text in
                 if !text.isEmpty, session.isSelecting { session.isSelecting = false; session.selection = [] }
+                // "#launch " typed whole becomes the tag's token, as on the Mac.
+                if let token = LibrarySearchSuggestions.promotedTag(in: text, tags: library.allTags) {
+                    session.searchTokens.append(token)
+                    session.searchText = ""
+                }
             }
     }
 
@@ -83,47 +80,31 @@ struct LibraryPage: View {
         if session.isSearching {
             results
         } else if session.place == .trash {
-            TrashList(library: library, rootURL: rootURL)
+            TrashList(library: library)
         } else {
             list
         }
     }
 
     private var place: LibraryPlace { session.place.libraryPlace ?? .section(.all) }
-
-    /// Where a summary runs first ("Summarizing in 12 s"), then the processing status.
-    private func rowStatus(_ meeting: Meeting, now: Date) -> RowStatus? {
-        let placement = model.placement
-        return StatusPresentation.placementRow(placement.planners[meeting.id], run: placement.runs[meeting.id], live: placement.live(meeting.id), now: now)
-            ?? StatusPresentation.row(ProcessingStatus.phone(meeting, now: now), meeting: meeting)
-    }
     private var meetings: [Meeting] { place.meetings(in: library.meetings) }
 
     private var list: some View {
         let meetings = meetings
         let now = Date()
+        let context = PhoneRowStatus.context(model: model, library: library, player: session.player)
         return List(selection: selectionBinding) {
             ForEach(DateGroup.groups(for: meetings, now: now)) { group in
                 Section {
                     ForEach(group.meetings) { meeting in
-                        ConversationRow(meeting: meeting,
-                                        status: rowStatus(meeting, now: now),
-                                        timeLabel: RowDate.format(meeting.date, group: group.title, now: now),
-                                        isPlaying: session.player.meetingID == meeting.id && session.player.isPlaying)
+                        ConversationRowView(meeting: meeting, status: PhoneRowStatus.make(meeting, context: context, now: now),
+                                            timeLabel: RowDate.format(meeting.date, group: group.title, now: now))
                             .tag(meeting.id)
+                            .listRowInsets(.leading, rowInset(.leading))
+                            .listRowInsets(.trailing, rowInset(.trailing))
                             .listRowBackground(rowBackground(meeting.id))
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) { session.confirmingTrash = [meeting.id] } label: { Label("Trash", systemImage: "trash") }
-                                Button { session.sheet = .move([meeting.id]) } label: { Label("Move", systemImage: "folder") }
-                                    .tint(PhoneStyle.prominentFill)
-                            }
-                            .swipeActions(edge: .leading) {
-                                let personal = meeting.effectivePlacement == .personal
-                                Button { library.setPlacement([meeting.id], personal ? .work : .personal) } label: {
-                                    Label(personal ? "Work" : "Personal", systemImage: personal ? "briefcase" : "house")
-                                }
-                                .tint(Color(uiColor: .systemGray))
-                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) { swipes(meeting, edge: .trailing) }
+                            .swipeActions(edge: .leading) { swipes(meeting, edge: .leading) }
                     }
                 } header: {
                     Text(group.title)
@@ -139,10 +120,11 @@ struct LibraryPage: View {
         .scrollEdgeEffectStyle(.hard, for: .bottom)
         .paperBackground()
         .contextMenu(forSelectionType: UUID.self) { ids in
-            RowMenu(library: library, ids: Array(ids), trash: { session.confirmingTrash = $0 })
+            RowMenu(library: library, ids: Array(ids))
         } primaryAction: { ids in
             guard let id = ids.first else { return }
-            twoPage ? session.select(id) : session.open(id)
+            // On two pages a tap shows it on the right page, and a tap on the one shown opens it.
+            if twoPage && session.openID != id { session.select(id) } else { session.open(id) }
         }
         // Through PhoneSync, so a pull joins a pass already running instead of being dropped, and the status follows.
         .refreshable { await model.sync.synchronize(.manual) }
@@ -150,13 +132,54 @@ struct LibraryPage: View {
         .motion(library.isLoaded ? PhoneStyle.Motion.state : .linear(duration: 0), value: meetings.map(\.id))
     }
 
+    /// A row's side inset on two pages: 20 pt, and on the side that meets the Duo's crease, clear of it. Nil, the
+    /// list's own, on one page.
+    private func rowInset(_ edge: Edge) -> CGFloat? {
+        guard twoPage else { return nil }
+        return creaseEdge == edge ? PhoneStyle.Page.creaseClearance : Self.pageRowInset
+    }
+
+    private static let pageRowInset: CGFloat = 20
+    /// How far the shown row's wash reaches past its words.
+    private static let washOutset: CGFloat = 10
+
+    /// The one shown on the right page, on two pages: a wash 10 pt outside the row's words on both sides, so it
+    /// keeps clear of the crease as they do.
     private func rowBackground(_ id: UUID) -> some View {
         Group {
             if twoPage && !session.isSelecting && session.openID == id {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(PhoneStyle.accent.opacity(0.14)).padding(.horizontal, 6)
+                RoundedRectangle(cornerRadius: 14, style: .continuous).fill(PhoneStyle.accent.opacity(0.14))
+                    .padding(.leading, (rowInset(.leading) ?? Self.pageRowInset) - Self.washOutset)
+                    .padding(.trailing, (rowInset(.trailing) ?? Self.pageRowInset) - Self.washOutset)
             } else {
                 PhoneStyle.paper
             }
+        }
+    }
+
+    /// A row's swipes, from its actions: Move to Trash and Move to Folder to the trailing edge, Work or Personal to
+    /// the leading.
+    @ViewBuilder private func swipes(_ meeting: Meeting, edge: HorizontalEdge) -> some View {
+        let groups = PhoneActions.groups(for: [meeting.id], library: library)
+        if edge == .trailing {
+            if let trash = ConversationActionMenuItems.action(.moveToTrash, in: groups) {
+                Button(role: .destructive) { session.confirmingTrash = [meeting.id] } label: {
+                    Label(ConversationActionMenuItems.shortTitle(trash), systemImage: trash.symbol)
+                }
+            }
+            if let move = ConversationActionMenuItems.action(.moveToFolder, in: groups) {
+                Button { session.sheet = .move([meeting.id]) } label: {
+                    Label(ConversationActionMenuItems.shortTitle(move), systemImage: move.symbol)
+                }
+                .tint(PhoneStyle.prominentFill)
+            }
+        } else if let filing = ConversationActionMenuItems.action(.moveTo(.work), in: groups)
+                    ?? ConversationActionMenuItems.action(.moveTo(.personal), in: groups),
+                  case .moveTo(let placement) = filing.id {
+            Button { library.setPlacement([meeting.id], placement, undoManager: undoManager) } label: {
+                Label(ConversationActionMenuItems.shortTitle(filing), systemImage: filing.symbol)
+            }
+            .tint(Color(uiColor: .systemGray))
         }
     }
 
@@ -169,26 +192,29 @@ struct LibraryPage: View {
         })
     }
 
+    private struct CaptionQuery: Equatable {
+        var text: String
+        var tokens: [SearchToken]
+        var scope: SearchScope
+        var revision: Int
+    }
+
     private var results: some View {
         let hits = LibrarySearch.hits(in: library.meetings, text: session.searchText, tokens: session.searchTokens, scope: session.searchScope)
-        // Saved live captions of conversations nothing else matched, labelled as such, as on the Mac.
-        let found = Set(hits.map(\.meetingID))
-        let scoped = LibrarySearch.hits(in: library.meetings, text: "", tokens: session.searchTokens, scope: session.searchScope).map(\.meetingID)
-        let captionHits = SavedCaptions.hits(in: library.meetings.filter { scoped.contains($0.id) && !found.contains($0.id) },
-                                             query: session.searchText, store: captionStore)
         return List {
             ForEach(hits) { hit in
                 if let meeting = library.meetings.first(where: { $0.id == hit.meetingID }) {
-                    Button { session.open(hit) } label: { SearchResultRow(meeting: meeting, hit: hit) }
+                    Button { session.open(hit) } label: { SearchResultRowView(meeting: meeting, hit: hit) }
                         .buttonStyle(.plain)
                         .listRowBackground(PhoneStyle.paper)
                 }
             }
-            ForEach(captionHits, id: \.meeting.id) { hit in
+            // Saved live captions of conversations the text search didn't find, labelled as such.
+            ForEach(captionHits) { hit in
                 Button {
                     session.open(hit.meeting.id, mode: .transcript)
                     session.showCaption(hit.segment.id)
-                } label: { CaptionSearchRow(meeting: hit.meeting, segment: hit.segment, query: session.searchText) }
+                } label: { CaptionHitRowView(meeting: hit.meeting, segment: hit.segment, query: session.searchText) }
                     .buttonStyle(.plain)
                     .listRowBackground(PhoneStyle.paper)
             }
@@ -197,16 +223,23 @@ struct LibraryPage: View {
         .scrollContentBackground(.hidden)
         .paperBackground()
         .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: session.searchText) } }
+        .task(id: CaptionQuery(text: session.searchText, tokens: session.searchTokens, scope: session.searchScope, revision: library.revision)) {
+            let scoped = Set(LibrarySearch.hits(in: library.meetings, text: "", tokens: session.searchTokens, scope: session.searchScope).map(\.meetingID))
+            let found = await LibraryCaptionSearch.hits(in: library.meetings.filter { scoped.contains($0.id) }, query: session.searchText,
+                                                        excluding: Set(hits.map(\.meetingID)), libraryRoot: library.rootURL)
+            guard !Task.isCancelled else { return }
+            captionHits = found
+        }
     }
 
-    /// A place with nothing in it: its symbol and one line, no instructions.
+    /// A place with nothing in it, in the Mac's words; an empty library that's still arriving from iCloud says so.
     @ViewBuilder private var emptyPlace: some View {
-        switch place {
-        case .section(.all): EmptyPlace(title: "No Conversations Yet", systemImage: "waveform", brand: true)
-        case .section(.work): EmptyPlace(title: "No Work Conversations", systemImage: "briefcase")
-        case .section(.personal): EmptyPlace(title: "No Personal Conversations", systemImage: "house")
-        case .folder(let id): EmptyPlace(title: "Nothing in \(library.folders.first { $0.id == id }?.name ?? "This Folder")", systemImage: "folder")
-        case .device: Color.clear
+        let sync = model.sync
+        if LibraryWords.isGettingConversations(libraryIsEmpty: library.meetings.isEmpty, checking: sync.connection == .checking && sync.controller != nil,
+                                               connected: sync.isConnected, lastSync: sync.controller?.lastSync, hasMoreWork: sync.hasMoreWork) {
+            GettingConversationsView()
+        } else if let words = LibraryWords.emptyPlace(place, libraryIsEmpty: library.meetings.isEmpty, platform: .iPhone) {
+            LibraryEmptyPlaceView(words)
         }
     }
 
@@ -215,18 +248,12 @@ struct LibraryPage: View {
     private var title: String {
         if session.isSelecting { return session.selection.isEmpty ? "Select Conversations" : "\(session.selection.count) Selected" }
         switch session.place {
-        case .trash: return "Trash"
+        case .trash: return LibraryWords.trash
         case .library(.section(let section)): return section.rawValue
         case .library(.folder(let id)): return library.folders.first { $0.id == id }?.name ?? "Folder"
         case .library(.device): return "Device"
+        case .library(.trash): return LibraryWords.trash
         }
-    }
-
-    private var suggestedTokens: [SearchToken] {
-        let tags = library.allTags.map(SearchToken.tag)
-        let speakers = Set(library.meetings.flatMap { $0.speakers.map(\.name) }.filter { !$0.hasPrefix("Speaker ") && $0 != "Me" })
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map(SearchToken.speaker)
-        return (tags + speakers).filter { !session.searchTokens.contains($0) }
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
@@ -245,33 +272,42 @@ struct LibraryPage: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { withAnimation { session.isSelecting = false; session.selection = [] } }
+                Button("Done") { withAnimation(PhoneStyle.Motion.resolved(PhoneStyle.Motion.state, reduceMotion: reduceMotion)) { session.isSelecting = false; session.selection = [] } }
                     .fontWeight(.semibold)
             }
         } else {
-            // Only what works here: no New Note in the Trash, no Select with nothing to select.
+            // Only what works here: no New Note in the Trash, no Select with nothing to select. Glyphs in the title's
+            // ink, as the system's back chevron; teal is for what confirms.
             if session.place != .trash {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: newNote) { Label("New Note", systemImage: "square.and.pencil") }
+                        .tint(PhoneStyle.Ink.title)
                 }
                 if !meetings.isEmpty {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button { withAnimation { session.isSelecting = true; session.selection = [] } } label: {
+                        Button { withAnimation(PhoneStyle.Motion.resolved(PhoneStyle.Motion.state, reduceMotion: reduceMotion)) { session.isSelecting = true; session.selection = [] } } label: {
                             Label("Select", systemImage: "checkmark.circle")
                         }
+                        .tint(PhoneStyle.Ink.title)
                     }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingSettings = true } label: { Label("Settings", systemImage: "gearshape") }
+                    .tint(PhoneStyle.Ink.title)
             }
         }
     }
 
-    /// Record at the thumb, a mini player while something plays, or the selection's actions.
+    /// Record at the thumb, a mini player while something plays, or the selection's actions. On the Duo's left
+    /// page they keep clear of the crease.
     @ViewBuilder private var bottomBar: some View {
         if session.isSelecting {
-            SelectionBar(library: library, ids: Array(session.selection), trash: { session.confirmingTrash = $0 })
+            SelectionBar(library: library, ids: Array(session.selection))
+                .padding(.leading, barInset(.leading))
+                .padding(.trailing, barInset(.trailing))
+                .padding(.bottom, PhoneStyle.Space.s2)
+                .daybookTransition(.move(edge: .bottom).combined(with: .opacity))
         } else if !session.isSearchPresented {
             VStack(spacing: PhoneStyle.Space.s2) {
                 if let id = session.player.meetingID, !(twoPage && session.openID == id), let meeting = library.meeting(id) {
@@ -300,9 +336,15 @@ struct LibraryPage: View {
                     .dynamicTypeSize(...StatusCompactDetent.recordLargestSize)
                 }
             }
-            .padding(.horizontal, PhoneStyle.Space.s4)
+            .padding(.leading, barInset(.leading))
+            .padding(.trailing, barInset(.trailing))
             .padding(.bottom, PhoneStyle.Space.s2)
         }
+    }
+
+    /// The bar's side padding: 16 pt, and on the side that meets the Duo's crease, clear of it.
+    private func barInset(_ edge: Edge) -> CGFloat {
+        creaseEdge == edge ? PhoneStyle.Page.creaseClearance : PhoneStyle.Space.s4
     }
 
     // MARK: Actions
@@ -317,10 +359,41 @@ struct LibraryPage: View {
         guard !name.isEmpty, let naming else { return }
         switch naming {
         case .new(let ids):
-            let id = library.createFolder(named: name, moving: ids)
+            let id = library.createFolder(named: name, moving: ids, undoManager: undoManager)
             session.place = .library(.folder(id))
         case .rename(let id):
-            library.saveFolder(LibraryFolder(id: id, name: name))
+            library.renameFolder(id, to: name, undoManager: undoManager)
+        }
+    }
+}
+
+/// The search field, under the title only while search is up: Search beside Record, or on the status sheet, opens
+/// it. It's attached to the page's background, so opening and closing it never rebuilds the list or loses its place.
+private struct SearchWhilePresented: ViewModifier {
+    let library: LibraryController
+    @Environment(ReadingSession.self) private var session
+
+    func body(content: Content) -> some View {
+        @Bindable var session = session
+        content.background {
+            if session.isSearchPresented || session.isSearching {
+                Color.clear
+                    .searchable(text: $session.searchText, tokens: $session.searchTokens,
+                                suggestedTokens: .constant(LibrarySearchSuggestions.tokens(for: session.searchText, tags: library.allTags,
+                                                                                          meetings: library.meetings, chosen: session.searchTokens)),
+                                isPresented: $session.isSearchPresented, placement: .navigationBarDrawer(displayMode: .always),
+                                prompt: LibraryWords.searchPrompt) { token in
+                        Label(token.text, systemImage: token.symbol)
+                    }
+                    .searchScopes($session.searchScope, activation: .onSearchPresentation) {
+                        Text("All").tag(SearchScope.all)
+                        Text("Work").tag(SearchScope.work)
+                        Text("Personal").tag(SearchScope.personal)
+                        if case .library(.folder(let id)) = session.place, let folder = library.folders.first(where: { $0.id == id }) {
+                            Text(folder.name).tag(SearchScope.folder(id))
+                        }
+                    }
+            }
         }
     }
 }
@@ -355,80 +428,145 @@ private struct PlacesMenu: View {
             }
         }
         Section {
-            Picker("Trash", selection: $session.place) {
-                Label("Trash", systemImage: "trash").tag(ReadingPlace.trash)
+            Picker(LibraryWords.trash, selection: $session.place) {
+                Label(LibraryWords.trash, systemImage: "trash").tag(ReadingPlace.trash)
             }
             .pickerStyle(.inline)
         }
     }
 }
 
-/// A row's menu, or the selection's. Items that don't apply are hidden.
+/// A row's menu, or the selection's: Open first, then what `ConversationActions` lists for this iPhone, without
+/// what doesn't apply now.
 struct RowMenu: View {
     let library: LibraryController
     let ids: [UUID]
-    let trash: ([UUID]) -> Void
     @Environment(ReadingSession.self) private var session
-
-    private var meetings: [Meeting] { library.meetings.filter { ids.contains($0.id) } }
+    @Environment(\.summaryPlacement) private var placement
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        if let meeting = meetings.first {
-            if meetings.count == 1 {
-                Button { session.open(meeting.id) } label: { Label("Open", systemImage: "doc.text") }
-                if !meeting.unifiedTranscript.isEmpty {
-                    Button { session.open(meeting.id, mode: .transcript) } label: { Label("Open Transcript", systemImage: "text.quote") }
-                }
-            }
-            Button { session.sheet = .move(ids) } label: { Label("Move to Folder…", systemImage: "folder") }
-            Button { session.sheet = .tags(ids) } label: { Label("Tags…", systemImage: "tag") }
-            let personal = meetings.allSatisfy { $0.effectivePlacement == .personal }
-            Button { library.setPlacement(ids, personal ? .work : .personal) } label: {
-                Label(personal ? "Move to Work" : "Move to Personal", systemImage: personal ? "briefcase" : "house")
-            }
-            if meetings.count == 1 {
-                Divider()
-                ReprocessMenu(library: library, meeting: meeting)
-                ExportMenu(meeting: meeting)
+        let meetings = library.meetings.filter { ids.contains($0.id) }
+        if let only = meetings.first, meetings.count == 1 {
+            Button { session.open(only.id) } label: { Label("Open", systemImage: "doc.text") }
+            if !only.unifiedTranscript.isEmpty {
+                Button { session.open(only.id, mode: .transcript) } label: { Label("Open Transcript", systemImage: "text.quote") }
             }
             Divider()
-            Button(role: .destructive) { trash(ids) } label: {
-                Label(meetings.count == 1 ? "Move to Trash…" : "Move \(meetings.count) to Trash…", systemImage: "trash")
-            }
+        }
+        if !meetings.isEmpty {
+            ConversationActionMenuItems(PhoneActions.groups(for: ids, library: library), platform: .iPhone,
+                                        perform: { PhoneActions.perform($0, on: ids, library: library, session: session,
+                                                                        placement: placement, undoManager: undoManager) },
+                                        custom: { PhoneActions.custom($0, ids: ids, library: library) })
         }
     }
 }
 
-/// The selection's actions, at the bottom where the thumb is.
+/// What this iPhone does for each of `ConversationActions`.
+@MainActor
+enum PhoneActions {
+    /// The actions for one conversation, or a selection's.
+    static func groups(for ids: [UUID], library: LibraryController) -> [ConversationActionGroup] {
+        let selected = library.meetings.filter { ids.contains($0.id) }
+        guard let only = selected.first, selected.count == 1 else {
+            return ConversationActions.batch(ids, in: library.meetings, context: .init(platform: .iPhone))
+        }
+        return ConversationActions.actions(for: only, context: .init(platform: .iPhone, status: ProcessingStatus.phone(only),
+                                                                      canTakePhoto: CameraPicker.isAvailable))
+    }
+
+    static func perform(_ id: ConversationAction.ID, on ids: [UUID], library: LibraryController, session: ReadingSession,
+                        placement: PhoneSummaryPlacement?, undoManager: UndoManager?) {
+        let meetings = library.meetings.filter { ids.contains($0.id) }
+        guard let first = meetings.first else { return }
+        switch id {
+        case .copySummary: LocalPasteboard.copy(MeetingExport.summaryMarkdown(first))
+        case .takePhoto: session.cameraFor = first.id
+        case .addPhotos: session.sheet = .importPhotos(first.id)
+        case .process(let mode):
+            for meeting in meetings where mode != .summaryOnly || !meeting.unifiedTranscript.isEmpty {
+                if mode == .summaryOnly { library.summarize(meeting.id, placement: placement) }
+                else { library.requestProcessing(meeting.id, mode: mode) }
+            }
+        case .versionHistory: session.sheet = .history(first.id)
+        case .moveToFolder: session.sheet = .move(meetings.map(\.id))
+        case .tags: session.sheet = .tags(meetings.map(\.id))
+        case .moveTo(let placement): library.setPlacement(meetings.map(\.id), placement, undoManager: undoManager)
+        case .moveToTrash: session.confirmingTrash = meetings.map(\.id)
+        case .export, .exportMarkdown, .exportJSON, .shareAudio, .reprocess, .addRecording, .addRecordingFromFile:
+            break // Menus this iPhone draws itself (`custom`).
+        case .showFloatingNotes, .rename, .showInFinder:
+            break // The Mac's.
+        case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
+            break // A recording's, in Info.
+        }
+    }
+
+    /// Share and Reprocess, through the share sheet and the requests this iPhone writes; Add Recording isn't offered
+    /// from a row.
+    static func custom(_ action: ConversationAction, ids: [UUID], library: LibraryController) -> AnyView? {
+        guard ids.count == 1, let meeting = library.meeting(ids[0]) else { return nil }
+        switch action.id {
+        case .export: return AnyView(ExportMenu(meeting: meeting))
+        case .reprocess: return AnyView(ReprocessMenu(library: library, meeting: meeting))
+        case .addRecording: return AnyView(EmptyView())
+        default: return nil
+        }
+    }
+}
+
+/// The selection's actions at the bottom, where the thumb is: what `ConversationActions.batch` offers, each a glyph
+/// over a word on one baseline.
 private struct SelectionBar: View {
     let library: LibraryController
     let ids: [UUID]
-    let trash: ([UUID]) -> Void
     @Environment(ReadingSession.self) private var session
+    @Environment(\.summaryPlacement) private var placement
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
-        let personal = !ids.isEmpty && library.meetings.filter { ids.contains($0.id) }.allSatisfy { $0.effectivePlacement == .personal }
+        let groups = ConversationActions.batch(ids, in: library.meetings, context: .init(platform: .iPhone))
+        let actions = ConversationActionMenuItems.shown(groups, on: .iPhone).flatMap(\.actions)
         HStack(spacing: 0) {
-            item("Move", "folder") { session.sheet = .move(ids) }
-            item("Tag", "tag") { session.sheet = .tags(ids) }
-            item(personal ? "Work" : "Personal", personal ? "briefcase" : "house") {
-                library.setPlacement(ids, personal ? .work : .personal)
+            if actions.isEmpty {
+                // Nothing selected yet: the same bar, waiting.
+                ForEach(Self.placeholders, id: \.0) { title, symbol in item(title, symbol, role: nil) {} }
+            } else {
+                ForEach(actions) { action in
+                    item(ConversationActionMenuItems.shortTitle(action), action.symbol, role: action.role == .destructive ? .destructive : nil) {
+                        PhoneActions.perform(action.id, on: ids, library: library, session: session, placement: placement, undoManager: undoManager)
+                        // Done the moment it's chosen (a sheet, or the Trash's question, ends Select itself).
+                        if Self.endsSelection(action.id) {
+                            session.isSelecting = false
+                            session.selection = []
+                        }
+                    }
+                }
             }
-            item("Trash", "trash", role: .destructive) { trash(ids) }
         }
         .disabled(ids.isEmpty)
         .padding(.vertical, 6)
         .glassEffect(.regular, in: Capsule())
-        .padding(.horizontal, PhoneStyle.Space.s4)
-        .padding(.bottom, PhoneStyle.Space.s2)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
-    private func item(_ title: String, _ symbol: String, role: ButtonRole? = nil, action: @escaping () -> Void) -> some View {
+    /// Whether an action is done the moment it's chosen.
+    private static func endsSelection(_ id: ConversationAction.ID) -> Bool {
+        switch id {
+        case .process, .moveTo: return true
+        default: return false
+        }
+    }
+
+    /// What the bar shows before anything is selected.
+    private static let placeholders = [("Move", "folder"), ("Tags", "tag"), ("Personal", "house"), ("Trash", "trash")]
+
+    private func item(_ title: String, _ symbol: String, role: ButtonRole?, action: @escaping () -> Void) -> some View {
         Button(role: role, action: action) {
             VStack(spacing: 3) {
-                Image(systemName: symbol).font(.body.weight(.medium))
-                Text(title).font(.caption2.weight(.medium))
+                // Every glyph in the same box, so the words share a baseline whatever the symbol's height.
+                Image(systemName: symbol).font(.body.weight(.medium)).frame(height: 24)
+                Text(title).font(.caption2.weight(.medium)).lineLimit(1)
             }
             .frame(maxWidth: .infinity, minHeight: 48)
             .contentShape(Rectangle())
@@ -438,25 +576,12 @@ private struct SelectionBar: View {
     }
 }
 
-/// An empty place in the library: a symbol over one line, centred.
+/// An empty place in a sheet ("No Changes Yet"): DaybookUI's empty state with the place's glyph.
 struct EmptyPlace: View {
     let title: String
     let systemImage: String
-    /// The brand gradient, for the library itself.
-    var brand = false
 
     var body: some View {
-        VStack(spacing: PhoneStyle.Space.s3) {
-            Image(systemName: systemImage)
-                .font(.largeTitle)
-                .foregroundStyle(brand ? AnyShapeStyle(PhoneStyle.brandGradient) : AnyShapeStyle(PhoneStyle.Ink.meta))
-                .accessibilityHidden(true)
-            Text(title)
-                .font(PhoneStyle.Typeface.title(.title2))
-                .foregroundStyle(PhoneStyle.Ink.title)
-                .multilineTextAlignment(.center)
-        }
-        .padding(PhoneStyle.Space.s6)
-        .accessibilityElement(children: .combine)
+        LibraryEmptyPlaceView(LibraryWords.EmptyPlace(title: title, symbol: systemImage))
     }
 }
