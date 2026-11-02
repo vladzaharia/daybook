@@ -99,7 +99,7 @@ public enum SyncStatus: Equatable, Sendable {
         }
     }
 
-    /// The phrase for a status line: the Mac's iCloud row in Settings › Library (`SyncShown.headline`) and the iPhone's
+    /// The phrase for a status line: the Mac's iCloud row in Settings › Library (`ICloudSyncShown.headline`) and the iPhone's
     /// sync line (`PhoneSync.statusLine`) say it for the same state, so the two apps word it alike.
     public var shortText: String {
         switch self {
