@@ -526,9 +526,10 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: journal.appendingPathComponent("daybook-sync.json").path))
     }
 
-    func testBehaviorALibraryRemovedFromICloudOffersANewOneAndAPlaintextOneCanBeJoined() async throws {
+    func testBehaviorALibraryRemovedFromICloudOffersANewOneAndAPlaintextOneGetsNothing() async throws {
         let sync = controller(environment())
-        sync.replica.keyStore = MemoryLibraryKeyStore()
+        let keychain = MemoryLibraryKeyStore()
+        sync.replica.keyStore = keychain
         sync.replica.sealsNewLibrary = true
         sync.encryptsAutomatically = false
         sync.syncDebounce = nil
@@ -558,20 +559,31 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertGreaterThan(fresh.publishedEvents, 0, "Published again into the new library")
         XCTAssertNil(sync.status.problem)
 
-        // What's there now is a plaintext library another device started: sync waits for the person, then joins it.
+        // What's there now is a plaintext library another device started: nothing of this device's goes into it, and sync
+        // stays paused, saying so, however often it's asked.
         let other = try LibrarySyncEngine(localRoot: root.appendingPathComponent("Other"), remoteRoot: root.appendingPathComponent("Elsewhere"),
                                           deviceID: "Other", replica: SyncReplicaConfiguration(sealsNewLibrary: false))
         _ = try await other.synchronize(meetings: [])
         try fm.removeItem(at: folder.appendingPathComponent("daybook-sync.json"))
         try fm.copyItem(at: root.appendingPathComponent("Elsewhere/daybook-sync.json"), to: folder.appendingPathComponent("daybook-sync.json"))
-        let waiting = try await pass(sync, fresh.meetings)
-        XCTAssertNil(waiting)
-        XCTAssertEqual(sync.status, .newLibrary)
-        XCTAssertEqual(sync.status.problem, .newLibrary)
-        sync.syncWithLibraryInICloud()
-        let joined = try await pass(sync, fresh.meetings)
-        XCTAssertNotNil(joined)
+        for _ in 0..<2 {
+            let waiting = try await pass(sync, fresh.meetings)
+            XCTAssertNil(waiting)
+            XCTAssertEqual(sync.status, .libraryNotEncrypted)
+            XCTAssertEqual(sync.status.problem, .libraryNotEncrypted)
+            XCTAssertEqual(sync.status.problem?.text, "The library in iCloud isn’t encrypted.")
+        }
+        let plaintext = (try? fm.contentsOfDirectory(atPath: folder.appendingPathComponent("Events").path)) ?? []
+        XCTAssertEqual(plaintext.filter { !$0.hasPrefix(".") }, [], "Nothing published unencrypted")
+        // Once that library is encrypted (its device turns encryption on), sync carries on into it, encrypted.
+        let encrypting = try LibrarySyncEngine(localRoot: root.appendingPathComponent("Other here"), remoteRoot: folder, deviceID: "Other",
+                                               replica: SyncReplicaConfiguration(keyStore: keychain, sealsNewLibrary: false))
+        try await encrypting.enableSealing()
+        let resumedPass = try await pass(sync, fresh.meetings)
+        let resumed = try XCTUnwrap(resumedPass)
         XCTAssertNil(sync.status.problem)
+        XCTAssertTrue(sync.encryption.isOn)
+        XCTAssertGreaterThan(resumed.publishedEvents, 0, "Published into the library now in iCloud")
     }
 
     func testBehaviorAFullICloudSaysSoAndHoldsEncryptionBack() async throws {

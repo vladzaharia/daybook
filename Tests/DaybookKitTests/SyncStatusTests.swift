@@ -42,7 +42,7 @@ final class SyncStatusTests: XCTestCase {
         return [.off, .unavailableInThisBuild, .signedOut, .iCloudDriveOff, .connecting, .preparing, .deferred, .syncing, .applying,
                 .waitingForICloud, .waitingForKey, .keyStoreUnreadable, .exchanged(uploads: 2, downloads: 1), .upToDate(at: Date()),
                 .migrating(SyncMigrationProgress()), .migrating(progress), .migrationPaused(details: "No space left on device."),
-                .storageFull, .accountChanged, .folderAccountChanged, .libraryRemoved, .newLibrary, .previousFolderMissing,
+                .storageFull, .accountChanged, .folderAccountChanged, .libraryRemoved, .libraryNotEncrypted, .previousFolderMissing,
                 .previousFolderAccessLost, .iCloudUnavailable(details: nil), .iCloudUnavailable(details: "CKErrorDomain 4"),
                 .reconnectFolder(details: "The file couldn’t be opened."), .couldNotUseFolder(details: "Choose another folder."),
                 .failure(details: "The operation couldn’t be completed.")]

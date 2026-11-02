@@ -535,11 +535,11 @@ public final class LibrarySyncController {
             status = .waitingForICloud
             return nil
         } catch let error as LibrarySyncError where error == .libraryRemoved || error == .sealingRemoved {
-            // The encrypted library this device synced is gone from iCloud, or what's there now isn't encrypted: sync
-            // waits for the person (`startNewLibrary`, `syncWithLibraryInICloud`).
+            // The encrypted library this device synced is gone from iCloud (the person may start a new one,
+            // `startNewLibrary`), or what's there now isn't encrypted (nothing goes there; sync carries on once it is).
             activeTask = nil; isSyncing = false; pendingReceipt = nil
             guard generation == configurationID else { return nil }
-            status = error == .libraryRemoved ? .libraryRemoved : .newLibrary
+            status = error == .libraryRemoved ? .libraryRemoved : .libraryNotEncrypted
             return nil
         } catch LibrarySyncError.keyStoreUnreadable {
             // Not a failure, and not a missing key: the keychain can't be read right now (an iPhone not unlocked since it

@@ -162,7 +162,7 @@ extension FloatingStatusInputs {
         case .previousFolderAccessLost: return "iCloud sync is paused: choose the folder this Mac synced through again"
         case .previousFolderMissing: return "iCloud sync is paused: the folder this Mac synced through can’t be found"
         case .libraryRemoved: return "iCloud sync is paused: the library in iCloud was removed"
-        case .newLibrary: return "iCloud sync is paused: iCloud holds a different library"
+        case .libraryNotEncrypted: return "iCloud sync is paused: the library in iCloud isn’t encrypted"
         case .migrationPaused: return "Moving to iCloud is paused."
         case .storageFull, .folderAccountChanged, .iCloudUnavailable, .reconnectFolder, .couldNotUseFolder: return problem?.text
         }

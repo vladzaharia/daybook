@@ -49,8 +49,8 @@ public enum LibrarySyncError: LocalizedError, Equatable {
     /// written; local edits wait. Every pass checks the keychain again.
     case keyUnavailable(String)
     /// This device synced an encrypted library here, and the library there now isn't encrypted: sync pauses rather
-    /// than publish plaintext (`SealingMemory`). The person may sync with it anyway
-    /// (`LibrarySyncController.syncWithLibraryInICloud`).
+    /// than publish plaintext (`SealingMemory`), until the library there is encrypted. Choosing another iCloud account
+    /// forgets it.
     case sealingRemoved
     /// This device synced an encrypted library here, and there's no library there at all any more (someone deleted
     /// Daybook's data from iCloud): sync pauses until the person starts a new one (`startNewLibrary`).
@@ -75,7 +75,7 @@ public enum LibrarySyncError: LocalizedError, Equatable {
         case .invalidCheckpoint: return "Sync again to finish."
         case .waitingForICloud: return "Waiting for iCloud…"
         case .keyUnavailable: return "Waiting for this library’s key."
-        case .sealingRemoved: return "The library in iCloud is no longer encrypted."
+        case .sealingRemoved: return "The library in iCloud isn’t encrypted."
         case .libraryRemoved: return "The library in iCloud was removed."
         case .keyStoreUnavailable: return "This build of Daybook can’t keep encryption keys."
         case .keyAvailable: return "One of your devices has this library’s key. Get the key from it instead."

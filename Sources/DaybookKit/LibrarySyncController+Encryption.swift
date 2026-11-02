@@ -110,16 +110,6 @@ extension LibrarySyncController {
         requestSync()
     }
 
-    /// iCloud holds a library that isn't encrypted where this device synced an encrypted one (`status == .newLibrary`):
-    /// syncs with it anyway. This device forgets the folder held an encrypted library; the library is encrypted again on
-    /// its own once every device in use can read encrypted libraries.
-    public func syncWithLibraryInICloud() {
-        guard let folder, !isSyncing else { return }
-        LibrarySyncEngine.forgetSealedLibrary(localRoot: localRoot, remoteRoot: folder)
-        status = .preparing
-        requestSync()
-    }
-
     /// Devices that would stop syncing if the library were encrypted now: their Daybook doesn't say it reads encrypted
     /// libraries (an earlier version, or one seen only in the journal).
     /// Each device once (`inUse`): an earlier identity of a reinstalled device isn't listed beside it.

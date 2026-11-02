@@ -46,9 +46,9 @@ public enum SyncStatus: Equatable, Sendable {
     /// The encrypted library this device synced with is gone from iCloud (someone deleted Daybook's data there). Sync
     /// waits for the person: `LibrarySyncController.startNewLibrary()` starts a new one.
     case libraryRemoved
-    /// iCloud holds a library that isn't encrypted where this device synced an encrypted one. Sync waits for the person:
-    /// `LibrarySyncController.syncWithLibraryInICloud()` syncs with it anyway.
-    case newLibrary
+    /// iCloud holds a library that isn't encrypted where this device synced an encrypted one. This device publishes
+    /// nothing there, and syncs again once the library in iCloud is encrypted.
+    case libraryNotEncrypted
     /// The folder this Mac synced through before can't be found.
     case previousFolderMissing
     /// The folder this Mac synced through before is there, but this build can't open it.
@@ -88,7 +88,7 @@ public enum SyncStatus: Equatable, Sendable {
         case .accountChanged: return "Sync paused: the iCloud account changed"
         case .folderAccountChanged: return "Apple Account changed · reconnect the intended iCloud folder"
         case .libraryRemoved: return "Sync paused: the library in iCloud was removed"
-        case .newLibrary: return "Sync paused: iCloud holds a different library"
+        case .libraryNotEncrypted: return "Sync paused: the library in iCloud isn’t encrypted"
         case .previousFolderMissing: return "Sync paused: the folder this Mac synced through can’t be found"
         case .previousFolderAccessLost: return "Sync paused: choose the folder this Mac synced through again"
         case .iCloudUnavailable(let details?): return "Couldn’t connect to iCloud: \(details)"
@@ -121,7 +121,7 @@ public enum SyncStatus: Equatable, Sendable {
             return progress.total > 0 ? "Moving to iCloud · \(progress.completed) of \(progress.total) files" : "Moving to iCloud…"
         case .storageFull: return "iCloud storage is full"
         case .iCloudUnavailable: return "Not available right now"
-        case .migrationPaused, .accountChanged, .folderAccountChanged, .libraryRemoved, .newLibrary, .previousFolderMissing,
+        case .migrationPaused, .accountChanged, .folderAccountChanged, .libraryRemoved, .libraryNotEncrypted, .previousFolderMissing,
              .previousFolderAccessLost, .reconnectFolder, .couldNotUseFolder, .failure:
             return "Sync paused"
         }
@@ -138,7 +138,7 @@ public enum SyncStatus: Equatable, Sendable {
         case .accountChanged: return .accountChanged
         case .folderAccountChanged: return .folderAccountChanged
         case .libraryRemoved: return .libraryRemoved
-        case .newLibrary: return .newLibrary
+        case .libraryNotEncrypted: return .libraryNotEncrypted
         case .previousFolderMissing: return .previousFolderMissing
         case .previousFolderAccessLost: return .previousFolderAccessLost
         case .iCloudUnavailable(let details): return .iCloudUnavailable(details: details)
@@ -160,7 +160,7 @@ public enum SyncProblem: Equatable, Sendable {
     case accountChanged
     case folderAccountChanged
     case libraryRemoved
-    case newLibrary
+    case libraryNotEncrypted
     case migrationPaused(details: String)
     case previousFolderMissing
     case previousFolderAccessLost
@@ -175,7 +175,7 @@ public enum SyncProblem: Equatable, Sendable {
         case .accountChanged: return "This library synced with a different iCloud account."
         case .folderAccountChanged: return "Apple Account changed · reconnect the intended iCloud folder"
         case .libraryRemoved: return "The library in iCloud was removed."
-        case .newLibrary: return "iCloud holds a different library."
+        case .libraryNotEncrypted: return "The library in iCloud isn’t encrypted."
         case .migrationPaused: return "Moving to iCloud is paused."
         case .previousFolderMissing: return "Can’t find the folder this Mac synced through before."
         case .previousFolderAccessLost: return "Can’t open the folder this Mac synced through before."
@@ -191,7 +191,7 @@ public enum SyncProblem: Equatable, Sendable {
         case .failure(let details), .migrationPaused(let details), .reconnectFolder(let details), .couldNotUseFolder(let details):
             return details.isEmpty ? nil : details
         case .iCloudUnavailable(let details): return details
-        case .storageFull, .accountChanged, .folderAccountChanged, .libraryRemoved, .newLibrary, .previousFolderMissing,
+        case .storageFull, .accountChanged, .folderAccountChanged, .libraryRemoved, .libraryNotEncrypted, .previousFolderMissing,
              .previousFolderAccessLost:
             return nil
         }
