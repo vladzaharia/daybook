@@ -16,6 +16,9 @@ final class RecordingActivityController {
     private var lastSent = Date.distantPast
     private var lastLevelUpdate = Date.distantPast
     private var lastCaptionUpdate = Date.distantPast
+    /// The last ActivityKit call made: each waits for the one before, so an end never overtakes an update still on its
+    /// way, and a quick pause and resume land in that order.
+    private var sending: Task<Void, Never>?
     /// Level-only changes at most this often, to stay inside the system's update budget.
     static let levelInterval: TimeInterval = 2
 
@@ -48,7 +51,16 @@ final class RecordingActivityController {
         if state.caption != current?.caption { lastCaptionUpdate = now }
         current = state
         lastSent = now
-        Task { await activity.update(ActivityContent(state: state, staleDate: state.staleDate(from: now))) }
+        enqueue { await activity.update(ActivityContent(state: state, staleDate: state.staleDate(from: now))) }
+    }
+
+    /// Runs `call` once the ActivityKit calls made before it are done.
+    private func enqueue(_ call: @escaping () async -> Void) {
+        let previous = sending
+        sending = Task {
+            await previous?.value
+            await call()
+        }
     }
 
     /// Whether an update goes now: a change at once (a level-only change at most every
@@ -85,7 +97,7 @@ final class RecordingActivityController {
         guard let activity else { return }
         self.activity = nil
         current = nil
-        Task { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(8))) }
+        enqueue { await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(8))) }
     }
 
     /// Ends activities left from a run that didn't finish (called at launch, before recovery).
