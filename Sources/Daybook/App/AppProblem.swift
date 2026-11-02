@@ -100,24 +100,52 @@ struct LibraryProblemPage: View {
     @State private var retrying = false
 
     var body: some View {
-        AttentionBox(kind: .problem, title: problem.title, message: problem.message) {
-            if let details = problem.details {
-                DetailsButton(details: details).buttonStyle(.daybookLink)
+        // Where the empty library's words would be: nothing else is on the page.
+        box
+            .frame(maxWidth: DaybookStyle.measure)
+            .padding(.horizontal, Space.s6)
+            .offset(y: -24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(DaybookStyle.paper)
+    }
+
+    /// A problem box in `AttentionBox`'s inks and wash: the warning glyph in its column, the title and the sentence, and
+    /// the actions under them on the words' edge (three, with Details…, never fit beside them at the measure). Drawn
+    /// here because the shared box fixes its words' height, which, outside a scroll view, makes the split view taller
+    /// than the window and pushes the sidebar under the title bar.
+    private var box: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(Ink.warning)
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: Space.s2) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(problem.title).font(TypeStyle.statusLead).foregroundStyle(AttentionBoxLayout.title(for: .problem).ink.color)
+                    Text(problem.message).font(TypeStyle.status).foregroundStyle(AttentionBoxLayout.message(for: .problem).ink.color)
+                }
+                .accessibilityElement(children: .combine)
+                HStack(spacing: Space.s3) { actions }
+                    .controlSize(.small)
             }
-            Button("Show in Finder") { state.showLibraryInFinder() }
-                .buttonStyle(.daybookLink)
-            Button("Try Again") {
-                retrying = true
-                Task { await state.retryOpeningLibrary(); retrying = false }
-            }
-            .buttonStyle(.daybookProminent)
-            .disabled(retrying)
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: DaybookStyle.measure)
-        .padding(.horizontal, Space.s6)
-        .padding(.top, Space.s7)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(DaybookStyle.paper)
+        .padding(Space.s3)
+        .background(AttentionBoxLayout.wash(for: .problem).color, in: DaybookRadius.shape(DaybookRadius.box))
+    }
+
+    @ViewBuilder private var actions: some View {
+        if let details = problem.details { DetailsButton(details: details).buttonStyle(.daybookLink) }
+        Button("Show in Finder") { state.showLibraryInFinder() }
+            .buttonStyle(.daybookLink)
+        Button("Try Again") {
+            retrying = true
+            Task { await state.retryOpeningLibrary(); retrying = false }
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(DaybookStyle.prominentFill)
+        .disabled(retrying)
     }
 }
 
