@@ -87,7 +87,7 @@ public struct WelcomePageDots: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(dot > reachable)
-                .accessibilityLabel("Page \(dot + 1) of \(count)")
+                .accessibilityLabel(WelcomeWords.page(dot + 1, of: count))
                 .accessibilityAddTraits(dot == index ? .isSelected : [])
             }
         }
