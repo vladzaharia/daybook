@@ -147,6 +147,36 @@ final class RecordingInterruptionsTests: XCTestCase {
         model.scenePhaseChanged(.active)
     }
 
+    func testBehaviorAStopAsTheRecordingStopsByItselfWaitsForThatStop() async throws {
+        let rig = RecorderRig()
+        let model = try makeModel(rig: rig)
+        try await model.startRecording()
+        rig.pump(5)
+        // Storage gives out (the recorder finishes what it has, then says so) just as the person taps Stop.
+        let byItself = Task { @MainActor in
+            let recording = await rig.recorder.stop()
+            rig.recorder.onUnexpectedStop?(recording)
+        }
+        let stop = Task { @MainActor () -> String in
+            do {
+                try await model.stopRecording()
+                return model.lastStopResult.sentence
+            } catch {
+                return "threw \(error)"
+            }
+        }
+        await byItself.value
+        let said = await stop.value
+
+        XCTAssertEqual(said, "Saved to Daybook.")
+        guard case .saved? = model.lastFiling else { return XCTFail("filed: \(String(describing: model.lastFiling))") }
+        XCTAssertNil(model.activities.savingOn, "the person's Stop left the activity to the stop under way")
+        XCTAssertEqual(model.activities.endedOn?.phase, .stopped)
+        XCTAssertEqual(model.activities.endedOn?.endLine, "Everything up to then is saved", "never “No audio was recorded”")
+        XCTAssertEqual(model.notice, "Recording stopped. Everything up to 0:05 is saved.")
+        XCTAssertNil(model.stopUnderway)
+    }
+
     func testBehaviorTheStoppedActivityAndNotificationSayWhatsSaved() {
         let started = Date(timeIntervalSince1970: 1_800_000_000)
         let stopped = RecordingActivityAttributes.ContentState(phase: .stopped, timerStart: started, frozenElapsed: 3_734, level: 0, bookmarkCount: 2)

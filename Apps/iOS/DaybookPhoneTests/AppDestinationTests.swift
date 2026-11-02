@@ -172,6 +172,54 @@ final class AppDestinationTests: XCTestCase {
         XCTAssertEqual(model.activities.endedOn?.endLine, "Saved to Daybook", "the Lock Screen agrees")
     }
 
+    func testBehaviorAStopWhileOneFinishesWaitsForItAndSaysItWasSaved() async throws {
+        // Stop tapped again as the recording saves, or a Mac's stop with the person's.
+        let rig = RecorderRig()
+        let model = try makeModel(rig: rig)
+        try await model.startRecording()
+        let id = try XCTUnwrap(model.recorder.captureID)
+        rig.pump(3)
+        let seen = Seen()
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<2 {
+                group.addTask { @MainActor in
+                    do {
+                        try await model.stopRecording()
+                        seen.events.append(model.lastStopResult.sentence)
+                    } catch {
+                        seen.events.append("threw \(error)")
+                    }
+                }
+            }
+        }
+
+        XCTAssertEqual(seen.events, ["Saved to Daybook.", "Saved to Daybook."], "what Siri or the Shortcut says, both times")
+        guard case .saved(let filed, _)? = model.lastFiling else { return XCTFail("filed: \(String(describing: model.lastFiling))") }
+        XCTAssertEqual(filed, id)
+        XCTAssertEqual(model.library.conversations.filter { $0.id == id }.count, 1)
+        let saving = try XCTUnwrap(model.activities.savingOn, "frozen at Stop")
+        XCTAssertEqual(saving.phase, .saving)
+        XCTAssertTrue(saving.hasEnded, "no buttons while it saves")
+        XCTAssertEqual(saving.frozenElapsed ?? 0, 3, accuracy: 0.5)
+        XCTAssertEqual(saving.title(isStale: false), "Saving…")
+        XCTAssertNil(saving.endLine)
+        XCTAssertNotNil(saving.staleDate(from: Date()), "should Daybook stop before it has finished, it goes stale")
+        XCTAssertEqual(saving.title(isStale: true), "Open Daybook to check")
+        XCTAssertEqual(model.activities.endedOn?.phase, .saved)
+        XCTAssertEqual(model.activities.endedOn?.endLine, "Saved to Daybook", "never “No audio was recorded”")
+        XCTAssertNil(model.stopUnderway)
+        XCTAssertTrue(model.filings.isEmpty)
+        XCTAssertFalse(model.isFiling)
+
+        // Nothing records now: Stop says so.
+        do {
+            try await model.stopRecording()
+            XCTFail("stopped twice")
+        } catch {
+            guard case RecordingCommandError.notRecording = error else { return XCTFail("\(error)") }
+        }
+    }
+
     func testBehaviorAStartFromTheBackgroundContinuesInFrontOnlyWhenTheMicrophoneWasNeverAsked() throws {
         let rig = RecorderRig()
         let model = try makeModel(rig: rig)
@@ -192,4 +240,10 @@ final class AppDestinationTests: XCTestCase {
         XCTAssertTrue(model.recorder.isActive)
         try await model.stopRecording()
     }
+}
+
+/// What a test's stand-ins were asked, in order.
+@MainActor
+final class Seen {
+    var events: [String] = []
 }

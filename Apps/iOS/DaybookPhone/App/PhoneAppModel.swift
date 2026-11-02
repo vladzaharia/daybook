@@ -118,6 +118,11 @@ final class PhoneAppModel: RecordingCommandHandling {
     @ObservationIgnored private var processingObservers: [NSObjectProtocol] = []
     /// Each recording being filed, by conversation: a photo taken as it ended waits for it (`whileFiling`).
     @ObservationIgnored var filings: [UUID: Task<Void, Never>] = [:]
+    /// The stop under way (Stop, a Mac's, or the recording stopping by itself) until it has ended the Live Activity,
+    /// filed the recording, and said what it came to: a Stop meanwhile waits for it (`stopRecording`).
+    @ObservationIgnored var stopUnderway: StopUnderway?
+    /// Stops asked for while the recording stops by itself, until that stop is under way (`stoppedByItself`).
+    @ObservationIgnored private var waitingForStopByItself: [CheckedContinuation<Void, Never>] = []
     /// What Spotlight lists of the library.
     @ObservationIgnored private(set) var conversationIndex: ConversationIndex?
 
@@ -218,9 +223,7 @@ final class PhoneAppModel: RecordingCommandHandling {
     private func wireRecorder() {
         recorder.onChange = { [weak self] in self?.recorderChanged() }
         recorder.onLevel = { [weak self] level in self?.levelChanged(level) }
-        recorder.onUnexpectedStop = { [weak self] recording in
-            Task { await self?.finishUnexpectedly(recording) }
-        }
+        recorder.onUnexpectedStop = { [weak self] recording in self?.stoppedByItself(recording) }
         // The interruption ended and iOS asked to continue, but recording couldn't: the person hears why.
         recorder.onResumeFailed = { [weak self] error in self?.sayResumeFailed(error) }
     }
@@ -631,6 +634,19 @@ final class PhoneAppModel: RecordingCommandHandling {
     }
 
     func stopRecording() async throws {
+        // Stop again while a stop finishes (tapped twice as it saves, a Mac's stop with the person's): it waits for that
+        // one and comes to what it came to. It never ends the Live Activity, files, or says anything itself.
+        if let underway = stopUnderway, !recorder.isActive || recorder.recordingID == underway.recordingID {
+            multipoints.stopIsFromMac = false
+            return await underway.task.value
+        }
+        // The recording is stopping by itself (storage, the encoder): that stop is this one.
+        if recorder.state == .stopping {
+            multipoints.stopIsFromMac = false
+            await withCheckedContinuation { waitingForStopByItself.append($0) }
+            await stopUnderway?.task.value
+            return
+        }
         guard recorder.isActive else { throw RecordingCommandError.notRecording }
         // A stop from a Mac (it asked, or this iPhone follows it) doesn't go back to that Mac.
         let cascadesUp = !multipoints.stopIsFromMac
@@ -638,7 +654,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         let stopping = recorder.captureID
         sharing.flushSharedNotes()
         sharing.stopSharingCaptions()
-        // What the Live Activity ends on, its clock frozen where it stopped: read now, before the recorder resets.
+        // What the Live Activity shows from now on, its clock frozen where it stopped: read now, before the recorder resets.
         var final = activityState()
         final.frozenElapsed = recorder.pausedAt ?? recorder.elapsedTime
         isFiling = true
@@ -648,6 +664,8 @@ final class PhoneAppModel: RecordingCommandHandling {
         // Finishing and filing must complete even if the caller is cancelled (an intent that timed
         // out, a view that went away): an unstructured task doesn't inherit cancellation.
         let filing = Task { @MainActor [final] () -> StopOutcome in
+            // Saving, with no buttons, as the recorder starts to finish (nothing updates the activity after this).
+            self.activities.showSaving(Self.savingActivity(final))
             let stopped = await self.recorder.stop()
             // Saved only once there's a recording to save.
             self.activities.end(Self.endedActivity(final, recorded: stopped != nil, failure: self.recorder.lastFailure,
@@ -666,14 +684,25 @@ final class PhoneAppModel: RecordingCommandHandling {
             let filed = await self.file(recording, session: session)
             return StopOutcome(filing: filed)
         }
-        noteStopped(await whileFiling(stopping, filing))
-        multipoints.stopMacsStartedHere(session)
-        multipoints.endCascade(stopping, session: session, cascadesUp: cascadesUp)
-        multipoints.session = nil
-        sync.controller?.publishActivity(recording: nil)
-        multipoints.recordingEnded()
-        sharing.sendRecordingState(force: true)
-        if !isForeground { Task { await link.setActivity(.background) } }
+        await beginStop(of: recorder.recordingID) {
+            self.noteStopped(await self.whileFiling(stopping, filing))
+            self.multipoints.stopMacsStartedHere(session)
+            self.multipoints.endCascade(stopping, session: session, cascadesUp: cascadesUp)
+            self.multipoints.session = nil
+            self.sync.controller?.publishActivity(recording: nil)
+            self.multipoints.recordingEnded()
+            self.sharing.sendRecordingState(force: true)
+            if !self.isForeground { Task { await self.link.setActivity(.background) } }
+        }.value
+    }
+
+    /// The recording stopped by itself: finishing it is the stop under way, and a Stop asked for as it stopped
+    /// waits for it.
+    private func stoppedByItself(_ recording: PhoneRecording?) {
+        beginStop(of: recording?.recordingID) { await self.finishUnexpectedly(recording) }
+        let waiting = waitingForStopByItself
+        waitingForStopByItself = []
+        for stop in waiting { stop.resume() }
     }
 
     /// Filing put a conversation in the library (`PhoneAppModel+Filing.swift`).

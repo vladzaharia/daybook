@@ -22,6 +22,26 @@ extension PhoneAppModel {
         }
     }
 
+    /// A stop under way (`stopUnderway`), until it's done.
+    struct StopUnderway {
+        let token: UUID
+        /// The recording it stops (`PhoneRecorder.recordingID`): a Stop for another, started meanwhile, is that one's.
+        let recordingID: UUID?
+        let task: Task<Void, Never>
+    }
+
+    /// Runs `work` as the stop under way of recording `recordingID`, which a Stop meanwhile waits for.
+    @discardableResult
+    func beginStop(of recordingID: UUID?, _ work: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let token = UUID()
+        let task = Task { @MainActor in
+            await work()
+            if self.stopUnderway?.token == token { self.stopUnderway = nil }
+        }
+        stopUnderway = StopUnderway(token: token, recordingID: recordingID, task: task)
+        return task
+    }
+
     static let notFinished = "Couldn’t finish the recording. It’s kept, and Daybook tries again the next time it opens."
     static let notFiled = "Couldn’t add the recording to your library. It’s saved and will be added next time Daybook opens."
     /// A recording that captured no audio, with notes, bookmarks, or photos: they're a conversation of notes now.
@@ -152,6 +172,17 @@ extension PhoneAppModel {
     static func stoppedActivity(recording: PhoneRecording?, bookmarks: Int) -> RecordingActivityAttributes.ContentState {
         RecordingActivityAttributes.ContentState(phase: .stopped, timerStart: recording?.startedAt ?? Date(),
                                                  frozenElapsed: recording?.duration ?? 0, level: 0, bookmarkCount: bookmarks)
+    }
+
+    /// What the Live Activity shows from Stop until the recorder has finished (`final`: what it showed, its clock
+    /// frozen where it stopped): saving, with no buttons.
+    static func savingActivity(_ final: RecordingActivityAttributes.ContentState) -> RecordingActivityAttributes.ContentState {
+        var saving = final
+        saving.phase = .saving
+        saving.level = 0
+        saving.caption = nil
+        saving.canResume = nil
+        return saving
     }
 
     /// The Live Activity's end once Stop has finished the recording (`final`: what it showed, its clock

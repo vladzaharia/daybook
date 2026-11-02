@@ -12,7 +12,10 @@ struct RecordingActivityAttributes: ActivityAttributes {
             case recording
             /// Interrupted (a call, Siri, an alarm). Resume (once the call is over) or Stop.
             case paused
-            /// Stopped; the recording is being saved to the library.
+            /// Stop was pressed and the recorder is finishing: the clock frozen where it stopped, and no
+            /// buttons, so it can't be stopped twice. It ends as saved or stopped once the recorder has finished.
+            case saving
+            /// Stopped, with a recording, which goes into the library.
             case saved
             /// It stopped by itself (storage couldn't keep up, the encoder failed): everything up to
             /// the frozen time is saved, and nothing records any more.
@@ -56,17 +59,18 @@ extension RecordingActivityAttributes.ContentState {
     /// A pause changes nothing until the person acts, and the app may be suspended through a call.
     static let pausedStaleAfter: TimeInterval = 2 * 3_600
 
-    /// The stale date for content sent at `now`. A recording that ended never goes stale.
+    /// The stale date for content sent at `now`. A recording that ended never goes stale. One being saved
+    /// does, as a recording does, in case Daybook stops before it has finished.
     func staleDate(from now: Date) -> Date? {
         switch phase {
-        case .recording: return now.addingTimeInterval(Self.staleAfter)
+        case .recording, .saving: return now.addingTimeInterval(Self.staleAfter)
         case .paused: return now.addingTimeInterval(Self.pausedStaleAfter)
         case .saved, .stopped: return nil
         }
     }
 
-    /// "Recording", "Paused", "Saved", "Recording stopped", or "Open Daybook to check" once the system
-    /// marks it stale.
+    /// "Recording", "Paused", "Saving…", "Saved", "Recording stopped", or "Open Daybook to check" once the
+    /// system marks it stale.
     func title(isStale: Bool) -> String {
         switch phase {
         case .saved: return "Saved"
@@ -74,11 +78,12 @@ extension RecordingActivityAttributes.ContentState {
         case _ where isStale: return SharedRecordingState.unconfirmedLine
         case .recording: return "Recording"
         case .paused: return "Paused"
+        case .saving: return "Saving…"
         }
     }
 
-    /// The recording has ended, by Stop or by itself: no buttons, the time frozen.
-    var hasEnded: Bool { phase == .saved || phase == .stopped }
+    /// The recording has ended, by Stop (being saved, or saved) or by itself: no buttons, the time frozen.
+    var hasEnded: Bool { phase == .saving || phase == .saved || phase == .stopped }
 
     /// Paused, with Resume offered: only once recording can continue.
     var offersResume: Bool { phase == .paused && canResume != false }
@@ -115,7 +120,7 @@ extension RecordingActivityAttributes.ContentState {
         switch phase {
         case .saved: return "Saved to Daybook"
         case .stopped: return (frozenElapsed ?? 0) > 0 ? "Everything up to then is saved" : "No audio was recorded"
-        case .recording, .paused: return nil
+        case .recording, .paused, .saving: return nil
         }
     }
 }

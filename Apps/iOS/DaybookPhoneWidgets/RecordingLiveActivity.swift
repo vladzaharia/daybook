@@ -5,7 +5,7 @@ import SwiftUI
 import WidgetKit
 
 /// The recording on the Lock Screen and in the Dynamic Island: the clock, and Bookmark and Stop (Resume
-/// and Stop once a pause can end, Stop alone during a call). The compact and minimal presentations are
+/// and Stop once a pause can end, Stop alone during a call; none from Stop while it saves). The compact and minimal presentations are
 /// Daybook's waveform, so they never pass for the system's microphone dot. Red means recording; amber
 /// means bookmarks; the warning ink, a recording that stopped by itself.
 struct RecordingLiveActivity: Widget {
@@ -40,7 +40,7 @@ struct RecordingLiveActivity: Widget {
                         ActivityCaption(state: context.state, isStale: context.isStale, lines: 1)
                         if let line = context.state.endLine {
                             Text(line).font(.caption).foregroundStyle(.secondary)
-                        } else {
+                        } else if !context.state.hasEnded {
                             ActivityButtons(state: context.state, isStale: context.isStale)
                         }
                     }
@@ -88,7 +88,7 @@ private struct RecordingGlyph: View {
     }
 }
 
-/// Counts itself while recording; frozen when paused, saved, or stopped; a dash once it's stale,
+/// Counts itself while recording; frozen when paused, saving, saved, or stopped; a dash once it's stale,
 /// because the app hasn't confirmed the recording is still going.
 struct ActivityClock: View {
     let state: RecordingActivityAttributes.ContentState
@@ -225,7 +225,7 @@ struct LockScreenRecording: View {
             ActivityCaption(state: state, isStale: context.isStale, lines: typeSize > .xLarge ? 1 : 2)
             if let line = state.endLine {
                 Text(line).font(.caption).foregroundStyle(.secondary)
-            } else {
+            } else if !state.hasEnded {
                 ActivityButtons(state: state, isStale: context.isStale)
             }
         }
@@ -248,6 +248,8 @@ struct LockScreenRecording: View {
                                              bookmarkCount: 2, canResume: false)
     RecordingActivityAttributes.ContentState(phase: .paused, timerStart: Date().addingTimeInterval(-754), frozenElapsed: 754, level: 0,
                                              bookmarkCount: 2, canResume: true)
+    RecordingActivityAttributes.ContentState(phase: .saving, timerStart: Date().addingTimeInterval(-754), frozenElapsed: 754, level: 0,
+                                             bookmarkCount: 2)
     RecordingActivityAttributes.ContentState(phase: .stopped, timerStart: Date().addingTimeInterval(-3_734), frozenElapsed: 3_734, level: 0,
                                              bookmarkCount: 2)
 }

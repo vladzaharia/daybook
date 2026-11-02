@@ -75,6 +75,21 @@ final class RecordingActivityController {
         return withoutLevel == state
     }
 
+    /// What the last recording's activity showed from Stop until the recorder finished, whether or not one was
+    /// showing (tests read it).
+    private(set) var savingOn: RecordingActivityAttributes.ContentState?
+
+    /// Stop was pressed (`ContentState.Phase.saving`): the clock frozen where it stopped and no buttons, at
+    /// once, so it can't be stopped twice while the recorder finishes. `end` then says how it ended.
+    func showSaving(_ state: RecordingActivityAttributes.ContentState) {
+        savingOn = state
+        guard runner.isRunning else { return }
+        let now = Date()
+        current = state
+        lastSent = now
+        runner.update(ActivityContent(state: state, staleDate: state.staleDate(from: now)))
+    }
+
     /// What the last recording's activity ended on, whether or not one was showing (tests read it).
     private(set) var endedOn: RecordingActivityAttributes.ContentState?
 
