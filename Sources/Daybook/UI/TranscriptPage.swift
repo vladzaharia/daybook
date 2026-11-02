@@ -9,16 +9,23 @@ import SwiftUI
 // it apart and redraws when the passage under the playhead changes.
 
 extension TranscriptPage where Header == MacTranscriptHeader, Placeholder == EmptyView {
-    /// The transcript of a conversation on this Mac. A jump asked for elsewhere (a search hit, a photo's moment, a
+    /// The transcript of a conversation on this Mac, with its saved live captions (`AppState.savedCaptions(for:)`, read
+    /// off the main actor). A jump asked for elsewhere (a search hit, a saved caption search found, a photo's moment, a
     /// summary line's evidence: `AppState.pageScrollTarget`) moves the page once and is then cleared.
     init(state: AppState, player: AudioPlaybackController, meeting: Meeting, play: @escaping (PlaybackTarget) -> Void) {
+        let captions = state.savedCaptions(for: meeting)
         self.init(meeting: meeting,
                   host: .mac(state: state, player: player, meetingID: meeting.id, play: play),
                   findQuery: state.search,
                   find: ConversationFind.window,
-                  scrollRequest: state.pageScrollTarget.map { TranscriptScrollRequest(target: $0.uuidString, token: $0.hashValue) },
+                  scrollRequest: state.pageScrollTarget.map { target in
+                      // A saved caption search found is one of the captions' rows.
+                      let caption = captions?.segments.contains { $0.id == target } == true
+                      return TranscriptScrollRequest(target: caption ? SavedCaptions.rowID(target) : target.uuidString, token: target.hashValue)
+                  },
                   scrolled: { state.pageScrollTarget = nil },
-                  playerInset: 56) {
+                  playerInset: 56,
+                  captions: captions) {
             MacTranscriptHeader(state: state, player: player, meeting: meeting, play: play)
         }
     }

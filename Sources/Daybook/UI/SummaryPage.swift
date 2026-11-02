@@ -31,7 +31,8 @@ struct SummaryPage: View {
             ConversationStatus(state: state, meeting: meeting)
             if let summary = meeting.summary {
                 SummaryBody(meeting: meeting, summary: summary, library: state.library, query: state.search,
-                            revealing: arrival.reveals(summary, in: meeting), passages: passages) { section in
+                            revealing: arrival.reveals(summary, in: meeting), passages: passages,
+                            blockID: { $0 == .notesHeading ? SummaryJump.notes : nil }) { section in
                     let pictures = meeting.photos(in: section)
                     if !pictures.isEmpty { SectionPhotos(state: state, meeting: meeting, photos: pictures) }
                 }
@@ -55,6 +56,8 @@ struct SummaryPage: View {
             }
             NotesSection(state: state, meeting: meeting, play: play, passages: passages)
                 .padding(.top, meeting.summary == nil ? Space.s5 : Space.s2)
+                // Without a summary there's no "Your notes" heading: the notes are where Show in Your Notes goes.
+                .id(meeting.summary == nil ? SummaryJump.notes : "notes-body")
             // Every photo, in the order taken; the summary's sections show the ones they illustrate.
             PhotoStrip(state: state, meeting: meeting)
             // Tentative captions while recording; after the notes, so arriving words never move what
@@ -66,6 +69,8 @@ struct SummaryPage: View {
                 PageColophon(state: state, meeting: meeting, summary: summary)
             }
         }
+        // Show in Your Notes on the transcript, and a search result found in the notes, move the page there once.
+        .summaryJumps(in: meeting.id)
         .environment(\.findQuery, state.search)
         .macReadingContext(state)
         .onChange(of: meeting.id) { arrival = SummaryArrival(opening: meeting) }

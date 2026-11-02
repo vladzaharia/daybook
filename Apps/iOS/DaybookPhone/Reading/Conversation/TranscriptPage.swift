@@ -5,8 +5,8 @@ import DaybookUI
 import SwiftUI
 
 // The iPhone's transcript is DaybookUI's `TranscriptPage`, the same page the Mac draws, over this iPhone's library, its
-// player, and its reading session. Before the transcript arrives, saved live captions show in its place, else a calm
-// empty page.
+// player, and its reading session. Saved live captions read on it by the Mac's rule (`SavedCaptions`): in the
+// transcript's place before it arrives, else after an earlier recording's transcript. Without either, a calm empty page.
 
 /// The transcript's page on the iPhone: one column's Transcript side, or the right page of the open Duo. A tap plays
 /// from a passage; Correct Passage… opens its sheet; playback follows along until the person scrolls away.
@@ -24,27 +24,23 @@ struct PhoneTranscriptPage: View {
     @Environment(\.liveCaptionStore) private var captionStore
     @Environment(\.liveCaptionsSaved) private var captionsSaved
     @State private var find = ConversationFind()
-    /// Saved live captions, shown in the transcript's place until a transcript arrives.
+    /// Saved live captions to read here (`SavedCaptions.shown`): in the transcript's place until a transcript arrives,
+    /// else after an earlier recording's transcript.
     @State private var captions: LiveCaptions?
-    @State private var playingCaption: UUID?
-    /// Where the page goes next: the session's latest jump, or the caption under the playhead, numbered here so the
-    /// newest of either wins.
+    /// Where the page goes next: the session's latest jump.
     @State private var scrollRequest: TranscriptScrollRequest?
     @State private var requests = 0
-    @State private var lastUserScroll = Date.distantPast
 
     var body: some View {
         @Bindable var session = session
         let shownCaptions = SavedCaptions.shown(captions, for: meeting)
         TranscriptPage(meeting: meeting, host: host, findQuery: findQuery, find: find, scrollRequest: scrollRequest,
-                       anchor: $session.transcriptAnchor) {
+                       anchor: $session.transcriptAnchor, captions: shownCaptions) {
             if showsHeader {
                 PageHeader(library: library, meeting: meeting, play: play).padding(.bottom, PhoneStyle.Space.s2).id("header")
             }
         } placeholder: {
-            if let shownCaptions {
-                CaptionRows(meeting: meeting, captions: shownCaptions, playing: playingCaption, play: play)
-            } else {
+            if shownCaptions == nil {
                 EmptyTranscript(meeting: meeting, status: ProcessingStatus.phone(meeting), words: .iPhone(id: library.thisDevice.id),
                                 // On two pages the summary's box beside this one says why, with Try Again.
                                 showsReason: !twoPage, play: { play(.timeline(0)) },
@@ -57,7 +53,7 @@ struct PhoneTranscriptPage: View {
         .photoServices(.phone(library: library, session: session, provider: provider))
         .paperBackground()
         .scrollEdgeEffectStyle(.soft, for: .top)
-        .modifier(PageTitle(title: showsHeader ? nil : shownCaptions == nil ? "Transcript" : "Live Captions"))
+        .modifier(PageTitle(title: showsHeader ? nil : shownCaptions != nil && SavedCaptions.standsIn(for: meeting) ? "Live Captions" : "Transcript"))
         // A jump asked for elsewhere (a search hit, a summary line's evidence, a photo's moment), again each time the
         // page appears, so turning to it from the summary lands there.
         .onChange(of: session.transcriptRequest, initial: true) { _, request in
@@ -68,18 +64,12 @@ struct PhoneTranscriptPage: View {
             if flash { session.flashedSegment = nil }
             scrollRequest = TranscriptScrollRequest(target: request.target, token: requests, flash: flash)
         }
-        .task(id: "\(meeting.id)-\(meeting.showsLiveCaptions)-\(captionsSaved?.timeIntervalSince1970 ?? 0)") {
-            // Captions come from the store `LibraryBrowser` provides; a transcript replaces them.
-            captions = meeting.showsLiveCaptions ? captionStore?.captions(for: meeting.id) : nil
-        }
-        // Saved captions follow playback as passages do, until the person scrolls away.
-        .task(id: "\(meeting.id)-\(shownCaptions != nil)") {
-            guard shownCaptions != nil else { return }
-            let player = self.player
-            let watch = ObservationWatch({ _ = (player.position, player.isPlaying, player.phase, player.trackID, player.meetingID) }) {
-                followCaption()
-            }
-            await watch.followWhileRunning()
+        // Captions come from the store `LibraryBrowser` provides, read off the main actor; a transcript made after
+        // them replaces them. The page follows the playhead through them as it does through passages.
+        .task(id: SavedCaptions.Reading(meeting, lastSave: captionsSaved)) {
+            let read = await SavedCaptions.read(for: meeting, from: captionStore)
+            guard !Task.isCancelled else { return }
+            if read != captions { captions = read }
         }
     }
 
@@ -99,10 +89,7 @@ struct PhoneTranscriptPage: View {
                 return true
             },
             showNotes: { session.showOnSummary(SummaryBlockID.notes) },
-            didScroll: {
-                lastUserScroll = Date()
-                session.pageMode = .transcript
-            },
+            didScroll: { session.pageMode = .transcript },
             photos: .phone(library: library, session: session, provider: provider))
     }
 
@@ -118,18 +105,6 @@ struct PhoneTranscriptPage: View {
 
     private func play(_ target: PlaybackTarget) {
         player.play(target, in: meeting, provider: provider)
-    }
-
-    private func followCaption() {
-        let here = player.meetingID == meeting.id && player.phase == .ready
-        let caption = here ? SavedCaptions.shown(captions, for: meeting).flatMap {
-            SavedCaptions.playing(at: player.position, trackID: player.trackID, captions: $0, in: meeting)
-        } : nil
-        guard caption != playingCaption else { return }
-        playingCaption = caption
-        guard let caption, player.isPlaying, Date().timeIntervalSince(lastUserScroll) > 5 else { return }
-        requests += 1
-        scrollRequest = TranscriptScrollRequest(target: "caption:\(caption.uuidString)", token: requests, flash: false)
     }
 }
 

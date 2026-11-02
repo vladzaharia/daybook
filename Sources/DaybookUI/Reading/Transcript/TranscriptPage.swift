@@ -1,3 +1,4 @@
+import DaybookCaptions
 import DaybookDesign
 import DaybookKit
 import SwiftUI
@@ -11,6 +12,10 @@ import SwiftUI
 /// The page doesn't read the player in its body, whose position moves ten times a second: it follows it apart
 /// (`ObservationWatch`) and redraws when the passage under the playhead changes. Rows, bookmark marks, and the playhead
 /// index are worked out once per version of the conversation (`TranscriptLayout`).
+///
+/// Saved live captions read here by the one rule both apps share (`SavedCaptions`): in the transcript's place while
+/// there's none, else after it (an earlier recording's, which doesn't cover them), each time playing the recording it
+/// was heard from, and followed by the playhead as passages are.
 public struct TranscriptPage<Header: View, Placeholder: View>: View {
     private let meeting: Meeting
     private let host: TranscriptHost
@@ -22,8 +27,12 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
     private let playerInset: CGFloat
     private let header: Header
     private let placeholder: Placeholder
+    /// Saved live captions to read here (`SavedCaptions.shown`), or nil.
+    private let captions: LiveCaptions?
 
     @State private var playing: UUID?
+    /// The saved caption under the playhead.
+    @State private var playingCaption: UUID?
     @State private var isPlaying = false
     @State private var playerShown = false
     @State private var correcting: CorrectionRequest?
@@ -52,10 +61,12 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
     ///   - anchor: The top row's ID, kept by the app so the page reopens where it was left.
     ///   - playerInset: Room under the last row while the player floats over the page.
     ///   - header: The title, byline, and status above the rows.
-    ///   - placeholder: What shows in the transcript's place before there is one.
+    ///   - captions: Saved live captions to read here (`SavedCaptions.shown`), in the transcript's place or after it.
+    ///   - placeholder: What shows in the transcript's place before there is one, when there are no captions either.
     public init(meeting: Meeting, host: TranscriptHost, findQuery: String = "", find: ConversationFind? = nil,
                 scrollRequest: TranscriptScrollRequest? = nil, scrolled: (() -> Void)? = nil, anchor: Binding<String?>? = nil,
-                playerInset: CGFloat = 0, @ViewBuilder header: () -> Header, @ViewBuilder placeholder: () -> Placeholder) {
+                playerInset: CGFloat = 0, captions: LiveCaptions? = nil, @ViewBuilder header: () -> Header,
+                @ViewBuilder placeholder: () -> Placeholder) {
         self.meeting = meeting
         self.host = host
         self.findQuery = findQuery
@@ -66,6 +77,7 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
         self.playerInset = playerInset
         self.header = header()
         self.placeholder = placeholder()
+        self.captions = captions
     }
 
     public var body: some View {
@@ -80,11 +92,17 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
             TranscriptColumn(bottomInset: playerShown ? playerInset : 0) {
                 header
                 TranscriptNotices(meeting: meeting, host: host)
-                if meeting.unifiedTranscript.isEmpty { placeholder }
+                if SavedCaptions.standsIn(for: meeting) {
+                    if let captions { savedCaptions(captions, spacingAbove: 0) } else { placeholder }
+                }
                 ForEach(rows) { row in
                     rowView(row, layout: layout, turnStarts: turnStarts, corrected: corrected, highlight: highlight, current: current)
                         .id(row.id)
                         .accessibilityRotorEntry(id: row.id, in: rotorSpace)
+                }
+                // After an earlier recording's transcript, which doesn't cover them.
+                if let captions, !SavedCaptions.standsIn(for: meeting) {
+                    savedCaptions(captions, spacingAbove: DaybookSpacing.s6 - DaybookSpacing.s4)
                 }
             }
             .modifier(AnchorPosition(anchor: anchor))
@@ -127,9 +145,15 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
                 guard !followSuspended else { return }
                 scroll(proxy, to: id.uuidString)
             }
+            .onChange(of: playingCaption) { _, id in
+                guard let id, isPlaying else { return }
+                if Date().timeIntervalSince(lastUserScroll) > 5 { followSuspended = false }
+                guard !followSuspended else { return }
+                scroll(proxy, to: SavedCaptions.rowID(id))
+            }
         }
-        // Again for each version of the conversation, which the playhead's passages come from.
-        .task(id: meeting) {
+        // Again for each version of the conversation, which the playhead's passages come from, and of its captions.
+        .task(id: PlayheadSource(meeting: meeting, captions: captions?.updatedAt)) {
             followPlayhead()
             let host = self.host
             let watch = ObservationWatch({ _ = host.playhead() }) { followPlayhead() }
@@ -281,11 +305,28 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
     }
     #endif
 
-    /// The passage under the playhead, in the recording that is playing; state changes only when it does.
+    /// What the playhead is followed through: the conversation's passages and its saved captions.
+    private struct PlayheadSource: Equatable {
+        var meeting: Meeting
+        var captions: Date?
+    }
+
+    /// Saved live captions, in the page's column.
+    private func savedCaptions(_ captions: LiveCaptions, spacingAbove: CGFloat) -> some View {
+        SavedCaptionsView(meeting: meeting, captions: captions, playing: playingCaption, spacingAbove: spacingAbove, play: host.play)
+            .environment(\.readingWidth, readingWidth)
+    }
+
+    /// The passage, or saved caption, under the playhead, in the recording that is playing; state changes only when it
+    /// does.
     private func followPlayhead() {
         let playhead = host.playhead()
         let id = playhead.flatMap { TranscriptLayout.cached(for: meeting).playhead.segmentID(at: $0.position, trackID: $0.trackID) }
         if id != playing { playing = id }
+        let caption = playhead.flatMap { playhead in
+            captions.flatMap { SavedCaptions.playing(at: playhead.position, trackID: playhead.trackID, captions: $0, in: meeting) }
+        }
+        if caption != playingCaption { playingCaption = caption }
         let now = playhead?.isPlaying ?? false
         if now != isPlaying { isPlaying = now }
         if (playhead != nil) != playerShown { playerShown = playhead != nil }
@@ -295,9 +336,9 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
 extension TranscriptPage where Placeholder == EmptyView {
     public init(meeting: Meeting, host: TranscriptHost, findQuery: String = "", find: ConversationFind? = nil,
                 scrollRequest: TranscriptScrollRequest? = nil, scrolled: (() -> Void)? = nil, anchor: Binding<String?>? = nil,
-                playerInset: CGFloat = 0, @ViewBuilder header: () -> Header) {
+                playerInset: CGFloat = 0, captions: LiveCaptions? = nil, @ViewBuilder header: () -> Header) {
         self.init(meeting: meeting, host: host, findQuery: findQuery, find: find, scrollRequest: scrollRequest, scrolled: scrolled,
-                  anchor: anchor, playerInset: playerInset, header: header) { EmptyView() }
+                  anchor: anchor, playerInset: playerInset, captions: captions, header: header) { EmptyView() }
     }
 }
 

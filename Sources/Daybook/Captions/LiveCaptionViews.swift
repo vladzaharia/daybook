@@ -59,26 +59,6 @@ struct LiveCaptionsSection: View {
     }
 }
 
-// MARK: - Saved captions
-
-/// Saved captions on the transcript's page (`TranscriptPage`), drawn as the iPhone draws them
-/// (`SavedCaptionsView`): in the page's measure with its time margin, or on a narrow page with a lane of
-/// times inside the column.
-struct SavedCaptionsReading: View {
-    let meeting: Meeting
-    let captions: LiveCaptions
-    let playing: UUID?
-    /// More room above their label, where they follow a transcript.
-    var spacingAbove: CGFloat = 0
-    let play: (PlaybackTarget) -> Void
-    @Environment(\.pageIsNarrow) private var narrow
-
-    var body: some View {
-        SavedCaptionsView(meeting: meeting, captions: captions, playing: playing, spacingAbove: spacingAbove, play: play)
-            .environment(\.readingWidth, narrow ? .narrow : .regular)
-    }
-}
-
 // MARK: - Listen Live
 
 /// Listen Live's captions on a recorder's page: the shared strip at the page's body type, its label's

@@ -103,6 +103,10 @@ public enum SavedCaptions {
         return hits(in: meetings, query: query, captions: captions)
     }
 
+    /// A saved caption's scroll ID on the transcript's page (`SavedCaptionsView`), which a search result or the
+    /// playhead moves the page to.
+    public static func rowID(_ id: UUID) -> String { "caption:\(id.uuidString)" }
+
     /// Where search found a caption, under the result: labelled so it never passes for the transcript.
     public static func searchLocation(_ segment: LiveCaptionSegment) -> String {
         "Live captions · tentative · \(TimeLabel.short(segment.start))"
@@ -156,7 +160,7 @@ public struct SavedCaptionsView: View {
                 SavedCaptionRow(segment: segment, name: LiveCaptionLabels.speaker(segment, names: names), isPlaying: playing == segment.id) {
                     play(SavedCaptions.playback(segment, captions: captions, in: meeting))
                 }
-                .id("caption:\(segment.id.uuidString)")
+                .id(SavedCaptions.rowID(segment.id))
             }
         }
         // The iPhone's pages always keep their lane of times inside the column.
