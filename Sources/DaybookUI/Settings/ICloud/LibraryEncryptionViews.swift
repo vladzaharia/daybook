@@ -150,9 +150,9 @@ public struct RecoveryKeyView: View {
     public var body: some View {
         SettingsFormSheet(title: "Recovery Key", cancel: nil, confirm: .init("Done", perform: done)) {
             Section {
+                // Not selectable: the system's Copy would put it on every nearby device and in clipboard history.
                 Text(key.text)
                     .font(.system(.title3, design: .monospaced))
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel(key.text.map(String.init).joined(separator: " "))
                 Button(copied ? "Copied" : "Copy") {

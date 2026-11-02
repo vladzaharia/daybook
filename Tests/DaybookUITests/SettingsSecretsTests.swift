@@ -18,6 +18,19 @@ final class SettingsSecretsTests: XCTestCase {
         XCTAssertEqual(RecoveryKeyView.copyLifetime, .seconds(120), "long enough to paste it into a password manager")
     }
 
+    /// Copy is the only way to copy the recovery key: the key can't be selected, so the system's Copy (⌘C, a long
+    /// press) never puts it on the general pasteboard, nearby devices, or clipboard history.
+    func testBehaviorTheRecoveryKeyCantBeSelectedOnlyCopied() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/DaybookUI/Settings/ICloud/LibraryEncryptionViews.swift")
+        let source = try String(contentsOf: file, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "public struct RecoveryKeyView"))
+        let end = source.range(of: "\npublic struct ", range: start.upperBound..<source.endIndex)?.lowerBound ?? source.endIndex
+        let view = source[start.lowerBound..<end]
+        XCTAssertTrue(view.contains("Self.copy(key, services: services)"))
+        XCTAssertFalse(view.contains(".textSelection("), "the key's text isn't selectable")
+    }
+
     func testBehaviorALocalCopyIsConcealedTransientAndClearedWhenItExpires() async throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("DaybookTests-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
