@@ -81,6 +81,19 @@ public enum RecordingWords {
     public static func isUnaligned(_ track: RecordingTrack, in meeting: Meeting) -> Bool {
         track.alignment?.method == .unaligned || meeting.alignmentReports.contains { $0.trackID == track.id && $0.method == .unaligned }
     }
+
+    /// The glyph beside a recording, the same on both apps: the device it came from when one did ("iphone" for an
+    /// iPhone's microphone, the recorder's own glyph), otherwise what it is ("mic", "desktopcomputer" for computer
+    /// audio, "doc" for a file).
+    public static func symbol(_ track: RecordingTrack) -> String {
+        if let kind = track.deviceKind, let device = DeviceCatalog.kind(kind) { return device.systemImage }
+        switch track.source {
+        case .microphone: return "mic"
+        case .systemAudio: return "desktopcomputer"
+        case .soundcore: return "recordingtape"
+        case .imported: return "doc"
+        }
+    }
 }
 
 extension AudioSource {

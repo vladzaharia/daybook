@@ -110,12 +110,14 @@ extension Meeting {
     public func speakerName(_ id: String?) -> String? { id.flatMap { id in speakers.first { $0.id == id }?.name } }
     /// A raw microphone with an echo-cancelled copy counts as transcribed once the copy is.
     public var hasUntranscribedAudio: Bool { hasUntranscribedTranscribableAudio }
-    /// Names of the people, for the byline: up to three, then "and 2 others".
+    /// Names of the people, for the byline: up to three, then "and 2 others". The people are the ones Info lists
+    /// (`peopleSpeakers`), so a voice heard only in background audio (a TV's presenter) isn't named.
     public var peopleLine: String? {
+        let people = peopleSpeakers.map(\.speaker)
         // One person can be several speakers (recognized by voice in more than one recording): named once.
         var seen = Set<String>()
-        let named = speakers.map(\.name).filter { !$0.hasPrefix("Speaker ") && seen.insert($0).inserted }
-        if named.isEmpty { return speakers.count > 1 ? "\(speakers.count) speakers" : nil }
+        let named = people.map(\.name).filter { !$0.hasPrefix("Speaker ") && seen.insert($0).inserted }
+        if named.isEmpty { return people.count > 1 ? "\(people.count) speakers" : nil }
         if named.count <= 3 { return named.formatted(.list(type: .and)) }
         return named.prefix(3).joined(separator: ", ") + " and \(named.count - 3) others"
     }
