@@ -1,4 +1,5 @@
 import DaybookCore
+import DaybookKit
 import DaybookTestSupport
 import Foundation
 import XCTest
@@ -112,6 +113,27 @@ final class ProcessingQueueTests: XCTestCase {
         _ = queue.next()
         queue.settle(id)
         XCTAssertFalse(queue.isOwed(id))
+    }
+
+    /// An error that says what kind of failure it is, in words the older reading wouldn't recognize.
+    private struct EngineGaveUp: LocalizedError, ProcessingFailureClassifying {
+        var errorDescription: String? { "The engine gave up." }
+        var failureKind: ProcessingRequest.FailureKind { .modelCouldNotStart }
+    }
+
+    func testBehaviorALocalJobsFailureKeepsTheKindItWasCaughtWith() async throws {
+        let rig = try await rig()
+        let audio = try rig.audio("odd.wav", frequency: 380)
+        let id = try await rig.macConversation("Interview", at: Date(), seconds: 0.5, audio: audio)
+        try rig.inference.fail(audio, with: EngineGaveUp())
+        rig.state.enqueue(id)
+        try await rig.processed(id)
+        let meeting = try XCTUnwrap(rig.meeting(id))
+        guard case .failed(let failure) = rig.state.processingStatus(for: meeting) else { return XCTFail("Failed") }
+        XCTAssertEqual(failure.kind, .modelCouldNotStart, "As the error said, with no request to keep it")
+        XCTAssertEqual(failure.reason, "The engine gave up.", "Its words stay for Details")
+        guard case .failed(let read) = ProcessingStatus(meeting) else { return XCTFail("Failed") }
+        XCTAssertEqual(read.kind, .other, "Read back from the words alone, it would be another kind")
     }
 
     func testBehaviorAQueuedConversationSaysWhatItWaitsForAndWhy() async throws {

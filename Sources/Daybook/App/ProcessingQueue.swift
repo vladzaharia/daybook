@@ -27,6 +27,14 @@ final class ProcessingQueue {
     var awaitingModels: Set<UUID> = []
     /// Conversations whose running job stopped because another device took its request over.
     var claimsLost: Set<UUID> = []
+    /// What the last failure of each conversation's own job was, as the error said it where the job caught it: a job
+    /// with no request has no outcome to keep its kind (`processingStatus(for:)`). Kept while Daybook runs.
+    var failures: [UUID: CaughtFailure] = [:]
+
+    struct CaughtFailure: Equatable {
+        var reason: String
+        var kind: ProcessingRequest.FailureKind
+    }
     /// The running job's progress, throttled (`ActivityProgress`). The window isn't redrawn by it: the views that draw
     /// it observe `activity`, and redraw when its percent, message, or step changes.
     let activity = ActivityProgress(IntelligenceProgress(0, "Ready"))
@@ -242,6 +250,8 @@ extension AppState {
                     if !queue.isStopping { queue.settle(id) }
                 }
                 catch {
+                    // The kind is kept as the error says it (a cloud key refused, models missing), not read back from words.
+                    queue.failures[id] = .init(reason: error.localizedDescription, kind: ProcessingRequest.FailureKind(error))
                     self.update(id) { $0.status = .failed; $0.errorMessage = error.localizedDescription }
                     self.finishRequests(of: queue.running ?? job, failure: error)
                     self.reportToPhones(id, phase: .failed, detail: error.localizedDescription)
@@ -335,7 +345,13 @@ extension AppState {
     /// The one status the list, the conversation page, and device pages show (shared with the iPhone). Only the
     /// conversation being processed reads the job's progress, so a progress report redraws its row and page, not every row.
     func processingStatus(for meeting: Meeting) -> ProcessingStatus {
-        ProcessingStatus(meeting, queue: queueState(readingProgress: meeting.id == processingID))
+        let status = ProcessingStatus(meeting, queue: queueState(readingProgress: meeting.id == processingID))
+        // A job of this Mac's own has no request to keep its failure's kind: the queue kept it where it caught the error.
+        if case .failed(var failure) = status, failure.request == nil, let caught = queue.failures[meeting.id], caught.reason == failure.reason {
+            failure.kind = caught.kind
+            return .failed(failure)
+        }
+        return status
     }
 
     /// The queue, with the running job's progress and step when `readingProgress` (only the running conversation's

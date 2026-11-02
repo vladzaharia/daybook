@@ -44,11 +44,11 @@ extension AppState {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 do {
-                    let metadata = await Task.detached { PhotoMetadata.read(url) }.value
+                    let metadata = await detachedWork { PhotoMetadata.read(url) }
                     let timing = photoTiming(for: id, capturedAt: metadata.capturedAt)
                     if PhotoFormat.detect(fileURL: url) != nil {
                         try await library.addPhoto(from: url, to: id, timing: timing, origin: photoOrigin)
-                    } else if let png = await Task.detached(operation: { Self.pngData(contentsOf: url) }).value {
+                    } else if let png = await detachedWork({ Self.pngData(contentsOf: url) }) {
                         try await library.addPhoto(data: png, to: id, fileName: url.deletingPathExtension().lastPathComponent + ".png",
                                                    timing: timing, origin: photoOrigin)
                     } else {
@@ -76,7 +76,7 @@ extension AppState {
                         continue
                     }
                     guard let data = try await Self.imageData(from: provider) else { continue }
-                    let metadata = await Task.detached { PhotoMetadata.read(data) }.value
+                    let metadata = await detachedWork { PhotoMetadata.read(data) }
                     let timing = photoTiming(for: id, capturedAt: metadata.capturedAt)
                     // A capture from the iPhone's camera has no file date: the moment it arrived is its moment.
                     let moment = timing.capturedAt == nil && metadata.capturedAt == nil ? PhotoTimingInput(capturedAt: Date()) : timing
@@ -290,7 +290,7 @@ extension AppState {
         }
         for type in [UTType.tiff, .image] where provider.hasItemConformingToTypeIdentifier(type.identifier) {
             if let data = try await loadData(provider, type: type) {
-                return PhotoFormat.detect(data) != nil ? data : await Task.detached { pngData(data) }.value
+                return PhotoFormat.detect(data) != nil ? data : await detachedWork { pngData(data) }
             }
         }
         return nil
@@ -348,7 +348,7 @@ enum PhotoCopy {
         let token = UUID()
         latest = token
         let destination = folder.appendingPathComponent(token.uuidString, isDirectory: true)
-        let written = await Task.detached(priority: .userInitiated) { () -> URL? in
+        let written = await detachedWork(priority: .userInitiated) { () -> URL? in
             let files = FileManager.default
             guard (try? files.createDirectory(at: destination, withIntermediateDirectories: true,
                                               attributes: [.posixPermissions: 0o700])) != nil else { return nil }
@@ -357,7 +357,7 @@ enum PhotoCopy {
                 return nil
             }
             return destination.appendingPathComponent(file)
-        }.value
+        }
         guard latest == token else {
             try? FileManager.default.removeItem(at: destination)
             return .superseded
