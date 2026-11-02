@@ -35,7 +35,7 @@ public struct EmptyTranscript<Record: View>: View {
     public var body: some View {
         let words = Self.words(meeting: meeting, status: status, device: self.words, showsReason: showsReason)
         VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
-            Image(systemName: meeting.tracks.isEmpty ? "note.text" : "waveform")
+            Image(systemName: meeting.presentTracks.isEmpty ? "note.text" : "waveform")
                 .font(.system(size: 34, weight: .light))
                 .foregroundStyle(DaybookPalette.Ink.meta)
                 .accessibilityHidden(true)
@@ -49,7 +49,7 @@ public struct EmptyTranscript<Record: View>: View {
                     .foregroundStyle(DaybookPalette.Ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if meeting.tracks.isEmpty {
+            if meeting.presentTracks.isEmpty {
                 record.padding(.top, DaybookSpacing.s1)
             } else {
                 HStack(spacing: DaybookSpacing.s2) {
@@ -71,7 +71,7 @@ public struct EmptyTranscript<Record: View>: View {
     /// The title and, when there's a reason to give, the sentence under it.
     public static func words(meeting: Meeting, status: ProcessingStatus, device: DeviceWords,
                              showsReason: Bool) -> (title: String, message: String?) {
-        if meeting.tracks.isEmpty { return ("No recording yet", nil) }
+        if meeting.presentTracks.isEmpty { return ("No recording yet", nil) }
         guard case .failed(let failure) = status else { return ("Not transcribed yet", nil) }
         guard showsReason else { return ("No transcript", nil) }
         let failed = FailureWords(failure, words: device)

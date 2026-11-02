@@ -72,7 +72,8 @@ public struct MeetingPlaybackPosition {
     public let seconds: Double
     public static func resolve(_ meetingSeconds: Double, in meeting: Meeting) -> Self? {
         guard meetingSeconds.isFinite else { return nil }
-        for track in meeting.tracks {
+        // A recording taken out of the conversation keeps its offset, but isn't on its timeline.
+        for track in meeting.presentTracks {
             let alignment = meeting.alignmentReports.first { $0.trackID == track.id }
             if alignment?.method == .unaligned { continue }
             guard alignment != nil || track.offset != nil else { continue }

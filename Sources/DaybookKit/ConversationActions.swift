@@ -195,7 +195,7 @@ public enum ConversationActions {
             ConversationAction(id: .shareMarkdown, title: "Markdown" + more, symbol: "doc.richtext"),
             ConversationAction(id: .shareJSON, title: "Full Data (JSON)", symbol: "curlybraces", platforms: [.iPhone]),
             ConversationAction(id: .shareAudio, title: "Audio" + more, symbol: "waveform",
-                               availability: meeting.tracks.isEmpty ? .unavailable("No recording yet") : .available),
+                               availability: meeting.primaryRecording == nil ? .unavailable("No recording yet") : .available),
         ])
     }
 
@@ -204,7 +204,7 @@ public enum ConversationActions {
     /// cloud for a summary), so its glyph says "again", not where.
     static func reprocess(_ meeting: Meeting, context: Context) -> ConversationAction {
         var availability: ConversationAction.Availability = .available
-        if meeting.tracks.isEmpty { availability = .unavailable("No recording yet") }
+        if meeting.presentTracks.isEmpty { availability = .unavailable("No recording yet") }
         else if let busy = context.busy { availability = .unavailable(busy) }
         else if context.status?.isPending == true { availability = .unavailable("Already asked for") }
         var modes: [ConversationAction] = []
@@ -256,7 +256,10 @@ public enum ConversationActions {
     /// One recording's actions (the inspector's Audio, the iPhone's Info › Audio): play it, its timing and original
     /// transcript, move it into a conversation of its own, and remove it.
     public static func track(_ track: RecordingTrack, in meeting: Meeting, context: Context) -> [ConversationActionGroup] {
-        let only = meeting.tracks.count < 2
+        // The only recording still in the conversation, counting the copies that share its audio as one: it's moved and
+        // removed with them, and its timing is theirs.
+        let present = meeting.presentTracks
+        let only = Set(present.map { Set(meeting.recordingGroup(of: $0.id).map(\.id)) }).count < 2
         let locked = context.recordingBusy
         let groups = [
             ConversationActionGroup(id: .playback, actions: [

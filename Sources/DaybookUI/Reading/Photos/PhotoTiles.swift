@@ -25,7 +25,7 @@ public struct PhotoMenu: View {
         if showsOpen {
             Button("Open Photo", systemImage: "photo") { PhotoOpening.open(photo, in: meeting.id, services: services, fallback: openPhoto) }
         }
-        if let time = meeting.timelineTime(of: photo), !meeting.tracks.isEmpty {
+        if let time = meeting.timelineTime(of: photo), !meeting.presentTracks.isEmpty {
             Button("Play from \(TimeLabel.short(time))", systemImage: "play") { services.play(.timeline(time), meeting) }
                 .disabled(!services.canPlay())
             if !meeting.unifiedTranscript.isEmpty {

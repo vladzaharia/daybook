@@ -106,7 +106,7 @@ public enum RowPreview {
             .map { $0.replacingOccurrences(of: #"^\s*[-*•]\s+"#, with: "", options: .regularExpression) }
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         if let line = lines.first(where: { normalized($0) != title }) { return line }
-        if meeting.tracks.isEmpty { return lines.isEmpty ? "No notes" : "Notes only" }
+        if meeting.presentTracks.isEmpty { return lines.isEmpty ? "No notes" : "Notes only" }
         return meeting.duration.map(DurationLabel.format) ?? ""
     }
 

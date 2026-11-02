@@ -210,7 +210,7 @@ enum ConversationShare {
     }
 
     private static func audio(_ meeting: Meeting, session: ReadingSession, provider: any AudioProviding) {
-        guard let track = meeting.transcribableTracks.first ?? meeting.tracks.first else { return }
+        guard let track = meeting.primaryRecording else { return }
         Task {
             do {
                 let source = try await provider.localAudio(for: track, in: meeting.id) { _ in }

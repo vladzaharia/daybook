@@ -222,8 +222,8 @@ public enum DurationLabel {
 }
 
 extension Meeting {
-    /// The span of the longest recording on the conversation's timeline.
+    /// The span of the longest recording on the conversation's timeline. A recording taken out of it doesn't count.
     public var duration: TimeInterval? {
-        tracks.compactMap { track in track.duration.map { max(0, track.offset ?? 0) + $0 } }.max()
+        presentTracks.compactMap { track in track.duration.map { max(0, track.offset ?? 0) + $0 } }.max()
     }
 }

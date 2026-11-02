@@ -176,12 +176,19 @@ public enum PlaybackTarget: Equatable, Sendable {
                let track = meeting.tracks.first(where: { $0.id == position.trackID }) {
                 return (track, position.seconds)
             }
-            guard let track = meeting.tracks.first(where: { meeting.transcribableTracks.contains($0) }) ?? meeting.tracks.first else { return nil }
+            guard let track = meeting.primaryRecording else { return nil }
             return (track, max(0, seconds - (track.offset ?? 0)))
         case .source(let track, let seconds):
             return (track, max(0, seconds))
         }
     }
+}
+
+extension Meeting {
+    /// The conversation's recording when one has to stand for it: what plays where no placed recording covers a time,
+    /// and what Share › Audio sends. The first that's transcribed (a cleaned copy over its original), else the first
+    /// still in the conversation; never one taken out of it.
+    public var primaryRecording: RecordingTrack? { transcribableTracks.first ?? presentTracks.first }
 }
 
 /// A conversation's transcript as a page draws it: blocks, bookmark marks, the playhead index, and the

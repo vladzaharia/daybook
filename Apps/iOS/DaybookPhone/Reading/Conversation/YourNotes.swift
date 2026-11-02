@@ -15,7 +15,7 @@ struct PhoneNotes: View {
     var body: some View {
         let times = meeting.paragraphTimes()
         let timed = times.contains { $0 != nil }
-        YourNotes(meeting: meeting, library: library, canPlay: !meeting.tracks.isEmpty, play: play, passages: passages,
+        YourNotes(meeting: meeting, library: library, canPlay: !meeting.presentTracks.isEmpty, play: play, passages: passages,
                   bookmarksID: SummaryBlockID.bookmarks) {
             MarginNotesEditor(
                 text: Binding(get: { meeting.notes }, set: { library.editNotes(meeting.id, text: $0) }),

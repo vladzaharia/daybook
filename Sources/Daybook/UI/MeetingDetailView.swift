@@ -325,7 +325,7 @@ enum MacShare {
             let files = originals
             return try await Task.detached(priority: .userInitiated) { try ExportFiles.markdownWithPhotos(meeting, originals: files) }.value
         case .shareAudio:
-            guard let track = meeting.transcribableTracks.first ?? meeting.tracks.first,
+            guard let track = meeting.primaryRecording,
                   let source = await state.audioURL(for: track, meetingID: meeting.id) else { return nil }
             let name = ExportFiles.audioName(meeting, track: track, fileExtension: source.pathExtension)
             return try await Task.detached(priority: .userInitiated) { try ExportFiles.audio(source, named: name) }.value

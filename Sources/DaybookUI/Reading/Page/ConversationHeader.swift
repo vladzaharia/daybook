@@ -158,7 +158,7 @@ public struct ConversationHeader<Pill: View>: View {
         Text(meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(month).hour().minute()))
     }
 
-    private var hasLead: Bool { recording != nil || meeting.duration != nil || meeting.tracks.isEmpty }
+    private var hasLead: Bool { recording != nil || meeting.duration != nil || meeting.presentTracks.isEmpty }
 
     /// The recording's state: recording now, its play pill, or no recording at all.
     @ViewBuilder private var lead: some View {
@@ -174,7 +174,7 @@ public struct ConversationHeader<Pill: View>: View {
             }
         } else if meeting.duration != nil {
             pill
-        } else if meeting.tracks.isEmpty {
+        } else if meeting.presentTracks.isEmpty {
             Text("Notes only")
         }
     }

@@ -122,6 +122,66 @@ final class ConversationActionsTests: XCTestCase {
         XCTAssertEqual(busy[3].actions[0].availability, .unavailable("Processing now"))
     }
 
+    /// "The only recording" is the only one left in the conversation: one removed or moved out doesn't count, and a
+    /// microphone and its echo-removed copy are one recording.
+    func testBehaviorTheOnlyRecordingLeftCantBeMovedOutOrTimed() throws {
+        var two = meeting()
+        two.tracks.append(RecordingTrack(source: .soundcore, relativePath: "Originals/b.wav", fileName: "b.wav", duration: 60))
+        two.tracks[0].removal = RecordingRemoval(removedAt: Date())
+        let left = try XCTUnwrap(two.tracks.last)
+        let groups = ConversationActions.track(left, in: two, context: .init(platform: .mac))
+        XCTAssertEqual(groups[1].actions[0].id, .adjustTiming)
+        XCTAssertEqual(groups[1].actions[0].availability, .unavailable("The only recording"))
+        XCTAssertEqual(groups[2].actions[0].id, .moveToNewConversation)
+        XCTAssertEqual(groups[2].actions[0].availability, .unavailable("The only recording"))
+
+        var echo = meeting()
+        let microphone = try XCTUnwrap(echo.tracks.first)
+        echo.tracks.append(RecordingTrack(source: .microphone, relativePath: "Originals/a-clean.m4a", fileName: "a-clean.m4a", duration: 60,
+                                          derivedFrom: microphone.id, processing: RecordingTrack.echoCancelledProcessing))
+        for track in echo.tracks {
+            let actions = ConversationActions.track(track, in: echo, context: .init(platform: .iPhone)).flatMap(\.actions)
+            XCTAssertEqual(actions.first { $0.id == .moveToNewConversation }?.availability, .unavailable("The only recording"))
+            XCTAssertEqual(actions.first { $0.id == .adjustTiming }?.availability, .unavailable("The only recording"))
+        }
+        echo.tracks.append(RecordingTrack(source: .soundcore, relativePath: "Originals/b.wav", fileName: "b.wav", duration: 60))
+        let other = ConversationActions.track(microphone, in: echo, context: .init(platform: .iPhone)).flatMap(\.actions)
+        XCTAssertEqual(other.first { $0.id == .moveToNewConversation }?.availability, .available, "a second recording")
+    }
+
+    /// A recording taken out of a conversation doesn't set its length, isn't played for its timeline, and isn't the audio
+    /// Share sends; with none left, the conversation reads as one without a recording.
+    func testBehaviorARecordingTakenOutIsntTheConversationsLengthPlaybackOrAudio() throws {
+        let long = RecordingTrack(source: .soundcore, relativePath: "Originals/long.wav", fileName: "long.wav", duration: 3600, offset: 0)
+        let call = RecordingTrack(source: .microphone, relativePath: "Originals/call.m4a", fileName: "call.m4a", duration: 300, offset: 0)
+        var meeting = Meeting(title: "Five-minute call", tracks: [long, call])
+        func shareAudio() -> ConversationAction.Availability? {
+            ConversationActions.actions(for: meeting, context: .init(platform: .mac)).flatMap(\.actions)
+                .first { $0.id == .share }?.children.first { $0.id == .shareAudio }?.availability
+        }
+        XCTAssertEqual(meeting.duration, 3600)
+        XCTAssertEqual(PlaybackTarget.timeline(1200).resolve(in: meeting)?.track.id, long.id)
+
+        meeting.tracks[0].removal = RecordingRemoval(removedAt: Date())
+        XCTAssertEqual(meeting.duration, 300)
+        XCTAssertEqual(MeetingPlaybackPosition.resolve(60, in: meeting)?.trackID, call.id)
+        XCTAssertNil(MeetingPlaybackPosition.resolve(1200, in: meeting), "only the removed recording covered it")
+        XCTAssertEqual(PlaybackTarget.timeline(1200).resolve(in: meeting)?.track.id, call.id)
+        XCTAssertEqual(meeting.primaryRecording?.id, call.id)
+        XCTAssertEqual(shareAudio(), .available)
+
+        // The last one moved to a conversation of its own.
+        meeting.tracks[1].removal = RecordingRemoval(removedAt: Date(), movedTo: UUID())
+        XCTAssertNil(meeting.duration)
+        XCTAssertNil(MeetingPlaybackPosition.resolve(60, in: meeting))
+        XCTAssertNil(PlaybackTarget.timeline(60).resolve(in: meeting))
+        XCTAssertNil(meeting.primaryRecording)
+        XCTAssertEqual(shareAudio(), .unavailable("No recording yet"))
+        XCTAssertEqual(ConversationActions.actions(for: meeting, context: .init(platform: .mac)).flatMap(\.actions)
+            .first { $0.id == .reprocess }?.availability, .unavailable("No recording yet"))
+        XCTAssertEqual(RowPreview.text(for: meeting), "No notes")
+    }
+
     func testBehaviorARecordingStaysWhileAnotherDeviceProcessesIt() throws {
         var two = meeting()
         two.tracks.append(RecordingTrack(source: .soundcore, relativePath: "Originals/b.wav", fileName: "b.wav", duration: 60))

@@ -99,6 +99,10 @@ final class TranscriptScreensTests: XCTestCase {
         XCTAssertEqual(AdjustTimingSheet.defaultTrack(in: meeting), second)
         meeting.alignmentReports = [TrackAlignment(trackID: third, method: .unaligned)]
         XCTAssertEqual(AdjustTimingSheet.defaultTrack(in: meeting), third)
+        // A recording taken out of the conversation isn't one to line up.
+        meeting.alignmentReports = [TrackAlignment(trackID: second, method: .unaligned)]
+        meeting.tracks[1].removal = RecordingRemoval(removedAt: Date())
+        XCTAssertEqual(AdjustTimingSheet.defaultTrack(in: meeting), third)
     }
 
     func testBehaviorCorrectPassageAsksBeforeLosingWhatWasTyped() {

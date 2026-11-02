@@ -93,7 +93,7 @@ private struct NotesSection: View {
     var body: some View {
         // Each non-empty paragraph's time, matched to the saved anchors by text; nil where there is none.
         let times = meeting.paragraphTimes()
-        YourNotes(meeting: meeting, library: state.library, canPlay: !meeting.tracks.isEmpty && !state.isRecording, play: play,
+        YourNotes(meeting: meeting, library: state.library, canPlay: !meeting.presentTracks.isEmpty && !state.isRecording, play: play,
                   passages: passages) {
             MarginNotesEditor(
                 text: Binding(get: { meeting.notes }, set: { state.editNotes(meeting.id, text: $0) }),

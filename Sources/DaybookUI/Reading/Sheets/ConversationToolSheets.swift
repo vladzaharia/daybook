@@ -241,7 +241,9 @@ public struct AdjustTimingSheet: View {
 
     /// The recording to adjust: the one asked for, else the one that couldn't be lined up, else the second.
     public static func defaultTrack(in meeting: Meeting) -> UUID? {
-        meeting.alignmentReports.first { $0.method == .unaligned }?.trackID ?? meeting.tracks.dropFirst().first?.id
+        let present = meeting.presentTracks
+        let unaligned = meeting.alignmentReports.first { report in report.method == .unaligned && present.contains { $0.id == report.trackID } }
+        return unaligned?.trackID ?? present.dropFirst().first?.id
     }
 
     private var meeting: Meeting? { library.meeting(meetingID) }

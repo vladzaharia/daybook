@@ -97,10 +97,7 @@ struct AudioRow: View {
     }
 
     private var actions: [ConversationActionGroup] {
-        // Only the recordings still in the conversation count: "the only recording" is the only one left.
-        var shown = meeting
-        shown.tracks = meeting.presentTracks
-        let groups = ConversationActions.track(track, in: shown, context: services.actionContext(meeting))
+        let groups = ConversationActions.track(track, in: meeting, context: services.actionContext(meeting))
         // A Mac dims what can't be done now; an iPhone leaves it out. Neither lists what this app doesn't offer.
         return groups.compactMap { group in
             let actions = group.actions.filter { services.offers($0.id) && (!touch || $0.isAvailable) }

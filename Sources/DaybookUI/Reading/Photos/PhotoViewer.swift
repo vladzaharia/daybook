@@ -148,7 +148,7 @@ public struct PhotoViewer: View {
 
     /// Play from the photo's time and Show in Transcript, when it has a time and there's something to go to.
     @ViewBuilder private func moment(_ photo: MeetingPhoto, time: TimeInterval?, in meeting: Meeting) -> some View {
-        if let time, !meeting.tracks.isEmpty {
+        if let time, !meeting.presentTracks.isEmpty {
             Button("Play from \(TimeLabel.short(time))") { saveCaption(for: photoID); services.play(.timeline(time), meeting); close() }
                 .disabled(!services.canPlay())
             if !meeting.unifiedTranscript.isEmpty {
