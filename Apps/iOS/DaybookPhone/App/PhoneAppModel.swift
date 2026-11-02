@@ -647,7 +647,7 @@ final class PhoneAppModel: RecordingCommandHandling {
         let clocks = link.peerClocks { mac in session?.macs.first(where: { $0.id == mac.id })?.startedAt ?? mac.recording?.startedAt }
         // Finishing and filing must complete even if the caller is cancelled (an intent that timed
         // out, a view that went away): an unstructured task doesn't inherit cancellation.
-        let filing = Task { @MainActor () -> StopOutcome in
+        let filing = Task { @MainActor [final] () -> StopOutcome in
             let stopped = await self.recorder.stop()
             // Saved only once there's a recording to save.
             self.activities.end(Self.endedActivity(final, recorded: stopped != nil, failure: self.recorder.lastFailure,
