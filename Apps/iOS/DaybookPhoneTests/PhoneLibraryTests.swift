@@ -724,6 +724,40 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(Set(try JSONDecoder().decode([String].self, from: data)), [first.uuidString, second.uuidString])
     }
 
+    /// Add Recording…: the files picked join the conversation they were picked for, even when the picker closes before
+    /// it answers, and count as importing while they copy, as an import does. A cancelled picker adds nothing.
+    func testRecordingsAddedFromFilesJoinTheirConversationAndCountWhileTheyCopy() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root.appendingPathComponent("Library"), installation: "INSTALL-1")
+        try await library.reload()
+        let model = appModel(RecorderRig().recorder, library)
+        let session = ReadingSession()
+        let id = session.newNote(in: library.controller)
+        let memo = root.appendingPathComponent("Voice memo.wav")
+        try audioFile(at: memo)
+
+        session.addRecording(to: id)
+        XCTAssertTrue(session.showsRecordingPicker)
+        session.showsRecordingPicker = false // SwiftUI closes the picker before it calls back
+        let picked = try XCTUnwrap(session.pickedRecordings(.success([memo])), "the files aren't dropped")
+        XCTAssertEqual(picked.conversation, id)
+        XCTAssertNil(session.pickedRecordings(.success([memo])), "one answer")
+
+        final class Counted: @unchecked Sendable { var changed = false }
+        let counted = Counted()
+        withObservationTracking { _ = model.importing } onChange: { counted.changed = true }
+        await model.importFiles(picked.urls, attachTo: picked.conversation)
+        XCTAssertTrue(counted.changed, "counted while it copied")
+        XCTAssertEqual(model.importing, 0)
+        XCTAssertEqual(library.controller.meeting(id)?.tracks.count, 1)
+        XCTAssertEqual(library.controller.meetings.count, 1, "joined, not a conversation of its own")
+        XCTAssertNil(model.lastImportedID, "the page stays on the conversation it was added to")
+
+        session.addRecording(to: id)
+        XCTAssertNil(session.pickedRecordings(.failure(CocoaError(.userCancelled))))
+        XCTAssertNil(session.pickedRecordings(.success([memo])), "cancelled: the request went with it")
+    }
+
     /// A second of tone as a WAV file, as another app might hand over.
     private func audioFile(at url: URL, step: Float = 0.17) throws {
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))

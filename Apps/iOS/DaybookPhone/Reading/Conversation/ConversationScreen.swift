@@ -123,7 +123,7 @@ enum ConversationMoreActions {
             ConversationShare.share(id, meeting: meeting, session: session, provider: provider)
         case .takePhoto: session.cameraFor = meeting.id
         case .addPhotos: session.sheet = .importPhotos(meeting.id)
-        case .addRecordingFromFile: session.addingRecordingTo = meeting.id
+        case .addRecordingFromFile: session.addRecording(to: meeting.id)
         case .process(let mode):
             if mode == .summaryOnly { library.summarize(meeting.id, placement: placement) }
             else { library.requestProcessing(meeting.id, mode: mode) }

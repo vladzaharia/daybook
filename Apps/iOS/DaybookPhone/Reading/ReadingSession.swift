@@ -58,8 +58,11 @@ final class ReadingSession {
     var sheet: ReadingSheet?
     /// The camera is open to add a photo to this conversation.
     var cameraFor: UUID?
-    /// Files is open to add a recording to this conversation (Add Recording…).
-    var addingRecordingTo: UUID?
+    /// Files is open to add a recording to a conversation (Add Recording…; `addRecording(to:)`).
+    var showsRecordingPicker = false
+    /// The conversation the files picked join, kept until the picker answers (`pickedRecordings`), however soon it
+    /// closes.
+    private(set) var addingRecordingTo: UUID?
     /// A moment's word over the page after something that leaves nothing else to see ("Copied").
     var confirmation: ConfirmationBeat?
     /// A new note: its notes take the keyboard when the page appears.
@@ -95,6 +98,20 @@ final class ReadingSession {
     /// A conversation that's only your notes (photos can join it), in the place being viewed, open
     /// with the keyboard on its notes.
     @discardableResult
+    /// Add Recording…: Files opens to pick recordings for this conversation.
+    func addRecording(to id: UUID) {
+        addingRecordingTo = id
+        showsRecordingPicker = true
+    }
+
+    /// The picker's answer: the files picked and the conversation they join, once. Nil when it was cancelled or
+    /// couldn't open, or for an answer already taken.
+    func pickedRecordings(_ result: Result<[URL], any Error>) -> (urls: [URL], conversation: UUID)? {
+        defer { addingRecordingTo = nil }
+        guard let id = addingRecordingTo, case .success(let urls) = result, !urls.isEmpty else { return nil }
+        return (urls, id)
+    }
+
     func newNote(in library: LibraryController, now: Date = Date()) -> UUID {
         var folder: UUID?, placement: LibraryPlacement?
         switch place {

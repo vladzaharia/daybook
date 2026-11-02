@@ -28,35 +28,15 @@ struct LibraryBrowser: View {
             .environment(\.liveCaptionsSaved, model.captions.lastSave)
             // The player stands aside for a recording however it starts, before anything plays here.
             .onAppear { [model] in session.player.follow { model.isRecordingActive } }
-            .fileImporter(isPresented: Binding(get: { session.addingRecordingTo != nil }, set: { if !$0 { session.addingRecordingTo = nil } }),
+            // Add Recording…: the conversation is the session's until the picker answers, so the picker closing
+            // first doesn't lose the files.
+            .fileImporter(isPresented: Bindable(session).showsRecordingPicker,
                           allowedContentTypes: RecordStartButton.audioTypes, allowsMultipleSelection: true) { result in
-                guard let id = session.addingRecordingTo, case .success(let urls) = result else { return }
-                session.addingRecordingTo = nil
-                Task { await model.addRecordings(urls, to: id) }
+                guard let picked = session.pickedRecordings(result) else { return }
+                Task { await model.importFiles(picked.urls, attachTo: picked.conversation) }
+            } onCancellation: {
+                _ = session.pickedRecordings(.success([]))
             }
-    }
-}
-
-extension PhoneAppModel {
-    /// Add Recording…: files from Files join a conversation as more of its recordings, each asking to be transcribed
-    /// as an import does. A file already in the library isn't copied again.
-    func addRecordings(_ urls: [URL], to id: UUID) async {
-        var failures: [(name: String, reason: String)] = []
-        for url in urls {
-            do {
-                let filed = try await library.importFile(url, requestTranscription: settings.requestsTranscription, attachTo: id)
-                if let request = filed.request { link.nudge(request) }
-            } catch {
-                failures.append((url.lastPathComponent, error.localizedDescription))
-            }
-        }
-        if !failures.isEmpty {
-            say(failures.count == 1 ? "Couldn’t add “\(failures[0].name)”." : "Couldn’t add \(failures.count) recordings.",
-                details: failures.map { "\($0.name): \($0.reason)" }.joined(separator: "\n"))
-        }
-        sync.synchronizeFinishing(.filed)
-        processor.pickUp()
-        publish()
     }
 }
 

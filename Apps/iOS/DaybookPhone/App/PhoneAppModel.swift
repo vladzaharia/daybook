@@ -894,23 +894,28 @@ final class PhoneAppModel: RecordingCommandHandling {
 
     // MARK: Importing
 
-    /// Files or the share sheet: each file becomes a conversation, with a Transcribe request.
-    func importFiles(_ urls: [URL]) async {
+    /// Files or the share sheet: each file becomes a conversation, with a Transcribe request. With `attachTo`, Add
+    /// Recording…: they join that conversation as more of its recordings, each asking to be transcribed the same way. A
+    /// file already in the library isn't copied again. Either way they count in `importing` while they copy.
+    func importFiles(_ urls: [URL], attachTo conversation: UUID? = nil) async {
         guard !urls.isEmpty else { return }
         importing += urls.count
         defer { importing = max(0, importing - urls.count) }
         var failures: [(name: String, reason: String)] = []
         for url in urls {
             do {
-                let filed = try await library.importFile(url, requestTranscription: settings.requestsTranscription)
-                lastImportedID = filed.meeting.id
+                let filed = try await library.importFile(url, attachTo: conversation, requestTranscription: settings.requestsTranscription)
+                if conversation == nil { lastImportedID = filed.meeting.id }
                 if let request = filed.request { link.nudge(request) }
             } catch {
                 failures.append((url.lastPathComponent, error.localizedDescription))
             }
         }
         if !failures.isEmpty {
-            say(failures.count == 1 ? "Couldn’t import “\(failures[0].name)”." : Self.importFailures(failures.count),
+            let one = failures.count == 1
+            say(conversation == nil
+                ? (one ? "Couldn’t import “\(failures[0].name)”." : Self.importFailures(failures.count))
+                : (one ? "Couldn’t add “\(failures[0].name)”." : "Couldn’t add \(failures.count) recordings."),
                 details: failures.map { "\($0.name): \($0.reason)" }.joined(separator: "\n"))
         }
         sync.synchronizeFinishing(.filed)
