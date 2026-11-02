@@ -453,7 +453,7 @@ extension LibrarySyncEngine {
             // A library that started over never wrote plaintext: a recording from before nothing uses is the old library's.
             if ready {
                 let plan = retirementPlan(entries: legacyEntries, blobs: legacyBlobs.map { ($0, Optional<Data>.none) }, input: input,
-                                          liveShas: liveShas, knownShas: knownShas, unnamedAreReplaced: sealing.manifest.replaces != nil,
+                                          liveShas: liveShas, knownShas: knownShas, unnamedAreReplaced: sealing.manifest.startedOver,
                                           whole: whole, progress: &progress)
                 for url in plan.delete { deleteRemote(url) }
                 if plan.complete {

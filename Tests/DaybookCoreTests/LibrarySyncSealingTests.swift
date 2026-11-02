@@ -792,6 +792,74 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertFalse(files("Events").contains(late))
     }
 
+    /// A new encrypted library's marker beside this one (`daybook-sync 2.json`), as iCloud keeps a second device's: it
+    /// was started at `started` by that device's clock. Its key is in iCloud Keychain.
+    private func rivalMarker(started: Date) throws {
+        let key = LibraryKey.generate(libraryID: UUID(), createdBy: "Elsewhere", now: started)
+        try keychain.store(key)
+        var marker = SyncManifest(libraryID: key.libraryID)
+        marker.schemaVersion = SyncManifest.sealedSchemaVersion
+        marker.sealing = .init(current: key.idHex, sealedSince: key.createdAt, migrator: "Elsewhere", keys: [.init(id: key.idHex, created: key.createdAt)])
+        marker.created = key.createdAt
+        try marker.encoded().write(to: remote.appendingPathComponent("daybook-sync 2.json"))
+    }
+
+    /// A library encrypted after it began as plaintext that wins over a rival (`rivalOrder`) didn't start over: until its
+    /// plaintext from before is retired, that's still its history, a recording nothing names yet stays through retirement,
+    /// and a new library that meets it later doesn't win either.
+    func testBehaviorALibraryThatWinsOverARivalKeepsItsPlaintextHistory() async throws {
+        let mac = try mac(), phone = try phone()
+        try await pass(mac, "Mac", [Meeting(title: "Shared")])
+        try await pass(phone, "Phone")
+        // The iPhone edits it on the manifest from before encryption (offline): its entry reaches iCloud late.
+        let before = Set(files("Events"))
+        let onPhone = try await MeetingStore(rootURL: local("Phone")).list()
+        var edited = try XCTUnwrap(onPhone.first)
+        edited.setNotes("Written offline")
+        try await pass(phone, "Phone", [edited])
+        let late = try XCTUnwrap(Set(files("Events")).subtracting(before).first)
+        let lateURL = remote.appendingPathComponent("Events/\(late)")
+        try cloud.withhold(lateURL)
+        let start = Date()
+        await mac.setSealerClock { start }
+        try await mac.enableSealing(recovery: RecoveryKey.generate())
+        let held = try await MeetingStore(rootURL: local("Mac")).list()
+        let macCopy = try XCTUnwrap(held.first)
+        try await pass(mac, "Mac", [macCopy])
+        let established = try manifest()
+        let sealedSince = try XCTUnwrap(established.sealing?.sealedSince)
+        // A new library started an hour before encryption began here, by its device's clock, meets it, and loses.
+        try rivalMarker(started: sealedSince.addingTimeInterval(-3_600))
+        try await pass(mac, "Mac", [macCopy])
+        XCTAssertEqual(try manifest().libraryID, established.libraryID)
+        XCTAssertEqual(try manifest().sealing?.rivals?.count, 1)
+        XCTAssertEqual(try manifest().sealing?.startedOver, false)
+
+        // The iPhone's late entry is history from before, not yet retired: a new device reads it.
+        try cloud.deliver(lateURL)
+        let newcomer = try await pass(try self.mac("Fresh"), "Fresh")
+        XCTAssertEqual(newcomer.meetings.map(\.notes), ["Written offline"])
+
+        // A recording whose entry hasn't arrived yet stays through retirement.
+        let unnamed = audioBytes(4000, seed: 51)
+        let sha = SyncDigest.sha256(data: unnamed)
+        try unnamed.write(to: remote.appendingPathComponent("Blobs/\(sha)"))
+        await mac.setSealerClock { start.addingTimeInterval(LibrarySyncEngine.retirementGrace + 60) }
+        let onMac = try await MeetingStore(rootURL: local("Mac")).list()
+        try await pass(mac, "Mac", onMac)
+        try await pass(mac, "Mac", onMac)
+        try await pass(mac, "Mac", onMac)
+        XCTAssertNotNil(try manifest().sealing?.legacyRetired)
+        XCTAssertFalse(files("Events").contains(late))
+        XCTAssertEqual(files("Blobs"), [sha])
+
+        // Another new library, started earlier still by its device's clock, meets it later: this one still wins.
+        try rivalMarker(started: sealedSince.addingTimeInterval(-7_200))
+        try await pass(mac, "Mac", onMac)
+        XCTAssertEqual(try manifest().libraryID, established.libraryID)
+        XCTAssertEqual(try manifest().sealing?.rivals?.count, 2)
+    }
+
     func testPlaintextAfterRetirementCountsOnlyWhenTheLibraryVouchesForIt() async throws {
         let mac = try mac(), phone = try phone()
         let kept = try await pass(mac, "Mac", [Meeting(title: "Kept")]).meetings[0]

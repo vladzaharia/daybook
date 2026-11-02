@@ -30,19 +30,23 @@ extension SyncManifest {
         /// When the plaintext files from before were deleted. Nil until then.
         var legacyRetired: Date?
         var keys: [Key]
-        /// Libraries this one started over from (Start Over, LibrarySyncStartOver.swift): their key was lost, so their
-        /// files are deleted where they're found, and no device carries a checkpoint over from them. Nil for a library
-        /// that didn't start over.
+        /// Libraries this one replaced: ones it started over from (Start Over, LibrarySyncStartOver.swift), whose key was
+        /// lost, so their files are deleted where they're found, and rivals it won over (`rivals`). No device carries a
+        /// checkpoint over from them. Nil for a library that did neither.
         var replaces: [UUID]?
         /// Keys retired after a rotation (`retire`), and when: their files are gone, and once every device has moved
         /// on they're removed from iCloud Keychain (`removeRetiredKeys`). A file found sealed with one this device
         /// doesn't hold is left alone, neither read nor waited for, for a device that holds it to seal again. Additive:
         /// earlier versions ignore it.
         var retired: [RetiredKey]?
-        /// Of `replaces`, the libraries replaced because two devices started one at once (`resolveManifest`), not by
+        /// Of `replaces`, the libraries replaced because they met this one as rivals (`resolveManifest`), not by
         /// Start Over: their keys are known, so their files and keys go only once every device has moved on to this
         /// library's key, and an object only once what it holds is in this library. Additive.
         var rivals: [UUID]?
+
+        /// Whether this library started over from another (Start Over): it replaces one that wasn't a rival. One that only
+        /// won over rivals didn't, and may hold plaintext history from before it was encrypted.
+        var startedOver: Bool { !Set(replaces ?? []).subtracting(rivals ?? []).isEmpty }
 
         struct Key: Codable, Equatable {
             var id: String
@@ -164,8 +168,8 @@ struct SealingState {
     /// Every key this device holds for the library, by ID.
     var keys: [Data: LibraryKey]
     var current: LibraryKey
-    /// The library was encrypted from its start (a new library, one that started over, or a rival started at once), with no
-    /// plaintext library's journal merged into it: it never held plaintext history.
+    /// The library was encrypted from its start (a new library, or one that started over), with no plaintext library's
+    /// journal merged into it: it never held plaintext history. Winning over rivals says nothing about that.
     var startedEncrypted = false
 
     var keyring: SealedObject.Keyring { { [keys] in keys[$0] } }
@@ -300,7 +304,7 @@ extension LibrarySyncEngine {
         }
         if sealing?.current.id != current.id { sealingRuntime.verified = [] }
         sealing = SealingState(libraryID: manifest.libraryID, manifest: description, keys: held, current: current,
-                               startedEncrypted: manifest.supersedes == nil && (description.replaces != nil || manifest.created == description.sealedSince))
+                               startedEncrypted: manifest.supersedes == nil && (description.startedOver || manifest.created == description.sealedSince))
         waitingForKey = nil; waitingSealing = nil
     }
 

@@ -1112,12 +1112,13 @@ public actor LibrarySyncEngine {
 
     /// Where an encrypted library stands among rivals that met (`resolveManifest`), from the versions of its manifest:
     /// smaller goes first. A library encrypted after it began as plaintext holds history from before and comes before
-    /// every new one, the earliest encrypted first (`sealedSince`); new ones (started encrypted, or started over) by when
-    /// they started, by the clocks of the devices that started them. Ties fall to the smallest ID.
+    /// every new one, the earliest encrypted first (`sealedSince`), whatever rivals it won over before; new ones (started
+    /// encrypted, or started over) by when they started, by the clocks of the devices that started them. Ties fall to the
+    /// smallest ID.
     static func rivalOrder(_ versions: [SyncManifest]) -> (Int, Date) {
         let sealedSince = versions.compactMap { $0.sealing?.sealedSince }.min() ?? .distantPast
         if let created = versions.compactMap(\.created).min() { return (1, created) }
-        if versions.contains(where: { $0.sealing?.replaces != nil }) { return (1, sealedSince) }
+        if versions.contains(where: { $0.sealing?.startedOver == true }) { return (1, sealedSince) }
         return (0, sealedSince)
     }
 
