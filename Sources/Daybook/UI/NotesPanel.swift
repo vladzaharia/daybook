@@ -10,18 +10,8 @@ import SwiftUI
 // what's becoming of the recording; with nothing recording, a small home: status lines, Record and
 // Import, and recent conversations. The views live in `FloatingNotes/`.
 
-/// AppState's handle on the panel. There is one panel for the app, so every handle drives it.
-@MainActor
-final class NotesPanelController {
-    /// Shows the panel on `meetingID`, or on its home when nil.
-    func show(state: AppState, meetingID: UUID?) {
-        FloatingNotesWindow.shared.show(state: state, focus: meetingID)
-    }
-
-    func close() { FloatingNotesWindow.shared.close() }
-}
-
-/// The panel itself: made once, kept for the life of the app, hidden rather than closed.
+/// The panel itself: made once, kept for the life of the app, hidden rather than closed. There is one for the app;
+/// AppState shows it through `showNotes(for:)` and `showFloatingNotes(focus:)`.
 @MainActor
 final class FloatingNotesWindow {
     static let shared = FloatingNotesWindow()
