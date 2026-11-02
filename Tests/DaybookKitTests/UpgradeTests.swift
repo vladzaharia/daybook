@@ -315,6 +315,27 @@ final class UpgradeTests: XCTestCase {
         XCTAssertEqual(here.request(by: library.thisDevice).device, library.thisDevice)
     }
 
+    func testBehaviorCancellingAWaitingUpgradeBringsTheOfferBack() async throws {
+        let library = LibraryController(rootURL: makeTemporaryFolder("DaybookUpgradeCancel"), sync: nil)
+        try await library.load()
+        let meeting = conversation(transcription: ["parakeet/redux"], speakers: "sortformer-2.1/fp16", summary: "gemma-4/e2b-4bit")
+        library.add(meeting)
+        let offer = try XCTUnwrap(offer(meeting, macs: [mac()]))
+        let request = try XCTUnwrap(library.requestUpgrade(offer, in: meeting.id))
+        let waiting = try XCTUnwrap(library.meeting(meeting.id))
+        // The page says what it waits for, with Cancel where it was accepted.
+        let inputs = ConversationStatusPresentation.Inputs(words: .mac(id: library.thisDevice.id), local: .mac())
+        XCTAssertEqual(ConversationStatusPresentation.page(ProcessingStatus(waiting), meeting: waiting, inputs: inputs)?.actions,
+                       [.cancelRequest(request.id)])
+        // Studio Mac is gone: Cancel takes it back, and the offer returns.
+        let device = library.thisDevice
+        library.update(meeting.id) { $0.withdrawProcessingRequest(request.id, by: device, at: Date()) }
+        let cancelled = try XCTUnwrap(library.meeting(meeting.id))
+        XCTAssertEqual(ProcessingStatus(cancelled), .done)
+        XCTAssertEqual(self.offer(cancelled, status: ProcessingStatus(cancelled), macs: [mac()]), offer)
+        XCTAssertTrue(cancelled.revisions.isEmpty, "Nothing in Version History")
+    }
+
     func testBehaviorAniPhoneLeavesAnUpgradeItAskedOfAMacToTheMac() {
         let phone = ProcessingRequest.Device(id: "phone", name: "Vlad's iPhone")
         var meeting = conversation(transcription: ["parakeet/redux"])
