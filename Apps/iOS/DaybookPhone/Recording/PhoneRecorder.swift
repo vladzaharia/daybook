@@ -696,8 +696,8 @@ final class PhoneRecorder {
     private func startTicks() {
         stopTicks()
         ticks = [
-            Self.repeating(every: Self.levelInterval) { [weak self] in self?.updateLevels() },
-            Self.repeating(every: Self.journalInterval) { [weak self] in self?.persistJournal() },
+            Self.repeating(every: Self.levelInterval) { [weak self] in self?.updateLevels() != nil },
+            Self.repeating(every: Self.journalInterval) { [weak self] in self?.persistJournal() != nil },
         ]
     }
 
@@ -706,13 +706,12 @@ final class PhoneRecorder {
         ticks = []
     }
 
-    /// Runs `tick` every `interval` seconds until cancelled.
-    private static func repeating(every interval: TimeInterval, _ tick: @escaping @MainActor () -> Void) -> Task<Void, Never> {
+    /// Runs `tick` every `interval` seconds until cancelled, or until it says the recorder is gone.
+    private static func repeating(every interval: TimeInterval, _ tick: @escaping @MainActor () -> Bool) -> Task<Void, Never> {
         Task { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(interval))
-                guard !Task.isCancelled else { return }
-                tick()
+                guard !Task.isCancelled, tick() else { return }
             }
         }
     }
