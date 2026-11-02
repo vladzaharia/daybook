@@ -289,14 +289,8 @@ struct SettingsLink<Label: View>: View {
 
 // MARK: Rows
 
-// The rows every Settings screen uses (SettingsTile, SettingsRow, SettingsActionLabel, DevicePageHeader)
-// are DaybookUI's, shared with the Mac; these names keep the screens that use them as they were.
-typealias SettingsMetrics = DaybookUI.SettingsMetrics
-typealias SettingsTileWidth = DaybookUI.SettingsTileWidth
-typealias SettingsTile = DaybookUI.SettingsTile
-typealias SettingsRow = DaybookUI.SettingsRow
-typealias SettingsActionLabel = DaybookUI.SettingsActionLabel
-typealias DevicePageHeader = DaybookUI.DevicePageHeader
+// The rows every Settings screen uses (SettingsTile, SettingsRow, SettingsActionLabel, DevicePageHeader) are
+// DaybookUI's, shared with the Mac, by their own names.
 
 extension View {
     /// `--scroll-end` (debug): the screen scrolled to its foot (`SettingsScrollEndMarker`), for screenshots.
