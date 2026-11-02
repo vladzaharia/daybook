@@ -23,27 +23,14 @@ import UIKit
 @MainActor
 @Observable
 final class PhoneModels {
-    /// One model's state on this iPhone.
-    enum Status: Equatable {
-        case notDownloaded
-        /// Queued until Wi‑Fi (cellular downloads are off).
-        case waitingForWiFi
-        case downloading(Double)
-        case downloaded
-        /// The last download stopped, in the system's words.
-        case failed(String)
-        /// It can't run here: "Not available on iPhone", "Needs an iPhone with more memory".
-        case unavailable(String)
-
-        var isTransferring: Bool {
-            switch self {
-            case .waitingForWiFi, .downloading: return true
-            default: return false
-            }
-        }
-    }
+    /// One model's state on this iPhone, in the words both apps use (DaybookKit's `ModelStatus`): not downloaded, waiting
+    /// for Wi‑Fi, downloading, downloaded, failed in the system's words, or unavailable here ("Needs an iPhone with more
+    /// memory").
+    typealias Status = ModelStatus
 
     let store: ModelStore
+    /// The store's folder.
+    let root: URL
     let catalog: ModelCatalog
     /// The processing engines (DaybookIntelligence): what the processing models need to run here.
     let registry: ModelEngineRegistry
@@ -71,6 +58,10 @@ final class PhoneModels {
     private(set) var progress: [String: Double] = [:]
     private(set) var waiting: Set<String> = []
     private(set) var failures: [String: String] = [:]
+    /// What's free where the models go, as of the last refresh: a download that wouldn't fit says so and waits.
+    private(set) var space = ModelSpace.unknown
+    /// Reads what's free at a folder; replaced in tests.
+    @ObservationIgnored var readSpace: (URL) -> ModelSpace = ModelSpace.available(at:)
     /// Downloads may use cellular data. Off by default: the models are hundreds of megabytes.
     var allowsCellular: Bool {
         didSet {
@@ -82,8 +73,9 @@ final class PhoneModels {
 
     /// The app's model downloads: background sessions, so a download goes on while the app is
     /// suspended or after iOS ends it (`BackgroundModelFetcher`). One per process: iOS hands a relaunched
-    /// app its sessions' events through it (`PhoneAppDelegate`).
-    static let downloads = BackgroundModelFetcher()
+    /// app its sessions' events through it (`PhoneAppDelegate`). Nonisolated, so it can be a default argument and the
+    /// app delegate can reach it from anywhere; the fetcher keeps its own state safe.
+    nonisolated static let downloads = BackgroundModelFetcher()
 
     /// Models were downloaded, removed, or chosen: what this iPhone can process may have changed.
     @ObservationIgnored var changed: (() -> Void)?
@@ -121,6 +113,7 @@ final class PhoneModels {
         try? folder.setResourceValues(values)
         let store = ModelStore(root: root)
         self.store = store
+        self.root = root
         self.catalog = catalog
         registry = .standard
         runtime = LocalIntelligenceRuntime(modelsDirectory: root, store: store)
@@ -230,12 +223,97 @@ final class PhoneModels {
         }
     }
 
-    /// What the chosen live models take on disk.
+    /// What the downloaded models take on disk (Settings › Models' Model Library, and Storage).
     var bytesOnDisk: Int64 { inventory.revisions.reduce(0) { $0 + $1.bytes } }
+
+    // MARK: Settings › Models
+
+    /// The roles whose models transcribing here needs; the summary model is downloaded on its own: it's gigabytes.
+    static let transcribingRoles: [ModelRole] = [.transcription, .diarization, .speakerEmbedding]
+
+    /// `role`'s choice as the shared role row draws it (DaybookUI's `ModelRoleRow`): the chosen model, the models it
+    /// could be with their state, and the chosen one's. Nil when no model can serve it here (a summary model that
+    /// doesn't fit in the memory iOS gives Daybook).
+    func roleChoice(for role: ModelRole) -> ModelRoleChoice? {
+        guard let chosen = choice(for: role) else { return nil }
+        var available: [ModelOption] = [], unavailable: [ModelOption] = []
+        for model in options(for: role) {
+            let status = status(of: model)
+            let option = ModelOption(key: model.key, name: model.name, detail: ModelOption.detail(for: model, status: status),
+                                     isEnabled: status.isAvailable)
+            if status.isAvailable || model.key == chosen.key { available.append(option) } else { unavailable.append(option) }
+        }
+        if !(available + unavailable).contains(where: { $0.key == chosen.key }) {
+            available.insert(ModelOption(key: chosen.key, name: chosen.name, detail: ModelOption.detail(for: chosen, status: status(of: chosen)),
+                                         isEnabled: true), at: 0)
+        }
+        return ModelRoleChoice(role: role, selection: chosen.key, options: available + unavailable, selectedModel: chosen,
+                               status: status(of: chosen))
+    }
+
+    /// What transcribing here still needs downloaded, or how far it's got (Settings › Models' Processing).
+    var processingDownload: ModelDownloadSummary? { downloadSummary(for: Self.transcribingRoles) }
+
+    /// The same for live captions' models.
+    var liveDownload: ModelDownloadSummary? { downloadSummary(for: roles) }
+
+    /// What `roles`' chosen models still need: what to download (the names when some are here already), or, once all of
+    /// it is on its way, how much has arrived. Nil when everything that can run here is downloaded.
+    func downloadSummary(for roles: [ModelRole]) -> ModelDownloadSummary? {
+        var seen = Set<String>()
+        let chosen = roles.compactMap(choice(for:)).filter { seen.insert($0.key).inserted && status(of: $0).isAvailable }
+        let missing = missing(in: roles)
+        if !missing.isEmpty {
+            return .missing(names: missing.map(\.name), bytes: missing.reduce(0) { $0 + $1.approximateBytes }, partly: missing.count < chosen.count)
+        }
+        guard chosen.contains(where: { status(of: $0).isTransferring }) else { return nil }
+        let total = chosen.reduce(Int64(0)) { $0 + $1.approximateBytes }
+        let done = chosen.reduce(Int64(0)) { sum, model in
+            switch status(of: model) {
+            case .downloaded: return sum + model.approximateBytes
+            case .downloading(let fraction): return sum + Int64(Double(model.approximateBytes) * min(max(fraction, 0), 1))
+            default: return sum
+            }
+        }
+        return .downloading(done: done, total: total)
+    }
+
+    /// Downloads what `roles`' choices still need, when there's room for all of it.
+    func downloadMissing(in roles: [ModelRole]) {
+        let missing = missing(in: roles)
+        guard space.fits(missing.reduce(0) { $0 + $1.approximateBytes }) else { return }
+        for model in missing { download(model) }
+    }
+
+    /// Downloads `model` from its row, when there's room for it.
+    func downloadIfItFits(_ model: CatalogModel) {
+        guard space.fits(model.approximateBytes) else { return }
+        download(model)
+    }
+
+    /// Cancels every download and wait for `roles`' choices.
+    func cancelDownloads(in roles: [ModelRole]) {
+        for model in roles.compactMap(choice(for:)) where status(of: model).isTransferring { cancel(model) }
+    }
+
+    /// The models on this iPhone, in catalog order, for the library's list.
+    var downloadedModels: [CatalogModel] {
+        catalog.models.filter { inventory.resolve($0.key) != nil }
+    }
+
+    /// Removing `model`, in the words both apps use: what it frees, and that each role using it waits for it to be
+    /// downloaded again (this iPhone keeps a role's choice rather than switching it).
+    func removal(of model: CatalogModel) -> (title: String, message: String) {
+        var roles: [ModelRole] = []
+        for role in processingRoles + self.roles where !roles.contains(role) && choice(for: role)?.key == model.key { roles.append(role) }
+        let bytes = inventory.revisions(of: model.key).reduce(Int64(0)) { $0 + $1.bytes }
+        return (ModelRemovalWords.title(model.name),
+                ModelRemovalWords.message(frees: bytes > 0 ? bytes : model.approximateBytes, changes: roles.map { .waits($0) }))
+    }
 
     // MARK: Downloads
 
-    func downloadMissing() { for model in missing { download(model) } }
+    func downloadMissing() { downloadMissing(in: roles) }
 
     /// Downloads `model` (its newest revision), now on Wi‑Fi or when cellular is allowed, else when
     /// Wi‑Fi returns. Interrupted downloads resume with the files they hadn't finished.
@@ -315,12 +393,16 @@ final class PhoneModels {
 
     func refresh() async {
         inventory = await store.inventory()
+        space = readSpace(root)
         resolve()
         changed?()
     }
 
     private func finished(_ key: String, error: Error?) async {
         tasks[key] = nil
+        // What's installed is read before the progress goes, so a row goes straight from its bar to Downloaded (and its
+        // checkmark), never Not downloaded in between.
+        if error == nil { inventory = await store.inventory() }
         progress[key] = nil
         if let error {
             if error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled {

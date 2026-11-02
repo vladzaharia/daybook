@@ -124,15 +124,15 @@ final class PhoneModelsTests: XCTestCase {
         XCTAssertEqual(models.status(of: speakers), .waitingForWiFi)
         XCTAssertTrue(fetcher.requests.isEmpty, "nothing fetched over cellular")
         scripted.set(.unrestricted)
-        try await waitUntil { !fetcher.requests.isEmpty }
-        try await waitUntil { if case .failed = models.status(of: speakers) { return true } else { return false } }
+        try await waitUntil("a fetch") { !fetcher.requests.isEmpty }
+        try await waitUntil("the failure") { if case .failed = models.status(of: speakers) { return true } else { return false } }
         XCTAssertEqual(models.status(of: speakers), .failed("The Internet connection appears to be offline."))
 
         let voices = try XCTUnwrap(models.choice(for: .speakerEmbedding))
         scripted.set(.restricted)
         models.allowsCellular = true
         models.download(voices)
-        try await waitUntil { fetcher.requests.count >= 2 }
+        try await waitUntil("a second fetch") { fetcher.requests.count >= 2 }
     }
 
     func testADownloadEndsItsBackgroundTimeOnceItStops() async throws {
@@ -142,7 +142,7 @@ final class PhoneModelsTests: XCTestCase {
         let speakers = try XCTUnwrap(models.choice(for: .liveDiarization))
         models.download(speakers)
         XCTAssertEqual(time.begun, ["Daybook model download"])
-        try await waitUntil { if case .failed = models.status(of: speakers) { return true } else { return false } }
+        try await waitUntil("the failure") { if case .failed = models.status(of: speakers) { return true } else { return false } }
         XCTAssertEqual(time.ended, [1])
     }
 
@@ -152,12 +152,12 @@ final class PhoneModelsTests: XCTestCase {
         let models = makeModels(network: scripted.network, fetcher: fetcher, backgroundTime: time)
         let speakers = try XCTUnwrap(models.choice(for: .liveDiarization))
         models.download(speakers)
-        try await waitUntil { fetcher.isHolding }
+        try await waitUntil("the fetch held") { fetcher.isHolding }
         time.expire()
         XCTAssertEqual(time.ended, [1], "held past its time, iOS would end the app instead of suspending it")
         XCTAssertTrue(models.status(of: speakers).isTransferring, "the download carries on")
         fetcher.release()
-        try await waitUntil { if case .failed = models.status(of: speakers) { return true } else { return false } }
+        try await waitUntil("the failure") { if case .failed = models.status(of: speakers) { return true } else { return false } }
         XCTAssertEqual(time.ended, [1])
     }
 
@@ -173,9 +173,9 @@ final class PhoneModelsTests: XCTestCase {
         defaults.set(["nemotron-3-diarization/live"], forKey: PhoneModels.Keys.downloading)
         let models = PhoneModels(root: root, defaults: defaults, fetcher: fetcher, network: scripted.network,
                                  physicalMemory: 12 * 1_073_741_824)
-        try await waitUntil { !fetcher.requests.isEmpty }
+        try await waitUntil("a fetch") { !fetcher.requests.isEmpty }
         XCTAssertEqual(fetcher.requests, ["FluidInference/nemotron-3-diarization-coreml"], "picked up again at launch")
-        try await waitUntil { (defaults.stringArray(forKey: PhoneModels.Keys.downloading) ?? []).isEmpty }
+        try await waitUntil("nothing left to carry over") { (defaults.stringArray(forKey: PhoneModels.Keys.downloading) ?? []).isEmpty }
         let speakers = try XCTUnwrap(models.choice(for: .liveDiarization))
         XCTAssertEqual(models.status(of: speakers), .failed("The Internet connection appears to be offline."),
                        "a download that failed is shown, and not started again at the next launch")
@@ -201,11 +201,68 @@ final class PhoneModelsTests: XCTestCase {
         XCTAssertTrue(models.installedSet(for: Locale(identifier: "en_US")).isEmpty)
     }
 
-    private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { return XCTFail("timed out") }
-            try await Task.sleep(for: .milliseconds(20))
-        }
+    // MARK: Settings › Models
+
+    /// A role's row reads the same as on the Mac: the model as the menu's choice, the others with their state, and the
+    /// chosen one's line only while it isn't ready ("Not downloaded · 588 MB", one size format on both apps).
+    func testBehaviorARolesChoiceIsWordedAsOnTheMac() throws {
+        let models = makeModels(network: ScriptedNetwork().network)
+        let choice = try XCTUnwrap(models.roleChoice(for: .liveTranscription))
+        let recognizer = try XCTUnwrap(models.choice(for: .liveTranscription))
+        XCTAssertEqual(choice.selection, recognizer.key)
+        XCTAssertEqual(choice.selectionName, recognizer.name)
+        XCTAssertEqual(choice.status, .notDownloaded)
+        XCTAssertEqual(choice.line()?.text, "Not downloaded · \(ByteSize.format(recognizer.approximateBytes))")
+        XCTAssertFalse(choice.line()?.text.contains(".") ?? true, "whole megabytes under a gigabyte, as the Mac writes them")
+        XCTAssertTrue(choice.options.count >= 2, "the other recognizers, to choose from the name")
+        XCTAssertEqual(choice.options.first { $0.key == recognizer.key }?.detail, ByteSize.format(recognizer.approximateBytes))
+        XCTAssertEqual(ModelsSettingsScreen.title(.speakerEmbedding), "Voice Profiles")
+        XCTAssertEqual(ModelsSettingsScreen.size(632_200_000), "632 MB")
+    }
+
+    /// One Download for what transcribing here needs: all of it, then what's left by name once some is here, then
+    /// nothing; Cancel takes back every one.
+    func testBehaviorProcessingsDownloadSaysWhatsLeft() async throws {
+        let scripted = ScriptedNetwork(), fetcher = HeldFetcher()
+        let models = makeModels(network: scripted.network, fetcher: fetcher)
+        guard case .missing(let names, let bytes, let partly)? = models.processingDownload else { return XCTFail("everything is missing") }
+        XCTAssertFalse(partly)
+        XCTAssertEqual(names.count, 3, "transcription, speakers, and voice profiles")
+        XCTAssertEqual(bytes, models.processingMissingBytes)
+        models.downloadMissing(in: PhoneModels.transcribingRoles)
+        XCTAssertEqual(models.processingDownload, .downloading(done: 0, total: bytes), "all of it waiting for Wi‑Fi")
+        models.cancelDownloads(in: PhoneModels.transcribingRoles)
+        XCTAssertEqual(models.processingDownload, .missing(names: names, bytes: bytes, partly: false))
+    }
+
+    /// A download that wouldn't fit says how much it needs, and waits.
+    func testBehaviorADownloadThatWouldntFitWaits() async throws {
+        let scripted = ScriptedNetwork(), fetcher = RecordingFetcher()
+        scripted.set(.unrestricted)
+        let models = makeModels(network: scripted.network, fetcher: fetcher)
+        models.readSpace = { _ in ModelSpace(free: 100_000_000) }
+        await models.refresh()
+        let choice = try XCTUnwrap(models.roleChoice(for: .liveDiarization))
+        XCTAssertEqual(choice.line(space: models.space), ModelLine("Needs \(ByteSize.format(choice.downloadBytes)) · 100 MB free", needsAttention: true))
+        XCTAssertFalse(choice.canDownload(space: models.space))
+        let speakers = try XCTUnwrap(choice.selectedModel)
+        models.downloadIfItFits(speakers)
+        models.downloadMissing(in: models.roles)
+        XCTAssertEqual(models.status(of: speakers), .notDownloaded)
+        XCTAssertTrue(fetcher.requests.isEmpty, "nothing fetched that wouldn't fit")
+        XCTAssertEqual(models.liveDownload?.line(space: models.space).needsAttention, true, "Download All says so too")
+    }
+
+    /// Removing a model says what it frees and what each role using it does, in the Mac's sentence.
+    func testBehaviorRemovingSaysWhatItFreesAndWhatWaits() throws {
+        let models = makeModels(network: ScriptedNetwork().network)
+        let voices = try XCTUnwrap(models.choice(for: .speakerEmbedding))
+        let removal = models.removal(of: voices)
+        XCTAssertEqual(removal.title, "Remove \(voices.name)?")
+        XCTAssertEqual(removal.message, "Frees \(ByteSize.format(voices.approximateBytes)). Voice profiles will wait until you download it again.",
+                       "voice profiles serve both processing and live captions, and are named once")
+        let multilingual = try XCTUnwrap(models.options(for: .liveTranscription).first { $0.key != models.choice(for: .liveTranscription)?.key })
+        XCTAssertEqual(models.removal(of: multilingual).message,
+                       "Frees \(ByteSize.format(multilingual.approximateBytes)). You can download it again at any time.")
     }
 }
