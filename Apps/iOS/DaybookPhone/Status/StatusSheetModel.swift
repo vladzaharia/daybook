@@ -24,6 +24,8 @@ enum StatusDetent: String, CaseIterable, Sendable {
 /// show more.
 enum StatusLineRoute: Equatable {
     case showMore
+    /// More of the sheet, at the group that says what to do (the Macs card, for a Mac).
+    case showFix(StatusSection)
     case open(SettingsRoute)
 }
 
@@ -374,17 +376,13 @@ enum StatusSheetModel {
     }
 
     /// Where a line leads when it's tapped. A line that needs the person goes to where it's fixed: iCloud's to
-    /// Settings › iCloud, a recorder's to its page, a paired Mac that isn't set up to its page; the Macs card says
-    /// what to do for a Mac that isn't paired here. Every other line shows more of the sheet.
+    /// Settings › iCloud, a recorder's to its page, a Mac's to the Macs card, which says what to do for a Mac
+    /// that isn't set up to transcribe (paired here or not) and lists what it couldn't finish. Every other line
+    /// shows more of the sheet.
     static func route(for line: StatusLineItem, _ inputs: StatusInputs) -> StatusLineRoute {
         guard line.tone == .attention else { return .showMore }
         if line.id == syncID { return .open(.icloud) }
-        if line.id == macID {
-            if case .notProcessing(let name, _) = inputs.mac, let mac = inputs.pairedMacs.first(where: { $0.name == name }) {
-                return .open(.mac(mac.id))
-            }
-            return .showMore
-        }
+        if line.id == macID { return .showFix(.macs) }
         if line.id.hasPrefix("recorder-") { return .open(.device(String(line.id.dropFirst("recorder-".count)))) }
         return .showMore
     }
@@ -394,7 +392,7 @@ enum StatusSheetModel {
         switch route {
         case .showMore: return "Shows more"
         case .open(.icloud): return "Opens iCloud settings"
-        case .open: return "Shows how to fix it"
+        case .showFix, .open: return "Shows how to fix it"
         }
     }
 

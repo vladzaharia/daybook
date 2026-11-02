@@ -37,8 +37,8 @@ extension PresentationDetent {
 
 /// Tall enough for the Record row and the lines at the person's text size, measured from the fonts they
 /// use, so nothing is cut off. At the accessibility sizes compact holds the Record row and one line, its
-/// words under its title (`StatusSheetModel.compactLines`), so the list above stays usable; the rest are a
-/// tap away. At most about half the screen.
+/// title and its words each on up to two lines (`StatusSheetModel.compactLines`), so the list above stays
+/// usable; the rest are a tap away. At most 55% of the screen; past that, the line scrolls.
 struct StatusCompactDetent: CustomPresentationDetent {
     /// Room above Record, so the sheet's grabber sits clearly above it.
     static let recordTop: CGFloat = 26
@@ -60,11 +60,12 @@ struct StatusCompactDetent: CustomPresentationDetent {
     }
 
     /// The lines' height at a text size: one row each, or at the accessibility sizes one line with its title
-    /// over two lines of words; the room between them, and a progress line's under the last.
+    /// and its words each on up to two lines (`StatusLineView`, stacked); the room between them, and a
+    /// progress line's under the last.
     static func linesHeight(for size: DynamicTypeSize, lines: Int = lineCount) -> CGFloat {
         let line = lineHeight(.subheadline, at: size)
         if size.isAccessibilitySize {
-            return (1 + CGFloat(StatusMetrics.stackedLineLimit)) * line + 2 + 6
+            return 2 * CGFloat(StatusMetrics.stackedLineLimit) * line + 2 + 6
         }
         return CGFloat(lines) * line + CGFloat(max(0, lines - 1)) * PhoneStyle.Space.s2 + 6
     }
@@ -368,6 +369,8 @@ private struct StatusSections: View {
     @Environment(ReadingSession.self) private var session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// The group a tapped line's fix is in, until the sheet has scrolled to it.
+    @State private var fix: StatusSection?
 
     var body: some View {
         let inputs = StatusSheetInputs.make(model, library: library, hostsRecordButton: hostsRecordButton)
@@ -379,38 +382,69 @@ private struct StatusSections: View {
                     .padding(.top, StatusCompactDetent.recordTop)
                     .padding(.bottom, StatusCompactDetent.recordGap)
             }
-            ScrollView {
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    let lines = StatusSheetModel.lines(inputs, now: context.date)
-                    StatusOverview(lines: detent == .compact
-                                       ? StatusSheetModel.compactLines(lines, accessibilitySize: typeSize.isAccessibilitySize) : lines,
-                                   density: detent.density,
-                                   hint: { StatusSheetModel.hint(for: StatusSheetModel.route(for: $0, inputs)) },
-                                   choose: { choose($0, inputs: inputs) }) {
-                        ForEach(sections.filter { $0 != .quickActions && $0 != .lines }, id: \.self) { section in
-                            view(for: section, inputs: inputs, now: context.date)
-                                .transition(.opacity)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        let lines = StatusSheetModel.lines(inputs, now: context.date)
+                        StatusOverview(lines: detent == .compact
+                                           ? StatusSheetModel.compactLines(lines, accessibilitySize: typeSize.isAccessibilitySize) : lines,
+                                       density: detent.density,
+                                       hint: { StatusSheetModel.hint(for: StatusSheetModel.route(for: $0, inputs)) },
+                                       choose: { choose($0, inputs: inputs) }) {
+                            ForEach(sections.filter { $0 != .quickActions && $0 != .lines }, id: \.self) { section in
+                                view(for: section, inputs: inputs, now: context.date)
+                                    .id(section)
+                                    .transition(.opacity)
+                            }
                         }
+                        .padding(.horizontal, PhoneStyle.Space.s4)
+                        .padding(.top, hostsRecordButton ? 0 : PhoneStyle.Space.s1)
+                        .padding(.bottom, PhoneStyle.Space.s4)
                     }
-                    .padding(.horizontal, PhoneStyle.Space.s4)
-                    .padding(.top, hostsRecordButton ? 0 : PhoneStyle.Space.s1)
-                    .padding(.bottom, PhoneStyle.Space.s4)
+                }
+                // Compact holds its lines whole; at the accessibility sizes, where the 55% cap can leave a long
+                // line less room than it takes, the line scrolls rather than running under the home indicator.
+                .scrollDisabled(detent == .compact && !typeSize.isAccessibilitySize)
+                .scrollBounceBehavior(.basedOnSize)
+                // `--status-scroll-end`: the foot of the content, for screenshots.
+                .defaultScrollAnchor(model.options.statusScrollEnd ? .bottom : nil)
+                .onChange(of: fix.map(sections.contains) ?? false) { _, shown in
+                    if shown { reveal(in: proxy) }
                 }
             }
-            .scrollDisabled(detent == .compact)
-            .scrollBounceBehavior(.basedOnSize)
-            // `--status-scroll-end`: the foot of the content, for screenshots.
-            .defaultScrollAnchor(model.options.statusScrollEnd ? .bottom : nil)
         }
         .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: sections)
         .animation(reduceMotion ? nil : PhoneStyle.Motion.state, value: detent)
+        .task { await chooseRequestedLine() }
+    }
+
+    /// `--status-choose mac|sync|recorder` (debug): that compact line, tapped, for screenshots of where it leads.
+    private func chooseRequestedLine() async {
+        guard let id = model.options.statusChoose, detent == .compact else { return }
+        try? await Task.sleep(for: .milliseconds(1_500))
+        let inputs = StatusSheetInputs.make(model, library: library, hostsRecordButton: hostsRecordButton)
+        guard let line = StatusSheetModel.lines(inputs).first(where: { $0.id == id || $0.id.hasPrefix(id + "-") }) else { return }
+        choose(line, inputs: inputs)
     }
 
     /// A line leads to its fix when it needs the person, else to more of the sheet.
     private func choose(_ line: StatusLineItem, inputs: StatusInputs) {
         switch StatusSheetModel.route(for: line, inputs) {
         case .showMore: if detent == .compact { detent = .medium }
+        case .showFix(let section):
+            if detent == .compact { detent = .medium }
+            fix = section
         case .open(let route): open(route)
+        }
+    }
+
+    /// Scrolls the group with the fix to the top, once the sheet has stepped up and the group has laid out.
+    private func reveal(in proxy: ScrollViewProxy) {
+        guard let section = fix else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            withAnimation(reduceMotion ? nil : PhoneStyle.Motion.state) { proxy.scrollTo(section, anchor: .top) }
+            fix = nil
         }
     }
 

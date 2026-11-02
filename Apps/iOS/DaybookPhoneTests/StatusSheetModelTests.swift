@@ -471,7 +471,7 @@ final class StatusSheetModelTests: XCTestCase {
     }
 
     func testCompactDetentGrowsWithTextSize() {
-        // Up to the accessibility sizes, three lines one row each; past them, one line over three rows.
+        // Up to the accessibility sizes, three lines one row each; past them, one line over four rows.
         for sizes in [DynamicTypeSize.allCases.filter { !$0.isAccessibilitySize }, DynamicTypeSize.allCases.filter(\.isAccessibilitySize)] {
             var previous: CGFloat = 0
             for size in sizes {
@@ -483,12 +483,32 @@ final class StatusSheetModelTests: XCTestCase {
         // Record (68 pt with the glass) under the grabber's room, then three lines.
         XCTAssertGreaterThanOrEqual(StatusCompactDetent.height(for: .large, maximum: 800), StatusCompactDetent.recordTop + 68 + 16 + 3 * 18 + 16)
         XCTAssertLessThanOrEqual(StatusCompactDetent.height(for: .xxxLarge, maximum: 678), 678 * 0.55, "about half the screen")
-        // At the largest size, the Record row and one line leave the list more than half the Duo's cover (it was 70%).
-        XCTAssertLessThanOrEqual(StatusCompactDetent.height(for: .accessibility5, maximum: 678), 678 * 0.5)
+        // At the largest size, the Record row and one line take at most 55% of the Duo's cover (it was 70%).
+        XCTAssertLessThanOrEqual(StatusCompactDetent.height(for: .accessibility5, maximum: 678), 678 * 0.55)
         // This iPhone's line, while it has work, takes a row more.
         XCTAssertGreaterThan(StatusCompactDetent.height(for: .large, maximum: 800, lines: 4), StatusCompactDetent.height(for: .large, maximum: 800))
         XCTAssertEqual(StatusCompactDetent.height(for: .accessibility3, maximum: 800, lines: 4),
                        StatusCompactDetent.height(for: .accessibility3, maximum: 800), "one line at the accessibility sizes, whatever there is")
+    }
+
+    /// ui-iphone-02, hig-ios-05: at the accessibility sizes a line's title wraps as its words do ("Vlad’s / MacBook Pro"
+    /// over "Last seen / today, 2:29 AM"), so compact makes room for both on two lines each and the progress line,
+    /// on the iPhone's sheet and the Duo's panel alike, short of the cap.
+    func testCompactDetentHoldsAWrappedTitleAndItsWordsAtTheAccessibilitySizes() {
+        for size in DynamicTypeSize.allCases.filter(\.isAccessibilitySize) {
+            let line = StatusCompactDetent.lineHeight(.subheadline, at: size)
+            let rows = 2 * CGFloat(StatusMetrics.stackedLineLimit)
+            XCTAssertEqual(rows, 4, "a title and its words, two lines each")
+            let lines = StatusCompactDetent.linesHeight(for: size)
+            // The title's two lines, 2 pt, the words' two lines, then 4 pt and the 2 pt progress line.
+            XCTAssertGreaterThanOrEqual(lines, rows * line + 2 + 4 + 2, "\(size)")
+            let record = max(60, StatusCompactDetent.lineHeight(.title3, at: min(size, StatusCompactDetent.recordLargestSize)) + 8) + 8
+            XCTAssertGreaterThanOrEqual(StatusCompactDetent.height(for: size, maximum: 2_000),
+                                        StatusCompactDetent.recordTop + record + StatusCompactDetent.recordGap + lines + 16, "\(size)")
+        }
+        // Even at the largest size, an iPhone 18 Pro's sheet holds it uncapped.
+        let largest = StatusCompactDetent.height(for: .accessibility5, maximum: 2_000)
+        XCTAssertEqual(StatusCompactDetent.height(for: .accessibility5, maximum: 800), largest)
     }
 
     // MARK: This iPhone's own work
@@ -580,20 +600,29 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(StatusSheetModel.unavailablePhrase(CloudAvailability.iCloudDriveOffMessage), "iCloud Drive is off")
         XCTAssertEqual(StatusSheetModel.unavailablePhrase(CloudAvailability.unsetMessage), "Not available in this build")
 
-        // A paired Mac that isn't set up to transcribe: its page. Not paired here: the Macs card says what to do.
+        // A Mac that isn't set up to transcribe, paired here or not: the Macs card, where its row says what to do (the
+        // Mac's own page says only "Transcribes: Not set up").
         let studio = UUID()
         inputs.mac = .notProcessing(name: "Studio Mac", lastSeen: now)
         inputs.pairedMacs = [StatusInputs.Mac(id: studio, name: "Studio Mac", line: "Connected", isConnected: true, notProcessing: true)]
         let mac = StatusSheetModel.macLine(inputs, now: now)
         XCTAssertEqual(mac.tone, .attention)
-        XCTAssertEqual(StatusSheetModel.route(for: mac, inputs), .open(.mac(studio)))
+        XCTAssertEqual(StatusSheetModel.route(for: mac, inputs), .showFix(.macs))
+        XCTAssertEqual(StatusSheetModel.hint(for: .showFix(.macs)), "Shows how to fix it")
+        XCTAssertTrue(StatusSheetModel.sections(for: .medium, inputs).contains(.macs), "the step up to medium shows the card")
         let row = StatusSheetModel.macRows(inputs, now: now).first
         XCTAssertEqual(row?.text, "Not set up to transcribe", "not \"Connected\"")
         XCTAssertEqual(row?.fix, "Finish in Daybook › Settings on Studio Mac.")
         XCTAssertTrue(row?.needsYou == true)
         inputs.pairedMacs = []
-        XCTAssertEqual(StatusSheetModel.route(for: mac, inputs), .showMore)
+        XCTAssertEqual(StatusSheetModel.route(for: mac, inputs), .showFix(.macs))
         XCTAssertEqual(StatusSheetModel.macRows(inputs, now: now).first?.fix, "Finish in Daybook › Settings on Studio Mac.")
+        // What a Mac couldn’t finish: the Macs card too, where its queue row says what happened.
+        var failing = inputs
+        failing.liveProgress = [LiveProgress(LinkProcessingProgress(meetingID: UUID(), phase: .failed, macName: "Studio Mac"))]
+        let failed = StatusSheetModel.macLine(failing, now: now)
+        XCTAssertEqual(failed.text, "Couldn’t finish")
+        XCTAssertEqual(StatusSheetModel.route(for: failed, failing), .showFix(.macs))
 
         // A recorder's problem: its page.
         let problem = line(recorder { $0.state = .unavailable; $0.isLinked = false; $0.problem = "Bluetooth is off" })

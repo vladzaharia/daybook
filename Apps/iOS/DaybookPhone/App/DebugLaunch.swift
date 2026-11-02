@@ -16,8 +16,8 @@ import SwiftUI
 ///     --demo-captions            scripted live captions while recording (no speech recognition)
 ///     --demo-recorder-only <name>  only that recorder records a shared recording; this iPhone's microphone didn't start
 ///                                (use with --synthetic-audio; nothing is recorded)
-///     --interface-orientation portrait|landscape|preview-portrait   turn the interface in table mode (the simulator can't
-///                                turn the device)
+///     --interface-orientation portrait|landscape|preview-portrait   turn the interface in table mode, and the library
+///                                (the simulator can't turn the device)
 ///     --write-notes              table mode opens with Write Notes on (notes on the standing half, the keyboard below)
 ///     --caption-probe [file]     log what live captions can do here (and, if ready, caption the file); never downloads
 ///     --device-simulator         Soundcore runs against DaybookDevices' simulated recorder
@@ -66,7 +66,9 @@ import SwiftUI
 ///                                merge's confirmation
 ///     --status-detent compact|medium|large   open the status sheet (or the notebook's status panel) at this size
 ///     --status-scroll-end        the status sheet's content scrolled to its foot
-///     --status-open device|mac|storage|add-recorder   the status sheet at full height, showing that screen
+///     --status-open device|mac|storage|icloud|add-recorder   the status sheet at full height, showing that screen
+///     --status-demo phone-working|phone-paused   this iPhone's own work in the status sheet (see `StatusSheetDemo`)
+///     --status-choose mac|sync|recorder   tap that line of the compact status sheet, for screenshots of where it leads
 ///
 /// The device:
 ///
@@ -172,7 +174,7 @@ struct DebugLaunch {
 
     /// `--status-open <screen>`: the status sheet at full height, showing that screen.
     enum StatusPage: String, Equatable, Sendable {
-        case device, mac, storage
+        case device, mac, storage, icloud
         case addRecorder = "add-recorder"
     }
 
@@ -196,6 +198,8 @@ struct DebugLaunch {
     var openSettings: String? { settingsPage?.argument }
     /// `statusOpen` as a string, likewise.
     var statusOpen: String? { statusPage?.rawValue }
+    /// `--status-choose mac|sync|recorder`: the compact status sheet's line to tap.
+    var statusChoose: String?
 
     init(arguments: [String] = CommandLine.arguments, environment: [String: String] = ProcessInfo.processInfo.environment) {
         isRunningTests = Self.hostsTests(environment)
@@ -229,6 +233,7 @@ struct DebugLaunch {
         statusDetent = value("--status-detent").flatMap(StatusDetent.init(rawValue:))
         statusScrollEnd = has("--status-scroll-end")
         statusPage = value("--status-open").flatMap(StatusPage.init(rawValue:))
+        statusChoose = value("--status-choose")
         scrollEnd = has("--scroll-end")
         handoffDemo = value("--handoff-demo").flatMap(HandoffDemo.init(rawValue:))
         demoLiveCaptions = has("--demo-live-captions")
