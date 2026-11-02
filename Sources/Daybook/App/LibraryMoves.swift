@@ -215,14 +215,45 @@ struct MovedLibrary: Equatable {
 }
 
 /// Opens a new instance of the app and quits this one: after a library move, everything starts over with the library
-/// where it now is.
+/// where it now is. The new copy is told this one's process ID (`SingleInstance.relaunchFlag`), so it waits for this
+/// one to quit rather than giving way to it.
 enum AppRelaunch {
+    /// What this copy does once the new one's launch is answered.
+    enum Outcome: Equatable {
+        /// The new copy is starting: this one quits.
+        case quit
+        /// The new copy couldn't open: this one stays until the person quits it and opens Daybook again.
+        case askToReopen
+    }
+
+    static func outcome(launchError: Error?) -> Outcome { launchError == nil ? .quit : .askToReopen }
+
+    /// The arguments the new copy opens with.
+    static func arguments(relaunchingFrom pid: pid_t) -> [String] { [SingleInstance.relaunchFlag, String(pid)] }
+
     @MainActor static func relaunch() {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         configuration.activates = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, _ in
-            DispatchQueue.main.async { NSApp.terminate(nil) }
+        configuration.arguments = arguments(relaunchingFrom: getpid())
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            Task { @MainActor in
+                switch outcome(launchError: error) {
+                case .quit: NSApp.terminate(nil)
+                case .askToReopen: askToReopen()
+                }
+            }
         }
+    }
+
+    /// The library is in its new place, but the new copy didn't open: the person opens Daybook again.
+    @MainActor private static func askToReopen() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Couldn’t Reopen Daybook"
+        alert.informativeText = "Your library is in its new place. Quit Daybook and open it again."
+        alert.addButton(withTitle: "Quit Daybook")
+        alert.runModal()
+        NSApp.terminate(nil)
     }
 }

@@ -36,8 +36,9 @@ enum DaybookEntry {
         }
         if let name = LaunchOptions.deviceName { ProcessingRequest.Device.currentName = name }
         #endif
-        // Before anything opens the library, syncs, or listens: one copy at a time.
-        SingleInstance.ensureOnlyCopy()
+        // Before anything opens the library, syncs, or listens: one copy at a time. A copy opened to start over after a
+        // library move waits for the one that opened it to quit.
+        await SingleInstance.ensureOnlyCopy()
         // Before anything reads a setting: the earlier bundle ID's preferences, once (docs/sandbox.md, "One bundle ID").
         PreferencesCarryOver.atLaunch()
         DaybookApp.main()

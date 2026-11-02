@@ -56,4 +56,41 @@ final class SingleInstanceTests: XCTestCase {
         XCTAssertEqual(SingleInstance.earlierCopy(than: undated, among: [undated, first])?.pid, 100)
         XCTAssertNil(SingleInstance.earlierCopy(than: first, among: [undated, first]))
     }
+
+    /// After a library move, the copy that moved it opens a new one and quits (`AppRelaunch`). The new copy is told
+    /// which one opened it: it doesn't give way to that one, though it started earlier and may still be quitting.
+    func testBehaviorARelaunchedCopyStaysWhileTheCopyThatOpenedItQuits() {
+        let moving = copy(100, "local.daybook", launched: 0)
+        let relaunched = copy(200, "local.daybook", launched: 30)
+        let running = [moving, relaunched]
+        XCTAssertEqual(SingleInstance.earlierCopy(than: relaunched, among: running)?.pid, 100, "An ordinary later copy gives way")
+        XCTAssertNil(SingleInstance.earlierCopy(than: relaunched, among: running, ignoring: 100), "The relaunched one stays")
+        // Another copy that was there first still wins.
+        let other = copy(50, "local.daybook.adhoc", launched: -10)
+        XCTAssertEqual(SingleInstance.earlierCopy(than: relaunched, among: running + [other], ignoring: 100)?.pid, 50)
+
+        // The new copy learns the old one's process ID from the arguments the relaunch opens it with.
+        let arguments = ["/Applications/Daybook.app/Contents/MacOS/Daybook"] + AppRelaunch.arguments(relaunchingFrom: 100)
+        XCTAssertEqual(SingleInstance.relaunchedFrom(arguments: arguments), 100)
+        XCTAssertNil(SingleInstance.relaunchedFrom(arguments: ["Daybook"]), "An ordinary launch")
+        XCTAssertNil(SingleInstance.relaunchedFrom(arguments: ["Daybook", SingleInstance.relaunchFlag]))
+        XCTAssertNil(SingleInstance.relaunchedFrom(arguments: ["Daybook", SingleInstance.relaunchFlag, "soon"]))
+        XCTAssertTrue(LaunchPaths.problems(arguments: arguments, sandboxed: true, roots: ["/nowhere"]).isEmpty,
+                      "The sandbox's launch check lets the flag through")
+    }
+
+    func testBehaviorTheRelaunchedCopyWaitsForTheOldOneOnlyAsLongAsItRuns() async {
+        let gone = await SingleInstance.waitForExit(of: 999_999, within: .seconds(5))
+        XCTAssertTrue(gone, "A copy that has quit already is waited for no longer")
+        let started = ContinuousClock.now
+        let stillHere = await SingleInstance.waitForExit(of: ProcessInfo.processInfo.processIdentifier, within: .milliseconds(200))
+        XCTAssertFalse(stillHere, "One still running is waited for up to the limit, and then the new copy goes on")
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - started, .milliseconds(200))
+    }
+
+    func testBehaviorTheOldCopyQuitsOnlyOnceTheNewOneOpened() {
+        XCTAssertEqual(AppRelaunch.outcome(launchError: nil), .quit)
+        XCTAssertEqual(AppRelaunch.outcome(launchError: CocoaError(.fileNoSuchFile)), .askToReopen,
+                       "A launch that failed leaves this copy running and asks the person to reopen Daybook")
+    }
 }
