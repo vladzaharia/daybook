@@ -30,6 +30,12 @@ extension View {
     public func daybookHitTarget() -> some View {
         modifier(HitTarget())
     }
+
+    /// `daybookHitTarget()` for a control right after something that does something else (a tag's ×, after the
+    /// tag's name): its 44 × 44 pt target reaches at most `leading` points before it, and the rest after it.
+    public func daybookHitTarget(leadingAtMost leading: CGFloat) -> some View {
+        modifier(HitTarget(leadingLimit: leading))
+    }
 }
 
 private struct DesignMotion<Value: Equatable>: ViewModifier {
@@ -97,22 +103,33 @@ enum TouchTarget {
     static func outset(for size: CGSize) -> (horizontal: CGFloat, vertical: CGFloat) {
         (max(0, (side - size.width) / 2), max(0, (side - size.height) / 2))
     }
+
+    /// The same 44 × 44, reaching at most `limit` past its leading edge and the rest past its trailing one; nil
+    /// `limit` reaches evenly.
+    static func outset(for size: CGSize, leadingAtMost limit: CGFloat?) -> (leading: CGFloat, trailing: CGFloat, vertical: CGFloat) {
+        let even = outset(for: size)
+        let leading = min(even.horizontal, max(0, limit ?? even.horizontal))
+        return (leading, 2 * even.horizontal - leading, even.vertical)
+    }
 }
 
 private struct HitTarget: ViewModifier {
+    var leadingLimit: CGFloat?
     @Environment(\.daybookDensity) private var density
     @State private var size: CGSize = .zero
 
     func body(content: Content) -> some View {
         if density == .touch {
-            let outset = TouchTarget.outset(for: size)
+            let outset = TouchTarget.outset(for: size, leadingAtMost: leadingLimit)
             content
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
                 // Grown for hit-testing, then given back, so the layout keeps the content's own size.
-                .padding(.horizontal, outset.horizontal)
+                .padding(.leading, outset.leading)
+                .padding(.trailing, outset.trailing)
                 .padding(.vertical, outset.vertical)
                 .contentShape(Rectangle())
-                .padding(.horizontal, -outset.horizontal)
+                .padding(.leading, -outset.leading)
+                .padding(.trailing, -outset.trailing)
                 .padding(.vertical, -outset.vertical)
         } else {
             content

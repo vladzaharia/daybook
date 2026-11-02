@@ -5,7 +5,7 @@ import SwiftUI
 /// Tags as chips, then a field for more, on both apps (Info's Tags). Typing takes the tags the way both apps do
 /// (`TagInput`: "client, beta" is two). A chip shows the conversations with its tag; its × removes it: on the Mac it
 /// appears over the chip's corner while the pointer is on the chip, so the chip never changes size; under touch it's
-/// always there, with a 44 pt target that never lays out narrower than its glyph.
+/// always there, with a 44 pt target that never lays out narrower than its glyph and stays off the name.
 public struct TagEditor: View {
     let tags: [String]
     let save: ([String]) -> Void
@@ -96,11 +96,13 @@ private struct TagChip: View {
     var body: some View {
         let colors = DaybookChip.colors(.tag)
         if density == .touch {
-            HStack(spacing: 6) {
+            let gap: CGFloat = 6
+            HStack(spacing: gap) {
                 name
                 Button(action: remove) {
+                    // Its 44 pt target reaches back only across the gap, so a tap on the name always searches it.
                     Image(systemName: "xmark").font(.caption2.weight(.bold))
-                        .daybookHitTarget()
+                        .daybookHitTarget(leadingAtMost: gap)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Remove tag \(tag)")

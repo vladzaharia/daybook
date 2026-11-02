@@ -259,6 +259,19 @@ final class DesignTokenTests: XCTestCase {
         let big = TouchTarget.outset(for: CGSize(width: 80, height: 50))
         XCTAssertEqual(big.horizontal, 0, "Already big enough")
         XCTAssertEqual(big.vertical, 0)
+
+        // A tag's ×, 10 pt wide and 6 pt after the tag's name: its target stays off the name and reaches the rest
+        // of the way after it.
+        let after = TouchTarget.outset(for: CGSize(width: 10, height: 12), leadingAtMost: 6)
+        XCTAssertEqual(after.leading, 6)
+        XCTAssertEqual(after.trailing, 28)
+        XCTAssertEqual(after.leading + 10 + after.trailing, 44, "still 44 pt wide")
+        XCTAssertEqual(after.vertical, 16)
+        let even = TouchTarget.outset(for: CGSize(width: 12, height: 20), leadingAtMost: nil)
+        XCTAssertEqual(even.leading, 16)
+        XCTAssertEqual(even.trailing, 16)
+        XCTAssertEqual(TouchTarget.outset(for: CGSize(width: 40, height: 44), leadingAtMost: 6).leading, 2, "never more than it needs")
+        XCTAssertEqual(TouchTarget.outset(for: CGSize(width: 10, height: 12), leadingAtMost: -3).trailing, 34, "a limit under zero reaches nothing before it")
     }
 
     func testButtonsDimWhenDisabledAndPressed() {
