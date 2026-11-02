@@ -14,6 +14,9 @@ extension FocusedValues {
     @Entry var shownConversation: UUID?
     /// Whether the library window's toolbar shows, for View › Show/Hide Toolbar.
     @Entry var libraryToolbarShown: Binding<Bool>?
+    /// Whether the library window's inspector shows, for View › Show/Hide Inspector (⌃⌘I); nil without a conversation
+    /// for it. Asking for it widens a window too narrow for it.
+    @Entry var libraryInspectorShown: Binding<Bool>?
 }
 
 /// The main window: places, the conversation list, and the page, with an optional inspector.
@@ -81,7 +84,9 @@ struct LibraryView: View {
                     DetailToolbar(state: state, meeting: toolbarMeeting, inspectorAvailable: showsConversation,
                                   inspectorShown: inspectorShown, toggleInspector: toggleInspector, windowAction: windowAction)
                 }
-                .inspector(isPresented: inspector) {
+                // SwiftUI's own changes (closing it by dragging, and keeping its split item in step, which can say
+                // "shown" by itself) are kept without widening the window; only asking for it does (`inspector`).
+                .inspector(isPresented: Binding(get: { inspectorShown }, set: { inspectorPresented = $0 })) {
                     ZStack {
                         if let id = state.selectedID { MeetingInspector(state: state, meetingID: id).equatable() }
                     }
@@ -101,6 +106,7 @@ struct LibraryView: View {
         .focusedSceneValue(\.shownConversation, toolbarMeeting?.id)
         .toolbarVisibility(toolbarShown ? .automatic : .hidden, for: .windowToolbar)
         .focusedSceneValue(\.libraryToolbarShown, $toolbarShown)
+        .focusedSceneValue(\.libraryInspectorShown, inspectorCommand)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0; noteScreen() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { note in
             if (note.object as? NSWindow) === shareAnchor.window { noteScreen() }
@@ -219,18 +225,21 @@ struct LibraryView: View {
         inspectorPresented && showsConversation && ColumnFit.inspectorFits(window: windowWidth, screen: screenWidth)
     }
 
-    /// Every way of asking for the inspector or putting it away (the toolbar, ⌃⌘I, Tags…, the byline's people, closing
-    /// it): asked for in a window that holds it back, the window widens, whether or not it was asked for already (the
-    /// stored choice outlives a window that has since narrowed, or a relaunch).
+    /// Every way the person asks for the inspector or puts it away (the toolbar, View › Show Inspector and ⌃⌘I, Tags…,
+    /// the byline's people): asked for in a window that holds it back, the window widens, whether or not it was asked
+    /// for already (the stored choice outlives a window that has since narrowed, or a relaunch).
     private var inspector: Binding<Bool> {
         Binding(get: { inspectorShown }, set: { wanted in
             let widens = ColumnFit.widensForInspector(asked: wanted, available: showsConversation, window: windowWidth, screen: screenWidth)
             inspectorPresented = wanted
-            // On the next turn: this may be called inside an update, and a window resized during a layout pass lays
-            // itself out again without end.
+            // On the next turn: a command or a change may arrive inside an update, and a window resized during a
+            // layout pass lays itself out again without end.
             if widens { DispatchQueue.main.async { makeRoomForInspector(animated: true) } }
         })
     }
+
+    /// View › Show/Hide Inspector's: `inspector` while there's a conversation for it.
+    private var inspectorCommand: Binding<Bool>? { showsConversation ? inspector : nil }
 
     /// The toolbar's Inspector: hides it when it shows; otherwise asks for it, widening the window to make room.
     private func toggleInspector() {

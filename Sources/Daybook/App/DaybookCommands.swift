@@ -127,11 +127,21 @@ private struct ViewCommands: Commands {
     @FocusedValue(\.shownConversation) private var shownID
     /// Whether the library window's toolbar shows, while that window is key.
     @FocusedBinding(\.libraryToolbarShown) private var toolbarShown
+    /// Whether its inspector shows; asking for it widens a window too narrow for it.
+    @FocusedBinding(\.libraryInspectorShown) private var inspectorShown
 
     var body: some Commands {
         let meeting = state.shownMeeting(shownID)
         SidebarCommands()
-        InspectorCommands()
+        // The library window's own, rather than InspectorCommands': asking for the inspector widens a window too narrow
+        // for it, which a change SwiftUI makes on its own must not.
+        CommandGroup(after: .sidebar) {
+            Button(inspectorShown == true ? "Hide Inspector" : "Show Inspector") {
+                if let shown = inspectorShown { withAnimation { inspectorShown = !shown } }
+            }
+            .keyboardShortcut("i", modifiers: [.command, .control])
+            .disabled(inspectorShown == nil)
+        }
         // Show or Hide Toolbar alone: the toolbar isn't customizable (`DetailToolbar`), so there's no Customize Toolbar….
         CommandGroup(replacing: .toolbar) {
             Button(toolbarShown == false ? "Show Toolbar" : "Hide Toolbar") {

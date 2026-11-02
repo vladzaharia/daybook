@@ -35,7 +35,7 @@ enum LibraryDemo {
 
     static func apply(to state: AppState) {
         resizeWindow()
-        runWindowActions()
+        runWindowActions(state)
         // `--info` is the iPhone's word for the inspector.
         if CommandLine.arguments.contains("--info") { LaunchOptions.defaults.set(true, forKey: AppState.Preference.isInspectorPresented) }
         guard isRequested else { return }
@@ -88,12 +88,13 @@ enum LibraryDemo {
         window.setFrame(NSRect(origin: window.frame.origin, size: NSSize(width: parts[0], height: parts[1])), display: true)
     }
 
-    /// `--window-actions activate,fullscreen,toolbar,zoom,top,sidebar,…`: what the main window goes
+    /// `--window-actions activate,fullscreen,toolbar,zoom,top,sidebar,inspector,…`: what the main window goes
     /// through, a step every 1.5 s, so a snapshot after them shows whether every column still starts
     /// under the toolbar. A step named twice undoes itself (full screen in and out, the toolbar hidden
     /// and shown); `activate` brings the app forward first, which full screen needs and which only an
-    /// app opened through Launch Services (`open`) is allowed to do.
-    private static func runWindowActions() {
+    /// app opened through Launch Services (`open`) is allowed to do. `inspector` asks for the inspector as Tags… does,
+    /// so a narrow window shows whether it widens.
+    private static func runWindowActions(_ state: AppState) {
         guard let steps = LaunchOptions.value(after: "--window-actions")?.split(separator: ",").map(String.init) else { return }
         for (index, step) in steps.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 * Double(index + 1)) {
@@ -109,6 +110,7 @@ enum LibraryDemo {
                     // Against the top of the screen, as a window dragged under the menu bar can be.
                     if let screen = window.screen { window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: screen.frame.maxY)) }
                 case "sidebar": NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+                case "inspector": state.showInspector()
                 default: break
                 }
             }

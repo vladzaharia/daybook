@@ -294,8 +294,9 @@ Debug builds accept launch arguments that open a specific surface against a sepa
                                       a merge asked for (or made), its deletion asked for
   --window-size <W>x<H>               the main window's size, such as 900x700
   --window-actions <step,…>           what the main window goes through before a snapshot, 1.5 s apart:
-                                      activate, fullscreen, toolbar, zoom, top, sidebar (full screen
-                                      needs activate, so run it as an app with `open`)
+                                      activate, fullscreen, toolbar, zoom, top, sidebar, inspector (as
+                                      Tags… asks for it; full screen needs activate, so run it as an app
+                                      with `open`)
   --model-demo <step,…>               Settings › Models states without the network; see models.md
   --placement-demo countdown|cloud|colophon|colophon-mac
                                       with --library-demo (or --notes-demo processing), a summary's countdown, the
