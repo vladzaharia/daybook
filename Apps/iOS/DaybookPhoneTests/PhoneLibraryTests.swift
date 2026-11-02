@@ -604,7 +604,6 @@ final class PhoneLibraryTests: XCTestCase {
 
     // MARK: Files opened in Daybook
 
-    /// A second of tone as a WAV file, as another app might hand over.
     /// An app model over `library`, as a test makes one; the scratch folder its models get goes when the test ends.
     private func appModel(_ recorder: PhoneRecorder, _ library: PhoneLibrary,
                           environment: [String: String] = ["XCTestConfigurationFilePath": "1"]) -> PhoneAppModel {
@@ -725,6 +724,7 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertEqual(Set(try JSONDecoder().decode([String].self, from: data)), [first.uuidString, second.uuidString])
     }
 
+    /// A second of tone as a WAV file, as another app might hand over.
     private func audioFile(at url: URL, step: Float = 0.17) throws {
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_000))
