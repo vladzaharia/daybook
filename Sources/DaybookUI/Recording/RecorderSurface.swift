@@ -66,6 +66,12 @@ public struct RecorderSurfaceState {
         self.isSaving = isSaving; self.pause = pause; self.topInset = topInset; self.keyboardShortcuts = keyboardShortcuts
         self.asleep = asleep
     }
+
+    /// Whether a touch on Stop reaches it. Dimmed, the touch only wakes the screen: it never ends the recording.
+    /// Bookmark takes every touch, dimmed or not.
+    public var stopTakesTouch: Bool { !asleep }
+    /// Whether a touch on the tools beside Stop (Write Notes, Take Photo) reaches them; dimmed, it only wakes.
+    public var toolsTakeTouch: Bool { !asleep }
 }
 
 /// What the recorder's controls do.
@@ -198,7 +204,7 @@ struct RecorderPieces {
     func stop(_ metrics: RecorderControlMetrics) -> some View {
         StopControl(isSaving: state.isSaving, metrics: metrics, shortcut: state.keyboardShortcuts, elapsed: { state.clock.now },
                     action: actions.stop)
-            .allowsHitTesting(!state.asleep)
+            .allowsHitTesting(state.stopTakesTouch)
     }
 
     func controls(_ metrics: RecorderControlMetrics) -> some View {
@@ -497,7 +503,7 @@ private struct FlexStage: View {
             }
             VStack(spacing: DaybookSpacing.s3) {
                 parts.stop(RecorderControlMetrics(height: 84, radius: DaybookRadius.control, size: nil, spacing: DaybookSpacing.s3))
-                parts.slots.tools.allowsHitTesting(!parts.state.asleep)
+                parts.slots.tools.allowsHitTesting(parts.state.toolsTakeTouch)
             }
             .frame(maxWidth: 170)
         }
@@ -562,7 +568,7 @@ private struct BookStage: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: DaybookSpacing.s3) {
-                parts.slots.tools.allowsHitTesting(!parts.state.asleep)
+                parts.slots.tools.allowsHitTesting(parts.state.toolsTakeTouch)
                 parts.stop(RecorderControlMetrics(height: 52, radius: DaybookRadius.control, size: nil, spacing: DaybookSpacing.s3))
                     .frame(maxWidth: 220)
             }

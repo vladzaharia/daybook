@@ -144,6 +144,19 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertFalse(BookmarkControlLabel.isGlyphOnly(size: 14, typeSize: .accessibility5), "the Mac's fixed sizes keep their words")
     }
 
+    /// Regression: in table mode a tap on the dimmed Stop ended the recording, though a touch was meant only to wake
+    /// the screen. Dimmed, Stop and the tools beside it ignore the touch; Bookmark (which has no gate) takes it.
+    func testBehaviorStopIgnoresTheTouchThatWakesTheTable() {
+        var state = RecorderSurfaceState(title: "Design review", clock: .since(Date()), isLive: true, bookmarkCount: 0, asleep: true)
+        XCTAssertFalse(state.stopTakesTouch, "the waking touch never stops the recording")
+        XCTAssertFalse(state.toolsTakeTouch, "nor opens the notes or the camera")
+        state.asleep = false
+        XCTAssertTrue(state.stopTakesTouch)
+        XCTAssertTrue(state.toolsTakeTouch)
+        XCTAssertTrue(RecorderSurfaceState(title: "", clock: .since(Date()), isLive: true, bookmarkCount: 0).stopTakesTouch,
+                      "awake unless the host dims it")
+    }
+
     func testBehaviorTheCompactNoteFieldAddsALineAsTheLastParagraph() {
         XCTAssertEqual(RecorderNoteField.appending("Ship Friday", to: ""), "Ship Friday")
         XCTAssertEqual(RecorderNoteField.appending("  Ship Friday ", to: "Agenda\n"), "Agenda\nShip Friday")
