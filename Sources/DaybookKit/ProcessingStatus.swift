@@ -222,11 +222,14 @@ extension Meeting {
     /// person chooses Don't Wait (`stopWaitingForRecordings`).
     public func awaitedRecordings(now: Date = Date()) -> [AwaitedRecording] {
         (companions ?? []).compactMap { link in
-            guard link.expectsRecording, link.trackID == nil, link.stoppedWaitingAt == nil else { return nil }
-            let since = link.macEndedAt ?? link.macStartedAt
-            guard now.timeIntervalSince(since) <= AwaitedRecording.lifetime, !hasRecording(fulfilling: link) else { return nil }
-            return AwaitedRecording(deviceName: link.deviceName, deviceKind: link.deviceKind, since: since)
+            guard waits(for: link, now: now) else { return nil }
+            return AwaitedRecording(deviceName: link.deviceName, deviceKind: link.deviceKind, since: link.macEndedAt ?? link.macStartedAt)
         }
+    }
+
+    /// The links whose recordings it waits for now: what Don't Wait stops waiting for.
+    public func awaitedLinks(now: Date = Date()) -> Set<UUID> {
+        Set((companions ?? []).filter { waits(for: $0, now: now) }.map(\.id))
     }
 
     /// A recording this conversation was waiting for has arrived and isn't added yet: a multipoint
@@ -244,22 +247,41 @@ extension Meeting {
         }
     }
 
-    /// Don't Wait: stops waiting for every recording it waits for now, so its status says what's here. A recording
-    /// that still arrives is added (`hasAwaitedRecordingToAdd`). Returns whether anything was waited for.
+    /// Don't Wait: stops waiting for every recording it waits for now (of `links` alone, when given), so its status
+    /// says what's here. A recording that still arrives is added (`hasAwaitedRecordingToAdd`). Returns whether anything
+    /// was waited for.
     @discardableResult
-    public mutating func stopWaitingForRecordings(at now: Date = Date()) -> Bool {
+    public mutating func stopWaitingForRecordings(at now: Date = Date(), links only: Set<UUID>? = nil) -> Bool {
         guard var links = companions else { return false }
         var stopped = false
-        for index in links.indices {
-            let link = links[index]
-            guard link.expectsRecording, link.trackID == nil, link.stoppedWaitingAt == nil,
-                  now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) <= AwaitedRecording.lifetime,
-                  !hasRecording(fulfilling: link) else { continue }
+        for index in links.indices where (only?.contains(links[index].id) ?? true) && waits(for: links[index], now: now) {
             links[index].stoppedWaitingAt = now
             stopped = true
         }
         if stopped { companions = links }
         return stopped
+    }
+
+    /// Takes back Don't Wait for these links alone: each is waited for again. The other links, and everything else
+    /// these say (a recording that arrived since), stay as they are. Returns whether any link changed.
+    @discardableResult
+    public mutating func waitAgain(for only: Set<UUID>) -> Bool {
+        guard var links = companions else { return false }
+        var resumed = false
+        for index in links.indices where only.contains(links[index].id) && links[index].stoppedWaitingAt != nil {
+            links[index].stoppedWaitingAt = nil
+            resumed = true
+        }
+        if resumed { companions = links }
+        return resumed
+    }
+
+    /// It waits for the link's recording: the recorder recorded, or may have, and its recording isn't here, within
+    /// `AwaitedRecording.lifetime` of this Mac's recording, until Don't Wait.
+    private func waits(for link: CompanionRecording, now: Date) -> Bool {
+        link.expectsRecording && link.trackID == nil && link.stoppedWaitingAt == nil
+            && now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) <= AwaitedRecording.lifetime
+            && !hasRecording(fulfilling: link)
     }
 
     /// The conversation holds a recording from the link's device that it was waiting for.

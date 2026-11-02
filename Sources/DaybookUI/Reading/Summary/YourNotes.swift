@@ -208,15 +208,11 @@ struct BookmarkRow: View {
             return
         }
         draft = text
-        library.update(meeting.id, actionName: "Bookmark Label", undoManager: undoManager) { value in
-            if let index = value.highlights.firstIndex(where: { $0.id == highlight.id }) { value.highlights[index].text = text }
-        }
+        library.setBookmarkText(highlight.id, text: text, in: meeting.id, undoManager: undoManager)
     }
 
     private func delete() {
-        library.update(meeting.id, actionName: "Delete Bookmark", undoManager: undoManager) { value in
-            value.highlights.removeAll { $0.id == highlight.id }
-        }
+        library.removeBookmark(highlight.id, in: meeting.id, undoManager: undoManager)
     }
 
     private func playFromHere() {

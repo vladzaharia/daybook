@@ -212,10 +212,7 @@ struct NextStepRow: View {
     }
 
     private func set(_ done: Bool) {
-        library.update(meeting.id, actionName: done ? "Mark as Done" : "Mark as Not Done", undoManager: undoManager) { value in
-            guard let index = value.summary?.actionItems.firstIndex(where: { $0.id == item.id }) else { return }
-            value.summary?.actionItems[index].completed = done
-        }
+        library.setNextStep(item.id, done: done, in: meeting.id, undoManager: undoManager)
     }
 }
 

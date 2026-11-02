@@ -276,8 +276,7 @@ struct ConversationStatus: View {
         case .cancelRequest(let request):
             let device = state.library.thisDevice
             state.library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
-        case .dontWait:
-            state.library.update(id, actionName: "Don’t Wait", undoManager: undoManager) { $0.stopWaitingForRecordings() }
+        case .dontWait: state.library.stopWaitingForRecordings(in: id, undoManager: undoManager)
         case .cancelDownload: state.cancelDownload()
         case .downloadModels:
             state.enqueue(id)

@@ -233,8 +233,7 @@ struct SummaryPage: View {
         case .cancelRequest(let request):
             let device = library.thisDevice
             library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
-        case .dontWait:
-            library.update(id, actionName: "Don’t Wait", undoManager: undoManager) { $0.stopWaitingForRecordings() }
+        case .dontWait: library.stopWaitingForRecordings(in: id, undoManager: undoManager)
         case .cancelDownload:
             guard let models = model?.models else { return }
             for role in Self.processingRoles { if let choice = models.choice(for: role) { models.cancel(choice) } }

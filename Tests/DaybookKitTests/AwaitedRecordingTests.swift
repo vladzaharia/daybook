@@ -131,6 +131,20 @@ final class AwaitedRecordingTests: XCTestCase {
         XCTAssertEqual(never.companions?.compactMap(\.stoppedWaitingAt), [])
     }
 
+    func testBehaviorDontWaitActsOnTheLinksItNamesAndIsTakenBackByThem() {
+        let phone = link(), recorder = link("soundcore.work", name: "Soundcore Work", recordingID: "1800000000")
+        var waiting = meeting([phone, recorder, link(state: .failed)])
+        XCTAssertEqual(waiting.awaitedLinks(now: now), [phone.id, recorder.id], "only the links it waits for")
+        XCTAssertTrue(waiting.stopWaitingForRecordings(at: now, links: [phone.id]))
+        XCTAssertEqual(waiting.companions?.map(\.stoppedWaitingAt), [now, nil, nil])
+        XCTAssertEqual(waiting.awaitedLinks(now: now), [recorder.id])
+
+        XCTAssertTrue(waiting.waitAgain(for: [phone.id]))
+        XCTAssertEqual(waiting.awaitedLinks(now: now), [phone.id, recorder.id])
+        XCTAssertFalse(waiting.waitAgain(for: [phone.id]), "already waited for")
+        XCTAssertFalse(waiting.waitAgain(for: [UUID()]))
+    }
+
     func testBehaviorDontWaitSurvivesASyncMerge() {
         let base = meeting([link()])
         var local = base
