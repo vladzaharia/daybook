@@ -324,6 +324,99 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(phone.handoff.state(of: phone.session), .idle)
     }
 
+    /// The Mac's answer on the link comes late, so the phone also asks through sync; the Mac answers on the link and
+    /// starts letting go, and the sync record reaches it too. Stop Waiting calls it off: the Mac stops, and the
+    /// request's sync record, still `requested` there until the phone's `cancelled` arrives, isn't taken up again at
+    /// the Mac's next library change.
+    func testBehaviorACalledOffRequestIsNotTakenUpAgainFromItsSyncRecord() async throws {
+        let recorder = makeRecorder(count: 2, seconds: 1, oldestSeconds: 30)
+        recorder.pace = .milliseconds(100)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+
+        // Wired by hand, so the phone's messages can be held back.
+        let macLinkID = UUID(), phoneLinkID = UUID()
+        let phonePeer = RecorderHandoff.Peer(linkID: phoneLinkID, syncID: phone.id, name: "Alex’s iPhone", deviceClass: .phone, handsOffRecorders: true)
+        let macPeer = RecorderHandoff.Peer(linkID: macLinkID, syncID: mac.id, name: "Studio Mac", deviceClass: .mac, handsOffRecorders: true)
+        let held = HeldMessages()
+        mac.handoff.link = RecorderHandoff.Link(peers: { [phonePeer] }, send: { message, _ in phone.handoff.receive(message, from: macLinkID) })
+        phone.handoff.link = RecorderHandoff.Link(peers: { [macPeer] }, send: { message, _ in held.messages.append(message) })
+
+        try await waitUntil("the Mac lists the recordings") { mac.session.newRecordings.count == 2 }
+        mac.session.importRecordings(mac.session.newRecordings, automatic: true)
+        try await waitUntil("the first transfer is under way") { mac.session.queue.current != nil && (mac.session.phase?.fraction ?? 0) > 0 }
+
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone waits through sync", timeout: 6) {
+            if case .waitingForSync = phone.handoff.state(of: phone.session) { return true }; return false
+        }
+        // The request reaches the Mac late, and then its sync record.
+        let request = held.messages
+        held.messages = []
+        for message in request { mac.handoff.receive(message, from: phoneLinkID) }
+        try await waitUntil("the Mac is letting go") { mac.session.isHandingOff }
+        try await syncAll(phone, mac)
+        XCTAssertEqual(mac.library.recorderHandoff(kind: kind, serial: recorder.serial)?.phase, .requested)
+        XCTAssertTrue(mac.session.isHandingOff, "still importing")
+
+        phone.handoff.cancel(phone.session)
+        try await waitUntil("the call-off is sent") { !held.messages.isEmpty }
+        let callOff = held.messages
+        held.messages = []
+        for message in callOff { mac.handoff.receive(message, from: phoneLinkID) }
+        try await waitUntil("the Mac stops letting go") { !mac.session.isHandingOff }
+
+        // Another change to the Mac's library before the phone's cancelled record arrives.
+        mac.library.saveRecorderHandoff(RecorderHandoffRecord(kind: kind, serial: "OTHER", ownerID: "x", ownerName: "x",
+                                                              requesterID: "y", requesterName: "y", requesterClass: .phone, phase: .cancelled))
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertFalse(mac.session.isHandingOff, "the called-off request was taken up again from its sync record")
+        XCTAssertEqual(mac.library.recorderHandoff(kind: kind, serial: recorder.serial)?.phase, .requested, "the Mac answered it in the record")
+        XCTAssertEqual(mac.handoff.state(of: mac.session), .idle)
+        recorder.pace = nil
+    }
+
+    /// The phone's request never reaches the Mac on the link, so it asks through sync; Stop Waiting's call-off reaches
+    /// the Mac before the request's sync record does. The stale `requested` record then moves nothing.
+    func testBehaviorACallOffThatArrivesBeforeItsRequestKeepsTheRecorderWhereItIs() async throws {
+        let recorder = makeRecorder(count: 1)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+
+        let macLinkID = UUID(), phoneLinkID = UUID()
+        let phonePeer = RecorderHandoff.Peer(linkID: phoneLinkID, syncID: phone.id, name: "Alex’s iPhone", deviceClass: .phone, handsOffRecorders: true)
+        let macPeer = RecorderHandoff.Peer(linkID: macLinkID, syncID: mac.id, name: "Studio Mac", deviceClass: .mac, handsOffRecorders: true)
+        let held = HeldMessages()
+        mac.handoff.link = RecorderHandoff.Link(peers: { [phonePeer] }, send: { message, _ in phone.handoff.receive(message, from: macLinkID) })
+        phone.handoff.link = RecorderHandoff.Link(peers: { [macPeer] }, send: { message, _ in held.messages.append(message) })
+
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the phone waits through sync", timeout: 6) {
+            if case .waitingForSync = phone.handoff.state(of: phone.session) { return true }; return false
+        }
+        let stale = try XCTUnwrap(phone.library.recorderHandoff(kind: kind, serial: recorder.serial))
+        XCTAssertEqual(stale.phase, .requested)
+        held.messages = []
+
+        phone.handoff.cancel(phone.session)
+        try await waitUntil("the call-off is sent") { !held.messages.isEmpty }
+        for message in held.messages { mac.handoff.receive(message, from: phoneLinkID) }
+
+        // The request's sync record arrives as it was before the phone stopped waiting.
+        mac.library.saveRecorderHandoff(stale)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertFalse(mac.session.isHandingOff)
+        XCTAssertEqual(mac.handoff.state(of: mac.session), .idle)
+        XCTAssertEqual(mac.library.recorderHandoff(kind: kind, serial: recorder.serial)?.phase, .requested, "the Mac answered it in the record")
+        XCTAssertTrue(mac.session.isLinked, "the Mac kept it")
+        XCTAssertEqual(mac.library.recorderOwner(kind: kind, serial: recorder.serial)?.ownerID, mac.id)
+        XCTAssertFalse(phone.session.isLinked)
+    }
+
     func testWhatTheOldOwnerImportedIsNotImportedAgain() async throws {
         let recorder = makeRecorder(count: 1)
         let mac = try await makeSide("Mac", .mac, recorder)

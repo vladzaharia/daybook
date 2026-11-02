@@ -162,6 +162,9 @@ public final class RecorderHandoff {
     private var outgoing: [UUID: Outgoing] = [:]
     /// Answers this device gave, so a repeated request gets the same one.
     private var answered: [UUID: LinkRecorderHandoffReply] = [:]
+    /// Requests the other device called off. A late copy of one (its sync record, or the link sending it again) is
+    /// never taken up, so the recorder doesn't move after the person stopped waiting.
+    private var calledOff: Set<UUID> = []
     /// Recorders this device is letting go of, with the request (by recorder ID).
     private var releasing: [String: (request: UUID, to: LinkHandoffDevice, linkID: UUID?)] = [:]
     /// Offers this device accepted and waits on, by recorder ID, so Stop Waiting can call them off.
@@ -337,7 +340,7 @@ public final class RecorderHandoff {
     /// a recorder it offered.
     private func handleCancel(_ request: LinkRecorderHandoffRequest) {
         let id = RecorderOwnership.id(kind: request.kind, serial: request.serial)
-        answered[request.id] = nil
+        calledOff.insert(request.id)
         if let current = releasing[id], current.request == request.id {
             releaseTasks[id]?.cancel()
             releaseTasks[id] = nil
@@ -423,6 +426,7 @@ public final class RecorderHandoff {
             handleCancel(request)
             return
         }
+        guard !calledOff.contains(request.id) else { return }
         if let reply = answered[request.id] {
             if let linkID { send(.recorderHandoffReply(reply), to: linkID) }
             return

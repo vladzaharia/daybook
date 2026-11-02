@@ -279,8 +279,9 @@ change take seconds instead of a sync round trip. They're app messages, added wi
   (`addressedTo`), so another device says `notOwner` instead of acting.
 - Stop Waiting sends the request again with its ID and intent `cancel`, which isn't answered: an owner
   still finishing what can't move keeps the recorder and carries on, and a device that accepted an offer
-  stops waiting for it. One that has let go already has sent its release, which still moves the
-  recorder. An older peer doesn't understand `cancel`: it repeats its earlier answer or refuses the
+  stops waiting for it. A request called off is never taken up again, whether it arrives again on the
+  link or as its sync record before the requester's `cancelled` does. One that has let go already has
+  sent its release, which still moves the recorder. An older peer doesn't understand `cancel`: it repeats its earlier answer or refuses the
   request as `unsupported`, which the requester ignores, and if it was already letting go the recorder
   still moves, as after its release.
 - A reply this build can't read is a refusal, never a yes. Unknown intents are refused as
