@@ -24,21 +24,28 @@ struct TranscriptMarginRow<Margin: View, Content: View>: View {
     }
 }
 
-/// A time that plays from there: meta ink, link ink on hover, monospaced digits.
+/// A time that plays from there: meta ink, link ink on hover, monospaced digits. `tabStop` false keeps it out of
+/// keyboard navigation, for a time shown only while its row is hovered or focused: focus moving to it would take it away.
 public struct TranscriptTime: View {
     private let time: TimeInterval
+    private let tabStop: Bool
     private let play: () -> Void
     @Environment(\.daybookDensity) private var density
     @Environment(\.readingScale) private var scale
     @Environment(\.readingWidth) private var readingWidth
     @State private var hovering = false
 
-    public init(time: TimeInterval, play: @escaping () -> Void) {
+    public init(time: TimeInterval, tabStop: Bool = true, play: @escaping () -> Void) {
         self.time = time
+        self.tabStop = tabStop
         self.play = play
     }
 
     public var body: some View {
+        if tabStop { button } else { button.focusable(false) }
+    }
+
+    private var button: some View {
         Button(action: play) {
             Text(TimeLabel.short(time))
                 .font((readingWidth == .regular ? DaybookFont.marginTime : DaybookFont.time).font(density, scale: scale))
@@ -147,10 +154,12 @@ struct PassageRow: View {
                     #endif
             }
             // A turn's first passage has its time above it; a bookmark there shows the glyph alone. Others show their
-            // time while hovered, focused, or bookmarked; until then there's no button to Tab to.
+            // time while hovered, focused, or bookmarked; until then there's no button to Tab to. A time shown only
+            // while its passage is focused isn't a Tab stop either: Tab to it would unfocus the passage and hide it
+            // with focus on it. Space on the passage plays.
             if !opensTurn {
                 if hovering || isFocused || holder {
-                    TranscriptTime(time: segment.start) { actions.play(.segment(segment)) }
+                    TranscriptTime(time: segment.start, tabStop: holder) { actions.play(.segment(segment)) }
                 } else {
                     Text(TimeLabel.short(segment.start)).font(DaybookFont.marginTime.font(density, scale: scale)).hidden()
                         .accessibilityHidden(true)
