@@ -277,6 +277,11 @@ change take seconds instead of a sync round trip. They're app messages, added wi
   from the link device ID).
 - A request is idempotent by ID: a repeat gets the first answer. It names the device it's for
   (`addressedTo`), so another device says `notOwner` instead of acting.
+- Stop Waiting sends the request again with its ID and intent `cancel`, which isn't answered: an owner
+  still finishing what can't move keeps the recorder and carries on, and a device that accepted an offer
+  stops waiting for it. One that has let go already has sent its release, which still moves the
+  recorder. An older peer refuses the intent as `unsupported`, which the requester, no longer waiting,
+  ignores.
 - A reply this build can't read is a refusal, never a yes. Unknown intents are refused as
   `unsupported`; unknown reasons are kept.
 - An older peer ignores the types; the requester hears nothing within 5 s and falls back to sync.

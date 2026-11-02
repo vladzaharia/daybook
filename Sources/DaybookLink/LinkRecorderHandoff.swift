@@ -39,6 +39,11 @@ public struct LinkRecorderHandoffRequest: Codable, Sendable, Equatable, Identifi
         public static let take: Self = "take"
         /// The requester owns the recorder and offers it; the receiver takes it if it has it set up.
         public static let give: Self = "give"
+        /// The requester calls off the request it sent with this `id` (Stop Waiting): an owner still finishing
+        /// keeps the recorder, and a device waiting for an offered one stops waiting. Too late once the owner has
+        /// let go: its release still moves the recorder. Older builds refuse it as unsupported, which changes
+        /// nothing.
+        public static let cancel: Self = "cancel"
     }
 
     public var id: UUID

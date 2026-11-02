@@ -164,6 +164,8 @@ public final class RecorderHandoff {
     private var answered: [UUID: LinkRecorderHandoffReply] = [:]
     /// Recorders this device is letting go of, with the request (by recorder ID).
     private var releasing: [String: (request: UUID, to: LinkHandoffDevice, linkID: UUID?)] = [:]
+    /// Offers this device accepted and waits on, by recorder ID, so Stop Waiting can call them off.
+    private var acceptedOffers: [String: LinkRecorderHandoffRequest] = [:]
     @ObservationIgnored private var releaseTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var watchTasks: [String: Task<Void, Never>] = [:]
     /// Releases this device already took over from.
@@ -297,7 +299,8 @@ public final class RecorderHandoff {
         connectAfterHandoff(session, id: id, from: ownerName ?? "the other device")
     }
 
-    /// Stops waiting for the other device (a request through sync, or an answer to clear).
+    /// Stops waiting for the other device (Stop Waiting): a request through sync is marked cancelled in its record, and
+    /// one over the link is called off there, so an owner still finishing keeps the recorder.
     public func cancel(_ session: DeviceSession) {
         guard let serial = session.recorderSerial, let id = recorderID(of: session) else { return }
         let kind = session.kind.id
@@ -306,8 +309,45 @@ public final class RecorderHandoff {
             record.phase = .cancelled
             library.saveRecorderHandoff(record)
         }
+        for sent in outgoing.values where sent.request.serial == serial && sent.request.kind == kind {
+            callOff(sent.request)
+        }
         outgoing = outgoing.filter { $0.value.request.serial != serial || $0.value.request.kind != kind }
+        // Waiting for an offer it accepted: tell the device that offered it.
+        if case .ownerFinishing? = states[id], let accepted = acceptedOffers[id] {
+            callOff(accepted)
+        }
+        acceptedOffers[id] = nil
         states[id] = nil
+    }
+
+    /// Calls off a request on the link: the same `id`, as `cancel`.
+    private func callOff(_ request: LinkRecorderHandoffRequest) {
+        let peerID = request.intent == .give && request.requester.syncID != thisDevice.id ? request.requester.syncID : request.addressedTo
+        guard let peer = peer(syncID: peerID) else { return }
+        var cancel = request
+        cancel.intent = .cancel
+        cancel.requester = me
+        cancel.addressedTo = peerID
+        cancel.sentAt = Date()
+        send(.recorderHandoffRequest(cancel), to: peer.linkID)
+    }
+
+    /// The other device called off a request: stop letting go (unless this device already has), or stop waiting for
+    /// a recorder it offered.
+    private func handleCancel(_ request: LinkRecorderHandoffRequest) {
+        let id = RecorderOwnership.id(kind: request.kind, serial: request.serial)
+        answered[request.id] = nil
+        if let current = releasing[id], current.request == request.id {
+            releaseTasks[id]?.cancel()
+            releaseTasks[id] = nil
+            releasing[id] = nil
+            session(kind: request.kind, serial: request.serial)?.endHandoffHold()
+            states[id] = nil
+        } else if acceptedOffers[id]?.id == request.id {
+            acceptedOffers[id] = nil
+            if case .ownerFinishing? = states[id] { states[id] = nil }
+        }
     }
 
     /// Clears an answer the page has shown (a refusal, or "Now on this iPhone").
@@ -379,6 +419,10 @@ public final class RecorderHandoff {
     }
 
     private func handle(_ request: LinkRecorderHandoffRequest, replyTo linkID: UUID?) {
+        if request.intent == .cancel {
+            handleCancel(request)
+            return
+        }
         if let reply = answered[request.id] {
             if let linkID { send(.recorderHandoffReply(reply), to: linkID) }
             return
@@ -404,6 +448,7 @@ public final class RecorderHandoff {
         case .give:
             // The other device lets go and sends its release; this one then takes over.
             states[id] = .ownerFinishing(owner: request.requester.name, finishing: nil)
+            acceptedOffers[id] = request
         default:
             beginRelease(session, to: request.requester, requestID: request.id, linkID: linkID)
         }
@@ -595,6 +640,7 @@ public final class RecorderHandoff {
             completed.insert(requestID)
         }
         let id = RecorderOwnership.id(kind: kind, serial: serial)
+        acceptedOffers[id] = nil
         let before = previousOwner ?? library.recorderOwner(kind: kind, serial: serial)
         let name = ownerName ?? outgoing.values.first { $0.request.kind == kind && $0.request.serial == serial }?.counterpart
             ?? before.flatMap { $0.ownerID == thisDevice.id ? nil : $0.ownerName } ?? "the other device"

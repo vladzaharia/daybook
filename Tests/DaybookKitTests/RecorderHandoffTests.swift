@@ -215,6 +215,40 @@ final class RecorderHandoffTests: XCTestCase {
         }
     }
 
+    /// Stop Waiting while the owner finishes an import calls the handoff off on the owner too: it keeps the recorder
+    /// and carries on importing, and the phone never reaches for it.
+    func testBehaviorStoppingTheWaitWhileTheOwnerFinishesLeavesTheRecorderWhereItIs() async throws {
+        let recorder = makeRecorder(count: 2, seconds: 1, oldestSeconds: 6)
+        recorder.pace = .milliseconds(12)
+        let mac = try await makeSide("Mac", .mac, recorder)
+        let phone = try await makeSide("Phone", .phone, recorder)
+        try await macStartsManaging(mac)
+        try await syncAll(mac, phone)
+        try await link(mac, phone)
+
+        try await waitUntil("the Mac lists the recordings") { mac.session.newRecordings.count == 2 }
+        mac.session.importRecordings(mac.session.newRecordings, automatic: true)
+        try await waitUntil("the first transfer is under way") { mac.session.queue.current != nil && (mac.session.phase?.fraction ?? 0) > 0 }
+        recorder.pace = nil
+
+        phone.handoff.useHere(phone.session)
+        try await waitUntil("the Mac says it's finishing an import") {
+            if case .ownerFinishing(_, .importing?) = phone.handoff.state(of: phone.session) { return true }; return false
+        }
+        XCTAssertTrue(mac.session.isHandingOff)
+        phone.handoff.cancel(phone.session)
+        XCTAssertEqual(phone.handoff.state(of: phone.session), .idle)
+
+        try await waitUntil("the Mac stops letting go") { !mac.session.isHandingOff && mac.handoff.state(of: mac.session) == .idle }
+        try await waitUntil("the Mac imports both", timeout: 20, state: { "Mac imported \(mac.imported.map(\.recordingID))" }) {
+            mac.imported.count == 2
+        }
+        XCTAssertTrue(mac.session.isLinked, "the Mac kept it")
+        XCTAssertEqual(mac.library.recorderOwner(kind: kind, serial: recorder.serial)?.ownerID, mac.id)
+        XCTAssertFalse(phone.session.isLinked, "the phone never reached for it")
+        XCTAssertTrue(phone.imported.isEmpty)
+    }
+
     func testWhatTheOldOwnerImportedIsNotImportedAgain() async throws {
         let recorder = makeRecorder(count: 1)
         let mac = try await makeSide("Mac", .mac, recorder)
