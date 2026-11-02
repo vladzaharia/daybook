@@ -59,14 +59,16 @@ struct MeetingInspector: View {
                                               placement: .init(planner: state.placements[meeting.id]))
     }
 
-    /// A conversation whose recordings changed is processed again here: its new recording transcribed, else its
-    /// summary written again from the transcript it has now.
-    static func summarizeAgain(_ state: AppState) -> @MainActor (UUID) -> Void {
-        { [weak state] id in
-            guard let state, let meeting = state.meetings.first(where: { $0.id == id }), !meeting.presentTracks.isEmpty,
-                  state.processingID != id else { return }
+    /// A conversation whose recordings changed is processed again here, as the library says it needs: its new
+    /// recording transcribed, else the summary it had written again from the transcript it has now. One the person
+    /// paused stays paused until Resume, and a recording moved out of it (`source`) waits in its new conversation
+    /// until asked for too.
+    static func processAgain(_ state: AppState, source: UUID? = nil) -> @MainActor (UUID, ProcessingRequest.Mode) -> Void {
+        { [weak state] id, mode in
+            guard let state, state.processingID != id, !state.pausedIDs.contains(id),
+                  !(source.map(state.pausedIDs.contains) ?? false) else { return }
             state.cancelQueued(id)
-            state.enqueue(id, mode: state.defaultProcessingMode(for: meeting))
+            state.enqueue(id, mode: mode)
         }
     }
 
@@ -77,7 +79,7 @@ struct MeetingInspector: View {
             perform(action, track: track, in: meeting)
         case .putBack(let track):
             state.library.putBackRecording(track.id, in: id, phoneName: state.phoneName(track), undoManager: undoManager,
-                                           changed: Self.summarizeAgain(state))
+                                           changed: Self.processAgain(state))
         case .process(let mode):
             state.enqueue(id, mode: mode)
         case .summarize:
@@ -116,14 +118,14 @@ struct MeetingInspector: View {
         case .removeRecording:
             // Its words leave the transcript at once; the summary is written again without them.
             state.library.removeRecording(track.id, from: id, phoneName: state.phoneName(track), undoManager: undoManager,
-                                          changed: Self.summarizeAgain(state))
+                                          changed: Self.processAgain(state))
         case .moveToNewConversation:
             let state = state, undoManager = undoManager
             Task {
                 do {
                     _ = try await state.library.moveRecordingToNewConversation(track.id, from: id, phoneName: state.phoneName(track), audio: { track in
                         try await state.library.audioURL(for: track, in: id)
-                    }, undoManager: undoManager, changed: Self.summarizeAgain(state))
+                    }, undoManager: undoManager, changed: Self.processAgain(state, source: id))
                 } catch {
                     state.report("Couldn’t Move the Recording", "Try again.", error)
                 }

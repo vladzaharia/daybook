@@ -7,14 +7,30 @@ import Foundation
 /// the conversation's folder with a mark on its track (`RecordingRemoval`), its transcript leaves the conversation's
 /// at once (`realign`), and Version History says what happened. A removed recording can be put back (Info lists it,
 /// and Undo does it); a moved one is in its own conversation, with its transcript, speakers, names, corrections, and
-/// bookmarks. `changed` hears of each conversation whose recordings changed (also on undo and redo), for the app to
-/// summarize it again where its summaries run.
+/// bookmarks. `changed` hears of each conversation whose recordings changed (also on undo and redo) with what it
+/// needs now (`processing(after:hadSummary:)`), for the app to ask for it where that runs.
 extension LibraryController {
+    /// What a conversation whose recordings changed needs: a recording not yet transcribed is transcribed; otherwise
+    /// its summary is written again from the transcript it has now, only where it had one (`hadSummary`), so a
+    /// summary that was stopped, or never written, waits to be asked for. Nil when nothing does.
+    nonisolated static func processing(after meeting: Meeting, hadSummary: Bool) -> ProcessingRequest.Mode? {
+        guard !meeting.presentTracks.isEmpty else { return nil }
+        if meeting.hasUntranscribedAudio { return .newAudio }
+        return hadSummary && !meeting.unifiedTranscript.isEmpty ? .summaryOnly : nil
+    }
+
+    /// Tells `changed` what the conversation needs now, if anything. `hadSummary` defaults to whether it has one.
+    private func recordingsChanged(_ id: UUID, hadSummary: Bool? = nil, _ changed: (@MainActor (UUID, ProcessingRequest.Mode) -> Void)?) {
+        guard let changed, let meeting = meeting(id),
+              let mode = Self.processing(after: meeting, hadSummary: hadSummary ?? (meeting.summary != nil)) else { return }
+        changed(id, mode)
+    }
+
     /// Remove Recording…: takes the recording (with the copies that share its audio) out of the conversation.
     /// Returns whether anything was removed.
     @discardableResult
     public func removeRecording(_ trackID: UUID, from id: UUID, phoneName: String? = nil, undoManager: UndoManager?,
-                                at now: Date = Date(), changed: (@MainActor (UUID) -> Void)? = nil) -> Bool {
+                                at now: Date = Date(), changed: (@MainActor (UUID, ProcessingRequest.Mode) -> Void)? = nil) -> Bool {
         guard let meeting = meeting(id), let track = meeting.tracks.first(where: { $0.id == trackID }), !track.isRemoved else { return false }
         let group = meeting.recordingGroup(of: trackID).map(\.id)
         let words = RecordingWords.inSentence(track, in: meeting, phoneName: phoneName)
@@ -25,7 +41,7 @@ extension LibraryController {
             meeting.revisions.append(MeetingRevision(date: now, field: "source:\(trackID.uuidString):removed", oldValue: "",
                                                      newValue: "Removed \(words)"))
         }
-        Task { await realign(id); changed?(id) }
+        Task { await realign(id); recordingsChanged(id, changed) }
         undoManager?.registerUndo(withTarget: self) { controller in
             controller.putBackRecording(trackID, in: id, phoneName: phoneName, undoManager: undoManager, changed: changed)
         }
@@ -36,7 +52,7 @@ extension LibraryController {
     /// Puts a removed recording back in its conversation. Returns whether it was put back.
     @discardableResult
     public func putBackRecording(_ trackID: UUID, in id: UUID, phoneName: String? = nil, undoManager: UndoManager?,
-                                 at now: Date = Date(), changed: (@MainActor (UUID) -> Void)? = nil) -> Bool {
+                                 at now: Date = Date(), changed: (@MainActor (UUID, ProcessingRequest.Mode) -> Void)? = nil) -> Bool {
         guard let meeting = meeting(id), let track = meeting.tracks.first(where: { $0.id == trackID }), track.isRemoved,
               track.removal?.movedTo == nil else { return false }
         let group = meeting.recordingGroup(of: trackID).map(\.id)
@@ -46,7 +62,7 @@ extension LibraryController {
             meeting.revisions.append(MeetingRevision(date: now, field: "source:\(trackID.uuidString):put-back", oldValue: "",
                                                      newValue: "Put back \(words)"))
         }
-        Task { await realign(id); changed?(id) }
+        Task { await realign(id); recordingsChanged(id, changed) }
         undoManager?.registerUndo(withTarget: self) { controller in
             controller.removeRecording(trackID, from: id, phoneName: phoneName, undoManager: undoManager, changed: changed)
         }
@@ -62,7 +78,7 @@ extension LibraryController {
     public func moveRecordingToNewConversation(_ trackID: UUID, from id: UUID, phoneName: String? = nil,
                                                audio: (RecordingTrack) async throws -> URL,
                                                undoManager: UndoManager?, at now: Date = Date(),
-                                               changed: (@MainActor (UUID) -> Void)? = nil) async throws -> UUID {
+                                               changed: (@MainActor (UUID, ProcessingRequest.Mode) -> Void)? = nil) async throws -> UUID {
         guard let source = meeting(id), let track = source.tracks.first(where: { $0.id == trackID }), !track.isRemoved else {
             throw DaybookError.libraryUnavailable
         }
@@ -126,12 +142,13 @@ extension LibraryController {
         }
         await realign(newID)
         await realign(id)
-        changed?(id)
-        changed?(newID)
+        recordingsChanged(id, changed)
+        // Its own conversation is summarized where the one it left was.
+        recordingsChanged(newID, hadSummary: source.summary != nil, changed)
         undoManager?.registerUndo(withTarget: self) { controller in
             Task {
                 await controller.takeBackMove(trackID, from: id, to: newID)
-                changed?(id)
+                controller.recordingsChanged(id, changed)
             }
         }
         undoManager?.setActionName("Move to New Conversation")

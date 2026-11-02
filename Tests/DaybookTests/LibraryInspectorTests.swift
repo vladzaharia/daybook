@@ -80,6 +80,59 @@ final class LibraryInspectorTests: XCTestCase {
         XCTAssertEqual(play(), .unavailable("Recording now"), "dimmed, with its reason, as the Mac won't play it")
     }
 
+    /// Regression: taking a recording out of a conversation the person paused started it again, summary and all.
+    /// It stays paused until Resume, and a recording moved out of it waits in its new conversation; once resumed,
+    /// a change writes the summary again.
+    func testBehaviorTakingARecordingOutOfAPausedConversationLeavesItPaused() async throws {
+        let rig = try await MultiSourceRig.make(in: self)
+        addTeardownBlock { await rig.tearDown() }
+        let state = rig.state
+        let id = try await rig.macConversation("Weekly sync", at: Date().addingTimeInterval(-600), seconds: 0.5,
+                                               audio: try rig.audio("weekly-mic.wav", frequency: 300))
+        let installed = state.installedModels
+        state.installedModels = []
+        try await state.importFiles([try rig.audio("weekly-call.wav", frequency: 520)], source: .imported, attachTo: id)
+        state.installedModels = installed
+        state.awaitingModels.remove(id)
+        let tracks = try XCTUnwrap(rig.meeting(id)?.tracks)
+        XCTAssertEqual(tracks.count, 2)
+        state.update(id) { meeting in
+            meeting.transcripts = tracks.map { track in
+                TrackTranscript(trackID: track.id, segments: [TranscriptSegment(trackID: track.id, start: 0, end: 0.5, text: "Words from \(track.fileName).")])
+            }
+            meeting.summary = MeetingSummary(overview: "They met.")
+            meeting.status = .ready
+        }
+        await state.library.realign(id)
+        state.pausedIDs = [id]
+        var heard: [UUID] = []
+        func changed(_ source: UUID? = nil) -> @MainActor (UUID, ProcessingRequest.Mode) -> Void {
+            let processAgain = MeetingInspector.processAgain(state, source: source)
+            return { changed, mode in heard.append(changed); processAgain(changed, mode) }
+        }
+
+        let call = try XCTUnwrap(tracks.first { $0.source == .imported }), mic = try XCTUnwrap(tracks.first { $0.source == .microphone })
+        XCTAssertTrue(state.library.removeRecording(call.id, from: id, undoManager: nil, changed: changed()))
+        try await waitUntil("the change to be heard") { heard == [id] }
+        XCTAssertTrue(state.pausedIDs.contains(id), "still paused")
+        XCTAssertFalse(state.queuedIDs.contains(id))
+        XCTAssertNil(state.processingID)
+
+        let moved = try await state.library.moveRecordingToNewConversation(mic.id, from: id, audio: { track in
+            try await state.library.audioURL(for: track, in: id)
+        }, undoManager: nil, changed: changed(id))
+        XCTAssertEqual(heard.last, moved, "its own conversation would be summarized where the paused one was")
+        XCTAssertFalse(state.queuedIDs.contains(moved), "and waits to be asked")
+        XCTAssertNil(state.processingID)
+        XCTAssertTrue(rig.inference.summarized.isEmpty)
+
+        // Resumed, a change writes the summary again.
+        state.pausedIDs = []
+        XCTAssertTrue(state.library.putBackRecording(call.id, in: id, undoManager: nil, changed: changed()))
+        try await waitUntil("the summary to be written again") { rig.inference.summarized.count == 1 }
+        try await rig.processed(id)
+    }
+
     /// Lets SwiftUI update and its animations run.
     private func settle() async throws { try await Task.sleep(for: .milliseconds(600)) }
 

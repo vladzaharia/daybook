@@ -209,6 +209,53 @@ final class RecordingRemovalTests: XCTestCase {
         XCTAssertTrue(restored.contains("Pricing") && restored.contains("interview"))
     }
 
+    func testBehaviorTakingARecordingOutWritesTheSummaryAgainOnlyWhereThereWasOne() async throws {
+        let library = try await open()
+        let (id, _, dropped, _) = try await twoRecordings(library)
+        let meeting = try XCTUnwrap(library.meeting(id))
+        // Transcribed, with its summary stopped before it was written: nothing writes one.
+        XCTAssertNil(LibraryController.processing(after: meeting, hadSummary: false))
+        XCTAssertEqual(LibraryController.processing(after: meeting, hadSummary: true), .summaryOnly)
+        // A recording not yet transcribed is transcribed, summary or not.
+        var untranscribed = meeting
+        untranscribed.transcripts.removeAll { $0.trackID == dropped }
+        XCTAssertEqual(LibraryController.processing(after: untranscribed, hadSummary: false), .newAudio)
+        // With every recording out, there's nothing to do.
+        var emptied = meeting
+        for index in emptied.tracks.indices { emptied.tracks[index].removal = RecordingRemoval(removedAt: Date()) }
+        XCTAssertNil(LibraryController.processing(after: emptied, hadSummary: true))
+
+        // It had a summary: removing a recording, and putting it back, each write it again.
+        library.update(id) { $0.summary = MeetingSummary(overview: "They covered the launch and pricing.") }
+        var heard: [(UUID, ProcessingRequest.Mode)] = []
+        let changed: @MainActor (UUID, ProcessingRequest.Mode) -> Void = { heard.append(($0, $1)) }
+        XCTAssertTrue(library.removeRecording(dropped, from: id, undoManager: nil, changed: changed))
+        try await waitUntil("the conversation to be summarized again") { heard.count == 1 }
+        XCTAssertTrue(library.putBackRecording(dropped, in: id, undoManager: nil, changed: changed))
+        try await waitUntil("and again") { heard.count == 2 }
+        XCTAssertEqual(heard.map(\.0), [id, id])
+        XCTAssertEqual(heard.map(\.1), [.summaryOnly, .summaryOnly])
+    }
+
+    func testBehaviorAMovedRecordingsConversationIsSummarizedWhereTheOneItLeftWas() async throws {
+        let library = try await open()
+        let (id, mic, dropped, _) = try await twoRecordings(library)
+        var heard: [UUID: ProcessingRequest.Mode] = [:]
+        let changed: @MainActor (UUID, ProcessingRequest.Mode) -> Void = { heard[$0] = $1 }
+        // No summary was written (it was stopped, say): neither conversation gets one.
+        _ = try await library.moveRecordingToNewConversation(dropped, from: id, audio: { track in
+            try await library.audioURL(for: track, in: id)
+        }, undoManager: nil, changed: changed)
+        XCTAssertTrue(heard.isEmpty)
+
+        // It had one: the new conversation, transcribed already, is summarized; the one left has nothing in it.
+        library.update(id) { $0.summary = MeetingSummary(overview: "They covered the launch.") }
+        let second = try await library.moveRecordingToNewConversation(mic, from: id, audio: { track in
+            try await library.audioURL(for: track, in: id)
+        }, undoManager: nil, changed: changed)
+        XCTAssertEqual(heard, [second: .summaryOnly])
+    }
+
     func testBehaviorAMovedRecordingsAudioIsFoundInItsNewConversation() async throws {
         let library = try await open()
         let (id, _, dropped, _) = try await twoRecordings(library)

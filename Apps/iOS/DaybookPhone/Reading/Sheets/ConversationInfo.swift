@@ -98,14 +98,14 @@ struct ConversationInfo: View {
         case .track(.play, let track):
             session.player.play(.source(track, 0), in: meeting, provider: provider)
         case .track(.removeRecording, let track):
-            library.removeRecording(track.id, from: id, undoManager: undoManager, changed: summarizeAgain)
+            library.removeRecording(track.id, from: id, undoManager: undoManager, changed: processAgain)
         case .track(.moveToNewConversation, let track):
-            let library = library, provider = provider, undoManager = undoManager, summarizeAgain = summarizeAgain
+            let library = library, provider = provider, undoManager = undoManager, processAgain = processAgain
             Task {
                 do {
                     _ = try await library.moveRecordingToNewConversation(track.id, from: id, audio: { track in
                         try await provider.localAudio(for: track, in: id, progress: { _ in })
-                    }, undoManager: undoManager, changed: summarizeAgain)
+                    }, undoManager: undoManager, changed: processAgain)
                 } catch {
                     session.alert = ReadingAlert(title: "Couldn’t Move the Recording", error: error, fallback: "Try again.")
                 }
@@ -113,7 +113,7 @@ struct ConversationInfo: View {
         case .track:
             break
         case .putBack(let track):
-            library.putBackRecording(track.id, in: id, undoManager: undoManager, changed: summarizeAgain)
+            library.putBackRecording(track.id, in: id, undoManager: undoManager, changed: processAgain)
         case .process(let mode):
             if mode == .summaryOnly { library.summarize(id, placement: placement) } else { library.requestProcessing(id, mode: mode) }
         case .summarize(let template):
@@ -137,14 +137,12 @@ struct ConversationInfo: View {
         }
     }
 
-    /// A conversation whose recordings changed: its new recording is transcribed where that happens, else its
-    /// summary is written again from the transcript it has now.
-    private var summarizeAgain: @MainActor (UUID) -> Void {
+    /// A conversation whose recordings changed, with what the library says it needs: its new recording is
+    /// transcribed where that happens, else the summary it had is written again from the transcript it has now.
+    private var processAgain: @MainActor (UUID, ProcessingRequest.Mode) -> Void {
         let library = library, placement = placement
-        return { id in
-            guard let meeting = library.meeting(id), !meeting.presentTracks.isEmpty else { return }
-            if meeting.hasUntranscribedAudio { library.requestProcessing(id, mode: .newAudio) }
-            else if !meeting.unifiedTranscript.isEmpty { library.summarize(id, placement: placement) }
+        return { id, mode in
+            if mode == .summaryOnly { library.summarize(id, placement: placement) } else { library.requestProcessing(id, mode: mode) }
         }
     }
 }
