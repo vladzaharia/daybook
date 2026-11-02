@@ -386,6 +386,11 @@ enum ModelSettingsDemo {
         if let use = ModelDemo.value("use"), let split = use.firstIndex(of: "=") {
             manager.use(String(use[use.index(after: split)...]), for: ModelRole(String(use[..<split])))
         }
+        // "free:<bytes>": that much is free where models go, to show what a download that won't fit says.
+        if let free = ModelDemo.value("free").flatMap(Int64.init) {
+            manager.readSpace = { _ in ModelSpace(free: free) }
+            await manager.refresh()
+        }
         if let key = ModelDemo.value("downloading"), !key.isEmpty { state.downloadModels([key]) }
         if ModelDemo.value("updates") != nil { await manager.checkForUpdates() }
         try? await Task.sleep(for: .milliseconds(300))
