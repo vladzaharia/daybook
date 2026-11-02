@@ -463,11 +463,11 @@ final class PhoneLinkTests: XCTestCase {
         await rig.state.flush()
 
         // This build opens.
-        let relaunched = AppState(libraryURL: rig.root, defaults: rig.defaults)
+        let relaunched = AppState(libraryURL: rig.root, defaults: rig.defaults, capture: MultiSourceRig.capture(rig.microphone))
         PhoneLinkRig.useLoopback(relaunched, keyStore: phone.macKeyStore)
         await relaunched.initialize()
         defer { Task { await phone.client.disconnect(from: phone.macID); await relaunched.phoneLink.shutDown() } }
-        let again = MultiSourceRig(state: relaunched, root: rig.root, defaults: rig.defaults, suite: rig.suite)
+        let again = MultiSourceRig(state: relaunched, root: rig.root, defaults: rig.defaults, suite: rig.suite, microphone: rig.microphone)
         let session = try XCTUnwrap(relaunched.devices.session(phone.phoneID.uuidString))
         XCTAssertEqual(session.device.recordAlongOffOwed, true)
         XCTAssertFalse(session.device.recordsAlongsideMac, "it still may not start recording here")
