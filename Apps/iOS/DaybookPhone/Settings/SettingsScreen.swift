@@ -51,6 +51,7 @@ struct SettingsScreen: View {
             }
         }
         .presentationSizing(SheetPagesSizing(asPages: surface != .pocket))
+        .environment(\.closeSettings) { dismiss() }
         .pairingSheet(isPresented: $showingPairing)
         .addRecorderSheet(isPresented: $showingAddDevice) { id in
             if let id { path = [.device(id)] }

@@ -13,6 +13,22 @@ public enum SpeakerProfileDemo {
     public static var isRequested: Bool { CommandLine.arguments.contains("--speaker-demo") }
     public static let recognized = "Vendor call"
 
+    // Speaker Profiles on either app, for screenshots: `--speaker-profile <name>` selects a profile (the Mac's
+    // window; the iPhone opens one with `--open-settings speaker-profile:<name>`), `--profile-name <name>` types a
+    // name into it (another profile's, to offer a merge), `--merge-into <name>` asks to merge it into that one
+    // (`--confirm-merge`: and merges), and `--delete-profile` asks to delete it.
+    public static var selectedProfile: String? { value(after: "--speaker-profile") }
+    public static var typedName: String? { value(after: "--profile-name") }
+    public static var mergeTarget: String? { value(after: "--merge-into") }
+    public static var confirmsMerge: Bool { CommandLine.arguments.contains("--confirm-merge") }
+    public static var asksToDelete: Bool { CommandLine.arguments.contains("--delete-profile") }
+
+    private static func value(after flag: String) -> String? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
+        return arguments[index + 1]
+    }
+
     public static func seed(_ library: LibraryController, now: Date = Date()) async {
         guard library.isLoaded, !library.meetings.contains(where: { $0.title == recognized }) else { return }
         let vlad = voice(1), priya = voice(2), sam = voice(3)
