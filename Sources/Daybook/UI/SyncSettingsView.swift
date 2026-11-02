@@ -154,7 +154,8 @@ struct SyncSettingsView: View {
             let words = SyncWarningWords.split(warning)
             ProblemLine(text: words.text, details: words.details)
         }
-        SyncEncryptionRows(state: state, shown: shown, problem: $problem)
+        // A library removed from iCloud has nothing to encrypt: the new one starts encrypted.
+        if !shown.offersNewLibrary { SyncEncryptionRows(state: state, shown: shown, problem: $problem) }
         Toggle("Transcribe synced recordings on this Mac", isOn: $state.processSyncedAudio)
             .controlSize(.regular)
     }
@@ -166,7 +167,7 @@ struct SyncSettingsView: View {
         } else if shown.isConnected {
             HStack(spacing: Space.s2) {
                 Spacer()
-                if shown.encryption.isOn {
+                if shown.encryption.isOn, !shown.offersNewLibrary {
                     Button("Erase Deleted Conversations from iCloud…") { confirmingErase = true }
                         .disabled(shown.isSyncing)
                 }
