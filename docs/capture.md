@@ -443,10 +443,12 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
   Call) sits in the time lane, so arriving words never move the notes. Compact, it shows the newest
   line only, without the label (`.panelCompact`). The conversation page, after your notes: the newest
   eight lines while this Mac records it, You or Call before the words. A recorder's Listen Live page:
-  six lines in the page's body type (`.feed`). Once the recording stops, saved captions read in the
-  transcript's place (DaybookUI's `SavedCaptionsView`, as on the iPhone): each caption with its time,
-  which plays the recording it was heard from, the person or device before its words, in lighter ink
-  than a transcript, with no editing. Each surface observes the captions directly, so a revised word
+  six lines in the page's body type (`.feed`). Once the recording stops, the saved captions read on
+  the conversation page after your notes until a transcript made after them replaces them
+  (`LiveCaptionStore.shown`), drawn as the iPhone's transcript page draws them (DaybookUI's
+  `SavedCaptionsView`): each caption with its time, which plays the recording it was heard from and
+  marks the caption under the playhead, the person or device before its words, in lighter ink than a
+  transcript, with no editing. Each surface observes the captions directly, so a revised word
   redraws only it.
 - **Settings › General › Live Captions.** DaybookUI's `LiveCaptionSettingsSection`, the iPhone's
   too: "Show while recording" (on by default, as on the iPhone) and the language ("Same as This Mac",
