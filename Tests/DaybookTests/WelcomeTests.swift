@@ -61,12 +61,18 @@ final class WelcomeTests: XCTestCase {
         await state.flush()
     }
 
-    /// A library that couldn't open says so in the window: Record stops waiting.
+    /// A library that couldn't open says so on the page (`libraryProblem`, as `initialize` sets it): Record stops
+    /// waiting. Another problem, such as a save that failed, doesn't.
     func testBehaviorRecordStopsWaitingWhenTheLibraryCantOpen() async throws {
         let state = unopened()
         let (answer, waiting) = waitForLibrary(state)
         try await Task.sleep(for: .milliseconds(50))
-        state.report("Couldn’t Open Your Library", "Quit Daybook and open it again.", CocoaError(.fileReadNoPermission))
+        state.report("Couldn’t Save Changes", "Try again.", CocoaError(.fileWriteNoPermission))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(answer.value, "still waiting for the library")
+        state.libraryProblem = AppProblem(title: "Couldn’t Open Your Library",
+                                          fallback: "Its folder couldn’t be opened. Check it in Finder, then try again.",
+                                          error: CocoaError(.fileReadNoPermission))
         await waiting.value
         XCTAssertEqual(answer.value, false)
     }
