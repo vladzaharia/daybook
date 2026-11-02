@@ -116,6 +116,14 @@ struct LibraryView: View {
             if (note.object as? NSWindow) === shareAnchor.window { noteScreen() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in noteScreen() }
+        // On screen, and each time it comes forward, the window's columns are checked against what they should be.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { note in
+            guard let window = note.object as? NSWindow, window === shareAnchor.window, window.occlusionState.contains(.visible) else { return }
+            DispatchQueue.main.async { matchShownColumns() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            if (note.object as? NSWindow) === shareAnchor.window { DispatchQueue.main.async { matchShownColumns() } }
+        }
         // Tags… and the byline's people ask for the inspector here, so they widen a narrow window as ⌃⌘I does.
         .onChange(of: state.inspectorRequest) { _, _ in askForInspector() }
         .onChange(of: inspectorPresented) { _, _ in adaptColumns() }
@@ -221,6 +229,15 @@ struct LibraryView: View {
         guard ColumnFit(columns) != ColumnFit(target) else { return }
         adaptedColumns = target
         withAnimation { columns = target }
+    }
+
+    /// The cap applied again as the window shows and comes forward, and the sidebar the window shows put aside when
+    /// `columns` says it is: `columns` set before the window was on screen isn't taken as proof of what it shows.
+    private func matchShownColumns() {
+        adaptColumns()
+        guard ColumnFit(columns) < .all, let window = shareAnchor.window,
+              let sidebar = ColumnFit.sidebarItem(in: window.contentView), !sidebar.isCollapsed else { return }
+        sidebar.isCollapsed = true
     }
 
     /// The inspector shows only where it leaves the page its 560 pt beside the list (the sidebar stepping aside), or in a
@@ -365,6 +382,16 @@ enum ColumnFit: String, Comparable, CaseIterable {
 
     /// A stored choice; anything unreadable is every column.
     init(_ stored: String) { self = ColumnFit(rawValue: stored) ?? .all }
+
+    /// The sidebar's item in the split view of the window's columns, found through `view` and its subviews.
+    @MainActor
+    static func sidebarItem(in view: NSView?) -> NSSplitViewItem? {
+        guard let view else { return nil }
+        if let split = (view as? NSSplitView)?.delegate as? NSSplitViewController,
+           let sidebar = split.splitViewItems.first(where: { $0.behavior == .sidebar }) { return sidebar }
+        for subview in view.subviews { if let found = sidebarItem(in: subview) { return found } }
+        return nil
+    }
 
     var visibility: NavigationSplitViewVisibility {
         switch self {

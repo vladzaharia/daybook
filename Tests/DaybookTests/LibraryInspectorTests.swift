@@ -171,6 +171,32 @@ final class LibraryInspectorTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "isInspectorPresented"))
     }
 
+    /// With the inspector asked for and the window too narrow for it (it waits), the sidebar still steps aside below
+    /// 1000 pt, in the window's split view and not only in the binding, and stays aside as the window comes forward.
+    func testBehaviorANarrowWindowWithTheInspectorAskedForStillPutsTheSidebarAside() async throws {
+        let root = makeTemporaryFolder("DaybookInspectorNarrow")
+        let defaults = makeTestDefaults()
+        let state = AppState(libraryURL: root, defaults: defaults)
+        await state.initialize()
+        defaults.set(true, forKey: "isInspectorPresented")
+        state.selectedID = state.newMeeting(title: "Weekly product sync with the design and research teams")
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 480), styleMask: [.titled, .resizable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingController(rootView: LibraryView(state: state).defaultAppStorage(defaults))
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setContentSize(NSSize(width: 720, height: 480))
+        defer { window.close() }
+        try await settle()
+        let sidebar = try XCTUnwrap(ColumnFit.sidebarItem(in: window.contentView), "The window's sidebar")
+        XCTAssertTrue(sidebar.isCollapsed, "the sidebar steps aside")
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        try await settle()
+        XCTAssertTrue(sidebar.isCollapsed, "still aside once the window comes forward")
+    }
+
     /// Lets SwiftUI update and its animations run.
     private func settle() async throws { try await Task.sleep(for: .milliseconds(600)) }
 
