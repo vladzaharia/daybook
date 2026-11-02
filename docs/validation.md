@@ -120,6 +120,61 @@ change:
   with its notices, licenses, and the compiled icon. `dist/` and `build/` were removed afterwards.
 - `bash scripts/ci/tests/run-tests.sh --require-all`: 399 passed, 0 failed, 0 skipped.
 
+**Final review (14).** A last review of the integrated branch's code, screens, and security found 14 more. Fixed on
+`audit/2026-11-01/wave2`:
+
+- **A phone's owed Record along off (high).** `ConfiguredDevice`'s lenient decoder (devices core) didn't read the
+  `recordAlongOffOwed` link pairing added, so the off an earlier build left was dropped at the next launch, and the
+  Mac asked that iPhone to record again. It's read back; a phone that doesn't connect before a relaunch still isn't
+  asked (`DeviceHubTests`, `PhoneLinkTests`).
+- **A recording taken out of a conversation** (Remove Recording, Move to New Conversation) no longer sets its length,
+  plays for its timeline, or is what Share › Audio sends (`Meeting.primaryRecording`). With none left, Share › Audio
+  and Reprocess say "No recording yet", and the row, the header, and the transcript read as notes only. "The only
+  recording" counts the recordings left, a microphone and its echo-removed copy as one, so Move to New Conversation
+  and Adjust Timing… can't empty a conversation; Adjust Timing… opens on a recording still in it.
+- **Live captions at Stop.** A caption write that fails is kept by the store and read as it would have left them (the
+  iPhone's filing builds on it), and written again after 2, 10, 30, and 120 s: Stop's last lines no longer depend on
+  the one save after it.
+- **Sync: winning over a rival that had started over.** The winner took the rival's Start Over as its own, so a
+  library encrypted after it began as plaintext lost its plaintext history's standing and its place among rivals.
+  What a losing rival started over from is now replaced through the rival (`sealing.rivals`, docs/icloud-sync.md).
+- **Cloud keys.** An OpenRouter key (`sk-or-`) is refused in either field, and any key without `sk-ant-` in
+  Anthropic's, before anything is sent (`CloudAPIKey.refusal`).
+- **The recovery key** can't be selected, so its Copy button (this device only, concealed, expiring) is the only
+  way to copy it.
+- **Screens.** On the open Duo at the accessibility sizes, captions give way before Bookmark and Stop, and the
+  notebook keeps only the newest line, as in the hand. Writing notes in book posture moves Bookmark beside the clock,
+  so Stop and Done stay above the keyboard. Settings › Cloud on the iPhone keeps a provider's name whole, its key
+  under it at the accessibility sizes. Version History says a photo or recording change by its title alone, without
+  "Before: Empty / After: added". The Mac's conversation page no longer redraws when the inspector toggles.
+- **The Mac's window.** Its columns are checked again as it shows and comes forward. The reported 190 pt page (a
+  720 pt window, the inspector stored, the sidebar beside the list) didn't happen in four relaunches here, with and
+  without the demo, nor with the saved window and columns from different runs; every run of `.build/debug/Daybook`
+  shares those, so a debug `--window-size` run now forgets them and opens at that size, and an inspector capture no
+  longer depends on the run before it.
+
+**Final review, verified.**
+
+- `swift build --build-tests`: clean.
+- Full `swift test`: exit 0, 2,177 tests, 0 failures, 3 skipped (as above). By bundle: DaybookKitTests 572,
+  DaybookTests 490, DaybookCoreTests 453, DaybookIntelligenceTests 200, DaybookDevicesTests 147, DaybookUITests 118,
+  DaybookLinkTests 93, DaybookLiveTests 43, DaybookDesignTests 36, DaybookCaptionsTests 25. Two existing settings
+  tests left an empty preferences file each in ~/Library/Preferences; they keep them in the temporary folder now.
+- `scripts/build-ios.sh --test` on a clone of iPhone 18 Pro: TEST SUCCEEDED, 375 tests, 0 failures. The new open Duo
+  check fails on the recorder from before (805 pt of content on a 635 pt page).
+- Screenshots on clones of iPhone 18 Pro and the Duo: Settings › Cloud at AX5 and at the default size; the open Duo
+  recording with captions at AX5 (Bookmark and Stop whole, the newest caption line) and at the default size; book
+  posture writing notes (Stop and Done above the keyboard, Bookmark beside the clock).
+- `.build/debug/Daybook --snapshot`: a run at 720 pt, then one at `--window-size 1400x860 --inspector`, which showed
+  the inspector.
+- `./scripts/build-app.sh --debug --ad-hoc`: BUILD SUCCEEDED, valid ad hoc signature; `dist/` and `build/` removed.
+- `bash scripts/ci/tests/run-tests.sh --require-all`: 399 passed, 0 failed, 0 skipped.
+
+Still open from the final review: the Mac's 190 pt page wasn't reproduced, so it's unconfirmed whether the check as
+the window shows covers what the review saw. Recordings of the library a losing rival started over from, whose key
+is lost, are kept as a rival's are: with no key, nothing shows the winner holds them, so any its devices didn't already
+delete stay in iCloud. Version History doesn't show a photo's thumbnail beside "Photo added".
+
 **Needs the owner.**
 
 - **Product decisions** from the audit, none changed here: SNR weighting and the stored alignment pipeline
