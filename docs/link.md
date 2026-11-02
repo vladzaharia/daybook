@@ -540,7 +540,7 @@ iCloud Keychain. There's no Mac-to-Mac path; two Macs rely on iCloud Keychain or
 
 ## Tests
 
-`swift test --filter DaybookLinkTests`: 95 tests, about 9 s. Everything runs on 127.0.0.1 inside
+`swift test --filter DaybookLinkTests`: 93 tests, about 9 s. Everything runs on 127.0.0.1 inside
 the test process, and nothing is advertised.
 - **Pairings that can't be read** (`LinkKeyStoreTests`, `LinkDiscoveryTests`): a damaged item is left out
   and listed apart, the others keep working, pairing again replaces it, unpairing removes it, a damaged
@@ -554,9 +554,11 @@ the test process, and nothing is advertised.
   the code's one separator, the side to update, and the refusals.
 - **In the apps:** `PhoneLinkTests` on the Mac (a pairings read that fails keeps every phone and is
   tried again, a link that can't start keeps trying, a refused unpair is said, a damaged pairing,
-  wake, the page's Stop, notes owed to a phone that was away, `PeerPage` for both devices) and
-  `LinkServicesTests` on the iPhone (the same keychain cases, sends in order, Stop on a Mac, a Mac's
-  problems and Last seen, Macs of another library).
+  wake, the page's Stop, a phone asked whatever Can start recording says here and declining in its own
+  words, notes owed to a phone that was away and a failed send owed again without undoing a newer
+  paragraph, Settings' Over Wi‑Fi line, `PeerPage` for both devices) and `LinkServicesTests` on the
+  iPhone (the same keychain cases, sends in order, Stop on a Mac, a Mac's problems and Last seen, Local
+  Network off on a paired Mac's row and page, a failed code's reason kept, Macs of another library).
 - **The exchange on its own:** same keys on both sides; a wrong code fails at its first different
   bit; a guessing device in the middle fails; tampering with the transcript fails; a reflected
   key is rejected.
