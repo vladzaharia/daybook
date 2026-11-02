@@ -118,6 +118,28 @@ final class DeviceHubTests: XCTestCase {
         hub.shutDown()
     }
 
+    /// Every setting a device stores reads back as it was written, so a save and a launch never reset one.
+    func testBehaviorEveryStoredSettingReadsBackAsWritten() throws {
+        var phone = ConfiguredDevice(id: "phone", kind: DaybookPhoneIntegration().kind, name: "Pocket iPhone",
+                                     addedAt: Date(timeIntervalSince1970: 1_780_000_000))
+        phone.disabledMethods = [.files]
+        phone.importsAutomatically = false
+        phone.automaticImportsSince = Date(timeIntervalSince1970: 1_780_100_000)
+        phone.alsoRecordsWithMac = false
+        phone.recordAlongOffOwed = true
+        phone.fastTransferForLongRecordings = false
+        let data = try StoredDevices().encoded([phone])
+        let read = StoredDevices(data, knownKinds: [DaybookPhoneIntegration.id])
+        XCTAssertEqual(read.devices, [phone])
+        XCTAssertEqual(read.devices.first?.recordAlongOffOwed, true)
+
+        // Through the hub, as a relaunch reads it.
+        defaults.set(data, forKey: DeviceHub.storageKey)
+        let hub = DeviceHub(environment: environment())
+        XCTAssertEqual(hub.devices, [phone])
+        hub.shutDown()
+    }
+
     /// A stored list that isn't a list at all is kept aside, and the hub starts with none.
     func testBehaviorAStoredListThatCantBeReadIsKeptAside() throws {
         let garbage = Data("{not json".utf8)

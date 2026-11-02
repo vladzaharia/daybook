@@ -500,6 +500,46 @@ final class PhoneLinkTests: XCTestCase {
         await relaunched.sources.recorders.settle()
     }
 
+    /// An off owed to a phone outlasts a relaunch before the phone connects: it's carried over once, so the device must
+    /// keep it as it's read back, or the next launch would ask the phone to record again.
+    func testBehaviorAnOffOwedToAPhoneOutlastsARelaunchBeforeItConnects() async throws {
+        let rig = try await rig()
+        let phone = try await PhoneLinkRig.connect(rig.state, features: [LinkCapabilities.recordPermissionFeature])
+        rig.state.devices.session(phone.phoneID.uuidString)?.update { $0.alsoRecordsWithMac = false }
+        rig.defaults.removeObject(forKey: AppState.recordAlongCarriedOverKey)
+        await phone.client.disconnect(from: phone.macID)
+        await rig.state.phoneLink.shutDown()
+        await rig.state.flush()
+
+        // This build opens and carries the off over, and quits before the phone connects.
+        let first = AppState(libraryURL: rig.root, defaults: rig.defaults)
+        XCTAssertEqual(first.devices.session(phone.phoneID.uuidString)?.device.recordAlongOffOwed, true)
+        XCTAssertTrue(rig.defaults.bool(forKey: AppState.recordAlongCarriedOverKey))
+        await first.phoneLink.shutDown()
+        await first.flush()
+
+        // It opens again: the off is still owed, though it's never carried over twice.
+        let relaunched = AppState(libraryURL: rig.root, defaults: rig.defaults, capture: MultiSourceRig.capture(rig.microphone))
+        PhoneLinkRig.useLoopback(relaunched, keyStore: phone.macKeyStore)
+        await relaunched.initialize()
+        defer { Task { await phone.client.disconnect(from: phone.macID); await relaunched.phoneLink.shutDown() } }
+        let again = MultiSourceRig(state: relaunched, root: rig.root, defaults: rig.defaults, suite: rig.suite, microphone: rig.microphone)
+        let session = try XCTUnwrap(relaunched.devices.session(phone.phoneID.uuidString))
+        XCTAssertEqual(session.device.recordAlongOffOwed, true, "still owed after a second launch")
+
+        try await phone.reconnect(to: relaunched)
+        try await waitUntil("the off it owes") { phone.events.permissions.contains { $0.asksReceiverOff == true && !$0.allowed } }
+        // Its word that it would record doesn't undo the off it hasn't taken yet.
+        try await phone.client.send(.recordPermission(LinkRecordPermission(allowed: true)), to: phone.macID)
+        try await waitUntil("its word") { relaunched.phoneLink.recordPermissions[phone.phoneID] == true }
+        let id = macStartsRecording(again)
+        await relaunched.sources.recorders.settle()
+        XCTAssertTrue(phone.recorder.requests.isEmpty, "not asked while the off is owed")
+        XCTAssertNil(relaunched.meetings.first { $0.id == id }?.companions)
+        macStopsRecording(again, id)
+        await relaunched.sources.recorders.settle()
+    }
+
     /// Only an off set in an earlier build is carried over, and only once: a phone switched off since isn't owed it.
     func testBehaviorOnlyAnOffFromBeforeTheChangeIsCarriedOver() async throws {
         let rig = try await rig()

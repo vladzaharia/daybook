@@ -197,6 +197,7 @@ public struct ConfiguredDevice: Codable, Identifiable, Hashable {
         // recorder imports unasked.
         automaticImportsSince = (try? container.decodeIfPresent(Date.self, forKey: .automaticImportsSince)) ?? added ?? Date()
         alsoRecordsWithMac = try? container.decodeIfPresent(Bool.self, forKey: .alsoRecordsWithMac)
+        recordAlongOffOwed = try? container.decodeIfPresent(Bool.self, forKey: .recordAlongOffOwed)
         fastTransferForLongRecordings = try? container.decodeIfPresent(Bool.self, forKey: .fastTransferForLongRecordings)
     }
 
