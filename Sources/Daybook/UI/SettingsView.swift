@@ -406,6 +406,7 @@ private struct LibrarySettings: View {
                         .textSelection(.enabled)
                         .help(state.storageURL.path)
                 }
+                StorageSettingsRow(state: state)
             }
 
             SyncSettingsView(state: state)
