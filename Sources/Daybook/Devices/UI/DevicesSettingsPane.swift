@@ -257,7 +257,7 @@ struct PhoneSettingsRows: View {
             LabeledContent("Recordings") {
                 HStack(spacing: Space.s2) {
                     Text("Sync is off").foregroundStyle(.secondary)
-                    Button("Library Settings…") { LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: "settingsPane") }
+                    Button("Library Settings…") { LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: SettingsPane.storageKey) }
                 }
             }
         }

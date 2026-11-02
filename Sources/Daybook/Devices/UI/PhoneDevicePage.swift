@@ -75,7 +75,7 @@ struct PhoneOverview: View {
             stopPending: phone?.recordCommandPending == true,
             pairAgain: { state.requestAddDevice(kind: DaybookPhoneIntegration.id) },
             problemAction: session.problem == nil ? nil : (title: "Library Settings…", perform: {
-                LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: "settingsPane")
+                LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: SettingsPane.storageKey)
                 openSettings()
             }),
             canStartRecording: phone?.isSetUp == true ? Binding(get: { session.device.recordsAlongsideMac },

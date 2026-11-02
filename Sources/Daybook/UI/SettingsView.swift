@@ -8,7 +8,7 @@ import DaybookUI
 import ServiceManagement
 import SwiftUI
 
-/// The Settings panes, restored from `@AppStorage("settingsPane")`.
+/// The Settings panes, restored from `@AppStorage(SettingsPane.storageKey)`.
 enum SettingsPane: String {
     case general, models, cloud, devices, library
 }
@@ -16,7 +16,7 @@ enum SettingsPane: String {
 /// Settings (Direction A §5.14): five grouped panes, 600 pt wide, each as tall as its content.
 struct SettingsView: View {
     let state: AppState
-    @AppStorage("settingsPane") private var pane = SettingsPane.general
+    @AppStorage(SettingsPane.storageKey) private var pane = SettingsPane.general
 
     var body: some View {
         TabView(selection: $pane) {
@@ -78,8 +78,8 @@ private struct GeneralSettings: View {
     let state: AppState
     /// The import-matching switch lives on the sources coordinator, which the window doesn't follow.
     @Bindable private var sources: MultiSourceCoordinator
-    @AppStorage("showsFloatingNotesWhileRecording") private var showsFloatingNotes = true
-    @AppStorage("showsMenuBarExtra") private var showsMenuBarExtra = true
+    @AppStorage(AppState.Preference.showsFloatingNotesWhileRecording) private var showsFloatingNotes = true
+    @AppStorage(AppState.Preference.showsMenuBarExtra) private var showsMenuBarExtra = true
     @AppStorage("screenCaptureRequested") private var screenCaptureRequested = false
     @State private var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var screenCapture = CGPreflightScreenCaptureAccess()

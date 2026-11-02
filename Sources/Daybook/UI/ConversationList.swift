@@ -531,7 +531,7 @@ private struct SyncAttention: View {
     var body: some View {
         if let text {
             LibrarySyncLine(text) {
-                LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: "settingsPane")
+                LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: SettingsPane.storageKey)
                 openSettings()
                 NSApp.activate()
             }

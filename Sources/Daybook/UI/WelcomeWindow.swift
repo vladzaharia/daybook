@@ -13,7 +13,7 @@ struct WelcomeWindow: View {
     }
 
     let state: AppState
-    @AppStorage("onboardingCompleted") private var onboardingCompleted = false
+    @AppStorage(AppState.Preference.onboardingCompleted) private var onboardingCompleted = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var page = WelcomeWindow.initialPage

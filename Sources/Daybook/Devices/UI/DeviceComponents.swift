@@ -188,10 +188,9 @@ extension DeviceSession {
 /// Actions shared by the banner, the page, and menus.
 @MainActor
 enum DeviceActions {
-    /// Settings › Devices. The Settings window reads its pane from `settingsPane`.
+    /// Settings › Devices.
     static func openSettings(_ openSettings: OpenSettingsAction) {
-        LaunchOptions.defaults.set("devices", forKey: "settingsPane")
-        openSettings()
+        SettingsPane.devices.open(with: openSettings, activating: false)
     }
 
     /// Show Audio File in Finder for an imported recording.

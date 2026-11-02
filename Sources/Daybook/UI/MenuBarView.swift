@@ -104,7 +104,7 @@ private struct MenuBarStatusItems: View {
     }
 
     private func showSettings(_ pane: SettingsPane) {
-        LaunchOptions.defaults.set(pane.rawValue, forKey: "settingsPane")
+        LaunchOptions.defaults.set(pane.rawValue, forKey: SettingsPane.storageKey)
         openSettings()
         NSApp.activate()
     }

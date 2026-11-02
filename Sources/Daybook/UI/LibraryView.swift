@@ -22,7 +22,7 @@ extension FocusedValues {
 /// The main window: places, the conversation list, and the page, with an optional inspector.
 struct LibraryView: View {
     @Bindable var state: AppState
-    @AppStorage("isInspectorPresented") private var inspectorPresented = false
+    @AppStorage(AppState.Preference.isInspectorPresented) private var inspectorPresented = false
     @State private var columns = NavigationSplitViewVisibility.all
     /// The most columns the window has room for now (`ColumnFit`); the person's own choice is `storedColumns`.
     @State private var columnCap = ColumnFit.all

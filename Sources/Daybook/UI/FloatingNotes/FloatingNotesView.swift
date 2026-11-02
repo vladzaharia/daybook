@@ -389,7 +389,7 @@ struct ChipMenuItems: View {
     }
 
     private func openSettingsPane(_ pane: SettingsPane) {
-        LaunchOptions.defaults.set(pane.rawValue, forKey: "settingsPane")
+        LaunchOptions.defaults.set(pane.rawValue, forKey: SettingsPane.storageKey)
         openSettings()
         NSApp.activate()
     }

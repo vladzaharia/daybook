@@ -196,7 +196,7 @@ struct ConversationStatus: View {
     private let sources: MultiSourceCoordinator
     /// A summary's countdown, and the cloud at work.
     private let placements: SummaryPlacements
-    @AppStorage(SettingsPaneKey.storageKey) private var settingsPane = "general"
+    @AppStorage(SettingsPane.storageKey) private var settingsPane = "general"
     @Environment(\.openSettings) private var openSettings
     @Environment(\.undoManager) private var undoManager
 
@@ -372,7 +372,6 @@ struct StatusBox<Actions: View>: View {
     }
 }
 
-enum SettingsPaneKey { static let storageKey = "settingsPane" }
 
 /// Plain-language reasons for processing failures, for Floating Notes' box, which has only the conversation's message.
 /// The page words a failure from its stored kind (`FailureWords`). The technical message stays one click away.
