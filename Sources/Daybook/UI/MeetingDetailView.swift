@@ -15,7 +15,6 @@ struct MeetingDetailView: View {
     let meetingID: UUID
     @State private var playbackRequest: Task<Void, Never>?
     @State private var viewingPhoto: PhotoViewerRequest?
-    @AppStorage(AppState.Preference.isInspectorPresented) private var inspectorPresented = false
     @Environment(\.readingScale) private var scale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
