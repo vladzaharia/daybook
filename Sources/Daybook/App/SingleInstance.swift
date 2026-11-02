@@ -9,6 +9,9 @@ import Foundation
 /// A copy that finds an earlier one, before it starts anything, brings that one forward and quits. Copies that start
 /// at the same moment agree on the earlier start (then the lower process ID), so exactly one stays. A copy another one
 /// opened to start over (`AppRelaunch`, after a library move) first waits for that one to quit, and never gives way to it.
+///
+/// It all runs before the app starts, without suspending (`DaybookEntry`): past an `await` there, the app would run
+/// inside one main-queue job, and no main-actor task or main-queue block would ever run in it.
 enum SingleInstance {
     /// A running process, as much as the check needs of it.
     struct Copy: Equatable {
@@ -52,12 +55,12 @@ enum SingleInstance {
     /// Whether a process is still there (one this user can't signal is still running).
     static func isRunning(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 || errno == EPERM }
 
-    /// Returns once `pid` has exited (true), or after `limit` (false).
-    static func waitForExit(of pid: pid_t, within limit: Duration = .seconds(10)) async -> Bool {
+    /// Returns once `pid` has exited (true), or after `limit` (false). It blocks the thread, checking every 20 ms.
+    static func waitForExit(of pid: pid_t, within limit: Duration = .seconds(10)) -> Bool {
         let deadline = ContinuousClock.now.advanced(by: limit)
         while isRunning(pid) {
             guard ContinuousClock.now < deadline else { return false }
-            try? await Task.sleep(for: .milliseconds(50))
+            usleep(20_000)
         }
         return true
     }
@@ -65,15 +68,17 @@ enum SingleInstance {
     /// Run before the app starts: returns when this copy is the one, and otherwise brings the earlier copy forward
     /// and exits. A copy opened to start over waits (up to 10 seconds) for the one that opened it to quit, so the two
     /// don't open the library together, and stays even if that one is still quitting.
-    @MainActor static func ensureOnlyCopy(arguments: [String] = CommandLine.arguments) async {
+    @MainActor static func ensureOnlyCopy(arguments: [String] = CommandLine.arguments) {
+        // Setting AppKit up checks this copy in with Launch Services. It fills in the running apps (this one included),
+        // and it's what answers the launch request of a copy that opened this one, which only then starts to quit: so
+        // it comes before the wait for that one.
+        _ = NSApplication.shared
         let previous = relaunchedFrom(arguments: arguments)
-        if let previous { _ = await waitForExit(of: previous) }
+        if let previous { _ = waitForExit(of: previous) }
         #if DEBUG
         // Screenshots and demos run beside the everyday app, each with a library and preferences of its own.
-        if LaunchOptions.libraryURL != nil && !CommandLine.arguments.contains("--single-instance") { return }
+        if LaunchOptions.libraryURL != nil && !arguments.contains("--single-instance") { return }
         #endif
-        // AppKit fills in the running apps (this one included) only once it's set up.
-        _ = NSApplication.shared
         let apps = NSWorkspace.shared.runningApplications
         guard let earlier = earlierCopy(than: copy(of: .current), among: apps.map(copy(of:)), ignoring: previous),
               let other = apps.first(where: { $0.processIdentifier == earlier.pid }) else { return }

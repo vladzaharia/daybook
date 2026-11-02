@@ -130,10 +130,12 @@ are, unused). What follows the bundle ID, and what carries it over:
 
 `SingleInstance` counts `local.daybook` as Daybook when its executable is `Daybook` (the iPhone app on a Mac is
 `DaybookPhone`), and earlier releases, ad hoc builds, and rehearsals under either set of IDs, so two never run side by
-side. When a library move starts the app over (`AppRelaunch`), the new copy opens with `--relaunched-from <pid>`: it
-waits up to 10 seconds for the copy that moved the library to quit, and never gives way to it, so one copy is left
-running. The old copy quits only once the new one has launched; if the launch fails, it says so ("Couldn’t Reopen
-Daybook") and quits when the person chooses, to be opened again. Going back to a release from before the one bundle ID finds the library and its own preferences where they were;
+side. When a library move starts the app over (`AppRelaunch`), the new copy opens with `--relaunched-from <pid>`. It
+first sets AppKit up (`NSApplication.shared`), which checks it in with Launch Services and so answers the old copy's
+launch request; only then does the old copy quit. The new copy then waits up to 10 seconds for the old one to be gone,
+and never gives way to it, so one copy is left running. The wait blocks: nothing before the app starts may suspend
+(`SingleInstance`). If the launch fails, the old copy says so ("Couldn’t Reopen Daybook") and quits when the person
+chooses, to be opened again. Going back to a release from before the one bundle ID finds the library and its own preferences where they were;
 pairings made since, and a sync identity written since, are in `<team>.local.daybook`, which it can't read (a new pairing,
 or a new device ID, which republishes and never deletes).
 

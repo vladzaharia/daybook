@@ -79,13 +79,25 @@ final class SingleInstanceTests: XCTestCase {
                       "The sandbox's launch check lets the flag through")
     }
 
-    func testBehaviorTheRelaunchedCopyWaitsForTheOldOneOnlyAsLongAsItRuns() async {
-        let gone = await SingleInstance.waitForExit(of: 999_999, within: .seconds(5))
-        XCTAssertTrue(gone, "A copy that has quit already is waited for no longer")
-        let started = ContinuousClock.now
-        let stillHere = await SingleInstance.waitForExit(of: ProcessInfo.processInfo.processIdentifier, within: .milliseconds(200))
+    /// The wait blocks, before the app starts: an `await` there would leave the app's main queue unserved for good.
+    func testBehaviorTheRelaunchedCopyWaitsForTheOldOneOnlyAsLongAsItRuns() throws {
+        XCTAssertTrue(SingleInstance.waitForExit(of: 999_999, within: .seconds(5)), "A copy that has quit already is waited for no longer")
+        var started = ContinuousClock.now
+        let stillHere = SingleInstance.waitForExit(of: ProcessInfo.processInfo.processIdentifier, within: .milliseconds(200))
         XCTAssertFalse(stillHere, "One still running is waited for up to the limit, and then the new copy goes on")
         XCTAssertGreaterThanOrEqual(ContinuousClock.now - started, .milliseconds(200))
+
+        // One that quits while it's waited for: the wait ends as it goes.
+        let quitting = Process()
+        quitting.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        quitting.arguments = ["0.3"]
+        try quitting.run()
+        addTeardownBlock { if quitting.isRunning { quitting.terminate() } }
+        started = ContinuousClock.now
+        XCTAssertTrue(SingleInstance.waitForExit(of: quitting.processIdentifier, within: .seconds(10)))
+        let waited = ContinuousClock.now - started
+        XCTAssertGreaterThanOrEqual(waited, .milliseconds(200))
+        XCTAssertLessThan(waited, .seconds(5), "Not the whole limit")
     }
 
     func testBehaviorTheOldCopyQuitsOnlyOnceTheNewOneOpened() {
