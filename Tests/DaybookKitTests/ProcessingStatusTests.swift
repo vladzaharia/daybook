@@ -146,6 +146,48 @@ final class ProcessingStatusTests: XCTestCase {
         XCTAssertEqual(ProcessingStatus(meeting, queue: .init(), now: now), .requested(.device(request)), "A newer request waits")
     }
 
+    func testBehaviorTheDeviceThatAskedCanWithdrawARequestNobodyStarted() {
+        let observations = ClaimObservations()
+        let request = ProcessingRequest(meetingID: UUID(), mode: .newAudio, requestedBy: phone, createdAt: now)
+        XCTAssertNil(request.withdrawn(by: mac, at: now, observations: observations), "Only the device that asked")
+        let withdrawn = request.withdrawn(by: phone, at: now, observations: observations)
+        XCTAssertEqual(withdrawn?.isOpen, false, "Finished: no device claims it")
+        XCTAssertEqual(withdrawn?.isWithdrawn, true)
+        XCTAssertEqual(withdrawn?.outcome?.result, .completed, "An older Daybook reads it as finished, never as a failure")
+        XCTAssertNil(withdrawn?.withdrawn(by: phone, at: now, observations: observations), "Once")
+        XCTAssertFalse(withdrawn?.isClaimable(by: mac, at: now, observations: observations) ?? true)
+
+        // Started on a Mac: it's the Mac's now (it can pause it there).
+        let claimed = request.claimed(by: mac, at: now, observations: observations)!
+        XCTAssertNil(claimed.withdrawn(by: phone, at: now.addingTimeInterval(60), observations: observations))
+        // A claim that lapsed doesn't hold it.
+        XCTAssertNotNil(claimed.withdrawn(by: phone, at: now.addingTimeInterval(ProcessingRequest.defaultLease + 3600), observations: observations))
+        // Work that was done isn't a withdrawal.
+        XCTAssertEqual(claimed.completed(by: mac, at: now.addingTimeInterval(60), observations: observations)?.isWithdrawn, false)
+    }
+
+    func testBehaviorAWithdrawnRequestLeavesTheConversationAsItWas() {
+        var meeting = recorded()
+        let request = ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now)
+        meeting.upsertProcessingRequest(request)
+        XCTAssertEqual(ProcessingStatus(meeting, now: now), .requested(.device(request)))
+        XCTAssertTrue(meeting.withdrawProcessingRequest(request.id, by: phone, at: now, observations: ClaimObservations()))
+        XCTAssertEqual(ProcessingStatus(meeting, now: now), .recorded, "Back to Transcribe")
+        XCTAssertTrue(meeting.revisions.isEmpty, "Nothing in Version History")
+        XCTAssertEqual(meeting.processingRequests?.count, 1, "Kept as provenance")
+
+        // Taking back a Try Again leaves the failure it was asked for, with its own Try Again.
+        var failed = recorded()
+        let first = ProcessingRequest(meetingID: failed.id, mode: .newAudio, requestedBy: phone, createdAt: now.addingTimeInterval(-600))
+            .failed(by: mac, at: now.addingTimeInterval(-500), reason: "Out of memory", kind: .modelCouldNotStart, observations: ClaimObservations())!
+        failed.upsertProcessingRequest(first)
+        let again = ProcessingRequest(meetingID: failed.id, mode: .newAudio, requestedBy: phone, createdAt: now.addingTimeInterval(-60))
+        failed.upsertProcessingRequest(again)
+        failed.withdrawProcessingRequest(again.id, by: phone, at: now, observations: ClaimObservations())
+        guard case .failed(let failure) = ProcessingStatus(failed, now: now) else { return XCTFail("the failure stands") }
+        XCTAssertEqual(failure.kind, .modelCouldNotStart)
+    }
+
     func testLibraryControllerAnswersForAConversation() async throws {
         let root = makeTemporaryFolder("DaybookStatus")
         let library = await LibraryController(rootURL: root, sync: nil)

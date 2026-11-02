@@ -151,8 +151,11 @@ public enum ProcessingStatus: Equatable, Sendable {
                                    request: lastFailure, kind: kind))
             return
         }
+        // A Try Again taken back (`isWithdrawn`) did nothing, so the failure before it still stands.
         if let lastFailure, let outcome = lastFailure.outcome, !lastFailure.isSatisfied(by: meeting),
-           !(meeting.processingRequests ?? []).contains(where: { $0.outcome?.result == .completed && $0.outcome!.finishedAt > outcome.finishedAt }) {
+           !(meeting.processingRequests ?? []).contains(where: {
+               $0.outcome?.result == .completed && !$0.isWithdrawn && $0.outcome!.finishedAt > outcome.finishedAt
+           }) {
             self = .failed(Failure(reason: outcome.message ?? "", hadTranscripts: !meeting.transcripts.isEmpty,
                                    device: outcome.device, request: lastFailure, kind: outcome.failureKind))
             return
@@ -215,10 +218,11 @@ extension ProcessingStatus {
 extension Meeting {
     /// Recordings made alongside this conversation's on other devices that haven't arrived: a
     /// multipoint link that recorded (or may have) after this Mac's recording ended, with no recording
-    /// of that device's in the conversation yet, for at most `AwaitedRecording.lifetime`.
+    /// of that device's in the conversation yet, for at most `AwaitedRecording.lifetime`, until the
+    /// person chooses Don't Wait (`stopWaitingForRecordings`).
     public func awaitedRecordings(now: Date = Date()) -> [AwaitedRecording] {
         (companions ?? []).compactMap { link in
-            guard link.expectsRecording, link.trackID == nil else { return nil }
+            guard link.expectsRecording, link.trackID == nil, link.stoppedWaitingAt == nil else { return nil }
             let since = link.macEndedAt ?? link.macStartedAt
             guard now.timeIntervalSince(since) <= AwaitedRecording.lifetime, !hasRecording(fulfilling: link) else { return nil }
             return AwaitedRecording(deviceName: link.deviceName, deviceKind: link.deviceKind, since: since)
@@ -238,6 +242,24 @@ extension Meeting {
                 Self.track(track, fulfills: link) && !transcripts.contains { $0.trackID == track.id }
             }
         }
+    }
+
+    /// Don't Wait: stops waiting for every recording it waits for now, so its status says what's here. A recording
+    /// that still arrives is added (`hasAwaitedRecordingToAdd`). Returns whether anything was waited for.
+    @discardableResult
+    public mutating func stopWaitingForRecordings(at now: Date = Date()) -> Bool {
+        guard var links = companions else { return false }
+        var stopped = false
+        for index in links.indices {
+            let link = links[index]
+            guard link.expectsRecording, link.trackID == nil, link.stoppedWaitingAt == nil,
+                  now.timeIntervalSince(link.macEndedAt ?? link.macStartedAt) <= AwaitedRecording.lifetime,
+                  !hasRecording(fulfilling: link) else { continue }
+            links[index].stoppedWaitingAt = now
+            stopped = true
+        }
+        if stopped { companions = links }
+        return stopped
     }
 
     /// The conversation holds a recording from the link's device that it was waiting for.

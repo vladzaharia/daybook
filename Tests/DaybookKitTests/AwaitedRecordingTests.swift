@@ -110,6 +110,39 @@ final class AwaitedRecordingTests: XCTestCase {
         XCTAssertFalse(late.hasAwaitedRecordingToAdd(now: now))
     }
 
+    func testBehaviorDontWaitStopsTheWaitAndStillTakesTheRecordingIfItComes() {
+        var waiting = meeting([link(), link("soundcore.work", name: "Soundcore Work", recordingID: "1800000000")])
+        XCTAssertEqual(waiting.awaitedRecordings(now: now).count, 2)
+        XCTAssertTrue(waiting.stopWaitingForRecordings(at: now))
+        XCTAssertEqual(ProcessingStatus(waiting, now: now), .done, "Nothing left to wait for: the page says nothing")
+        XCTAssertEqual(waiting.companions?.map(\.stoppedWaitingAt), [now, now], "Kept on each link, so it syncs")
+        XCTAssertEqual(waiting.companions?.map(\.state), [.stopped, .stopped], "What the recorders did is unchanged")
+        XCTAssertFalse(waiting.stopWaitingForRecordings(at: now), "Nothing more to stop waiting for")
+
+        // The recording still arrives: it's added, as one waited for is.
+        let phone = RecordingTrack(source: .microphone, relativePath: "p.m4a", fileName: "p.m4a", sha256: "p",
+                                   device: DeviceRecordingIdentity(kind: DaybookPhoneIntegration.id, serial: "phone-1", recordingID: "rec-1"))
+        waiting.tracks.append(phone)
+        XCTAssertTrue(waiting.hasAwaitedRecordingToAdd(now: now))
+
+        // Links that weren't waited for are left alone.
+        var never = meeting([link(state: .failed), link(ended: -3 * 86_400)])
+        XCTAssertFalse(never.stopWaitingForRecordings(at: now))
+        XCTAssertEqual(never.companions?.compactMap(\.stoppedWaitingAt), [])
+    }
+
+    func testBehaviorDontWaitSurvivesASyncMerge() {
+        let base = meeting([link()])
+        var local = base
+        local.stopWaitingForRecordings(at: now)
+        var remote = base
+        remote.title = "Design review, renamed"
+        let merged = MeetingMerge.merge(base: base, local: local, remote: remote).meeting
+        XCTAssertEqual(merged.companions?.first?.stoppedWaitingAt, now)
+        XCTAssertEqual(merged.title, "Design review, renamed")
+        XCTAssertTrue(merged.awaitedRecordings(now: now).isEmpty)
+    }
+
     func testSeveralDevicesShareOneLine() {
         let recorder = link("soundcore.work", name: "Soundcore Work", recordingID: "1800000000")
         let awaited = meeting([link(), recorder]).awaitedRecordings(now: now)

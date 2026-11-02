@@ -111,6 +111,9 @@ public struct CompanionRecording: Codable, Equatable, Identifiable, Sendable {
     /// The recorder's clock against this Mac's, measured when it was asked to record: the timing
     /// prior for its recording. Nil for recorders that report none (only Daybook's local link does).
     public var clock: CompanionClock?
+    /// When the person chose Don't Wait: the conversation stops waiting for this recording, and adds it if it
+    /// still arrives. Nil while it's waited for.
+    public var stoppedWaitingAt: Date?
 
     public init(id: UUID = UUID(), deviceID: String, deviceKind: String, deviceSerial: String? = nil, deviceName: String,
                 macStartedAt: Date, state: State = .starting, startedByDaybook: Bool = false) {
