@@ -23,19 +23,21 @@ enum SyncSymbol {
         return "icloud"
     }
 
-    /// iCloud can't be used, a pass failed, or the library's key is missing.
+    /// iCloud can't be used, a pass failed, iCloud storage is full, or the library's key is missing.
     static func needsAttention(_ sync: PhoneSync) -> Bool {
         if case .unavailable = sync.connection { return true }
-        return sync.isConnected && (sync.lastError != nil || sync.encryption == .waitingForKey)
+        return sync.isConnected && (sync.lastError != nil || sync.isStorageFull || sync.encryption == .waitingForKey)
     }
 }
 
-/// Settings › iCloud: what sync is doing right now, in one honest line; Sync Now; the library's
-/// devices; and encryption.
+/// Settings › iCloud: what sync is doing right now, in one honest line; the older app still installed beside this one;
+/// Sync Now, and Start a New Library in iCloud when the library there was removed; the library's devices; and encryption.
 struct ICloudScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.openURL) private var openURL
     @State private var showingDetails = false
+    /// Start a New Library in iCloud couldn't be done.
+    @State private var problem: ReadingAlert?
 
     var body: some View {
         let sync = model.sync
@@ -58,9 +60,22 @@ struct ICloudScreen: View {
                     .accessibilityElement(children: .combine)
                 }
                 if sync.isConnected {
+                    // As a problem line: the warning glyph, and the sentence in the label colour.
+                    if let line = sync.otherInstallationLine {
+                        Label {
+                            Text(line).foregroundStyle(PhoneStyle.Ink.title).fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(PhoneStyle.Ink.warning)
+                        }
+                    }
                     if sync.lastError != nil {
                         Button { showingDetails = true } label: { SettingsActionLabel(title: "Details", systemImage: "info.circle") }
                     }
+                    if sync.offersNewLibrary {
+                        Button { startNewLibrary() } label: { SettingsActionLabel(title: LibraryWords.startNewLibrary, systemImage: "plus.circle") }
+                            .disabled(sync.isSyncing)
+                    }
+                    if let problem { ProblemText(problem: problem) }
                     // A pass already running takes this as another to run after it.
                     Button {
                         Task { await model.sync.synchronize(.manual) }
@@ -84,7 +99,8 @@ struct ICloudScreen: View {
                         LabeledContent("Devices in This Library", value: devicesSummary)
                     }
                 }
-                if sync.encryption != .unavailable {
+                // A library removed from iCloud has nothing to encrypt: the new one starts encrypted.
+                if sync.encryption != .unavailable, !sync.offersNewLibrary {
                     Section { EncryptionRows() }
                 }
             }
@@ -94,6 +110,15 @@ struct ICloudScreen: View {
         .navigationTitle("iCloud")
         .navigationBarTitleDisplayMode(.inline)
         .pageSheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: model.sync.lastError ?? "") }
+    }
+
+    private func startNewLibrary() {
+        problem = nil
+        Task {
+            do { try await model.sync.controller?.startNewLibrary() } catch {
+                problem = ReadingAlert(title: "Couldn’t Start a New Library", error: error, fallback: "A new library couldn’t be started in iCloud. Try again.")
+            }
+        }
     }
 
     private var devicesSummary: String {

@@ -356,7 +356,7 @@ enum StatusSheetInputs {
             // The full reason is in Settings; the line fits one row.
             inputs.syncLine = "Off"
         case .connected:
-            inputs.syncTone = model.sync.lastError != nil ? .attention : model.sync.isUpToDate ? .upToDate : .working
+            inputs.syncTone = model.sync.lastError != nil || model.sync.isStorageFull ? .attention : model.sync.isUpToDate ? .upToDate : .working
         }
         inputs.hostsRecordButton = hostsRecordButton
         inputs.hasLiveCaptions = devices.sessions.contains { $0.isListeningLive }

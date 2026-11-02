@@ -233,7 +233,7 @@ private struct EnterRecoveryKeyScreen: View {
 
 /// A problem shown in place: one plain sentence, and the system's own words behind Details, in the sheet every other
 /// problem on this iPhone opens.
-private struct ProblemText: View {
+struct ProblemText: View {
     let problem: ReadingAlert
     @State private var showingDetails = false
 

@@ -324,6 +324,8 @@ final class PhoneSync {
             if isSyncing { return changesInFlight > 0 ? "Syncing \(Self.changes(changesInFlight))" : SyncStatus.syncing.shortText }
             // The reason is the system's words; Settings shows it behind Details.
             if let lastError { return SyncStatus.failure(details: lastError).shortText }
+            // Said before what waits to upload, which can't go until there's room.
+            if isStorageFull { return SyncStatus.storageFull.shortText }
             if pendingUploads > 0 { return SyncStatus.exchanged(uploads: pendingUploads, downloads: 0).shortText }
             if let line = courierLine() { return line }
             if hasMoreWork { return "Syncing… more to come" }
@@ -342,13 +344,29 @@ final class PhoneSync {
 
     var isUpToDate: Bool {
         isConnected && !isSyncing && lastError == nil && encryption != .waitingForKey && localChanges == 0 && pendingUploads == 0 && !hasMoreWork && lastSynced != nil
-            && courierLine() == nil
+            && !isStorageFull && courierLine() == nil
+    }
+
+    /// iCloud has no room for what this iPhone sends (`LibrarySyncController.isStorageFull`): the last pass found iCloud
+    /// refusing uploads for it, or the courier is refused while its sends wait (they share the quota). Read live, so it
+    /// goes as soon as either finds room.
+    var isStorageFull: Bool { isConnected && controller?.isStorageFull == true }
+
+    /// The library in iCloud was removed (`SyncStatus.libraryRemoved`): Settings › iCloud offers Start a New Library in
+    /// iCloud, as the Mac does.
+    var offersNewLibrary: Bool { isConnected && controller?.status == .libraryRemoved }
+
+    /// The older Daybook app is still installed beside this one and syncs as this iPhone
+    /// (`LibrarySyncController.warning`): said in Settings › iCloud, with what to do. Nil otherwise.
+    var otherInstallationLine: String? {
+        guard isConnected, controller?.warning == .otherInstallation else { return nil }
+        return "Daybook is also installed as an older app on this iPhone. Delete the older app."
     }
 
     /// A send to the Mac by courier that has waited a while (`CourierStatus.stuckAfter`); nil otherwise.
     func courierLine(now: Date = Date()) -> String? {
         guard courier.isStuck(now: now) else { return nil }
-        if courier.storageFull { return "iCloud storage is full" }
+        if courier.storageFull { return SyncStatus.storageFull.shortText }
         let count = courier.waitingToSend
         return "Waiting to send \(count) \(count == 1 ? "item" : "items") to your Mac"
     }
