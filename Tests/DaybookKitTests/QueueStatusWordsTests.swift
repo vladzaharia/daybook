@@ -41,9 +41,10 @@ final class QueueStatusWordsTests: XCTestCase {
     func testBehaviorAPausedQueueSaysWhenItGoesOn() {
         let paused = line(Queue(waiting: 2, pause: .lowBattery), .iPhone())
         XCTAssertEqual(paused?.text, "Paused · Continues when iPhone is charging")
-        XCTAssertEqual(paused?.shortText, "Paused")
+        XCTAssertEqual(paused?.shortText, "Continues when iPhone is charging", "narrow, the reason stays")
         XCTAssertEqual(line(Queue(waiting: 1, pause: .heat), .iPhone())?.text, "Paused · Continues when iPhone cools down")
         XCTAssertEqual(line(Queue(waiting: 1, pause: .person))?.text, "Paused")
+        XCTAssertNil(line(Queue(waiting: 1, pause: .person))?.shortText, "nothing to drop")
     }
 
     func testBehaviorWaitingWorkAndModels() {

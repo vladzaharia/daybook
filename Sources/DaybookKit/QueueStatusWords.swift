@@ -53,7 +53,8 @@ public enum QueueStatusWords {
         }
         if let pause = queue.pause {
             let why = ProcessingWords.pausedLine(pause, device: words.hereDeviceName)
-            return line(["Paused", why].compactMap { $0 }.joined(separator: " · "), .calm, short: why == nil ? nil : "Paused")
+            // Narrow, the reason stays: "Continues when iPhone is charging" says it waits, and for what.
+            return line(["Paused", why].compactMap { $0 }.joined(separator: " · "), .calm, short: why)
         }
         if let download = queue.download {
             let text = "Downloading \(download.name) · \(ProcessingWords.percentText(download.fraction))"
