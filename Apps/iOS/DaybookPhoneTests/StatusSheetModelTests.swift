@@ -511,6 +511,45 @@ final class StatusSheetModelTests: XCTestCase {
         XCTAssertEqual(StatusCompactDetent.height(for: .accessibility5, maximum: 800), largest)
     }
 
+    /// hig-ios-01: an iPhone 18 Pro on its side shows the panel on a right page about 380 pt tall. Compact stays within
+    /// 55% of it, as the sheet does of the screen, even at the largest text size (the line scrolls there), and each size
+    /// is at least the one below it, so Expand never shrinks the panel.
+    func testBehaviorThePanelOnASidewaysIPhoneStaysWithinItsCapAndGrowsInOrder() {
+        let page: CGFloat = 380
+        for size in DynamicTypeSize.allCases {
+            for lines in [StatusCompactDetent.lineCount, StatusCompactDetent.lineCount + 1] {
+                let layout = StatusPanelLayout(lines: lines, typeSize: size)
+                let compact = StatusPanel.contentHeight(.compact, in: page, layout: layout)
+                let medium = StatusPanel.contentHeight(.medium, in: page, layout: layout)
+                let large = StatusPanel.contentHeight(.large, in: page, layout: layout)
+                XCTAssertGreaterThan(compact, 0, "\(size)")
+                XCTAssertLessThanOrEqual(StatusPanel.footprint(.compact, in: page, layout: layout), page * 0.55, "\(size), \(lines) lines")
+                XCTAssertLessThanOrEqual(compact, medium, "\(size): Expand never shrinks the panel")
+                XCTAssertLessThanOrEqual(medium, large, "\(size)")
+                XCTAssertLessThan(StatusPanel.footprint(.large, in: page, layout: layout), page, "\(size): large stays on the page")
+                if !size.isAccessibilitySize {
+                    // Short of the accessibility sizes compact doesn't scroll, so it holds its lines whole.
+                    let whole = StatusCompactDetent.linesHeight(for: size, lines: lines) + PhoneStyle.Space.s1 + PhoneStyle.Space.s4
+                    XCTAssertEqual(compact, whole, "\(size), \(lines) lines")
+                }
+            }
+        }
+        let largest = StatusPanelLayout(lines: StatusCompactDetent.lineCount, typeSize: .accessibility5)
+        XCTAssertLessThanOrEqual(StatusPanel.contentHeight(.compact, in: page, layout: largest), page * 0.55)
+        XCTAssertLessThanOrEqual(page * 0.55, StatusPanel.contentHeight(.medium, in: page, layout: largest))
+        XCTAssertLessThan(StatusPanel.contentHeight(.compact, in: page, layout: largest),
+                          StatusCompactDetent.linesHeight(for: .accessibility5) + PhoneStyle.Space.s1 + PhoneStyle.Space.s4,
+                          "the line scrolls inside the cap")
+
+        // The open Duo's right page is taller: compact holds its lines whole at every size.
+        let duoPage: CGFloat = 635
+        for size in DynamicTypeSize.allCases {
+            let layout = StatusPanelLayout(lines: StatusCompactDetent.lineCount + 1, typeSize: size)
+            let whole = StatusCompactDetent.linesHeight(for: size, lines: layout.lines) + PhoneStyle.Space.s1 + PhoneStyle.Space.s4
+            XCTAssertEqual(StatusPanel.contentHeight(.compact, in: duoPage, layout: layout), whole, "\(size)")
+        }
+    }
+
     // MARK: This iPhone's own work
 
     /// rd-10, ux-iphone-21: while this iPhone transcribes its own recording, or pauses it, the sheet says so in the

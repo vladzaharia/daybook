@@ -186,9 +186,9 @@ struct StatusSheetHost: ViewModifier {
 // MARK: Notebook: the panel on the right page
 
 /// The status at the foot of the right page of the open iPhone Duo (and of an iPhone on its side).
-/// Compact, it's the lines, as tall as they are at the person's text size; medium takes half the page;
-/// large takes the page (the conversation preview steps aside). It stays on its page, clear of the
-/// crease, and hides while a conversation is open across both pages.
+/// Compact, it's the lines, as tall as they are at the person's text size, within 55% of the page;
+/// medium takes half the page; large takes the page (the conversation preview steps aside). It stays
+/// on its page, clear of the crease, and hides while a conversation is open across both pages.
 struct StatusPanel: View {
     @Binding var detent: StatusDetent
     @Environment(PhoneAppModel.self) private var model
@@ -236,17 +236,29 @@ struct StatusPanel: View {
     /// panel holds (`StatusPanelLayout.current`), so the page moves when a line comes or goes.
     @MainActor
     static func footprint(_ detent: StatusDetent, in height: CGFloat) -> CGFloat {
-        contentHeight(detent, in: height, layout: StatusPanelLayout.current) + handleHeight + PhoneStyle.Space.s2
+        footprint(detent, in: height, layout: StatusPanelLayout.current)
+    }
+
+    static func footprint(_ detent: StatusDetent, in height: CGFloat, layout: StatusPanelLayout) -> CGFloat {
+        contentHeight(detent, in: height, layout: layout) + chromeHeight
     }
     private static let handleHeight: CGFloat = 28
+    /// The handle over the content and the room under the panel.
+    private static let chromeHeight = handleHeight + PhoneStyle.Space.s2
 
-    private static func contentHeight(_ detent: StatusDetent, in height: CGFloat, layout: StatusPanelLayout) -> CGFloat {
+    /// The panel's content on a page this tall. Compact is its lines at the person's text size, the
+    /// panel at most 55% of the page as the sheet is of the screen (an iPhone on its side, at the
+    /// accessibility sizes, where the line then scrolls). Each size is at least the one below it, so
+    /// Expand never shrinks the panel.
+    static func contentHeight(_ detent: StatusDetent, in height: CGFloat, layout: StatusPanelLayout) -> CGFloat {
+        // The lines, with the room above and under them (`StatusSections`).
+        let lines = StatusCompactDetent.linesHeight(for: layout.typeSize, lines: layout.lines) + PhoneStyle.Space.s1 + PhoneStyle.Space.s4
+        let compact = max(0, min(lines, height * 0.55 - chromeHeight))
+        let medium = max(compact, 220, height * 0.5)
         switch detent {
-        case .compact:
-            // The lines, with the room above and under them (`StatusSections`).
-            return StatusCompactDetent.linesHeight(for: layout.typeSize, lines: layout.lines) + PhoneStyle.Space.s1 + PhoneStyle.Space.s4
-        case .medium: return max(220, height * 0.5)
-        case .large: return max(220, height - 44 - PhoneStyle.Space.s2 - PhoneStyle.Space.s3)
+        case .compact: return compact
+        case .medium: return medium
+        case .large: return max(medium, height - 44 - PhoneStyle.Space.s2 - PhoneStyle.Space.s3)
         }
     }
 
