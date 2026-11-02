@@ -31,7 +31,8 @@ final class MeetingExportTests: XCTestCase {
     }
 
     /// The files both apps hand the share sheet are named after the conversation, a recording of several after which
-    /// it is, and wait in a folder of their own that clearing takes away without touching anything else.
+    /// it is, and each share's wait in a folder of their own that clearing takes away without touching anything else,
+    /// another share of the same conversation (an AirDrop of its audio still going) included.
     @MainActor
     func testBehaviorSharedFilesAreNamedAfterTheConversationAndClearedAfterwards() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MeetingExport-\(UUID().uuidString)", isDirectory: true)
@@ -56,10 +57,18 @@ final class MeetingExportTests: XCTestCase {
         let markdown = try ExportFiles.markdown(two, in: directory)
         XCTAssertEqual(markdown.lastPathComponent, "Weekly sync.md")
 
+        let again = try ExportFiles.audio(original, meeting: two, track: soundcore, in: directory)
+        XCTAssertNotEqual(again.deletingLastPathComponent(), audio.deletingLastPathComponent(), "sharing it again: a folder of its own")
+
         ExportFiles.clear([audio, original], in: directory)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: audio.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: json.path), "the conversation's export folder goes whole")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audio.deletingLastPathComponent().path), "the share's folder goes whole")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: again.path), "another share of the conversation keeps its file")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: json.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markdown.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: original.path), "a file outside the exports is never touched")
+        ExportFiles.clear(in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ExportFiles.root(in: directory).path), "at launch, everything left")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
     }
 
     func testBehaviorFullDataIsEveryFieldWithItsKeysInOrder() throws {

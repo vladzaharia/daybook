@@ -281,6 +281,9 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // What a share left behind (`ExportFiles`), as the iPhone clears it at launch. A run on a library of its own
+        // (`--library`) may sit beside the app mid-share, so it leaves them.
+        if LaunchOptions.libraryURL == nil { Task.detached(priority: .utility) { ExportFiles.clear() } }
         #if DEBUG
         PerfProbe.start()
         switch LaunchOptions.value(after: "--appearance") {

@@ -230,8 +230,9 @@ public enum MeetingExport {
 
 /// Files handed to the share sheet (the iPhone's, and the Mac's sharing picker): the conversation as Markdown or JSON,
 /// a photo, or a recording, each named after the conversation (`MeetingExport.fileName`). They wait in
-/// `<temporary folder>/Daybook Export/`, each in a folder of its own, until the share is done with them; whatever is
-/// left there is cleared at the next launch, or by the next share on the Mac.
+/// `<temporary folder>/Daybook Export/`, each share's in a folder of its own, until that share is done with them (both
+/// apps clear its folder when the share sheet or the sharing service finishes, fails, or is dismissed); whatever is
+/// left there, by a share that never said it was done, is cleared at the next launch.
 public enum ExportFiles {
     public static func root(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
         directory.appendingPathComponent("Daybook Export", isDirectory: true)
@@ -271,14 +272,14 @@ public enum ExportFiles {
     }
 
     public static func markdown(_ meeting: Meeting, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
-        let url = try folder(for: meeting.id, in: directory).appendingPathComponent(MeetingExport.fileName(for: meeting) + ".md")
+        let url = try newFolder(in: directory).appendingPathComponent(MeetingExport.fileName(for: meeting) + ".md")
         try MeetingExport.markdown(meeting).write(to: url, atomically: true, encoding: .utf8)
         return url
     }
 
     /// The full data, as `MeetingExport.json`.
     public static func json(_ meeting: Meeting, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
-        let url = try folder(for: meeting.id, in: directory).appendingPathComponent(MeetingExport.fileName(for: meeting) + ".json")
+        let url = try newFolder(in: directory).appendingPathComponent(MeetingExport.fileName(for: meeting) + ".json")
         try MeetingExport.json(meeting).write(to: url, options: .atomic)
         return url
     }
@@ -306,10 +307,9 @@ public enum ExportFiles {
 
     /// A copy of the recording at `source`, called `name` (`audioName`). A copy on the same volume is a clone, but it's
     /// still file work: do it off the main actor.
-    public static func audio(_ source: URL, named name: String, meetingID: UUID,
+    public static func audio(_ source: URL, named name: String,
                              in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
-        let url = try folder(for: meetingID, in: directory).appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: url)
+        let url = try newFolder(in: directory).appendingPathComponent(name)
         try FileManager.default.copyItem(at: source, to: url)
         return url
     }
@@ -318,12 +318,13 @@ public enum ExportFiles {
     @MainActor
     public static func audio(_ source: URL, meeting: Meeting, track: RecordingTrack,
                              in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
-        try audio(source, named: audioName(meeting, track: track, fileExtension: source.pathExtension), meetingID: meeting.id, in: directory)
+        try audio(source, named: audioName(meeting, track: track, fileExtension: source.pathExtension), in: directory)
     }
 
-    /// The conversation's own folder in the exports.
-    private static func folder(for id: UUID, in directory: URL) throws -> URL {
-        let folder = root(in: directory).appendingPathComponent(id.uuidString, isDirectory: true)
+    /// A share's own folder in the exports, so clearing it once that share is done leaves every other share's files,
+    /// of this conversation too, where they are.
+    private static func newFolder(in directory: URL) throws -> URL {
+        let folder = root(in: directory).appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
     }

@@ -215,8 +215,7 @@ enum ConversationShare {
             do {
                 let source = try await provider.localAudio(for: track, in: meeting.id) { _ in }
                 let name = ExportFiles.audioName(meeting, track: track, fileExtension: source.pathExtension)
-                let id = meeting.id
-                let url = try await Task.detached { try ExportFiles.audio(source, named: name, meetingID: id) }.value
+                let url = try await Task.detached { try ExportFiles.audio(source, named: name) }.value
                 session.sheet = .share([url])
             } catch {
                 session.alert = ReadingAlert(title: "Couldn’t Share", error: error, fallback: "The audio couldn’t be prepared. Try again.")

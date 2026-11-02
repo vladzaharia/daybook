@@ -319,7 +319,7 @@ enum MoreMenuActions {
 
 /// Share ▸ Markdown… and Audio… on the Mac: the files the iPhone's share sheet gets (DaybookKit's `ExportFiles`), made
 /// off the main actor, then the system's sharing picker (Mail, Messages, AirDrop, Notes…) hanging from the top of the
-/// page, under the toolbar's More.
+/// page, under the toolbar's More. Each share's files go once it's done with them (`ShareCleanup`).
 @MainActor
 enum MacShare {
     static func share(_ id: ConversationAction.ID, meeting: Meeting, state: AppState, anchor: SharingAnchor.Holder) {
@@ -340,20 +340,12 @@ enum MacShare {
             var originals: [UUID: URL] = [:]
             for photo in meeting.visiblePhotos { originals[photo.id] = folder.appendingPathComponent(photo.relativePath) }
             let files = originals
-            return try await Task.detached(priority: .userInitiated) {
-                // What an earlier share left is done with by now.
-                ExportFiles.clear()
-                return try ExportFiles.markdownWithPhotos(meeting, originals: files)
-            }.value
+            return try await Task.detached(priority: .userInitiated) { try ExportFiles.markdownWithPhotos(meeting, originals: files) }.value
         case .shareAudio:
             guard let track = meeting.transcribableTracks.first ?? meeting.tracks.first,
                   let source = await state.audioURL(for: track, meetingID: meeting.id) else { return nil }
             let name = ExportFiles.audioName(meeting, track: track, fileExtension: source.pathExtension)
-            let id = meeting.id
-            return try await Task.detached(priority: .userInitiated) {
-                ExportFiles.clear()
-                return try ExportFiles.audio(source, named: name, meetingID: id)
-            }.value
+            return try await Task.detached(priority: .userInitiated) { try ExportFiles.audio(source, named: name) }.value
         default:
             return nil
         }
@@ -363,16 +355,26 @@ enum MacShare {
 /// An invisible view the sharing picker hangs from: the top trailing corner of the page, under the toolbar's More. It
 /// also tells the window it's in, for what only AppKit does (widening the window for the inspector).
 struct SharingAnchor: NSViewRepresentable {
-    /// Holds the anchor's view for whoever shows the picker.
+    /// Holds the anchor's view for whoever shows the picker, and each share under way until it's done with its files.
     @MainActor
     final class Holder {
         fileprivate weak var view: NSView?
+        private var shares: [ShareCleanup] = []
 
         var window: NSWindow? { view?.window }
 
-        func show(_ items: [Any]) {
-            guard let view, view.window != nil else { return }
-            NSSharingServicePicker(items: items).show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+        /// The sharing picker for `files`, export files that go once the share is done with them.
+        func show(_ files: [URL]) {
+            let share = ShareCleanup(files: files) { [weak self] done in
+                self?.shares.removeAll { $0 === done }
+                let files = done.files
+                Task.detached(priority: .utility) { ExportFiles.clear(files) }
+            }
+            guard let view, view.window != nil else { share.finish(); return }
+            shares.append(share)
+            let picker = NSSharingServicePicker(items: files)
+            picker.delegate = share
+            picker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
         }
     }
 
@@ -385,4 +387,37 @@ struct SharingAnchor: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NSView, context: Context) { holder.view = view }
+}
+
+/// One share's files, kept while the sharing picker is open and while the service chosen in it (Mail, AirDrop…) shares
+/// them, then let go once: the picker dismissed without a choice, or the service done or failed. A share that never says
+/// leaves them for the next launch (`ExportFiles`).
+@MainActor
+final class ShareCleanup: NSObject, @preconcurrency NSSharingServicePickerDelegate, NSSharingServiceDelegate {
+    let files: [URL]
+    private var finished: ((ShareCleanup) -> Void)?
+
+    init(files: [URL], finished: @escaping (ShareCleanup) -> Void) {
+        self.files = files
+        self.finished = finished
+    }
+
+    /// The share is done with its files; only the first call counts.
+    func finish() {
+        guard let finished else { return }
+        self.finished = nil
+        finished(self)
+    }
+
+    func sharingServicePicker(_ picker: NSSharingServicePicker, delegateFor sharingService: NSSharingService) -> (any NSSharingServiceDelegate)? {
+        self
+    }
+
+    func sharingServicePicker(_ picker: NSSharingServicePicker, didChoose service: NSSharingService?) {
+        if service == nil { finish() }
+    }
+
+    func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) { finish() }
+
+    func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: any Error) { finish() }
 }
