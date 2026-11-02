@@ -17,13 +17,8 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
 
     override func setUp() async throws {
         defaults = UserDefaults(suiteName: makeTestSuite("local.daybook.tests.soundcore-shared"))
-        staging = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookShared-\(UUID().uuidString)", isDirectory: true)
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookSharedLibrary-\(UUID().uuidString)", isDirectory: true)
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: staging)
-        try? FileManager.default.removeItem(at: root)
+        staging = makeTemporaryFolder("DaybookShared")
+        root = makeTemporaryFolder("DaybookSharedLibrary")
     }
 
     /// A library on disk: imports go through `MeetingStore.importAudio`, as the apps' do.
@@ -287,8 +282,12 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
         try await waitUntil("some audio recorded") { (device.activeRecording?.frames.count ?? 0) >= 25 }
 
         // A device stopping it ends the live audio first (its list can't be read while it streams), so
-        // the recorder records a little more than the live audio has.
-        await rig.session.endLiveCapture()
+        // the recorder records a little more than the live audio has: waited for, not left to the time the
+        // stop happens to take.
+        let ended = await rig.session.endLiveCapture()
+        let saved = try XCTUnwrap(ended)
+        let liveFrames = Int((saved.seconds / 0.02).rounded())
+        try await waitUntil("a little more recorded") { (device.activeRecording?.frames.count ?? 0) >= liveFrames + 3 }
         rig.connection.pauseRecording()
         try await waitUntil("it stops") { rig.connection.status?.isRecording == false && !rig.connection.recordCommandPending }
         let recordingID = String(try XCTUnwrap(device.recordings.first).id)
@@ -319,11 +318,39 @@ final class SoundcoreSharedRecordingTests: XCTestCase {
 
     // MARK: What it costs
 
-    /// Live audio at the recorder's own pace (20 ms Opus frames, three to a notification): what the link
-    /// carries a second, how far behind the recording it runs, and how soon the audio is in the library
-    /// after the recording stops, against what importing the file afterwards would take. The numbers go
-    /// to docs/direct-soundcore.md, "Live audio for a shared recording".
+    /// Live audio at the recorder's own pace (20 ms Opus frames, three to a notification) arrives whole, and
+    /// costs the link what each second of audio should, whatever pace a busy machine runs the recorder at:
+    /// counted per second of audio, not of the clock, and waiting on what's recorded rather than on time.
+    func testBehaviorLiveAudioForASharedRecordingArrivesWholeAtItsCostOnTheLink() async throws {
+        let device = SimulatedSoundcore(recordings: [])
+        device.recordsInRealTime = true
+        device.pace = .milliseconds(20)
+        device.slicesPerPacket = 3
+        let rig = rig(device)
+        try await connected(rig)
+        rig.connection.startRecording()
+        try await waitUntil("it records") { rig.connection.status?.isRecording == true && !rig.connection.recordCommandPending }
+        let before = (bytes: device.bytesSent, notifications: device.notificationsSent)
+        XCTAssertTrue(rig.session.captureLive(into: UUID()))
+        try await waitUntil("a second recorded", timeout: 20) { (device.activeRecording?.frames.count ?? 0) >= 50 }
+        let bytes = Double(device.bytesSent - before.bytes), notifications = Double(device.notificationsSent - before.notifications)
+        device.pressButton()
+        try await waitUntil("saved", timeout: 20) { rig.session.lastLiveSave != nil }
+        let audioSeconds = try XCTUnwrap(rig.session.lastLiveSave?.seconds)
+
+        // 166 bytes a slice (160 of Opus), 10 of framing a notification of three: 508 bytes every 60 ms.
+        let perSecond = bytes / (notifications * Double(device.slicesPerPacket) * 0.02)
+        XCTAssertEqual(perSecond, 8_467, accuracy: 1_500, "about 68 kbit/s")
+        XCTAssertEqual(audioSeconds, Double(device.recordings[0].frames.count) * 0.02, accuracy: 0.05, "all of it")
+    }
+
+    /// The measurement behind docs/direct-soundcore.md, "Live audio for a shared recording": what the link
+    /// carries a second, how far behind the recording it runs, and how soon the audio is in the library after
+    /// the recording stops. Its bounds are on the wall clock, which a loaded machine stretches, so it runs only
+    /// when asked: `DAYBOOK_MEASURE=1 swift test --filter SoundcoreSharedRecordingTests`.
     func testWhatLiveAudioCostsTheLinkAndHowSoonItsThere() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DAYBOOK_MEASURE"] == "1",
+                          "A wall-clock measurement: set DAYBOOK_MEASURE=1 to run it")
         let device = SimulatedSoundcore(recordings: [])
         device.recordsInRealTime = true
         device.pace = .milliseconds(60)

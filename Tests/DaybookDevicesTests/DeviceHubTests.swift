@@ -233,12 +233,12 @@ final class DeviceHubTests: XCTestCase {
         XCTAssertEqual(session.split.imported.count, 1)
         XCTAssertEqual(session.split.new.map(\.fileName), ["notes.m4a"])
 
-        try await Task.sleep(for: .milliseconds(400))
+        try await settle(files, session)
         XCTAssertEqual(meetings.count, 1, "Nothing imports twice")
 
         failNotes = false
         session.retry(session.failures[0])
-        try await waitUntil("Try Again") { meetings.count == 2 }
+        try await waitUntil("Try Again") { meetings.count == 2 && session.lastBatch?.destination == .conversation(meetings[1].id) }
         XCTAssertTrue(session.failures.isEmpty)
         XCTAssertNotNil(files.lastImportDate)
         XCTAssertTrue(files.summary.hasPrefix("Watching") && files.summary.contains("Exports · Last import "), files.summary)
@@ -247,9 +247,18 @@ final class DeviceHubTests: XCTestCase {
         // Deleting a conversation doesn't bring its file back on its own.
         meetings.removeAll()
         session.libraryChanged([], ready: true)
-        try await Task.sleep(for: .milliseconds(400))
+        try await settle(files, session)
         XCTAssertTrue(meetings.isEmpty)
         XCTAssertEqual(session.newRecordings.count, 2, "It's offered again, for the person to choose")
+    }
+
+    /// The watcher looks again (twice: a file counts once it's unchanged across two looks), the session acts on what
+    /// it saw, and whatever that queued has run: a moment in which something that shouldn't import would have.
+    private func settle(_ files: ImportFolderWatcher, _ session: DeviceSession) async throws {
+        await files.scan()
+        await files.scan()
+        for _ in 0..<10 { await Task.yield() }
+        try await waitUntil("the queue to be idle") { !session.queue.isActive }
     }
 
     func testDifferentFoldersWithEqualFileNamesAndSizesUseContentIdentity() async throws {

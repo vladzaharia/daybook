@@ -169,7 +169,9 @@ The device managing the recorder saves its audio into a shared recording as it r
 Live's stream (docs/multipoint.md, "A recorder's audio while it records"). Measured against
 `SimulatedSoundcore` recording in real time (`recordsInRealTime`: a recording grows by three 20 ms Opus
 frames every 60 ms, live audio streams it from its first frame and ends with it;
-`SoundcoreSharedRecordingTests.testWhatLiveAudioCostsTheLinkAndHowSoonItsThere`):
+`SoundcoreSharedRecordingTests.testWhatLiveAudioCostsTheLinkAndHowSoonItsThere`, which measures on the wall
+clock and so runs only with `DAYBOOK_MEASURE=1`; the ordinary suite checks the cost per second of audio and
+that all of it arrives, without timing bounds):
 
 | | Measured |
 | --- | --- |
