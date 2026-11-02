@@ -1,5 +1,6 @@
 import DaybookCaptions
 import DaybookKit
+import DaybookLink
 import ImageIO
 import Observation
 import UIKit
@@ -89,13 +90,23 @@ final class ReadingTests: XCTestCase {
 
     // MARK: Processing states
 
+    /// The page's status, as this iPhone draws it: the shared presentation with what the iPhone knows.
+    private func pageStatus(_ status: ProcessingStatus, _ meeting: Meeting, mac: ConversationStatusPresentation.MacStanding? = nil,
+                            local: ConversationStatusPresentation.LocalCapabilities = .iPhone(),
+                            live: LiveProgress? = nil) -> ConversationStatusPresentation? {
+        var inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: phone.id), local: local)
+        inputs.mac = mac
+        inputs.link = live.map(ConversationStatusPresentation.LinkWork.init(live:))
+        return ConversationStatusPresentation.page(status, meeting: meeting, inputs: inputs, now: now)
+    }
+
     func testRecordedIsACalmCompleteState() {
         let meeting = recorded()
         XCTAssertEqual(ProcessingStatus(meeting, now: now), .recorded)
-        let page = StatusPresentation.page(.recorded, meeting: meeting, sighting: nil, now: now)
-        XCTAssertEqual(page?.kind, .line)
+        let page = pageStatus(.recorded, meeting)
+        XCTAssertEqual(page?.kind, .box(.accent), "the same box as the Mac's")
         XCTAssertEqual(page?.title, "Not transcribed yet")
-        XCTAssertEqual(page?.actions, [.request(.newAudio)], "the line offers Transcribe")
+        XCTAssertEqual(page?.actions, [.transcribe(newAudio: false)], "it offers Transcribe")
         XCTAssertEqual(StatusPresentation.row(.recorded), RowStatus(kind: .notTranscribed, text: "Not transcribed yet"))
     }
 
@@ -105,63 +116,117 @@ final class ReadingTests: XCTestCase {
         meeting.transcripts = [TrackTranscript(trackID: meeting.tracks[0].id, segments: [words], createdAt: now)]
         meeting.unifiedTranscript = [words]
         XCTAssertEqual(ProcessingStatus(meeting, now: now), .transcribed)
-        let page = StatusPresentation.page(.transcribed, meeting: meeting, sighting: nil, now: now)
+        let page = pageStatus(.transcribed, meeting, mac: .seen(name: "Studio", at: now.addingTimeInterval(-3600)))
         XCTAssertEqual(page?.kind, .line)
         XCTAssertEqual(page?.title, "Not summarized yet")
-        XCTAssertEqual(page?.actions, [.request(.summaryOnly)], "the line offers Summarize, a request your Mac carries out")
+        XCTAssertEqual(page?.actions, [.summarize], "the line offers Summarize")
         XCTAssertNil(StatusPresentation.row(.transcribed), "the row shows its preview: the transcript reads")
+        // With no Mac, no summarizer here, and no cloud, Summarize would only wait.
+        XCTAssertEqual(pageStatus(.transcribed, meeting, mac: .noMac)?.title, "Needs your Mac to summarize")
     }
 
     func testWaitingSaysWhenAMacWasLastSeen() {
         var meeting = recorded()
-        meeting.upsertProcessingRequest(ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now))
+        let request = ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now)
+        meeting.upsertProcessingRequest(request)
         let status = ProcessingStatus(meeting, now: now)
         guard case .requested(.device) = status else { return XCTFail("expected a request waiting for a Mac, got \(status)") }
 
-        let old = StatusPresentation.page(status, meeting: meeting, sighting: MacSighting(name: "Studio", date: now.addingTimeInterval(-2 * 3600)), now: now)
+        let old = pageStatus(status, meeting, mac: .phone(presence: nil, sighting: MacSighting(name: "Studio", date: now.addingTimeInterval(-2 * 3600)),
+                                                          connected: [], liveProgress: [:], meetingID: meeting.id, now: now))
         XCTAssertEqual(old?.title, "Waiting for your Mac")
         XCTAssertEqual(old?.detail, "Last seen 2 h ago")
-        let recent = StatusPresentation.page(status, meeting: meeting, sighting: MacSighting(name: "Studio", date: now.addingTimeInterval(-60)), now: now)
-        XCTAssertNil(recent?.detail, "a Mac that checked in recently needs no excuse")
-        let never = StatusPresentation.page(status, meeting: meeting, sighting: nil, now: now)
-        XCTAssertEqual(never?.detail, "No Mac has checked in yet. Open Daybook on your Mac.")
+        XCTAssertEqual(old?.actions, [.cancelRequest(request.id)], "this iPhone asked: it can take it back")
+        let recent = pageStatus(status, meeting, mac: .seen(name: "Studio", at: now.addingTimeInterval(-60)))
+        XCTAssertEqual(recent?.title, "Waiting for Studio", "a Mac that checked in recently is named")
+        XCTAssertNil(recent?.detail)
+        let never = pageStatus(status, meeting, mac: .phone(presence: nil, sighting: nil, connected: [], liveProgress: [:], meetingID: meeting.id))
+        XCTAssertEqual(never?.detail, "No Mac has synced this library yet. Open Daybook on your Mac.", "one way of saying it, as Settings does")
+        XCTAssertEqual(MacSighting.line(nil, now: now), never?.detail)
         XCTAssertEqual(StatusPresentation.row(status)?.text, "Waiting for your Mac")
         XCTAssertEqual(StatusPresentation.waitingTitle(.summaryOnly), "Waiting for your Mac to summarize", "a first summary")
         XCTAssertEqual(StatusPresentation.waitingTitle(.summaryOnly, summarized: true), "Waiting for your Mac to summarize again")
     }
 
+    func testTheWaitingLineSaysWhatTheMacIsDoing() {
+        let id = UUID()
+        let presence = MacPresence.connected(name: "Studio")
+        var mac = PhoneLink.Mac(id: UUID(), name: "Studio", pairedAt: now)
+        XCTAssertEqual(ConversationStatusPresentation.MacStanding.phone(presence: presence, sighting: nil, connected: [mac], liveProgress: [:], meetingID: id),
+                       .connected("Studio"))
+        let other = LiveProgress(LinkProcessingProgress(meetingID: UUID(), phase: .transcribing, fraction: 0.2, macName: "Studio"), receivedAt: now)
+        XCTAssertEqual(ConversationStatusPresentation.MacStanding.phone(presence: presence, sighting: nil, connected: [mac],
+                                                                         liveProgress: [other.meetingID: other], meetingID: id), .busy("Studio"))
+        mac.recording = LinkRecordingState(phase: .recording, conversationID: UUID(), startedAt: now, elapsed: 30, sentAt: now)
+        XCTAssertEqual(ConversationStatusPresentation.MacStanding.phone(presence: presence, sighting: nil, connected: [mac], liveProgress: [:], meetingID: id),
+                       .recording("Studio"))
+        XCTAssertEqual(ConversationStatusPresentation.MacStanding.phone(presence: .unavailable("Sign in to iCloud."), sighting: nil, connected: [],
+                                                                         liveProgress: [:], meetingID: id), .needsICloud)
+        // The library's own evidence counts when it's newer than the Mac's presence.
+        let presenceSeen = MacPresence.seen(name: "Studio", lastSeen: now.addingTimeInterval(-7200))
+        XCTAssertEqual(ConversationStatusPresentation.MacStanding.phone(presence: presenceSeen, sighting: MacSighting(name: "Studio", date: now.addingTimeInterval(-60)),
+                                                                         connected: [], liveProgress: [:], meetingID: id),
+                       .seen(name: "Studio", at: now.addingTimeInterval(-60)))
+    }
+
+    func testTheMacsLiveProgressReadsOnThePageBeforeSyncSaysSo() {
+        // A Mac took the request a moment ago: the link knows before the next sync pass brings the claim.
+        var meeting = recorded()
+        meeting.upsertProcessingRequest(ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now))
+        let status = ProcessingStatus(meeting, now: now)
+        let live = LiveProgress(LinkProcessingProgress(meetingID: meeting.id, phase: .transcribing, fraction: 0.4, macName: "Studio Mac"), receivedAt: now)
+        let page = pageStatus(status, meeting, mac: .connected("Studio Mac"), live: live)
+        XCTAssertEqual(page?.title, "Transcribing on Studio Mac · 40%")
+        XCTAssertEqual(page?.progress, 0.4)
+    }
+
     func testProcessingNamesTheMacAndNeverInventsProgress() {
         let reported = ProcessingStatus.Progress(stage: .transcribing, fraction: 0.4, device: studio)
-        let page = StatusPresentation.page(.processing(reported), meeting: recorded(), sighting: nil, now: now)
+        let page = pageStatus(.processing(reported), recorded())
         XCTAssertEqual(page?.title, "Transcribing on Studio · 40%")
         XCTAssertEqual(page?.progress, 0.4)
         XCTAssertEqual(page?.isWorking, false)
 
         let silent = ProcessingStatus.Progress(stage: .summarizing, fraction: nil, device: studio)
-        let line = StatusPresentation.page(.processing(silent), meeting: recorded(), sighting: nil, now: now)
+        let line = pageStatus(.processing(silent), recorded())
         XCTAssertEqual(line?.title, "Summarizing on Studio")
         XCTAssertNil(line?.progress, "no figure, no bar")
         XCTAssertEqual(line?.isWorking, true)
+        // This iPhone's own work names it, with the same rounding as everywhere: down.
+        let here = pageStatus(.processing(.init(stage: .transcribing, fraction: 0.396)), recorded())
+        XCTAssertEqual(here?.title, "Transcribing on this iPhone · 39%")
         XCTAssertEqual(StatusPresentation.row(.processing(reported)), RowStatus(kind: .processing, text: "Transcribing on Studio · 40%", fraction: 0.4))
     }
 
     func testCouldntFinishOffersTryAgainWithTheFailedRequestsMode() {
         var meeting = weekly()
         let request = ProcessingRequest(meetingID: meeting.id, mode: .speakerRefresh, requestedBy: phone, createdAt: now)
-        let failed = request.failed(by: studio, at: now, reason: "The speaker model isn't downloaded")!
+        let failed = request.failed(by: studio, at: now, reason: "The speaker model isn't downloaded", kind: .modelsMissing)!
         meeting.upsertProcessingRequest(failed)
         let status = ProcessingStatus(meeting, now: now)
         guard case .failed(let failure) = status else { return XCTFail("expected a failure, got \(status)") }
-        let page = StatusPresentation.page(status, meeting: meeting, sighting: nil, now: now)
-        XCTAssertEqual(page?.kind, .problem)
+        let page = pageStatus(status, meeting)
+        XCTAssertEqual(page?.kind, .box(.problem))
         XCTAssertEqual(page?.title, "Couldn’t finish summarizing")
         XCTAssertEqual(page?.detail, "The models it needs aren’t on Studio yet. The recording is saved.")
-        XCTAssertEqual(page?.actions, [.request(.speakerRefresh), .details(failure.reason)])
+        XCTAssertEqual(page?.actions, [.details(failure.reason), .tryAgain(.speakerRefresh)], "the Mac's order: Details, then the fix")
 
         // Trying again can't find speech that isn't there.
-        let silent = StatusPresentation.page(.failed(.init(reason: "No speech was recognized.", hadTranscripts: false)), meeting: recorded(), sighting: nil, now: now)
+        let silent = pageStatus(.failed(.init(reason: "No speech was recognized.", hadTranscripts: false)), recorded())
         XCTAssertEqual(silent?.title, "No speech in this recording")
+        XCTAssertEqual(silent?.detail, "The recording is saved.")
         XCTAssertEqual(silent?.actions, [.details("No speech was recognized.")])
+    }
+
+    func testThisiPhonesOwnRecordingOffersItsDownloadWhenNoMacIsAround() {
+        var meeting = recorded()
+        let request = ProcessingRequest(meetingID: meeting.id, mode: .newAudio, requestedBy: phone, createdAt: now)
+        meeting.upsertProcessingRequest(request)
+        let status = ProcessingStatus(meeting, now: now)
+        let page = pageStatus(status, meeting, mac: .noMac, local: .iPhone(processesHere: true, missingModelBytes: 852_900_000))
+        XCTAssertEqual(page?.title, "Download models to transcribe this conversation")
+        XCTAssertEqual(page?.actions, [.downloadModels(bytes: 852_900_000)])
+        XCTAssertEqual(page?.detail, ByteSize.format(852_900_000))
     }
 
     func testTheLastSightingIsTheNewestSignOfAMacAtWork() {

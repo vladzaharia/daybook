@@ -1,3 +1,4 @@
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -30,24 +31,6 @@ extension View {
     func pageColumn() -> some View { modifier(PageColumn()) }
 }
 
-/// A row with something in the lane (a time, a glyph) and content beside it, on the same baseline.
-/// The lane grows with Dynamic Type exactly as the notes editor's does, so their times line up.
-struct LaneRow<Lane: View, Content: View>: View {
-    var alignment: VerticalAlignment = .firstTextBaseline
-    @ViewBuilder var lane: Lane
-    @ViewBuilder var content: Content
-    @ScaledMetric(relativeTo: .footnote) private var scaled = PhoneStyle.Page.lane
-
-    var body: some View {
-        HStack(alignment: alignment, spacing: 0) {
-            HStack(spacing: 3) { lane }
-                .frame(width: max(0, min(scaled, PhoneStyle.Page.lane * 1.9) - 10), alignment: .trailing)
-                .padding(.trailing, 10)
-            content.frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
 /// A time that plays from there: meta ink, monospaced digits.
 struct TimeButton: View {
     let time: TimeInterval
@@ -63,6 +46,8 @@ struct TimeButton: View {
                 .minimumScaleFactor(0.7)
                 .padding(.vertical, 4)
                 .contentShape(Rectangle())
+                // A 44 pt target without making its row taller.
+                .daybookHitTarget()
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Play from \(SpokenTime.format(time))")
@@ -78,167 +63,6 @@ struct PageHeading: View {
             .foregroundStyle(PhoneStyle.Ink.body)
             .accessibilityAddTraits(.isHeader)
             .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// The processing status on the page: one bare line while something works or waits, a quiet
-/// filled box with at most two actions when something needs the person. The symbol sits in a
-/// fixed column, so the words, the progress line, and the actions start at the same edge.
-struct StatusView: View {
-    let presentation: StatusPresentation
-    let perform: (StatusPresentation.Action) -> Void
-    @Environment(\.colorScheme) private var scheme
-    @ScaledMetric(relativeTo: .subheadline) private var glyphWidth: CGFloat = 20
-
-    var body: some View {
-        switch presentation.kind {
-        case .line: line
-        case .problem, .info: box
-        }
-    }
-
-    private var column: CGFloat { min(glyphWidth, 32) }
-    private var gap: CGFloat { 8 }
-
-    private var line: some View {
-        HStack(alignment: .firstTextBaseline, spacing: gap) {
-            Group {
-                if presentation.isWorking {
-                    ProgressView().controlSize(.small)
-                } else if let symbol = presentation.symbol {
-                    Image(systemName: symbol).foregroundStyle(PhoneStyle.Ink.secondary)
-                }
-            }
-            .frame(width: column)
-            .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 6) {
-                if presentation.actions.isEmpty {
-                    lineWords
-                } else {
-                    // The line's action at its end, as Record sits beside "No recording yet"; under
-                    // the words when they need the room, so neither breaks mid-word.
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .firstTextBaseline, spacing: PhoneStyle.Space.s3) {
-                            lineWords.fixedSize()
-                            Spacer(minLength: 0)
-                            actions.fixedSize()
-                        }
-                        VStack(alignment: .leading, spacing: 6) {
-                            lineWords
-                            actions
-                        }
-                    }
-                }
-                if let progress = presentation.progress {
-                    ProgressView(value: progress).progressViewStyle(.brand(width: nil, height: 3))
-                        .frame(maxWidth: 220)
-                }
-            }
-        }
-        .font(PhoneStyle.Typeface.status)
-    }
-
-    private var lineWords: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(presentation.title)
-                .foregroundStyle(PhoneStyle.Ink.secondary)
-                .contentTransition(.numericText())
-            if let detail = presentation.detail {
-                Text(detail).foregroundStyle(PhoneStyle.Ink.meta).font(.footnote)
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var box: some View {
-        let problem = presentation.kind == .problem
-        return HStack(alignment: .firstTextBaseline, spacing: gap) {
-            Group {
-                if let symbol = presentation.symbol {
-                    Image(systemName: symbol)
-                        .symbolRenderingMode(problem ? .monochrome : .hierarchical)
-                        .foregroundStyle(problem ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
-                }
-            }
-            .frame(width: column)
-            .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(presentation.title)
-                        .font(PhoneStyle.Typeface.statusLead)
-                        .foregroundStyle(problem ? PhoneStyle.Ink.warning : PhoneStyle.Ink.body)
-                    if let detail = presentation.detail {
-                        Text(detail).font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.secondary)
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityElement(children: .combine)
-                if !presentation.actions.isEmpty {
-                    actions
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(problem ? PhoneStyle.Ink.warning.opacity(scheme == .dark ? 0.12 : 0.08) : PhoneStyle.quietFill,
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private var actions: some View {
-        HStack(spacing: 16) {
-            ForEach(Array(presentation.actions.enumerated()), id: \.offset) { _, action in
-                actionButton(action)
-            }
-        }
-    }
-
-    @ViewBuilder private func actionButton(_ action: StatusPresentation.Action) -> some View {
-        switch action {
-        case .request(let mode):
-            if presentation.kind == .line {
-                // On a calm line, the action is a link, as quiet as the line.
-                Button(mode == .newAudio ? "Transcribe" : mode == .summaryOnly ? "Summarize" : "Try Again") { perform(action) }
-                    .buttonStyle(.daybookLink).font(.subheadline.weight(.semibold))
-            } else {
-                Button("Try Again") { perform(action) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(PhoneStyle.prominentFill)
-                    .controlSize(.small)
-                    .font(.subheadline.weight(.semibold))
-            }
-        case .details:
-            Button("Details") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
-        case .dismiss:
-            Button("Dismiss") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
-        case .placement(let choice):
-            Button(choice.title) { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.semibold))
-        case .stopSummary:
-            Button("Stop") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
-        case .upgrade:
-            Button("Upgrade") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.semibold))
-        case .dismissUpgrade:
-            Button("Dismiss") { perform(action) }.buttonStyle(.daybookLink).font(.subheadline.weight(.medium))
-        }
-    }
-}
-
-/// A next step's owner, in their speaker ink when they spoke. Done rows keep the name, not the chip.
-struct OwnerChip: View {
-    let name: String
-    let ink: Color?
-    var filled = true
-
-    var body: some View {
-        Text(name)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(ink ?? PhoneStyle.Ink.secondary)
-            .padding(.horizontal, 7).padding(.vertical, 2)
-            .background((ink ?? .clear).opacity(filled ? 0.14 : 0), in: Capsule())
-            .background(ink == nil && filled ? PhoneStyle.quietFill : .clear, in: Capsule())
-            .fixedSize()
-            .accessibilityLabel("Owner: \(name)")
     }
 }
 

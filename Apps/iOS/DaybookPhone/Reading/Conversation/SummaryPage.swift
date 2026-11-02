@@ -1,13 +1,16 @@
 import DaybookCaptions
+import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// The conversation as a page: the title, one byline, the processing status when there's
 /// something to say, then what happened (the lede), the next steps, the template's sections, your
 /// notes with their recording times, your bookmarks, and how the page was made.
 ///
-/// A conversation that isn't transcribed yet is a complete page too: title, byline, a calm status
-/// line, your notes, and your bookmarks; everything but the summary works.
+/// The blocks are DaybookUI's, the same as the Mac's page (`ConversationHeader`, `StatusBlock`, `SummaryBody`,
+/// `YourNotes`, `Colophon`); this iPhone gives them its notes editor, photos, player, and what it knows about its Macs.
+/// A conversation that isn't transcribed yet is a complete page too: everything but the summary works.
 struct SummaryPage: View {
     let library: LibraryController
     let meeting: Meeting
@@ -17,63 +20,75 @@ struct SummaryPage: View {
     /// panel, so the page doesn't read through its glass; nil is the system's.
     var bottomEdgeEffect: ScrollEdgeEffectStyle? = nil
     @Environment(ReadingSession.self) private var session
+    @Environment(PhoneAppModel.self) private var model: PhoneAppModel?
     @Environment(\.audioProvider) private var provider
     @Environment(\.macSighting) private var sightingOverride
     @Environment(\.summaryPlacement) private var placement
     @Environment(\.upgrades) private var upgrades
     @Environment(\.isTwoPage) private var twoPage
+    @Environment(\.findQuery) private var query
+    @Environment(\.undoManager) private var undoManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var consumedToken = 0
-    /// The status line's symbol column (`StatusView`).
-    @ScaledMetric(relativeTo: .subheadline) private var statusGlyph: CGFloat = 20
     @Environment(\.liveCaptionStore) private var captionStore
     @Environment(\.liveCaptionsSaved) private var captionsSaved
     /// Saved live captions take the transcript's page, which then doesn't say "Not transcribed yet".
     @State private var hasCaptions = false
+    /// The summary present when the page opened. Any later one arrived while the page was on screen, so it's
+    /// revealed block by block; opening a page never animates.
+    @State private var openedWith: Date?
+    /// A Settings screen the status opened (Cloud Settings).
+    @State private var settings: PageSettings?
+
+    init(library: LibraryController, meeting: Meeting, showsHeader: Bool = true, bottomEdgeEffect: ScrollEdgeEffectStyle? = nil) {
+        self.library = library
+        self.meeting = meeting
+        self.showsHeader = showsHeader
+        self.bottomEdgeEffect = bottomEdgeEffect
+        _openedWith = State(initialValue: meeting.summary?.createdAt)
+    }
 
     var body: some View {
         @Bindable var session = session
+        let status = self.status(at: Date())
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if showsHeader {
                         PageHeader(library: library, meeting: meeting, play: play).id(SummaryBlockID.header)
                     }
-                    if let status, status.countdownUntil != nil {
-                        // A summary's countdown: its seconds move.
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            StatusView(presentation: self.status(at: context.date) ?? status, perform: perform)
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let status, !(twoPage && isRecordedOnly && !hasCaptions) {
+                            StatusBlock(status, perform: perform)
+                                .padding(.top, PhoneStyle.Space.s4)
+                                .daybookTransition(.opacity.combined(with: .move(edge: .top)))
+                                .id("status")
+                        } else if meeting.tracks.isEmpty && !twoPage {
+                            // Only notes so far: the byline says so, and Record records into it. Two pages offer it
+                            // on the transcript's page.
+                            RecordIntoButton(meeting: meeting)
+                                .padding(.top, PhoneStyle.Space.s4)
+                                .id("status")
                         }
-                        .padding(.top, PhoneStyle.Space.s4).id("status")
-                    } else if let status, !(twoPage && isRecordedOnly && !hasCaptions) {
-                        StatusView(presentation: status, perform: perform).padding(.top, PhoneStyle.Space.s4).id("status")
-                    } else if meeting.tracks.isEmpty && !twoPage {
-                        // Only notes so far. Two pages show this on the transcript's page. Record sits at
-                        // the line's end, or under it when the words need the room.
-                        ViewThatFits(in: .horizontal) {
-                            HStack(alignment: .center, spacing: PhoneStyle.Space.s2) {
-                                noRecordingLine.fixedSize()
-                                Spacer(minLength: PhoneStyle.Space.s3)
-                                RecordIntoButton(meeting: meeting).fixedSize()
-                            }
-                            VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-                                noRecordingLine
-                                RecordIntoButton(meeting: meeting)
-                                    .padding(.leading, min(statusGlyph, 32) + PhoneStyle.Space.s2)
-                            }
-                        }
-                        .padding(.top, PhoneStyle.Space.s4)
-                        .id("status")
                     }
+                    .daybookMotion(DaybookMotion.state, value: StatusBlockLayout.motionKey(status))
                     if let summary = meeting.summary {
-                        SummaryBody(library: library, meeting: meeting, summary: summary, play: play)
-                            .opacity(isResummarizing ? 0.5 : 1)
+                        SummaryBody(meeting: meeting, summary: summary, library: library, query: query,
+                                    revealing: summary.createdAt != openedWith, passages: passages,
+                                    blockID: Self.blockID) { section in
+                            ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true).padding(.top, PhoneStyle.Space.s2) }
+                        }
+                        // A new summary is a new block, so it reveals itself; the ID is a String, as the page's anchors are.
+                        .id("summary:\(summary.createdAt.timeIntervalSinceReferenceDate)")
+                        .opacity(isResummarizing ? 0.5 : 1)
+                        .daybookTransition(.opacity)
                     }
-                    YourNotes(library: library, meeting: meeting, play: play)
+                    PhoneNotes(library: library, meeting: meeting, play: play, passages: passages)
                         .padding(.top, meeting.summary == nil ? PhoneStyle.Space.s5 : 0)
                         .id(meeting.summary == nil ? SummaryBlockID.notes : "notes-body")
                     PhotoStrip(meeting: meeting)
-                    if meeting.summary != nil {
-                        Colophon(library: library, meeting: meeting).id(SummaryBlockID.colophon)
+                    if let summary = meeting.summary {
+                        PageColophon(library: library, meeting: meeting, summary: summary).id(SummaryBlockID.colophon)
                     }
                 }
                 .scrollTargetLayout()
@@ -91,50 +106,102 @@ struct SummaryPage: View {
             .onAppear { handleRequest(proxy) }
             .onChange(of: session.summaryRequest) { _, _ in handleRequest(proxy) }
         }
+        // Every page of the iPhone keeps its times in a lane inside the column (docs/interface.md, "Geometry").
+        .environment(\.readingWidth, .narrow)
+        .readingContext(readingContext)
         .paperBackground()
         .task(id: SavedCaptions.Reading(meeting, lastSave: captionsSaved)) {
             let read = await SavedCaptions.read(for: meeting, from: captionStore) != nil
             guard !Task.isCancelled else { return }
             hasCaptions = read
         }
-        .motion(PhoneStyle.Motion.page, value: meeting.summary?.createdAt)
-        .motion(PhoneStyle.Motion.state, value: status)
+        .sheet(item: $settings) { page in
+            NavigationStack {
+                SettingsDestination(route: page.route)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { settings = nil } } }
+            }
+        }
+        .daybookMotion(DaybookMotion.page, value: meeting.summary?.createdAt)
+        .daybookMotion(DaybookMotion.dim, value: isResummarizing)
     }
 
-    /// "No recording yet" in the status line's symbol column, so it reads as one of them.
-    private var noRecordingLine: some View {
-        HStack(alignment: .firstTextBaseline, spacing: PhoneStyle.Space.s2) {
-            Image(systemName: "note.text").foregroundStyle(PhoneStyle.Ink.secondary)
-                .frame(width: min(statusGlyph, 32)).accessibilityHidden(true)
-            Text("No recording yet").font(PhoneStyle.Typeface.status).foregroundStyle(PhoneStyle.Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+    /// The page's blocks' scroll IDs, which the transcript and search jump to.
+    private static func blockID(_ block: SummaryBlock) -> String? {
+        switch block {
+        case .lede: return SummaryBlockID.lede
+        case .nextSteps: return SummaryBlockID.nextSteps
+        case .section(let id): return SummaryBlockID.section(id)
+        case .notesHeading: return SummaryBlockID.notes
         }
+    }
+
+    /// A passage, from a summary line or a bookmark: on two pages the transcript beside scrolls there; in one column
+    /// the page turns to it.
+    private var passages: PassageLinks {
+        PassageLinks(onTap: twoPage) { [session, twoPage] in session.showInTranscript($0, switchPage: !twoPage) }
+    }
+
+    private var readingContext: ReadingContext {
+        ReadingContext(thisDevice: PhoneSummaryPlacement.thisDeviceWords, macPlace: "Your Mac", audio: { _ in .local }, player: nil,
+                       navigator: ReadingNavigator(open: { [session] in session.open($0) },
+                                                   showInfo: { [session] in session.sheet = .info($0) },
+                                                   search: { _ in },
+                                                   showTranscript: { [session] _, _ in session.pageMode = .transcript }))
     }
 
     private func handleRequest(_ proxy: ScrollViewProxy) {
         guard let request = session.summaryRequest, request.token != consumedToken else { return }
         consumedToken = request.token
-        DispatchQueue.main.async {
-            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(request.target, anchor: .top) }
+        let animation = DaybookMotion.scrollAnimation(reduceMotion: reduceMotion)
+        Task { @MainActor in
+            withAnimation(animation) { proxy.scrollTo(request.target, anchor: .top) }
         }
     }
 
-    private var status: StatusPresentation? { status(at: Date()) }
+    // MARK: Status
 
-    /// Where its summary runs first, when that's what there is to say (`PhoneSummaryPlacement`), then the processing status.
-    private func status(at now: Date) -> StatusPresentation? {
-        let sighting = sightingOverride ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id)
+    /// The shared presentation of the conversation's processing, from what this iPhone knows: the library, its own
+    /// processing, where summaries run, a Mac's live progress over the link, and whether a Mac is around.
+    private func status(at now: Date) -> ConversationStatusPresentation? {
         let processing = ProcessingStatus.phone(meeting, now: now)
-        if let placement, let placing = StatusPresentation.placement(placement.planners[meeting.id], run: placement.runs[meeting.id],
-                                                                      live: placement.live(meeting.id), status: processing,
-                                                                      cloudOffered: placement.cloudOffer != nil, sighting: sighting, now: now) {
-            return placing
-        }
-        let page = StatusPresentation.page(processing, meeting: meeting, sighting: sighting, pause: PhoneProcessor.current?.pause)
-        // A clearly better model within reach, when there's nothing else to say.
-        if page == nil, let offer = upgrades?.offer(for: meeting, now: now) { return .upgrade(offer) }
-        return page
+        return ConversationStatusPresentation.page(processing, meeting: meeting, inputs: inputs(for: processing, now: now), now: now)
     }
+
+    private func inputs(for processing: ProcessingStatus, now: Date) -> ConversationStatusPresentation.Inputs {
+        var inputs = ConversationStatusPresentation.Inputs(words: .iPhone(id: library.thisDevice.id), local: local)
+        inputs.mac = ConversationStatusPresentation.MacStanding.phone(
+            presence: model?.macPresence, sighting: sightingOverride ?? MacSighting.latest(in: library.meetings, excluding: library.thisDevice.id),
+            override: sightingOverride != nil, connected: model?.link.connectedMacs ?? [], liveProgress: model?.liveProgress ?? [:],
+            meetingID: meeting.id, now: now)
+        inputs.link = model?.liveProgress[meeting.id].map(ConversationStatusPresentation.LinkWork.init(live:))
+        inputs.placement = .init(planner: placement?.planners[meeting.id], run: placement?.runs[meeting.id],
+                                 cloudOffered: placement?.cloudOffer != nil)
+        inputs.pause = PhoneProcessor.current?.pause.map(ProcessingWords.PauseReason.init(phone:))
+        inputs.cloudModel = placement?.cloud?.resolved?.model.name
+        if let owns = model?.library.ownsTrack {
+            inputs.ownsUntranscribed = meeting.transcribableTracks
+                .filter { track in !meeting.transcripts.contains { $0.trackID == track.id } }
+                .allSatisfy(owns)
+        }
+        // A clearly better model within reach, when there's nothing else to say.
+        if processing == .done { inputs.upgrade = upgrades?.offer(for: meeting, now: now) }
+        return inputs
+    }
+
+    /// What this iPhone does itself: its own recordings when processing here is on, with what the models still need.
+    private var local: ConversationStatusPresentation.LocalCapabilities {
+        guard let model else { return .iPhone() }
+        let processesHere = model.settings.processesOnThisIPhone
+        let downloading = Self.processingRoles.compactMap(model.models.choice(for:)).lazy.compactMap { choice -> ConversationStatusPresentation.LocalCapabilities.Download? in
+            if case .downloading(let fraction) = model.models.status(of: choice) { return .init(name: choice.name, fraction: fraction) }
+            return nil
+        }.first
+        return .iPhone(processesHere: processesHere, summarizes: processesHere && model.processingCapabilities.summarizes,
+                       missingModelBytes: model.models.processingMissingBytes, download: downloading)
+    }
+
+    /// The models transcribing here needs (`PhoneModels.processingMissing`).
+    private static let processingRoles: [ModelRole] = [.transcription, .diarization, .speakerEmbedding]
 
     /// Recorded and nothing asked yet: two pages say so on the transcript's page, with Transcribe.
     private var isRecordedOnly: Bool {
@@ -154,336 +221,107 @@ struct SummaryPage: View {
         session.player.play(target, in: meeting, provider: provider)
     }
 
-    private func perform(_ action: StatusPresentation.Action) {
+    private func perform(_ action: ConversationStatusPresentation.Action) {
+        let id = meeting.id
         switch action {
-        case .request(.summaryOnly): library.summarize(meeting.id, placement: placement)
-        case .request(let mode): library.requestProcessing(meeting.id, mode: mode)
-        case .details(let text): session.sheet = .details(text)
-        case .dismiss: library.update(meeting.id) { $0.errorMessage = nil }
-        case .placement(let choice): placement?.perform(choice, for: meeting.id)
-        case .stopSummary: placement?.stop(meeting.id)
-        case .upgrade(let offer): Task { await upgrades?.accept(offer, for: meeting.id) }
-        case .dismissUpgrade(let offer): upgrades?.dismiss(offer, for: meeting.id)
+        case .transcribe: library.requestProcessing(id, mode: .newAudio)
+        case .summarize: library.summarize(id, placement: placement)
+        case .tryAgain(let mode):
+            if mode == .summaryOnly { library.summarize(id, placement: placement) } else { library.requestProcessing(id, mode: mode) }
+        case .details(let words): session.sheet = .details(words)
+        case .pause, .resume, .cancel: break
+        case .cancelRequest(let request):
+            let device = library.thisDevice
+            library.update(id) { $0.withdrawProcessingRequest(request, by: device, at: Date()) }
+        case .dontWait:
+            library.update(id, actionName: "Don’t Wait", undoManager: undoManager) { $0.stopWaitingForRecordings() }
+        case .cancelDownload:
+            guard let models = model?.models else { return }
+            for role in Self.processingRoles { if let choice = models.choice(for: role) { models.cancel(choice) } }
+        case .downloadModels:
+            guard let models = model?.models else { return }
+            for missing in models.processingMissing { models.download(missing) }
+        case .chooseModels: settings = PageSettings(route: .models)
+        case .cloudSettings: settings = PageSettings(route: .cloud)
+        case .summarizeHere: placement?.placements.beginHere(id)
+        case .useYourMac: library.requestProcessing(id, mode: .summaryOnly)
+        case .dismiss: library.update(id) { $0.errorMessage = nil }
+        case .placement(let choice): placement?.perform(choice, for: id)
+        case .stopSummary: placement?.stop(id)
+        case .upgrade(let offer): Task { await upgrades?.accept(offer, for: id) }
+        case .dismissUpgrade(let offer): upgrades?.dismiss(offer, for: id)
         }
     }
 }
 
+/// A Settings screen opened from the page.
+private struct PageSettings: Identifiable {
+    let route: SettingsRoute
+    var id: SettingsRoute { route }
+}
+
 // MARK: - Header
 
-/// Title and one byline: the same on both pages, so switching feels like turning the page.
+/// Title and one byline: the same on both pages and both apps, so switching feels like turning the page. DaybookUI's
+/// `ConversationHeader`, with this iPhone's player in its play pill, and "Recording on Studio Mac" while a Mac records it.
 struct PageHeader: View {
     let library: LibraryController
     let meeting: Meeting
     let play: (PlaybackTarget) -> Void
     @Environment(ReadingSession.self) private var session
-    @State private var draft = ""
-    @FocusState private var editingTitle: Bool
+    @Environment(PhoneAppModel.self) private var model: PhoneAppModel?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Untitled Conversation", text: titleBinding, axis: .vertical)
-                .font(PhoneStyle.Typeface.docTitle)
-                .foregroundStyle(PhoneStyle.Ink.title)
-                // A long title shows whole; it never stops mid-phrase inside the field.
-                .lineLimit(1...12)
-                .focused($editingTitle)
-                .submitLabel(.done)
-                .accessibilityLabel("Title")
-                .onChange(of: editingTitle) { _, editing in if !editing { commitTitle() } }
-                .onAppear { draft = meeting.title }
-                .onChange(of: meeting.title) { _, title in if !editingTitle { draft = title } }
-            byline
-        }
-    }
-
-    /// Return ends the title instead of starting a second line.
-    private var titleBinding: Binding<String> {
-        Binding(get: { draft }, set: { value in
-            if value.contains("\n") {
-                draft = value.replacingOccurrences(of: "\n", with: "")
-                editingTitle = false
-            } else {
-                draft = value
-            }
-        })
-    }
-
-    private func commitTitle() {
-        let title = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { draft = meeting.title; return }
-        if title != meeting.title { library.rename(meeting.id, to: title) }
-    }
-
-    /// The length (a play pill) and the date, then the people on their own line. A conversation
-    /// without a recording says so once, in its status line, not here too.
-    private var byline: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            FlowLayout(spacing: 8, lineSpacing: 4) {
-                if let duration = meeting.duration {
-                    PlayPill(player: session.player, meeting: meeting, duration: duration) { play(.timeline(0)) }
-                }
-                Text(meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(.wide).hour().minute()))
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
-            }
-            if let people = meeting.peopleLine {
-                Button { session.sheet = .info(meeting.id) } label: {
-                    Text(people).foregroundStyle(PhoneStyle.Ink.secondary).multilineTextAlignment(.leading)
-                }
-                .buttonStyle(.plain)
-                .accessibilityHint("Shows the people in this conversation")
+        ConversationHeader(meeting: meeting, library: library, recording: recording) {
+            if let duration = meeting.duration {
+                ConversationPlayPill(duration: duration, player: pillPlayer)
             }
         }
-        .font(PhoneStyle.Typeface.byline)
-    }
-}
-
-// MARK: - Summary
-
-/// Lede, next steps, and the template's sections, ending at "Your notes".
-private struct SummaryBody: View {
-    let library: LibraryController
-    let meeting: Meeting
-    let summary: MeetingSummary
-    let play: (PlaybackTarget) -> Void
-    @Environment(\.findQuery) private var query
-
-    private var sections: [SummarySection] {
-        summary.sections.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        .readingContext(ReadingContext(thisDevice: PhoneSummaryPlacement.thisDeviceWords, macPlace: "Your Mac", audio: { _ in .local },
+                                       navigator: ReadingNavigator(open: { [session] in session.open($0) },
+                                                                   showInfo: { [session] in session.sheet = .info($0) },
+                                                                   search: { _ in }, showTranscript: { _, _ in })))
     }
 
-    var body: some View {
-        let evidence = EvidenceIndex.cached(for: meeting)
-        VStack(alignment: .leading, spacing: 0) {
-            EvidenceLink(text: summary.overview, evidence: evidence.segment(for: summary.overview)) {
-                Text(FindHighlight.mark(SummaryLine.inline(summary.overview), query: query))
-                    .font(PhoneStyle.Typeface.lede)
-                    .foregroundStyle(PhoneStyle.Ink.body)
-                    .lineSpacing(5)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.top, PhoneStyle.Space.s5)
-            .id(SummaryBlockID.lede)
-            if !summary.actionItems.isEmpty {
-                VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
-                    PageHeading(text: "Next steps")
-                    ForEach(summary.actionItems) { item in
-                        NextStepRow(library: library, meeting: meeting, item: item,
-                                    evidence: evidence.segment(for: item.text, owner: item.owner))
-                    }
-                }
-                .padding(.top, PhoneStyle.Space.s6)
-                .id(SummaryBlockID.nextSteps)
-            }
-            ForEach(sections) { section in
-                VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-                    PageHeading(text: section.heading)
-                    SectionBody(source: section.body, evidence: evidence)
-                    ForEach(meeting.photos(in: section)) { PhotoTile(meeting: meeting, photo: $0, large: true) }
-                }
-                .padding(.top, PhoneStyle.Space.s6)
-                .id(SummaryBlockID.section(section.id))
-            }
-            PageHeading(text: "Your notes").padding(.top, PhoneStyle.Space.s6).id(SummaryBlockID.notes)
-        }
-    }
-}
-
-/// A summary block that leads to its evidence in the transcript. On two pages a tap scrolls the
-/// right page there; in one column the link is in the block's menu, so reading never jumps away.
-struct EvidenceLink<Content: View>: View {
-    let text: String
-    let evidence: UUID?
-    @ViewBuilder var content: Content
-    @Environment(ReadingSession.self) private var session
-    @Environment(\.isTwoPage) private var twoPage
-
-    var body: some View {
-        if let evidence {
-            content
-                .contentShape(Rectangle())
-                .onTapGesture { if twoPage { session.showInTranscript(evidence, switchPage: false) } }
-                .contextMenu {
-                    Button { session.showInTranscript(evidence, switchPage: !twoPage) } label: {
-                        Label("Show in Transcript", systemImage: "text.quote")
-                    }
-                    Button { LocalPasteboard.copy(text) } label: { Label("Copy", systemImage: "doc.on.doc") }
-                }
-                .accessibilityAction(named: "Show in Transcript") { session.showInTranscript(evidence, switchPage: !twoPage) }
-        } else {
-            content
-        }
-    }
-}
-
-private struct NextStepRow: View {
-    let library: LibraryController
-    let meeting: Meeting
-    let item: ActionItem
-    let evidence: UUID?
-    @Environment(ReadingSession.self) private var session
-    @Environment(\.isTwoPage) private var twoPage
-    @Environment(\.findQuery) private var query
-
-    /// An owner who spoke takes their speaker ink, tying them to the transcript.
-    private var ownerInk: Color? {
-        guard let owner = item.owner else { return nil }
-        return meeting.speakers.firstIndex { $0.name.caseInsensitiveCompare(owner) == .orderedSame }.map(PhoneStyle.speakerInk)
+    /// A Mac recording this conversation, over the link.
+    private var recording: String? {
+        model?.link.connectedMacs.first { $0.isRecording && $0.recording?.conversationID == meeting.id }.map { "Recording on \($0.name)" }
     }
 
-    private var stepText: some View {
-        Text(FindHighlight.mark(SummaryLine.inline(item.text), query: query))
-            .font(PhoneStyle.Typeface.body)
-            .strikethrough(item.completed, color: PhoneStyle.Ink.meta)
-            .foregroundStyle(item.completed ? PhoneStyle.Ink.secondary : PhoneStyle.Ink.body)
-    }
-
-    @ViewBuilder private var owner: some View {
-        if let owner = item.owner, !owner.isEmpty {
-            OwnerChip(name: owner, ink: ownerInk, filled: !item.completed).opacity(item.completed ? 0.6 : 1)
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Button {
-                library.setNextStep(item.id, completed: !item.completed, in: meeting.id)
-            } label: {
-                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(item.completed ? PhoneStyle.accent : PhoneStyle.Ink.meta)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(minWidth: 28, minHeight: 28)
-                    .contentShape(Rectangle())
-                    .accessibilityHidden(true)
-            }
-            .buttonStyle(.plain)
-            .sensoryFeedback(.selection, trigger: item.completed)
-            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
-            EvidenceLink(text: item.text, evidence: evidence) {
-                // The owner sits beside a short step, and under a long one.
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        stepText.fixedSize()
-                        owner
-                        Spacer(minLength: 0)
-                    }
-                    VStack(alignment: .leading, spacing: 5) {
-                        stepText.fixedSize(horizontal: false, vertical: true)
-                        owner
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if let evidence, let segment = meeting.unifiedTranscript.first(where: { $0.id == evidence }) {
-                Button { session.showInTranscript(evidence, switchPage: !twoPage) } label: {
-                    Text(TimeLabel.short(segment.start))
-                        .font(PhoneStyle.Typeface.time)
-                        .foregroundStyle(PhoneStyle.Ink.meta)
-                        .padding(.vertical, 4).padding(.leading, 4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Said at \(SpokenTime.format(segment.start))")
-                .accessibilityHint("Shows it in the transcript")
-            }
-        }
-        .motion(.easeOut(duration: 0.2), value: item.completed)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isToggle)
-        .accessibilityValue(item.completed ? "Done" : "Not done")
-        .accessibilityAction { library.setNextStep(item.id, completed: !item.completed, in: meeting.id) }
-    }
-}
-
-/// A section's Markdown: paragraphs, bullets (teal dots), numbered items, and subheadings.
-private struct SectionBody: View {
-    let source: String
-    let evidence: EvidenceIndex
-    @Environment(\.findQuery) private var query
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(SummaryLine.lines(source).enumerated()), id: \.offset) { _, line in
-                EvidenceLink(text: line.text, evidence: evidence.segment(for: line.text)) {
-                    switch line {
-                    case .paragraph(let text):
-                        Text(FindHighlight.mark(SummaryLine.inline(text), query: query))
-                            .lineSpacing(PhoneStyle.Typeface.bodyLineSpacing)
-                    case .heading(let text):
-                        Text(SummaryLine.inline(text)).font(PhoneStyle.Typeface.heading)
-                    case .item(let marker, let text):
-                        HStack(alignment: .firstTextBaseline, spacing: 0) {
-                            Group {
-                                if marker == "•" {
-                                    Circle().fill(PhoneStyle.accent.opacity(0.75)).frame(width: 6, height: 6)
-                                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
-                                } else {
-                                    Text(marker).monospacedDigit().foregroundStyle(PhoneStyle.Ink.secondary)
-                                }
-                            }
-                            .frame(width: 20, alignment: .leading)
-                            .accessibilityHidden(true)
-                            Text(FindHighlight.mark(SummaryLine.inline(text), query: query))
-                                .lineSpacing(PhoneStyle.Typeface.bodyLineSpacing)
-                        }
-                    }
-                }
-                .font(PhoneStyle.Typeface.body)
-                .foregroundStyle(PhoneStyle.Ink.body)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
+    private var pillPlayer: ConversationPlayPill.Player {
+        let player = session.player, id = meeting.id
+        return ConversationPlayPill.Player(isHere: { player.meetingID == id && player.phase == .ready },
+                                           isPlaying: { player.isPlaying },
+                                           position: { player.position },
+                                           toggle: { player.toggle() },
+                                           start: { play(.timeline(0)) })
     }
 }
 
 // MARK: - Colophon
 
-/// How the page was made, at its foot: a fact that doubles as the privacy line, the template, and
-/// Summarize Again (a request your Mac carries out).
-private struct Colophon: View {
+/// How the page was made, at its foot: DaybookUI's `Colophon`, with the template menu and Summarize Again.
+private struct PageColophon: View {
     let library: LibraryController
     let meeting: Meeting
+    let summary: MeetingSummary
+    @Environment(PhoneAppModel.self) private var model: PhoneAppModel?
     @Environment(\.summaryPlacement) private var placement
 
     var body: some View {
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s2) {
-            Rectangle().fill(PhoneStyle.Ink.faint).frame(width: 24, height: 1).padding(.bottom, PhoneStyle.Space.s1)
-                .accessibilityHidden(true)
-            if let summary = meeting.summary {
-                Label {
-                    // Where it ran: "Summarized on your Mac", "Summarized on this iPhone", "Summarized with Claude Sonnet 5.5".
-                    Text("\(summary.origin.colophon(thisDeviceID: library.thisDevice.id, thisDevice: PhoneSummaryPlacement.thisDeviceWords, unknown: "your Mac")) · \(summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))")
-                } icon: {
-                    Image(systemName: summary.origin.cloudModel != nil ? "cloud" : summary.origin.deviceID == library.thisDevice.id ? "iphone" : "laptopcomputer")
-                        .symbolEffect(.bounce, value: summary.createdAt)
-                }
-                .labelStyle(CompactLabelStyle())
-            }
-            HStack(spacing: 4) {
-                Text("Template:")
-                TemplateMenu(library: library, meeting: meeting) {
-                    HStack(spacing: 3) {
-                        Text(templateTitle).fontWeight(.medium)
-                        Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold))
-                    }
-                    .foregroundStyle(PhoneStyle.Ink.link)
-                }
-                // Only while it can be asked for: a pending request already shows on the page.
-                if !meeting.unifiedTranscript.isEmpty && !isPending {
-                    Text("·").accessibilityHidden(true)
-                    Button("Summarize Again") { library.summarize(meeting.id, placement: placement) }
-                        .buttonStyle(.daybookLink)
-                        .fontWeight(.medium)
-                }
-            }
+        let deviceClass = summary.origin.deviceID.flatMap { id in model?.sync.devices.first { $0.id == id }?.deviceClass }
+        Colophon(SummaryColophon(summary, thisDeviceID: library.thisDevice.id, words: .iPhone(id: library.thisDevice.id),
+                                 deviceClass: deviceClass),
+                 arrived: summary.createdAt, template: templateTitle, summarizeAgain: summarizeAgain) {
+            TemplatePicker(library: library, meeting: meeting)
         }
-        .font(PhoneStyle.Typeface.colophon)
-        .foregroundStyle(PhoneStyle.Ink.meta)
-        .padding(.top, PhoneStyle.Space.s7)
     }
 
-    private var isPending: Bool { ProcessingStatus.phone(meeting).isPending }
+    /// Only while it can be asked for: a pending request already shows on the page.
+    private var summarizeAgain: (() -> Void)? {
+        guard !meeting.unifiedTranscript.isEmpty, !ProcessingStatus.phone(meeting).isPending else { return nil }
+        return { [library, placement, id = meeting.id] in library.summarize(id, placement: placement) }
+    }
 
     private var templateTitle: String {
         if let template = library.resolvedTemplate(for: meeting) { return template.name }
@@ -492,28 +330,24 @@ private struct Colophon: View {
     }
 }
 
-/// The template picker: Automatic (with its guess), then the built-in and your own templates.
-/// Choosing another one asks your Mac to summarize again; the old summary stays in Version History.
-struct TemplateMenu<Label: View>: View {
+/// The template menu's items: Automatic (with its guess), then the built-in and your own templates. Choosing another
+/// one summarizes again; the old summary stays in Version History.
+struct TemplatePicker: View {
     let library: LibraryController
     let meeting: Meeting
-    @ViewBuilder var label: Label
     @Environment(\.summaryPlacement) private var placement
 
     var body: some View {
-        Menu {
-            Picker("Template", selection: Binding(get: { library.templateSelection(for: meeting.id) }, set: choose)) {
-                Text(automaticTitle).tag("auto")
+        Picker("Template", selection: Binding(get: { library.templateSelection(for: meeting.id) }, set: choose)) {
+            Text(automaticTitle).tag("auto")
+            Divider()
+            ForEach(library.templates.filter(\.isBuiltIn)) { Text($0.name).tag($0.id) }
+            let custom = library.templates.filter { !$0.isBuiltIn }
+            if !custom.isEmpty {
                 Divider()
-                ForEach(library.templates.filter(\.isBuiltIn)) { Text($0.name).tag($0.id) }
-                let custom = library.templates.filter { !$0.isBuiltIn }
-                if !custom.isEmpty {
-                    Divider()
-                    ForEach(custom) { Text($0.name).tag($0.id) }
-                }
+                ForEach(custom) { Text($0.name).tag($0.id) }
             }
-        } label: { label }
-        .accessibilityLabel("Template")
+        }
     }
 
     private var automaticTitle: String {
