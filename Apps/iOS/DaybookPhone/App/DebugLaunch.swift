@@ -55,7 +55,7 @@ import SwiftUI
 /// Settings and the status sheet:
 ///
 ///     --open-settings [<screen>] Settings, at a screen (`SettingsScreen`): icloud, macs, devices, device, device-details,
-///                                pairing, storage, models, cloud, cloud-key, templates, template, vocabulary,
+///                                device-live, device-recordings, pairing, storage, models, cloud, cloud-key, templates, template, vocabulary,
 ///                                speaker-profiles, speaker-profile:<name>, recording, library-devices, about,
 ///                                acknowledgements, add-device (straight to Soundcore's setup), add-recorder (the list of
 ///                                kinds), add-term (Vocabulary with Add Term showing)
@@ -134,7 +134,8 @@ struct DebugLaunch {
 
     /// `--open-settings <screen>`: the Settings screen to open.
     enum SettingsPage: Equatable, Sendable {
-        case root, icloud, macs, devices, device, deviceDetails, pairing, storage, models, cloud, cloudKey, templates,
+        case root, icloud, macs, devices, device, deviceDetails, deviceLive, deviceRecordings, pairing, storage, models, cloud,
+             cloudKey, templates,
              template, vocabulary, speakerProfiles, recording, libraryDevices, about, acknowledgements, addDevice,
              addRecorder, addTerm
         /// A speaker profile's page, by its name.
@@ -142,7 +143,8 @@ struct DebugLaunch {
 
         static let plain: [(String, SettingsPage)] = [
             ("root", .root), ("icloud", .icloud), ("macs", .macs), ("devices", .devices), ("device", .device),
-            ("device-details", .deviceDetails), ("pairing", .pairing), ("storage", .storage), ("models", .models),
+            ("device-details", .deviceDetails), ("device-live", .deviceLive), ("device-recordings", .deviceRecordings),
+            ("pairing", .pairing), ("storage", .storage), ("models", .models),
             ("cloud", .cloud), ("cloud-key", .cloudKey), ("templates", .templates), ("template", .template),
             ("vocabulary", .vocabulary), ("speaker-profiles", .speakerProfiles), ("recording", .recording),
             ("library-devices", .libraryDevices), ("about", .about), ("acknowledgements", .acknowledgements),

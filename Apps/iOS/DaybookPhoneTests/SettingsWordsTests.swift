@@ -36,7 +36,7 @@ final class SettingsWordsTests: XCTestCase {
     func testARecorderAwaySaysWhenItWasLastSeen() {
         let calendar = Calendar.current
         let earlier = calendar.date(byAdding: .hour, value: -1, to: now)!
-        let line = PhoneDeviceCopy.lastSeen(earlier, now: now)
+        let line = RecorderStatusWords.lastSeen(earlier, now: now)
         XCTAssertTrue(line.hasPrefix("Last seen "), "never a bare time: \(line)")
         XCTAssertTrue(line.contains(earlier.formatted(date: .omitted, time: .shortened)))
     }
@@ -44,24 +44,19 @@ final class SettingsWordsTests: XCTestCase {
     func testFiguresFromEarlierSayAsOfOnce() {
         let calendar = Calendar.current
         let today = calendar.date(byAdding: .minute, value: -30, to: now)!
-        XCTAssertEqual(PhoneDeviceCopy.asOf(today, now: now, calendar: calendar),
-                       "As of \(today.formatted(date: .omitted, time: .shortened))")
+        XCTAssertEqual(RecorderStatusWords.asOf(today, now: now), "As of today, \(today.formatted(date: .omitted, time: .shortened))",
+                       "dated as Last seen is, on both apps")
         let before = calendar.date(byAdding: .day, value: -3, to: now)!
-        let asOf = PhoneDeviceCopy.asOf(before, now: now, calendar: calendar)
+        let asOf = RecorderStatusWords.asOf(before, now: now)
         XCTAssertTrue(asOf.hasPrefix("As of "), asOf)
         XCTAssertFalse(asOf.contains(" on "), "not \"As of on 20 Oct\": \(asOf)")
         XCTAssertFalse(asOf.contains(" at "), asOf)
     }
 
     func testARecordersRoomIsAFigureInHours() {
-        XCTAssertEqual(PhoneDeviceCopy.storageFigure(hours: 213), "210 hr")
-        XCTAssertEqual(PhoneDeviceCopy.storageFigure(hours: 6.2), "6 hr")
-        XCTAssertEqual(PhoneDeviceCopy.storageFigure(hours: 0.4), "< 1 hr")
-    }
-
-    func testARelativeTimeStartingALineIsCapitalized() {
-        XCTAssertEqual(PhoneDeviceCopy.sentenceCase("just now"), "Just now")
-        XCTAssertEqual(PhoneDeviceCopy.sentenceCase("2 hours ago"), "2 hours ago")
+        XCTAssertEqual(RecorderStatusWords.storageFigure(hours: 213, low: false), "210 hr")
+        XCTAssertEqual(RecorderStatusWords.storageFigure(hours: 6.2, low: true), "6 hr left")
+        XCTAssertEqual(RecorderStatusWords.storageFigure(hours: 0.4, low: true), "< 1 hr")
     }
 
     // MARK: Storage

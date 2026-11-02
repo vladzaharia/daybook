@@ -1,153 +1,24 @@
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-/// A recorder's handoff (docs/devices.md, "Handing a recorder over"): "Use on This iPhone" when a
-/// Mac manages it, "Use on Studio Mac" when this iPhone does and the Mac is on Wi‑Fi, and the
-/// handoff's progress in between. The same rows in the status sheet's recorder card and on the
-/// device page: a glyph column, then the words. "Managed by" is the line above them, not repeated.
-///
-/// A working state is a bare line; a state that needs the person (an answer, or waiting too long)
-/// offers at most two actions (docs/interface.md).
+/// A recorder's handoff in the status sheet's recorder card (docs/devices.md, "Handing a recorder over"): the rows
+/// both apps draw (DaybookUI's `RecorderHandoffView`), as the card's rows. "Use on This iPhone" while a Mac manages
+/// it, "Use on Studio Mac" while this iPhone does and the Mac is on Wi‑Fi, and the handoff's progress in between,
+/// with Stop Waiting wherever waiting can be called off. "Managed by" is the line above them, not repeated.
 struct RecorderHandoffCard: View {
     let session: DeviceSession
     @Environment(PhoneAppModel.self) private var model
-    @State private var confirmingTakeOver = false
+    @Environment(\.openURL) private var openURL
 
     /// Whether there's anything to show: a handoff under way, or one to offer.
     @MainActor
     static func shows(_ session: DeviceSession, devices: PhoneDevices) -> Bool {
-        guard session.direct is any ManagedConnection else { return false }
-        return devices.handoffState(session) != .idle || session.managedElsewhere != nil || !devices.handoffTargets(session).isEmpty
+        RecorderHandoffView.shows(session, handoff: devices.handoff)
     }
 
     var body: some View {
-        let devices = model.devices
-        let state = devices.handoffState(session)
-        VStack(alignment: .leading, spacing: 0) {
-            if session.direct is any ManagedConnection {
-                rows(state, devices: devices)
-            }
-        }
-        .confirmationDialog("Take over \(session.device.name) now?", isPresented: $confirmingTakeOver, titleVisibility: .visible) {
-            Button("Take Over Anyway") { devices.takeOverAnyway(session) }
-            Button("Keep Waiting", role: .cancel) {}
-        } message: {
-            Text(RecorderHandoff.Words.takeOverRisk(owner: owner(state), recorder: session.device.name, here: "this iPhone"))
-        }
-    }
-
-    // MARK: The rows
-
-    @ViewBuilder
-    private func rows(_ state: RecorderHandoff.State, devices: PhoneDevices) -> some View {
-        let recorder = session.device.name
-        let headline = RecorderHandoff.Words.headline(state, recorder: recorder, here: "this iPhone") ?? ""
-        switch state {
-        case .idle:
-            if let owner = session.managedElsewhere {
-                Button { devices.useHere(session) } label: {
-                    StatusRow {
-                        StatusLinkGlyph(systemImage: "iphone")
-                    } content: {
-                        Text("Use on This iPhone").font(.subheadline.weight(.medium)).foregroundStyle(PhoneStyle.Ink.link)
-                    }
-                }
-                .buttonStyle(StatusRowButtonStyle())
-                .accessibilityHint("Asks \(owner.ownerName) to let go of \(recorder), then connects here")
-            } else {
-                let targets = devices.handoffTargets(session)
-                ForEach(targets, id: \.linkID) { mac in
-                    if mac.linkID != targets.first?.linkID { StatusDivider() }
-                    Button { devices.give(session, to: mac) } label: {
-                        StatusRow {
-                            StatusLinkGlyph(systemImage: "desktopcomputer")
-                        } content: {
-                            NamePhrase(prefix: "Use on", name: mac.name)
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(PhoneStyle.Ink.link)
-                        }
-                    }
-                    .buttonStyle(StatusRowButtonStyle())
-                    .accessibilityHint("This iPhone finishes any import first")
-                }
-            }
-        case .done:
-            StatusRow {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.body)
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(PhoneStyle.Ink.secondary)
-                    .accessibilityHidden(true)
-            } content: {
-                Text(headline).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        default:
-            TimelineView(.periodic(from: .now, by: 15)) { context in
-                let overdue = devices.handoff.isOverdue(state, now: context.date)
-                let detail = RecorderHandoff.Words.detail(state, recorder: recorder, here: "this iPhone", overdue: overdue, now: context.date)
-                let refused: Bool = { if case .refused = state { return true }; return false }()
-                StatusRow(alignment: .top) {
-                    Group {
-                        if refused {
-                            Image(systemName: "exclamationmark.triangle.fill").font(.body).foregroundStyle(PhoneStyle.Ink.warning)
-                        } else {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                    .frame(height: 20)
-                    .accessibilityHidden(true)
-                } content: {
-                    VStack(alignment: .leading, spacing: PhoneStyle.Space.s1) {
-                        Text(headline)
-                            .font(.subheadline.weight(refused ? .semibold : .regular))
-                            .foregroundStyle(refused ? PhoneStyle.Ink.warning : PhoneStyle.Ink.title)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let detail {
-                            Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        if refused {
-                            refusedActions(devices: devices).padding(.top, 2)
-                        } else if case .waitingForSync = state {
-                            waitingActions(devices: devices, overdue: overdue).padding(.top, 2)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: Shared
-
-    private func refusedActions(devices: PhoneDevices) -> some View {
-        HStack(spacing: PhoneStyle.Space.s4) {
-            if session.managedElsewhere != nil {
-                Button("Take Over Anyway…") { confirmingTakeOver = true }
-            }
-            Button("OK") { devices.endHandoff(session) }
-        }
-        .font(.footnote.weight(.semibold))
-        .foregroundStyle(PhoneStyle.Ink.link)
-        .buttonStyle(.borderless)
-    }
-
-    private func waitingActions(devices: PhoneDevices, overdue: Bool) -> some View {
-        HStack(spacing: PhoneStyle.Space.s4) {
-            Button("Take Over Anyway…") { confirmingTakeOver = true }
-                .fontWeight(overdue ? .semibold : .regular)
-            Button("Stop Waiting") { devices.endHandoff(session) }
-        }
-        .font(.footnote)
-        .foregroundStyle(PhoneStyle.Ink.link)
-        .buttonStyle(.borderless)
-    }
-
-    private func owner(_ state: RecorderHandoff.State) -> String {
-        switch state {
-        case .waitingForSync(let owner, _), .asking(let owner), .ownerFinishing(let owner, _): return owner
-        case .refused(let by, _): return by
-        default: return session.managedElsewhere?.ownerName ?? "your Mac"
-        }
+        RecorderHandoffView(session: session, style: .card)
+            .environment(\.recorderServices, PhoneRecorderServices.make(model: model, openURL: openURL))
     }
 }

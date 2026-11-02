@@ -384,7 +384,7 @@ enum StatusSheetInputs {
             handoff: model.devices.handoffState(session),
             isRecording: session.isLinked && session.status?.isRecording == true,
             isListeningLive: session.isListeningLive,
-            problem: session.problem.map { PhoneDeviceCopy.problem($0).title },
+            problem: session.problem.map { RecorderStatusWords.problem($0, on: .iPhone).title },
             lastConnected: session.direct?.lastConnectedAt ?? session.primary?.lastConnectedAt,
             storageHours: session.status?.storage?.hoursLeft,
             storageIsLow: session.status?.storage.map(StorageFormat.isLow) ?? false,
@@ -820,7 +820,7 @@ private struct StatusRecorderCard: View {
     /// on the same line when it fits.
     @ViewBuilder
     private func status(storage hours: Double?, low: Bool) -> some View {
-        let line = PhoneDeviceCopy.line(for: session).keepingSeparators
+        let line = session.statusLine(model: model).text.keepingSeparators
         if let hours {
             let storage = Text(StatusSheetModel.storageLeft(hours: hours))
                 .foregroundStyle(low ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)

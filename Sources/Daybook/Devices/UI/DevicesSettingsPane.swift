@@ -2,10 +2,12 @@ import AppKit
 import DaybookCore
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import SwiftUI
 
-/// Settings › Devices: each recorder's set-and-forget preferences and its methods. Everything
-/// operational (connecting, importing, status) lives on the device's page instead.
+/// Settings › Devices: each recorder's ways in, and its options in the words its page and the iPhone use
+/// (DaybookUI's `RecorderPreferencesSection`). Everything operational (connecting, importing, status) lives
+/// on the device's page instead.
 struct DevicesSettingsPane: View {
     let state: AppState
     let hub: DeviceHub
@@ -26,7 +28,7 @@ struct DevicesSettingsPane: View {
                             .frame(width: 32)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("No recorders yet")
+                            Text("No devices yet")
                             Text("Soundcore Work, Daybook on iPhone, or any recorder that saves audio files.")
                                 .font(TypeStyle.status).foregroundStyle(.secondary)
                         }
@@ -54,6 +56,7 @@ struct DevicesSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+        .environment(\.recorderServices, state.recorderServices)
     }
 }
 
@@ -82,13 +85,14 @@ private struct DeviceSettingsSection: View {
     var body: some View {
         let kind = session.kind
         Section {
-            if kind.allowsMultiple {
-                TextField("Name", text: $name)
-                    .onAppear { name = session.device.name }
-                    .onSubmit { state.devices.rename(session.id, to: name) }
-            }
             if kind.id == DaybookPhoneIntegration.id {
+                if kind.allowsMultiple {
+                    TextField("Name", text: $name)
+                        .onAppear { name = session.device.name }
+                        .onSubmit { state.devices.rename(session.id, to: name) }
+                }
                 PhoneSettingsRows(state: state, session: session)
+                // Also for a pairing that can't be read or is gone ("Not paired"): Unpair removes what's left of it.
                 LabeledContent("Pairing") {
                     Button(PairingWords.unpair) { confirmingRemove = true }
                 }
@@ -99,9 +103,7 @@ private struct DeviceSettingsSection: View {
                 if let files = session.files, let method = kind.method(.files) {
                     FolderRows(state: state, session: session, files: files, method: method)
                 }
-                LabeledContent("Remove from Daybook") {
-                    Button("Remove…") { confirmingRemove = true }
-                }
+                RecorderPreferencesSection(session: session, style: .form)
             }
         } header: {
             HStack(spacing: Space.s2) {
@@ -119,21 +121,14 @@ private struct DeviceSettingsSection: View {
         } message: {
             Text("Daybook stops connecting to it. Recordings you already imported stay.")
         }
-        .alert(kind.id == DaybookPhoneIntegration.id ? PairingWords.unpairQuestion(session.device.name) : "Remove \(session.device.name) from Daybook?",
-               isPresented: $confirmingRemove) {
-            if kind.id == DaybookPhoneIntegration.id {
-                Button("Unpair", role: .destructive) {
-                    if let phone = UUID(uuidString: session.id), state.phoneLink.isPaired(phone) { state.unpairPhone(phone) }
-                    else { state.removeDevice(session.id) }
-                }
-            } else {
-                Button("Remove", role: .destructive) { state.removeDevice(session.id) }
+        .alert(PairingWords.unpairQuestion(session.device.name), isPresented: $confirmingRemove) {
+            Button("Unpair", role: .destructive) {
+                if let phone = UUID(uuidString: session.id), state.phoneLink.isPaired(phone) { state.unpairPhone(phone) }
+                else { state.removeDevice(session.id) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(kind.id == DaybookPhoneIntegration.id
-                 ? PairingWords.unpairConsequence
-                 : "Daybook stops importing from it. Recordings you already imported stay in your library.")
+            Text(PairingWords.unpairConsequence)
         }
     }
 
@@ -141,22 +136,9 @@ private struct DeviceSettingsSection: View {
     private func directRows(_ direct: any DeviceConnection, _ method: ConnectionMethod) -> some View {
         let enabled = Binding(get: { session.device.isEnabled(.direct) },
                               set: { on in session.update { if on { $0.disabledMethods.remove(.direct) } else { $0.disabledMethods.insert(.direct) } } })
-        let automatic = Binding(get: { session.device.importsAutomatically },
-                                set: { on in session.update { $0.importsAutomatically = on } })
         Toggle("Connect \(method.title.prefix(1).lowercased() + method.title.dropFirst())", isOn: enabled)
             .controlSize(.regular)
             .disabled(!direct.isSetUp)
-        Toggle("Import new recordings automatically", isOn: automatic)
-            .controlSize(.regular)
-            .padding(.leading, Space.s5)
-            .disabled(!direct.isSetUp || !session.device.isEnabled(.direct))
-        if direct.capabilities.contains(.recordControl) {
-            Toggle("Record along with this Mac",
-                   isOn: Binding(get: { session.device.recordsAlongsideMac }, set: { on in session.update { $0.alsoRecordsWithMac = on } }))
-                .controlSize(.regular)
-                .padding(.leading, Space.s5)
-                .disabled(!direct.isSetUp || !session.device.isEnabled(.direct))
-        }
         RecorderOwnershipRow(state: state, session: session)
         LabeledContent("Recorder") {
             if let snapshot = (direct as? SoundcoreConnection)?.remembered {

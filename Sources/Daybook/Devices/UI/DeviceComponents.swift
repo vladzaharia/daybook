@@ -3,11 +3,12 @@ import DaybookCore
 import DaybookKit
 import SwiftUI
 
-// Building blocks shared by every device surface. The device page is content, not chrome: the
-// paper surface, page type, the paper inks (`Ink`), quiet fills, and no glass. Colour is reserved,
-// as on the iPhone: teal for a live link to a recorder and for what you can act on (`Ink.link`),
-// neon cyan for live listening, the brand gradient for progress, `Ink.warning` for warnings, and
-// `Ink.record` for recording. Everything else is the label colour or secondary.
+// Building blocks for the Mac's own device surfaces: a selected recording's page, the paired iPhone's
+// page, and Add Device. A recorder's page, Listen Live, and its recordings are the screens both apps
+// share (DaybookUI's `Devices`). A device surface is content, not chrome: the paper surface, page
+// type, the paper inks (`Ink`), quiet fills, and no glass. Colour is reserved, as on the iPhone: teal
+// for a live link to a recorder and for what you can act on (`Ink.link`), the brand gradient for
+// progress, `Ink.warning` for warnings, and `Ink.record` for recording.
 
 /// The device page's column: a conversation page's (`PageScroll`: a 640 pt measure, centred, with a
 /// 56 pt margin hanging to its left), so titles line up when moving between a device and a
@@ -93,18 +94,6 @@ struct DeviceStatusDot: View {
     }
 }
 
-/// A page section heading: "Import".
-struct DeviceHeading: View {
-    let title: String
-    init(_ title: String) { self.title = title }
-    var body: some View {
-        Text(title).font(TypeStyle.heading())
-            .foregroundStyle(Ink.body)
-            .padding(.top, Space.s6).padding(.bottom, Space.s3)
-            .accessibilityAddTraits(.isHeader)
-    }
-}
-
 /// One quiet-filled box on the column, its outer edge on the text's edge as a conversation's
 /// status boxes are, with their padding and corners.
 struct DeviceBox<Content: View>: View {
@@ -114,36 +103,6 @@ struct DeviceBox<Content: View>: View {
             .padding(Space.s3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
-/// The device page's problem, under its status line: a conversation's problem box (`StatusBox`),
-/// with what happened, what is safe, and at most two actions, the first of them prominent.
-struct DeviceProblemBanner: View {
-    let problem: DeviceProblem
-    let perform: (DeviceProblemAction) -> Void
-
-    /// The problem's first two actions, with Dismiss when there's room for it.
-    static func actions(_ problem: DeviceProblem, excluding hidden: Set<DeviceProblemAction> = []) -> [DeviceProblemAction] {
-        let actions = Array(problem.actions.filter { !hidden.contains($0) }.prefix(2))
-        return actions.count < 2 && !actions.contains(.dismiss) ? actions + [.dismiss] : actions
-    }
-
-    /// Actions that don't apply here (Set Up Folder… once the folder is set up).
-    var hidden: Set<DeviceProblemAction> = []
-
-    var body: some View {
-        let actions = Self.actions(problem, excluding: hidden)
-        DeviceAttentionBox(kind: .problem, symbol: "exclamationmark.triangle.fill", title: problem.title, message: problem.message) {
-            ForEach(Array(actions.dropFirst().reversed().enumerated()), id: \.offset) { _, action in
-                Button(action.title) { perform(action) }.buttonStyle(.daybookLink)
-            }
-            if let primary = actions.first {
-                DeviceBoxPrimaryButton(title: primary.title) { perform(primary) }
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(problem.title). \(problem.message)")
     }
 }
 
@@ -174,69 +133,6 @@ struct DeviceBoxPrimaryButton: View {
     }
 }
 
-/// Something to know, with one optional action and Dismiss.
-struct DeviceNotice: View {
-    var symbol = "info.circle.fill"
-    let text: String
-    var action: (title: String, run: () -> Void)?
-    var dismiss: (() -> Void)?
-
-    var body: some View {
-        DeviceAttentionBox(symbol: symbol, title: text) {
-            if let dismiss { Button("Dismiss", action: dismiss).buttonStyle(.daybookLink) }
-            if let action { Button(action.title, action: action.run) }
-        }
-    }
-}
-
-/// One of the page's figures, in a quiet tile: Recorder, Case, Storage.
-struct DeviceFigureTile: View {
-    let label: String
-    let symbol: String
-    let value: String
-    var detail: String?
-    var warning = false
-    /// A value the recorder hasn't confirmed recently is drawn quieter, with its time.
-    var stale = false
-    let accessibility: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.s2) {
-            HStack(spacing: 6) {
-                Image(systemName: symbol)
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(warning ? Ink.warning : Ink.secondary)
-                Text(label)
-                    .foregroundStyle(Ink.secondary)
-            }
-            .font(TypeStyle.status)
-            Text(value)
-                .font(.system(size: 20, weight: .semibold).monospacedDigit())
-                .foregroundStyle(warning ? Ink.warning : stale ? Ink.secondary : Ink.body)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .contentTransition(.numericText())
-            Text(detail ?? " ")
-                .font(TypeStyle.colophon)
-                .foregroundStyle(warning ? Ink.warning : Ink.meta)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, Space.s3)
-        .padding(.vertical, Space.s3)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .quietBox(cornerRadius: 12)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibility)
-    }
-}
-
-/// A glyph tucked against its text, for row details.
-struct DeviceInlineLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 4) { configuration.icon.imageScale(.small); configuration.title }
-    }
-}
-
 /// The M4 transition: a status line or notice slides in from the top; it only fades under Reduce Motion.
 extension AnyTransition {
     static func deviceNotice(reduceMotion: Bool) -> AnyTransition {
@@ -245,9 +141,6 @@ extension AnyTransition {
 }
 
 extension DeviceSession {
-    /// "Today, 10:02 AM" and "48 min" for the list and pages.
-    func overlapHint(_ recording: DeviceRecording) -> DeviceOverlap? { overlaps(recording).first }
-
     /// "Connected · Recorder 80%", the list column's subtitle.
     var subtitle: String {
         if queue.isActive {
@@ -281,13 +174,6 @@ extension DeviceSession {
         }
     }
 
-    /// Whether this Mac imports from the device: not from a recorder another device manages, which
-    /// imports there (its recordings arrive through sync).
-    var importsHere: Bool { managedElsewhere == nil || primary?.method != .direct }
-
-    /// New recordings this Mac can import, for the sidebar's count and the menus.
-    var importableCount: Int { importsHere ? newRecordings.count : 0 }
-
     /// Stop, confirming first when more than a minute of audio has arrived (§5.19).
     func requestStop(all: Bool) {
         let seconds = Double(receivedBytes) / SoundcoreRecording.bytesPerSecond
@@ -306,30 +192,6 @@ enum DeviceActions {
     static func openSettings(_ openSettings: OpenSettingsAction) {
         LaunchOptions.defaults.set("devices", forKey: "settingsPane")
         openSettings()
-    }
-
-    /// Problem actions that don't apply to this device now: Set Up Folder… once its folder is set up.
-    static func inapplicable(for session: DeviceSession) -> Set<DeviceProblemAction> {
-        session.files?.isSetUp == true ? [.setUpFolder] : []
-    }
-
-    static func perform(_ action: DeviceProblemAction, session: DeviceSession, state: AppState) {
-        switch action {
-        case .openBluetoothSettings:
-            if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") { NSWorkspace.shared.open(url) }
-        case .openPrivacySettings: PrivacySettings.open(.bluetooth)
-        case .setUpFolder, .chooseFolder:
-            if state.chooseDeviceFolder(for: session) { session.dismissProblem() }
-        case .tryAgain: session.tryAgain()
-        case .technicalDetails:
-            session.browser.showsTechnicalDetails = true
-            session.browser.showingDetails = true
-        case .reconnect, .connect: session.connect()
-        case .dismiss: session.dismissProblem()
-        case .refreshStatus:
-            session.dismissProblem()
-            session.primary?.refresh()
-        }
     }
 
     /// Show Audio File in Finder for an imported recording.

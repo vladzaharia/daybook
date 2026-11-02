@@ -4,7 +4,9 @@ Daybook brings recordings in from recorders: Soundcore Work today, Daybook on iP
 "Other Recorder" that saves audio files, and in future other hardware such as Plaud NotePin. This document
 describes the hardware-agnostic device framework and how to add a new kind of recorder.
 
-The framework and kinds are the `DaybookDevices` library (`Sources/DaybookDevices/`, macOS and iOS); the Mac's device interface stays in the app (`Sources/Daybook/Devices/`):
+The framework and kinds are the `DaybookDevices` library (`Sources/DaybookDevices/`, macOS and iOS); the screens both apps
+show for a recorder are DaybookUI's (`Sources/DaybookUI/Devices/`), and each app hosts them (`Sources/Daybook/Devices/`,
+`Apps/iOS/DaybookPhone/Devices/UI/`):
 
 | Folder | What's there |
 | --- | --- |
@@ -14,7 +16,9 @@ The framework and kinds are the `DaybookDevices` library (`Sources/DaybookDevice
 | `DaybookDevices/OtherRecorder/` | A kind with only the files method |
 | `DaybookDevices/DaybookPhone/` | Daybook on iPhone: the kind, its synced recordings (`SyncedPhoneRecordings`), and the hooks the app fills in (`DaybookPhoneHooks`) |
 | `Daybook/App/PhoneLink*.swift` | The phone's direct method over DaybookLink (`PhoneLinkConnection`) and the Mac's end of the link (`PhoneLink`) |
-| `Daybook/Devices/UI/` | Sidebar section, list column, device page, Add Device, Device Details, Settings › Devices, menus |
+| `DaybookUI/Devices/` | A recorder's page (`RecorderDevicePage`), its recordings (`DeviceRecordingsView`, `DeviceRecordingActions`, `ConversationChooser`), Listen Live (`ListenLiveView`), its handoff (`RecorderHandoffView`), options (`RecorderPreferencesSection`), menu items (`RecorderMenuItems`), and Add Device's steps (`AddRecorderFlow`), reaching each app through `RecorderServices` |
+| `Daybook/Devices/UI/` | The Mac's hosting of them: sidebar section, list column, detail column, Add Device's sheet, Device Details, Settings › Devices, menus |
+| `DaybookPhone/Devices/UI/` | The iPhone's: Settings › Recorders, the page's pushes, Add Recorder's sheet and the open Duo's pages |
 | `Daybook/Devices/Demo/` | Debug-only demo states for screenshots, installed into the hub through `DeviceHub.demo` |
 
 ## Concepts
@@ -275,7 +279,9 @@ No answer within 5 s (an older build, or the link dropped) falls back to sync.
 The requester says honestly that it's waiting ("Waiting for Studio Mac to let go…", and after two
 minutes "Studio Mac hasn't answered since 10:02 AM. It may be asleep, closed, or offline."). The
 owner answers in the record at its next pass (`releasing`, `released` with the waiting imports, or
-`refused` with words), then the requester takes over as above. **Stop Waiting** cancels it.
+`refused` with words), then the requester takes over as above. **Stop Waiting** cancels it: in the record through sync, and over the link a
+`recorder.handoff.request` with the same ID and intent `cancel` (docs/link.md), so an owner still finishing an import
+keeps the recorder and carries on. Once the owner has let go it's too late: its release still moves the recorder.
 **Take Over Anyway** claims the recorder at once after a confirmation that says the risk: if the
 other device is still connected, the recorder may not answer here until it hears and lets go
 (finishing any import first); nothing on the recorder is lost. The new owner keeps trying with no
@@ -317,7 +323,7 @@ and hands over what was waiting.
   (at launch). A recording the recorder was making already, or one from a build that doesn't
   say, is never stopped.
 
-**Hand back** (iPhone, off by default; the device page's "Hand Back to My Mac"):
+**Hand back** (iPhone, off by default; the device page's "Hand Back to Your Mac"):
 a recorder the iPhone took from a Mac goes back to that Mac when the Mac connects over the link,
 the recorder is idle here (no transfer, no Listen Live), and the person hasn't chosen this iPhone in
 the last 10 minutes. It's an offer the Mac accepts only if it has the recorder set up. It never
@@ -325,34 +331,83 @@ fires for a Mac that was already connected.
 
 ## Interface
 
-The interface is generic and capability-driven:
+The interface is generic and capability-driven, and a recorder's screens are the same on the Mac and the iPhone
+(DaybookUI's `Devices`, in DaybookKit's words: `RecorderStatusWords`, `RecorderActions`). Each app hosts them and fills
+`RecorderServices` with what only it does (opening a conversation, the Mac's Finder and open panel, the iPhone's
+pushes, Settings).
 
-- **Sidebar › Devices**: every configured device, with at most one accessory (a progress ring
+- **Sidebar › Devices** (Mac): every configured device, with at most one accessory (a progress ring
   while importing, a teal arc drawn by Daybook so it reads the same in an inactive window, else a count of new recordings this Mac can import: none for a recorder another
   device manages). The glyph is teal while a recorder is linked, as on the iPhone, and the
-  sidebar's own colour otherwise. A `+` on hover adds a device.
-- **List column**: Recording Now, the queue, New on <device>, and Already in Daybook (collapsed).
-- **Device page**: a conversation page's column, so titles line up, with the glyph hanging in its
-  margin; a status dot and byline (with Cancel while connecting); the problem under it, in a
-  conversation's status box with at most two actions; figure tiles for whatever status the method
-  reports; the page's one action (Import N New, Connect, or Use on This Mac), which neither the
-  problem box nor a method row repeats; Import (each method in preference order, each saying only
-  what the byline doesn't: a connected link is just its name, a watched folder just where it is);
-  Recent imports. Daybook on iPhone's page has the same header and boxes, without Import or method
-  rows: the byline says the link, the box says when sync is off, and its recordings are the list
-  beside it.
-- **More menu** (the page's toolbar): Refresh Status and Device Settings… always, dimmed when they
-  can't run; the rest (Start or Pause Recording on <device>, Listen Live, Device Details…, Connect or
-  Disconnect, the handoff items) only when it applies (`DeviceMenuOffer`).
-- **Add Device…** (File menu, sidebar, Settings, Welcome): choose a kind, then its methods in
-  order of preference. The first is marked Recommended. A direct method's card is the
-  pre-permission screen; its one button starts the search.
-- **Settings › Devices**: per device, its methods and preferences, Forget… and Remove….
-- **Menus**: File › Add Device… and Import from <device>…; Add Recording › From <device>…;
+  sidebar's own colour otherwise. A `+` on hover adds a device. On the iPhone, Settings › Recorders lists
+  each with its status line.
+- **The recorder's page** (`RecorderDevicePage`), on paper in a conversation page's column so titles line up, in one
+  order on both:
+  1. Its name in New York and a byline (`RecorderStatusWords.byline`: "Connected", "Not connected · Last seen
+     today, 3:25 AM"), with Cancel while it connects. Where the column has a margin (600 pt and wider: the Mac's
+     detail, a single page on the open Duo) the kind's glyph hangs in it; narrower, it sits on a tile beside the name.
+     Teal while the recorder is linked.
+  2. The problem, in a problem box (`AttentionBox`) with at most two actions, the first leading, in this device's
+     words (`RecorderStatusWords.problem`: the iPhone's Bluetooth is in Settings, with Open Settings). None while
+     another device manages it.
+  3. The handoff (below).
+  4. What can be done now, as tiles of equal width straight on the page (`RecorderActions.available`): Connect,
+     Record or Pause on Soundcore, Import N New, Check for New Recordings, Listen Live or Stop Listening. Never a
+     disabled one, never one the problem box offers, and none while another device manages it or it moves.
+  5. Figure tiles (Recorder, Case, Storage) for what the method reports: three across where 3 × 140 pt fits, else two
+     (a third spanning the row), one under another at the accessibility sizes. Values not confirmed since it was last
+     connected are quieter, with "As of today, 3:25 AM" under them, also while another device manages it (unless the
+     byline dates the same minute).
+  6. The import under way ("Importing 1 of 3 · about 6 min left", Stop), and Listen Live's saved notice.
+  7. New on <kind>, with Import, Recording now, and All Recordings, where no list beside the page shows them (the
+     iPhone; the Mac's list column does).
+  8. Recent imports: the library's latest from it and every recording that didn't import, merged by date. A row
+     opens its conversation; a failure says why, with Try Again (not for the one the problem box retries). The same
+     actions are in a row's context menu, and on the iPhone a swipe.
+  9. Import: each method in preference order, each saying only what the byline doesn't (a connected link is just
+     its name, a watched folder just where it is), with one action that works now (Choose Folder…, Show in Finder,
+     Set Up…, Turn On) where the device can do it from a page.
+  10. Options (`RecorderPreferencesSection`), one set of words cased for each device: Import automatically, Record
+      along with this Mac (the iPhone: with This iPhone), and on the iPhone Fast Transfer and Hand Back to Your Mac;
+      Name with Rename…; Remove from This Mac…, confirmed with "This Mac stops importing from it. Recordings you
+      already imported stay in your library."
+  11. Details (a popover on the Mac, a pushed screen on the iPhone) and Disconnect.
+
+  Daybook on iPhone's page on the Mac is the paired device's page instead (docs/link.md).
+- **Its recordings** (`DeviceRecordingsView`): Recording Now, the queue, New on <kind> with Import All, and Already
+  in Daybook (collapsed on the Mac). The Mac shows them in the list column, where a selection opens a recording's
+  page or its conversation; the iPhone pushes them as All Recordings. A recording's actions are one list
+  (`DeviceRecordingActions`): Import, Add to “<the conversation recorded at the same time>”, Choose Conversation…
+  (`ConversationChooser`, a sheet with search), Remove from Queue, Stop Importing, Show Conversation, and on the Mac
+  Show Audio File in Finder; in a context menu on both, as swipes on the iPhone. A recording in Daybook isn't
+  imported again beside its conversation: the library keeps one conversation per recording ("Library identity").
+- **Listen Live** (`ListenLiveView`): the Mac's detail for Recording Now; the iPhone pushes it from the page's Listen
+  Live tile and its Recording now row.
+- **The menu** (`RecorderMenuItems`, the same list on both): Refresh Status; Record or Pause on <kind>, Listen
+  Live; Device Details…; Connect or Disconnect; where it can move. On the Mac it's the detail toolbar's More menu,
+  with Device Settings… after it, and Refresh Status dims when it can't run; on the iPhone, the page's ellipsis, in
+  the title's ink, leaving out what can't run.
+- **Add Device…** (Mac: File menu, sidebar, Settings, Welcome) and **Add Recorder…** (iPhone, which adds only
+  recorders; pairing is Pair with Your Mac…): choose a kind (`RecorderKindRow`, a plain label for what it is), then
+  its methods in order of preference where it has more than one on that device (the iPhone adds a Soundcore over
+  Bluetooth only), then finding it nearby (`RecorderDiscoveryContent`): what was found with its signal and Connect
+  (prominent for the nearest), the problem in its box, the same tips on both in each device's words
+  (`RecorderStatusWords.discoveryTips`), and the folder instead when nothing was found. Every step on the Mac has
+  one header (a 20 pt glyph and the title, left-aligned) and its actions in the footer: Back, then Cancel and the
+  step's own (Stop while it looks; Try Again or Look Again, the default). On the Mac a direct method's card is the
+  pre-permission screen; on the iPhone, Search. A recorder already set up opens its page; one a Mac manages offers
+  Use on This iPhone instead of a search. Settings › Devices on the Mac offers Pair with iPhone… beside Add Device….
+- **Settings › Devices** (Mac): per recorder, its methods (Connect directly over Bluetooth, Managed by, Recorder
+  with Forget…, the folder with Choose…), then the same Options section as the page.
+- **Menus** (Mac): File › Add Device… and Import from <device>…; Add Recording › From <device>…;
   the menu bar extra's per-device line (a handoff under way, or Use <recorder> on This Mac).
-- **Handoff** (Mac): a bare line under the page's byline while a handoff works, a quiet box when it
-  needs the person (refused, or waiting past its patience) with Take Over Anyway… and Stop Waiting;
-  the More menu's Use on This Mac / Use on Alex’s iPhone; Settings › Devices' "Managed by" row.
+- **Handoff** (`RecorderHandoffView`, the same rules on both): at rest, "Use on This Mac" (with this Mac's own glyph)
+  while another device manages it, or "Use on Alex’s iPhone" for each device it could go to, on the page and in the
+  iPhone's status card; under way, a bare line with a spinner and its detail, with Stop Waiting while it asks, waits
+  for the owner to finish, offers it, or waits through iCloud (with Take Over Anyway… there too); refused, or waiting
+  past its patience, a warning box with Take Over Anyway… and OK (or Stop Waiting). Take Over Anyway's confirmation
+  names the device it waits on, else "the other device". The Mac keeps the moves in its sidebar, menu bar, and
+  Floating Notes menus (`RecorderHandoffMenuItems`) and Settings › Devices' "Managed by" row.
   `--device-demo not-connected --handoff-demo waiting|overdue|finishing|refused|managed|done` (and
   `--device-demo importing --handoff-demo handing`) show each state.
 
@@ -445,6 +500,8 @@ that kind, the phone's device ID as serial, and the phone's recording ID.
   `--device-simulator --device-autopilot --demo-transfer wifi|joining|other-app` imports the next
   recording over the simulated recorder's Wi‑Fi (its access point runs on loopback; `joining` holds it
   where iOS would ask to join the network), or has it wait for another app's long transfer.
+- On iPhone, `--device-simulator --device-autopilot --open-settings device|device-details|device-live|device-recordings`
+  opens the recorder's page, or Details, Listen Live (with `--demo-live-captions`), or All Recordings over it.
 - `--device other` opens the Other Recorder in a demo; `--snapshot-appearance light|dark` sets
   the appearance; `--place device` opens the first device; `--device-window 860x700` sets the
   library window's size (a narrow page); `--recorder-name "<name>"` names the demo's recorders (a

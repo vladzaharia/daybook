@@ -1,14 +1,20 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 // MARK: - A recording that isn't in Daybook yet
 
+/// The Mac's page for recordings selected in the device's list: what they are and where, the import under way or
+/// waiting, Import with Add to… (the list's own actions, `DeviceRecordingActions`), and, for one recording made at
+/// the same time as a conversation, adding it there.
 struct RecordingPage: View {
     let state: AppState
     let session: DeviceSession
     let recordings: [DeviceRecording]
+    @Environment(\.recorderServices) private var services
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -51,17 +57,7 @@ struct RecordingPage: View {
             }
             .padding(.top, Space.s5)
         } else {
-            if canImport {
-                HStack(spacing: Space.s3) {
-                    Button { session.importRecordings([recording]) } label: { Label("Import", systemImage: "arrow.down.circle") }
-                        .buttonStyle(.borderedProminent)
-                        .tint(DaybookStyle.prominentFill)
-                    ImportAndAddMenu(session: session, recordings: [recording])
-                        .fixedSize()
-                }
-                .controlSize(.large)
-                .padding(.top, Space.s5)
-            }
+            if canImport { importButtons([recording], title: "Import") }
             if let failure = session.failures.first(where: { $0.id == recording.id }) {
                 Label {
                     Text(failure.message).foregroundStyle(Ink.secondary)
@@ -75,9 +71,9 @@ struct RecordingPage: View {
 
         if canImport, !queue.contains(recording.id) {
             ForEach(session.overlaps(recording)) { overlap in
-                DeviceAttentionBox(symbol: "link", title: "Overlaps “\(overlap.title)”", message: "Recorded on this Mac \(overlap.span)") {
-                    Button("Add to “\(overlap.title)”") { session.importRecordings([recording], attachTo: overlap.meetingID) }
-                }
+                AttentionBox(kind: .info, title: "Overlaps “\(overlap.title)”", symbol: "link", message: "Recorded on this Mac \(overlap.span)",
+                             primary: AttentionAction("Add to “\(overlap.title)”") { session.importRecordings([recording], attachTo: overlap.meetingID) })
+                    .padding(.top, Space.s4)
             }
         }
     }
@@ -88,18 +84,19 @@ struct RecordingPage: View {
         DevicePageTitle(title: "\(recordings.count) Recordings Selected") { recordingGlyph(false) }
         Text("\(total > 0 ? "\(estimated ? "About " : "")\(DurationLabel.format(total)) in all · " : "")\(location) · Not in Daybook yet")
             .font(TypeStyle.byline()).foregroundStyle(Ink.secondary).padding(.top, 6)
-        if canImport {
-            HStack(spacing: Space.s3) {
-                Button { session.importRecordings(recordings) } label: {
-                    Label("Import \(recordings.count) Recordings", systemImage: "arrow.down.circle")
-                }
+        if canImport { importButtons(recordings, title: "Import \(recordings.count) Recordings") }
+    }
+
+    /// Import, the page's one action, and Add to… for the conversations it could join instead.
+    private func importButtons(_ recordings: [DeviceRecording], title: String) -> some View {
+        HStack(spacing: Space.s3) {
+            Button { session.importRecordings(recordings) } label: { Label(title, systemImage: "arrow.down.circle") }
                 .buttonStyle(.borderedProminent)
                 .tint(DaybookStyle.prominentFill)
-                ImportAndAddMenu(session: session, recordings: recordings).fixedSize()
-            }
-            .controlSize(.large)
-            .padding(.top, Space.s5)
+            AddToMenu(session: session, recordings: recordings).fixedSize()
         }
+        .controlSize(.large)
+        .padding(.top, Space.s5)
     }
 
     private func recordingGlyph(_ queued: Bool) -> some View {
@@ -126,170 +123,33 @@ struct RecordingPage: View {
     }
 }
 
-// MARK: - Recording now, and Listen Live
-
-struct LivePage: View {
-    let state: AppState
-    let session: DeviceSession
-    let connection: SoundcoreConnection
-    let live: LiveCapture
-    @Environment(\.openSettings) private var openSettings
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        DevicePageScroll {
-            DevicePageTitle(title: "Recording on \(session.kind.shortName)") {
-                Image(systemName: "record.circle.fill")
-                    .font(.system(size: 22))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Ink.record)
-                    .symbolEffect(.breathe, isActive: !reduceMotion)
-                    .accessibilityHidden(true)
-            }
-            byline.padding(.top, 6)
-            // Handed over mid-recording: the conversation it goes into once it's finished.
-            if let id = session.split.inProgress?.id, let waiting = session.conversationWaiting(for: id),
-               let meeting = state.meetings.first(where: { $0.id == waiting }) {
-                Text("For \(meeting.title)").font(TypeStyle.status).foregroundStyle(Ink.secondary).padding(.top, Space.s2)
-            }
-            if let problem = session.problem {
-                DeviceProblemBanner(problem: problem, perform: { DeviceActions.perform($0, session: session, state: state) },
-                                    hidden: DeviceActions.inapplicable(for: session))
-            }
-
-            if live.isListening {
-                listening
-            } else {
-                Button { connection.startListening() } label: { Label("Listen Live", systemImage: "waveform") }
-                    .buttonStyle(.borderedProminent)
-                    .tint(DaybookStyle.prominentFill)
-                    .controlSize(.large)
-                    .disabled(connection.info?.isRecording != true || session.queue.current != nil)
-                    .padding(.top, Space.s5)
-                if session.queue.current != nil {
-                    Text("Available when the import finishes.").font(TypeStyle.status).foregroundStyle(Ink.secondary).padding(.top, Space.s2)
-                }
-                LiveSavedNotice(state: state, session: session, live: live)
-            }
-        }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: live.isListening)
-    }
-
-    @ViewBuilder private var listening: some View {
-        HStack(alignment: .center, spacing: Space.s3) {
-            // Live, like the byline's playing waveform: mint, glowing and moving, in Dark Mode; steady link
-            // ink in Light, where dimmed layers would leave it faint.
-            Image(systemName: "waveform")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(DaybookStyle.liveGlyph(scheme))
-                .symbolEffect(.variableColor.iterative.dimInactiveLayers, isActive: !reduceMotion && scheme == .dark)
-                .neonGlow(DaybookStyle.neonMint, radius: 4)
-                // The captions' label below keeps its glyph in the same column, so the words line up.
-                .frame(width: LiveCaptionFeed.glyphColumn)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Listening").font(TypeStyle.statusLead).foregroundStyle(Ink.body)
-                Text("\(TimeLabel.short(live.receivedSeconds)) saved")
-                    .font(TypeStyle.status).foregroundStyle(Ink.secondary).monospacedDigit()
-            }
-            Spacer()
-            Button("Stop Listening") { connection.stopListening() }
-        }
-        .padding(.top, Space.s5)
-
-        // The session's live captions, as the iPhone shows them too.
-        LiveCaptionFeed(segments: session.liveCaptions, state: live.captionState, locale: state.captionSettings.locale)
-            .padding(.top, Space.s5)
-
-        Text("Stopping here doesn’t stop your \(session.kind.shortName) recording.")
-            .font(TypeStyle.colophon).foregroundStyle(Ink.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, Space.s5)
-    }
-
-    @ViewBuilder private var byline: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(Ink.record).accessibilityHidden(true)
-            if let start = session.split.inProgress?.startedAt {
-                (Text("Started \(start.formatted(date: .omitted, time: .shortened)) · ")
-                 + Text(timerInterval: start...Date.distantFuture, countsDown: false)
-                 + Text(" so far"))
-            } else {
-                Text("Recording")
-            }
-        }
-        .font(TypeStyle.byline()).foregroundStyle(Ink.secondary)
-    }
-}
-
-/// "Saved 12 minutes as a new conversation…", after Stop Listening.
-struct LiveSavedNotice: View {
-    let state: AppState
-    let session: DeviceSession
-    let live: LiveCapture
-
-    var body: some View {
-        if let saved = live.saved, !live.isListening {
-            let meetingID = session.links.partial[saved.recordingID] ?? session.links.imported[saved.recordingID]
-            DeviceNotice(symbol: "checkmark.circle.fill",
-                         text: "Saved \(DurationLabel.format(saved.seconds)) as a new conversation",
-                         action: meetingID.map { id in ("Show Conversation", { state.showConversation(id) }) },
-                         dismiss: { live.saved = nil })
-        }
-    }
-}
-
-// MARK: - Choose Conversation…
-
-/// Conversations from the same day, give or take one, to add a device recording to.
-struct ConversationChooser: View {
-    let state: AppState
+/// Add to…: the conversations recorded at the same time, then Choose Conversation…, as the list offers them.
+private struct AddToMenu: View {
     let session: DeviceSession
     let recordings: [DeviceRecording]
-    @State private var search = ""
-    @State private var selection: UUID?
-    @Environment(\.dismiss) private var dismiss
-
-    private var candidates: [Meeting] {
-        let calendar = Calendar.current
-        let days = recordings.compactMap(\.sortDate).map { calendar.startOfDay(for: $0) }
-        let query = search.trimmingCharacters(in: .whitespaces)
-        return state.meetings.filter { meeting in
-            let day = calendar.startOfDay(for: meeting.date)
-            let near = days.isEmpty || days.contains { abs(calendar.dateComponents([.day], from: $0, to: day).day ?? 99) <= 1 }
-            return near && (query.isEmpty || meeting.title.localizedCaseInsensitiveContains(query))
-        }
-        .sorted { $0.date > $1.date }
-    }
+    @Environment(\.recorderServices) private var services
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s3) {
-            Text("Add to a Conversation").font(.headline)
-            TextField("Search Conversations", text: $search).textFieldStyle(.roundedBorder)
-            List(candidates, selection: $selection) { meeting in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(meeting.title).font(TypeStyle.rowTitle)
-                    Text(meeting.date.formatted(date: .abbreviated, time: .shortened)).font(TypeStyle.rowDetail).foregroundStyle(.secondary)
-                }
-                .tag(meeting.id)
+        let actions = DeviceRecordingActions.available(Set(recordings.map { .recording($0.id) }), in: session, revealsAudio: false)
+            .filter { action in
+                if case .addTo = action { return true }
+                return action == .chooseConversation
             }
-            .frame(height: 220)
-            .overlay {
-                if candidates.isEmpty { Text("No conversations from around that day.").foregroundStyle(.secondary) }
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Import and Add") {
-                    if let selection { session.importRecordings(recordings, attachTo: selection) }
-                    dismiss()
+        Menu("Add to…") {
+            ForEach(actions, id: \.self) { action in
+                if action == .chooseConversation, actions.count > 1 { Divider() }
+                Button(title(action)) {
+                    DeviceRecordingActions.perform(action, recordings: recordings, session: session, services: services) { chosen in
+                        session.browser.choosingConversation = .init(recordings: chosen)
+                    }
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(selection == nil)
             }
         }
-        .padding(Space.s5)
-        .frame(width: 440)
+    }
+
+    /// Under Add to…, a conversation is just its title.
+    private func title(_ action: DeviceRecordingAction) -> String {
+        if case .addTo(_, let title) = action { return "“\(title)”" }
+        return action.title
     }
 }

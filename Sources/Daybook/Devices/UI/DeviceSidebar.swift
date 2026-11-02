@@ -1,5 +1,6 @@
 import AppKit
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 /// The sidebar's Devices section: every configured device, each with at most one accessory (a

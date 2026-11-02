@@ -105,7 +105,7 @@ final class DeviceOwnershipTests: XCTestCase {
         _ = await mac.synchronize()
         await phone.sync.synchronize(.remote)
         try await waitUntil("the phone lets go") { session.managedElsewhere?.ownerName == "Studio Mac" && !session.isLinked }
-        XCTAssertEqual(PhoneDeviceCopy.line(for: session), "Managed by Studio Mac")
+        XCTAssertEqual(RecorderStatusWords.byline(RecorderFacts(session: session)), "Managed by Studio Mac")
         let attempts = recorder.attempts
         session.connect()
         await drainMainQueue()
@@ -195,7 +195,7 @@ final class DeviceOwnershipTests: XCTestCase {
         try await waitUntil("on this iPhone") { session.isLinked }
         XCTAssertNil(session.managedElsewhere)
         XCTAssertEqual(phone.library.controller.recorderOwner(kind: kind.id, serial: serial)?.ownerID, phone.library.controller.thisDevice.id)
-        XCTAssertEqual(PhoneDeviceCopy.line(for: session).hasPrefix("Connected"), true)
+        XCTAssertEqual(RecorderStatusWords.byline(RecorderFacts(session: session)).hasPrefix("Connected"), true)
         _ = model
     }
 
@@ -224,7 +224,7 @@ final class DeviceOwnershipTests: XCTestCase {
         for line in ["Recording list: 2, in 1 page, ", "On the device: 2", " · New · "] {
             XCTAssertTrue(text.contains(line), "lacks \(line):\n\(text)")
         }
-        let copy = PhoneDeviceCopy.problem(SoundcoreIssue.listFailed.problem)
+        let copy = RecorderStatusWords.problem(SoundcoreIssue.listFailed.problem, on: .iPhone)
         XCTAssertEqual(copy.title, "Soundcore didn’t list its recordings")
         XCTAssertFalse(copy.message.contains("phone"), "on the iPhone, the Soundcore app is on this phone")
     }

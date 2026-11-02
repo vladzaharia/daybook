@@ -1,10 +1,14 @@
 import AppKit
+import DaybookDesign
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
-/// Add Device: choose the kind of recorder, then its setup, which offers its methods in order of
+/// Add Device: choose the kind of device, then its setup, which offers its methods in order of
 /// preference. A direct method's card is the pre-permission screen: its one button starts the
-/// search, which is when macOS asks about Bluetooth.
+/// search, which is when macOS asks about Bluetooth. The steps' rows, words, and tips are the ones the
+/// iPhone's Add Recorder shows (DaybookUI's `AddRecorderFlow`); every step has the same header, and its
+/// actions in the footer, the one that moves on as the default.
 struct AddDeviceSheet: View {
     let state: AppState
     let request: AddDeviceRequest
@@ -75,7 +79,7 @@ struct AddDeviceSheet: View {
         .frame(width: 560)
         .fixedSize(horizontal: false, vertical: true)
         .clipped()
-        .tint(DaybookStyle.accent)
+        .environment(\.recorderServices, state.recorderServices)
         .onAppear { prepare(step) }
     }
 
@@ -119,71 +123,62 @@ private struct KindChooser: View {
     let cancel: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text("Add Recorder").font(.title3.weight(.semibold))
-                .accessibilityAddTraits(.isHeader)
+        VStack(alignment: .leading, spacing: 0) {
+            AddRecorderHeader(symbol: "plus.circle", title: "Add Device")
             VStack(spacing: Space.s2) {
                 ForEach(DeviceCatalog.kinds) { kind in
-                    KindCard(kind: kind, existing: kind.allowsMultiple ? nil : state.devices.session(kind: kind.id)) { choose(kind) }
+                    KindCard(kind: kind, isSetUp: !kind.allowsMultiple && state.devices.session(kind: kind.id) != nil) { choose(kind) }
                 }
             }
-            .padding(.top, Space.s5)
-            HStack {
-                Spacer()
+            .padding(.top, Space.s4)
+            SheetFooter {
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
             }
-            .padding(.top, Space.s5)
         }
         .padding(Space.s5)
     }
 }
 
+/// A kind on a quiet card that lifts under the pointer: the row the iPhone's Add Recorder lists.
 private struct KindCard: View {
     let kind: DeviceKind
-    let existing: DeviceSession?
+    let isSetUp: Bool
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: Space.s4) {
-                // A tile in the secondary ink, as on the iPhone's Add Recorder: the accent stays on actions.
-                Image(systemName: kind.systemImage)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: Space.s2) {
-                        Text(kind.name).font(.system(size: 13, weight: .semibold))
-                        if existing != nil {
-                            Label("Set Up", systemImage: "checkmark.circle.fill")
-                                .labelStyle(DeviceInlineLabelStyle())
-                                .font(TypeStyle.status).foregroundStyle(.secondary)
-                        }
-                    }
-                    Text(existing != nil ? "Add another way to import." : kind.summary)
-                        .font(TypeStyle.status).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: Space.s2)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .offset(x: hovering ? 2 : 0)
-            }
-            .padding(Space.s3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(hovering ? Color.primary.opacity(0.09) : DaybookStyle.quietFill,
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            RecorderKindRow(kind: kind, isSetUp: isSetUp)
+                .padding(Space.s3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(hovering ? Color.primary.opacity(0.09) : DaybookStyle.quietFill,
+                            in: RoundedRectangle(cornerRadius: DaybookRadius.box, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: DaybookRadius.box, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
-        .accessibilityLabel("\(kind.name). \(kind.summary)")
+        .motion(Motion.hover, value: hovering)
+        .accessibilityLabel("\(kind.name). \(RecorderStatusWords.kindLabel(kind))")
+    }
+}
+
+/// A step's footer: Back on the leading edge when there's somewhere to go back to, then the step's actions at the
+/// trailing edge, as a Mac sheet places them.
+private struct SheetFooter<Actions: View>: View {
+    var back: (() -> Void)?
+    var backTitle = "Back"
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        HStack(spacing: Space.s3) {
+            if let back {
+                Button { back() } label: { Label(backTitle, systemImage: "chevron.left") }
+                    .buttonStyle(.borderless)
+            }
+            Spacer()
+            actions
+        }
+        .padding(.top, Space.s5)
     }
 }
 
@@ -199,9 +194,8 @@ private struct MethodChooser: View {
 
     var body: some View {
         let kind = session.kind
-        VStack(spacing: 0) {
-            DeviceGlyph(symbol: kind.systemImage, size: 30, linked: false)
-            Text("Set Up \(kind.name)").font(.title3.weight(.semibold)).padding(.top, Space.s3)
+        VStack(alignment: .leading, spacing: 0) {
+            AddRecorderHeader(symbol: kind.systemImage, title: "Set Up \(kind.name)")
             VStack(spacing: Space.s3) {
                 ForEach(Array(kind.implementedMethods.enumerated()), id: \.element.id) { index, method in
                     MethodCard(method: method, recommended: index == 0 && kind.implementedMethods.count > 1,
@@ -214,19 +208,14 @@ private struct MethodChooser: View {
                     }
                 }
             }
-            .padding(.top, Space.s5)
-            HStack {
-                if let back {
-                    Button { back() } label: { Label("All Recorders", systemImage: "chevron.left") }
-                        .buttonStyle(.borderless)
+            .padding(.top, Space.s4)
+            SheetFooter(back: back, backTitle: "All Devices") {
+                if session.setUpMethods.isEmpty {
+                    Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+                } else {
+                    Button("Done", action: finish).keyboardShortcut(.defaultAction)
                 }
-                Spacer()
-                Button(session.setUpMethods.isEmpty ? "Cancel" : "Done") {
-                    if session.setUpMethods.isEmpty { cancel() } else { finish() }
-                }
-                .keyboardShortcut(.cancelAction)
             }
-            .padding(.top, Space.s5)
         }
         .padding(Space.s5)
     }
@@ -249,7 +238,7 @@ private struct MethodCard: View {
             VStack(alignment: .leading, spacing: Space.s1) {
                 HStack(alignment: .firstTextBaseline, spacing: Space.s2) {
                     Text(method.title).font(.system(size: 13, weight: .semibold))
-                    if recommended && !isSetUp { RecommendedBadge() }
+                    if recommended && !isSetUp { RecommendedLabel() }
                     Spacer()
                 }
                 Text(method.summary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -273,7 +262,7 @@ private struct MethodCard: View {
             }
         }
         .padding(Space.s4)
-        .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: DaybookRadius.box, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(recommended ? "\(method.title), recommended" : method.title)
     }
@@ -289,92 +278,29 @@ private struct DiscoveryStep: View {
     let useFolder: (() -> Void)?
     let finish: () -> Void
     let cancel: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var searching: Bool { connection.state == .searching }
     private var connecting: Bool { connection.connectingTo != nil }
-    private var nothingFound: Bool { !searching && connection.discovered.isEmpty && !connecting }
+    private var found: Bool { !connection.discovered.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: Space.s3) {
-                Image(systemName: searching || connecting ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                    .font(.system(size: 20))
-                    .foregroundStyle(.secondary)
-                    .symbolEffect(.variableColor.iterative, isActive: (searching || connecting) && !reduceMotion)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 28)
-                    .accessibilityHidden(true)
-                Text(title).font(.title3.weight(.semibold))
-                    .contentTransition(.opacity)
-                Spacer()
-                if searching {
-                    Button("Stop") { connection.stopSearching() }
-                } else if !connecting {
-                    Button(connection.discovered.isEmpty ? "Try Again" : "Look Again") { connection.search() }
-                }
-            }
-
-            if let problem = connection.problem, problem.id != SoundcoreIssue.notFound.rawValue {
-                SetupProblem(problem: problem) { action in
-                    switch action {
-                    case .openBluetoothSettings:
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") { NSWorkspace.shared.open(url) }
-                    case .openPrivacySettings: PrivacySettings.open(.bluetooth)
-                    default: connection.search()
-                    }
-                }
-                .transition(.deviceNotice(reduceMotion: reduceMotion))
-            }
-
-            // What it found comes first, straight under the title; the tips are for when it doesn't.
-            if !connection.discovered.isEmpty {
-                VStack(spacing: 0) {
-                    let nearest = connection.discovered.max { $0.signal.bars < $1.signal.bars }?.id
-                    ForEach(Array(connection.discovered.enumerated()), id: \.element.id) { index, recorder in
-                        if index > 0 { Divider().padding(.leading, 44) }
-                        FoundRow(recorder: recorder, symbol: session.kind.systemImage, prominent: recorder.id == nearest,
-                                 connection: connection)
-                            .transition(.opacity)
-                    }
-                }
-                .background(DaybookStyle.quietFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(.top, Space.s4)
-            }
-
-            VStack(alignment: .leading, spacing: Space.s2) {
-                Text("If it doesn’t appear:").font(TypeStyle.statusLead).foregroundStyle(.secondary)
-                ForEach(session.kind.discoveryTips, id: \.self) { tip in
-                    HStack(alignment: .firstTextBaseline, spacing: Space.s3) {
-                        Image(systemName: tip.symbol).foregroundStyle(.secondary).frame(width: 20).accessibilityHidden(true)
-                        Text(tip.text).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .padding(.top, Space.s4)
-
-            if nothingFound, let fallback = session.kind.method(.files), let useFolder {
-                HStack(spacing: Space.s1) {
-                    Text("Or import exports instead:").foregroundStyle(.secondary)
-                    Button("\(fallback.title)…", action: useFolder).buttonStyle(.daybookLink)
-                }
-                .padding(.top, Space.s4)
-                .transition(.opacity)
-            }
-
-            HStack {
-                if let back {
-                    Button { connection.stopSearching(); back() } label: { Label("Back", systemImage: "chevron.left") }
-                        .buttonStyle(.borderless)
-                }
-                Spacer()
+            AddRecorderHeader(symbol: searching || connecting ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash",
+                              title: RecorderStatusWords.discoveryTitle(session.kind, searching: searching, connecting: connecting, found: found),
+                              animates: searching || connecting)
+            RecorderDiscoveryContent(session: session, connection: connection, useFolder: useFolder)
+            SheetFooter(back: back.map { back in { connection.stopSearching(); back() } }) {
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+                if let action = RecorderStatusWords.discoveryAction(searching: searching, connecting: connecting, found: found) {
+                    if searching {
+                        Button(action) { connection.stopSearching() }
+                    } else {
+                        Button(action) { connection.search() }.keyboardShortcut(.defaultAction)
+                    }
+                }
             }
-            .padding(.top, Space.s5)
         }
         .padding(Space.s5)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: connection.discovered)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: connection.problem)
         .onAppear {
             if connection.state == .connected { finish() }
             else if !searching && !connecting && connection.discovered.isEmpty && connection.problem == nil && !connection.searchFoundNothing {
@@ -384,72 +310,5 @@ private struct DiscoveryStep: View {
         .onChange(of: connection.state) { _, state in
             if state == .connected { finish() }
         }
-    }
-
-    private var title: String {
-        if searching { return "Looking for \(session.kind.name)…" }
-        if connecting { return "Connecting to \(session.kind.name)…" }
-        if nothingFound { return "No \(session.kind.shortName) Found Nearby" }
-        return "Found Nearby"
-    }
-}
-
-private struct FoundRow: View {
-    let recorder: DiscoveredRecorder
-    let symbol: String
-    let prominent: Bool
-    let connection: SoundcoreConnection
-
-    private var connecting: Bool { connection.connectingTo == recorder.id }
-
-    var body: some View {
-        HStack(spacing: Space.s3) {
-            Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 20)
-                .accessibilityHidden(true)
-            Text(recorder.name).lineLimit(1)
-            Spacer()
-            HStack(spacing: 4) {
-                Image(systemName: "cellularbars", variableValue: recorder.signal.bars)
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                Text(recorder.signal.word).foregroundStyle(.secondary)
-            }
-            .font(TypeStyle.status)
-            .frame(minWidth: 100, alignment: .leading)
-            if connecting {
-                HStack(spacing: Space.s2) {
-                    ProgressView().controlSize(.small)
-                    Text("Connecting…").font(TypeStyle.status).foregroundStyle(.secondary)
-                }
-                .transition(.opacity)
-            } else if prominent {
-                Button("Connect") { connection.connect(to: recorder) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(DaybookStyle.prominentFill)
-                    .disabled(connection.connectingTo != nil)
-            } else {
-                Button("Connect") { connection.connect(to: recorder) }
-                    .disabled(connection.connectingTo != nil)
-            }
-        }
-        .padding(.horizontal, Space.s3)
-        .padding(.vertical, Space.s2 + 2)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(recorder.name), \(recorder.signal.word)")
-    }
-}
-
-/// A problem inside the sheet: the device page's problem box and copy, with its first action.
-private struct SetupProblem: View {
-    let problem: DeviceProblem
-    let perform: (DeviceProblemAction) -> Void
-
-    var body: some View {
-        DeviceAttentionBox(kind: .problem, symbol: "exclamationmark.triangle.fill", title: problem.title, message: problem.message) {
-            if let action = problem.actions.first(where: { ![.technicalDetails, .dismiss, .setUpFolder].contains($0) }) {
-                DeviceBoxPrimaryButton(title: action.title) { perform(action) }
-            }
-        }
-        .accessibilityElement(children: .contain)
     }
 }

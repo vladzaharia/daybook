@@ -1,7 +1,14 @@
+import DaybookCaptions
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
 import UniformTypeIdentifiers
+
+// A recorder's screens on the iPhone are the ones the Mac shows (DaybookUI's `Devices`): its page, its recordings,
+// Listen Live, its handoff, and adding one, in the same words. What's here is how the iPhone hosts them: Settings'
+// Recorders section, the pushes from the page, Add Recorder's sheet and the open Duo's pages, and the services
+// they reach the app through (`PhoneRecorderServices`).
 
 // MARK: Settings › Recorders
 
@@ -27,40 +34,109 @@ struct RecordersSection: View {
     }
 }
 
-/// A recorder in Settings: its tile (teal while it's connected), its name, and the status sheet's line
-/// for it ("Connected · 80% · 2 new", "Importing 1 of 3", "Managed by Studio Mac").
+/// A recorder in Settings: its tile (teal while it's connected), its name, and its status line as both apps word
+/// it ("Connected · 80% · 2 new", "Importing 1 of 3", "Managed by Studio Mac").
 struct DeviceRow: View {
     let session: DeviceSession
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            let line = StatusSheetModel.recorderLine(StatusSheetInputs.recorder(session, model: model), now: context.date)
+            let line = session.statusLine(model: model, now: context.date)
             SettingsRow(title: session.device.name, detail: line.text, systemImage: session.kind.systemImage,
                         tone: session.isLinked ? .active : .neutral, detailNeedsAttention: line.tone == .attention)
         }
     }
 }
 
-/// The recorder's symbol: teal while it's linked, secondary otherwise.
+/// The recorder's symbol on a card's tile: teal while it's linked, secondary otherwise. `size` is the glyph
+/// column it sits in.
 struct DeviceGlyph: View {
     let session: DeviceSession
     var size: CGFloat
 
     var body: some View {
-        Image(systemName: session.kind.systemImage)
-            .font(.system(size: size * 0.5, weight: .medium))
-            .foregroundStyle(session.isLinked ? PhoneStyle.accent : PhoneStyle.Ink.secondary)
-            .frame(width: size, height: size)
-            .background((session.isLinked ? PhoneStyle.accent : Color.gray).opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
-            .accessibilityHidden(true)
+        DaybookTile(symbol: session.kind.systemImage, tone: session.isLinked ? .active : .neutral, size: .card)
+            .frame(width: size)
+    }
+}
+
+extension DeviceSession {
+    /// The recorder's status line, as both apps word it (`RecorderStatusWords.line`): the status sheet's card and
+    /// Settings' row. Over the recorder's Wi‑Fi it says to keep Daybook open.
+    @MainActor
+    func statusLine(model: PhoneAppModel, now: Date = Date()) -> StatusLineWords {
+        RecorderStatusWords.line(PhoneRecorderServices.make(model: model).facts(self, now: now), here: "this iPhone", now: now)
+    }
+}
+
+// MARK: The services the shared screens reach the iPhone through
+
+@MainActor
+enum PhoneRecorderServices {
+    /// The services for a recorder's screens. `push` opens what the page leads to (Details, Listen Live, All
+    /// Recordings); `left` runs once the recorder is removed; `open` opens a conversation.
+    static func make(model: PhoneAppModel, open: ((UUID) -> Void)? = nil, push: ((DevicePageRoute) -> Void)? = nil,
+                     left: (() -> Void)? = nil, openURL: OpenURLAction? = nil) -> RecorderServices {
+        let devices = model.devices
+        let link = model.link
+        let library = model.library.controller
+        let settings = model.settings
+        return RecorderServices(
+            place: .iPhone, handoff: devices.handoff, devices: devices.hub, library: library, thisDeviceSymbol: "iphone",
+            processingLabel: { id in
+                switch library.meeting(id)?.status {
+                case .transcribing?: return "Transcribing"
+                case .summarizing?: return "Summarizing"
+                default: return nil
+                }
+            },
+            showConversation: { id in open?(id) },
+            linkState: { session in
+                guard session.managedElsewhere != nil else { return nil }
+                return link.recorderReport(kind: session.kind.id, serial: session.recorderSerial)?.state
+            },
+            openSystemSettings: { _ in
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL?(url) }
+            },
+            stopImporting: { session, all in if all { session.stopAll() } else { session.stopCurrent() } },
+            showDetails: { _ in push?(.details) },
+            remove: { session in
+                devices.remove(session)
+                left?()
+            },
+            captionStatus: PhoneRecorderServices.captionStatus,
+            showListenLive: push.map { push in { _ in push(.listenLive) } },
+            showRecordings: push.map { push in { _ in push(.recordings) } },
+            handsBack: Binding(get: { settings.handsRecorderBackToMac }, set: { on in
+                settings.handsRecorderBackToMac = on
+                devices.handoff.handsBackAutomatically = on
+            }))
+    }
+
+    /// What Listen Live's captioner is doing, before there are captions to read.
+    static func captionStatus(_ state: LiveCaptionState) -> String? {
+        switch state {
+        case .preparing: return "Getting captions ready…"
+        case .downloading: return "Downloading captions…"
+        case .listening: return "Listening…"
+        case .failed: return "Captions stopped"
+        case .unavailable(let reason): return reason
+        case .off, .finished: return nil
+        }
     }
 }
 
 // MARK: Device page
 
-/// One recorder: its status, what can be done with it now, what's new on it, what's been imported,
-/// and how recordings arrive.
+/// What a recorder's page leads to.
+enum DevicePageRoute: Hashable, Identifiable {
+    case details, listenLive, recordings
+    var id: Self { self }
+}
+
+/// One recorder: the page both apps show (`RecorderDevicePage`), with its menu in the bar, and the screens it pushes:
+/// Details, Listen Live, and All Recordings.
 struct DevicePage: View {
     @Environment(PhoneAppModel.self) private var model
     let sessionID: String
@@ -76,269 +152,70 @@ struct DevicePage: View {
 
 private struct DevicePageContent: View {
     @Environment(PhoneAppModel.self) private var model
+    @Environment(ReadingSession.self) private var reading: ReadingSession?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.settingsPages) private var pages
+    @Environment(\.openURL) private var openURL
     let session: DeviceSession
-    @State private var confirmingRemove = false
-    @State private var renaming = false
-    @State private var name = ""
-    @State private var showingDetails = false
-    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var route: DevicePageRoute?
+
+    private var services: RecorderServices {
+        PhoneRecorderServices.make(model: model, open: { id in reading?.open(id) }, push: { route = $0 },
+                                   left: { if let pages { pages.leave() } else { dismiss() } }, openURL: openURL)
+    }
 
     var body: some View {
-        let soundcore = session.direct as? SoundcoreConnection
-        let problem = session.managedElsewhere == nil ? session.problem : nil
-        let actions = pageActions(problem: problem)
-        List {
-            Section {
-                DevicePageHeader(systemImage: session.kind.systemImage, isActive: session.isLinked, title: session.device.name,
-                                 status: PhoneDeviceCopy.line(for: session),
-                                 statusNeedsAttention: !session.isLinked && session.state == .unavailable)
-                    .devicePageHeaderRow()
-            }
-            if let problem {
-                Section { ProblemBox(session: session, problem: problem) }
-            }
-            // Who manages it, and moving it between this iPhone and a Mac (docs/devices.md, "Handing a recorder over"):
-            // the status sheet's rows, which say "Managed by" only in the header above.
-            if RecorderHandoffCard.shows(session, devices: model.devices) {
-                Section { RecorderHandoffCard(session: session) }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-            }
-            // What can be done now, as the status sheet offers it: never a disabled button.
-            if !actions.isEmpty {
-                Section { StatusRecorderActions(session: session, actions: actions) }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
-            }
-            if let status = session.status, session.managedElsewhere == nil {
-                Section { StatusTiles(status: status, live: session.isLinked) }
-            }
-            importSection(offersImportAll: !actions.contains { if case .importNew = $0 { return true }; return false })
-            if !session.links.recent.isEmpty {
-                Section("Recently Imported") {
-                    ForEach(session.links.recent.prefix(6)) { entry in
-                        let meeting = model.library.controller.meeting(entry.meetingID)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(meeting?.title ?? entry.fileName).foregroundStyle(PhoneStyle.Ink.title)
-                            Text(PhoneDeviceCopy.sentenceCase(DeviceDateFormat.relative(entry.importedAt)))
-                                .font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                        }
-                        .accessibilityElement(children: .combine)
-                    }
+        let services = services
+        ScrollViewReader { proxy in
+            RecorderDevicePage(session: session, showsRecordings: true)
+                .task {
+                    // `--scroll-end` (debug): the page scrolled to its foot, for screenshots.
+                    guard model.options.scrollEnd else { return }
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    proxy.scrollTo(RecorderDevicePage.endAnchor, anchor: .bottom)
                 }
-            }
-            optionsSection(soundcore: soundcore)
-            Section {
-                if session.direct is any DetailedConnection {
-                    Button { showingDetails = true } label: {
-                        HStack {
-                            Text("Details").foregroundStyle(PhoneStyle.Ink.title)
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.forward")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(Color(uiColor: .tertiaryLabel))
-                                .accessibilityHidden(true)
-                        }
-                    }
-                }
-                if soundcore != nil, session.managedElsewhere == nil, session.isLinked {
-                    Button("Disconnect") { session.disconnect(.direct) }
-                }
-            }
-            SettingsScrollEndMarker()
         }
-        .settingsScrollEnd()
+        .environment(\.recorderServices, services)
         .navigationTitle(session.device.name)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(isPresented: $showingDetails) { DeviceDetailsScreen(session: session) }
         .toolbar {
             // The page's own header names the recorder; the bar stays quiet.
             ToolbarItem(placement: .principal) { Text("") }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    Button("Rename…") { name = session.device.name; renaming = true }
-                    if session.isLinked { Button("Refresh") { session.direct?.refresh() } }
-                    Button("Remove from This iPhone…", role: .destructive) { confirmingRemove = true }
-                } label: { Image(systemName: "ellipsis.circle") }
+                    RecorderMenuItems(session: session).environment(\.recorderServices, services)
+                } label: {
+                    // The bar's glyphs are in the title's ink: they're chrome, not a link.
+                    Image(systemName: "ellipsis").foregroundStyle(PhoneStyle.Ink.title)
+                }
                 .accessibilityLabel("More")
             }
         }
+        .navigationDestination(item: $route) { route in
+            Group {
+                switch route {
+                case .details: DeviceDetailsScreen(session: session)
+                case .listenLive:
+                    ListenLiveView(session: session)
+                        .navigationTitle("Listen Live")
+                        .navigationBarTitleDisplayMode(.inline)
+                case .recordings:
+                    DeviceRecordingsView(session: session)
+                        .navigationTitle("All Recordings")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+            .environment(\.recorderServices, services)
+        }
         .refreshable { session.direct?.refresh() }
-        .onAppear { session.direct?.refreshIfStale() }
         .task {
-            // `--open-settings device-details` (debug), for screenshots.
-            if model.options.openSettings == "device-details", session.direct is any DetailedConnection {
-                try? await Task.sleep(for: .milliseconds(500))
-                showingDetails = true
-            }
+            // `--open-settings device-details|device-live|device-recordings` (debug): what the page pushes, for
+            // screenshots.
+            let pushes: [String: DevicePageRoute] = ["device-details": .details, "device-live": .listenLive, "device-recordings": .recordings]
+            guard let push = model.options.openSettings.flatMap({ pushes[$0] }) else { return }
+            try? await Task.sleep(for: .milliseconds(500))
+            route = push
         }
-        .alert("Rename Recorder", isPresented: $renaming) {
-            TextField("Name", text: $name)
-            Button("Cancel", role: .cancel) {}
-            Button("Rename") { model.devices.hub.rename(session.id, to: name) }
-        }
-        .confirmationDialog("Remove \(session.device.name)?", isPresented: $confirmingRemove, titleVisibility: .visible) {
-            Button("Remove", role: .destructive) {
-                model.devices.remove(session)
-                // On the open Duo's right page there's nothing to go back to.
-                if let pages { pages.leave() } else { dismiss() }
-            }
-        } message: {
-            Text("Recordings already imported stay in your library.")
-        }
-    }
-
-    /// The status sheet's actions for this recorder, less Connect when the problem above already offers it.
-    private func pageActions(problem: DeviceProblem?) -> [StatusRecorderAction] {
-        let actions = StatusSheetModel.actions(for: StatusSheetInputs.recorder(session, model: model))
-        guard let problem, ProblemBox.actions(problem).contains(where: { $0 == .connect || $0 == .reconnect }) else { return actions }
-        return actions.filter { $0 != .connect }
-    }
-
-    /// What's coming off the recorder now, and what's new on it. A recorder another device manages has
-    /// none here: that device imports them.
-    @ViewBuilder
-    private func importSection(offersImportAll: Bool) -> some View {
-        let split = session.split
-        let new = session.newRecordings
-        let canImport = session.isConnected && session.managedElsewhere == nil
-        if session.managedElsewhere == nil, session.queue.isActive || !new.isEmpty || split.inProgress != nil {
-            Section {
-                if let current = session.queue.current {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("Importing \(current.recording.title)")
-                                .font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.title)
-                            Spacer()
-                            if let importLabel {
-                                Text(importLabel)
-                                    .font(.subheadline.monospacedDigit()).foregroundStyle(PhoneStyle.Ink.secondary)
-                            }
-                        }
-                        // Work in progress: the brand gradient.
-                        ProgressView(value: session.phase?.fraction ?? 0).progressViewStyle(.brand(width: nil))
-                        if session.queue.total > 1 || session.secondsLeft != nil {
-                            Text(queueLine).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                        }
-                        if session.fastTransferStage == .transferring {
-                            Text("Over Wi‑Fi. Keep Daybook open until it finishes.").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                        } else if let sentence = session.fastTransferStage?.sentence {
-                            // Under iOS's question about a network called "WiFi-…": whose network it is.
-                            Text(sentence).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                        } else if session.kind.method(.direct)?.transport == .bluetoothLE {
-                            Text("Keep it near this iPhone until it finishes.").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    Button("Stop Importing", role: .destructive) { session.stopAll() }
-                } else if session.queue.isSuspended {
-                    Text("Importing continues when \(session.kind.shortName) reconnects.")
-                        .font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
-                }
-                if let now = split.inProgress {
-                    HStack(spacing: PhoneStyle.Space.s2) {
-                        Circle().fill(PhoneStyle.Ink.record).frame(width: 8, height: 8).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Recording now · started \(now.title)").font(.subheadline).foregroundStyle(PhoneStyle.Ink.title)
-                            // Handed over mid-recording: the conversation it goes into once it's finished.
-                            if let waiting = session.conversationWaiting(for: now.id),
-                               let title = model.library.controller.meeting(waiting)?.title {
-                                Text("For \(title)").font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                            }
-                        }
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-                ForEach(new) { recording in
-                    // At the accessibility sizes, Import goes under the recording rather than squeezing it.
-                    let layout = typeSize.isAccessibilitySize
-                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: PhoneStyle.Space.s2))
-                        : AnyLayout(HStackLayout())
-                    layout {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(recording.title).foregroundStyle(PhoneStyle.Ink.title)
-                            Text(recording.detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                        }
-                        .accessibilityElement(children: .combine)
-                        if !typeSize.isAccessibilitySize { Spacer() }
-                        if canImport {
-                            Button("Import") { session.importRecordings([recording]) }
-                                .buttonStyle(.bordered)
-                                .tint(PhoneStyle.accent)
-                                .accessibilityLabel("Import \(recording.title)")
-                        }
-                    }
-                    .contextMenu {
-                        if canImport, session.offersFastTransfer {
-                            Button("Import over Wi‑Fi", systemImage: "wifi") { session.importRecordings([recording], overWiFi: true) }
-                        }
-                    }
-                }
-                if offersImportAll, canImport, new.count > 1, !session.queue.isActive {
-                    Button("Import \(new.count) New") { session.importRecordings(new) }
-                }
-            } header: {
-                Text("New on \(session.kind.shortName)")
-            }
-        }
-    }
-
-    /// How recordings arrive: a folder's place and state, and Soundcore's two choices. Bluetooth's own
-    /// state is the header's line, so it isn't repeated here.
-    @ViewBuilder
-    private func optionsSection(soundcore: SoundcoreConnection?) -> some View {
-        let methods = session.connections.filter { $0.isSetUp && !($0 is SoundcoreConnection) }
-        if !methods.isEmpty || soundcore != nil {
-            Section {
-                ForEach(methods, id: \.method) { connection in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(PhoneDeviceCopy.methodTitle(session.kind, connection.method))
-                            .font(.subheadline.weight(.semibold)).foregroundStyle(PhoneStyle.Ink.title)
-                        Text(PhoneDeviceCopy.summary(connection.summary)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                    }
-                    .padding(.vertical, 2)
-                    .accessibilityElement(children: .combine)
-                }
-                if soundcore != nil {
-                    Toggle("Import Automatically", isOn: Binding(
-                        get: { session.device.importsAutomatically },
-                        set: { value in session.update { $0.importsAutomatically = value } }))
-                    if session.direct?.capabilities.contains(.recordControl) == true {
-                        // Off: this iPhone doesn't start it, its button doesn't start this iPhone, and its
-                        // link isn't held in the background for that.
-                        Toggle("Record Along", isOn: Binding(
-                            get: { session.device.recordsAlongsideMac },
-                            set: { value in session.update { $0.alsoRecordsWithMac = value } }))
-                    }
-                    if session.hasFastTransfer {
-                        // Over ten minutes: over the recorder's own Wi‑Fi while Daybook is open.
-                        Toggle("Fast Transfer", isOn: Binding(
-                            get: { session.device.usesFastTransfer },
-                            set: { value in session.update { $0.fastTransferForLongRecordings = value } }))
-                    }
-                    Toggle("Hand Back to My Mac", isOn: Binding(
-                        get: { model.settings.handsRecorderBackToMac },
-                        set: { value in
-                            model.settings.handsRecorderBackToMac = value
-                            model.devices.handoff.handsBackAutomatically = value
-                        }))
-                }
-            }
-        }
-    }
-
-    /// "64%", "Starting Wi‑Fi…", or "Waiting…" while another app transfers. Nothing while joining: the line under
-    /// the progress says it once, with whose Wi‑Fi (`FastTransferStage.sentence`).
-    private var importLabel: String? {
-        if session.isWaitingForOtherApp { return "Waiting…" }
-        if let stage = session.fastTransferStage, stage != .transferring { return stage.sentence == nil ? stage.label : nil }
-        return session.phase?.label ?? "Waiting…"
-    }
-
-    private var queueLine: String {
-        var parts = ["\(session.queue.position) of \(session.queue.total)"]
-        if let seconds = session.secondsLeft { parts.append("about \(DurationLabel.format(seconds)) left") }
-        return parts.joined(separator: " · ")
     }
 }
 
@@ -409,100 +286,7 @@ struct DeviceDetailsScreen: View {
     }
 }
 
-/// Battery, case, and storage as figures in one card, as the Mac's page shows them. Cached values
-/// say when they're from.
-private struct StatusTiles: View {
-    let status: DeviceStatus
-    let live: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: PhoneStyle.Space.s3) {
-            HStack(alignment: .top, spacing: PhoneStyle.Space.s3) {
-                if let battery = status.battery, battery.level != nil {
-                    figure("Recorder", BatteryFormat.value(battery), symbol: BatteryFormat.symbol(battery), warn: BatteryFormat.isLow(battery))
-                }
-                if let battery = status.caseBattery, battery.level != nil {
-                    figure("Case", BatteryFormat.value(battery), symbol: BatteryFormat.symbol(battery), warn: BatteryFormat.isLow(battery))
-                }
-                if let storage = status.storage {
-                    let low = StorageFormat.isLow(storage)
-                    figure("Storage", PhoneDeviceCopy.storageFigure(hours: storage.hoursLeft),
-                           symbol: low ? "externaldrive.trianglebadge.exclamationmark" : "externaldrive", warn: low)
-                        .accessibilityLabel("Storage, \(StorageFormat.hoursLeft(storage))")
-                }
-            }
-            if !live {
-                Text(PhoneDeviceCopy.asOf(status.updatedAt)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func figure(_ label: String, _ value: String, symbol: String, warn: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Image(systemName: symbol)
-                .font(.body)
-                .foregroundStyle(warn ? PhoneStyle.Ink.warning : PhoneStyle.Ink.secondary)
-                .frame(height: 22, alignment: .leading)
-                .accessibilityHidden(true)
-            Text(value)
-                .font(.title3.weight(.semibold).monospacedDigit())
-                .foregroundStyle(warn ? PhoneStyle.Ink.warning : PhoneStyle.Ink.title)
-                .lineLimit(1).minimumScaleFactor(0.6)
-            Text(label).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                .lineLimit(1).minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// One problem at a time: what happened, what's safe, at most two actions.
-struct ProblemBox: View {
-    @Environment(\.openURL) private var openURL
-    let session: DeviceSession
-    let problem: DeviceProblem
-
-    var body: some View {
-        let copy = PhoneDeviceCopy.problem(problem)
-        VStack(alignment: .leading, spacing: 8) {
-            Label(copy.title, systemImage: "exclamationmark.triangle.fill")
-                .font(.headline)
-                .foregroundStyle(PhoneStyle.Ink.warning)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(copy.message).font(.subheadline).foregroundStyle(PhoneStyle.Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 16) {
-                ForEach(Array(Self.actions(problem).enumerated()), id: \.offset) { _, action in
-                    Button(PhoneDeviceCopy.title(action)) { perform(action) }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PhoneStyle.Ink.link)
-                        .buttonStyle(.borderless)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    /// The problem's actions this iPhone can take, at most two.
-    static func actions(_ problem: DeviceProblem) -> [DeviceProblemAction] {
-        Array(problem.actions.filter(PhoneDeviceCopy.isAvailable).prefix(2))
-    }
-
-    private func perform(_ action: DeviceProblemAction) {
-        switch action {
-        case .openBluetoothSettings, .openPrivacySettings:
-            if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-        case .tryAgain: session.tryAgain()
-        case .reconnect, .connect: session.connect()
-        case .dismiss: session.dismissProblem()
-        case .refreshStatus: session.direct?.refresh()
-        default: session.dismissProblem()
-        }
-    }
-}
-
-// MARK: Add Device
+// MARK: Add Recorder
 
 extension View {
     /// Add Recorder: a sheet in the hand; open, the display as two pages (`pagesPresentation`). Closes
@@ -517,13 +301,14 @@ extension View {
     }
 }
 
-/// Add Recorder: choose a kind, then its method. Soundcore searches only when you tap Search,
-/// which is when iOS asks to allow Bluetooth.
+/// Add Recorder: choose a kind, then set it up. A recorder Daybook talks to directly searches only when you tap
+/// Search, which is when iOS asks to allow Bluetooth; one a Mac manages moves here with Use on This iPhone instead.
 struct AddDeviceSheet: View {
     /// Shown over the whole open display, rather than as a sheet.
     var asPages = false
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.surfaceStyle) private var surface
+    @Environment(\.openURL) private var openURL
     var done: (String?) -> Void
     @State private var session: DeviceSession?
 
@@ -538,6 +323,7 @@ struct AddDeviceSheet: View {
                 SheetCreaseSplit { kindsPage } trailing: { setupPage } single: { column }
             }
         }
+        .environment(\.recorderServices, PhoneRecorderServices.make(model: model, openURL: openURL))
         .presentationSizing(SheetPagesSizing(asPages: surface != .pocket))
         .task {
             // `--open-settings add-device`: straight to Soundcore setup.
@@ -605,6 +391,7 @@ struct AddRecorderPage: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.settingsPages) private var pages
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @State private var session: DeviceSession?
     @State private var finished = false
 
@@ -616,6 +403,7 @@ struct AddRecorderPage: View {
                 RecorderKinds(chosen: nil, showsChevrons: true) { session = model.devices.beginSetup($0) }
             }
         }
+        .environment(\.recorderServices, PhoneRecorderServices.make(model: model, openURL: openURL))
         .navigationTitle(session?.kind.name ?? "Add Recorder")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -649,12 +437,13 @@ struct AddRecorderPage: View {
     }
 }
 
-/// The kinds of recorder this iPhone can add. Two pages mark the chosen one, whose setup is on the
-/// right page rather than pushed (so no chevrons).
+/// The kinds of recorder this iPhone can add, in the rows the Mac's Add Device shows. Two pages mark the chosen
+/// one, whose setup is on the right page rather than pushed (so no chevrons).
 private struct RecorderKinds: View {
     var chosen: DeviceKind?
     var showsChevrons: Bool
     let choose: (DeviceKind) -> Void
+    @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
         List {
@@ -663,29 +452,11 @@ private struct RecorderKinds: View {
                 ForEach(DeviceCatalog.kinds.filter { $0.id != DaybookPhoneIntegration.id }) { kind in
                     let isChosen = chosen == kind
                     Button { choose(kind) } label: {
-                        // Explicit inks: in a list, a button tints its label, and `.primary` and
-                        // `.secondary` would follow that tint, turning the whole row teal.
-                        HStack(spacing: 14) {
-                            Image(systemName: kind.systemImage)
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(PhoneStyle.Ink.secondary)
-                                .frame(width: 44, height: 44)
-                                .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                                .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(kind.name).foregroundStyle(PhoneStyle.Ink.title)
-                                Text(PhoneDeviceCopy.kindSummary(kind)).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                            }
-                            Spacer(minLength: 0)
-                            if showsChevrons {
-                                Image(systemName: "chevron.forward")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(Color(uiColor: .tertiaryLabel))
-                                    .accessibilityHidden(true)
-                            }
-                        }
-                        .padding(.vertical, 4)
+                        RecorderKindRow(kind: kind, isSetUp: !kind.allowsMultiple && model.devices.hub.session(kind: kind.id) != nil,
+                                        showsChevron: showsChevrons)
+                            .padding(.vertical, 4)
                     }
+                    .buttonStyle(.plain)
                     .listRowBackground(isChosen ? PhoneStyle.accent.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
                     .accessibilityAddTraits(isChosen ? .isSelected : [])
                 }
@@ -707,69 +478,29 @@ private struct AddRecorderBar: ViewModifier {
     }
 }
 
+/// Setting one kind up. A recorder Daybook talks to directly: Search (iOS asks to allow Bluetooth then), then what
+/// it found, with the step's own action (Stop, Try Again, Look Again) beside its title. One already set up here
+/// opens its page; one a Mac manages offers Use on This iPhone instead of a search. A folder recorder: Choose
+/// Folder….
 private struct SetupScreen: View {
     let session: DeviceSession
     var done: (String?) -> Void
+    @Environment(PhoneAppModel.self) private var model
     @State private var choosingFolder = false
     @State private var folderError: String?
+    @State private var searched = false
     private let tileColumn = SettingsTileWidth()
 
     var body: some View {
-        let soundcore = session.direct as? SoundcoreConnection
         List {
-            if let soundcore {
+            if session.managedElsewhere != nil {
+                // Set up here before, and a Mac manages it now: moving it here is the way, not a second search.
                 Section {
-                    if soundcore.state == .searching || !soundcore.discovered.isEmpty || soundcore.connectingTo != nil {
-                        ForEach(soundcore.discovered) { recorder in
-                            Button { soundcore.connect(to: recorder) } label: {
-                                HStack {
-                                    SettingsRow(title: recorder.name, detail: recorder.signal.word, systemImage: "recordingtape")
-                                    Spacer(minLength: 0)
-                                    if soundcore.connectingTo == recorder.id { ProgressView() }
-                                }
-                            }
-                            .disabled(soundcore.connectingTo != nil)
-                        }
-                        if soundcore.discovered.isEmpty {
-                            HStack(spacing: SettingsMetrics.gap) {
-                                ProgressView().frame(width: tileColumn.value)
-                                Text("Looking for Soundcore Work…").foregroundStyle(PhoneStyle.Ink.secondary)
-                            }
-                        }
-                    } else {
-                        Button {
-                            soundcore.search()
-                        } label: {
-                            SettingsActionLabel(title: "Search for Soundcore Work", systemImage: "antenna.radiowaves.left.and.right")
-                        }
-                    }
-                } footer: {
-                    if soundcore.searchFoundNothing {
-                        Text("Nothing found yet.")
-                    }
+                    RecorderHandoffView(session: session, style: .card)
+                        .listRowInsets(EdgeInsets())
                 }
-                // The not-found problem says what the tips say.
-                if let problem = session.problem, problem.id != SoundcoreIssue.notFound.rawValue {
-                    Section {
-                        Text(PhoneDeviceCopy.problem(problem).message).font(.subheadline).foregroundStyle(PhoneStyle.Ink.warning)
-                    }
-                }
-                // Until it's found: what to try.
-                if soundcore.discovered.isEmpty {
-                    Section("If It Doesn’t Appear") {
-                        ForEach(PhoneDeviceCopy.tips(session.kind), id: \.text) { tip in
-                            // Tips aren't actions: secondary symbols, so the accent stays on Search.
-                            HStack(spacing: SettingsMetrics.gap) {
-                                Image(systemName: tip.symbol)
-                                    .foregroundStyle(PhoneStyle.Ink.secondary)
-                                    .frame(width: tileColumn.value)
-                                    .accessibilityHidden(true)
-                                Text(tip.text).foregroundStyle(PhoneStyle.Ink.title)
-                            }
-                            .font(.subheadline)
-                        }
-                    }
-                }
+            } else if let discovering = session.direct as? any DiscoveringConnection {
+                discovery(discovering)
             } else if let files = session.files {
                 Section {
                     Button { choosingFolder = true } label: { SettingsActionLabel(title: "Choose Folder…", systemImage: "folder") }
@@ -788,108 +519,57 @@ private struct SetupScreen: View {
                 }
             }
         }
+        .task {
+            // Already set up here and managed here: its page is where it goes.
+            if model.devices.hub.pendingSetup !== session, session.managedElsewhere == nil, session.direct?.isSetUp == true {
+                done(session.id)
+            }
+        }
         .onChange(of: session.isLinked) { _, linked in
             // The recorder answered: it's set up, and this iPhone manages it.
             if linked { done(session.id) }
         }
     }
-}
 
-// MARK: Copy for iPhone
-
-/// The device framework's words are written for the Mac ("bring it close to this Mac"); these are
-/// the iPhone's, keyed by the same stable problem IDs.
-@MainActor
-enum PhoneDeviceCopy {
-    static func line(for session: DeviceSession) -> String {
-        if let owner = session.managedElsewhere { return "Managed by \(owner.ownerName)" }
-        if let wait = session.otherAppWait { return wait }
-        if let current = session.queue.current { return "Importing \(current.recording.title) · \(session.phase?.label ?? "…")" }
-        switch session.state {
-        case .connected:
-            let state = session.status?.isRecording == true ? "Recording" : "Connected"
-            if let battery = session.status?.battery, battery.level != nil { return "\(state) · \(BatteryFormat.label(battery))" }
-            return state
-        case .searching: return "Looking for it…"
-        case .connecting: return "Connecting…"
-        case .reconnecting: return "Reconnecting…"
-        case .unavailable: return session.problem.map { problem(for: $0.id)?.title ?? $0.title } ?? "Bluetooth isn’t available"
-        case .notSetUp: return "Not set up"
-        case .notConnected:
-            if let status = session.status, status.isRecording == true { return DeviceDateFormat.recordingAsOf(status.updatedAt) }
-            if let last = session.direct?.lastConnectedAt { return lastSeen(last) }
-            return session.files != nil ? "Watching a folder" : "Not connected"
+    @ViewBuilder
+    private func discovery(_ connection: any DiscoveringConnection) -> some View {
+        let searching = connection.state == .searching
+        let connecting = connection.connectingTo != nil
+        let found = !connection.discovered.isEmpty
+        Section {
+            if !searched && !searching && !found && !connecting && !connection.searchFoundNothing {
+                Button {
+                    searched = true
+                    connection.search()
+                } label: {
+                    SettingsActionLabel(title: "Search for \(session.kind.name)", systemImage: "antenna.radiowaves.left.and.right")
+                }
+            } else {
+                HStack(spacing: SettingsMetrics.gap) {
+                    Group {
+                        if searching || connecting { ProgressView() } else {
+                            Image(systemName: found ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                                .foregroundStyle(PhoneStyle.Ink.secondary)
+                        }
+                    }
+                    .frame(width: tileColumn.value)
+                    .accessibilityHidden(true)
+                    Text(RecorderStatusWords.discoveryTitle(session.kind, searching: searching, connecting: connecting, found: found))
+                        .foregroundStyle(PhoneStyle.Ink.title)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if let action = RecorderStatusWords.discoveryAction(searching: searching, connecting: connecting, found: found) {
+                        Button(action) { if searching { connection.stopSearching() } else { connection.search() } }
+                            .buttonStyle(.daybookLink)
+                    }
+                }
+            }
         }
-    }
-
-    /// "Last seen today, 2:14 PM", as the status sheet's line says it.
-    static func lastSeen(_ date: Date, now: Date = Date()) -> String {
-        "Last seen \(DeviceDateFormat.lastSeen(date, now: now))"
-    }
-
-    /// Under figures that are from earlier: "As of 2:14 PM" today, "As of 20 Oct" before.
-    static func asOf(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
-        let when = DeviceDateFormat.asOf(date, now: now, calendar: calendar)
-        for word in ["at ", "on "] where when.hasPrefix(word) { return "As of " + when.dropFirst(word.count) }
-        return "As of " + when
-    }
-
-    /// A recorder's room as a figure: "210 hr", "6 hr", "< 1 hr".
-    static func storageFigure(hours: Double) -> String {
-        hours < 1 ? "< 1 hr" : "\(StorageFormat.roundedHours(hours)) hr"
-    }
-
-    /// "Just now", "2 hours ago": a relative time starting a line.
-    static func sentenceCase(_ text: String) -> String { text.prefix(1).uppercased() + text.dropFirst() }
-
-    static func summary(_ text: String) -> String {
-        text.replacingOccurrences(of: "this Mac", with: "this iPhone")
-    }
-
-    static func kindSummary(_ kind: DeviceKind) -> String {
-        kind.id == SoundcoreWorkIntegration.id ? "Over Bluetooth, even while Daybook is closed." : kind.summary
-    }
-
-    static func methodTitle(_ kind: DeviceKind, _ method: ConnectionMethodKind) -> String {
-        kind.method(method)?.title ?? method.rawValue.capitalized
-    }
-
-    static func tips(_ kind: DeviceKind) -> [DeviceTip] {
-        guard kind.id == SoundcoreWorkIntegration.id else { return kind.discoveryTips }
-        return [
-            DeviceTip(symbol: "moon.zzz", text: "Take it out of its case."),
-            DeviceTip(symbol: "xmark.app", text: "Close the Soundcore app."),
-            DeviceTip(symbol: "desktopcomputer", text: "If your Mac manages it, wait a few minutes."),
-            DeviceTip(symbol: "wave.3.right", text: "Bring it close to this iPhone."),
-        ]
-    }
-
-    static func problem(_ problem: DeviceProblem) -> (title: String, message: String) {
-        if let copy = Self.problem(for: problem.id) { return copy }
-        return (problem.title, summary(problem.message))
-    }
-
-    private static func problem(for id: String) -> (title: String, message: String)? {
-        switch SoundcoreIssue(rawValue: id) {
-        case .bluetoothDenied?: return ("Daybook can’t use Bluetooth", "Allow Bluetooth for Daybook in Settings › Daybook.")
-        case .bluetoothUnsupported?: return ("This iPhone can’t connect to Soundcore", "Export recordings from the Soundcore app and import them with Import Audio.")
-        case .notFound?: return ("No Soundcore found nearby", "Take it out of its case, close the Soundcore app, and bring it close to this iPhone.")
-        case .connectTimeout?: return ("Soundcore didn’t finish connecting", "Take it out of its case to wake it, and close the Soundcore app.")
-        case .rejected?: return ("This Soundcore didn’t accept the connection", "Export from the Soundcore app and import the file instead.")
-        case .listFailed?: return ("Soundcore didn’t list its recordings", "Close the Soundcore app, then refresh.")
-        default: return nil
-        }
-    }
-
-    /// Folder actions belong to the Mac's setup; on iPhone, Import Audio does that job.
-    static func isAvailable(_ action: DeviceProblemAction) -> Bool {
-        action != .setUpFolder && action != .chooseFolder && action != .technicalDetails
-    }
-
-    static func title(_ action: DeviceProblemAction) -> String {
-        switch action {
-        case .openBluetoothSettings, .openPrivacySettings: return "Open Settings"
-        default: return action.title
+        Section {
+            RecorderDiscoveryContent(session: session, connection: connection)
+                .padding(.bottom, DaybookSpacing.s4)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
         }
     }
 }

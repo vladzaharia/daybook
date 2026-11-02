@@ -184,7 +184,8 @@ struct SettingsScreen: View {
         case "icloud": path = [.icloud]
         case "macs": if let mac = model.link.macs.first { path = [.mac(mac.id)] }
         case "pairing": showingPairing = true
-        case "devices", "device", "device-details": if let session = model.devices.sessions.first { path = [.device(session.id)] }
+        case "devices", "device", "device-details", "device-live", "device-recordings":
+            if let session = model.devices.sessions.first { path = [.device(session.id)] }
         case "add-device", "add-recorder": if surface == .pocket { showingAddDevice = true } else { path = [.addRecorder] }
         case "storage": path = [.storage]
         case "models": path = [.models]

@@ -3,7 +3,9 @@ import DaybookCore
 import DaybookDevices
 import DaybookKit
 import DaybookLink
+import DaybookUI
 import Foundation
+import SwiftUI
 
 /// Asks the main window to present Add Device: the kind chooser, or one kind's setup, optionally
 /// for an existing device (to add its other methods) or straight to one method.
@@ -77,6 +79,51 @@ extension AppState {
             return false
         }
     }
+
+    // MARK: The recorder screens both apps share (DaybookUI)
+
+    /// What the shared recorder screens need from this Mac: its words, its handoff and library, and what only the
+    /// Mac does (Finder, the open panel, Settings › Devices, the details popover).
+    var recorderServices: RecorderServices {
+        let phoneLink = phoneLink
+        return RecorderServices(
+            place: .mac, handoff: recorderHandoff, devices: devices, library: library, thisDeviceSymbol: Self.thisMacSymbol,
+            processingLabel: { [weak self] in self?.deviceProcessingLabel($0) },
+            showConversation: { [weak self] in self?.showConversation($0) },
+            linkState: { session in
+                phoneLink.phoneRecorders.values.joined().first { $0.kind == session.kind.id && $0.serial != nil && $0.serial == session.recorderSerial }
+            },
+            openSystemSettings: { action in
+                switch action {
+                case .openPrivacySettings: PrivacySettings.open(.bluetooth)
+                default:
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") { NSWorkspace.shared.open(url) }
+                }
+            },
+            stopImporting: { session, all in session.requestStop(all: all) },
+            showDetails: { session in session.browser.showingDetails = true },
+            remove: { [weak self] session in self?.removeDevice(session.id) },
+            captionStatus: { [weak self] state in LiveCaptionStatus.line(state, locale: self?.captionSettings.locale ?? .current) },
+            chooseFolder: { [weak self] session in self?.chooseDeviceFolder(for: session) ?? false },
+            revealFolder: { NSWorkspace.shared.activateFileViewerSelecting([$0]) },
+            revealAudio: { [weak self] meetingID, recordingID in
+                guard let self else { return }
+                DeviceActions.revealAudio(state: self, meetingID: meetingID, recordingID: recordingID)
+            },
+            setUpMethod: { [weak self] session, method in self?.requestAddDevice(kind: session.kind.id, method: method) },
+            showListenLive: { session in session.browser.selection = [.recordingNow] },
+            detailsPopover: { session in AnyView(DeviceDetailsView(session: session, browser: session.browser)) })
+    }
+
+    /// This Mac's glyph: a MacBook's laptop, another Mac's desktop (`SettingsWords.thisDeviceSymbol`).
+    static let thisMacSymbol: String = {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var model = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+        let identifier = String(cString: model)
+        return SettingsWords.thisDeviceSymbol(model: identifier, name: Host.current().localizedName)
+    }()
 
     /// "Transcribing", "Summarizing", or "Waiting to transcribe" for a conversation still being processed.
     func deviceProcessingLabel(_ id: UUID) -> String? {

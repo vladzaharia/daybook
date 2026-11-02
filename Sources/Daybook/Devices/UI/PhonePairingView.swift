@@ -39,7 +39,7 @@ struct PhonePairingStep: View {
             }
             HStack {
                 if let back {
-                    Button { back() } label: { Label("All Recorders", systemImage: "chevron.left") }
+                    Button { back() } label: { Label("All Devices", systemImage: "chevron.left") }
                         .buttonStyle(.borderless)
                 }
                 Spacer()
