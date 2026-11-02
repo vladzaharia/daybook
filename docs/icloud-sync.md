@@ -231,7 +231,9 @@ means a new library. Builds that can't keep a key (unsigned and ad hoc, without 
   courier's CloudKit records hold only sealed bytes. Tampering is detected: every sealed file is authenticated, a
   manifest replaced by a plaintext one pauses sync on every device that synced the library encrypted, and once the
   plaintext from before is retired (or in a library that started encrypted) a plaintext file someone drops into the
-  sync folder is ignored: it's history only when something sealed names it (`admitPlaintext`, below).
+  sync folder is ignored: it's history only when something sealed names it (`admitPlaintext`, below). Nothing
+  authenticates the manifest, so each device keeps what it saw of that in `Sync/sealing.json`, and a manifest edited
+  to say otherwise changes nothing there.
 - **What it doesn't.** An Apple Account together with a trusted device's passcode; a compromised device; the Mac's
   working library and Time Machine (FileVault and an encrypted backup do that); the iPhone's iCloud Backup when the
   person includes the encrypted library in it (Storage › Include in iPhone Backups, off by default for an encrypted
@@ -275,7 +277,8 @@ the format (`SealedObjectTests`); a change needs a new version.
   Devices/<SHA-256>.json     # presence: plaintext essentials, the name and activity sealed
   Events/, Metadata/, Blobs/ # plaintext from before encryption, read only, until retired
 
-Local library/Sync/sealing.json   # this device synced an encrypted library here: never publish plaintext there
+Local library/Sync/sealing.json   # this device synced an encrypted library here: never publish plaintext there;
+                                  # when it saw the plaintext retired, or the library start encrypted
 ```
 
 **The manifest.** `{"format":"DaybookSync","schemaVersion":2,"libraryID":…,"sealing":{"scheme":"DBSEAL-1","current":…,
@@ -356,10 +359,22 @@ only won over rivals), a plaintext entry is history only when the library vouche
 something it applied names it (its own late write, from a pass that ran on the manifest from before encryption: its
 author seals it), or this process read it while it was history. Anything else in `Events/`, `Metadata/`, or
 `Compaction/` is left alone: not read, applied, sealed, waited for, or deleted, so a file anyone with write access to the
-container drops there changes nothing, and an author's late upload isn't lost before it seals it. A device that was away across
-retirement and still has a deleted conversation applies the deletion (its parents are gone, not on their way) or, if it
-changed the conversation meanwhile, keeps it as a new one. An on-demand replica publishes a recording it doesn't hold by
-reference only to an object in the sync folder; one the journal names but that isn't there waits.
+container drops there changes nothing, and an author's late upload isn't lost before it seals it.
+
+The manifest itself isn't authenticated, so the first time a device sees `legacyRetired`, or sees that the library
+started encrypted, it keeps that in `Sync/sealing.json` for the library and holds to it whatever a later manifest says:
+one edited to drop `legacyRetired` or to name a library it `supersedes` lets nothing in there, and the migrator puts a
+dropped `legacyRetired` back with its first date. A plaintext library that really does merge into one
+that started encrypted is no different on a device that saw the start: its entries reach that device once their authors
+seal them. The limit is trust on first use: a device new to the library (or one that never saw the retirement) takes the
+manifest as it finds it, so one already edited lets a planted entry into that device's library. Unless it's the migrator,
+its sealer seals only what that device wrote, so the entry reaches no other device unless someone edits that conversation
+there.
+
+A device that was away across retirement and still has a deleted conversation applies the deletion (its parents are
+gone, not on their way) or, if it changed the conversation meanwhile, keeps it as a new one. An on-demand replica
+publishes a recording it doesn't hold by reference only to an object in the sync folder; one the journal names but that
+isn't there waits.
 
 **Rotating** ("Erase Deleted Conversations from iCloud", `rotateKey`). A new key becomes current, the sealer seals what's
 live under it, and once every device seen in the last 30 days that reads encrypted libraries reports it holds the new key

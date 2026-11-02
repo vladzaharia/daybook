@@ -890,6 +890,69 @@ final class LibrarySyncSealingTests: XCTestCase {
         XCTAssertEqual(after.meetings.map(\.title), [kept.title])
     }
 
+    /// Rewrites the manifest as someone who can write the iCloud container might: nothing authenticates it.
+    private func editManifest(_ change: (inout SyncManifest) -> Void) throws {
+        var edited = try manifest()
+        change(&edited)
+        try edited.encoded().write(to: remote.appendingPathComponent("daybook-sync.json"))
+    }
+
+    /// Passes `names` in turn, each on an engine opened again (only what the device keeps on disk counts), and checks that
+    /// none applies the planted conversation or settings.
+    private func assertPlantedIgnored(by names: [String], library: [String], file: StaticString = #filePath, line: UInt = #line) async throws {
+        for name in names {
+            let engine = try name.hasPrefix("Phone") ? self.phone(name) : self.mac(name)
+            let result = try await pass(engine, name, try await MeetingStore(rootURL: local(name)).list())
+            XCTAssertEqual(result.meetings.map(\.title).sorted(), library, name, file: file, line: line)
+            XCTAssertEqual(result.metadataVersions.filter { String(decoding: $0, as: UTF8.self).contains("Forged") }, [], name, file: file, line: line)
+            XCTAssertEqual(result.warnings, [], name, file: file, line: line)
+        }
+    }
+
+    /// A manifest edited to drop `legacyRetired` turns nothing back on: every device that saw the plaintext retired keeps
+    /// it so (`Sync/sealing.json`), so plaintext planted after the edit is neither applied nor sealed, and the migrator
+    /// puts the retirement back as it was rather than retiring again.
+    func testBehaviorAManifestThatLosesItsRetirementLetsNoPlaintextIn() async throws {
+        let mac = try mac(), phone = try phone()
+        let kept = try await pass(mac, "Mac", [Meeting(title: "Kept")]).meetings[0]
+        try await pass(phone, "Phone")
+        await mac.setSealerClock { Date().addingTimeInterval(LibrarySyncEngine.retirementGrace * 2) }
+        try await mac.enableSealing(recovery: RecoveryKey.generate())
+        try await pass(mac, "Mac", [kept])
+        try await pass(mac, "Mac", [kept])
+        let retired = try XCTUnwrap(try manifest().sealing?.legacyRetired)
+        try await pass(phone, "Phone", try await MeetingStore(rootURL: local("Phone")).list())
+        let sealedBefore = files("Sealed/Events") + files("Sealed/Metadata")
+
+        try editManifest { $0.sealing?.legacyRetired = nil }
+        let planted = try await plantPlaintext([Meeting(title: "Zanzibar, forged")], settings: Data(#"{"folders":["Forged"]}"#.utf8), as: "Mac")
+        XCTAssertEqual(planted.count, 2)
+        // The iPhone first, while the manifest still lacks it; then the Mac, the migrator.
+        try await assertPlantedIgnored(by: ["Phone", "Mac", "Phone"], library: [kept.title])
+        XCTAssertEqual(files("Sealed/Events") + files("Sealed/Metadata"), sealedBefore, "Nothing sealed it")
+        for path in planted { XCTAssertTrue(FileManager.default.fileExists(atPath: remote.appendingPathComponent(path).path), path) }
+        XCTAssertEqual(try manifest().sealing?.legacyRetired, retired, "Put back as it was")
+    }
+
+    /// The same for a library that started encrypted: a `supersedes` added to its manifest (as a plaintext library merged
+    /// into it would bring) doesn't make planted plaintext history on a device that saw it start encrypted. A device new to
+    /// the library takes the manifest as it finds it (docs/icloud-sync.md, "Encryption"), and its sealer seals only what
+    /// it wrote, so nothing seals the planted entry either way.
+    func testBehaviorAManifestEditedToSupersedeALibraryLetsNoPlaintextIntoOneThatStartedEncrypted() async throws {
+        let mac = try self.mac(startsEncrypted: true), phone = try self.phone()
+        let real = try await pass(mac, "Mac", [Meeting(title: "Real")]).meetings[0]
+        try await pass(phone, "Phone")
+        let sealedBefore = files("Sealed/Events") + files("Sealed/Metadata")
+
+        try editManifest { $0.supersedes = [UUID()] }
+        let planted = try await plantPlaintext([Meeting(title: "Zanzibar, forged")], settings: Data(#"{"folders":["Forged"]}"#.utf8), as: "Mac")
+        try await assertPlantedIgnored(by: ["Phone", "Mac"], library: [real.title])
+        _ = try await pass(try self.phone("Fresh"), "Fresh")
+        try await assertPlantedIgnored(by: ["Mac", "Phone"], library: [real.title])
+        XCTAssertEqual(files("Sealed/Events") + files("Sealed/Metadata"), sealedBefore, "Nothing sealed it")
+        for path in planted { XCTAssertTrue(FileManager.default.fileExists(atPath: remote.appendingPathComponent(path).path), path) }
+    }
+
     func testRotationReSealsLiveContentAndErasesDeletedConversations() async throws {
         let mac = try mac(), phone = try phone()
         try await pass(mac, "Mac")

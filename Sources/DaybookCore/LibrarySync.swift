@@ -520,7 +520,7 @@ public actor LibrarySyncEngine {
                     do {
                         if let fork = try keepContentAddedAfterDeletion(local, deletions: ids.filter { events[$0]?.deleted == true },
                                                                        events: events, memo: &memo, supplied: pass.output,
-                                                                       parentsMayBeRetired: !journalIncomplete && sealing?.manifest.legacyRetired != nil) {
+                                                                       parentsMayBeRetired: !journalIncomplete && sealing?.legacyRetired != nil) {
                             pass.output[fork.id] = fork; pass.changed.insert(fork.id)
                             if audioPolicy == .onDemand {
                                 let missing = Set(fork.tracks.filter { availability(of: $0, in: fork.id) == .notLocal }.map(\.id))

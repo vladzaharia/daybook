@@ -169,14 +169,20 @@ struct SealingState {
     var keys: [Data: LibraryKey]
     var current: LibraryKey
     /// The library was encrypted from its start (a new library, or one that started over), with no plaintext library's
-    /// journal merged into it: it never held plaintext history. Winning over rivals says nothing about that.
+    /// journal merged into it: it never held plaintext history. Winning over rivals says nothing about that. Once this
+    /// device has seen it so, it stays so whatever a later manifest says (`SealingMemory`).
     var startedEncrypted = false
+    /// When this device first saw the plaintext from before retired (`SealingMemory`): nothing authenticates the manifest,
+    /// and a retirement never comes undone, so one the manifest no longer records still holds here.
+    var retiredBefore: Date?
 
     var keyring: SealedObject.Keyring { { [keys] in keys[$0] } }
+    /// When the plaintext from before was retired: as the manifest says, else as this device saw it (`retiredBefore`).
+    var legacyRetired: Date? { manifest.legacyRetired ?? retiredBefore }
     /// Whether a plaintext journal file is this library's history only when something authenticated names it: the plaintext
     /// from before was retired, or there never was any (`LibrarySyncEngine.admitPlaintext`). Until then a plaintext file is
     /// history from before encryption, which the sealer seals.
-    var plaintextNeedsVouching: Bool { manifest.legacyRetired != nil || startedEncrypted }
+    var plaintextNeedsVouching: Bool { legacyRetired != nil || startedEncrypted }
     /// Held keys, the current one first: where an object may be sealed.
     var readingOrder: [LibraryKey] { [current] + keys.values.filter { $0.id != current.id }.sorted { $0.idHex < $1.idHex } }
     /// A key the manifest saved a recovery wrap for: the current one.
@@ -189,11 +195,17 @@ struct SealingState {
 
 /// What this device remembers about encrypted libraries, beside its checkpoints (`Sync/sealing.json`): once it has
 /// synced an encrypted library in a sync folder, it never publishes plaintext there. A manifest replaced by a plaintext
-/// one (or removed) pauses sync instead (`LibrarySyncError.sealingRemoved`). Choosing another iCloud account forgets it.
+/// one (or removed) pauses sync instead (`LibrarySyncError.sealingRemoved`). It also remembers what makes a plaintext
+/// file need vouching for (`SealingState.plaintextNeedsVouching`), so a manifest edited to say otherwise changes nothing
+/// here. Choosing another iCloud account forgets it.
 struct SealingMemory: Codable, Equatable {
     struct Remote: Codable, Equatable {
         var libraryID: UUID
         var since: Date
+        /// When the library's plaintext from before was retired, as this device first saw it in the manifest. Additive.
+        var plaintextRetired: Date?
+        /// The library started encrypted, as this device first saw it (`SealingState.startedEncrypted`). Additive.
+        var startedEncrypted: Bool?
     }
     var schemaVersion = 1
     /// By the SHA-256 (16 hex digits) of the sync folder's path.
@@ -284,8 +296,11 @@ extension LibrarySyncEngine {
             manifestChecked = true
             return
         }
-        // Seen encrypted once, never published to in plaintext: remembered even before the key arrives.
-        try rememberSealed(manifest.libraryID)
+        // Seen encrypted once, never published to in plaintext: remembered even before the key arrives. So is what makes a
+        // plaintext file need vouching for, the first time this device sees it: a later manifest that drops it (nothing
+        // authenticates the manifest) changes nothing here.
+        let remembered = try rememberSealed(manifest.libraryID, retired: description.legacyRetired,
+                                            startedEncrypted: manifest.supersedes == nil && (description.startedOver || manifest.created == description.sealedSince))
         var held: [Data: LibraryKey] = [:]
         if let keyStore {
             let stored: [LibraryKey]
@@ -304,7 +319,7 @@ extension LibrarySyncEngine {
         }
         if sealing?.current.id != current.id { sealingRuntime.verified = [] }
         sealing = SealingState(libraryID: manifest.libraryID, manifest: description, keys: held, current: current,
-                               startedEncrypted: manifest.supersedes == nil && (description.startedOver || manifest.created == description.sealedSince))
+                               startedEncrypted: remembered.startedEncrypted == true, retiredBefore: remembered.plaintextRetired)
         waitingForKey = nil; waitingSealing = nil
     }
 
@@ -320,13 +335,21 @@ extension LibrarySyncEngine {
         return manifestChecked
     }
 
-    /// Records that this device synced an encrypted library in this sync folder (`SealingMemory`).
-    func rememberSealed(_ libraryID: UUID) throws {
+    /// Records that this device synced an encrypted library in this sync folder (`SealingMemory`), and, the first time it
+    /// sees them, that the library's plaintext from before was retired (`retired`) or that it started encrypted. Neither
+    /// is ever forgotten for the library. Returns what's remembered.
+    @discardableResult
+    func rememberSealed(_ libraryID: UUID, retired: Date? = nil, startedEncrypted: Bool = false) throws -> SealingMemory.Remote {
         var memory = SealingMemory.load(localRoot: localRoot)
         let key = SealingMemory.key(remoteRoot: remoteRoot)
-        guard memory.remotes[key]?.libraryID != libraryID else { return }
-        memory.remotes[key] = SealingMemory.Remote(libraryID: libraryID, since: Date())
+        let known = memory.remotes[key]
+        var remote = known.flatMap { $0.libraryID == libraryID ? $0 : nil } ?? SealingMemory.Remote(libraryID: libraryID, since: Date())
+        if remote.plaintextRetired == nil { remote.plaintextRetired = retired }
+        if startedEncrypted { remote.startedEncrypted = true }
+        guard remote != known else { return remote }
+        memory.remotes[key] = remote
         try memory.save(localRoot: localRoot)
+        return remote
     }
 
     /// Whether this device has synced an encrypted library in this sync folder.

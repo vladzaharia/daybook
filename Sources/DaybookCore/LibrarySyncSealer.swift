@@ -342,7 +342,7 @@ extension LibrarySyncEngine {
             }
         }
 
-        progress.legacyRetired = sealing.manifest.legacyRetired != nil && !hasLegacyFiles()
+        progress.legacyRetired = sealing.legacyRetired != nil && !hasLegacyFiles()
         progress.oldKeysRetired = sealing.manifest.keys.count == 1
         guard isMigrator, !Task.isCancelled else { return progress }
         // What's sealed and uploaded replaces its plaintext (or old-key) copy at once, object by object, once retirement
@@ -437,16 +437,23 @@ extension LibrarySyncEngine {
         let liveShas = Set(input.liveAssets.filter { !input.deleted.contains($0.key) }.values.joined().map(\.sha256))
         let knownShas = Set(input.events.values.flatMap { $0.assets.map(\.sha256) }).union(liveShas)
 
-        // Retiring the plaintext from before.
+        // Retiring the plaintext from before. A retirement this device saw that the manifest no longer records (nothing
+        // authenticates the manifest) is put back as it was, never made again: plaintext a manifest without it let in is
+        // never read here, so it's never sealed (`SealingState.retiredBefore`).
+        if sealing.manifest.legacyRetired == nil, let retired = sealing.retiredBefore,
+           let updated = try? updateManifest({ manifest in if manifest.sealing?.legacyRetired == nil { manifest.sealing?.legacyRetired = retired } }),
+           let description = updated.sealing {
+            self.sealing?.manifest = description
+        }
         let legacyEntries = (input.eventEntries + input.metadataEntries + input.compactionEntries).filter { !$0.isSealed }
         let legacyBlobs = (try? journalBlobNames()) ?? []
-        if !legacyEntries.isEmpty || !legacyBlobs.isEmpty || sealing.manifest.legacyRetired == nil {
+        if !legacyEntries.isEmpty || !legacyBlobs.isEmpty || sealing.legacyRetired == nil {
             // Once retired, a plaintext file is history only when the library vouches for it (`admitPlaintext`): one that
             // reappears with its sealed counterpart here (iCloud.com's Data Recovery restores deleted files for 30 days) is
             // deleted, and one a device wrote late, on a manifest from before encryption, is sealed by that device. Any
             // other never reaches the sealer: it isn't read, sealed, or deleted.
             var ready = true
-            if sealing.manifest.legacyRetired == nil {
+            if sealing.legacyRetired == nil {
                 if now.timeIntervalSince(sealing.manifest.sealedSince) < Self.retirementGrace { ready = false; progress.waitingFor.append(.gracePeriod) }
                 if !sealing.hasRecovery, otherDevicesHolding(current.idHex).isEmpty { ready = false; progress.waitingFor.append(.anotherDeviceOrRecoveryKey) }
             }
@@ -463,11 +470,14 @@ extension LibrarySyncEngine {
                         for path in compactionRuntime.prunedEntryPaths where !path.hasPrefix("Sealed/") { deleteRemote(remoteRoot.appendingPathComponent(path)) }
                     }
                     deleteStalePresence()
-                    if sealing.manifest.legacyRetired == nil, let updated = try? updateManifest({ $0.sealing?.legacyRetired = now }), let description = updated.sealing {
+                    if self.sealing?.manifest.legacyRetired == nil,
+                       let updated = try? updateManifest({ $0.sealing?.legacyRetired = sealing.retiredBefore ?? now }), let description = updated.sealing {
                         self.sealing?.manifest = description
+                        // Remembered at once, so a manifest that loses it before the next pass changes nothing here.
+                        if let retired = description.legacyRetired { _ = try? rememberSealed(sealing.libraryID, retired: retired) }
                     }
                 }
-                progress.legacyRetired = self.sealing?.manifest.legacyRetired != nil && !hasLegacyFiles()
+                progress.legacyRetired = self.sealing?.legacyRetired != nil && !hasLegacyFiles()
             }
         } else {
             progress.legacyRetired = true
