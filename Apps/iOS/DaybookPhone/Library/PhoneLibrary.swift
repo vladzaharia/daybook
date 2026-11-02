@@ -54,7 +54,7 @@ final class PhoneLibrary {
     func reload() async throws {
         try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try await controller.load()
-        if broughtInUnsaved { saveBroughtIn() }
+        if broughtInUnsaved { await saveBroughtIn() }
     }
 
     // MARK: Filing a recording
@@ -176,12 +176,13 @@ final class PhoneLibrary {
     // MARK: Bringing in audio
 
     /// Imports audio from Files or the share sheet (Voice Memos, call recordings saved from Notes)
-    /// into a new conversation named after the file and dated when it was recorded, if the file says.
-    /// The original isn't moved or changed, except the copy iOS left in the inbox, which goes once
-    /// it's imported (a failed import keeps it). Returns what was filed; audio already in the library
-    /// returns that conversation instead of a copy.
-    func importFile(_ url: URL, requestTranscription: Bool) async throws -> Filed {
-        let filed = try await importCopy(of: url, requestTranscription: requestTranscription)
+    /// into a new conversation named after the file and dated when it was recorded, if the file says;
+    /// or, with `attachTo` (Add Recording… on a conversation's page), into that conversation as another
+    /// recording of it, to be lined up with the others. The original isn't moved or changed, except the
+    /// copy iOS left in the inbox, which goes once it's imported (a failed import keeps it). Returns what
+    /// was filed; audio already in the library returns that conversation instead of a copy.
+    func importFile(_ url: URL, attachTo: UUID? = nil, requestTranscription: Bool) async throws -> Filed {
+        let filed = try await importCopy(of: url, attachTo: attachTo, requestTranscription: requestTranscription)
         removeInboxCopy(url)
         return filed
     }
@@ -194,7 +195,7 @@ final class PhoneLibrary {
         try? FileManager.default.removeItem(at: url)
     }
 
-    private func importCopy(of url: URL, requestTranscription: Bool) async throws -> Filed {
+    private func importCopy(of url: URL, attachTo: UUID?, requestTranscription: Bool) async throws -> Filed {
         try await reload()
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -205,14 +206,16 @@ final class PhoneLibrary {
         // A cancelled import stops waiting for the lock it never got, and imports nothing.
         try await controller.acquireLockUnlessCancelled()
         defer { controller.releaseLock() }
-        if let existing = try await controller.existingMeeting(containingAudioAt: staged) {
+        // Into the conversation it was added to, when that's still here; else a new one, unless the library has the audio.
+        let target = attachTo.flatMap { controller.meeting($0) != nil ? $0 : nil }
+        if target == nil, let existing = try await controller.existingMeeting(containingAudioAt: staged) {
             return Filed(meeting: existing, request: nil)
         }
         let title = url.deletingPathExtension().lastPathComponent
         let date = Self.recordingDate(of: url) ?? Date()
-        let id = controller.newMeeting(title: title.isEmpty ? "Imported recording" : title, date: date)
+        let id = target ?? controller.newMeeting(title: title.isEmpty ? "Imported recording" : title, date: date)
         let ingested = try await controller.ingest(staged, into: id, provenance: .file(source: .imported, duration: duration))
-        noteBroughtIn(ingested.track)
+        await noteBroughtIn(ingested.track)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
         claimIfProcessedHere(request, in: id)
         try await controller.flushDurably([id])
@@ -238,7 +241,7 @@ final class PhoneLibrary {
         let id = target ?? controller.newMeeting(title: Self.deviceTitle(identity, fallback: url), date: Self.deviceStart(identity) ?? Date())
         let ingested = try await controller.ingest(url, into: id, provenance: .file(source: source, device: identity, duration: duration,
                                                                                    recorderClock: DeviceRecordingStart.clock(of: identity)))
-        noteBroughtIn(ingested.track)
+        await noteBroughtIn(ingested.track)
         let request = requestTranscription ? controller.requestProcessing(id, mode: .newAudio) : nil
         claimIfProcessedHere(request, in: id)
         try await controller.flushDurably([id])
@@ -308,23 +311,28 @@ final class PhoneLibrary {
         }
     }
 
-    private func noteBroughtIn(_ track: RecordingTrack?) {
+    private func noteBroughtIn(_ track: RecordingTrack?) async {
         guard let track, broughtIn.insert(track.id).inserted || broughtInUnsaved else { return }
-        saveBroughtIn()
+        await saveBroughtIn()
     }
 
-    /// Writes `broughtIn` beside the library, so a relaunch still transcribes what this iPhone brought in. A write that
-    /// fails is logged and made again with the next one, and at the next load; meanwhile this run knows.
-    private func saveBroughtIn() {
+    /// Writes the record of what was brought in here, durably, before the conversation that holds it is: it decides
+    /// whether this iPhone transcribes an import itself, after a relaunch too. A write that fails (a full disk) is
+    /// logged and tried again with the next import and the next load, so the record catches up rather than being lost.
+    private func saveBroughtIn() async {
+        let url = rootURL.appendingPathComponent(Self.broughtInFile), ids = broughtIn.map(\.uuidString).sorted()
         do {
-            let data = try JSONEncoder().encode(broughtIn.map(\.uuidString).sorted())
-            try data.write(to: rootURL.appendingPathComponent(Self.broughtInFile), options: .atomic)
+            try await Task.detached(priority: .utility) {
+                try DurableFiles.write(try JSONEncoder().encode(ids), to: url)
+            }.value
             broughtInUnsaved = false
         } catch {
             broughtInUnsaved = true
-            Self.log.error("Couldn’t save the recordings brought in on this iPhone: \(String(describing: error), privacy: .public)")
+            Self.log.error("Couldn’t save the recordings brought in on this iPhone: \(error.localizedDescription, privacy: .public)")
         }
     }
+
+    private static let log = Logger(subsystem: "local.daybook", category: "PhoneLibrary")
 
     private static func readBroughtIn(at url: URL) -> Set<UUID> {
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
@@ -336,8 +344,6 @@ final class PhoneLibrary {
             return []
         }
     }
-
-    private static let log = Logger(subsystem: "local.daybook", category: "library")
 
     /// A Transcribe request this iPhone will carry out itself is claimed in the save that files the
     /// recording, before the first sync pass takes it to a Mac (`OnDeviceProcessing`).

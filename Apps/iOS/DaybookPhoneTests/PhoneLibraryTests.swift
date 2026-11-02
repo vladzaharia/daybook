@@ -168,8 +168,7 @@ final class PhoneLibraryTests: XCTestCase {
         let root = try temporaryDirectory()
         let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         let rig = RecorderRig()
-        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
-                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        let model = appModel(rig.recorder, library)
         try await model.startRecording()
         let recordingID = rig.recorder.captureID
         rig.pump(3)
@@ -367,8 +366,7 @@ final class PhoneLibraryTests: XCTestCase {
         let root = try temporaryDirectory()
         let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         let rig = RecorderRig()
-        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
-                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        let model = appModel(rig.recorder, library)
         try await model.startRecording()
         XCTAssertTrue(model.isRecordingActive)
         rig.pump(1)
@@ -393,8 +391,7 @@ final class PhoneLibraryTests: XCTestCase {
     func testBehaviorAStoppedRecordingSaysWhereItWent() async throws {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         let rig = RecorderRig()
-        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
-                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        let model = appModel(rig.recorder, library)
         XCTAssertNil(model.lastFiling)
         try await model.startRecording()
         rig.pump(2)
@@ -419,8 +416,7 @@ final class PhoneLibraryTests: XCTestCase {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         try await library.reload()
         let rig = RecorderRig()
-        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
-                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        let model = appModel(rig.recorder, library)
         let session = ReadingSession()
         let note = session.newNote(in: library.controller)
         library.controller.update(note) { $0.notes = "Agenda" }
@@ -444,8 +440,7 @@ final class PhoneLibraryTests: XCTestCase {
     func testTwoStartsAtOnceLeaveTheOneThatWonAlone() async throws {
         let library = PhoneLibrary(rootURL: try temporaryDirectory(), installation: "INSTALL-1")
         let rig = RecorderRig()
-        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
-                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        let model = appModel(rig.recorder, library)
         // A Mac's request and an intent arrive together.
         let conversation = UUID()
         let session = MultipointSession(conversationID: conversation, role: .macLed(macID: UUID()),
@@ -472,8 +467,7 @@ final class PhoneLibraryTests: XCTestCase {
         let root = try temporaryDirectory()
         let library = PhoneLibrary(rootURL: root, installation: "INSTALL-1")
         let rig = RecorderRig()
-        let model = PhoneAppModel(recorder: rig.recorder, library: library, posture: DevicePosture(),
-                                  options: LaunchOptions(arguments: [], environment: ["XCTestConfigurationFilePath": "1"]))
+        let model = appModel(rig.recorder, library)
         try await model.startRecording()
         rig.pump(2)
         // An intent the system gave up on, or a demo script that was cancelled, still saves.
@@ -498,8 +492,7 @@ final class PhoneLibraryTests: XCTestCase {
         await rig.recorder.flush()
         rig.recorder.prepareForTermination()   // the process ends here
 
-        let relaunched = PhoneAppModel(recorder: RecorderRig().recorder, library: library, posture: DevicePosture(),
-                                       options: LaunchOptions(arguments: [], environment: [:]))
+        let relaunched = appModel(RecorderRig().recorder, library, environment: [:])
         await relaunched.launch()
         XCTAssertEqual(library.conversations.map(\.id), [id])
         XCTAssertEqual(library.conversations.first?.highlights.count, 1)
@@ -612,6 +605,64 @@ final class PhoneLibraryTests: XCTestCase {
     // MARK: Files opened in Daybook
 
     /// A second of tone as a WAV file, as another app might hand over.
+    /// An app model over `library`, as a test makes one; the scratch folder its models get goes when the test ends.
+    private func appModel(_ recorder: PhoneRecorder, _ library: PhoneLibrary,
+                          environment: [String: String] = ["XCTestConfigurationFilePath": "1"]) -> PhoneAppModel {
+        let model = PhoneAppModel(recorder: recorder, library: library, posture: DevicePosture(),
+                                  options: LaunchOptions(arguments: [], environment: environment))
+        let models = model.models.root
+        addTeardownBlock { try? FileManager.default.removeItem(at: models) }
+        return model
+    }
+
+    /// Add Recording… on a conversation's page: a file from Files joins that conversation as another of its recordings,
+    /// with a Transcribe request, rather than starting a conversation of its own; one added to a conversation that's
+    /// gone makes its own.
+    func testBehaviorAFileAddedToAConversationJoinsIt() async throws {
+        let root = try temporaryDirectory()
+        let library = PhoneLibrary(rootURL: root.appendingPathComponent("Library"), installation: "INSTALL-1")
+        try await library.reload()
+        let (recording, _) = try await record(into: library)
+        let filed = try await library.fileRecording(recording, requestTranscription: false)
+        let memo = root.appendingPathComponent("Second take.wav")
+        try audioFile(at: memo)
+        let added = try await library.importFile(memo, attachTo: filed.meeting.id, requestTranscription: true)
+        XCTAssertEqual(added.meeting.id, filed.meeting.id)
+        XCTAssertEqual(added.meeting.tracks.count, 2, "the phone's recording and the file")
+        XCTAssertEqual(library.conversations.count, 1)
+        XCTAssertEqual(added.request?.mode, .newAudio)
+        let file = try XCTUnwrap(added.meeting.tracks.first { $0.fileName == memo.lastPathComponent })
+        XCTAssertTrue(library.ownsTrack(file), "brought in here, so this iPhone may transcribe it")
+
+        let elsewhere = root.appendingPathComponent("Elsewhere.wav")
+        try audioFile(at: elsewhere, step: 0.31)
+        let alone = try await library.importFile(elsewhere, attachTo: UUID(), requestTranscription: false)
+        XCTAssertNotEqual(alone.meeting.id, filed.meeting.id)
+        XCTAssertEqual(alone.meeting.title, "Elsewhere")
+    }
+
+    /// The record of what was brought in here decides whether this iPhone transcribes an import itself. A write that
+    /// fails (here, a folder in its place, as a full disk would) is tried again at the next load, so a relaunch still
+    /// knows the import is this iPhone's.
+    func testBehaviorAnImportsRecordThatCouldntBeSavedIsSavedAtTheNextLoad() async throws {
+        let root = try temporaryDirectory()
+        let libraryRoot = root.appendingPathComponent("Library")
+        let library = PhoneLibrary(rootURL: libraryRoot, installation: "INSTALL-1")
+        try await library.reload()
+        let record = libraryRoot.appendingPathComponent(PhoneLibrary.broughtInFile)
+        try FileManager.default.createDirectory(at: record.appendingPathComponent("blocked"), withIntermediateDirectories: true)
+        let memo = root.appendingPathComponent("Voice memo.wav")
+        try audioFile(at: memo)
+        let imported = try await library.importFile(memo, requestTranscription: false)
+        let track = try XCTUnwrap(imported.meeting.tracks.first)
+        XCTAssertTrue(library.ownsTrack(track), "known in this run whatever the disk said")
+        XCTAssertFalse(PhoneLibrary(rootURL: libraryRoot, installation: "INSTALL-1").ownsTrack(track), "not on disk yet")
+
+        try FileManager.default.removeItem(at: record)
+        try await library.reload()
+        XCTAssertTrue(PhoneLibrary(rootURL: libraryRoot, installation: "INSTALL-1").ownsTrack(track), "saved at the next load")
+    }
+
     private func audioFile(at url: URL, step: Float = 0.17) throws {
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_000))
