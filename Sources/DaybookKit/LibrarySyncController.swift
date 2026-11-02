@@ -679,11 +679,15 @@ public final class LibrarySyncController {
     // MARK: Held publications
 
     @ObservationIgnored var publicationTimer: Task<Void, Never>?
+    /// The last pass held back an edit to a large conversation (`SyncReplicaConfiguration.holdsEditBursts`): the app
+    /// publishes it when it leaves the foreground (`publishHeldEdits`).
+    public internal(set) var holdsEdits = false
 
     /// A large conversation edited here again soon after it was published is held back by the engine
     /// (`LibrarySyncEngine.publicationInterval`): a pass is asked for when it may go.
     private func schedulePublication(_ due: Date?) {
         publicationTimer?.cancel(); publicationTimer = nil
+        if holdsEdits != (due != nil) { holdsEdits = due != nil }
         guard let due else { return }
         publicationTimer = Task { [weak self] in
             try? await Task.sleep(for: .seconds(max(1, due.timeIntervalSinceNow)))
@@ -692,21 +696,24 @@ public final class LibrarySyncController {
         }
     }
 
-    /// Publishes edits the engine held back (`LibrarySyncEngine.publicationInterval`) at once: of `conversation`, or every
-    /// one. Both apps call it when the person leaves a conversation's page, and when the app goes to the background.
-    public func publishHeldEdits(of conversation: UUID? = nil) {
-        guard let engine else { return }
-        publicationTimer?.cancel(); publicationTimer = nil
-        Task {
-            await engine.publishHeldEdits(of: conversation.map { [$0] })
-            self.requestSync()
-        }
+    /// Lets edits the engine held back (`LibrarySyncEngine.publicationInterval`) go on the next pass: of `conversation`,
+    /// or every one. The iPhone calls it when the person leaves a conversation's page, and before its last pass when it
+    /// goes to the background (`requestingPass: false`, since it runs that pass itself). Returns whether anything was
+    /// held; then, with `requestingPass`, a pass is asked for.
+    @discardableResult
+    public func publishHeldEdits(of conversation: UUID? = nil, requestingPass: Bool = true) async -> Bool {
+        guard let engine else { return false }
+        let released = await engine.publishHeldEdits(of: conversation.map { [$0] })
+        if conversation == nil { publicationTimer?.cancel(); publicationTimer = nil; holdsEdits = false }
+        if released, requestingPass { requestSync() }
+        return released
     }
 
     func detach() {
         if activeTask == nil { isSyncing = false }
         activeTask?.cancel(); configurationID = UUID(); pendingReceipt = nil
         stopMonitoring(); engine = nil; folder = nil; transport = .none
+        publicationTimer?.cancel(); publicationTimer = nil; holdsEdits = false
     }
 
     // MARK: Monitoring

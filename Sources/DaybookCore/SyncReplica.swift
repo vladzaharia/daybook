@@ -79,6 +79,10 @@ public struct SyncReplicaConfiguration: Sendable {
     /// When this device compacts the journal, if it's the Mac that does (docs/icloud-sync.md, "Compaction"). Nil: it
     /// never does; it still reads what another device compacted and acknowledges its proposals.
     public var compaction: SyncCompactionPolicy?
+    /// A large conversation edited again soon after this device published it waits, and one publication carries the
+    /// burst (`LibrarySyncEngine.publicationInterval`). Only for an app that publishes what's held when the person leaves
+    /// the conversation or the app (`LibrarySyncController.publishHeldEdits`): the iPhone. Off: every edit goes at once.
+    public var holdsEditBursts = false
 
     public init(audioPolicy: SyncAudioPolicy = .eager, device: SyncDeviceIdentity? = nil,
                 audioCache: AudioCachePolicy? = nil, presenceRefreshInterval: TimeInterval = 600,

@@ -492,7 +492,7 @@ final class PhoneAppModel: RecordingCommandHandling {
             speakerPass?.task.cancel()
             speakerPass = nil
             sync.scheduleBackgroundRefresh()
-            if sync.localChanges > 0 || sync.isSyncing { sync.synchronizeFinishing(.edit) }
+            sync.finishOnLeavingForeground()
             Task { await link.setActivity(recorder.isActive || recorderOnly != nil ? .backgroundRecording : .background) }
         default:
             break

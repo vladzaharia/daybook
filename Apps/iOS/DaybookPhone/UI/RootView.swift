@@ -37,6 +37,13 @@ struct RootView: View {
             // Playback stops for a recording, so the microphone doesn't record it.
             if recording { reading.player.pause() }
         }
+        // Leaving a conversation: edits to it held back for a burst go now.
+        .onChange(of: reading.openID) { left, _ in
+            if let left { model.sync.publishHeldEdits(of: left) }
+        }
+        .onChange(of: reading.reading) { _, isReading in
+            if !isReading, let id = reading.openID { model.sync.publishHeldEdits(of: id) }
+        }
         .modifier(HingeObserver(posture: posture))
         .modifier(GeometryProbe(enabled: model.options.logGeometry, posture: posture))
         .overlay(alignment: .top) {

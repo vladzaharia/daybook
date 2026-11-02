@@ -97,10 +97,12 @@ final class PhoneSync {
         }
     }
 
-    /// The phone replica: on-demand audio within `budget`, presence as this iPhone.
+    /// The phone replica: on-demand audio within `budget`, presence as this iPhone, and a burst of edits to a large
+    /// conversation published once (`holdsEditBursts`; what's held goes when the person leaves the conversation or the app).
     static func replica(displayName: String, budget: UInt64, cloud: SyncCloudFiles = .system) -> SyncReplicaConfiguration {
         var replica = SyncReplicaConfiguration.phone(displayName: displayName, audioCache: AudioCachePolicy(budgetBytes: budget))
         replica.cloud = cloud
+        replica.holdsEditBursts = true
         return replica
     }
 
@@ -267,13 +269,29 @@ final class PhoneSync {
         await synchronize(.backgroundRefresh)
     }
 
+    /// Leaving the foreground: what changed here goes now (`synchronizeFinishing`), with edits held back for a burst
+    /// (`LibrarySyncEngine.publicationInterval`), which would otherwise wait until the app is in front again.
+    func finishOnLeavingForeground() {
+        let held = controller?.holdsEdits == true
+        guard localChanges > 0 || isSyncing || held else { return }
+        synchronizeFinishing(.edit, publishingHeldEdits: true)
+    }
+
+    /// The person left a conversation: edits held back for a burst go now.
+    func publishHeldEdits(of id: UUID) {
+        guard isConnected, let controller else { return }
+        Task { await controller.publishHeldEdits(of: id) }
+    }
+
     /// Runs a pass that must not stop when the app goes to the background (a just-filed recording's
     /// upload), under a background-task assertion of a few seconds to a few minutes. The courier sends
-    /// what the pass wrote under the same assertion.
-    func synchronizeFinishing(_ trigger: Trigger) {
+    /// what the pass wrote under the same assertion. `publishingHeldEdits` lets edits held back for a
+    /// burst go on that pass.
+    func synchronizeFinishing(_ trigger: Trigger, publishingHeldEdits: Bool = false) {
         let application = UIApplication.shared
         var assertion = UIBackgroundTaskIdentifier.invalid
         let pass = Task {
+            if publishingHeldEdits { await self.controller?.publishHeldEdits(requestingPass: false) }
             await self.synchronize(trigger)
             guard !Task.isCancelled else { return }
             await self.controller?.finishCourierSends()

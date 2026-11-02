@@ -6,8 +6,10 @@ final class LibrarySyncTests: XCTestCase {
     private var root: URL!
     private var remote: URL { root.appendingPathComponent("Remote") }
     private func local(_ name: String) -> URL { root.appendingPathComponent(name) }
-    private func engine(_ name: String, remote: URL? = nil) throws -> LibrarySyncEngine {
-        try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote ?? self.remote, deviceID: name)
+    private func engine(_ name: String, remote: URL? = nil, holdsEditBursts: Bool = false) throws -> LibrarySyncEngine {
+        var replica = SyncReplicaConfiguration()
+        replica.holdsEditBursts = holdsEditBursts
+        return try LibrarySyncEngine(localRoot: local(name), remoteRoot: remote ?? self.remote, deviceID: name, replica: replica)
     }
     override func setUpWithError() throws {
         root = makeTemporaryFolder("DaybookSyncTests")
@@ -339,7 +341,7 @@ final class LibrarySyncTests: XCTestCase {
     }
 
     func testBehaviorALargeConversationEditedAgainSoonIsPublishedOnceForTheBurst() async throws {
-        let a = try engine("A"), b = try engine("B")
+        let a = try engine("A", holdsEditBursts: true), b = try engine("B")
         let clock = MovingClock()
         await a.setPublicationClock { clock.now }
         var long = Meeting(title: "Long call")
@@ -379,12 +381,54 @@ final class LibrarySyncTests: XCTestCase {
         let held = try await a.synchronize(meetings: [edited, short])
         XCTAssertEqual(held.publishedEvents, 0)
         try await apply(held, to: "A", using: a)
-        await a.publishHeldEdits(of: [edited.id])
+        let released = await a.publishHeldEdits(of: [edited.id])
+        XCTAssertTrue(released)
+        let pending = await a.hasRemoteChanges()
+        XCTAssertTrue(pending, "The cheap check says a pass has work")
         let left = try await a.synchronize(meetings: [edited, short])
         XCTAssertEqual(left.publishedEvents, 1)
         try await apply(left, to: "A", using: a)
         let pulled = try await b.synchronize(meetings: [])
         XCTAssertEqual(pulled.meetings.first { $0.id == edited.id }?.notes, edited.notes)
+    }
+
+    /// What's held is never a recording or photo: a publication that brings one goes at once, and a replica that doesn't
+    /// hold bursts (the Mac) publishes every edit.
+    func testBehaviorARecordingAddedToAHeldConversationGoesAtOnce() async throws {
+        let audio = root.appendingPathComponent("added.wav")
+        try Data("a second recording".utf8).write(to: audio)
+        let a = try engine("A", holdsEditBursts: true), b = try engine("B")
+        let clock = MovingClock()
+        await a.setPublicationClock { clock.now }
+        var long = Meeting(title: "Long call")
+        long.setNotes(String(repeating: "Quarterly planning, line by line. ", count: 9_000))
+        var edited = try await publish(long, using: a, name: "A")
+        clock.advance(20)
+        edited.setNotes(edited.notes + "\nAdded line")
+        let held = try await a.synchronize(meetings: [edited])
+        XCTAssertEqual(held.publishedEvents, 0)
+        try await apply(held, to: "A", using: a)
+        // A recording filed into it a moment later: the publication carries it, and the held edit with it.
+        clock.advance(20)
+        let filed = try await MeetingStore(rootURL: local("A")).importAudio(from: audio, into: edited)
+        let sent = try await a.synchronize(meetings: [filed])
+        XCTAssertEqual(sent.publishedEvents, 1)
+        XCTAssertNil(sent.nextPublication)
+        try await apply(sent, to: "A", using: a)
+        let pulled = try await b.synchronize(meetings: [])
+        XCTAssertEqual(pulled.meetings.first?.tracks.count, 1)
+        XCTAssertEqual(pulled.meetings.first?.notes, edited.notes)
+
+        // Without holding, each edit goes as it's made.
+        try await apply(pulled, to: "B", using: b)
+        var typed = try XCTUnwrap(pulled.meetings.first)
+        for line in 1...2 {
+            typed.setNotes(typed.notes + "\nOn B \(line)")
+            let result = try await b.synchronize(meetings: [typed])
+            XCTAssertEqual(result.publishedEvents, 1, "line \(line)")
+            XCTAssertNil(result.nextPublication)
+            try await apply(result, to: "B", using: b)
+        }
     }
 
     func testBehaviorAPassThatChangesNothingDoesntWriteTheCheckpoint() async throws {

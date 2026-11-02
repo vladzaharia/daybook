@@ -586,6 +586,34 @@ final class LibrarySyncContainerTests: XCTestCase {
         XCTAssertGreaterThan(resumed.publishedEvents, 0, "Published into the library now in iCloud")
     }
 
+    /// The iPhone holds a burst of edits to a large conversation (`holdsEditBursts`): the controller says so, and what's
+    /// held goes on the next pass once the app asks, as it does when it leaves the foreground.
+    func testBehaviorEditsHeldForABurstGoOnceTheAppAsks() async throws {
+        let sync = controller(environment())
+        sync.replica.holdsEditBursts = true
+        sync.replica.sealsNewLibrary = false
+        sync.encryptsAutomatically = false
+        sync.syncDebounce = nil
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try sync.connect(to: folder, monitorChanges: false)
+        var long = Meeting(title: "Long call")
+        long.setNotes(String(repeating: "Quarterly planning, line by line. ", count: 9_000))
+        let firstPass = try await pass(sync, [long])
+        var edited = try XCTUnwrap(firstPass?.meetings.first)
+        edited.setNotes(edited.notes + "\nAdded line")
+        let held = try await pass(sync, [edited])
+        XCTAssertEqual(held?.publishedEvents, 0)
+        XCTAssertTrue(sync.holdsEdits)
+        let released = await sync.publishHeldEdits(requestingPass: false)
+        XCTAssertTrue(released)
+        XCTAssertFalse(sync.holdsEdits)
+        let sent = try await pass(sync, [edited])
+        XCTAssertEqual(sent?.publishedEvents, 1)
+        XCTAssertFalse(sync.holdsEdits)
+        let again = await sync.publishHeldEdits(requestingPass: false)
+        XCTAssertFalse(again, "Nothing is held")
+    }
+
     func testBehaviorAFullICloudSaysSoAndHoldsEncryptionBack() async throws {
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let full = Switch()

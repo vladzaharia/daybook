@@ -166,6 +166,8 @@ public actor LibrarySyncEngine {
     let keyStore: (any LibraryKeyStore)?
     /// A library this device starts is encrypted from the start (`SyncReplicaConfiguration.sealsNewLibrary`).
     let sealsNewLibrary: Bool
+    /// Edits to a large conversation published soon after the last one wait (`SyncReplicaConfiguration.holdsEditBursts`).
+    let holdsEditBursts: Bool
     /// An encrypted library's manifest and the keys held here, once a pass has read it (nil: plaintext, or no key).
     var sealing: SealingState?
     /// The current key (hex) of an encrypted library this device can't open yet.
@@ -198,6 +200,8 @@ public actor LibrarySyncEngine {
     var lastPublished: [UUID: Date] = [:]
     /// When the earliest conversation held back by the last pass may go (`SyncResult.nextPublication`).
     var heldPublicationDue: Date?
+    /// Conversations the last pass held back (`publicationInterval`).
+    var heldPublications = Set<UUID>()
     /// The publication throttle's clock (tests move it on).
     var publicationClock: @Sendable () -> Date = { Date() }
     func setPublicationClock(_ clock: @escaping @Sendable () -> Date) { publicationClock = clock }
@@ -223,6 +227,7 @@ public actor LibrarySyncEngine {
         self.deviceID = deviceID
         audioPolicy = replica.audioPolicy; cloud = replica.cloud; device = replica.device; keyStore = replica.keyStore
         network = replica.network; sealsNewLibrary = replica.sealsNewLibrary; compactionPolicy = replica.compaction
+        holdsEditBursts = replica.holdsEditBursts
         audioCachePolicy = replica.audioCache; presenceRefreshInterval = replica.presenceRefreshInterval
         let local = localRoot.standardizedFileURL.resolvingSymlinksInPath().path
         let remote = remoteRoot.standardizedFileURL.resolvingSymlinksInPath().path
@@ -417,8 +422,10 @@ public actor LibrarySyncEngine {
                 // A large conversation edited again soon after this device published it waits (`publicationInterval`): one
                 // publication carries the burst, rather than a full snapshot every time the person pauses typing. What
                 // others changed in it meanwhile waits too, as for any edit not yet published.
-                if !force, gone.isEmpty, let due = publicationHeld(supplied.id, bytes: encoded.count, now: publishedAt) {
-                    pass.pendingUploads += 1; pass.failedPublications.insert(supplied.id)
+                // One that brings a recording or photo goes at once, whatever else changed.
+                if !force, gone.isEmpty, let due = publicationHeld(supplied.id, bytes: encoded.count, now: publishedAt),
+                   !Self.addsFiles(supplied, to: base(key)) {
+                    pass.pendingUploads += 1; pass.failedPublications.insert(supplied.id); pass.heldPublications.insert(supplied.id)
                     pass.nextPublication = min(pass.nextPublication ?? due, due)
                     continue
                 }
@@ -612,7 +619,7 @@ public actor LibrarySyncEngine {
         state.pending = SyncPendingApply(id: checkpointID, heads: pass.proposedHeads, metadataHeads: settings.applied ? metadataHeads : state.metadataHeads,
             changedBases: pass.baseChanges, removedBases: pass.removedBases.sorted())
         try saveCheckpoint()
-        heldPublicationDue = pass.nextPublication
+        heldPublicationDue = pass.nextPublication; heldPublications = pass.heldPublications
         retainCaches(metadataHeads: Set(metadataHeads).union(state.metadataHeads))
         let journalIncomplete = pass.journalIncomplete
         // An encrypted library: seal what's live from before (or under an older key), and retire what's no longer
@@ -667,9 +674,10 @@ public actor LibrarySyncEngine {
 
     // MARK: Publication
 
-    /// How soon after this device published a large conversation it publishes it again: edits in between are held back
-    /// and go together (`SyncResult.nextPublication`), or at once when the person leaves the conversation or the app
-    /// (`publishHeldEdits`).
+    /// How soon after this device published a large conversation it publishes it again, on a replica that holds bursts
+    /// (`SyncReplicaConfiguration.holdsEditBursts`): edits in between are held back and go together
+    /// (`SyncResult.nextPublication`), or at once when the person leaves the conversation or the app (`publishHeldEdits`).
+    /// One that brings a recording or photo is never held.
     public static let publicationInterval: TimeInterval = 3 * 60
     /// A conversation is held back only when its snapshot is at least this large (an hour-long call with its transcripts
     /// is about 2 MB); a small one costs little to publish every time.
@@ -677,16 +685,32 @@ public actor LibrarySyncEngine {
 
     /// When a publication of `id` (its snapshot `bytes` long) held back may go, or nil to publish it now.
     func publicationHeld(_ id: UUID, bytes: Int, now: Date) -> Date? {
-        guard bytes >= Self.heldPublicationBytes, let last = lastPublished[id] else { return nil }
+        guard holdsEditBursts, bytes >= Self.heldPublicationBytes, let last = lastPublished[id] else { return nil }
         let due = last.addingTimeInterval(Self.publicationInterval)
         return due > now ? due : nil
     }
 
+    /// Whether `meeting` holds a recording or photo `base` (what this device last applied of it) doesn't: publishing it
+    /// brings that file, which nothing holds back.
+    static func addsFiles(_ meeting: Meeting, to base: Meeting?) -> Bool {
+        guard let base else { return true }
+        func files(_ meeting: Meeting) -> [String] {
+            meeting.tracks.map { "\($0.relativePath)#\($0.sha256)" } + (meeting.photos ?? []).map { "\($0.relativePath)#\($0.sha256)" }
+        }
+        return !Set(files(meeting)).isSubset(of: files(base))
+    }
+
     /// Publishes edits held back (`publicationInterval`) on the next pass: of `ids`, or every conversation's. For when the
-    /// person leaves a conversation, or the app goes to the background.
-    public func publishHeldEdits(of ids: Set<UUID>? = nil) {
+    /// person leaves a conversation, or the app goes to the background. Returns whether the last pass held any of them
+    /// back; then the cheap check (`hasRemoteChanges`) says a pass has work.
+    @discardableResult
+    public func publishHeldEdits(of ids: Set<UUID>? = nil) -> Bool {
+        let released = ids.map { heldPublications.intersection($0) } ?? heldPublications
         if let ids { for id in ids { lastPublished[id] = nil } } else { lastPublished = [:] }
-        heldPublicationDue = nil
+        guard !released.isEmpty else { return false }
+        heldPublications.subtract(released)
+        heldPublicationDue = .distantPast
+        return true
     }
 
     /// Reads the library settings versions the sync folder lists, and returns them with the entries read: in an encrypted
@@ -1983,7 +2007,8 @@ struct PassState {
     /// Conversations the library holds just as they were last applied here: one whose heads haven't moved either needs
     /// no merge, so its snapshots are never read.
     var unchangedHere = Set<UUID>()
-    /// When the earliest publication held back may go (`publicationInterval`).
+    /// Conversations held back for a burst of edits (`publicationInterval`), and when the earliest may go.
+    var heldPublications = Set<UUID>()
     var nextPublication: Date?
     /// The library as the pass returns it, and what changed in it.
     var output: [UUID: Meeting] = [:]
