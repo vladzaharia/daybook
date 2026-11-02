@@ -590,11 +590,13 @@ public struct RecorderNoteField: View {
             .accessibilityLabel("Add a note")
     }
 
-    /// The notes with `line` as a new last paragraph.
+    /// The notes with `line` as a new last paragraph. Only the blank lines at the end make way for it; the rest of
+    /// the notes stay as they were written.
     public static func appending(_ line: String, to notes: String) -> String {
         let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return notes }
-        let kept = notes.trimmingCharacters(in: .newlines)
+        var kept = Substring(notes)
+        while kept.last?.isNewline == true { kept = kept.dropLast() }
         return kept.isEmpty ? line : kept + "\n" + line
     }
 }

@@ -161,5 +161,9 @@ final class RecorderSurfaceTests: XCTestCase {
         XCTAssertEqual(RecorderNoteField.appending("Ship Friday", to: ""), "Ship Friday")
         XCTAssertEqual(RecorderNoteField.appending("  Ship Friday ", to: "Agenda\n"), "Agenda\nShip Friday")
         XCTAssertEqual(RecorderNoteField.appending("   ", to: "Agenda"), "Agenda", "an empty line adds nothing")
+        // Regression: the blank lines the notes began with went too, an edit the person never made.
+        XCTAssertEqual(RecorderNoteField.appending("Ship Friday", to: "\n\nAgenda\r\n\n"), "\n\nAgenda\nShip Friday",
+                       "only the end of the notes makes way")
+        XCTAssertEqual(RecorderNoteField.appending("Ship Friday", to: "\n\n"), "Ship Friday")
     }
 }
