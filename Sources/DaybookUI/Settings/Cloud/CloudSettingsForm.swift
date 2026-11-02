@@ -53,6 +53,7 @@ public struct CloudKeyRow: View {
     private let edit: @MainActor () -> Void
     private let remove: @MainActor () -> Void
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     public init(cloud: CloudSetup, provider: CloudProvider, edit: @escaping @MainActor () -> Void, remove: @escaping @MainActor () -> Void) {
         self.cloud = cloud
@@ -99,16 +100,27 @@ public struct CloudKeyRow: View {
         }
     }
 
-    /// The compact row: the name with its key or "Add Key", the whole row opening the editor.
+    /// The compact row: the name with its key or "Add Key", the whole row opening the editor. The name stays whole: the
+    /// key gives way first, and at the accessibility sizes it goes under the name.
     private var compact: some View {
         Button(action: edit) {
             HStack(spacing: DaybookSpacing.s2) {
-                Text(SettingsWords.provider(provider)).foregroundStyle(DaybookPalette.Ink.title)
-                Spacer(minLength: DaybookSpacing.s2)
-                Text(masked ?? "Add Key")
-                    .foregroundStyle(masked == nil ? DaybookPalette.Ink.link : DaybookPalette.Ink.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                let stacked = typeSize.isAccessibilitySize
+                let layout = stacked
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+                    : AnyLayout(HStackLayout(spacing: DaybookSpacing.s2))
+                layout {
+                    Text(SettingsWords.provider(provider)).foregroundStyle(DaybookPalette.Ink.title)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: !stacked, vertical: false)
+                        .layoutPriority(1)
+                    if !stacked { Spacer(minLength: DaybookSpacing.s2) }
+                    Text(masked ?? "Add Key")
+                        .foregroundStyle(masked == nil ? DaybookPalette.Ink.link : DaybookPalette.Ink.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if stacked { Spacer(minLength: DaybookSpacing.s2) }
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
