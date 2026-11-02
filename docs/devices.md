@@ -133,7 +133,9 @@ that recording joins the same conversation.
 
 - **Files**: everything that appears in the watched folder and is unchanged across two scans
   imports on its own, once. A file whose conversation is later deleted is offered again but
-  not re-imported automatically.
+  not re-imported automatically. Each scan lists the folder, reads its files' details, asks iCloud for
+  what isn't downloaded, and hashes new files off the main actor (`ImportFolderWatcher.survey`), so a
+  large folder or a slow file provider never holds up the window.
 - **Direct (Soundcore)**: "Import new recordings automatically" (on the iPhone's recorder page,
   "Import Automatically") is **on by default**, because
   recordings that arrive without effort is what people want most from a wearable. It imports

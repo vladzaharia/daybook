@@ -273,6 +273,32 @@ final class DeviceHubTests: XCTestCase {
         XCTAssertNotEqual(ids[0], ids[1])
     }
 
+    /// The folder is listed, read, and hashed off the main actor (in iCloud Drive a file provider can be slow), and
+    /// only plain values come back to it.
+    func testBehaviorAFolderIsSurveyedOffTheMainActor() async throws {
+        let folder = root.appendingPathComponent("Survey", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 64).write(to: folder.appendingPathComponent("b.wav"))
+        try Data(repeating: 2, count: 32).write(to: folder.appendingPathComponent("a.m4a"))
+        try Data("notes".utf8).write(to: folder.appendingPathComponent("readme.txt"))
+        try Data().write(to: folder.appendingPathComponent(".c.mp3.icloud"))
+        try Data().write(to: folder.appendingPathComponent("empty.wav"))
+
+        let survey = try await Task.detached { ImportFolderWatcher.survey(folder) }.value.get()
+        XCTAssertEqual(survey.files.map(\.name), ["a.m4a", "b.wav"], "audio only, in path order, nothing empty")
+        XCTAssertEqual(survey.waitingForICloud, 1, "a placeholder still in iCloud, asked to download")
+        let file = survey.files[1]
+        XCTAssertEqual(file.fingerprint.size, 64)
+        let digest = await Task.detached { ImportFolderWatcher.digest(of: file.url, unchangedFrom: file.fingerprint) }.value
+        XCTAssertEqual(digest, try AudioDigest.sha256(fileURL: file.url))
+        try Data(repeating: 4, count: 65).write(to: file.url)
+        let changed = await Task.detached { ImportFolderWatcher.digest(of: file.url, unchangedFrom: file.fingerprint) }.value
+        XCTAssertNil(changed, "a file that changed since it was looked at isn't taken as it was")
+
+        let gone = await Task.detached { ImportFolderWatcher.survey(folder.appendingPathComponent("Gone")) }.value
+        if case .failure(.missing) = gone {} else { XCTFail("a folder that isn't there is missing: \(gone)") }
+    }
+
     func testMissingFolderIsAProblemWithChooseFolder() async throws {
         let folder = root.appendingPathComponent("Gone", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

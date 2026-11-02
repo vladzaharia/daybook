@@ -12,7 +12,7 @@ import Observation
 @MainActor
 @Observable
 public final class ImportFolderWatcher: DeviceConnection {
-    public static let audioExtensions: Set<String> = ["wav", "mp3", "m4a", "aac", "aiff", "aif", "caf", "flac", "mp4", "ogg", "opus"]
+    public nonisolated static let audioExtensions: Set<String> = ["wav", "mp3", "m4a", "aac", "aiff", "aif", "caf", "flac", "mp4", "ogg", "opus"]
 
     public let method = ConnectionMethodKind.files
     public let capabilities: DeviceCapabilities = []
@@ -22,7 +22,7 @@ public final class ImportFolderWatcher: DeviceConnection {
     public private(set) var isRefreshing = false
     public private(set) var problem: DeviceProblem?
     public private(set) var lastImportDate: Date?
-    /// Files in iCloud Drive that haven't downloaded to this Mac yet.
+    /// Files in iCloud Drive that haven’t downloaded to this device yet.
     public private(set) var waitingForICloud = 0
     public private(set) var isWatching = false
     /// Where the folder was, when it's no longer watched because this build can't open it: in the App Sandbox a
@@ -233,85 +233,122 @@ public final class ImportFolderWatcher: DeviceConnection {
         Task { [weak self] in await self?.scan() }
     }
 
+    /// Looks at the folder once. Listing it, reading each file's details (in iCloud Drive, a file provider that
+    /// can be slow or offline), asking iCloud to download what isn't here, and hashing are done off the main
+    /// actor; only what they found is applied here.
     public func scan() async {
         guard let folder, !scanning else { return }
         let generation = scanGeneration
         scanning = true
         defer { scanning = false }
-        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey, .fileResourceIdentifierKey,
-                                      .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]
-        let contents: [URL]
-        do {
-            contents = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: [])
+        let surveyed = await Task.detached(priority: .utility) { Self.survey(folder) }.value
+        guard generation == scanGeneration, !Task.isCancelled else { return }
+        let survey: FolderSurvey
+        switch surveyed {
+        case .success(let found):
+            survey = found
             if problem != nil { problem = nil; publish() }
-        } catch {
-            let next = FileManager.default.fileExists(atPath: folder.path) ? Self.accessLost : Self.missing
+        case .failure(let failure):
+            let next = failure == .missing ? Self.missing : Self.accessLost
             if problem != next { problem = next; publish() }
             return
         }
-        var pending = 0
         var stable: [DeviceRecording] = []
         var found: [String: URL] = [:]
         var seen: [String: FileFingerprint] = [:]
         var migratedCompletion = false
-        for url in contents.sorted(by: { $0.path < $1.path }) {
-            let name = url.lastPathComponent
-            // Older iCloud placeholders are hidden ".name.m4a.icloud" files.
-            if name.hasPrefix(".") {
-                if let original = Self.placeholderOriginalName(name), Self.isAudio(original) {
-                    pending += 1
-                    try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-                }
-                continue
-            }
-            guard Self.isAudio(name), let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
-            if values.isUbiquitousItem == true, let status = values.ubiquitousItemDownloadingStatus, status != .current {
-                pending += 1
-                try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-                continue
-            }
-            guard values.isRegularFile == true, let size = values.fileSize, size > 0,
-                  let modified = values.contentModificationDate else { continue }
-            let fingerprint = FileFingerprint(path: url.path, size: size, modified: modified.timeIntervalSince1970,
-                                              resourceID: values.fileResourceIdentifier.map { String(describing: $0) })
-            seen[url.path] = fingerprint
+        for file in survey.files {
+            let path = file.fingerprint.path
+            seen[path] = file.fingerprint
             // Unchanged since the last scan: finished copying.
-            guard observations[url.path] == fingerprint else { continue }
+            guard observations[path] == file.fingerprint else { continue }
             let digest: String
-            if let cached = digests[url.path], cached.fingerprint == fingerprint {
+            if let cached = digests[path], cached.fingerprint == file.fingerprint {
                 digest = cached.value
             } else {
-                let hashed = await Task.detached(priority: .utility) { try? AudioDigest.sha256(fileURL: url) }.value
+                let hashed = await Task.detached(priority: .utility) { Self.digest(of: file.url, unchangedFrom: file.fingerprint) }.value
                 guard generation == scanGeneration, !Task.isCancelled else { return }
-                guard let hashed, let after = try? url.resourceValues(forKeys: Set(keys)),
-                      after.fileSize == size, after.contentModificationDate == modified,
-                      after.fileResourceIdentifier.map({ String(describing: $0) }) == fingerprint.resourceID else { continue }
+                guard let hashed else { continue }
                 digest = hashed
-                digests[url.path] = (fingerprint, digest)
+                digests[path] = (file.fingerprint, digest)
             }
             let id = Self.recordingID(sha256: digest)
             // Old completion records have no digest. Adopt the first stable file they identify
             // once, preserving the person's previous import/deletion decision; future versions
             // and other folders are distinguished by their bytes.
-            if completed.remove(Self.recordingID(name: name, size: size)) != nil {
+            if completed.remove(Self.recordingID(name: file.name, size: file.fingerprint.size)) != nil {
                 completed.insert(id)
                 migratedCompletion = true
             }
             guard found[id] == nil else { continue }
-            found[id] = url
-            stable.append(DeviceRecording(id: id, startedAt: nil, length: nil, byteCount: UInt64(size), fileName: name,
-                                          addedAt: values.creationDate ?? modified))
+            found[id] = file.url
+            stable.append(DeviceRecording(id: id, startedAt: nil, length: nil, byteCount: UInt64(file.fingerprint.size), fileName: file.name,
+                                          addedAt: file.addedAt))
         }
         observations = seen
         digests = digests.filter { seen[$0.key] != nil }
         if migratedCompletion { storage.set(Array(completed).sorted(), Keys.completed) }
         urls = found
         stable.sort { ($0.addedAt ?? .distantPast) > ($1.addedAt ?? .distantPast) }
+        let pending = survey.waitingForICloud
         let changed = stable != recordings || pending != waitingForICloud
         recordings = stable
         waitingForICloud = pending
         inventoryUpdatedAt = Date()
         if changed { publish() }
+    }
+
+    private nonisolated static let surveyKeys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey,
+                                                                   .fileResourceIdentifierKey, .isUbiquitousItemKey,
+                                                                   .ubiquitousItemDownloadingStatusKey]
+
+    /// The folder's audio files with their details, in path order, and how many are still in iCloud (asked to
+    /// download). Off the main actor: it reads the disk.
+    nonisolated static func survey(_ folder: URL) -> Result<FolderSurvey, FolderSurvey.Failure> {
+        let fileManager = FileManager.default
+        let contents: [URL]
+        do {
+            contents = try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: surveyKeys, options: [])
+        } catch {
+            return .failure(fileManager.fileExists(atPath: folder.path) ? .unreadable : .missing)
+        }
+        var survey = FolderSurvey()
+        for url in contents.sorted(by: { $0.path < $1.path }) {
+            let name = url.lastPathComponent
+            // Older iCloud placeholders are hidden ".name.m4a.icloud" files.
+            if name.hasPrefix(".") {
+                if let original = placeholderOriginalName(name), isAudio(original) {
+                    survey.waitingForICloud += 1
+                    try? fileManager.startDownloadingUbiquitousItem(at: url)
+                }
+                continue
+            }
+            guard isAudio(name), let values = try? url.resourceValues(forKeys: Set(surveyKeys)) else { continue }
+            if values.isUbiquitousItem == true, let status = values.ubiquitousItemDownloadingStatus, status != .current {
+                survey.waitingForICloud += 1
+                try? fileManager.startDownloadingUbiquitousItem(at: url)
+                continue
+            }
+            guard values.isRegularFile == true, let size = values.fileSize, size > 0,
+                  let modified = values.contentModificationDate else { continue }
+            let fingerprint = FileFingerprint(path: url.path, size: size, modified: modified.timeIntervalSince1970,
+                                              resourceID: values.fileResourceIdentifier.map { String(describing: $0) })
+            survey.files.append(FolderSurvey.File(url: url, name: name, fingerprint: fingerprint, addedAt: values.creationDate ?? modified))
+        }
+        return .success(survey)
+    }
+
+    /// The file's SHA-256, if it's still as `fingerprint` says once hashed (not mid-copy). Off the main actor.
+    nonisolated static func digest(of url: URL, unchangedFrom fingerprint: FileFingerprint) -> String? {
+        // The listing's URL keeps the details it was read with: read them afresh, or a file that changed while it
+        // was hashed would look unchanged.
+        var current = url
+        current.removeAllCachedResourceValues()
+        guard let hashed = try? AudioDigest.sha256(fileURL: url),
+              let after = try? current.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .fileResourceIdentifierKey]),
+              after.fileSize == fingerprint.size, after.contentModificationDate?.timeIntervalSince1970 == fingerprint.modified,
+              after.fileResourceIdentifier.map({ String(describing: $0) }) == fingerprint.resourceID else { return nil }
+        return hashed
     }
 
     private func publish() { onChange?() }
@@ -323,12 +360,12 @@ public final class ImportFolderWatcher: DeviceConnection {
 
     public nonisolated static func recordingID(sha256: String) -> String { "file:sha256:\(sha256)" }
 
-    public static func isAudio(_ name: String) -> Bool {
+    public nonisolated static func isAudio(_ name: String) -> Bool {
         audioExtensions.contains((name as NSString).pathExtension.lowercased())
     }
 
     /// ".notes.m4a.icloud" → "notes.m4a".
-    public static func placeholderOriginalName(_ name: String) -> String? {
+    public nonisolated static func placeholderOriginalName(_ name: String) -> String? {
         guard name.hasPrefix("."), name.hasSuffix(".icloud"), name.count > 8 else { return nil }
         return String(name.dropFirst().dropLast(7))
     }
@@ -378,7 +415,28 @@ public final class ImportFolderWatcher: DeviceConnection {
     #endif
 }
 
-public struct FileFingerprint: Equatable {
+/// What one look at a watched folder found: plain values, read off the main actor.
+struct FolderSurvey: Sendable {
+    struct File: Sendable {
+        let url: URL
+        let name: String
+        let fingerprint: FileFingerprint
+        let addedAt: Date
+    }
+
+    enum Failure: Error, Equatable {
+        /// The folder isn't there any more.
+        case missing
+        /// It's there, but this build can't read it.
+        case unreadable
+    }
+
+    var files: [File] = []
+    /// Audio files in iCloud Drive that aren't on this device yet, asked to download.
+    var waitingForICloud = 0
+}
+
+public struct FileFingerprint: Equatable, Sendable {
     public let path: String
     public let size: Int
     public let modified: TimeInterval
