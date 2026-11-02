@@ -87,23 +87,27 @@ final class PhoneProcessingTests: XCTestCase {
     final class ScriptedScheduler: ContinuedProcessing.Scheduler {
         var refuses = false
         private(set) var submitted: [String] = []
+        /// Each request's words, as the system's Live Activity shows them on the Lock Screen.
+        private(set) var words: [(title: String, subtitle: String)] = []
         private(set) var tasks: [ScriptedTask] = []
         struct Refused: Error {}
-        func submit(identifier: String, title: String, subtitle: String, launch: @escaping @MainActor (any ContinuedProcessing.Task) -> Void) throws {
+        func submit(identifier: String, title: String, subtitle: String, launch: @escaping @MainActor (any ContinuedProcessing.ContinuedTask) -> Void) throws {
             guard !refuses else { throw Refused() }
             submitted.append(identifier)
+            words.append((title, subtitle))
             let task = ScriptedTask()
             tasks.append(task)
             Task { @MainActor in launch(task) }
         }
     }
 
-    final class ScriptedTask: ContinuedProcessing.Task {
+    final class ScriptedTask: ContinuedProcessing.ContinuedTask {
         let progress = Progress(totalUnitCount: 0)
         var expirationHandler: (() -> Void)?
         private(set) var titles: [String] = []
+        private(set) var subtitles: [String] = []
         private(set) var completed: Bool?
-        func update(title: String, subtitle: String) { titles.append(title) }
+        func update(title: String, subtitle: String) { titles.append(title); subtitles.append(subtitle) }
         func complete(success: Bool) { completed = success }
     }
 
@@ -167,14 +171,6 @@ final class PhoneProcessingTests: XCTestCase {
     }
 
     private func request(_ rig: Rig, _ id: UUID) -> ProcessingRequest? { rig.library.controller.meeting(id)?.processingRequests?.first }
-
-    private func waitUntil(_ what: String, timeout: TimeInterval = 10, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
-            guard Date() < deadline else { return XCTFail("timed out waiting for \(what)") }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
 
     private func outcome(_ rig: Rig, _ id: UUID) -> PhoneProcessor.Outcome? {
         rig.processor.lastOutcome?.meetingID == id ? rig.processor.lastOutcome?.outcome : nil
@@ -455,9 +451,62 @@ final class PhoneProcessingTests: XCTestCase {
         rig.engine.hold(false)
         rig.processor.conditions.screen = .active
         try await waitUntil("the job to finish") { outcome(rig, meeting.id) == .completed }
-        XCTAssertEqual(rig.scheduler.tasks.count, 3, "a new task for the work resumed on the screen, and one for the summary")
+        XCTAssertEqual(rig.scheduler.tasks.count, 2, "a new task for the work resumed on the screen; none for the summary, which waits for it")
         try await waitUntil("the second task to end") { rig.scheduler.tasks.last?.completed != nil }
         XCTAssertEqual(rig.scheduler.tasks.last?.completed, true)
+    }
+
+    /// The system's processing activity shows on the Lock Screen, where nothing can be hidden: its words are the step and
+    /// how many conversations, never a title, a Personal one's least of all.
+    func testBehaviorTheContinuedTasksWordsNeverNameTheConversation() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library, title: "Appointment with Dr. Lee")
+        rig.library.controller.setPlacement([meeting.id], .personal)
+        rig.engine.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("transcribing") { rig.engine.isWaiting }
+        try await waitUntil("the task") { !rig.scheduler.tasks.isEmpty && !(rig.scheduler.tasks.first?.titles.isEmpty ?? true) }
+        XCTAssertEqual(rig.scheduler.words.map(\.title), ["Transcribing"])
+        XCTAssertEqual(rig.scheduler.words.map(\.subtitle), ["1 conversation"])
+        XCTAssertEqual(rig.scheduler.tasks.first?.subtitles, ["1 conversation"])
+        let shown = rig.scheduler.words.flatMap { [$0.title, $0.subtitle] } + (rig.scheduler.tasks.first?.subtitles ?? [])
+        XCTAssertFalse(shown.contains { $0.contains("Appointment") || $0.contains("Lee") })
+        rig.engine.hold(false)
+        try await waitUntil("the job to finish") { outcome(rig, meeting.id) == .completed }
+        XCTAssertEqual(PhoneProcessor.subtitle(conversations: 3), "3 conversations")
+    }
+
+    /// Only work the person started asks the system to go on in the background. Work waiting from before (a recording
+    /// that waited for models, picked up once they're downloaded) runs on the screen and pauses when Daybook leaves it.
+    func testBehaviorOlderWorkPickedUpAgainDoesntAskToGoOnInTheBackground() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library)
+        let filed = try XCTUnwrap(request(rig, meeting.id))
+        XCTAssertTrue(rig.processor.isStartedByPerson(filed, work: .transcribe([])), "stopped in this run: the person's")
+        XCTAssertFalse(rig.processor.isStartedByPerson(filed, work: .summarize), "a summary waits for the screen anyway")
+        // As after a relaunch: the request was made before this run of Daybook.
+        rig.processor.personWorkSince = Date().addingTimeInterval(60)
+        XCTAssertFalse(rig.processor.isStartedByPerson(filed, work: .transcribe([])))
+        rig.engine.hold(true)
+        rig.processor.pickUp()
+        try await waitUntil("transcribing") { rig.engine.isWaiting }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(rig.scheduler.submitted.isEmpty, "nothing on the Lock Screen for work the person didn't start now")
+        rig.processor.conditions.screen = .background
+        try await waitUntil("the pause") { outcome(rig, meeting.id) == .paused(.background) }
+        rig.engine.hold(false)
+        rig.processor.conditions.screen = .active
+        try await waitUntil("the job to finish") { outcome(rig, meeting.id) == .completed }
+        XCTAssertTrue(rig.scheduler.submitted.isEmpty)
+    }
+
+    /// A request another device made isn't this iPhone's person's, nor is one made before this run.
+    func testBehaviorOnlyThisIPhonesOwnRequestsCountAsThePersons() async throws {
+        let rig = try await rig()
+        let meeting = try await record(into: rig.library)
+        var mac = try XCTUnwrap(request(rig, meeting.id))
+        mac.requestedBy = ProcessingRequest.Device(id: "studio-mac", name: "Studio Mac")
+        XCTAssertFalse(rig.processor.isStartedByPerson(mac, work: .transcribe([])))
     }
 
     func testBehaviorWithoutAContinuedTaskLeavingTheScreenPausesTheWork() async throws {

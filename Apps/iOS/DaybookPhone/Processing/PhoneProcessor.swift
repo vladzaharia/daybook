@@ -16,10 +16,13 @@ import Observation
 ///
 /// - **One at a time, never in a recording's way.** One conversation runs at once. A recording starting
 ///   pauses it, and nothing starts while one is under way.
-/// - **In the background** the work goes on under the system's continued-processing task where iOS
-///   allows one (`ContinuedProcessing`), with its progress; otherwise, and when the system ends that
-///   task, it pauses and resumes when Daybook is back on the screen. A summary needs the graphics
-///   processor, which iOS doesn't give an app in the background, so it waits for the screen.
+/// - **In the background** work the person started (`isStartedByPerson`: Stop, Import, Transcribe,
+///   Upgrade, Try Again, and those jobs resumed) goes on under the system's continued-processing task
+///   where iOS allows one (`ContinuedProcessing`), with its progress and words that never name the
+///   conversation; otherwise, and when the system ends that task, it pauses and resumes when Daybook is
+///   back on the screen. Older work picked up again (after a model download, a sync pass, a launch) runs
+///   while Daybook is on the screen. A summary needs the graphics processor, which iOS doesn't give an
+///   app in the background, so it waits for the screen and never asks for the task.
 /// - **Backing off** as live captions do (`LiveLoadPolicy.iPhone`): Serious heat, Low Power Mode, and
 ///   a battery under 20% unplugged pause it until they pass.
 /// - **Claims.** The request is claimed when work starts (or when the recording was filed), renewed
@@ -99,6 +102,8 @@ final class PhoneProcessor {
     let continued: ContinuedProcessing
     @ObservationIgnored var services: Services
     @ObservationIgnored var timing = Timing()
+    /// When this run of Daybook started: a request this iPhone made since is one the person made (`isStartedByPerson`).
+    @ObservationIgnored var personWorkSince = Date()
     @ObservationIgnored var conditions = Conditions() {
         didSet { if conditions != oldValue { conditionsChanged() } }
     }
@@ -198,8 +203,23 @@ final class PhoneProcessor {
         pause = nil
         for (meeting, request, work) in candidates {
             if work == .summarize, blocking(summarizing: true) != nil { continue }
-            if start(meeting, request: request, work: work) { return }
+            if start(meeting, request: request, work: work, conversations: Set(candidates.map(\.0.id)).count) { return }
         }
+    }
+
+    /// Whether `request`'s work asks the system to let it go on in the background (`ContinuedProcessing`): work the
+    /// person started, which is a request this iPhone made in this run of Daybook (Stop, Import, Transcribe, Upgrade, Try
+    /// Again; a job of theirs that paused and resumes keeps it). Older work picked up again after a model download, a
+    /// sync pass, or a launch runs only on the screen, and so does a summary, which needs it anyway.
+    func isStartedByPerson(_ request: ProcessingRequest, work: OnDeviceProcessing.Work) -> Bool {
+        guard work != .summarize else { return false }
+        return request.requestedBy.id == library.thisDevice.id && request.createdAt >= personWorkSince
+    }
+
+    /// The continued task's line under the step: how many conversations this iPhone is working through, never one's
+    /// title, which would show on the Lock Screen (a Personal one included) where nothing can hide it.
+    static func subtitle(conversations: Int) -> String {
+        conversations <= 1 ? "1 conversation" : "\(conversations) conversations"
     }
 
     /// Why work can't run now; nil when it can. The summary also needs Daybook on the screen.
@@ -216,15 +236,15 @@ final class PhoneProcessor {
         }
     }
 
-    private func start(_ meeting: Meeting, request: ProcessingRequest, work: OnDeviceProcessing.Work) -> Bool {
+    private func start(_ meeting: Meeting, request: ProcessingRequest, work: OnDeviceProcessing.Work, conversations: Int) -> Bool {
         guard library.claimProcessingRequest(request.id, in: meeting.id, lease: timing.lease) != nil else { return false }
         services.willStart()
         let stage: ProcessingRequest.Stage = work == .summarize ? .summarizing : .transcribing
         running = Running(meetingID: meeting.id, requestID: request.id, work: work, stage: stage, fraction: 0)
         paused.remove(meeting.id)
         stopping = nil
-        if conditions.screen == .active {
-            continued.begin(job: request.id, title: Self.title(stage), subtitle: meeting.title)
+        if conditions.screen == .active, isStartedByPerson(request, work: work) {
+            continued.begin(job: request.id, title: Self.title(stage), subtitle: Self.subtitle(conversations: conversations))
         }
         renew(force: true)
         startHeartbeat()
