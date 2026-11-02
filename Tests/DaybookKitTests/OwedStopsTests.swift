@@ -13,8 +13,7 @@ final class OwedStopsTests: XCTestCase {
     }
 
     func testStopsAreKeptUntilTheyAreSentOrADayHasPassed() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("OwedStops-\(UUID().uuidString)", isDirectory: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        let folder = makeTemporaryFolder("OwedStops")
         let defaults = makeTestDefaults("daybook.owedStops")
         let now = Date()
         let fresh = Stop(device: "Alex's iPhone", conversation: UUID(), owedAt: now.addingTimeInterval(-3_600))

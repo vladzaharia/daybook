@@ -16,7 +16,7 @@ final class DaybookPhoneDeviceTests: XCTestCase {
     }
 
     private func environment(syncs: @escaping () -> Bool = { true }, paired: Set<String> = []) -> DeviceEnvironment {
-        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: FileManager.default.temporaryDirectory)
+        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: makeTemporaryFolder("DaybookPhoneDevice"))
         environment.soundcoreTransport = { XCTFail("No Bluetooth"); return InertSoundcoreTransport() }
         environment.phone.syncIsOn = syncs
         environment.phone.pairedPhoneIDs = { paired }
