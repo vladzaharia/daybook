@@ -79,6 +79,14 @@ final class LibraryListTests: XCTestCase {
         XCTAssertEqual(dragged.first?.identifier, UTType.daybookConversation.identifier, "inside Daybook a drag or ⌘C leads with the conversation")
 
         let shared = ConversationShareItem(meeting)
+        // Exporting writes the Markdown into a folder of its own under "Daybook Drag"; remove the ones this test made.
+        let drags = FileManager.default.temporaryDirectory.appendingPathComponent("Daybook Drag", isDirectory: true)
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: drags.path)) ?? [])
+        defer {
+            for name in Set((try? FileManager.default.contentsOfDirectory(atPath: drags.path)) ?? []).subtracting(before) {
+                try? FileManager.default.removeItem(at: drags.appendingPathComponent(name))
+            }
+        }
         let types = shared.exportedContentTypes()
         XCTAssertFalse(types.contains { $0.identifier == UTType.daybookConversation.identifier },
                        "AirDrop or Mail could pick it, and no one could read it")
