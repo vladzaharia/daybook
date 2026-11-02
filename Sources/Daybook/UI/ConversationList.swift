@@ -11,6 +11,8 @@ struct ConversationList: View {
     @Bindable var state: AppState
     @State private var isDropTargeted = false
     @State private var tagging: ConversationIDs?
+    /// Matches in saved live captions, which the results list and the subtitle's count share.
+    @State private var captionHits: [LibraryCaptionSearch.Hit] = []
     @Environment(\.undoManager) private var undoManager
 
     private var selection: Binding<Set<UUID>> {
@@ -24,7 +26,7 @@ struct ConversationList: View {
 
     var body: some View {
         Group {
-            if state.isSearching { SearchResults(state: state) }
+            if state.isSearching { SearchResults(state: state, captionHits: $captionHits) }
             else if state.place.isTrash { MacTrashList(state: state) }
             else { browsing }
         }
@@ -103,7 +105,7 @@ struct ConversationList: View {
     /// summary counts down, or runs in the cloud, it says that: "Summarizing in 12 s".
     private func subtitle(at now: Date) -> String {
         if state.isSearching {
-            let count = state.searchHits.count
+            let count = state.searchHits.count + captionHits.count
             return count == 1 ? "1 result" : "\(count) results"
         }
         if state.isStoppingRecording { return "Saving recording…" }
@@ -200,7 +202,7 @@ private struct SelectionDrag: ViewModifier {
 /// Search results: the library's matches, then matches in saved live captions the text search didn't find.
 private struct SearchResults: View {
     @Bindable var state: AppState
-    @State private var captionHits: [LibraryCaptionSearch.Hit] = []
+    @Binding var captionHits: [LibraryCaptionSearch.Hit]
 
     private struct CaptionQuery: Equatable {
         var text: String
@@ -403,6 +405,8 @@ struct BatchActionButtons: View {
                     }
                 }
             }
+            // Words alone, as the buttons beside it.
+            .labelStyle(.titleOnly)
             // Red is reserved for recording; destructive text takes the error ink.
             ForEach(actions.filter { $0.role == .destructive }) { action in
                 Button(action.title, role: .destructive) { perform(action.id) }
@@ -504,8 +508,16 @@ private struct SyncAttention: View {
     let state: AppState
     @Environment(\.openSettings) private var openSettings
 
+    private var text: String? {
+        #if DEBUG
+        // `--sync-demo <state>`: the list says what Settings › Library shows for it.
+        if let demo = SyncAttentionDemo.status { return LibraryWords.syncAttention(demo, hasSynced: true) }
+        #endif
+        return LibraryWords.syncAttention(state.sync.status, hasSynced: state.sync.lastSync != nil)
+    }
+
     var body: some View {
-        if let text = LibraryWords.syncAttention(state.sync.status, hasSynced: state.sync.lastSync != nil) {
+        if let text {
             LibrarySyncLine(text) {
                 LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: "settingsPane")
                 openSettings()
@@ -518,6 +530,25 @@ private struct SyncAttention: View {
         }
     }
 }
+
+#if DEBUG
+/// Debug only: `--sync-demo paused|account|signed-out|drive-off|waiting|folder-missing|folder-lost` puts the sync
+/// state Settings › Library shows for it into the list's line too, for snapshots, without iCloud.
+enum SyncAttentionDemo {
+    static let status: SyncStatus? = {
+        switch LaunchOptions.value(after: "--sync-demo") {
+        case "paused"?: return .failure(details: "The operation couldn’t be completed. No space left on device.")
+        case "account"?: return .accountChanged
+        case "signed-out"?: return .signedOut
+        case "drive-off"?: return .iCloudDriveOff
+        case "waiting"?, "waiting-many"?: return .waitingForKey
+        case "folder-missing"?: return .previousFolderMissing
+        case "folder-lost"?: return .previousFolderAccessLost
+        default: return nil
+        }
+    }()
+}
+#endif
 
 /// One library-wide notice at the top of the list column, a line for each thing it says, newest last. The line its
 /// one action came with ends with it as a text link (Undo, Show, Show in Finder: `AppState.post(_:action:)`).
@@ -573,9 +604,10 @@ private struct LibraryNoticeLine: View {
         }
     }
 
-    /// The words take the room the link leaves, which keeps its own at the trailing edge.
+    /// The words take the room the link leaves, which keeps its own at the trailing edge. They wrap in that width;
+    /// a fixed vertical size made the window's split view taller than the window once a line wrapped.
     private var words: some View {
-        Text(text).font(TypeStyle.status).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+        Text(text).font(TypeStyle.status).textSelection(.enabled).lineLimit(4)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

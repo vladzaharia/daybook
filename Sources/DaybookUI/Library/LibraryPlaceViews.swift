@@ -39,8 +39,8 @@ public struct GettingConversationsView: View {
 }
 
 /// One quiet line while sync needs the person (`LibraryWords.syncAttention`): the glyph in warning ink, the sentence
-/// Settings says it with, and Open Sync Settings… as a text link, which moves under the sentence when the column is
-/// narrow.
+/// Settings says it with, and Open Sync Settings… as a text link under it. It takes its column's width and the
+/// height its words need, and nothing more, so it can sit in a list's top inset.
 public struct LibrarySyncLine: View {
     private let text: String
     private let openSettings: () -> Void
@@ -59,17 +59,11 @@ public struct LibrarySyncLine: View {
             Image(systemName: "exclamationmark.icloud")
                 .foregroundStyle(DaybookPalette.Ink.warning)
                 .accessibilityHidden(true)
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s2) {
-                    sentence
-                    Spacer(minLength: DaybookSpacing.s2)
-                    link
-                }
-                VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
-                    sentence
-                    link
-                }
+            VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
+                sentence
+                link
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(DaybookFont.status.font(density))
         .accessibilityElement(children: .combine)
@@ -80,7 +74,9 @@ public struct LibrarySyncLine: View {
     private var sentence: some View {
         Text(text)
             .foregroundStyle(density == .window ? AnyShapeStyle(.primary) : AnyShapeStyle(DaybookPalette.Ink.body))
-            .fixedSize(horizontal: false, vertical: true)
+            // Wraps in the width it's given; a fixed vertical size here made a window's split view taller than the
+            // window once the sentence took two lines in a list's top inset.
+            .lineLimit(3)
             .help(LibraryWords.notSyncing)
     }
 
