@@ -33,4 +33,25 @@ final class AudioPlaybackTests: XCTestCase {
         XCTAssertFalse(playback.isPlaying)
         XCTAssertEqual(playing.count, 2)
     }
+
+    /// The shared player bar reads this Mac's player as it reads the iPhone's: ready once a recording is open, or a
+    /// sentence saying it couldn't be, with the system's words behind it, and nothing at all once it's closed.
+    func testBehaviorThePlayerBarSeesReadyOrWhyNot() throws {
+        let playback = AudioPlaybackController()
+        let meetingID = UUID()
+        XCTAssertEqual(playback.phase, .idle)
+
+        let junk = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookPlayback-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: junk) }
+        try Data("not audio".utf8).write(to: junk)
+        playback.play(url: junk, at: 0, trackID: UUID(), meetingID: meetingID)
+        XCTAssertEqual(playback.phase, .unavailable("This recording couldn’t be opened."))
+        XCTAssertNotNil(playback.problemDetails, "the system's words, in its tooltip")
+        XCTAssertNil(playback.problem, "with nothing open, the sentence takes the bar's place")
+        XCTAssertEqual(playback.meetingID, meetingID)
+
+        playback.close()
+        XCTAssertEqual(playback.phase, .idle)
+        XCTAssertNil(playback.meetingID)
+    }
 }

@@ -1,7 +1,9 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookIntelligence
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -17,12 +19,25 @@ struct LibraryView: View {
     @Bindable var state: AppState
     @AppStorage("isInspectorPresented") private var inspectorPresented = false
     @State private var columns = NavigationSplitViewVisibility.all
-    @State private var autoCollapsedSidebar = false
+    /// The most columns the window has room for now (`ColumnFit`); the person's own choice is `storedColumns`.
+    @State private var columnCap = ColumnFit.all
+    /// What `adaptColumns` set last, so the change it makes isn't taken for the person's.
+    @State private var adaptedColumns: NavigationSplitViewVisibility?
     @State private var windowWidth: CGFloat = 1280
     @State private var problemDetails: AppProblem?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var confirmation: ConfirmationBeat?
+    @State private var shareAnchor = SharingAnchor.Holder()
     @FocusState private var searchFocused: Bool
     /// The window's: Edit › Undo takes a Move to Trash back.
     @Environment(\.undoManager) private var undoManager
+    // Where the person was, for the window to reopen there (`LibraryRestoration`): the place, the conversation, its
+    // page, and which columns they chose to show.
+    @SceneStorage("library.place") private var storedPlace = ""
+    @SceneStorage("library.selection") private var storedSelection = ""
+    @SceneStorage("library.page") private var storedPage = ""
+    @SceneStorage("library.columns") private var storedColumns = ColumnFit.all.rawValue
+    @State private var restored = false
 
     /// The conversation whose controls the toolbar shows; on the device page, an imported recording's conversation.
     private var toolbarMeeting: Meeting? {
@@ -50,9 +65,18 @@ struct LibraryView: View {
             // new split item when its view's identity changes. Swapping the page's item takes the
             // inspector's out and back in, and an inspector animation still running then finishes
             // on the detached item and throws. So both sides are one view whatever they show.
-            ZStack { detail }
-                .toolbar { DetailToolbar(state: state, meeting: toolbarMeeting, inspectorPresented: $inspectorPresented) }
-                .inspector(isPresented: Binding(get: { inspectorPresented && showsConversation }, set: { inspectorPresented = $0 })) {
+            // Teal is content's: the page's checkboxes, links, and fills. The toolbar, the inspector, the list, and the
+            // sidebar follow the accent the person chose in System Settings (the AccentColor asset under Multicolor).
+            ZStack { detail.tint(DaybookStyle.accent) }
+                .confirmationBeat($confirmation)
+                .overlay(alignment: .topTrailing) {
+                    SharingAnchor(holder: shareAnchor).frame(width: 1, height: 1).padding(.trailing, 72).accessibilityHidden(true)
+                }
+                .toolbar {
+                    DetailToolbar(state: state, meeting: toolbarMeeting, inspectorAvailable: showsConversation,
+                                  inspectorShown: inspectorShown, toggleInspector: toggleInspector, windowAction: windowAction)
+                }
+                .inspector(isPresented: Binding(get: { inspectorShown }, set: { inspectorPresented = $0 })) {
                     ZStack {
                         if let id = state.selectedID { MeetingInspector(state: state, meetingID: id).equatable() }
                     }
@@ -70,10 +94,20 @@ struct LibraryView: View {
         .onChange(of: state.visibleMeetings.map(\.id)) { _, _ in reconcileSelection() }
         .environment(\.readingScale, CGFloat(state.readingScale))
         .focusedSceneValue(\.shownConversation, toolbarMeeting?.id)
-        .tint(DaybookStyle.accent)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0; adaptColumns() }
-        .onChange(of: inspectorPresented) { _, _ in adaptColumns() }
+        // Asking for the inspector in a window too narrow for the page beside it (⌃⌘I, Tags…) widens the window, as
+        // Finder's preview does, rather than squeezing the page; the toolbar's button does too (`toggleInspector`).
+        .onChange(of: inspectorPresented) { _, wanted in
+            adaptColumns()
+            guard wanted, showsConversation, shareAnchor.window?.isKeyWindow == true else { return }
+            DispatchQueue.main.async { makeRoomForInspector(animated: true) }
+        }
         .onChange(of: showsConversation) { _, _ in adaptColumns() }
+        .onChange(of: columns) { old, shown in columnsChanged(from: old, to: shown) }
+        .onChange(of: state.isReady, initial: true) { _, ready in if ready { restore() } }
+        .onChange(of: state.place) { _, place in if restored { storedPlace = LibraryRestoration.encode(place) } }
+        .onChange(of: state.selectedID) { _, id in if restored { storedSelection = id?.uuidString ?? "" } }
+        .onChange(of: state.pageMode) { _, mode in if restored { storedPage = mode.rawValue } }
         .sheet(item: $state.activeSheet) { sheet in ConversationSheet(state: state, sheet: sheet) }
         .sheet(item: $state.addDeviceRequest) { request in AddDeviceSheet(state: state, request: request) }
         .sheet(item: $state.libraryMoveOffer) { offer in LibraryMoveSheet(state: state, offer: offer) }
@@ -161,43 +195,219 @@ struct LibraryView: View {
         state.search = ""
     }
 
-    /// The sidebar steps aside in narrow windows, and when the inspector would leave the page under
-    /// 560 pt. It comes back afterwards, unless the person hid it themselves.
+    /// The sidebar steps aside in narrow windows, and when the inspector would leave the page under 560 pt, and comes
+    /// back once there's room again (`ColumnFit`), never past what the person chose to show. (The window itself stays
+    /// wide enough for the page beside the list and the inspector: `ColumnFit.narrowestWithInspector`.)
     private func adaptColumns() {
-        let inspector: CGFloat = inspectorPresented && showsConversation ? 280 : 0
-        let crowded = windowWidth < 1000 || windowWidth - 200 - 300 - inspector < 560
-        if crowded, columns == .all {
-            withAnimation { columns = .doubleColumn }
-            autoCollapsedSidebar = true
-        } else if !crowded, autoCollapsedSidebar, windowWidth >= 1100 || inspector == 0 {
-            withAnimation { columns = .all }
-            autoCollapsedSidebar = false
+        columnCap = ColumnFit.cap(window: windowWidth, inspector: inspectorShown, previous: columnCap)
+        let target = min(ColumnFit(storedColumns), columnCap).visibility
+        guard ColumnFit(columns) != ColumnFit(target) else { return }
+        adaptedColumns = target
+        withAnimation { columns = target }
+    }
+
+    /// The inspector shows only where it leaves the page its 560 pt beside the list (the sidebar stepping aside); in a
+    /// narrower window it waits, still asked for, until the window is wide enough.
+    private var inspectorShown: Bool { inspectorPresented && showsConversation && ColumnFit.inspectorFits(window: windowWidth) }
+
+    /// The toolbar's Inspector: hides it when it shows; otherwise asks for it, widening the window to make room.
+    private func toggleInspector() {
+        let show = !inspectorShown
+        if show { makeRoomForInspector(animated: !reduceMotion) }
+        withAnimation { inspectorPresented = show }
+    }
+
+    /// Widens a window too narrow for the page beside the list and the inspector to `ColumnFit.narrowestWithInspector`,
+    /// as far as its screen allows. Only for something the person did (a click, a key), never inside a layout pass: a
+    /// window resized during one lays itself out again without end.
+    private func makeRoomForInspector(animated: Bool) {
+        guard let window = shareAnchor.window, !window.styleMask.contains(.fullScreen), let screen = window.screen?.visibleFrame,
+              let frame = ColumnFit.widened(window.frame, to: min(ColumnFit.narrowestWithInspector, screen.width), on: screen) else { return }
+        window.setFrame(frame, display: true, animate: animated && !reduceMotion)
+    }
+
+    /// A change the window didn't make is the person's (the sidebar button, ⌃⌘S): it's kept, and showing more lifts
+    /// what the window holds back. Fewer columns while the window is short of room may be AppKit's own squeeze, so that
+    /// isn't taken for a choice.
+    private func columnsChanged(from old: NavigationSplitViewVisibility, to shown: NavigationSplitViewVisibility) {
+        if let adapted = adaptedColumns, ColumnFit(adapted) == ColumnFit(shown) {
+            adaptedColumns = nil
+            return
         }
+        guard let choice = ColumnFit.choice(from: ColumnFit(old), to: ColumnFit(shown), cap: columnCap) else { return }
+        storedColumns = choice.rawValue
+        columnCap = max(columnCap, choice)
+    }
+
+    /// Puts the window back as the person left it, once the library is ready: the place (if it's still there), the
+    /// conversation (if it still is, else the place's first), its page, and the columns they chose. A launch that asks
+    /// for a place, a conversation, or a demo (debug builds) keeps what it asked for.
+    private func restore() {
+        guard !restored else { return }
+        defer {
+            restored = true
+            storedPlace = LibraryRestoration.encode(state.place)
+            storedSelection = state.selectedID?.uuidString ?? ""
+            storedPage = state.pageMode.rawValue
+        }
+        // The columns the person chose, as far as the window has room for them: one change, straight there.
+        adaptColumns()
+        guard !LibraryRestoration.launchChoosesPlace else { return }
+        if let place = LibraryRestoration.decode(storedPlace, folders: state.folders.map(\.id), devices: state.devices.sessions.map(\.id)) {
+            state.place = place
+        }
+        if let id = LibraryRestoration.selection(storedSelection, in: state.place.isDevice ? [] : state.visibleMeetings) {
+            state.multiSelection = []
+            state.selectedID = id
+        }
+        if let page = PageMode(rawValue: storedPage) { state.pageMode = page }
+    }
+
+    /// Share, Copy Summary, and Tags… from More: what needs the window.
+    private func windowAction(_ id: ConversationAction.ID, _ meeting: Meeting) {
+        switch id {
+        case .copySummary:
+            state.copySummary(meeting.id)
+            confirmation = .copied
+        case .tags:
+            withAnimation { inspectorPresented = true }
+        default:
+            MacShare.share(id, meeting: meeting, state: state, anchor: shareAnchor)
+        }
+    }
+}
+
+/// How many of the window's columns show, fewest to most. The person chooses with the sidebar button and ⌃⌘S; the
+/// window holds some back while there isn't room for the page.
+enum ColumnFit: String, Comparable, CaseIterable {
+    case detailOnly, doubleColumn, all
+
+    /// The page's least width while the inspector shows (docs/interface.md, "Window structure").
+    static let page: CGFloat = 560
+    // The columns' usual widths.
+    static let sidebar: CGFloat = 200
+    static let list: CGFloat = 300
+    static let inspector: CGFloat = 280
+    /// The narrowest the window goes while the inspector shows: the page's 560 pt beside the list and the inspector,
+    /// the sidebar stepping aside. Opening the inspector in a narrower window widens it to this, as far as the screen
+    /// allows. (macOS's split view won't fold its list column away, so the window makes the room instead.)
+    static let narrowestWithInspector: CGFloat = list + inspector + page
+
+    /// Whether a window `window` wide has room for the inspector beside the page and the list, the sidebar aside.
+    static func inspectorFits(window: CGFloat) -> Bool { window >= narrowestWithInspector }
+
+    init(_ visibility: NavigationSplitViewVisibility) {
+        switch visibility {
+        case .detailOnly: self = .detailOnly
+        case .doubleColumn: self = .doubleColumn
+        default: self = .all
+        }
+    }
+
+    /// A stored choice; anything unreadable is every column.
+    init(_ stored: String) { self = ColumnFit(rawValue: stored) ?? .all }
+
+    var visibility: NavigationSplitViewVisibility {
+        switch self {
+        case .detailOnly: return .detailOnly
+        case .doubleColumn: return .doubleColumn
+        case .all: return .all
+        }
+    }
+
+    private var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+    static func < (lhs: ColumnFit, rhs: ColumnFit) -> Bool { lhs.rank < rhs.rank }
+
+    /// The most columns a window `window` wide has room for: the sidebar steps aside below 1000 pt, or when the
+    /// inspector would leave the page under 560. Once aside, it comes back only with room to spare (1100 pt with the
+    /// inspector), or once the inspector closes, so a window at the edge doesn't flicker (`previous` is what the window
+    /// held back last).
+    static func cap(window: CGFloat, inspector: Bool, previous: ColumnFit) -> ColumnFit {
+        let inspectorWidth = inspector ? Self.inspector : 0
+        let sidebarCrowds = window < 1000 || window - sidebar - list - inspectorWidth < page
+        let sidebarFits = !sidebarCrowds && (window >= 1100 || !inspector)
+        if sidebarCrowds || (previous < .all && !sidebarFits) { return .doubleColumn }
+        return .all
+    }
+
+    /// `frame` at least `width` wide, kept on `screen` (growing leftward where its right edge would leave it); nil when
+    /// it's already that wide.
+    static func widened(_ frame: CGRect, to width: CGFloat, on screen: CGRect) -> CGRect? {
+        guard frame.width < width else { return nil }
+        var wider = frame
+        wider.size.width = width
+        if wider.maxX > screen.maxX { wider.origin.x = max(screen.minX, screen.maxX - width) }
+        return wider
+    }
+
+    /// What a change of columns the window didn't make says the person chose: showing more always; showing fewer only
+    /// while the window has room for more (narrower than that, AppKit folds the sidebar itself). Nil when it says
+    /// nothing.
+    static func choice(from old: ColumnFit, to new: ColumnFit, cap: ColumnFit) -> ColumnFit? {
+        if new > old { return new }
+        if new < old, cap == .all { return new }
+        return nil
+    }
+}
+
+/// Where the window was, as scene storage keeps it: a place as words ("section:work", "folder:<id>", "device:<id>"), and
+/// a conversation by its ID, each used only while it's still in the library.
+enum LibraryRestoration {
+    static func encode(_ place: LibraryPlace) -> String {
+        if case .section(let section) = place { return "section:" + section.rawValue }
+        if case .folder(let id) = place { return "folder:" + id.uuidString }
+        if case .device(let id) = place { return "device:" + id }
+        return ""
+    }
+
+    /// The place `text` names, while its folder or device is still here.
+    static func decode(_ text: String, folders: [UUID], devices: [String]) -> LibraryPlace? {
+        let parts = text.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        switch parts[0] {
+        case "section": return LibrarySection(rawValue: parts[1]).map { .section($0) }
+        case "folder": return UUID(uuidString: parts[1]).flatMap { folders.contains($0) ? .folder($0) : nil }
+        case "device": return devices.contains(parts[1]) ? .device(parts[1]) : nil
+        default: return nil
+        }
+    }
+
+    /// The stored conversation, while it's among `visible`; nil leaves the place's first selected.
+    static func selection(_ text: String, in visible: [Meeting]) -> UUID? {
+        guard let id = UUID(uuidString: text), visible.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    /// A launch that opens a surface (debug builds' `--place`, `--select`, `--page`, `--search`, the demos) keeps it.
+    static var launchChoosesPlace: Bool {
+        let flags = ["--place", "--select", "--page", "--search", "--library-demo", "--demo-library", "--device-demo",
+                     "--simulate-recording", "--multi-select", "--notes-demo"]
+        return flags.contains { CommandLine.arguments.contains($0) }
     }
 }
 
 // MARK: - Record
 
-/// Record, or the red elapsed-time pill that stops the recording.
-struct RecordToolbarItem: ToolbarContent {
+/// Record, then the red elapsed-time pill, then Saving…, then for a moment Saved; each blurs into the next.
+struct RecordControl: View {
     @Bindable var state: AppState
-    var body: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) { RecordControl(state: state) }
-    }
-}
-
-/// Record, then the red elapsed-time pill, then Saving…; each blurs into the next.
-private struct RecordControl: View {
-    @Bindable var state: AppState
+    /// The conversation being recorded, to see how its recording ended.
+    @State private var recorded: UUID?
+    /// The recording was saved: Record says so for `DaybookMotion.hold`.
+    @State private var saved = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private enum Phase { case idle, recording, saving }
-    private var phase: Phase {
-        if state.isStoppingRecording { return .saving }
-        return state.isRecording && state.recordingStartedAt != nil ? .recording : .idle
+    enum Phase: Equatable {
+        case idle, recording, saving
+
+        @MainActor init(_ state: AppState) {
+            if state.isStoppingRecording { self = .saving }
+            else { self = state.isRecording && state.recordingStartedAt != nil ? .recording : .idle }
+        }
     }
 
     var body: some View {
+        let phase = Phase(state)
         Group {
             switch phase {
             case .saving:
@@ -208,38 +418,63 @@ private struct RecordControl: View {
             case .idle:
                 Button { Task { await state.startRecording() } } label: {
                     Label {
-                        Text("Record")
+                        Text(saved ? "Saved" : "Record")
+                            .contentTransition(reduceMotion ? .opacity : .interpolate)
                     } icon: {
-                        Image(systemName: "record.circle").symbolRenderingMode(.palette).foregroundStyle(Ink.record, .secondary)
+                        if saved {
+                            DoneMark()
+                        } else {
+                            Image(systemName: "record.circle").symbolRenderingMode(.palette).foregroundStyle(Ink.record, .secondary)
+                        }
                     }
                 }
                 .disabled(!state.isReady || state.isStartingRecording)
                 .help("Start Recording (⇧⌘R)")
+                .accessibilityLabel("Record")
             }
         }
         .transition(reduceMotion ? .opacity : AnyTransition(.blurReplace))
         .motion(Motion.state, value: phase)
+        .motion(Motion.fade, value: saved)
+        .onChange(of: state.recordingID) { _, id in if let id { recorded = id } }
+        .onChange(of: phase) { old, new in
+            guard old != .idle, new == .idle, let id = recorded else { return }
+            recorded = nil
+            saved = Self.savedWell(id, state: state)
+        }
+        .task(id: saved) {
+            guard saved else { return }
+            try? await Task.sleep(for: DaybookMotion.hold)
+            saved = false
+        }
+    }
+
+    /// The recording ended with its conversation saved: not failed, and not stopped by something else.
+    static func savedWell(_ id: UUID, state: AppState) -> Bool {
+        guard let meeting = state.meetings.first(where: { $0.id == id }) else { return false }
+        return meeting.status != .failed && state.unexpectedStops[id] == nil
     }
 }
 
+/// Stop: the elapsed time in a red pill with its own colours, so it stays red while the window isn't key, which is how
+/// it is during a call (as Floating Notes' Stop).
 private struct RecordingPill: View {
     @Bindable var state: AppState
     let start: Date
     @State private var appeared = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button { Task { await state.stopRecording() } } label: {
-            Label {
-                ElapsedTime(start: start)
-            } icon: {
+            HStack(spacing: 5) {
                 Image(systemName: "stop.fill")
-                    .symbolEffect(.bounce.down, options: .nonRepeating, value: reduceMotion ? false : appeared)
+                    .font(.system(size: 9, weight: .bold))
+                    .daybookBounce(value: appeared)
+                ElapsedTime(start: start)
             }
-            .labelStyle(.titleAndIcon)
+            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+            .padding(.horizontal, 10).padding(.vertical, 4)
         }
-        .glassButtonStyle(prominent: true)
-        .tint(Ink.recordFill)
+        .buttonStyle(DaybookControlStyle(role: .stop, shape: .capsule))
         .help("Stop Recording (⇧⌘R)")
         .accessibilityLabel("Stop recording")
         .onAppear { appeared = true }
@@ -258,10 +493,12 @@ private struct EmptyLibraryView: View {
             Text("No Conversations Yet").font(TypeStyle.docTitleSmall).foregroundStyle(Ink.title)
             Text("Record a conversation, or drop audio files here.").foregroundStyle(Ink.secondary)
             HStack(spacing: Space.s3) {
-                Button { Task { await state.startRecording() } } label: { Label("Record", systemImage: "record.circle") }
-                    .buttonStyle(.borderedProminent)
-                    .tint(DaybookStyle.prominentFill)
-                    .disabled(!state.isReady || state.isStartingRecording)
+                // The red dot, as on the toolbar's Record and Floating Notes': the one red control.
+                Button { Task { await state.startRecording() } } label: {
+                    RecordControlLabel(size: 13).padding(.horizontal, 14).padding(.vertical, 6)
+                }
+                .buttonStyle(DaybookControlStyle(role: .standard, shape: .capsule))
+                .disabled(!state.isReady || state.isStartingRecording)
                 Button("Import Audio…") { state.chooseImport() }
                     .buttonStyle(.bordered)
             }
@@ -326,16 +563,18 @@ private struct AddRecordingDrop: ViewModifier {
     }
 }
 
-/// Elapsed recording time that rolls only the digits that change.
+/// Elapsed recording time that rolls only the digits that change, and under Reduce Motion fades, as `ElapsedClock`
+/// does. It takes the ink around it: white on Stop's red.
 struct ElapsedTime: View {
     let start: Date
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         TimelineView(.periodic(from: start, by: 1)) { context in
             let elapsed = max(0, context.date.timeIntervalSince(start))
-            Text(TimeLabel.short(elapsed))
+            Text(DaybookTime.short(elapsed))
                 .monospacedDigit()
-                .contentTransition(.numericText(countsDown: false))
-                .motion(.snappy(duration: 0.3), value: Int(elapsed))
+                .contentTransition(reduceMotion ? .opacity : .numericText(countsDown: false))
+                .animation(DaybookMotion.resolved(DaybookMotion.tick, reduceMotion: reduceMotion), value: Int(elapsed))
         }
     }
 }

@@ -1,5 +1,6 @@
 import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import DaybookUI
 import SwiftUI
@@ -13,15 +14,17 @@ struct MeetingDetailView: View {
     let meetingID: UUID
     @State private var playbackRequest: Task<Void, Never>?
     @State private var viewingPhoto: PhotoViewerRequest?
+    @State private var hasCaptions = false
     @AppStorage("isInspectorPresented") private var inspectorPresented = false
     @Environment(\.readingScale) private var scale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var meeting: Meeting? { state.meetings.first { $0.id == meetingID } }
 
     var body: some View {
         if let meeting {
-            // Saved live captions open the transcript's page until a transcript replaces them, as on the iPhone.
-            let mode: PageMode = state.hasTranscriptPage(meeting) ? state.pageMode : .summary
+            // Saved live captions turn to the Transcript side until the transcript replaces them, as on the iPhone.
+            let mode: PageMode = meeting.unifiedTranscript.isEmpty && !hasCaptions ? .summary : state.pageMode
             Group {
                 switch mode {
                 case .summary: SummaryPage(state: state, player: state.playback, meeting: meeting, play: play)
@@ -29,11 +32,13 @@ struct MeetingDetailView: View {
                 }
             }
             .transition(.opacity)
-            .animation(.easeOut(duration: 0.15), value: mode)
+            .animation(DaybookMotion.resolved(.easeOut(duration: 0.15), reduceMotion: reduceMotion), value: mode)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(DaybookStyle.paper)
             .bottomBar {
-                PlayerBar(state: state, player: state.playback, meeting: meeting) { play($0) }
+                PlayerBar(player: state.playback, meeting: meeting, isRecording: state.isRecording) { trackID, seconds in
+                    state.addPlaybackHighlight(meeting.id, trackID: trackID, seconds: seconds)
+                }
             }
             .onDisappear {
                 playbackRequest?.cancel()
@@ -42,6 +47,7 @@ struct MeetingDetailView: View {
             .environment(\.openPhoto) { viewingPhoto = PhotoViewerRequest(id: $0.id) }
             .sheet(item: $viewingPhoto) { request in PhotoViewer(state: state, meetingID: meetingID, photoID: request.id, play: play) }
             .modifier(PhotoDropTarget(state: state, meetingID: meetingID))
+            .task(id: SavedCaptionsProbe.key(meeting, state: state)) { hasCaptions = SavedCaptionsProbe.shown(meeting, state: state) }
             // Photos synced from another device, or added before the models were here, are read when seen.
             .task(id: "\(meetingID):\(meeting.visiblePhotos.filter { $0.analysis == nil }.map(\.id)):\(state.photoModel?.description ?? "vision"):\(state.recordingID?.uuidString ?? "idle")") {
                 state.readPhotosWhenIdle(meetingID)
@@ -63,10 +69,11 @@ struct MeetingDetailView: View {
 
     private func requestPlayback(_ track: RecordingTrack, at seconds: Double) {
         playbackRequest?.cancel()
+        let animation = DaybookMotion.resolved(Motion.state, reduceMotion: reduceMotion)
         playbackRequest = Task {
             guard let url = await state.audioURL(for: track, meetingID: meetingID), !Task.isCancelled,
                   state.selectedID == meetingID || state.place.isDevice else { return }
-            withAnimation(.snappy(duration: 0.25)) { state.playback.play(url: url, at: seconds, trackID: track.id, meetingID: meetingID) }
+            withAnimation(animation) { state.playback.play(url: url, at: seconds, trackID: track.id, meetingID: meetingID) }
         }
     }
 }
@@ -77,227 +84,306 @@ extension MeetingDetailView: Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.meetingID == rhs.meetingID }
 }
 
+/// Whether a conversation has live captions saved that its transcript hasn't replaced, which the Transcript side shows
+/// until it does (as the iPhone's). Read again when the captions are saved or a transcript arrives.
+@MainActor
+enum SavedCaptionsProbe {
+    static func key(_ meeting: Meeting, state: AppState) -> String {
+        "\(meeting.id)|\(meeting.transcripts.count)|\(state.captions.lastSave?.timeIntervalSince1970 ?? 0)|\(state.recordingID == meeting.id)"
+    }
+
+    static func shown(_ meeting: Meeting, state: AppState) -> Bool {
+        guard state.recordingID != meeting.id, meeting.unifiedTranscript.isEmpty else { return false }
+        return LiveCaptionStore.shown(state.captions.store.captions(for: meeting.id), for: meeting) != nil
+    }
+}
+
 // MARK: - Toolbar
 
-/// The detail toolbar, declared once on the window's stable detail column: Record, then
-/// [view switch · More], then the inspector toggle. The groups never come and go: what doesn't
-/// apply is dimmed, so Record stays under the pointer from one conversation to the next.
+/// The detail toolbar, declared once on the window's stable detail column: Record, then the view switch and More,
+/// then the inspector toggle. The groups never come and go: what doesn't apply is dimmed, so Record stays under the
+/// pointer from one conversation to the next and on a device's page, where More holds the device's items. The view
+/// switch's slot keeps its width when Bookmark takes it during a recording, so nothing beside it moves.
+///
+/// It isn't customizable: as a customizable toolbar (`.toolbar(id:)`), a window too narrow for its items now and then
+/// laid itself out without end at launch on macOS 27.2, and AppKit stopped the app.
 struct DetailToolbar: ToolbarContent {
     @Bindable var state: AppState
     let meeting: Meeting?
-    @Binding var inspectorPresented: Bool
+    /// Whether the inspector can show for what's on the page (a conversation in the list, not a device's page).
+    let inspectorAvailable: Bool
+    /// The inspector shows now.
+    let inspectorShown: Bool
+    /// Shows or hides it (a narrow window widens for it).
+    let toggleInspector: () -> Void
+    /// What the window does for an action of More's that needs it: share (the sharing picker hangs from it), Copy
+    /// Summary (its "Copied"), Tags… (the inspector).
+    let windowAction: (ConversationAction.ID, Meeting) -> Void
 
-    var body: some ToolbarContent {
-        RecordToolbarItem(state: state)
-        if !state.place.isDevice || state.isSearching || meeting != nil {
-            if #available(macOS 26, *) { ToolbarSpacer(.fixed, placement: .primaryAction) }
-            conversationItems(meeting)
-        }
+    /// The device whose page shows, when no conversation does: its items fill More.
+    private var device: DeviceSession? {
+        guard meeting == nil, state.place.isDevice, !state.isSearching else { return nil }
+        return state.selectedDevice
     }
 
-    @ToolbarContentBuilder
-    private func conversationItems(_ meeting: Meeting?) -> some ToolbarContent {
+    var body: some ToolbarContent {
+        if #available(macOS 26, *) {
+            // Stop is a red pill with its own colours, not on the toolbar's shared glass.
+            recordItem.sharedBackgroundVisibility(RecordControl.Phase(state) == .recording ? .hidden : .automatic)
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+        } else {
+            recordItem
+        }
         ToolbarItemGroup(placement: .primaryAction) {
-            if let meeting, state.recordingID == meeting.id {
-                Button { state.addHighlight(meeting.id) } label: {
-                    Label("Bookmark", systemImage: "bookmark")
-                        .symbolEffect(.bounce, value: meeting.highlights.count)
-                }
-                .help("Add Bookmark (⌘D)")
-            } else {
-                let hasTranscript = meeting.map { state.hasTranscriptPage($0) } ?? false
-                Picker("View", selection: hasTranscript ? $state.pageMode : .constant(.summary)) {
-                    ForEach(PageMode.allCases) { mode in Text(mode.title).tag(mode) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .disabled(!hasTranscript)
-                .help(hasTranscript ? "Show the summary (⌘1) or the transcript (⌘2)"
-                      : meeting == nil ? "Choose a conversation" : "Not transcribed yet")
-            }
-            Menu {
-                if let meeting { ConversationMoreMenu(state: state, meeting: meeting) }
-            } label: {
-                Label("More", systemImage: "ellipsis")
-            }
-            .menuIndicator(.hidden)
-            .disabled(meeting == nil)
-            .help("More")
+            PageSwitch(state: state, meeting: meeting)
+            MoreButton(state: state, meeting: meeting, device: device, windowAction: windowAction)
         }
         if #available(macOS 26, *) { ToolbarSpacer(.fixed, placement: .primaryAction) }
         ToolbarItem(placement: .primaryAction) {
-            Button { withAnimation { inspectorPresented.toggle() } } label: { Label("Inspector", systemImage: "sidebar.trailing") }
-                .disabled(meeting == nil)
-                .help(inspectorPresented ? "Hide Inspector (⌃⌘I)" : "Show Inspector (⌃⌘I)")
+            Button(action: toggleInspector) { Label("Inspector", systemImage: "sidebar.trailing") }
+                .disabled(!inspectorAvailable)
+                .help(inspectorShown ? "Hide Inspector (⌃⌘I)" : "Show Inspector (⌃⌘I)")
+        }
+    }
+
+    private var recordItem: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) { RecordControl(state: state) }
+    }
+}
+
+/// Summary | Transcript, or Bookmark while this conversation records, in a slot that keeps the switch's width.
+private struct PageSwitch: View {
+    @Bindable var state: AppState
+    let meeting: Meeting?
+    @State private var hasCaptions = false
+
+    var body: some View {
+        let recording = meeting.map { state.recordingID == $0.id } ?? false
+        let hasTranscript = meeting.map { !$0.unifiedTranscript.isEmpty } ?? false || hasCaptions
+        // Laid out always, so the slot is the switch's width whatever shows in it; Bookmark covers it while recording.
+        Picker("View", selection: hasTranscript ? $state.pageMode : .constant(.summary)) {
+            ForEach(PageMode.allCases) { mode in Text(mode.title).tag(mode) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .disabled(!hasTranscript || recording)
+        .opacity(recording ? 0 : 1)
+        .accessibilityHidden(recording)
+        .help(hasTranscript ? "Show the summary (⌘1) or the transcript (⌘2)"
+              : meeting == nil ? "Choose a conversation" : "Not transcribed yet")
+        .overlay {
+            if let meeting, recording {
+                Button { state.addHighlight(meeting.id) } label: {
+                    Label {
+                        Text("Bookmark")
+                    } icon: {
+                        Image(systemName: "bookmark.fill")
+                            .foregroundStyle(DaybookStyle.bookmark)
+                            .daybookBounce(value: meeting.highlights.count)
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .help("Add Bookmark (⌘D)")
+            }
+        }
+        .task(id: meeting.map { SavedCaptionsProbe.key($0, state: state) }) {
+            hasCaptions = meeting.map { SavedCaptionsProbe.shown($0, state: state) } ?? false
         }
     }
 }
 
-/// The conversation's More menu: share, add, reprocess, history, then file actions.
+/// More: the conversation's actions, or on a device's page the device's.
+private struct MoreButton: View {
+    let state: AppState
+    let meeting: Meeting?
+    let device: DeviceSession?
+    let windowAction: (ConversationAction.ID, Meeting) -> Void
+
+    var body: some View {
+        Menu {
+            if let meeting {
+                ConversationMoreMenu(state: state, meeting: meeting, windowAction: windowAction)
+            } else if let device {
+                DeviceMoreMenuContent(state: state, session: device)
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis")
+        }
+        .menuIndicator(.hidden)
+        .disabled(meeting == nil && device == nil)
+        .help("More")
+    }
+}
+
+/// The conversation's More menu: what DaybookKit's `ConversationActions` lists, in its order (share, add, reprocess,
+/// history, filing, the Trash), as the iPhone's More menu lists it. What doesn't apply now is dimmed, its reason as help.
 struct ConversationMoreMenu: View {
-    @Bindable var state: AppState
+    let state: AppState
     let meeting: Meeting
-    private var locked: Bool { state.recordingID == meeting.id || state.processingID == meeting.id || state.isStartingRecording || state.isStoppingRecording }
+    let windowAction: (ConversationAction.ID, Meeting) -> Void
+
     var body: some View {
-        Button("Copy Summary") { state.copySummary(meeting.id) }.disabled(meeting.summary == nil)
-        Menu("Export") {
-            Button("Markdown…") { state.export(meeting.id) }
-            Button("Full Data (JSON)…") { state.export(meeting.id, json: true) }
-        }
-        Divider()
-        Button("Show Floating Notes") { state.showNotes(for: meeting.id) }
-        Menu("Add Recording") {
-            Button("From a File…") { state.chooseImport(attachTo: meeting.id) }
-            AddRecordingFromDeviceItems(state: state)
-        }
-        .disabled(locked)
-        Button("Add Photos…") { state.chooseAddPhoto(to: meeting.id) }
-        ReprocessMenu(state: state, meeting: meeting)
-        Button("Version History…") { state.activeSheet = .versionHistory }.disabled(meeting.revisions.isEmpty)
-        Divider()
-        Button("Show in Finder") { state.showInFinder(meeting.id) }
-        Button("Move to Trash…", role: .destructive) { state.trashRequestID = meeting.id }.disabled(locked)
+        ConversationActionMenuItems(ConversationActions.actions(for: meeting, context: MoreMenuActions.context(state, meeting)), platform: .mac,
+                                    perform: { id in
+                                        if MoreMenuActions.needsWindow(id) { windowAction(id, meeting) }
+                                        else { MoreMenuActions.perform(id, meeting: meeting, state: state) }
+                                    },
+                                    custom: { MoreMenuActions.custom($0, meeting: meeting, state: state) })
     }
 }
 
+/// Reprocess ▸, as the More menu has it, for the inspector and a row's menu.
 struct ReprocessMenu: View {
-    @Bindable var state: AppState
+    let state: AppState
     let meeting: Meeting
     var body: some View {
-        Menu("Reprocess") {
-            if meeting.hasUntranscribedAudio { Button("Transcribe") { state.enqueue(meeting.id, mode: .newAudio) } }
-            Button("Summarize Again") { state.enqueue(meeting.id, mode: .summaryOnly) }.disabled(meeting.unifiedTranscript.isEmpty)
-            Button("Identify Speakers Again") { state.enqueue(meeting.id, mode: .speakerRefresh) }.disabled(meeting.transcripts.isEmpty)
-            Button("Transcribe Everything Again") { state.enqueue(meeting.id, mode: .fullRetranscription) }
-        }
-        .disabled(meeting.tracks.isEmpty || state.recordingID == meeting.id || state.processingID == meeting.id || state.queuedIDs.contains(meeting.id))
+        let groups = ConversationActions.actions(for: meeting, context: MoreMenuActions.context(state, meeting)).filter { $0.id == .reprocess }
+        ConversationActionMenuItems(groups, platform: .mac) { MoreMenuActions.perform($0, meeting: meeting, state: state) }
     }
 }
 
-// MARK: - Player
+/// What the Mac does for each of a conversation's actions (`ConversationActions`).
+@MainActor
+enum MoreMenuActions {
+    /// What the Mac knows about a conversation for its actions: recording here, or being processed here.
+    static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
+        let recording = state.recordingID == meeting.id && (state.isRecording || state.isStartingRecording || state.isStoppingRecording)
+        return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processingID == meeting.id,
+                                           status: state.processingStatus(for: meeting))
+    }
 
-/// One glass capsule pinned to the bottom of the page, shown once something plays.
-private struct PlayerBar: View {
-    @Bindable var state: AppState
-    @Bindable var player: AudioPlaybackController
-    let meeting: Meeting
-    let play: (PlaybackTarget) -> Void
-    private static let rates: [Float] = [0.75, 1, 1.25, 1.5, 2]
-
-    private var visible: Bool { player.meetingID == meeting.id && (player.duration > 0 || player.errorMessage != nil) }
-
-    var body: some View {
-        if visible {
-            GlassGroup {
-                VStack(spacing: 2) {
-                    if let error = player.errorMessage {
-                        Label(error, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(Ink.warning)
-                            .help(player.errorDetails ?? error)
-                    }
-                    if player.duration > 0 {
-                        // A narrow page gives up the skip buttons, then the speed, before the slider.
-                        ViewThatFits(in: .horizontal) {
-                            controls(skips: true, speed: true)
-                            controls(skips: false, speed: true)
-                            controls(skips: false, speed: false)
-                        }
-                    }
-                }
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .frame(maxWidth: DaybookStyle.measure)
-                .glassSurface(in: Capsule())
-            }
-            .padding(.horizontal, Space.s5).padding(.bottom, Space.s3)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+    /// Actions the window answers itself: sharing hangs its picker from it, Copy Summary says "Copied" over it, and
+    /// Tags… opens its inspector.
+    static func needsWindow(_ id: ConversationAction.ID) -> Bool {
+        switch id {
+        case .shareMarkdown, .shareAudio, .copySummary, .tags: return true
+        default: return false
         }
     }
 
-    private var caption: String? {
-        guard meeting.tracks.count > 1, let track = meeting.tracks.first(where: { $0.id == player.trackID }) else { return nil }
-        return track.source == .imported ? track.fileName : track.source.recordingName
+    static func perform(_ id: ConversationAction.ID, meeting: Meeting, state: AppState) {
+        switch id {
+        case .copySummary: state.copySummary(meeting.id)
+        case .exportMarkdown: state.export(meeting.id)
+        case .exportJSON: state.export(meeting.id, json: true)
+        case .showFloatingNotes: state.showNotes(for: meeting.id)
+        case .addPhotos: state.chooseAddPhoto(to: meeting.id)
+        case .addRecordingFromFile: state.chooseImport(attachTo: meeting.id)
+        case .process(let mode): state.enqueue(meeting.id, mode: mode)
+        case .versionHistory:
+            state.selectedID = meeting.id
+            state.activeSheet = .versionHistory
+        case .rename:
+            state.selectedID = meeting.id
+            state.focusTitle(meeting.id)
+        case .moveTo(let placement): state.setPlacement([meeting.id], placement)
+        case .showInFinder: state.showInFinder(meeting.id)
+        case .moveToTrash: state.trashRequestIDs = [meeting.id]
+        case .moveToFolder, .addRecording, .share, .export, .reprocess:
+            break // Menus.
+        case .shareMarkdown, .shareJSON, .shareAudio, .tags:
+            break // The window's (`needsWindow`), or the iPhone's.
+        case .takePhoto:
+            break // The iPhone's.
+        case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
+            break // A recording's, in the inspector.
+        }
     }
 
-    private func controls(skips: Bool, speed: Bool) -> some View {
-        HStack(spacing: 10) {
-            if skips {
-                SkipButton(symbol: "gobackward.15", help: "Back 15 Seconds (⌥⌘←)") { withAnimation(Motion.state) { player.skip(-15) } }
-                    .accessibilityLabel("Back 15 seconds")
+    /// The Mac's own submenus: Move to Folder lists the folders, and Add Recording each recorder beside a file.
+    static func custom(_ action: ConversationAction, meeting: Meeting, state: AppState) -> AnyView? {
+        switch action.id {
+        case .moveToFolder:
+            return AnyView(Menu { FolderMenuItems(state: state, meetingIDs: [meeting.id]) } label: {
+                Label(action.title, systemImage: action.symbol)
             }
-            Button { player.toggle() } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(DaybookStyle.onPlayFill)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(DaybookStyle.playFill))
-                    .neonGlow(player.isPlaying ? DaybookStyle.neonMint : .clear, radius: 5)
+            .disabled(!action.isAvailable))
+        case .addRecording:
+            return AnyView(Menu {
+                Button("From a File…") { state.chooseImport(attachTo: meeting.id) }
+                AddRecordingFromDeviceItems(state: state)
+            } label: {
+                Label(action.title, systemImage: action.symbol)
             }
-            .buttonStyle(.plain)
-            .disabled(state.isRecording)
-            .opacity(state.isRecording ? 0.4 : 1)
-            .help(state.isRecording ? "Playback is off while recording" : "Play or Pause")
-            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-            if skips {
-                SkipButton(symbol: "goforward.15", help: "Forward 15 Seconds (⌥⌘→)") { withAnimation(Motion.state) { player.skip(15) } }
-                    .accessibilityLabel("Forward 15 seconds")
-            }
-            VStack(spacing: 0) {
-                if let caption { Text(caption).font(.system(size: 10)).foregroundStyle(Ink.secondary).lineLimit(1) }
-                HStack(spacing: 8) {
-                    // Equal widths either side keep the slider centred.
-                    Text(TimeLabel.short(player.position)).frame(minWidth: 44, alignment: .trailing)
-                        .contentTransition(.numericText(value: player.position))
-                    Slider(value: Binding(get: { player.position }, set: { player.seek(to: $0) }), in: 0...max(1, player.duration))
-                        .controlSize(.mini)
-                        .frame(minWidth: 72)
-                        .tint(DaybookStyle.neonMint)
-                        .accessibilityLabel("Playback position")
-                        .accessibilityValue("\(SpokenTime.format(player.position)) of \(SpokenTime.format(player.duration))")
-                    Text("−" + TimeLabel.short(max(0, player.duration - player.position))).frame(minWidth: 44, alignment: .leading)
-                }
-                .font(.system(size: 11).monospacedDigit())
-                // Explicit inks, not vibrant hierarchy styles: the glass under them adapts to the paper.
-                .foregroundStyle(Ink.secondary)
-            }
-            if speed {
-                Menu {
-                    Picker("Speed", selection: $player.rate) {
-                        ForEach(Self.rates, id: \.self) { rate in Text(rate.formatted() + "×").tag(rate) }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    Text(player.rate.formatted() + "×").font(.system(size: 11, weight: .medium).monospacedDigit())
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(DaybookStyle.quietFill, in: Capsule())
-                }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                .help("Playback Speed")
-            }
-            Button {
-                if let trackID = player.trackID { state.addPlaybackHighlight(meeting.id, trackID: trackID, seconds: player.position) }
-            } label: { Image(systemName: "bookmark") }
-                .help("Add Bookmark at This Moment").accessibilityLabel("Add bookmark")
-            Button { withAnimation(.snappy(duration: 0.25)) { player.unload() } } label: { Image(systemName: "xmark") }
-                .help("Close Player").accessibilityLabel("Close player")
+            .disabled(!action.isAvailable)
+            .help({ if case .unavailable(let why) = action.availability { return why } else { return "" } }()))
+        default:
+            return nil
         }
-        .buttonStyle(.borderless)
-        .foregroundStyle(Ink.body)
-        .imageScale(.medium)
     }
 }
 
-/// A quiet skip control that brightens on hover.
-private struct SkipButton: View {
-    let symbol: String
-    let help: String
-    let action: () -> Void
-    @State private var hovering = false
-    var body: some View {
-        Button(action: action) { Image(systemName: symbol) }
-            .buttonStyle(.borderless)
-            .foregroundStyle(hovering ? Ink.body : Ink.secondary)
-            .onHover { hovering = $0 }
-            .animation(Motion.hover, value: hovering)
-            .help(help)
+// MARK: - Sharing
+
+/// Share ▸ Markdown… and Audio… on the Mac: the files the iPhone's share sheet gets (DaybookKit's `ExportFiles`), made
+/// off the main actor, then the system's sharing picker (Mail, Messages, AirDrop, Notes…) hanging from the top of the
+/// page, under the toolbar's More.
+@MainActor
+enum MacShare {
+    static func share(_ id: ConversationAction.ID, meeting: Meeting, state: AppState, anchor: SharingAnchor.Holder) {
+        Task {
+            do {
+                guard let url = try await file(id, meeting: meeting, state: state) else { return }
+                anchor.show([url])
+            } catch {
+                state.report("Couldn’t Share", id == .shareAudio ? "The audio couldn’t be prepared. Try again." : "The conversation couldn’t be prepared. Try again.", error)
+            }
+        }
     }
+
+    private static func file(_ id: ConversationAction.ID, meeting: Meeting, state: AppState) async throws -> URL? {
+        let folder = state.library.rootURL.appendingPathComponent("Meetings/\(meeting.id.uuidString)", isDirectory: true)
+        switch id {
+        case .shareMarkdown:
+            var originals: [UUID: URL] = [:]
+            for photo in meeting.visiblePhotos { originals[photo.id] = folder.appendingPathComponent(photo.relativePath) }
+            let files = originals
+            return try await Task.detached(priority: .userInitiated) {
+                // What an earlier share left is done with by now.
+                ExportFiles.clear()
+                return try ExportFiles.markdownWithPhotos(meeting, originals: files)
+            }.value
+        case .shareAudio:
+            guard let track = meeting.transcribableTracks.first ?? meeting.tracks.first,
+                  let source = await state.audioURL(for: track, meetingID: meeting.id) else { return nil }
+            let name = ExportFiles.audioName(meeting, track: track, fileExtension: source.pathExtension)
+            let id = meeting.id
+            return try await Task.detached(priority: .userInitiated) {
+                ExportFiles.clear()
+                return try ExportFiles.audio(source, named: name, meetingID: id)
+            }.value
+        default:
+            return nil
+        }
+    }
+}
+
+/// An invisible view the sharing picker hangs from: the top trailing corner of the page, under the toolbar's More. It
+/// also tells the window it's in, for what only AppKit does (widening the window for the inspector).
+struct SharingAnchor: NSViewRepresentable {
+    /// Holds the anchor's view for whoever shows the picker.
+    @MainActor
+    final class Holder {
+        fileprivate weak var view: NSView?
+
+        var window: NSWindow? { view?.window }
+
+        func show(_ items: [Any]) {
+            guard let view, view.window != nil else { return }
+            NSSharingServicePicker(items: items).show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+        }
+    }
+
+    let holder: Holder
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        holder.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) { holder.view = view }
 }

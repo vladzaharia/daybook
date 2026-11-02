@@ -411,10 +411,12 @@ private struct DebugLaunchActions: ViewModifier {
                 if DemoCaptions.isRequested { state.startDemoCaptions(id) }
                 if !CommandLine.arguments.contains("--no-panel") { state.showNotes(for: id) }
             }
-            // Plays silently, so the player can be seen without sound.
-            if CommandLine.arguments.contains("--play-muted"), let meeting = state.selectedMeeting, let track = meeting.tracks.first {
+            // Plays silently, so the player can be seen without sound: the conversation selected once a demo is seeded.
+            if CommandLine.arguments.contains("--play-muted") {
                 Task {
-                    guard let url = await state.audioURL(for: track, meetingID: meeting.id) else { return }
+                    await LibraryDemo.seeding?.value
+                    guard let meeting = state.selectedMeeting, let track = meeting.tracks.first,
+                          let url = await state.audioURL(for: track, meetingID: meeting.id) else { return }
                     state.playback.play(url: url, at: 9, trackID: track.id, meetingID: meeting.id)
                     state.playback.mute()
                 }
