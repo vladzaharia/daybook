@@ -140,7 +140,7 @@ long comparison never delays storing this Mac's own recording or another import.
 A recording joins a conversation automatically only on a link, a confident sound match, or a
 confirming transcript. Overlap in time alone is never proof (two meetings can happen at once).
 Moving is a copy that brings the recording's transcript, speakers, and bookmarks. The recording's
-own conversation then goes to the library's Trash, where it can be restored, unless the person has
+own conversation then goes to the library's Trash (the notice's Undo puts it back, as the Trash does later), unless the person has
 worked in it (notes, corrections, renamed speakers, bookmarks with text, tags, a folder, a chosen
 template or placement, completed next steps) or it holds other recordings, in which case it stays
 and a notice says so.
@@ -762,7 +762,7 @@ that step; a later, better model may offer again.
 - Pause and Cancel take effect between steps: a sound comparison already running (synchronous in
   `AudioAligner`) finishes first.
 - A renamed title isn't counted as the person's work when deciding whether a moved recording's own
-  conversation goes to the Trash (it can be restored from there).
+  conversation goes to the Trash (Undo in the notice, or the Trash, restores it).
 - A phone recording that moves into this Mac's conversation brings its bookmarks, not the notes
   typed on the phone; its own conversation keeps them and stays.
 - When either device makes the other's conversation before it has synced, both copies carry the
