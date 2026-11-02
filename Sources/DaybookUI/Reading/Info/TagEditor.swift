@@ -11,8 +11,13 @@ public struct TagEditor: View {
     let save: ([String]) -> Void
     let show: ((String) -> Void)?
     @State private var draft = ""
+    /// The width of what the field shows, under touch.
+    @State private var typedWidth: CGFloat = 0
+    /// Add Tag… asked for the tag in an alert (the largest text sizes).
+    @State private var adding = false
     @FocusState private var focused: Bool
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     public init(tags: [String], save: @escaping ([String]) -> Void, show: ((String) -> Void)? = nil) {
         self.tags = tags
@@ -31,24 +36,46 @@ public struct TagEditor: View {
     }
 
     @ViewBuilder private var field: some View {
-        let field = TextField("Tag", text: $draft, prompt: Text("Add Tag…"))
-            .labelsHidden()
+        #if os(iOS)
+        if dynamicTypeSize.isAccessibilitySize {
+            // At the largest sizes a field in a form keeps its words far from the chips and cuts them short, so Add
+            // Tag… asks for the tag in an alert.
+            Button("Add Tag…") { adding = true }
+                .buttonStyle(.daybookLink)
+                .font(.subheadline)
+                .alert("Add Tag", isPresented: $adding) {
+                    TextField("Tag", text: $draft)
+                        .textInputAutocapitalization(.never)
+                    Button("Add", action: commit)
+                    Button("Cancel", role: .cancel) { draft = "" }
+                }
+        } else {
+            // As wide as what it shows ("Add Tag…", or what's typed), never wider than the row.
+            let width = max(90, typedWidth + 6)
+            textField
+                .font(.subheadline)
+                .submitLabel(.done)
+                .textInputAutocapitalization(.never)
+                .frame(minWidth: 0, idealWidth: width, maxWidth: width, alignment: .leading)
+                .background(alignment: .leading) {
+                    Text(draft.isEmpty ? "Add Tag…" : draft).font(.subheadline).lineLimit(1).fixedSize().hidden()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { typedWidth = $0 }
+                }
+        }
+        #else
+        textField
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .frame(minWidth: 80, alignment: .leading)
+        #endif
+    }
+
+    private var textField: some View {
+        TextField("Add Tag…", text: $draft)
             .focused($focused)
             .onSubmit(commit)
             .onChange(of: focused) { _, active in if !active { commit() } }
             .accessibilityLabel("Add Tag")
-        #if os(iOS)
-        field
-            .font(.subheadline)
-            .frame(minWidth: 90)
-            .submitLabel(.done)
-            .textInputAutocapitalization(.never)
-        #else
-        field
-            .textFieldStyle(.plain)
-            .font(.system(size: 12))
-            .frame(minWidth: 80)
-        #endif
     }
 
     private func commit() {

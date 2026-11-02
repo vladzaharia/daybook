@@ -37,6 +37,7 @@ struct SpeakerRow<Identity: View>: View {
     @State private var draft = ""
     @FocusState private var focused: Bool
     @Environment(\.daybookDensity) private var density
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var touch: Bool { density == .touch }
     private var ink: Color { DaybookPalette.speakerInk(person.index) }
@@ -46,23 +47,40 @@ struct SpeakerRow<Identity: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: gap) {
-                Circle().fill(ink).frame(width: dot, height: dot).accessibilityHidden(true)
-                name
-                Spacer(minLength: 8)
-                Capsule().fill(Color.primary.opacity(0.08)).frame(width: bar, height: touch ? 5 : 4)
-                    .overlay(alignment: .leading) { Capsule().fill(ink).frame(width: max(touch ? 5 : 4, bar * person.share), height: touch ? 5 : 4) }
-                    .accessibilityLabel("\(Int((person.share * 100).rounded())) percent of the talking")
-                Text(DurationLabel.format(person.talkTime))
-                    .font(touch ? .subheadline.monospacedDigit() : .body.monospacedDigit())
-                    .foregroundStyle(DaybookPalette.Ink.secondary)
-                    .frame(minWidth: bar, alignment: .trailing)
+            if dynamicTypeSize.isAccessibilitySize {
+                // The largest sizes: the name a line of its own, then the share and the time under it.
+                HStack(spacing: gap) { inkDot; name }
+                HStack(spacing: gap) { share; time }.padding(.leading, dot + gap)
+            } else {
+                HStack(spacing: gap) {
+                    inkDot
+                    name
+                    Spacer(minLength: 8)
+                    share
+                    time.frame(minWidth: bar, alignment: .trailing)
+                }
             }
             // Lined up with the name, past the ink dot.
             identity.padding(.leading, dot + gap)
         }
         .onAppear { draft = person.speaker.name }
         .onChange(of: person.speaker.name) { _, value in if !focused { draft = value } }
+    }
+
+    private var inkDot: some View {
+        Circle().fill(ink).frame(width: dot, height: dot).accessibilityHidden(true)
+    }
+
+    private var share: some View {
+        Capsule().fill(Color.primary.opacity(0.08)).frame(width: bar, height: touch ? 5 : 4)
+            .overlay(alignment: .leading) { Capsule().fill(ink).frame(width: max(touch ? 5 : 4, bar * person.share), height: touch ? 5 : 4) }
+            .accessibilityLabel("\(Int((person.share * 100).rounded())) percent of the talking")
+    }
+
+    private var time: some View {
+        Text(DurationLabel.format(person.talkTime))
+            .font(touch ? .subheadline.monospacedDigit() : .body.monospacedDigit())
+            .foregroundStyle(DaybookPalette.Ink.secondary)
     }
 
     private var name: some View {
@@ -110,13 +128,13 @@ struct SpeakerIdentityLine: View {
             case .recognized:
                 line(identity) {
                     Label("Recognized", systemImage: "waveform")
-                    Spacer(minLength: 8)
+                } answers: {
                     answer("Not \(profile.name)") { library.rejectSpeakerProfile(speakerID, in: meeting.id) }
                 }
             case .suggested:
                 line(identity) {
                     Text("Maybe \(profile.name)")
-                    Spacer(minLength: 8)
+                } answers: {
                     answer("Yes", label: "This is \(profile.name)") { library.confirmSpeakerProfile(speakerID, in: meeting.id) }
                     answer("No", label: "Not \(profile.name)") { library.rejectSpeakerProfile(speakerID, in: meeting.id) }
                 }
@@ -126,9 +144,23 @@ struct SpeakerIdentityLine: View {
         }
     }
 
-    private func line<Content: View>(_ identity: SpeakerIdentity, @ViewBuilder _ content: () -> Content) -> some View {
+    /// The words, then the answers at the end of the line; the answers under the words when they don't fit beside.
+    private func line<Words: View, Answers: View>(_ identity: SpeakerIdentity, @ViewBuilder _ words: () -> Words,
+                                                  @ViewBuilder answers: () -> Answers) -> some View {
         // Under touch the answers sit far enough apart that their 44 pt targets don't overlap.
-        let row = HStack(spacing: density == .touch ? 18 : 6) { content() }
+        let spacing: CGFloat = density == .touch ? 18 : 6
+        let words = words(), answers = answers()
+        let row = ViewThatFits(in: .horizontal) {
+            HStack(spacing: spacing) {
+                words.fixedSize()
+                Spacer(minLength: 8)
+                answers.fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                words
+                HStack(spacing: spacing) { answers }
+            }
+        }
             .font(density == .touch ? .footnote : .caption)
             .foregroundStyle(DaybookPalette.Ink.secondary)
             .labelStyle(IdentityLabelStyle())

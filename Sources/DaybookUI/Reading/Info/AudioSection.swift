@@ -28,7 +28,7 @@ struct AudioSection<Extras: View, AddRecording: View>: View {
 
 /// The glyph column every Audio row starts with, so names line up whatever the glyph.
 enum AudioGlyph {
-    static func width(_ density: DaybookDensity) -> CGFloat { density == .touch ? 22 : 16 }
+    static func width(_ density: DaybookDensity, scale: CGFloat) -> CGFloat { density == .touch ? 24 * scale : 16 }
     static func spacing(_ density: DaybookDensity) -> CGFloat { density == .touch ? 10 : 6 }
 }
 
@@ -40,20 +40,36 @@ struct AudioRow: View {
     @State private var availability: ReadingAudio?
     @Environment(\.daybookDensity) private var density
     @Environment(\.readingContext) private var context
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var glyphScale: CGFloat = 1
 
     private var touch: Bool { density == .touch }
     private var name: String { services.recordingName(track, meeting) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: AudioGlyph.spacing(density)) {
-                Image(systemName: RecordingWords.symbol(track)).foregroundStyle(DaybookPalette.Ink.secondary)
-                    .frame(width: AudioGlyph.width(density)).accessibilityHidden(true)
-                Text(name).lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 6)
-                Text(track.duration.map(TimeLabel.short) ?? "—").monospacedDigit().foregroundStyle(DaybookPalette.Ink.secondary)
-                play
-                menu
+            if dynamicTypeSize.isAccessibilitySize {
+                // The largest sizes: the name a line of its own, then its length and controls.
+                HStack(alignment: .firstTextBaseline, spacing: AudioGlyph.spacing(density)) {
+                    glyph
+                    Text(name).lineLimit(3).truncationMode(.middle)
+                }
+                HStack(spacing: AudioGlyph.spacing(density)) {
+                    length
+                    Spacer(minLength: 6)
+                    play
+                    menu
+                }
+                .padding(.leading, AudioGlyph.width(density, scale: glyphScale) + AudioGlyph.spacing(density))
+            } else {
+                HStack(spacing: AudioGlyph.spacing(density)) {
+                    glyph
+                    Text(name).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    length
+                    play
+                    menu
+                }
             }
             Group {
                 details
@@ -61,12 +77,23 @@ struct AudioRow: View {
             }
             .font(touch ? .footnote : .caption)
             .foregroundStyle(DaybookPalette.Ink.secondary)
-            .padding(.leading, AudioGlyph.width(density) + AudioGlyph.spacing(density))
+            .padding(.leading, AudioGlyph.width(density, scale: glyphScale) + AudioGlyph.spacing(density))
         }
         .task(id: track.id) {
             guard let lookup = services.availability else { return }
             availability = await lookup(track, meeting)
         }
+    }
+
+    private var glyph: some View {
+        Image(systemName: RecordingWords.symbol(track)).foregroundStyle(DaybookPalette.Ink.secondary)
+            .frame(width: AudioGlyph.width(density, scale: glyphScale)).accessibilityHidden(true)
+    }
+
+    private var length: some View {
+        Text(track.duration.map(TimeLabel.short) ?? "—").monospacedDigit().foregroundStyle(DaybookPalette.Ink.secondary)
+            .lineLimit(1)
+            .fixedSize()
     }
 
     private var actions: [ConversationActionGroup] {
@@ -173,11 +200,12 @@ struct RemovedAudioRow: View {
     let track: RecordingTrack
     let services: ConversationInfoServices
     @Environment(\.daybookDensity) private var density
+    @ScaledMetric(relativeTo: .body) private var glyphScale: CGFloat = 1
 
     var body: some View {
         HStack(spacing: AudioGlyph.spacing(density)) {
             Image(systemName: RecordingWords.symbol(track)).foregroundStyle(DaybookPalette.Ink.faint)
-                .frame(width: AudioGlyph.width(density)).accessibilityHidden(true)
+                .frame(width: AudioGlyph.width(density, scale: glyphScale)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(services.recordingName(track, meeting)).lineLimit(1).truncationMode(.middle).foregroundStyle(DaybookPalette.Ink.secondary)
                 Text("Removed").font(density == .touch ? .footnote : .caption).foregroundStyle(DaybookPalette.Ink.secondary)
