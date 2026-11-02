@@ -132,4 +132,55 @@ final class VersionHistoryRestoreTests: XCTestCase {
         XCTAssertEqual(RowPreview.text(for: Meeting(title: "Offsite ideas", notes: "Offsite ideas")), "Notes only")
         XCTAssertEqual(RowPreview.text(for: Meeting(title: "Offsite ideas")), "No notes")
     }
+
+    // MARK: Laid out as the page lays it out
+
+    private func summaryRevision(old: MeetingSummary?, new: MeetingSummary) throws -> MeetingRevision {
+        func json(_ summary: MeetingSummary?) throws -> String {
+            guard let summary else { return "" }
+            return try XCTUnwrap(String(data: JSONEncoder().encode(summary), encoding: .utf8))
+        }
+        return MeetingRevision(field: "summary", oldValue: try json(old), newValue: try json(new))
+    }
+
+    func testBehaviorASummaryChangeIsLaidOutInThePagesBlocksWithBulletsInTheirOwnRows() throws {
+        let summary = MeetingSummary(overview: "The team kept the **14th**.",
+                                     sections: [SummarySection(heading: "Decisions", body: "- Keep the date.\n- The sync fix is the gate, and a long bullet wraps under its words.\n1. Ship it")],
+                                     modelID: "m")
+        let revision = try summaryRevision(old: nil, new: summary)
+        let layout = RevisionLayout(revision.newValue, field: revision.field)
+        XCTAssertEqual(layout.blocks.map(\.kind), [.paragraph, .heading, .bullet, .bullet, .numbered("1.")])
+        XCTAssertEqual(layout.blocks.map { String($0.text.characters) },
+                       ["The team kept the 14th.", "Decisions", "Keep the date.", "The sync fix is the gate, and a long bullet wraps under its words.", "Ship it"],
+                       "no Markdown marks and no bullet character left in the words")
+        XCTAssertTrue(layout.blocks[1].startsSection)
+        XCTAssertEqual(layout.blocks[0].text.runs.first { $0.inlinePresentationIntent == .stronglyEmphasized }.map { String(layout.blocks[0].text[$0.range].characters) },
+                       "14th", "bold stays bold")
+    }
+
+    func testBehaviorMarkingChangedWordsKeepsEachBlockInItsPlace() throws {
+        let old = MeetingSummary(overview: "Hold the date.", sections: [SummarySection(heading: "Decisions", body: "- The sink fix gates it.")], modelID: "m")
+        let new = MeetingSummary(overview: "Hold the date.", sections: [SummarySection(heading: "Decisions", body: "- The sync fix gates it.")], modelID: "m")
+        let revision = try summaryRevision(old: old, new: new)
+        // Foundation's own attribute as a marker, so the test needs no UI framework.
+        var removed = AttributeContainer(), inserted = AttributeContainer()
+        removed.languageIdentifier = "removed"
+        inserted.languageIdentifier = "inserted"
+        let marked = RevisionLayout.marked(old: RevisionLayout(revision.oldValue, field: revision.field),
+                                           new: RevisionLayout(revision.newValue, field: revision.field), removed: removed, inserted: inserted)
+        XCTAssertEqual(marked.new.blocks.map(\.kind), [.paragraph, .heading, .bullet])
+        let bullet = marked.new.blocks[2].text
+        let insertedWords = bullet.runs.filter { $0.languageIdentifier == "inserted" }.map { String(bullet[$0.range].characters) }
+        XCTAssertEqual(insertedWords, ["sync"])
+        let struck = marked.old.blocks[2].text.runs.filter { $0.languageIdentifier == "removed" }.map { String(marked.old.blocks[2].text[$0.range].characters) }
+        XCTAssertEqual(struck, ["sink"])
+        XCTAssertTrue(marked.new.blocks[0].text.runs.allSatisfy { $0.languageIdentifier == nil }, "unchanged blocks stay unmarked")
+    }
+
+    func testBehaviorAnythingButASummaryIsOneParagraphAsWritten() {
+        let layout = RevisionLayout("Beta date\n- not a bullet here", field: "notes")
+        XCTAssertEqual(layout.blocks.count, 1)
+        XCTAssertEqual(String(layout.blocks[0].text.characters), "Beta date\n- not a bullet here")
+        XCTAssertTrue(RevisionLayout("", field: "summary").isEmpty, "an empty Before")
+    }
 }
