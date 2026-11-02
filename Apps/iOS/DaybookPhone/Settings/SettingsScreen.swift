@@ -148,10 +148,16 @@ struct SettingsScreen: View {
     private var storageSummary: String { StatusSheetModel.audioOnThisIPhone(bytes: model.audio.usage.bytes) }
 
     private var modelsSummary: String {
-        let models = model.models
-        let missing = models.missingBytes + (model.settings.processesOnThisIPhone ? models.processingMissingBytes : 0)
-        if missing > 0 { return "\(ModelsSettingsScreen.size(missing)) to download" }
+        let missing = Self.missingModelBytes(model.models, processesHere: model.settings.processesOnThisIPhone)
+        if missing > 0 { return "\(ByteSize.format(missing)) to download" }
         return model.processingCapabilities.transcribes ? "Transcribes on this iPhone" : "Live transcription on this iPhone"
+    }
+
+    /// What's left to download for live captions and, while this iPhone transcribes its own recordings, for that:
+    /// each model once, as Models lists them, though the voice-profile model serves both.
+    static func missingModelBytes(_ models: PhoneModels, processesHere: Bool) -> Int64 {
+        let roles = models.roles + (processesHere ? [.transcription, .diarization, .speakerEmbedding] : [])
+        return models.missing(in: roles).reduce(0) { $0 + $1.approximateBytes }
     }
 
     /// "12 built-in, 2 yours", as the Mac counts them.
