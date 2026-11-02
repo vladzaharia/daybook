@@ -3227,3 +3227,26 @@ started together agree. Debug builds launched with `--library` (screenshots, dem
   Without that it saw none of the running copies.
 
 Not verified here: that the earlier copy comes to the front (a system dialog held the screen during the check).
+
+## Can start recording, both ways (2026-11-01)
+
+Each device's Can start recording for the other now says one thing on both: off, every start the other asks for is
+declined, and the other's page Stop is too. Each tells the other its own (`record.permission`), so neither asks one
+that would only decline, and a decline of a start asked on its own is taken quietly. A Mac that had Record along with
+this Mac off for an iPhone before this build carries it over once (`ConfiguredDevice.recordAlongOffOwed`): it doesn't
+ask that iPhone, and asks it to take the off as its Can Start Recording for the Mac until the iPhone says it has.
+
+- `PhoneLinkTests` (Mac): a phone that says no isn't asked and nothing is kept or said; this Mac's own word reaches the
+  phone as it connects and as it changes; an off left by an earlier build isn't asked across a relaunch, is sent until
+  the phone answers `turnedOff` (a crossing word doesn't clear it), then the phone decides; only an off from before the
+  change is carried over; a decline of a cascading start leaves no link, and other refusals still say why.
+- `CascadingRecordingTests` (Mac): off here declines the phone's cascading start, the start the person chose, and its
+  page's start alike.
+- `LinkServicesTests` and `CascadingRecordingTests` (iPhone, on a simulator clone): the Mac's page stops this iPhone only
+  while Can Start Recording is on; the iPhone tells a Mac its word as it connects and when either switch changes, takes
+  an earlier off once for the pairing and answers it; a Mac that said no isn't asked, a decline of a start asked on its
+  own is quiet, and Record on Studio Mac too still says why with the fix.
+
+**Still to check with a real iPhone:** a Mac updated with Record along off for a phone keeps that phone from recording
+before the phone updates; once both are updated and connected, the phone's Can Start Recording for that Mac is off,
+turning it on there makes the next Mac recording ask it, and the Mac's page offers Stop on iPhone only while it's on.
