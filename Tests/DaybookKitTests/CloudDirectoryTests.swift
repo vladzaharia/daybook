@@ -173,7 +173,17 @@ final class CloudDirectoryTests: XCTestCase {
             XCTAssertFalse(kept, openAIKey)
             XCTAssertEqual(setup.checks[.anthropic], .failed(message: "This is an OpenAI key.", details: ""), openAIKey)
         }
-        XCTAssertTrue(server.requests.isEmpty, "Neither key went anywhere: \(server.requests.map(\.path))")
+        // Every Anthropic key begins sk-ant-: an older OpenAI key in its field never goes to Anthropic.
+        kept = await setup.addKey("sk-" + String(repeating: "T", count: 48), for: .anthropic)
+        XCTAssertFalse(kept)
+        XCTAssertEqual(setup.checks[.anthropic], .failed(message: "This isn’t an Anthropic key.", details: ""))
+        // An OpenRouter key goes to neither.
+        for provider in CloudProvider.allCases {
+            kept = await setup.addKey("sk-or-v1-TESTtestTESTtestTEST-x9Qa", for: provider)
+            XCTAssertFalse(kept, "\(provider)")
+            XCTAssertEqual(setup.checks[provider], .failed(message: "This is an OpenRouter key.", details: ""))
+        }
+        XCTAssertTrue(server.requests.isEmpty, "No key went anywhere: \(server.requests.map(\.path))")
         XCTAssertEqual(keys.providersWithKeys(), [])
         XCTAssertFalse(setup.isSetUp)
 

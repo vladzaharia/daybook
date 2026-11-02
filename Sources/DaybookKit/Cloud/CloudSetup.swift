@@ -86,16 +86,17 @@ public final class CloudSetup {
     }
 
     /// Checks `text` as a key with the provider's model list and keeps it only when the provider accepts it. A key
-    /// whose prefix names the other provider is refused before anything is sent, so it never reaches a company it
-    /// doesn't belong to. A check dropped while it's under way (`leaveCheck`) keeps nothing and says nothing.
+    /// whose prefix says it isn't the provider's (`CloudAPIKey.refusal`) is refused before anything is sent, so it
+    /// never reaches a company it doesn't belong to. A check dropped while it's under way (`leaveCheck`) keeps nothing
+    /// and says nothing.
     @discardableResult
     public func addKey(_ text: String, for provider: CloudProvider) async -> Bool {
         guard let key = CloudAPIKey(text) else {
             checks[provider] = .failed(message: "Paste the whole key, with nothing around it.", details: "")
             return false
         }
-        if let issuer = key.issuer, issuer != provider {
-            checks[provider] = .failed(message: "This is an \(CloudError.providerName(issuer)) key.", details: "")
+        if let refusal = key.refusal(for: provider) {
+            checks[provider] = .failed(message: refusal, details: "")
             return false
         }
         let check = UUID()

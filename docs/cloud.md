@@ -132,8 +132,10 @@ masked too (`CloudError.scrubbed`). Adding a key checks it first with the provid
 the provider accepts it ("This key works"), else the reason ("Anthropic didn’t accept this key.") with the provider's
 words behind Details. A key goes only to its own provider: one whose prefix names the other (`sk-ant-` in OpenAI's
 field; `sk-proj-`, `sk-svcacct-`, or `sk-admin-` in Anthropic's; `CloudAPIKey.issuer`) is refused before anything is
-sent, with "This is an Anthropic key." or "This is an OpenAI key." A key with no recognizable prefix is the provider's
-to judge.
+sent, with "This is an Anthropic key." or "This is an OpenAI key." So is an OpenRouter key (`sk-or-`) in either field
+("This is an OpenRouter key."), and any key without `sk-ant-` in Anthropic's, since every Anthropic key has it ("This
+isn’t an Anthropic key."; `CloudAPIKey.refusal`). In OpenAI's field, a key with no recognizable prefix (an older OpenAI
+key) is OpenAI's to judge.
 
 ## Discovery
 

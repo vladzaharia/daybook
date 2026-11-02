@@ -27,6 +27,16 @@ public struct CloudAPIKey: Equatable, Sendable, CustomStringConvertible, CustomD
         return nil
     }
 
+    /// Why the key can't be `provider`'s, from its prefix alone, so it's never sent where it doesn't belong: another
+    /// provider's (`issuer`), an OpenRouter key (`sk-or-`), or, in Anthropic's field, any key without `sk-ant-`, which
+    /// every Anthropic key has. Nil when only the provider can tell (an OpenAI key of an older shape).
+    public func refusal(for provider: CloudProvider) -> String? {
+        if secret.hasPrefix("sk-or-") { return "This is an OpenRouter key." }
+        if let issuer, issuer != provider { return "This is an \(CloudError.providerName(issuer)) key." }
+        if provider == .anthropic, issuer != .anthropic { return "This isn’t an Anthropic key." }
+        return nil
+    }
+
     public var description: String { masked }
     public var debugDescription: String { "CloudAPIKey(\(masked))" }
     public var customMirror: Mirror { Mirror(self, children: ["masked": masked]) }
