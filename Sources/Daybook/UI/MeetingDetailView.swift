@@ -91,13 +91,14 @@ extension MeetingDetailView: Equatable {
 @MainActor
 @Observable
 final class SavedCaptionsProbe {
-    private struct Answer {
+    private struct Answer: Equatable {
         let meetingID: UUID
-        let key: String
         let shown: Bool
     }
 
     private var answer: Answer?
+    /// What the answer was read for (`key`). A new read that answers the same (each save while recording) redraws nothing.
+    @ObservationIgnored private var readKey: String?
 
     static func key(_ meeting: Meeting, state: AppState) -> String {
         "\(meeting.id)|\(meeting.transcripts.count)|\(state.captions.lastSave?.timeIntervalSince1970 ?? 0)|\(state.recordingID == meeting.id)"
@@ -111,14 +112,16 @@ final class SavedCaptionsProbe {
     /// Reads whether `meeting` has captions to show, unless that's been read since anything that changes it.
     func read(_ meeting: Meeting, state: AppState) async {
         let key = Self.key(meeting, state: state)
-        guard answer?.key != key else { return }
+        guard readKey != key else { return }
         var captions: LiveCaptions?
         if state.recordingID != meeting.id, meeting.unifiedTranscript.isEmpty {
             let url = state.captions.store.url(for: meeting.id)
             captions = await Task.detached(priority: .userInitiated) { LiveCaptionStore.read(url) }.value
             guard !Task.isCancelled else { return }
         }
-        answer = Answer(meetingID: meeting.id, key: key, shown: LiveCaptionStore.shown(captions, for: meeting) != nil)
+        readKey = key
+        let read = Answer(meetingID: meeting.id, shown: LiveCaptionStore.shown(captions, for: meeting) != nil)
+        if answer != read { answer = read }
     }
 }
 
