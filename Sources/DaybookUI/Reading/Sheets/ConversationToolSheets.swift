@@ -295,8 +295,16 @@ public struct OriginalTranscriptSheet: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: DaybookSpacing.s2) {
-                    SheetTitle("Original Transcript", detail: track.flatMap { track in meeting.map { recordingName(track, $0) } })
-                        .padding(.bottom, DaybookSpacing.s2)
+                    // Copy beside the recording's name: a sheet on the Mac has room for its buttons only at its foot.
+                    HStack(alignment: .firstTextBaseline) {
+                        SheetTitle("Original Transcript", detail: track.flatMap { track in meeting.map { recordingName(track, $0) } })
+                        Button("Copy") { LocalCopy.copy(Self.text(run)) }
+                            .buttonStyle(.daybookLink)
+                            .font(DaybookFont.statusLead.font(density))
+                            .disabled(run?.segments.isEmpty ?? true)
+                            .daybookHitTarget()
+                    }
+                    .padding(.bottom, DaybookSpacing.s2)
                     ForEach(run?.segments ?? []) { segment in
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Text(TimeLabel.short(segment.start))
@@ -323,9 +331,6 @@ public struct OriginalTranscriptSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Copy") { LocalCopy.copy(Self.text(run)) }.disabled(run?.segments.isEmpty ?? true)
-                }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { close() } }
             }
         }

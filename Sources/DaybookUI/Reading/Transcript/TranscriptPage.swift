@@ -252,8 +252,9 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
     }
 
     #if DEBUG
-    /// Debug builds, for screenshots: `--find "<words>"` opens Find in Conversation with them, and `--correct "<words>"`
-    /// corrects the first passage holding them (in place on a regular page, a sheet on a narrow one). Once per launch.
+    /// Debug builds, for screenshots: `--find "<words>"` opens Find in Conversation with them, `--correct "<words>"`
+    /// corrects the first passage holding them (in place on a regular page, a sheet on a narrow one), and
+    /// `--transcript-sheet timing|corrections|original` opens one of the conversation's tools. Once per launch.
     private func applyLaunchArguments() async {
         guard !TranscriptLaunch.applied else { return }
         TranscriptLaunch.applied = true
@@ -262,7 +263,7 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
             guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
             return arguments[index + 1]
         }
-        guard value("--find") != nil || value("--correct") != nil else { return }
+        guard value("--find") != nil || value("--correct") != nil || value("--transcript-sheet") != nil else { return }
         try? await Task.sleep(for: .milliseconds(400))
         if let query = value("--find"), let find {
             find.query = query
@@ -270,6 +271,12 @@ public struct TranscriptPage<Header: View, Placeholder: View>: View {
         }
         if let words = value("--correct"), let segment = meeting.unifiedTranscript.first(where: { $0.text.localizedCaseInsensitiveContains(words) }) {
             correct(segment)
+        }
+        switch value("--transcript-sheet") {
+        case "timing"?: _ = host.present(.adjustTiming(trackID: nil))
+        case "corrections"?: _ = host.present(.reviewCorrections)
+        case "original"?: if let track = meeting.tracks.first { _ = host.present(.originalTranscript(trackID: track.id)) }
+        default: break
         }
     }
     #endif
