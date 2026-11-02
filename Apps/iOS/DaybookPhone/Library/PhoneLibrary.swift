@@ -330,9 +330,10 @@ final class PhoneLibrary {
         controller.meeting(meetingID)?.openProcessingRequests ?? []
     }
 
-    /// The audio file of a conversation's track, for playback and tests.
+    /// The audio file of a conversation's track, for playback and tests, through the library's own
+    /// store, so a folder it makes is one the durability barrier flushes.
     func audioURL(for track: RecordingTrack, in meetingID: UUID) async throws -> URL {
-        try await MeetingStore(rootURL: rootURL).audioURL(for: track, in: meetingID)
+        try await controller.audioURL(for: track, in: meetingID)
     }
 }
 
