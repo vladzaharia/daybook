@@ -253,6 +253,32 @@ final class PhoneModelsTests: XCTestCase {
         XCTAssertEqual(models.liveDownload?.line(space: models.space).needsAttention, true, "Download All says so too")
     }
 
+    /// Two downloads that each fit but together wouldn't: what's free sets aside what's already on its way (here,
+    /// waiting for Wi‑Fi), so the second waits until the first is no longer asked for.
+    func testBehaviorASecondDownloadThatWouldFillTheDiskWaits() async throws {
+        let models = makeModels(network: ScriptedNetwork().network)
+        let first = try XCTUnwrap(models.choice(for: .liveTranscription))
+        let second = try XCTUnwrap(models.choice(for: .liveDiarization))
+        XCTAssertNotEqual(first.key, second.key)
+        models.readSpace = { _ in ModelSpace(free: first.approximateBytes + second.approximateBytes - 1) }
+        await models.refresh()
+        XCTAssertTrue(try XCTUnwrap(models.roleChoice(for: .liveDiarization)).canDownload(space: models.space))
+
+        models.downloadIfItFits(first)
+        XCTAssertEqual(models.status(of: first), .waitingForWiFi)
+        XCTAssertEqual(models.space, ModelSpace(free: second.approximateBytes - 1))
+        let waiting = try XCTUnwrap(models.roleChoice(for: .liveDiarization))
+        XCTAssertFalse(waiting.canDownload(space: models.space))
+        XCTAssertEqual(waiting.line(space: models.space)?.needsAttention, true, "it says how much it needs")
+        models.downloadIfItFits(second)
+        XCTAssertEqual(models.status(of: second), .notDownloaded, "each fits, but together they'd fill the disk")
+
+        models.cancel(first)
+        models.downloadIfItFits(second)
+        XCTAssertEqual(models.status(of: second), .waitingForWiFi)
+        models.cancel(second)
+    }
+
     /// Removing a model says what it frees and what each role using it does, in the Mac's sentence.
     func testBehaviorRemovingSaysWhatItFreesAndWhatWaits() throws {
         let models = makeModels(network: ScriptedNetwork().network)

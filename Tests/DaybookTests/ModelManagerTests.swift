@@ -286,7 +286,7 @@ final class ModelManagerTests: XCTestCase {
     /// in the role's row, the download row, and a preset that would need more than there is (ux-mac-16).
     func testBehaviorADownloadThatWouldntFitSaysWhatItNeedsAndWaits() async throws {
         var snapshot = makeSnapshot(selections: [.transcription: "whisp/big"])
-        snapshot.space = ModelSpace(free: 1_000_000_000)
+        snapshot.freeSpace = ModelSpace(free: 1_000_000_000)
         let choice = snapshot.choice(for: .transcription)
         XCTAssertEqual(choice.line(space: snapshot.space), ModelLine("Needs 1.6 GB · 1.0 GB free", needsAttention: true))
         XCTAssertFalse(choice.canDownload(space: snapshot.space))
@@ -311,6 +311,56 @@ final class ModelManagerTests: XCTestCase {
         manager.download("whisper/small")
         XCTAssertEqual(requested, [["whisper/small"]])
         XCTAssertNil(ModelPreset.quick.spaceNote(in: state, space: manager.space))
+    }
+
+    /// What's free for a download sets aside what the download under way and those waiting will still take: the one
+    /// under way less what it had fetched when the space was read (its partial files, or its progress where that says
+    /// more). A preset doesn't count again what's already on its way (ux-mac-16).
+    func testBehaviorWhatsFreeSetsAsideDownloadsAlreadyAskedFor() throws {
+        var snapshot = makeSnapshot(selections: [.transcription: "whisp/tiny"])
+        snapshot.freeSpace = ModelSpace(free: 2_000_000_000)
+        XCTAssertEqual(snapshot.space, snapshot.freeSpace, "nothing asked for yet")
+        snapshot.downloading = "whisp/big"
+        snapshot.fetchedWhenRead = ["whisp/big": 0.25]
+        XCTAssertEqual(snapshot.space, ModelSpace(free: 800_000_000), "Whisp Big's 1.6 GB less the quarter fetched when the space was read")
+        snapshot.diskUsage = ModelDiskUsage(installed: [:], partial: ["whisp/big": 600_000_000], legacy: [:])
+        XCTAssertEqual(snapshot.space, ModelSpace(free: 1_000_000_000), "its partial files say more")
+        snapshot.pending = ["babel/one"]
+        XCTAssertEqual(snapshot.space, ModelSpace(free: 950_000_000), "and the 50 MB waiting")
+        XCTAssertTrue(snapshot.choice(for: .transcription).canDownload(space: snapshot.space))
+
+        snapshot.freeSpace = ModelSpace(free: 1_120_000_000)
+        let tiny = snapshot.choice(for: .transcription)
+        XCTAssertEqual(tiny.line(space: snapshot.space), ModelLine("Needs 100 MB · 70 MB free", needsAttention: true))
+        XCTAssertFalse(tiny.canDownload(space: snapshot.space), "it would fit alone, but not with what's on its way")
+        let detailed = try XCTUnwrap(snapshot.presets.first { $0.preset == .detailed })
+        XCTAssertEqual(detailed.missingBytes, 0, "Whisp Big is on its way, counted once")
+    }
+
+    /// Two downloads that each fit but together wouldn't: the second waits until the first is no longer asked for.
+    func testBehaviorASecondDownloadThatWouldFillTheDiskWaits() async throws {
+        let state = AppState(libraryURL: try library(), defaults: defaults())
+        // Held by "processing", the queue keeps what's asked for and starts nothing: tests never download.
+        state.processingID = UUID()
+        var requested: [[String]] = []
+        let manager = ModelManager(state: state, hubClient: ScriptedHub(), requestDownload: { requested.append($0); state.downloadModels($0) })
+        let first = try XCTUnwrap(state.modelCatalog.model("whisper/small"))
+        let second = try XCTUnwrap(state.modelCatalog.model("sortformer-2.1/compact"))
+        manager.readSpace = { _ in ModelSpace(free: first.approximateBytes + second.approximateBytes - 1) }
+        await manager.refresh()
+        XCTAssertTrue(manager.space.fits(second.approximateBytes))
+
+        manager.download(first.key)
+        XCTAssertEqual(state.pendingDownloads, [first.key])
+        XCTAssertFalse(manager.space.fits(second.approximateBytes))
+        manager.download(second.key)
+        XCTAssertEqual(requested, [[first.key]], "each fits, but together they'd fill the disk")
+
+        manager.cancel(first.key)
+        manager.download(second.key)
+        XCTAssertEqual(requested, [[first.key], [second.key]])
+        manager.cancel(second.key)
+        XCTAssertEqual(state.pendingDownloads, [])
     }
 
     // MARK: Removal

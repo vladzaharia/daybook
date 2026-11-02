@@ -199,7 +199,8 @@ public enum ModelLabels {
 // MARK: - Space
 
 /// How much room this device has for downloads, and the words when a download won't fit: "Needs 16.5 GB · 12 GB free".
-/// A model download that fills the disk stops recordings and sync too, so Download waits until there's room.
+/// A model download that fills the disk stops recordings and sync too, so Download waits until there's room. What's
+/// free sets aside what the downloads already under way and waiting will still take (`less`).
 public struct ModelSpace: Equatable, Sendable {
     /// Bytes free where models go; nil when the system didn't say, which stops nothing.
     public var free: Int64?
@@ -219,6 +220,17 @@ public struct ModelSpace: Equatable, Sendable {
     }
 
     public func fits(_ bytes: Int64) -> Bool { free.map { bytes <= $0 } ?? true }
+
+    /// What's left for another download once `bytes` are set aside for the downloads under way and waiting, so two that
+    /// each fit but together wouldn't don't both start.
+    public func less(_ bytes: Int64) -> ModelSpace { ModelSpace(free: free.map { max(0, $0 - max(0, bytes)) }) }
+
+    /// What a download still takes from what's free: its size, less what it had fetched when the space was read (its
+    /// partial files, or its progress where that says more, as while a file is still arriving).
+    public static func stillToFetch(_ size: Int64, partial: Int64 = 0, fraction: Double? = nil) -> Int64 {
+        let fraction = fraction.map { $0.isFinite ? min(max($0, 0), 1) : 0 } ?? 0
+        return max(0, size - max(partial, Int64(Double(size) * fraction)))
+    }
 
     /// "Needs 16.5 GB · 12 GB free", or nil when it fits.
     public func shortfall(_ bytes: Int64) -> String? {

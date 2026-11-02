@@ -88,6 +88,20 @@ final class ModelChoicesTests: XCTestCase {
                         "read from the nearest folder that exists")
     }
 
+    /// What's free for another download sets aside what those already asked for will still take: a download under way
+    /// counts its size less what it had fetched when the space was read, by its partial files or its progress.
+    func testBehaviorWhatsFreeSetsAsideWhatsOnItsWay() {
+        XCTAssertEqual(ModelSpace(free: 10_000_000_000).less(8_000_000_000), ModelSpace(free: 2_000_000_000))
+        XCTAssertEqual(ModelSpace(free: 1_000_000_000).less(3_000_000_000), ModelSpace(free: 0), "never below nothing")
+        XCTAssertEqual(ModelSpace.unknown.less(3_000_000_000), .unknown, "when the system doesn't say, nothing waits")
+        XCTAssertFalse(ModelSpace(free: 10_000_000_000).less(8_000_000_000).fits(5_000_000_000), "8 GB on its way, then 5 GB more")
+        XCTAssertEqual(ModelSpace.stillToFetch(1_600_000_000), 1_600_000_000)
+        XCTAssertEqual(ModelSpace.stillToFetch(1_600_000_000, partial: 600_000_000), 1_000_000_000)
+        XCTAssertEqual(ModelSpace.stillToFetch(1_600_000_000, partial: 200_000_000, fraction: 0.5), 800_000_000, "a file still arriving")
+        XCTAssertEqual(ModelSpace.stillToFetch(1_600_000_000, fraction: .nan), 1_600_000_000)
+        XCTAssertEqual(ModelSpace.stillToFetch(1_600_000_000, partial: 2_000_000_000), 0)
+    }
+
     func testBehaviorTheDownloadRowSaysWhatsLeftThenHowFarItsGot() {
         let all = ModelDownloadSummary.missing(names: ["Parakeet Ultra", "Community-1"], bytes: 654_000_000, partly: false)
         XCTAssertEqual(all.title, "Not downloaded yet")

@@ -58,8 +58,11 @@ final class PhoneModels {
     private(set) var progress: [String: Double] = [:]
     private(set) var waiting: Set<String> = []
     private(set) var failures: [String: String] = [:]
-    /// What's free where the models go, as of the last refresh: a download that wouldn't fit says so and waits.
-    private(set) var space = ModelSpace.unknown
+    /// What's free where the models go, as the system said at the last refresh, and what the downloads then under way had
+    /// fetched (their partial files, and their progress): that much is already out of it.
+    private(set) var freeSpace = ModelSpace.unknown
+    private var partialWhenRead: [String: Int64] = [:]
+    private var fetchedWhenRead: [String: Double] = [:]
     /// Reads what's free at a folder; replaced in tests.
     @ObservationIgnored var readSpace: (URL) -> ModelSpace = ModelSpace.available(at:)
     /// Downloads may use cellular data. Off by default: the models are hundreds of megabytes.
@@ -226,6 +229,20 @@ final class PhoneModels {
     /// What the downloaded models take on disk (Settings › Models' Model Library, and Storage).
     var bytesOnDisk: Int64 { inventory.revisions.reduce(0) { $0 + $1.bytes } }
 
+    /// What's free for another download: `freeSpace`, less what the downloads under way and waiting for Wi‑Fi will still
+    /// take, so two that each fit but together wouldn't don't both start. One that wouldn't fit says so and waits.
+    var space: ModelSpace { freeSpace.less(promisedBytes) }
+
+    /// What the downloads under way and waiting for Wi‑Fi will still take.
+    var promisedBytes: Int64 {
+        Set(progress.keys).union(waiting).compactMap { catalog.model($0) }.reduce(0) { $0 + downloadBytes($1) }
+    }
+
+    /// What downloading `model` still takes: its size, less what it had fetched when `freeSpace` was read.
+    func downloadBytes(_ model: CatalogModel) -> Int64 {
+        ModelSpace.stillToFetch(model.approximateBytes, partial: partialWhenRead[model.key] ?? 0, fraction: fetchedWhenRead[model.key])
+    }
+
     // MARK: Settings › Models
 
     /// The roles whose models transcribing here needs; the summary model is downloaded on its own: it's gigabytes.
@@ -248,7 +265,7 @@ final class PhoneModels {
                                          isEnabled: true), at: 0)
         }
         return ModelRoleChoice(role: role, selection: chosen.key, options: available + unavailable, selectedModel: chosen,
-                               status: status(of: chosen))
+                               status: status(of: chosen), downloadBytes: downloadBytes(chosen))
     }
 
     /// What transcribing here still needs downloaded, or how far it's got (Settings › Models' Processing).
@@ -264,7 +281,7 @@ final class PhoneModels {
         let chosen = roles.compactMap(choice(for:)).filter { seen.insert($0.key).inserted && status(of: $0).isAvailable }
         let missing = missing(in: roles)
         if !missing.isEmpty {
-            return .missing(names: missing.map(\.name), bytes: missing.reduce(0) { $0 + $1.approximateBytes }, partly: missing.count < chosen.count)
+            return .missing(names: missing.map(\.name), bytes: missing.reduce(0) { $0 + downloadBytes($1) }, partly: missing.count < chosen.count)
         }
         guard chosen.contains(where: { status(of: $0).isTransferring }) else { return nil }
         let total = chosen.reduce(Int64(0)) { $0 + $1.approximateBytes }
@@ -281,13 +298,13 @@ final class PhoneModels {
     /// Downloads what `roles`' choices still need, when there's room for all of it.
     func downloadMissing(in roles: [ModelRole]) {
         let missing = missing(in: roles)
-        guard space.fits(missing.reduce(0) { $0 + $1.approximateBytes }) else { return }
+        guard space.fits(missing.reduce(0) { $0 + downloadBytes($1) }) else { return }
         for model in missing { download(model) }
     }
 
-    /// Downloads `model` from its row, when there's room for it.
+    /// Downloads `model` from its row, when there's room for it beside what's already on its way.
     func downloadIfItFits(_ model: CatalogModel) {
-        guard space.fits(model.approximateBytes) else { return }
+        guard space.fits(downloadBytes(model)) else { return }
         download(model)
     }
 
@@ -393,7 +410,11 @@ final class PhoneModels {
 
     func refresh() async {
         inventory = await store.inventory()
-        space = readSpace(root)
+        let partial = await store.diskUsage().partial
+        // Read with what the downloads under way have fetched: it's already out of what's free.
+        freeSpace = readSpace(root)
+        partialWhenRead = partial
+        fetchedWhenRead = progress
         resolve()
         changed?()
     }

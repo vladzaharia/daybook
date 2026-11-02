@@ -112,8 +112,21 @@ struct ModelManagerSnapshot {
     /// Revisions nothing may remove: pinned, leased, or frozen by queued and running jobs.
     var protectedRevisions: Set<ModelInstallKey> = []
     var resultCounts: [String: Int] = [:]
-    /// What's free where models go: a download that wouldn't fit says so and waits.
-    var space: ModelSpace = .unknown
+    /// What's free where models go, as the system said at the last refresh.
+    var freeSpace: ModelSpace = .unknown
+    /// How far the download under way had got when `freeSpace` was read: what it had fetched by then is already out of it.
+    var fetchedWhenRead: [String: Double] = [:]
+
+    /// What's free for another download: `freeSpace`, less what the download under way and those waiting will still
+    /// take. A download that wouldn't fit says so and waits.
+    var space: ModelSpace { freeSpace.less(promisedBytes) }
+
+    /// What the download under way and those waiting will still take.
+    var promisedBytes: Int64 {
+        Set(([downloading].compactMap { $0 } + pending).compactMap { catalog.model(ModelReference($0).id)?.key })
+            .compactMap { catalog.model($0) }
+            .reduce(0) { $0 + downloadBytes($1) }
+    }
 
     /// Roles listed first, in the pipeline's order; any others after.
     static func order(_ role: ModelRole) -> Int { ModelRole.known.firstIndex(of: role) ?? ModelRole.known.count }
@@ -155,15 +168,17 @@ struct ModelManagerSnapshot {
     /// "Non-commercial" and "Added by you", from the license and where the entry came from.
     func labels(_ model: CatalogModel) -> [String] { ModelLabels.of(model) }
 
-    /// What downloading a model still takes: its size, less what an unfinished download already fetched.
+    /// What downloading a model still takes: its size, less what an unfinished download had fetched when `freeSpace`
+    /// was read.
     func downloadBytes(_ model: CatalogModel) -> Int64 {
         guard !model.isSystemModel else { return 0 }
-        return max(0, model.approximateBytes - (diskUsage?.partial[model.key] ?? 0))
+        return ModelSpace.stillToFetch(model.approximateBytes, partial: diskUsage?.partial[model.key] ?? 0, fraction: fetchedWhenRead[model.key])
     }
 
-    /// What downloading these models still takes: those that aren't here.
+    /// What downloading these models still takes: those that aren't here or on their way (`promisedBytes` has those).
     func missingBytes(_ keys: [String]) -> Int64 {
-        Set(keys).compactMap { catalog.model($0) }.filter { !installed.contains($0.key) }.reduce(0) { $0 + downloadBytes($1) }
+        Set(keys).compactMap { catalog.model($0) }.filter { !installed.contains($0.key) && !status(of: $0).isTransferring }
+            .reduce(0) { $0 + downloadBytes($1) }
     }
 
     // MARK: Role choices
@@ -462,8 +477,11 @@ final class ModelManager {
     private(set) var updates: [ModelUpdate] = []
     private(set) var updateCheck = UpdateCheck.never
     private(set) var resultCounts: [String: Int] = [:]
-    /// What's free where models go, as of the last refresh (`ModelPreset.space`).
-    private(set) var space = ModelSpace.unknown
+    /// What's free where models go, as of the last refresh, and how far the download under way had got then.
+    private(set) var freeSpace = ModelSpace.unknown
+    private(set) var fetchedWhenRead: [String: Double] = [:]
+    /// What's free for another download (`ModelManagerSnapshot.space`).
+    var space: ModelSpace { snapshot.space }
     /// A problem to show: what couldn't be done, one sentence with its fix, and the system's words behind Details.
     var problem: AppProblem?
     private(set) var isWorking = false
@@ -482,7 +500,7 @@ final class ModelManager {
                              speakerQuality: state.processingPreferences.speakerOptions.quality,
                              downloading: state.downloadingID, downloadFraction: state.downloadProgress.fraction,
                              pending: state.pendingDownloads, updates: updates, protectedRevisions: protectedRevisions,
-                             resultCounts: resultCounts, space: space)
+                             resultCounts: resultCounts, freeSpace: freeSpace, fetchedWhenRead: fetchedWhenRead)
     }
 
     /// Removing and old-revision cleanup wait for processing and downloads (the app refuses them meanwhile).
@@ -493,6 +511,10 @@ final class ModelManager {
         let runtime = state.runtime
         inventory = await runtime.inventory()
         diskUsage = await runtime.diskUsage()
+        // Read with how far the download under way has got: what it has fetched is already out of what's free.
+        freeSpace = readSpace(modelsFolder)
+        fetchedWhenRead = state.downloadingID.flatMap { state.modelCatalog.model(ModelReference($0).id) }
+            .map { [$0.key: state.downloadProgress.fraction] } ?? [:]
         let jobs = state.processingQueue + [state.runningJob].compactMap { $0 }
         var protected = await runtime.store.pinned.union(await runtime.store.leasedKeys)
         for reference in jobs.flatMap(\.modelReferences) {
@@ -505,7 +527,6 @@ final class ModelManager {
         }
         protectedRevisions = protected
         resultCounts = state.modelCatalog.resultCounts(in: state.meetings)
-        space = readSpace(modelsFolder)
     }
 
     // MARK: Choosing and downloading
