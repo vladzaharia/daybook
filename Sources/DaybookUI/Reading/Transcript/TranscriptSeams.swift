@@ -105,7 +105,10 @@ public struct TranscriptHost {
 /// The words of the transcript's notices, the same on both apps: the recording named as Audio names it, and the
 /// action that fixes it.
 public enum TranscriptNoticeWords {
-    public static func unaligned(_ name: String) -> String { "Couldn’t line up the \(name) recording with the others" }
+    /// The recording quoted, as a title is, so every name reads: "Alex’s iPhone", a file's, "Computer audio, echo removed".
+    public static func unaligned(_ name: String?) -> String {
+        name.map { "Couldn’t line up “\($0)” with the other recordings" } ?? "Couldn’t line up a recording with the others"
+    }
 
     public static func corrections(_ count: Int) -> String {
         count == 1 ? "An earlier correction needs a look" : "\(count) earlier corrections need a look"

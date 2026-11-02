@@ -60,7 +60,20 @@ final class TranscriptScreensTests: XCTestCase {
     // MARK: Notices and sheets
 
     func testBehaviorNoticesNameTheRecordingAsAudioDoesAndOfferTheirFix() {
-        XCTAssertEqual(TranscriptNoticeWords.unaligned("Alex’s iPhone"), "Couldn’t line up the Alex’s iPhone recording with the others")
+        var meeting = recorded()
+        meeting.tracks += [
+            RecordingTrack(source: .imported, relativePath: "Originals/standup.m4a", fileName: "standup.m4a"),
+            RecordingTrack(source: .microphone, relativePath: "Processed/a.m4a", fileName: "a.m4a", derivedFrom: track,
+                           processing: RecordingTrack.echoCancelledProcessing),
+        ]
+        let names = meeting.tracks.map { RecordingWords.name($0, in: meeting) }
+        XCTAssertEqual(names.map { TranscriptNoticeWords.unaligned($0) }, [
+            "Couldn’t line up “Microphone, original” with the other recordings",
+            "Couldn’t line up “standup.m4a” with the other recordings",
+            "Couldn’t line up “Microphone, echo removed” with the other recordings",
+        ], "every name Audio gives reads in it, a file's and one with a comma too")
+        XCTAssertEqual(TranscriptNoticeWords.unaligned("Alex’s iPhone"), "Couldn’t line up “Alex’s iPhone” with the other recordings")
+        XCTAssertEqual(TranscriptNoticeWords.unaligned(nil), "Couldn’t line up a recording with the others", "its recording gone")
         XCTAssertEqual(TranscriptNoticeWords.corrections(1), "An earlier correction needs a look")
         XCTAssertEqual(TranscriptNoticeWords.corrections(3), "3 earlier corrections need a look")
         XCTAssertEqual(TranscriptNoticeWords.review, "Review…", "the same action on both apps, never \"Review it on your Mac\"")

@@ -361,7 +361,7 @@ struct TranscriptNotices: View {
 
     var body: some View {
         if let report = meeting.alignmentReports.first(where: { $0.method == .unaligned }) {
-            let name = meeting.tracks.first { $0.id == report.trackID }.map { host.recordingName($0, meeting) } ?? "added"
+            let name = meeting.tracks.first { $0.id == report.trackID }.map { host.recordingName($0, meeting) }
             notice(.problem, symbol: "exclamationmark.triangle.fill", title: TranscriptNoticeWords.unaligned(name),
                    action: TranscriptNoticeWords.adjustTiming) { _ = host.present(.adjustTiming(trackID: report.trackID)) }
         }
