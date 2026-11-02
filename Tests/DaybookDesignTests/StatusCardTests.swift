@@ -6,35 +6,39 @@ import XCTest
 /// row with none (a conversation at the top of a card, with no device above it).
 @MainActor
 final class StatusCardTests: XCTestCase {
-    private final class Probe { var values: [Bool] = [] }
+    private final class Probe { var values: [String: Bool] = [:] }
 
+    /// Reads what each row tells its card, as `StatusCard` does.
     private struct ProbeCard<Content: View>: View {
         let probe: Probe
         @ViewBuilder var content: Content
         var body: some View {
             Group(subviews: content) { rows in
                 ForEach(rows) { row in
-                    let _ = probe.values.append(row.containerValues.statusRowAtCardEdge)
+                    let _ = probe.values[row.containerValues.probeLabel] = row.containerValues.statusRowAtCardEdge
                     row
                 }
             }
         }
     }
 
-    private struct Row: View {
-        let text: String
-        var body: some View { Text(text).padding(4) }
-    }
-
     func testBehaviorARowAtTheCardsEdgeSaysSoToTheCard() {
         let probe = Probe()
         let card = ProbeCard(probe: probe) {
-            ForEach(["a", "b"], id: \.self) { text in Row(text: text).statusRowAtCardEdge() }
-            Row(text: "c")
-            Row(text: "d").statusRowAtCardEdge(false)
+            ForEach(["a", "b"], id: \.self) { text in
+                Text(text).statusRowAtCardEdge().containerValue(\.probeLabel, text)
+            }
+            Text("c").containerValue(\.probeLabel, "c")
+            Text("d").statusRowAtCardEdge(false).containerValue(\.probeLabel, "d")
         }
-        let renderer = ImageRenderer(content: card.frame(width: 200))
-        _ = renderer.cgImage
-        XCTAssertEqual(probe.values, [true, true, false, false])
+        _ = ImageRenderer(content: card.frame(width: 200)).cgImage
+        XCTAssertEqual(probe.values, ["a": true, "b": true, "c": false, "d": false])
+        // And the card draws one from it: a whole card renders.
+        _ = ImageRenderer(content: StatusCard { Text("a").statusRowAtCardEdge(); Text("b") }.frame(width: 200)).cgImage
     }
+}
+
+extension ContainerValues {
+    /// Which row a test's card is looking at.
+    @Entry fileprivate var probeLabel = ""
 }
