@@ -631,7 +631,7 @@ public final class SimulatedSoundcoreTransport: SoundcoreTransport {
     }
 
     /// A connection is waiting for the recorder to come into range or to be free.
-    fileprivate var isWaitingToConnect: Bool { pendingConnect }
+    public var isWaitingToConnect: Bool { pendingConnect }
 
     public func activate() {
         activations += 1

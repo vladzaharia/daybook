@@ -1,6 +1,6 @@
 import CryptoKit
 import DaybookCore
-import DaybookDevices
+@testable import DaybookDevices
 import DaybookLink
 import DaybookTestSupport
 import Foundation
@@ -20,17 +20,18 @@ final class RecorderHandoffTests: XCTestCase {
     private let base = UInt32(Date().timeIntervalSince1970) - 50_000
 
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookHandoff-\(UUID().uuidString)", isDirectory: true)
+        root = makeTemporaryFolder("DaybookHandoff")
         cloud = root.appendingPathComponent("Cloud", isDirectory: true)
         try FileManager.default.createDirectory(at: cloud, withIntermediateDirectories: true)
+        // Added after the folder's, so it runs first: the devices stop before their folder goes.
+        addTeardownBlock { [unowned self] in await self.shutDown() }
     }
 
-    override func tearDown() async throws {
+    private func shutDown() async {
         for pair in links { await pair.tearDown() }
         for side in sides { side.hub.shutDown(); side.library.sync?.disconnect() }
         links = []
         sides = []
-        try? FileManager.default.removeItem(at: root)
     }
 
     // MARK: Tests
@@ -131,7 +132,7 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(phone.library.recorderOwner(kind: kind, serial: recorder.serial)?.ownerID, phone.id)
         XCTAssertNil(phone.library.recorderHandoff(kind: kind, serial: recorder.serial), "the request is withdrawn")
         guard case .connecting = phone.handoff.state(of: phone.session) else { return XCTFail("\(phone.handoff.state(of: phone.session))") }
-        try await Task.sleep(for: .milliseconds(500))
+        try await waitUntil("the phone reaches for the recorder") { phone.transport.isWaitingToConnect }
         XCTAssertFalse(phone.session.isLinked, "while the Mac is connected, the recorder doesn't answer the phone")
         XCTAssertTrue(mac.session.isLinked)
 
@@ -231,8 +232,9 @@ final class RecorderHandoffTests: XCTestCase {
         phone.handoff.useHere(phone.session)
         try await waitUntil("the phone connects") { phone.session.isLinked }
         try await waitUntil("listed on the phone") { phone.session.direct?.inventoryUpdatedAt != nil && phone.session.direct?.isRefreshing == false }
-        try await Task.sleep(for: .milliseconds(500))
-        XCTAssertEqual(phone.imported.count, 0, "what the Mac imported is on its way through sync, not imported again")
+        try await importPass(phone)
+        XCTAssertFalse(phone.session.queue.isActive, "what the Mac imported is on its way through sync, not imported again")
+        XCTAssertEqual(phone.imported.count, 0)
         XCTAssertNotNil(phone.session.arrivingThroughSync[id])
         XCTAssertTrue(phone.session.newRecordings.isEmpty, "and it isn't offered as new meanwhile")
 
@@ -240,7 +242,8 @@ final class RecorderHandoffTests: XCTestCase {
         try await syncAll(mac, phone)
         try await waitUntil("the phone's library knows it") { phone.session.links.imported[id] != nil }
         XCTAssertNil(phone.session.arrivingThroughSync[id])
-        try await Task.sleep(for: .milliseconds(300))
+        try await importPass(phone)
+        XCTAssertFalse(phone.session.queue.isActive, "it's this library's now, so it isn't imported")
         XCTAssertEqual(phone.imported.count, 0)
         XCTAssertEqual(phone.library.meetings.filter { $0.tracks.contains { $0.deviceRecordingID == id } }.count, 1)
     }
@@ -291,9 +294,11 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertTrue(recorder.isRecording, "letting go doesn't stop the recorder")
         try await waitUntil("the phone sees it recording") { phone.session.status?.isRecording == true }
 
+        let commands = recordCommands(recorder)
         mac.connection.pauseRecording()
-        try await Task.sleep(for: .milliseconds(200))
-        XCTAssertTrue(recorder.isRecording, "the Mac no longer controls it")
+        XCTAssertFalse(mac.connection.recordCommandPending, "the Mac no longer controls it: nothing is sent")
+        XCTAssertEqual(recordCommands(recorder), commands)
+        XCTAssertTrue(recorder.isRecording)
         phone.connection.pauseRecording()
         try await waitUntil("the phone stops it") { !recorder.isRecording }
     }
@@ -322,8 +327,9 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(mac.library.recorderHandoff(kind: kind, serial: recorder.serial)?.recordingInProgress?.attachTo, conversation)
         XCTAssertEqual(phone.session.split.inProgress?.id, id)
         XCTAssertEqual(phone.session.conversationWaiting(for: id), conversation, "the phone knows which conversation waits for it")
-        try await Task.sleep(for: .milliseconds(200))
-        XCTAssertTrue(phone.imported.isEmpty, "nothing imports while it's still recording")
+        try await importPass(phone)
+        XCTAssertFalse(phone.session.queue.isActive, "nothing imports while it's still recording")
+        XCTAssertTrue(phone.imported.isEmpty)
 
         // Stopped on the phone, it's imported into that conversation, not a new one.
         phone.connection.pauseRecording()
@@ -360,8 +366,9 @@ final class RecorderHandoffTests: XCTestCase {
         // The link goes; then the Mac stops recording.
         await pair.tearDown()
         try await waitUntil("the link is gone") { pair.phoneEnd.peers.isEmpty }
-        try await Task.sleep(for: .milliseconds(200))
+        try await followCheck(phone)
         XCTAssertTrue(recorder.isRecording, "nothing stops it while the Mac records")
+        XCTAssertEqual(phone.handoff.followed.map(\.recordingID), [id])
         macRecordingEnds(mac, conversation)
 
         try await waitUntil("the phone stops the recorder", timeout: 15) { !recorder.isRecording }
@@ -414,7 +421,9 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertTrue(phone.handoff.followed.isEmpty, "Daybook didn't start it, so it doesn't stop it")
         await pair.tearDown()
         macRecordingEnds(mac, alreadyRecording)
-        try await Task.sleep(for: .milliseconds(300))
+        // Only a follow check stops a recorder, and with nothing followed it looks at nothing.
+        let following = await phone.handoff.checkFollowed()
+        XCTAssertFalse(following)
         XCTAssertTrue(recorder.isRecording)
 
         // Back to the Mac, which starts it for a new recording; then to the phone again.
@@ -430,16 +439,20 @@ final class RecorderHandoffTests: XCTestCase {
         XCTAssertEqual(phone.handoff.followed.map(\.recordingID), [id])
         try await waitUntil("the phone sees the Mac recording it") { phone.handoff.followed.first?.seenRecordingAt != nil }
         await pair.tearDown()
-        // The person stops it on the phone and starts another (a second later: the recorder names a
-        // recording by the second it started).
+        // The person stops it on the phone and starts another (the recorder names a recording by the
+        // second it started, so its clock moves on a second rather than the test waiting one).
         phone.connection.pauseRecording()
         try await waitUntil("stopped") { !recorder.isRecording && !phone.connection.recordCommandPending }
-        try await Task.sleep(for: .milliseconds(1_100))
+        recorder.clockOffset += 1
         phone.connection.startRecording()
-        try await waitUntil("recording again") { recorder.isRecording && phone.session.split.inProgress.map { $0.id != id } == true }
+        try await waitUntil("recording again") {
+            recorder.isRecording && !phone.connection.recordCommandPending && phone.session.split.inProgress.map { $0.id != id } == true
+        }
+        let commands = recordCommands(recorder)
         macRecordingEnds(mac, conversation)
+        // A follow check that stops the recorder does so before it lets the recording go.
         try await waitUntil("the phone lets it be", timeout: 15) { phone.handoff.followed.isEmpty }
-        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(recordCommands(recorder), commands, "no Pause was sent")
         XCTAssertTrue(recorder.isRecording, "the person's recording keeps going")
     }
 
@@ -710,6 +723,28 @@ final class RecorderHandoffTests: XCTestCase {
             // run, that look has happened (twice over, for a look that starts another).
             for _ in 0..<2 { await Task { @MainActor in }.value }
         }
+    }
+
+    /// An automatic-import pass over what the side has now, as the hub asks for at every library
+    /// change, run to the end: whatever it would import is queued once this returns.
+    private func importPass(_ side: Side, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let passes = side.session.evaluations
+        side.session.libraryChanged(side.library.meetings, ready: true)
+        try await waitUntil("\(side.name)'s automatic-import pass", file: file, line: line) { side.session.evaluations > passes }
+    }
+
+    /// Until a follow check that began after now has finished (the second to finish: one may be under
+    /// way), or nothing is followed any more.
+    private func followCheck(_ side: Side, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let checks = side.handoff.followChecks
+        try await waitUntil("\(side.name)'s next follow check", file: file, line: line) {
+            side.handoff.followChecks >= checks + 2 || side.handoff.followed.isEmpty
+        }
+    }
+
+    /// The Start and Pause commands the recorder has had (one command, either way).
+    private func recordCommands(_ recorder: SimulatedSoundcore) -> Int {
+        recorder.received.filter { $0.type == 0x18 && $0.command == 0x82 }.count
     }
 
     // MARK: The link

@@ -181,6 +181,8 @@ public final class RecorderHandoff {
     @ObservationIgnored private var followTask: Task<Void, Never>?
     @ObservationIgnored private var isCheckingFollowed = false
     @ObservationIgnored private var followCheckScheduled = false
+    /// Follow checks that looked at every followed recording (tests: two since a change mean one began after it).
+    @ObservationIgnored private(set) var followChecks = 0
 
     public init(library: LibraryController, devices: DeviceHub, deviceClass: SyncDeviceClass, defaults: UserDefaults = .standard,
                 link: Link = .none, timing: Timing = Timing(), deviceName: String? = nil) {
@@ -971,6 +973,7 @@ extension RecorderHandoff {
                 }
             }
         }
+        followChecks += 1
         return !followed.isEmpty
     }
 

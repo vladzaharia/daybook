@@ -18,11 +18,7 @@ final class SharedRecordingTests: XCTestCase {
 
     override func setUp() async throws {
         defaults = UserDefaults(suiteName: makeTestSuite("local.daybook.tests.shared-recording"))
-        staging = FileManager.default.temporaryDirectory.appendingPathComponent("DaybookCascade-\(UUID().uuidString)", isDirectory: true)
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: staging)
+        staging = makeTemporaryFolder("DaybookCascade")
     }
 
     private struct Rig {
@@ -108,7 +104,7 @@ final class SharedRecordingTests: XCTestCase {
         try await waitUntil("its audio goes into the shared recording") { rig.session.liveCaptureConversation == conversation }
         XCTAssertEqual(rig.cascade.sharedConversation(of: rig.session), conversation)
         XCTAssertEqual(rig.cascade.pendingConversation(conversation)?.title, "Design review")
-        try await Task.sleep(for: .milliseconds(300))
+        try await waitUntil("some of its audio has arrived") { rig.connection.live.receivedSeconds > 0 }
 
         await rig.cascade.stop()
         XCTAssertNil(rig.cascade.conversation)
@@ -187,7 +183,7 @@ final class SharedRecordingTests: XCTestCase {
         rig.cascade.begin(conversation)
         await rig.cascade.startRecorders()
         try await waitUntil("its audio") { rig.session.liveCaptureConversation == conversation }
-        try await Task.sleep(for: .milliseconds(300))
+        try await waitUntil("some of it has arrived") { rig.connection.live.receivedSeconds > 0 }
         rig.device.pressButton()
         try await waitUntil("the recorder stopped") { rig.connection.status?.isRecording == false }
         let stopped = await rig.cascade.recorderStopped(rig.session)

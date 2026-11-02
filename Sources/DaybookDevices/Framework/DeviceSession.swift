@@ -56,6 +56,8 @@ public final class DeviceSession: Identifiable {
     @ObservationIgnored private var rate = TransferRateEstimator()
     @ObservationIgnored private var lastProgressPublish = Date.distantPast
     @ObservationIgnored private var evaluationScheduled = false
+    /// Automatic-import passes run (tests: a pass after a change has seen it).
+    @ObservationIgnored private(set) var evaluations = 0
     private let sleep: SleepAssertion
     private let retryPolicy: DeviceRetryPolicy
     private let defaults: UserDefaults
@@ -636,6 +638,7 @@ public final class DeviceSession: Identifiable {
 
     /// Resumes the queue when its method is back, and queues what should import on its own.
     private func evaluate() {
+        evaluations += 1
         #if DEBUG
         if demoFrozen { return }
         #endif
