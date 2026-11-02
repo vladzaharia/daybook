@@ -19,8 +19,8 @@ public enum TitleEdit {
 /// A conversation's title and its one byline, the same on Summary and Transcript and on both apps, so switching
 /// feels like turning the page. The title is a field: a draft, saved once when editing ends (Return, or leaving it),
 /// with Undo, never left empty. The byline is the recording's state (the play pill, "Recording", or "Notes only"),
-/// when it was, and who was in it: on one line when it fits, the people on their own line when it doesn't, and with
-/// less of the date before the pill ever shortens. The people open Info.
+/// when it was, and who was in it: on one line when it fits, the people on their own line when it doesn't, then a
+/// shorter date, then the date under the pill. The pill never shortens and the date never goes. The people open Info.
 public struct ConversationHeader<Pill: View>: View {
     private let meeting: Meeting
     private let library: LibraryController
@@ -122,11 +122,14 @@ public struct ConversationHeader<Pill: View>: View {
             line(month: .wide, people: true)
             line(month: .abbreviated, people: true)
             VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
-                // The people go to their own line, and the date gives way before the pill does.
+                // The people go to their own line, the date shortens, and then it goes under the pill: neither is cut.
                 ViewThatFits(in: .horizontal) {
                     line(month: .wide, people: false)
                     line(month: .abbreviated, people: false)
-                    lead.fixedSize()
+                    VStack(alignment: .leading, spacing: DaybookSpacing.s1) {
+                        if hasLead { lead.fixedSize() }
+                        date(month: .abbreviated).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 if let people { peopleButton(people).fixedSize(horizontal: false, vertical: true) }
             }
@@ -141,7 +144,7 @@ public struct ConversationHeader<Pill: View>: View {
                 lead
                 separator
             }
-            Text(meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(month).hour().minute()))
+            date(month: month)
             if showsPeople, let people {
                 separator
                 peopleButton(people)
@@ -149,6 +152,10 @@ public struct ConversationHeader<Pill: View>: View {
         }
         .lineLimit(1)
         .fixedSize()
+    }
+
+    private func date(month: Date.FormatStyle.Symbol.Month) -> Text {
+        Text(meeting.date.formatted(.dateTime.weekday(.abbreviated).day().month(month).hour().minute()))
     }
 
     private var hasLead: Bool { recording != nil || meeting.duration != nil || meeting.tracks.isEmpty }
