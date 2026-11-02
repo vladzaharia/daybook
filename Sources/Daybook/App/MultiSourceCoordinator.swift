@@ -278,12 +278,14 @@ final class CompanionRecorders {
         let recorders = eligible().filter { $0.session.id != lead?.sessionID }
         guard !recorders.isEmpty else { status = alone(meetingID); return }
         let cascade = LinkCascade(trigger: lead != nil ? .device : recorderLead != nil ? .recorder : trigger)
+        // Each recorder starts at once, alongside the others; the start is done when every one has answered.
         starting[meetingID] = Task { [weak self] in
             guard let self else { return }
-            let each = recorders.map { recorder in
-                Task { await self.start(recorder.session, recorder.control, meetingID: meetingID, at: start, cascade: cascade) }
+            await withTaskGroup(of: Void.self) { group in
+                for recorder in recorders {
+                    group.addTask { await self.start(recorder.session, recorder.control, meetingID: meetingID, at: start, cascade: cascade) }
+                }
             }
-            for task in each { await task.value }
         }
     }
 
@@ -428,10 +430,13 @@ final class CompanionRecorders {
     /// The same, waiting at most `limit` (quitting, going to sleep): what can't reach a device by then won't.
     func settle(within limit: Duration) async {
         let done = OnceFlag()
+        var timeout: Task<Void, Never>?
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             Task { await self.settle(); if done.set() { continuation.resume() } }
-            Task { try? await Task.sleep(for: limit); if done.set() { continuation.resume() } }
+            timeout = Task { try? await Task.sleep(for: limit); if done.set() { continuation.resume() } }
         }
+        // Settled first: the wait for the limit has nothing left to do.
+        timeout?.cancel()
     }
 
     /// After a crash, once devices are available: a recovered recording's links are closed as its
