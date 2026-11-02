@@ -113,8 +113,9 @@ public struct TermForm: View {
         guard !value.term.isEmpty else { return }
         if isNew {
             editor.add(value)
-        } else if library.glossary.contains(where: { $0.id == value.id }) {
-            editor.save(value, replacing: original, actionName: VocabularyWords.undoEdit)
+        } else {
+            // Only what the person changed, onto the term as the library has it now.
+            editor.save(value, openedAs: original)
         }
         dismiss()
     }

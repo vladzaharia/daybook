@@ -180,6 +180,48 @@ final class LibrarySettingsScreensTests: XCTestCase {
         XCTAssertEqual(editor.term(id)?.term, "Daybook", "a deleted term comes back")
     }
 
+    func testBehaviorEditTermSavesOnlyWhatThePersonChanged() async throws {
+        let library = try await makeLibrary()
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        let editor = VocabularyEditor(library: library, undoManager: undo)
+        let source = UUID()
+        library.saveGlossaryTerm(GlossaryTerm(term: "Kubernetes", approved: false, sourceMeetingIDs: [source]))
+        // Edit Term opens on the term.
+        let opened = try XCTUnwrap(library.glossary.first)
+
+        // Meanwhile another device gives it a meaning, and a summary finds it in another conversation.
+        var remote = opened
+        remote.definition = "Container orchestration"
+        let other = UUID()
+        remote.sourceMeetingIDs.append(other)
+        library.saveGlossaryTerm(remote)
+        let beforeSave = try XCTUnwrap(editor.term(opened.id))
+
+        // The person changes only its other spellings, and saves.
+        var edited = opened
+        edited.aliases = GlossaryTerm.aliases(from: "k8s, kube")
+        undo.beginUndoGrouping()
+        XCTAssertTrue(editor.save(edited, openedAs: opened))
+        undo.endUndoGrouping()
+        let saved = try XCTUnwrap(editor.term(opened.id))
+        XCTAssertEqual(saved.aliases, ["k8s", "kube"], "what the person typed")
+        XCTAssertEqual(saved.definition, "Container orchestration", "and the other device's meaning, kept")
+        XCTAssertEqual(saved.sourceMeetingIDs, [source, other], "and the conversation the summary found it in")
+        XCTAssertEqual(undo.undoActionName, "Edit Term")
+
+        undo.undo()
+        XCTAssertEqual(editor.term(opened.id), beforeSave, "undo puts back the copy from just before the save, the synced meaning with it")
+        undo.redo()
+        XCTAssertEqual(editor.term(opened.id)?.aliases, ["k8s", "kube"])
+        XCTAssertEqual(editor.term(opened.id)?.definition, "Container orchestration")
+
+        XCTAssertFalse(editor.save(edited, openedAs: opened), "the library already has the change, so nothing new is written")
+        library.removeGlossaryTerm(opened.id)
+        XCTAssertFalse(editor.save(edited, openedAs: opened))
+        XCTAssertNil(editor.term(opened.id), "a term deleted meanwhile isn't brought back")
+    }
+
     func testBehaviorDeletingATermLimitedToAConversationAsksFirst() async throws {
         let library = try await makeLibrary()
         let editor = VocabularyEditor(library: library, undoManager: nil)

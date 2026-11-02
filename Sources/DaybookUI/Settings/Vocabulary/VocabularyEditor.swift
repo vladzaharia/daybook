@@ -41,6 +41,24 @@ public struct VocabularyEditor {
         undoManager?.setActionName(actionName)
     }
 
+    /// Edit Term's Save: what the person changed since the form opened on `opened` (spelling, other spellings,
+    /// meaning, Used In), written onto the library's copy as it is now, so an edit synced from another device
+    /// meanwhile, or a conversation a summary found the term in, isn't reverted. The undo puts back the copy the
+    /// library held just before. Returns whether anything was saved: nothing is when the term was deleted
+    /// meanwhile, or when the library already has every change.
+    @discardableResult
+    public func save(_ edited: GlossaryTerm, openedAs opened: GlossaryTerm) -> Bool {
+        guard let current = term(opened.id) else { return false }
+        var merged = current
+        if edited.term != opened.term { merged.term = edited.term }
+        if edited.aliases != opened.aliases { merged.aliases = edited.aliases }
+        if edited.definition != opened.definition { merged.definition = edited.definition }
+        if edited.approved != opened.approved, current.canChangeScope || edited.approved { merged.approved = edited.approved }
+        guard merged != current else { return false }
+        save(merged, replacing: current, actionName: VocabularyWords.undoEdit)
+        return true
+    }
+
     /// A new term's spelling: it joins the vocabulary, used in every conversation. Returns the spelling saved,
     /// or "" when there's none (nothing is added).
     @discardableResult
