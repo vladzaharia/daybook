@@ -80,7 +80,7 @@ struct LibraryPage: View {
         if session.isSearching {
             results
         } else if place.isTrash {
-            TrashList(library: library)
+            TrashList(library: library, twoPage: twoPage)
         } else {
             list
         }
@@ -99,9 +99,8 @@ struct LibraryPage: View {
                         PhoneConversationRow(library: library, meeting: meeting,
                                              timeLabel: RowDate.format(meeting.date, group: group.title, now: now))
                             .tag(meeting.id)
-                            .listRowInsets(.leading, rowInset(.leading))
-                            .listRowInsets(.trailing, rowInset(.trailing))
-                            .listRowBackground(rowBackground(meeting.id))
+                            .pageRowInsets(twoPage: twoPage)
+                            .listRowBackground(PageRowBackground(shown: twoPage && !session.isSelecting && session.openID == meeting.id))
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) { swipes(meeting, edge: .trailing) }
                             .swipeActions(edge: .leading) { swipes(meeting, edge: .leading) }
                     }
@@ -129,31 +128,6 @@ struct LibraryPage: View {
         .refreshable { await model.sync.synchronize(.manual) }
         .overlay { if meetings.isEmpty && library.isLoaded { emptyPlace } }
         .motion(library.isLoaded ? PhoneStyle.Motion.state : .linear(duration: 0), value: meetings.map(\.id))
-    }
-
-    /// A row's side inset on two pages: 20 pt, and on the side that meets the Duo's crease, clear of it. Nil, the
-    /// list's own, on one page.
-    private func rowInset(_ edge: Edge) -> CGFloat? {
-        guard twoPage else { return nil }
-        return creaseEdge == edge ? PhoneStyle.Page.creaseClearance : Self.pageRowInset
-    }
-
-    private static let pageRowInset: CGFloat = 20
-    /// How far the shown row's wash reaches past its words.
-    private static let washOutset: CGFloat = 10
-
-    /// The one shown on the right page, on two pages: a wash 10 pt outside the row's words on both sides, so it
-    /// keeps clear of the crease as they do.
-    private func rowBackground(_ id: UUID) -> some View {
-        Group {
-            if twoPage && !session.isSelecting && session.openID == id {
-                RoundedRectangle(cornerRadius: 14, style: .continuous).fill(PhoneStyle.accent.opacity(0.14))
-                    .padding(.leading, (rowInset(.leading) ?? Self.pageRowInset) - Self.washOutset)
-                    .padding(.trailing, (rowInset(.trailing) ?? Self.pageRowInset) - Self.washOutset)
-            } else {
-                PhoneStyle.paper
-            }
-        }
     }
 
     /// A row's swipes, from its actions: Move to Trash and Move to Folder to the trailing edge, Work or Personal to
@@ -204,13 +178,16 @@ struct LibraryPage: View {
         let hits = LibrarySearch.hits(in: library.meetings, text: session.searchText, tokens: session.searchTokens, scope: session.searchScope)
         return List {
             // The scopes, on one page and on two, as on the Mac.
+            // Its rows line up with the list's, clear of the crease on two pages.
             SearchScopePicker(scope: $session.searchScope, folder: viewedFolder)
                 .listRowSeparator(.hidden)
+                .pageRowInsets(twoPage: twoPage)
                 .listRowBackground(PhoneStyle.paper)
             ForEach(hits) { hit in
                 if let meeting = library.meetings.first(where: { $0.id == hit.meetingID }) {
                     Button { session.open(hit) } label: { SearchResultRowView(meeting: meeting, hit: hit) }
                         .buttonStyle(.plain)
+                        .pageRowInsets(twoPage: twoPage)
                         .listRowBackground(PhoneStyle.paper)
                 }
             }
@@ -221,6 +198,7 @@ struct LibraryPage: View {
                     session.showCaption(hit.segment.id)
                 } label: { CaptionHitRowView(meeting: hit.meeting, segment: hit.segment, query: session.searchText) }
                     .buttonStyle(.plain)
+                    .pageRowInsets(twoPage: twoPage)
                     .listRowBackground(PhoneStyle.paper)
             }
         }
@@ -585,6 +563,54 @@ private struct SelectionBar: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(role == .destructive ? PhoneStyle.Ink.error : PhoneStyle.Ink.link)
+    }
+}
+
+/// A list row's side insets on the open Duo's left page: 20 pt, and on the side that meets the crease, clear of it.
+/// The library's rows, search's results, and the Trash's line up. On one page, the list's own.
+enum PageRows {
+    static func inset(_ edge: Edge, twoPage: Bool, creaseEdge: Edge?) -> CGFloat? {
+        guard twoPage else { return nil }
+        return creaseEdge == edge ? PhoneStyle.Page.creaseClearance : pageInset
+    }
+
+    static let pageInset: CGFloat = 20
+    /// How far the shown row's wash reaches past its words.
+    static let washOutset: CGFloat = 10
+}
+
+extension View {
+    /// The row's side insets on two pages (`PageRows`).
+    func pageRowInsets(twoPage: Bool) -> some View {
+        modifier(PageRowInsets(twoPage: twoPage))
+    }
+}
+
+private struct PageRowInsets: ViewModifier {
+    let twoPage: Bool
+    @Environment(\.creaseEdge) private var creaseEdge
+
+    func body(content: Content) -> some View {
+        content
+            .listRowInsets(.leading, PageRows.inset(.leading, twoPage: twoPage, creaseEdge: creaseEdge))
+            .listRowInsets(.trailing, PageRows.inset(.trailing, twoPage: twoPage, creaseEdge: creaseEdge))
+    }
+}
+
+/// A row's background on paper. The one the right page shows, on two pages, has a wash 10 pt outside its words on
+/// both sides, so it keeps clear of the crease as they do.
+struct PageRowBackground: View {
+    let shown: Bool
+    @Environment(\.creaseEdge) private var creaseEdge
+
+    var body: some View {
+        if shown {
+            RoundedRectangle(cornerRadius: 14, style: .continuous).fill(PhoneStyle.accent.opacity(0.14))
+                .padding(.leading, (PageRows.inset(.leading, twoPage: true, creaseEdge: creaseEdge) ?? 0) - PageRows.washOutset)
+                .padding(.trailing, (PageRows.inset(.trailing, twoPage: true, creaseEdge: creaseEdge) ?? 0) - PageRows.washOutset)
+        } else {
+            PhoneStyle.paper
+        }
     }
 }
 

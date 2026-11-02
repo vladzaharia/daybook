@@ -80,6 +80,47 @@ final class LibraryListPhoneTests: XCTestCase {
                        "an empty Trash says what every empty place says")
     }
 
+    func testBehaviorBesideTheTrashTwoPagesShowWhatsInItNeverTheLibrarys() {
+        let session = ReadingSession()
+        session.isNotebook = true
+        let older = Meeting(title: "Roadmap review", date: Date().addingTimeInterval(-7_200))
+        let newer = Meeting(title: "Weekly sync", date: Date().addingTimeInterval(-3_600))
+        session.place = .trash
+        session.showNewest(of: [older, newer])
+        XCTAssertNil(session.openID, "no conversation from All beside the Trash")
+
+        let gone = Meeting(title: "Old standup", date: Date().addingTimeInterval(-600))
+        let earlier = Meeting(title: "Offsite ideas", date: Date().addingTimeInterval(-86_400))
+        session.showInTrash(from: [gone, earlier])
+        XCTAssertEqual(session.trashedID, gone.id, "the newest in the Trash, as the Mac's Trash selects its first")
+        session.trashedID = earlier.id
+        session.showInTrash(from: [gone, earlier])
+        XCTAssertEqual(session.trashedID, earlier.id, "the one tapped stays while it's there")
+        session.showInTrash(from: [gone])
+        XCTAssertEqual(session.trashedID, gone.id, "restored: the next one")
+        session.showInTrash(from: [])
+        XCTAssertNil(session.trashedID, "an empty Trash: paper")
+
+        session.searchText = "standup"
+        session.showInTrash(from: [gone])
+        XCTAssertNil(session.trashedID, "searching: the results own the right page")
+        session.searchText = ""
+        session.place = .library(.section(.all))
+        session.showInTrash(from: [gone])
+        XCTAssertNil(session.trashedID, "left the Trash while it read")
+
+        session.showNewest(of: [older, newer])
+        XCTAssertEqual(session.openID, newer.id, "leaving the Trash shows the place's newest")
+        XCTAssertFalse(session.chosen)
+    }
+
+    func testBehaviorResultsAndTheTrashKeepTheListsInsetsClearOfTheCrease() {
+        XCTAssertNil(PageRows.inset(.leading, twoPage: false, creaseEdge: nil), "one page: the list's own")
+        XCTAssertEqual(PageRows.inset(.trailing, twoPage: true, creaseEdge: .trailing), ReadingGeometry.creaseClearance)
+        XCTAssertEqual(PageRows.inset(.leading, twoPage: true, creaseEdge: .trailing), PageRows.pageInset)
+        XCTAssertGreaterThanOrEqual(ReadingGeometry.creaseClearance, 24)
+    }
+
     func testBehaviorTheTrashHasOneNameTheLibrarysOwn() {
         XCTAssertEqual(ReadingPlace.trash, .library(.trash), "one place, however it's written")
         XCTAssertTrue(ReadingPlace.library(.trash).isTrash)

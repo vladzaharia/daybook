@@ -8,30 +8,26 @@ import SwiftUI
 public struct TrashRowView: View {
     private let meeting: Meeting
     private let restore: () -> Void
+    private let show: (() -> Void)?
     @Environment(\.daybookDensity) private var density
 
-    public init(meeting: Meeting, restore: @escaping () -> Void) {
+    /// `show`: a tap on its words shows it read only beside the list, where the list's selection doesn't (the
+    /// iPhone's two pages); the Mac's Trash selects the row instead.
+    public init(meeting: Meeting, restore: @escaping () -> Void, show: (() -> Void)? = nil) {
         self.meeting = meeting
         self.restore = restore
+        self.show = show
     }
 
     private var onPaper: Bool { density != .window }
 
     public var body: some View {
         HStack(alignment: .center, spacing: DaybookSpacing.s3) {
-            VStack(alignment: .leading, spacing: density == .touch ? 3 : 2) {
-                Text(ConversationRowView.title(meeting))
-                    .font(DaybookFont.rowTitle.font(density))
-                    .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
-                    .lineLimit(1)
-                Text(Self.detail(meeting))
-                    .font(DaybookFont.rowDetail.font(density))
-                    .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.secondary) : AnyShapeStyle(.secondary))
-                    .monospacedDigit()
-                    .lineLimit(1)
+            if let show {
+                Button(action: show) { words }.buttonStyle(.plain)
+            } else {
+                words
             }
-            .accessibilityElement(children: .combine)
-            Spacer(minLength: 0)
             Button(TrashWords.restore, action: restore)
                 .buttonStyle(.daybookTinted)
                 .controlSize(.small)
@@ -39,6 +35,24 @@ public struct TrashRowView: View {
         }
         .padding(.vertical, density == .touch ? 4 : 6)
         .accessibilityAction(named: TrashWords.restore, restore)
+    }
+
+    /// Its title and when, up to Restore.
+    private var words: some View {
+        VStack(alignment: .leading, spacing: density == .touch ? 3 : 2) {
+            Text(ConversationRowView.title(meeting))
+                .font(DaybookFont.rowTitle.font(density))
+                .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.title) : AnyShapeStyle(.primary))
+                .lineLimit(1)
+            Text(Self.detail(meeting))
+                .font(DaybookFont.rowDetail.font(density))
+                .foregroundStyle(onPaper ? AnyShapeStyle(DaybookPalette.Ink.secondary) : AnyShapeStyle(.secondary))
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 
     /// "Sep 3, 2026 at 10:15 AM · 28 min".

@@ -28,6 +28,8 @@ final class ReadingSession {
     var pageMode: PageMode = .summary
     /// The current layout is two pages, so a jump to the transcript opens the spread.
     var isNotebook = false
+    /// The conversation in the Trash that the notebook's right page shows, read only, beside the Trash.
+    var trashedID: UUID?
 
     /// The top of what's visible on each page, so a page reopens where it was left.
     var summaryAnchor: String?
@@ -116,6 +118,24 @@ final class ReadingSession {
 
     func closeConversation() {
         reading = false
+    }
+
+    /// On two pages with nothing open, the right page shows the newest of the place, else of All, without choosing
+    /// it. Beside the Trash it shows what's in the Trash instead (`trashedID`), never one of the library's.
+    func showNewest(of meetings: [Meeting]) {
+        guard openID == nil, !place.isTrash else { return }
+        if let newest = place.libraryPlace.meetings(in: meetings).first ?? LibraryPlace.section(.all).meetings(in: meetings).first {
+            openID = newest.id
+            chosen = false
+        }
+    }
+
+    /// Takes what the Trash read on two pages: the one shown beside it stays while it's still there, else the
+    /// newest is shown, as the Mac's Trash selects its first. Not once the person has left the Trash, or is
+    /// searching, while it read: the right page belongs to what they're looking at now.
+    func showInTrash(from read: [Meeting]) {
+        guard place.isTrash, !isSearching else { return }
+        if !read.contains(where: { $0.id == trashedID }) { trashedID = read.first?.id }
     }
 
     /// Brings a passage into view on the transcript, switching one column to it.

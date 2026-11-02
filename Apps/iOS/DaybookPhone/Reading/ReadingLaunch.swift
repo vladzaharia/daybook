@@ -3,7 +3,8 @@ import Foundation
 
 /// Debug launch arguments that put a reading surface on screen for screenshots, without tapping:
 ///
-///     --select "<title>"                 open the conversation with exactly that title
+///     --select "<title>"                 open the conversation with exactly that title (with --place trash, show
+///                                        the one in the Trash beside it on two pages)
 ///     --page summary|transcript          which side one column shows
 ///     --spread library|conversation      the notebook's spread (default: conversation when selected)
 ///     --place work|personal|trash|folder:<name>
@@ -87,6 +88,11 @@ struct ReadingLaunch {
         if let selectMany, !session.place.isTrash {
             session.isSelecting = true
             session.selection = Set(session.place.libraryPlace.meetings(in: library.meetings).prefix(selectMany).map(\.id))
+        }
+        // The Trash's own, beside it on two pages.
+        if session.place.isTrash, let select {
+            session.trashedID = LibraryController.trashedMeetings(in: library.rootURL).first { $0.title == select }?.id
+            return
         }
         // The exact title, as on the Mac, so one flag opens the same conversation on both.
         guard let select, let meeting = library.meetings.first(where: { $0.title == select }) else { return }

@@ -88,6 +88,8 @@ private struct ReadingLayout: View {
             adapt(to: style)
         }
         .onChange(of: style) { _, style in adapt(to: style) }
+        // Leaving the Trash with nothing open shows the place's newest beside it.
+        .onChange(of: session.place) { _, _ in if style != .pocket { adapt(to: style) } }
         .onChange(of: library.meetings.map(\.id)) { _, ids in
             // A conversation trashed elsewhere (or by sync) leaves the page.
             if let open = session.openID, !ids.contains(open) { session.forget(open) }
@@ -189,7 +191,20 @@ private struct ReadingLayout: View {
     }
 
     @ViewBuilder private var rightPage: some View {
-        if let id = session.openID, let meeting = library.meeting(id) {
+        if showsTrash {
+            // Beside the Trash, the one shown there, read only, as the Mac's page beside its Trash.
+            withStatusPanel { footprint in
+                NavigationStack {
+                    TrashedPage(library: library, id: session.trashedID)
+                        .scrollEdgeEffectStyle(.hard, for: .bottom)
+                        .safeAreaBar(edge: .bottom, spacing: 0) {
+                            Rectangle().fill(Color.primary.opacity(0.001)).frame(height: footprint).accessibilityHidden(true)
+                        }
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+            .transition(.opacity)
+        } else if let id = session.openID, let meeting = library.meeting(id) {
             if session.reading {
                 NavigationStack {
                     PhoneTranscriptPage(library: library, player: session.player, meeting: meeting, showsHeader: false)
@@ -233,6 +248,13 @@ private struct ReadingLayout: View {
         }
     }
 
+    /// The left page lists the Trash (the conversations' spread isn't open, nor search), so the right page shows
+    /// what's in it.
+    private var showsTrash: Bool {
+        let spread = session.reading && session.openID.flatMap { library.meeting($0) } != nil
+        return !spread && session.place.isTrash && !session.isSearching
+    }
+
     /// The right page while browsing: the status panel at its foot, the page keeping clear of the
     /// room it takes (`footprint`, compact or medium). Expanded to the full page, the panel stands in
     /// for the preview until it's collapsed.
@@ -261,13 +283,8 @@ private struct ReadingLayout: View {
         if style == .pocket {
             // The conversation the person chose on the right page stays open in one column.
             if !session.reading, session.chosen, session.openID != nil, !session.isSelecting { session.reading = true }
-        } else if session.openID == nil {
-            // The Trash lists none of the library's: the newest of All, then.
-            let place = session.place.libraryPlace
-            if let newest = place.meetings(in: library.meetings).first ?? LibraryPlace.section(.all).meetings(in: library.meetings).first {
-                session.openID = newest.id
-                session.chosen = false
-            }
+        } else {
+            session.showNewest(of: library.meetings)
         }
     }
 }

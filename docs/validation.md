@@ -126,6 +126,14 @@ From the review of the shared library list.
   transcript and newer captions opened where the caption wasn't, and the next conversation opened on Transcript too.
   A caption result now opens the summary page at its captions (`MacSearch.open`, `PageAnchor.captions`), and a title
   or summary result clears an earlier result's place. `LibraryPlaceTests` covers where each kind of result opens.
+- **Results and the Trash at the Duo's crease.** On the open Duo's left page, the list kept its rows 24 pt from the
+  crease, but search's scopes and results and the Trash's rows used the list's default insets, so the dates and
+  Restore ended about 20 pt from it. All of them now take the list's insets (`pageRowInsets`).
+- **The Duo's right page beside the Trash.** It showed the newest conversation in All, with Open, beside the Trash,
+  and a trashed conversation couldn't be read before restoring it. It now shows one of the Trash's read only with
+  Restore (`TrashedPage`, DaybookUI's `TrashedConversationPage`, the Mac's page beside its Trash): the newest, or
+  the one tapped, and paper when the Trash is empty. `LibraryListPhoneTests` covers which one, and that leaving the
+  Trash shows the place's newest again.
 - **One name for the iPhone's Trash.** `ReadingPlace.trash` was a second case beside `.library(.trash)`; it's now
   the same value, and every check goes through `isTrash`.
 
@@ -137,7 +145,11 @@ place's selection), `SharedNameTests`, `LibraryTrashAndFilingTests`, `LibrarySea
 `LibraryListPhoneTests` and `ReadingTests` (37) passed, including the Trash's one name and caption search leaving
 out an earlier transcript with newer captions. Screenshots from clones of the iPhone 18 Pro and the Daybook Shell Duo
 (open, through `duo-fold.sh`): search with results, with none, and in a folder (its scope too), and the Trash. Mac
-window snapshots (`--snapshot`, a scratch library): search, search in a folder, no results, and the Trash.
+window snapshots (`--snapshot`, a scratch library): search, search in a folder, no results, and the Trash. After the
+second review: the Mac's library suites, `SharedNameTests`, and `LiveCaptionsTests` passing; `LibraryListPhoneTests`,
+`ReadingTests`, and `ShellTests` (48) on an iPhone 18 Pro clone; screenshots of the open Duo's list, search, and
+Trash (its right page reading the trashed conversation, Restore and the results' dates 24 pt from the crease), the
+iPhone's Trash on one page, and the Mac's Trash.
 
 **Not checked by hand.** On this Mac: dragging one row and a three-row selection onto a folder, Work, and the Trash;
 dragging a row into TextEdit or Mail; and Share… with AirDrop, Mail, and Messages. The Mac is shared with other

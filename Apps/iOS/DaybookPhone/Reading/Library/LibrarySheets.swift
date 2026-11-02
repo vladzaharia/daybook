@@ -4,9 +4,11 @@ import SwiftUI
 
 /// The Trash: what was moved out of the library, with its audio and notes, newest first, and Restore in sight, in
 /// a row's menu, and on a swipe. The rows are DaybookUI's, the Mac's Trash's too; the list is read from the library
-/// (`LibraryController.trashedMeetings()`) whenever its conversations change.
+/// (`LibraryController.trashedMeetings()`) whenever its conversations change. On two pages, as on the Mac, the right
+/// page shows one of them read only (`TrashedPage`): the newest, or the one tapped.
 struct TrashList: View {
     let library: LibraryController
+    var twoPage = false
     @Environment(ReadingSession.self) private var session
     @State private var trashed: [Meeting] = []
     @State private var loaded = false
@@ -14,8 +16,10 @@ struct TrashList: View {
     var body: some View {
         List {
             ForEach(trashed) { meeting in
-                TrashRowView(meeting: meeting) { restore(meeting.id) }
-                    .listRowBackground(PhoneStyle.paper)
+                TrashRowView(meeting: meeting, restore: { restore(meeting.id) },
+                             show: twoPage ? { session.trashedID = meeting.id } : nil)
+                    .pageRowInsets(twoPage: twoPage)
+                    .listRowBackground(PageRowBackground(shown: twoPage && session.trashedID == meeting.id))
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
                         Button { restore(meeting.id) } label: { Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol) }
                             .tint(PhoneStyle.prominentFill)
@@ -35,18 +39,52 @@ struct TrashList: View {
         }
         // Moving to the Trash and restoring change the library's conversations, so its revision.
         .task(id: library.revision) {
-            trashed = await library.trashedMeetings()
+            let read = await library.trashedMeetings()
+            guard !Task.isCancelled else { return }
+            trashed = read
             loaded = true
+            if twoPage { session.showInTrash(from: read) }
         }
     }
 
     private func restore(_ id: UUID) {
+        Self.restore(id, library: library, session: session)
+    }
+
+    /// Puts a conversation back in the library, or says it couldn't.
+    static func restore(_ id: UUID, library: LibraryController, session: ReadingSession) {
         Task {
             do {
                 try await library.restoreFromTrash(id)
             } catch {
                 session.alert = ReadingAlert(title: "Couldn’t Restore", error: error, fallback: "Try again.")
             }
+        }
+    }
+}
+
+/// The right page beside the Trash on two pages: the conversation shown there, read only, with Restore (DaybookUI's
+/// `TrashedConversationPage`, the Mac's page beside its Trash); paper while there's none.
+struct TrashedPage: View {
+    let library: LibraryController
+    let id: UUID?
+    @Environment(ReadingSession.self) private var session
+    @State private var meeting: Meeting?
+
+    var body: some View {
+        ZStack {
+            if let meeting {
+                TrashedConversationPage(meeting: meeting) { TrashList.restore(meeting.id, library: library, session: session) }
+            } else {
+                PhoneStyle.paper.ignoresSafeArea()
+            }
+        }
+        // Restoring it changes the library's revision; it's gone from the Trash then.
+        .task(id: [id, library.revision] as [AnyHashable?]) {
+            guard let id else { meeting = nil; return }
+            let read = await library.trashedMeeting(id)
+            guard !Task.isCancelled else { return }
+            meeting = read
         }
     }
 }
