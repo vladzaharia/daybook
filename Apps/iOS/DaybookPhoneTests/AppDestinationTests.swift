@@ -117,6 +117,38 @@ final class AppDestinationTests: XCTestCase {
         XCTAssertEqual(startedOver, 1, "once a run")
     }
 
+    func testBehaviorSiriLearnsTheConversationsItMayNameOnceTheyveSettled() async throws {
+        var refreshed = 0
+        let indexer = ConversationIndex.Indexer(isActive: true, index: { _ in }, remove: { _ in }, removeAll: {},
+                                                refreshPhrases: { refreshed += 1 })
+        let index = ConversationIndex(indexer: indexer, namingDelay: .zero)
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let meetings = (0..<(ConversationQuery.limit + 1)).map { Meeting(title: "Conversation \($0)", date: start.addingTimeInterval(Double($0) * 60)) }
+        index.update(ConversationIndex.entries(meetings))
+        await index.settle()
+        XCTAssertEqual(refreshed, 1, "a run's first list: what came while Daybook wasn't running")
+
+        // A title being typed: told once, when it settles.
+        var renamed = meetings
+        for title in ["P", "Pri", "Pricing review"] {
+            renamed[ConversationQuery.limit].title = title
+            index.update(ConversationIndex.entries(renamed))
+        }
+        await index.settle()
+        XCTAssertEqual(refreshed, 2)
+
+        // The oldest, past what Siri suggests, changes nothing it may name.
+        renamed[0].title = "Kickoff"
+        index.update(ConversationIndex.entries(renamed))
+        await index.settle()
+        XCTAssertEqual(refreshed, 2)
+
+        // A new conversation is one it may name.
+        index.update(ConversationIndex.entries(renamed + [Meeting(title: "Hiring sync", date: start.addingTimeInterval(86_400))]))
+        await index.settle()
+        XCTAssertEqual(refreshed, 3)
+    }
+
     func testBehaviorAConversationIsAnEntityByItsTitleAndDate() {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let entity = ConversationEntity(ConversationIndex.Entry(id: UUID(), title: "Design review", date: date))

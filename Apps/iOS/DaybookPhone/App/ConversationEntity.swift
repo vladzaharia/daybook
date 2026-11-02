@@ -127,6 +127,9 @@ final class ConversationIndex {
         var remove: @MainActor ([UUID]) async -> Void
         /// Takes every conversation out, whatever an earlier run listed.
         var removeAll: @MainActor () async -> Void
+        /// Siri's phrases with a conversation in them ("Open Pricing review in Daybook") learn the ones
+        /// `ConversationQuery` suggests now.
+        var refreshPhrases: @MainActor () -> Void = {}
 
         static let none = Indexer(isActive: false, index: { _ in }, remove: { _ in }, removeAll: {})
 
@@ -136,6 +139,8 @@ final class ConversationIndex {
             try? await CSSearchableIndex.default().deleteAppEntities(identifiedBy: ids, ofType: ConversationEntity.self)
         }, removeAll: {
             try? await CSSearchableIndex.default().deleteAppEntities(ofType: ConversationEntity.self)
+        }, refreshPhrases: {
+            DaybookShortcuts.updateAppShortcutParameters()
         })
     }
 
@@ -143,9 +148,16 @@ final class ConversationIndex {
     /// What Spotlight has now, by conversation; nil until this run's first update.
     private(set) var listed: [UUID: Entry]?
     private var updating: Task<Void, Never>?
+    /// The conversations Siri was last told it may name (`ConversationQuery.suggestedEntities`); nil until
+    /// this run's first update, which tells it what changed while Daybook wasn't running.
+    private var named: [Entry]?
+    private var naming: Task<Void, Never>?
+    /// How long Siri's phrases wait for the list to settle, so a title being typed tells it once.
+    private let namingDelay: Duration
 
-    init(indexer: Indexer) {
+    init(indexer: Indexer, namingDelay: Duration = .seconds(5)) {
         self.indexer = indexer
+        self.namingDelay = namingDelay
     }
 
     /// The conversations Spotlight lists, newest first: none that's Personal.
@@ -155,8 +167,20 @@ final class ConversationIndex {
 
     /// Lists what's new or changed and removes what went (Trash, Personal), after any update before it.
     /// A run's first update starts Spotlight's list over: what changed while Daybook wasn't running (a
-    /// conversation trashed or made Personal on another device) never stays listed.
+    /// conversation trashed or made Personal on another device) never stays listed. When the conversations
+    /// Siri may name change, it's told once they've settled.
     func update(_ entries: [Entry]) {
+        let suggested = Array(entries.prefix(ConversationQuery.limit))
+        if suggested != named {
+            named = suggested
+            naming?.cancel()
+            let refresh = indexer.refreshPhrases, delay = namingDelay
+            naming = Task {
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled else { return }
+                refresh()
+            }
+        }
         let wanted = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let startsOver = listed == nil
         let before = listed ?? [:]
@@ -173,8 +197,9 @@ final class ConversationIndex {
         }
     }
 
-    /// Waits for what's been asked of Spotlight (tests).
+    /// Waits for what's been asked of Spotlight and Siri (tests).
     func settle() async {
         await updating?.value
+        await naming?.value
     }
 }
