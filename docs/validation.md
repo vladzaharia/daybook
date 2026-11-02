@@ -47,6 +47,55 @@ Review fixes to the wave 2 Mac app work (MSQ-01, MSQ-23, MSQ-21, HIG-24).
 **Still needs a person.** A real library move in a bundled build (the new copy opens with the library, the old one
 quits, one Dock icon), and a logout with a recording under way.
 
+## Call detection, notifications, Shortcuts and Spotlight, and one Welcome (2026-11-02)
+
+From the November audit ([capture](capture.md), [sandbox](sandbox.md#capabilities-and-entitlements)).
+
+**What changed.**
+
+- **Call detection** reads windows and audio processes off the main thread, one process list and one window list a
+  look, on a task loop that stopping cancels. A failed look counts as unknown: a call ends only after its 45 s grace,
+  and three failures in a row say so in the status line.
+- **Without Screen & System Audio Recording**, a recording with no call app records the microphone alone with one
+  warning; a known call app still fails the start.
+- **Notifications** (`RecordingNotifications`): "Recording stopped" with the conversation's title (never a Personal
+  one's), why, and Record Again, and "Recording" for an automatic start, only while Daybook isn't in front, and taken
+  back once no longer true. Permission is asked on the first recording, or when Record calls automatically is turned on.
+- **App Intents** (`DaybookIntents`): Start Recording, Stop Recording, Add Bookmark, New Note, and Show Floating Notes,
+  with the iPhone's phrases, and Open Conversation on `ConversationEntity`, which Spotlight indexes
+  (`ConversationSpotlight`), never a Personal conversation.
+- **Welcome**, one paged Welcome for both apps (`DaybookUI/Welcome`): Allow Recording (the Mac's microphone and
+  computer audio, the iPhone's microphone), Record and Import that wait for the library, the Mac's presets with the room
+  each needs, and the iPhone's Pair with Your Mac and its own models. The iPhone's opens on a first launch only, never for
+  someone with conversations or a paired Mac (read from the stored pairings, before the link starts).
+- **Recorders recording along** start at once, in a task group, with their links written in the recorders' order first.
+
+**How it was checked.** `swift build --build-tests` clean. Focused suites: `CaptureTests`, `CallCaptureTests` (a look off
+the main thread, failures as unknown), `SystemEntryPointsTests` (each intent on a test state, notifications through a
+fake center, Spotlight's items without Personal ones), `WelcomeTests`, `WelcomeWordsTests`, and the link and multipoint
+suites, run repeatedly (`MultipointRecordingTests` lists five recorders' links in order). `PhoneWelcomeTests` on a clone
+of the iPhone simulator (deleted afterwards). Window snapshots of every Welcome page, light and dark, and with too little
+room for a preset; iPhone screenshots of every page, dark and at accessibility text sizes.
+
+**Still needs a real system.**
+
+- **Intents with Daybook not running**, from Shortcuts, Siri ("Start recording in Daybook"), and Spotlight: Start
+  Recording launches Daybook and records once the library opens; Stop Recording, Add Bookmark, New Note, and Show
+  Floating Notes act on the recording in progress, or say Daybook isn't recording. With a library move waiting, each
+  says to open Daybook.
+- **Spotlight** finds a conversation by its title and opens it with Open Conversation; a Personal conversation is never
+  found; a renamed or deleted one follows. A conversation whose kind isn't known yet is indexed by its title until it's
+  classified.
+- **Notifications** from a bundled build with Daybook in the background: "Recording stopped" when the microphone goes
+  away mid-recording, and Record Again starting a new one; "Recording" for an automatic start over a full-screen call;
+  neither while Daybook is in front; the permission prompt asked once. A click that launches Daybook may only open it:
+  the notifications' delegate is installed with the library window.
+- **Welcome's Allow rows** against the real prompts: Microphone's Allow… shows the system prompt, then reads Allowed;
+  Computer Audio's Allow… after its prompt, and Open System Settings… once declined, reading Allowed after granting and
+  relaunching. The iPhone's Allow and Open Settings the same way.
+- **Call detection** through a long call with many windows open: no hitch in Daybook every 2 s, and the call kept
+  through a failed look.
+
 ## Release review for 0.5.0 (2026-11-01)
 
 Window snapshots of the Mac (library, summary, transcript, inspector, the summary countdown, Upgrade, Floating Notes,
