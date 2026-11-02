@@ -251,7 +251,14 @@ final class DevicePageTests: XCTestCase {
         session.libraryChanged([imported, overlapping], ready: true)
 
         XCTAssertEqual(DeviceRecordingActions.available([.recording(new.id)], in: session, revealsAudio: true),
-                       [.importRecordings(1), .addTo(overlapping.id, title: "Design review"), .chooseConversation])
+                       [.importRecordings(1), .addTo(overlapping.id, title: "Design review"), .chooseConversation],
+                       "no Import over Wi‑Fi from a recorder without its own Wi‑Fi here")
+        XCTAssertEqual(DeviceRecordingActions.importActions(count: 1, overlaps: session.overlaps(new), offersFastTransfer: true),
+                       [.importRecordings(1), .importOverWiFi, .addTo(overlapping.id, title: "Design review"), .chooseConversation],
+                       "the iPhone brings one over the recorder's Wi‑Fi on request, whatever its length")
+        XCTAssertEqual(DeviceRecordingActions.importActions(count: 2, overlaps: [], offersFastTransfer: true),
+                       [.importRecordings(2), .chooseConversation], "Fast Transfer on request is for one recording")
+        XCTAssertEqual(DeviceRecordingAction.importOverWiFi.title, "Import over Wi‑Fi")
         XCTAssertEqual(DeviceRecordingActions.available([.recording(inDaybook.id)], in: session, revealsAudio: true),
                        [.showConversation(imported.id), .showInFinder(imported.id)],
                        "one recording is in one conversation: it opens there, never imported again beside it")

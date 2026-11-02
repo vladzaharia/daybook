@@ -135,8 +135,8 @@ enum DevicePageRoute: Hashable, Identifiable {
     var id: Self { self }
 }
 
-/// One recorder: the page both apps show (`RecorderDevicePage`), with its menu in the bar, and the screens it pushes:
-/// Details, Listen Live, and All Recordings.
+/// One recorder: the page both apps show (`RecorderDevicePage`), with its menu in the bar, the screens it pushes
+/// (Details, Listen Live, and All Recordings), and Choose Conversation…'s sheet.
 struct DevicePage: View {
     @Environment(PhoneAppModel.self) private var model
     let sessionID: String
@@ -206,6 +206,11 @@ private struct DevicePageContent: View {
                 }
             }
             .environment(\.recorderServices, services)
+        }
+        // A new recording's Choose Conversation… on the page, as the Mac's device page presents it.
+        .sheet(item: Bindable(session.browser).choosingConversation) { choice in
+            ConversationChooser(session: session, recordings: choice.recordings)
+                .environment(\.recorderServices, services)
         }
         .refreshable { session.direct?.refresh() }
         .task {

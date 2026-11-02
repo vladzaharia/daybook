@@ -11,6 +11,8 @@ import SwiftUI
 public enum DeviceRecordingAction: Hashable {
     /// Import the chosen recordings, each as a new conversation.
     case importRecordings(Int)
+    /// Import it over the recorder's own Wi‑Fi (Fast Transfer, on the iPhone), whatever its length.
+    case importOverWiFi
     /// Import into the conversation recorded at the same time.
     case addTo(Meeting.ID, title: String)
     case chooseConversation
@@ -24,6 +26,7 @@ public enum DeviceRecordingAction: Hashable {
     public var title: String {
         switch self {
         case .importRecordings(let count): return count > 1 ? "Import \(count) Recordings" : "Import"
+        case .importOverWiFi: return "Import over Wi‑Fi"
         case .addTo(_, let title): return "Add to “\(title)”"
         case .chooseConversation: return "Choose Conversation…"
         case .removeFromQueue: return "Remove from Queue"
@@ -55,12 +58,8 @@ public enum DeviceRecordingActions {
         let imported = recordings.filter { links.imported[$0.id] != nil }
         let fresh = recordings.filter { links.imported[$0.id] == nil && !session.queue.contains($0.id) }
         if !fresh.isEmpty, imported.isEmpty, session.importsHere {
-            var actions: [DeviceRecordingAction] = [.importRecordings(fresh.count)]
-            if fresh.count == 1 {
-                actions += session.overlaps(fresh[0]).map { .addTo($0.meetingID, title: $0.title) }
-            }
-            actions.append(.chooseConversation)
-            return actions
+            return importActions(count: fresh.count, overlaps: fresh.count == 1 ? session.overlaps(fresh[0]) : [],
+                                 offersFastTransfer: session.offersFastTransfer)
         }
         // A recording in Daybook is in one conversation, which an import of it again would join rather than copy
         // (docs/devices.md, "Library identity"): it opens there, and imports again once that conversation is gone.
@@ -70,6 +69,18 @@ public enum DeviceRecordingActions {
             return actions
         }
         return []
+    }
+
+    /// The ways in for `count` recordings not in Daybook: Import; for one, Import over Wi‑Fi where the recorder's own
+    /// Wi‑Fi can bring it (the iPhone) and Add to each conversation it overlaps; then Choose Conversation….
+    public static func importActions(count: Int, overlaps: [DeviceOverlap], offersFastTransfer: Bool) -> [DeviceRecordingAction] {
+        var actions: [DeviceRecordingAction] = [.importRecordings(count)]
+        if count == 1 {
+            if offersFastTransfer { actions.append(.importOverWiFi) }
+            actions += overlaps.map { .addTo($0.meetingID, title: $0.title) }
+        }
+        actions.append(.chooseConversation)
+        return actions
     }
 
     /// The recordings rows name: what the recorder lists, and what's queued from it.
@@ -86,6 +97,7 @@ public enum DeviceRecordingActions {
                                services: RecorderServices?, choose: ([DeviceRecording]) -> Void) {
         switch action {
         case .importRecordings: session.importRecordings(recordings.filter { session.links.imported[$0.id] == nil })
+        case .importOverWiFi: session.importRecordings(recordings.filter { session.links.imported[$0.id] == nil }, overWiFi: true)
         case .addTo(let meetingID, _): session.importRecordings(recordings, attachTo: meetingID)
         case .chooseConversation: choose(recordings)
         case .removeFromQueue: recordings.forEach { session.removeFromQueue($0.id) }

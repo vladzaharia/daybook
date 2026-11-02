@@ -377,7 +377,8 @@ pushes, Settings).
 - **Its recordings** (`DeviceRecordingsView`): Recording Now, the queue, New on <kind> with Import All, and Already
   in Daybook (collapsed on the Mac). The Mac shows them in the list column, where a selection opens a recording's
   page or its conversation; the iPhone pushes them as All Recordings. A recording's actions are one list
-  (`DeviceRecordingActions`): Import, Add to “<the conversation recorded at the same time>”, Choose Conversation…
+  (`DeviceRecordingActions`): Import, on the iPhone Import over Wi‑Fi for one recording (Fast Transfer whatever its
+  length), Add to “<the conversation recorded at the same time>”, Choose Conversation…
   (`ConversationChooser`, a sheet with search), Remove from Queue, Stop Importing, Show Conversation, and on the Mac
   Show Audio File in Finder; in a context menu on both, as swipes on the iPhone. A recording in Daybook isn't
   imported again beside its conversation: the library keeps one conversation per recording ("Library identity").
