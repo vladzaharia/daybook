@@ -34,6 +34,31 @@ final class ConversationInfoWordsTests: XCTestCase {
         XCTAssertEqual(meeting.peopleLine, "2 speakers")
     }
 
+    func testBehaviorCreatedAndEditedSayTheYearOnlyWhenItIsntThisOne() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_793_000_000) // November 2026
+        let thisYear = now.addingTimeInterval(-30 * 86_400)
+        let lastYear = now.addingTimeInterval(-400 * 86_400)
+        XCTAssertEqual(InfoDate.format(thisYear, now: now, calendar: calendar),
+                       thisYear.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
+        XCTAssertEqual(InfoDate.format(lastYear, now: now, calendar: calendar),
+                       lastYear.formatted(.dateTime.day().month(.abbreviated).year().hour().minute()))
+    }
+
+    func testBehaviorSpeakerProfilesSayWhatEachDestructiveActionCosts() {
+        XCTAssertEqual(SpeakerProfileWords.deleteTitle("Vlad"), "Delete “Vlad”?")
+        XCTAssertTrue(SpeakerProfileWords.deleteMessage.contains("stops recognizing this voice"))
+        XCTAssertEqual(SpeakerProfileWords.mergeInto("Vlad"), "Merge Into Vlad", "the same on the Mac and the iPhone")
+        XCTAssertEqual(SpeakerProfileWords.profiles(0), "No profiles yet")
+        XCTAssertEqual(SpeakerProfileWords.voiceprints(2), "2 voiceprints")
+        for words in [SpeakerProfileWords.deleteMessage, SpeakerProfileWords.forgetMessage,
+                      SpeakerProfileWords.removeVoiceprintMessage("Vlad", from: "Planning walk")] {
+            XCTAssertFalse(words.contains("—"), "no dash asides")
+            XCTAssertTrue(words.hasSuffix("."), "a sentence")
+        }
+    }
+
     func testBehaviorATagTypedWithACommaMakesTwoTagsOnBothApps() {
         XCTAssertEqual(TagInput.tags(in: "client, beta"), ["client", "beta"], "the iPhone used to make one tag, \"client  beta\"")
         XCTAssertEqual(TagInput.adding("Beta,  launch   week ,#pricing,,", to: ["beta"]), ["beta", "launch week", "pricing"],
