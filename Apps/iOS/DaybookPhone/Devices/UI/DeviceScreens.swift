@@ -504,9 +504,11 @@ private struct SetupScreen: View {
                     RecorderHandoffView(session: session, style: .card)
                         .listRowInsets(EdgeInsets())
                 }
-            } else if let discovering = session.direct as? any DiscoveringConnection {
+            } else if case .discover = AddRecorderStep.after(choosing: session.kind, on: .iPhone),
+                      let discovering = session.direct as? any DiscoveringConnection {
+                // Its only way in here is direct (the shared step rule): finding it nearby.
                 discovery(discovering)
-            } else if let files = session.files {
+            } else if let files = session.files, AddRecorderStep.methods(session.kind, on: .iPhone).contains(where: { $0.kind == .files }) {
                 Section {
                     Button { choosingFolder = true } label: { SettingsActionLabel(title: "Choose Folder…", systemImage: "folder") }
                     if let folderError { Text(folderError).font(.footnote).foregroundStyle(PhoneStyle.Ink.warning) }

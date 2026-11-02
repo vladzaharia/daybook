@@ -395,9 +395,11 @@ pushes, Settings).
   (prominent for the nearest), the problem in its box, the same tips on both in each device's words
   (`RecorderStatusWords.discoveryTips`), and the folder instead when nothing was found. Every step on the Mac has
   one header (a 20 pt glyph and the title, left-aligned) and its actions in the footer: Back, then Cancel and the
-  step's own (Stop while it looks; Try Again or Look Again, the default). On the Mac a direct method's card is the
-  pre-permission screen; on the iPhone, Search. A recorder already set up opens its page; one a Mac manages offers
-  Use on This iPhone instead of a search. Settings › Devices on the Mac offers Pair with iPhone… beside Add Device….
+  step's own (Stop while it looks; Try Again, the default, when nothing was found; Look Again once something was,
+  with the nearest recorder's Connect as the default). Where a step leads is one rule (`AddRecorderStep`), and a
+  problem there offers only what setup can do about it (Open Settings, Try Again). On the Mac a direct method's card
+  is the pre-permission screen; on the iPhone, Search. A recorder already set up opens its page; one a Mac manages
+  offers Use on This iPhone instead of a search. Settings › Devices on the Mac offers Pair with iPhone… beside Add Device….
 - **Settings › Devices** (Mac): per recorder, its methods (Connect directly over Bluetooth, Managed by, Recorder
   with Forget…, the folder with Choose…), then the same Options section as the page.
 - **Menus** (Mac): File › Add Device… and Import from <device>…; Add Recording › From <device>…;

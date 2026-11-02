@@ -90,6 +90,16 @@ final class DevicePageTests: XCTestCase {
                        "the iPhone imports exports with Import Audio, and shows technical facts on Details")
     }
 
+    func testBehaviorSetupOffersOnlyWhatItCanDoAboutAProblem() {
+        XCTAssertNil(RecorderSetupProblem.action(SoundcoreIssue.rejected.problem, on: .mac),
+                     "the folder is the step's own fallback, and Technical Details isn't a search")
+        XCTAssertEqual(RecorderSetupProblem.action(SoundcoreIssue.connectTimeout.problem, on: .mac), .tryAgain)
+        XCTAssertEqual(RecorderSetupProblem.action(SoundcoreIssue.bluetoothOff.problem, on: .iPhone), .openBluetoothSettings)
+        XCTAssertEqual(RecorderSetupProblem.action(SoundcoreIssue.bluetoothDenied.problem, on: .mac), .openPrivacySettings)
+        XCTAssertNil(RecorderSetupProblem.action(SoundcoreIssue.bluetoothUnsupported.problem, on: .mac))
+        XCTAssertNil(RecorderSetupProblem.action(SoundcoreIssue.listFailed.problem, on: .mac), "Refresh Status is a connected recorder's")
+    }
+
     // MARK: What can be done now
 
     func testBehaviorThePageOffersWhatTheRecorderCanDoNowTheSameOnBothDevices() {
@@ -154,6 +164,13 @@ final class DevicePageTests: XCTestCase {
         XCTAssertNil(RecorderStatusWords.discoveryAction(searching: false, connecting: true, found: true))
         XCTAssertEqual(AddRecorderStep.after(choosing: kind, on: .iPhone), .discover(kind.id), "the iPhone adds a Soundcore over Bluetooth")
         XCTAssertEqual(AddRecorderStep.after(choosing: kind, on: .mac), .methods(kind.id))
+
+        // The Mac's Add Device takes the step the rule names.
+        XCTAssertEqual(AddDeviceSheet.step(choosing: kind), .setUp(kind.id), "a Soundcore's two ways in on the Mac")
+        let folder = OtherRecorderIntegration().kind
+        XCTAssertEqual(AddRecorderStep.after(choosing: folder, on: .iPhone), .methods(folder.id), "a folder is chosen on its own step")
+        XCTAssertEqual(AddDeviceSheet.step(choosing: folder), .setUp(folder.id))
+        XCTAssertEqual(AddDeviceSheet.step(choosing: DaybookPhoneIntegration().kind), .pairPhone)
     }
 
     func testBehaviorARecordersOptionsAreOneSetOfWords() {

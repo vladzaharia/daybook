@@ -48,7 +48,7 @@ struct AddDeviceSheet: View {
         ZStack {
             switch step {
             case .choose:
-                KindChooser(state: state, choose: { go(to: $0.id == DaybookPhoneIntegration.id ? .pairPhone : .setUp($0.id)) }, cancel: close)
+                KindChooser(state: state, choose: { go(to: Self.step(choosing: $0)) }, cancel: close)
                     .transition(transition)
             case .pairPhone:
                 PhonePairingStep(state: state, back: request.kindID == nil ? { go(to: .choose, forward: false) } : nil) { paired in
@@ -66,7 +66,7 @@ struct AddDeviceSheet: View {
             case .discover(let id):
                 if let session, session.kind.id == id, let direct = session.direct as? SoundcoreConnection {
                     DiscoveryStep(session: session, connection: direct,
-                                  back: request.method == .direct ? nil : { go(to: .setUp(id), forward: false) },
+                                  back: backFromDiscovering(id),
                                   useFolder: session.files == nil || session.files?.isSetUp == true ? nil : {
                                       direct.stopSearching()
                                       if state.chooseDeviceFolder(for: session) { finish(session) }
@@ -81,6 +81,27 @@ struct AddDeviceSheet: View {
         .clipped()
         .environment(\.recorderServices, state.recorderServices)
         .onAppear { prepare(step) }
+    }
+
+    /// Where choosing a kind leads, by the rule the iPhone follows too (`AddRecorderStep`): Daybook on iPhone pairs; a
+    /// kind whose only way in here is direct is looked for at once; any other offers its ways in.
+    static func step(choosing kind: DeviceKind) -> Step {
+        if kind.id == DaybookPhoneIntegration.id { return .pairPhone }
+        switch AddRecorderStep.after(choosing: kind, on: .mac) {
+        case .kinds: return .choose
+        case .methods(let id): return .setUp(id)
+        case .discover(let id): return .discover(id)
+        }
+    }
+
+    /// Back from finding a recorder: to the kinds when it came straight from them, else to its ways in; nowhere when
+    /// the sheet opened on this step.
+    private func backFromDiscovering(_ id: String) -> (() -> Void)? {
+        guard request.method != .direct else { return nil }
+        if request.kindID == nil, let kind = DeviceCatalog.kind(id), case .discover = AddRecorderStep.after(choosing: kind, on: .mac) {
+            return { go(to: .choose, forward: false) }
+        }
+        return { go(to: .setUp(id), forward: false) }
     }
 
     /// Starts (or continues) setting up the step's kind, outside of view updates.
@@ -194,11 +215,12 @@ private struct MethodChooser: View {
 
     var body: some View {
         let kind = session.kind
+        let methods = AddRecorderStep.methods(kind, on: .mac)
         VStack(alignment: .leading, spacing: 0) {
             AddRecorderHeader(symbol: kind.systemImage, title: "Set Up \(kind.name)")
             VStack(spacing: Space.s3) {
-                ForEach(Array(kind.implementedMethods.enumerated()), id: \.element.id) { index, method in
-                    MethodCard(method: method, recommended: index == 0 && kind.implementedMethods.count > 1,
+                ForEach(Array(methods.enumerated()), id: \.element.id) { index, method in
+                    MethodCard(method: method, recommended: index == 0 && methods.count > 1,
                                isSetUp: session.connection(method.kind)?.isSetUp == true) {
                         switch method.kind {
                         case .direct: discover()
@@ -294,6 +316,9 @@ private struct DiscoveryStep: View {
                 if let action = RecorderStatusWords.discoveryAction(searching: searching, connecting: connecting, found: found) {
                     if searching {
                         Button(action) { connection.stopSearching() }
+                    } else if found {
+                        // Look Again: the nearest recorder's Connect is the default.
+                        Button(action) { connection.search() }
                     } else {
                         Button(action) { connection.search() }.keyboardShortcut(.defaultAction)
                     }

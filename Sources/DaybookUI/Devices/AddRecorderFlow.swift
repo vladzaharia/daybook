@@ -135,7 +135,8 @@ public struct RecorderDiscoveryContent: View {
                 RecorderSetupProblem(problem: problem, place: place) { action in
                     switch action {
                     case .openBluetoothSettings, .openPrivacySettings: services?.openSystemSettings(action)
-                    default: connection.search()
+                    case .tryAgain, .connect, .reconnect: connection.search()
+                    case .setUpFolder, .chooseFolder, .technicalDetails, .dismiss, .refreshStatus: break
                     }
                 }
                 .padding(.top, DaybookSpacing.s4)
@@ -186,8 +187,8 @@ public struct RecorderDiscoveryContent: View {
     }
 }
 
-/// A recorder found nearby: its glyph, its name, its signal as bars and a word, and Connect (prominent for the
-/// nearest).
+/// A recorder found nearby: its glyph, its name, its signal as bars and a word, and Connect (prominent, and the
+/// default button, for the nearest).
 public struct FoundRecorderRow: View {
     private let recorder: DiscoveredRecorder
     private let symbol: String
@@ -225,7 +226,7 @@ public struct FoundRecorderRow: View {
                 }
                 .daybookTransition(.opacity)
             } else if prominent {
-                Button("Connect", action: connect).buttonStyle(.daybookProminent).disabled(busy)
+                Button("Connect", action: connect).buttonStyle(.daybookProminent).disabled(busy).keyboardShortcut(.defaultAction)
             } else {
                 Button("Connect", action: connect).buttonStyle(.daybookTinted).disabled(busy)
             }
@@ -237,16 +238,31 @@ public struct FoundRecorderRow: View {
     }
 }
 
-/// A problem while finding a recorder: the page's problem box, with its first action (Open Settings for Bluetooth
-/// on the iPhone).
-struct RecorderSetupProblem: View {
-    let problem: DeviceProblem
-    let place: RecorderStatusWords.Place
-    let perform: (DeviceProblemAction) -> Void
+/// A problem while finding a recorder: the page's problem box, with its first action that setup can take (Open
+/// Settings for Bluetooth on the iPhone, Try Again).
+public struct RecorderSetupProblem: View {
+    private let problem: DeviceProblem
+    private let place: RecorderStatusWords.Place
+    private let perform: (DeviceProblemAction) -> Void
 
-    var body: some View {
+    public init(problem: DeviceProblem, place: RecorderStatusWords.Place, perform: @escaping (DeviceProblemAction) -> Void) {
+        self.problem = problem
+        self.place = place
+        self.perform = perform
+    }
+
+    /// What setup can do about a problem: open Settings, or look again. A folder is the step's own fallback, and
+    /// technical details belong to a recorder's page, so neither is offered here.
+    public static let actions: [DeviceProblemAction] = [.openBluetoothSettings, .openPrivacySettings, .tryAgain, .connect, .reconnect]
+
+    /// The problem's first action setup can take, if any.
+    public static func action(_ problem: DeviceProblem, on place: RecorderStatusWords.Place) -> DeviceProblemAction? {
+        RecorderStatusWords.problemActions(problem, on: place).first { actions.contains($0) }
+    }
+
+    public var body: some View {
         let words = RecorderStatusWords.problem(problem, on: place)
-        let action = RecorderStatusWords.problemActions(problem, on: place, excluding: [.dismiss, .setUpFolder]).first
+        let action = Self.action(problem, on: place)
         AttentionBox(kind: .problem, title: words.title, message: words.message,
                      primary: action.map { action in AttentionAction(RecorderStatusWords.actionTitle(action, on: place)) { perform(action) } })
     }
