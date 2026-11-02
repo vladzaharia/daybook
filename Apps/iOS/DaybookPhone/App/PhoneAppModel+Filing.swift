@@ -132,10 +132,12 @@ extension PhoneAppModel {
     /// The recording stopped by itself (storage full or too slow, the encoder failed): what was recorded
     /// is filed, the Live Activity ends as stopped in the warning ink with the time everything is saved up
     /// to, the Macs and recorders stop with it, and, when Daybook isn't in front, a time-sensitive
-    /// notification says so. In front, the notice does.
+    /// notification says so. In front, the notice does. With audio saved, the notification goes before
+    /// filing, which can take a while (a sync pass first, for a Mac's conversation), while iOS may suspend
+    /// Daybook; without, it waits to say what happened to the notes.
     func finishUnexpectedly(_ recording: PhoneRecording?) async {
         let cause = recorder.unexpectedStop
-        let savedUpTo = recording?.duration ?? 0
+        let details = recorder.lastError
         activities.end(Self.stoppedActivity(recording: recording, bookmarks: recording?.highlights.count ?? 0))
         let session = multipoints.session
         multipoints.stopMacsStartedHere(session)
@@ -144,6 +146,11 @@ extension PhoneAppModel {
         multipoints.recordingEnded()
         sharing.stopSharingCaptions()
         recorder.audioTap = nil
+        // Storage that couldn't keep up asks to free space only when it's nearly full.
+        let spaceLeft = (cause as? PhoneRecorderError) == .diskBacklog ? await PhoneNotices.spaceLeft(at: library.stagingURL) : nil
+        // Everything up to its end is saved: said now, opening the conversation it's filed as.
+        let saved = recording.map { PhoneNotices.recordingStoppedText(savedUpTo: $0.duration, because: cause, spaceLeft: spaceLeft) }
+        if let saved, let recording, !isInFront { notices.recordingStopped(saved, opening: .conversation(recording.id)) }
         await captions.finish()
         let outcome: StopOutcome
         if let recording {
@@ -153,13 +160,10 @@ extension PhoneAppModel {
             outcome = await fileUnfinished(recorder.unfinishedFolder, failure: recorder.lastFailure, reason: recorder.lastError ?? Self.notFinished)
         }
         noteStopped(outcome)
-        // Storage that couldn't keep up asks to free space only when it's nearly full.
-        let spaceLeft = (cause as? PhoneRecorderError) == .diskBacklog ? await PhoneNotices.spaceLeft(at: library.stagingURL) : nil
-        // Saved up to its end, or (no audio at all) what happened to the notes.
-        let text = PhoneNotices.recordingStoppedText(savedUpTo: recording.map { _ in savedUpTo }, because: cause, spaceLeft: spaceLeft,
-                                                     otherwise: outcome.result.sentence)
-        say("\(text.title). \(text.body)", details: recorder.lastError)
-        if !isInFront {
+        // No audio at all: what happened to the notes.
+        let text = saved ?? PhoneNotices.recordingStoppedText(savedUpTo: nil, because: cause, otherwise: outcome.result.sentence)
+        say("\(text.title). \(text.body)", details: details)
+        if saved == nil, !isInFront {
             let opens: AppDestination = { if case .saved(let id, _)? = outcome.filing { return .conversation(id) } else { return .library } }()
             notices.recordingStopped(text, opening: opens)
         }

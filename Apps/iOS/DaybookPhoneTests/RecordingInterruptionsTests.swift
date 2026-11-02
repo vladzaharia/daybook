@@ -133,17 +133,27 @@ final class RecordingInterruptionsTests: XCTestCase {
         model.scenePhaseChanged(.background)
         let stopped = await rig.recorder.stop()
         let recording = try XCTUnwrap(stopped)
+        // Filing waits (the library is busy, or a sync pass comes first), and iOS may suspend Daybook meanwhile.
+        try await model.library.reload()
+        await model.library.controller.acquireLock()
         rig.recorder.onUnexpectedStop?(recording)
-        try await waitUntil("filed and said") { model.lastFiling != nil && model.notice != nil }
 
-        guard case .saved(let id, _)? = model.lastFiling else { return XCTFail("filed: \(String(describing: model.lastFiling))") }
-        XCTAssertEqual(model.notice, "Recording stopped. Everything up to 0:05 is saved.")
+        try await waitUntil("said in the pocket") { !posted.isEmpty }
+        XCTAssertNil(model.lastFiling, "said before filing is done")
+        XCTAssertEqual(model.activities.endedOn?.phase, .stopped)
         let notice = try XCTUnwrap(posted.first)
         XCTAssertEqual(notice.id, PhoneNotices.recordingStoppedID)
         XCTAssertEqual(notice.title, "Recording stopped")
         XCTAssertEqual(notice.body, "Everything up to 0:05 is saved.")
         XCTAssertTrue(notice.timeSensitive)
-        XCTAssertEqual(notice.destination, .conversation(id), "opening it shows what was saved")
+        XCTAssertEqual(notice.destination, .conversation(recording.id), "opening it shows what was saved")
+
+        model.library.controller.releaseLock()
+        try await waitUntil("filed and said") { model.lastFiling != nil && model.notice != nil }
+        guard case .saved(let id, _)? = model.lastFiling else { return XCTFail("filed: \(String(describing: model.lastFiling))") }
+        XCTAssertEqual(id, recording.id, "the conversation the notification opens")
+        XCTAssertEqual(model.notice, "Recording stopped. Everything up to 0:05 is saved.")
+        XCTAssertEqual(posted.count, 1, "said once")
         model.scenePhaseChanged(.active)
     }
 
