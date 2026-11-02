@@ -10,15 +10,20 @@ public struct ConversationAction: Equatable, Identifiable, Sendable {
     public enum ID: Hashable, Sendable {
         // Share
         case copySummary
-        /// A menu: Markdown, Full Data (JSON), and on the iPhone the audio.
+        /// A menu: the conversation as Markdown, its full data (on the iPhone), and its audio, each through the
+        /// system's share sheet (the Mac's sharing picker).
+        case share
+        case shareMarkdown, shareJSON, shareAudio
+        /// The Mac's menu: Markdown or Full Data (JSON), saved where the person chooses.
         case export
-        case exportMarkdown, exportJSON, shareAudio
+        case exportMarkdown, exportJSON
         // Add
         case showFloatingNotes
         case takePhoto
         case addPhotos
-        /// A menu: From a File…, then each recorder's recordings.
+        /// The Mac's menu: From a File…, then each recorder's recordings.
         case addRecording
+        /// From a File… on the Mac; Add Recording… on the iPhone, which has no recorders to list there.
         case addRecordingFromFile
         // Reprocess
         /// A menu of the modes that apply.
@@ -134,27 +139,27 @@ public enum ConversationActions {
     public static func actions(for meeting: Meeting, context: Context) -> [ConversationActionGroup] {
         let mac = context.platform == .mac
         let locked: ConversationAction.Availability = context.busy.map { .unavailable($0) } ?? .available
-        var share: [ConversationAction] = [
+        let share: [ConversationAction] = [
             ConversationAction(id: .copySummary, title: "Copy Summary", symbol: "doc.on.doc",
                                availability: meeting.summary == nil ? .unavailable("No summary yet") : .available),
+            Self.share(meeting, mac: mac),
+            // The Mac also saves a file where the person chooses.
+            ConversationAction(id: .export, title: "Export", symbol: "square.and.arrow.down.on.square", platforms: [.mac], children: [
+                ConversationAction(id: .exportMarkdown, title: "Markdown…", symbol: "doc.richtext", platforms: [.mac]),
+                ConversationAction(id: .exportJSON, title: "Full Data (JSON)…", symbol: "curlybraces", platforms: [.mac]),
+            ]),
         ]
-        var exports = [ConversationAction(id: .exportMarkdown, title: mac ? "Markdown…" : "Markdown", symbol: "doc.richtext"),
-                       ConversationAction(id: .exportJSON, title: mac ? "Full Data (JSON)…" : "Full Data (JSON)", symbol: "curlybraces")]
-        if !mac {
-            exports.append(ConversationAction(id: .shareAudio, title: "Audio", symbol: "waveform",
-                                              availability: meeting.tracks.isEmpty ? .unavailable("No recording yet") : .available,
-                                              platforms: [.iPhone]))
-        }
-        // The Mac exports to a file it saves; the iPhone shares through the share sheet.
-        share.append(ConversationAction(id: .export, title: mac ? "Export" : "Share", symbol: "square.and.arrow.up", children: exports))
 
         let add: [ConversationAction] = [
             ConversationAction(id: .showFloatingNotes, title: "Show Floating Notes", symbol: "note.text", platforms: [.mac]),
             ConversationAction(id: .takePhoto, title: "Take Photo", symbol: "camera",
                                availability: context.canTakePhoto ? .available : .unavailable("No camera"), platforms: [.iPhone]),
             ConversationAction(id: .addPhotos, title: "Add Photos…", symbol: "photo.badge.plus"),
-            ConversationAction(id: .addRecording, title: "Add Recording", symbol: "waveform.badge.plus", availability: locked,
-                               children: [ConversationAction(id: .addRecordingFromFile, title: "From a File…", symbol: "doc")]),
+            // The Mac lists each recorder's recordings beside a file; the iPhone opens Files.
+            ConversationAction(id: .addRecording, title: "Add Recording", symbol: "waveform.badge.plus", availability: locked, platforms: [.mac],
+                               children: [ConversationAction(id: .addRecordingFromFile, title: "From a File…", symbol: "doc", platforms: [.mac])]),
+            ConversationAction(id: .addRecordingFromFile, title: "Add Recording…", symbol: "waveform.badge.plus", availability: locked,
+                               platforms: [.iPhone]),
         ]
 
         let history = [ConversationAction(id: .versionHistory, title: "Version History…", symbol: "clock.arrow.circlepath",
@@ -180,6 +185,18 @@ public enum ConversationActions {
                       ConversationActionGroup(id: .filing, actions: filing),
                       ConversationActionGroup(id: .trash, actions: trash)]
         return groups.compactMap { only($0, on: context.platform) }
+    }
+
+    /// Share ▸ the conversation as Markdown, its full data (on the iPhone, which has no Export), and its audio. Each
+    /// opens the system's share sheet, on the Mac a picker of where to send it, so there it ends in an ellipsis.
+    static func share(_ meeting: Meeting, mac: Bool) -> ConversationAction {
+        let more = mac ? "…" : ""
+        return ConversationAction(id: .share, title: "Share", symbol: "square.and.arrow.up", children: [
+            ConversationAction(id: .shareMarkdown, title: "Markdown" + more, symbol: "doc.richtext"),
+            ConversationAction(id: .shareJSON, title: "Full Data (JSON)", symbol: "curlybraces", platforms: [.iPhone]),
+            ConversationAction(id: .shareAudio, title: "Audio" + more, symbol: "waveform",
+                               availability: meeting.tracks.isEmpty ? .unavailable("No recording yet") : .available),
+        ])
     }
 
     /// Reprocess ▸ with the modes that apply: Transcribe (audio without a transcript), Summarize Again, Identify

@@ -219,6 +219,114 @@ public enum MeetingExport {
     private static func altText(_ photo: MeetingPhoto) -> String {
         ModelText.escapingMarkdown((photo.displayCaption ?? "Photo").replacingOccurrences(of: "\n", with: " "))
     }
+
+    /// The conversation's full data, as the Mac's Export › Full Data (JSON)… saves it: every field, keys sorted.
+    public static func json(_ meeting: Meeting) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(meeting)
+    }
+}
+
+/// Files handed to the share sheet (the iPhone's, and the Mac's sharing picker): the conversation as Markdown or JSON,
+/// a photo, or a recording, each named after the conversation (`MeetingExport.fileName`). They wait in
+/// `<temporary folder>/Daybook Export/`, each in a folder of its own, until the share is done with them; whatever is
+/// left there is cleared at the next launch, or by the next share on the Mac.
+public enum ExportFiles {
+    public static func root(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
+        directory.appendingPathComponent("Daybook Export", isDirectory: true)
+    }
+
+    /// Removes the export folders holding `urls`, or every export when nil. A URL outside the export folder (a library
+    /// original) is never touched.
+    public static func clear(_ urls: [URL]? = nil, in directory: URL = FileManager.default.temporaryDirectory) {
+        let root = root(in: directory)
+        guard let urls else { try? FileManager.default.removeItem(at: root); return }
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        for url in urls where url.isFileURL {
+            let path = url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+            guard path.count > rootPath.count, Array(path.prefix(rootPath.count)) == rootPath else { continue }
+            try? FileManager.default.removeItem(at: root.appendingPathComponent(path[rootPath.count], isDirectory: true))
+        }
+    }
+
+    /// The Markdown, or with photos one ZIP of the Markdown and its photos, so sharing keeps the relative links.
+    /// `originals` gives each photo's file on this device.
+    public static func markdownWithPhotos(_ meeting: Meeting, originals: [UUID: URL],
+                                          in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        guard !meeting.visiblePhotos.isEmpty else { return try markdown(meeting, in: directory) }
+        let name = MeetingExport.fileName(for: meeting)
+        let folder = root(in: directory).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let package = folder.appendingPathComponent(name, isDirectory: true)
+        try MeetingExport.write(meeting, to: package, name: name) { originals[$0.id] }
+        let archive = folder.appendingPathComponent(name + ".zip")
+        var coordinationError: NSError?
+        var copyError: Error?
+        NSFileCoordinator().coordinate(readingItemAt: package, options: .forUploading, error: &coordinationError) { uploaded in
+            do { try FileManager.default.copyItem(at: uploaded, to: archive) }
+            catch { copyError = error }
+        }
+        if let error = coordinationError ?? copyError as NSError? { throw error }
+        return archive
+    }
+
+    public static func markdown(_ meeting: Meeting, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        let url = try folder(for: meeting.id, in: directory).appendingPathComponent(MeetingExport.fileName(for: meeting) + ".md")
+        try MeetingExport.markdown(meeting).write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    /// The full data, as `MeetingExport.json`.
+    public static func json(_ meeting: Meeting, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        let url = try folder(for: meeting.id, in: directory).appendingPathComponent(MeetingExport.fileName(for: meeting) + ".json")
+        try MeetingExport.json(meeting).write(to: url, options: .atomic)
+        return url
+    }
+
+    /// One photo, named after its caption and re-encoded with only its orientation and capture time (`ExportPhoto`):
+    /// no location or camera details. The library's original stays.
+    public static func photo(_ original: URL, caption: String?, in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        let folder = root(in: directory).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        guard let file = ExportPhoto.write(original, to: folder, name: MeetingExport.fileName(for: caption.map { String($0.prefix(60)) } ?? "Photo")) else {
+            try? FileManager.default.removeItem(at: folder)
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return folder.appendingPathComponent(file)
+    }
+
+    /// What a shared recording is called: the conversation's name, so the share sheet doesn't offer
+    /// "iPhone recording.m4a"; of several recordings, each says which it is ("Weekly sync (Soundcore Work).m4a", its
+    /// name as Info › Audio says it).
+    @MainActor
+    public static func audioName(_ meeting: Meeting, track: RecordingTrack, fileExtension: String) -> String {
+        let suffix = meeting.tracks.count > 1 ? " (\(MeetingExport.fileName(for: RecordingWords.name(track, in: meeting))))" : ""
+        return MeetingExport.fileName(for: meeting) + suffix + "." + (fileExtension.isEmpty ? "m4a" : fileExtension)
+    }
+
+    /// A copy of the recording at `source`, called `name` (`audioName`). A copy on the same volume is a clone, but it's
+    /// still file work: do it off the main actor.
+    public static func audio(_ source: URL, named name: String, meetingID: UUID,
+                             in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        let url = try folder(for: meetingID, in: directory).appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.copyItem(at: source, to: url)
+        return url
+    }
+
+    /// The recording named as `audioName` says.
+    @MainActor
+    public static func audio(_ source: URL, meeting: Meeting, track: RecordingTrack,
+                             in directory: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        try audio(source, named: audioName(meeting, track: track, fileExtension: source.pathExtension), meetingID: meeting.id, in: directory)
+    }
+
+    /// The conversation's own folder in the exports.
+    private static func folder(for id: UUID, in directory: URL) throws -> URL {
+        let folder = root(in: directory).appendingPathComponent(id.uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
 }
 
 /// A photo as it leaves Daybook in an export: the same picture, re-encoded with only its orientation

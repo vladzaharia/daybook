@@ -25,17 +25,32 @@ final class ConversationActionsTests: XCTestCase {
         let phone = ConversationActions.actions(for: meeting(), context: .init(platform: .iPhone, canTakePhoto: true))
         XCTAssertEqual(mac.map(\.id), [.share, .add, .reprocess, .history, .filing, .trash])
         XCTAssertEqual(phone.map(\.id), mac.map(\.id))
-        XCTAssertEqual(ids(mac), [[.copySummary, .export], [.showFloatingNotes, .addPhotos, .addRecording], [.reprocess], [.versionHistory],
-                                  [.rename, .moveToFolder, .tags, .moveTo(.personal), .showInFinder], [.moveToTrash]])
-        XCTAssertEqual(ids(phone), [[.copySummary, .export], [.takePhoto, .addPhotos, .addRecording], [.reprocess], [.versionHistory],
+        XCTAssertEqual(ids(mac), [[.copySummary, .share, .export], [.showFloatingNotes, .addPhotos, .addRecording], [.reprocess],
+                                  [.versionHistory], [.rename, .moveToFolder, .tags, .moveTo(.personal), .showInFinder], [.moveToTrash]])
+        XCTAssertEqual(ids(phone), [[.copySummary, .share], [.takePhoto, .addPhotos, .addRecordingFromFile], [.reprocess], [.versionHistory],
                                     [.moveToFolder, .tags, .moveTo(.personal)], [.moveToTrash]])
-        // The filing the Mac's menu lacked, and the recording and JSON the iPhone's lacked, are on both now.
+        // The filing the Mac's menu lacked, and the recording the iPhone's lacked, are on both now; so is Share.
         XCTAssertEqual(phone[0].actions[1].title, "Share")
-        XCTAssertEqual(phone[0].actions[1].children.map(\.id), [.exportMarkdown, .exportJSON, .shareAudio])
-        XCTAssertEqual(mac[0].actions[1].title, "Export")
-        XCTAssertEqual(mac[0].actions[1].children.map(\.title), ["Markdown…", "Full Data (JSON)…"])
+        XCTAssertEqual(phone[0].actions[1].children.map(\.id), [.shareMarkdown, .shareJSON, .shareAudio])
+        XCTAssertEqual(mac[0].actions[1].title, "Share")
+        XCTAssertEqual(mac[0].actions[1].children.map(\.title), ["Markdown…", "Audio…"], "the Mac's sharing picker asks where")
+        XCTAssertEqual(mac[0].actions[2].title, "Export")
+        XCTAssertEqual(mac[0].actions[2].children.map(\.title), ["Markdown…", "Full Data (JSON)…"])
         XCTAssertEqual(mac[1].actions.map(\.title), ["Show Floating Notes", "Add Photos…", "Add Recording"])
+        XCTAssertEqual(mac[1].actions[2].children.map(\.title), ["From a File…"])
+        XCTAssertEqual(phone[1].actions.map(\.title), ["Take Photo", "Add Photos…", "Add Recording…"], "Files, with no recorders to list")
+        XCTAssertEqual(phone[3].actions.map(\.title), ["Version History…"], "the same ellipsis on both")
         XCTAssertEqual(mac[5].actions.first?.role, .destructive)
+    }
+
+    func testBehaviorAudioIsSharedOnlyWhenThereIsSome() {
+        let notes = Meeting(title: "Notes")
+        for platform in [ConversationAction.Platform.mac, .iPhone] {
+            let share = ConversationActions.actions(for: notes, context: .init(platform: platform))[0].actions[1]
+            XCTAssertEqual(share.children.last?.id, .shareAudio)
+            XCTAssertEqual(share.children.last?.availability, .unavailable("No recording yet"))
+            XCTAssertTrue(share.children[0].isAvailable, "a conversation's words share without a recording")
+        }
     }
 
     func testBehaviorReprocessSaysAgainNotWhereAndListsWhatApplies() {
@@ -57,6 +72,8 @@ final class ConversationActionsTests: XCTestCase {
         XCTAssertEqual(recording[2].actions[0].availability, .unavailable("Recording now"))
         XCTAssertEqual(recording[5].actions[0].availability, .unavailable("Recording now"))
         XCTAssertEqual(recording[1].actions[2].availability, .unavailable("Recording now"), "Add Recording waits too")
+        let phoneRecording = ConversationActions.actions(for: meeting(), context: .init(platform: .iPhone, isRecording: true, canTakePhoto: true))
+        XCTAssertEqual(phoneRecording[1].actions[2].availability, .unavailable("Recording now"))
         let pending = ConversationActions.actions(for: meeting(), context: .init(platform: .iPhone, status: .requested(.paused)))
         XCTAssertEqual(pending[2].actions[0].availability, .unavailable("Already asked for"))
         let notes = ConversationActions.actions(for: Meeting(title: "Notes"), context: .init(platform: .iPhone))

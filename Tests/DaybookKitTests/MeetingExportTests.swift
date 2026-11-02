@@ -30,6 +30,45 @@ final class MeetingExportTests: XCTestCase {
         }
     }
 
+    /// The files both apps hand the share sheet are named after the conversation, a recording of several after which
+    /// it is, and wait in a folder of their own that clearing takes away without touching anything else.
+    @MainActor
+    func testBehaviorSharedFilesAreNamedAfterTheConversationAndClearedAfterwards() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MeetingExport-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let microphone = RecordingTrack(source: .microphone, relativePath: "Originals/m.m4a", fileName: "Recording-7F3A.m4a")
+        let soundcore = RecordingTrack(source: .soundcore, relativePath: "Originals/s.wav", fileName: "Soundcore-1780000000.wav")
+        let one = Meeting(title: "Weekly sync: Q4/plan", tracks: [microphone])
+        let two = Meeting(title: "Weekly sync", tracks: [microphone, soundcore])
+
+        XCTAssertEqual(ExportFiles.audioName(one, track: microphone, fileExtension: "m4a"), "Weekly sync- Q4-plan.m4a")
+        XCTAssertEqual(ExportFiles.audioName(two, track: soundcore, fileExtension: "wav"), "Weekly sync (Soundcore Work).wav")
+        XCTAssertEqual(ExportFiles.audioName(one, track: microphone, fileExtension: ""), "Weekly sync- Q4-plan.m4a", "a file without one is m4a")
+
+        let original = directory.appendingPathComponent("original.wav")
+        try Data("audio".utf8).write(to: original)
+        let audio = try ExportFiles.audio(original, meeting: two, track: soundcore, in: directory)
+        XCTAssertEqual(audio.lastPathComponent, "Weekly sync (Soundcore Work).wav")
+        let json = try ExportFiles.json(two, in: directory)
+        XCTAssertEqual(json.lastPathComponent, "Weekly sync.json")
+        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: Data(contentsOf: json)).id, two.id, "the full data reads back")
+        let markdown = try ExportFiles.markdown(two, in: directory)
+        XCTAssertEqual(markdown.lastPathComponent, "Weekly sync.md")
+
+        ExportFiles.clear([audio, original], in: directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audio.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: json.path), "the conversation's export folder goes whole")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path), "a file outside the exports is never touched")
+    }
+
+    func testBehaviorFullDataIsEveryFieldWithItsKeysInOrder() throws {
+        let meeting = Meeting(title: "Planning")
+        let text = try XCTUnwrap(String(data: try MeetingExport.json(meeting), encoding: .utf8))
+        XCTAssertTrue(text.contains("\n  \""), "pretty-printed, as the Mac's export saves it")
+        XCTAssertEqual(try JSONDecoder().decode(Meeting.self, from: MeetingExport.json(meeting)), meeting)
+    }
+
     func testADerivedRecordingSaysHowItWasMade() {
         let microphone = RecordingTrack(source: .microphone, relativePath: "Originals/m.caf", fileName: "microphone.caf")
         let cleaned = RecordingTrack(source: .microphone, relativePath: "Originals/e.caf", fileName: "microphone-echo-cancelled.caf",
