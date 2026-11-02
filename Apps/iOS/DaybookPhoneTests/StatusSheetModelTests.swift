@@ -267,7 +267,8 @@ final class StatusSheetModelTests: XCTestCase {
 
         // While a recording comes off it, neither Record nor Import; Stop Listening stays.
         XCTAssertEqual(actions { $0.newCount = 2; $0.importing = .init(position: 1, total: 2, fraction: 0.3); $0.importRunning = true }, [])
-        XCTAssertEqual(actions { $0.isListeningLive = true; $0.importRunning = true }, [.stopListening])
+        XCTAssertEqual(actions { $0.isListeningLive = true; $0.importing = .init(position: 1, total: 1, fraction: 0.3); $0.importRunning = true },
+                       [.stopListening])
 
         // Away: Connect when it would do something, and new recordings can still be queued.
         XCTAssertEqual(actions { $0.isLinked = false; $0.state = .notConnected; $0.canConnect = true; $0.newCount = 1 }, [.connect, .importNew(1)])
@@ -276,6 +277,9 @@ final class StatusSheetModelTests: XCTestCase {
         // Another device manages it, or it has no Bluetooth: nothing here.
         XCTAssertEqual(actions { $0.managedBy = "Studio Mac"; $0.isLinked = false }, [])
         XCTAssertEqual(actions { $0.isDirect = false; $0.newCount = 3 }, [])
+        // On its way between devices: the handoff says what's happening, as on its page.
+        XCTAssertEqual(actions { $0.handoff = .offering(to: "Studio Mac"); $0.newCount = 1 }, [])
+        XCTAssertEqual(actions { $0.isLinked = false; $0.state = .notConnected; $0.canConnect = true; $0.handoff = .asking(owner: "Studio Mac") }, [])
         XCTAssertEqual(StatusSheetModel.actions(for: recorder { $0.newCount = 1 }), [.importNew(1)], "no record control, no Record")
 
         // Connected, but it didn't list its recordings (another app was using it): Check for New, not "nothing new".

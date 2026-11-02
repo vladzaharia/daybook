@@ -113,6 +113,16 @@ final class DevicePageTests: XCTestCase {
         XCTAssertEqual(RecorderActions.available(facts { $0.isLinked = false; $0.state = .notConnected; $0.canConnect = true }), [.connect])
         XCTAssertEqual(RecorderActions.available(facts { $0.managedBy = "Studio Mac" }), [])
         XCTAssertEqual(RecorderActions.available(facts { $0.handoff = .asking(owner: "Studio Mac") }), [], "never while it moves")
+        // Connect where it would do something, by one rule for the page and the iPhone's status card.
+        let recorder = FakeRecorder()
+        let session = session(recorder)
+        XCTAssertTrue(RecorderFacts.canConnect(session))
+        recorder.state = .unavailable
+        XCTAssertFalse(RecorderFacts.canConnect(session), "Bluetooth is off")
+        recorder.state = .notConnected
+        session.update { $0.disabledMethods.insert(.direct) }
+        XCTAssertFalse(RecorderFacts.canConnect(session), "its direct link is turned off")
+
         XCTAssertEqual(RecorderAction.pause.label(shortName: "Soundcore").title, "Pause on Soundcore")
         XCTAssertEqual(RecorderAction.importNew(1).label(shortName: "Soundcore").spoken, "Import 1 New Recording")
     }

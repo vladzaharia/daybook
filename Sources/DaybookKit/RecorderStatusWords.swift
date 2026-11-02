@@ -187,9 +187,17 @@ public struct RecorderFacts: Equatable {
         let direct = session.direct
         hasRecordControl = direct is any RecordControlConnection && direct?.capabilities.contains(.recordControl) == true
         hasLiveListening = direct is any LiveListeningConnection
-        canConnect = !session.isLinked && !session.state.isBusy && direct?.isSetUp == true && direct?.state != .unavailable
-            && session.device.isEnabled(.direct)
+        canConnect = Self.canConnect(session)
         notListed = session.managedElsewhere == nil && session.listingState == .notListed
+    }
+
+    /// It isn't linked, and Connect would do something now: its direct link is set up and on, not already on its
+    /// way, and Bluetooth can reach it.
+    @MainActor
+    public static func canConnect(_ session: DeviceSession) -> Bool {
+        let direct = session.direct
+        return !session.isLinked && !session.state.isBusy && direct?.isSetUp == true && direct?.state != .unavailable
+            && session.device.isEnabled(.direct)
     }
 
     var battery: String? {

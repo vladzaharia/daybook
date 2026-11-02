@@ -109,17 +109,9 @@ enum StatusSection: Hashable, Sendable {
     case iphone
 }
 
-/// What a recorder's card offers at the large detent: only what can be done now, never a disabled button.
-enum StatusRecorderAction: Hashable, Sendable {
-    case connect
-    case record
-    case pause
-    case importNew(Int)
-    /// Connected, but the recorder didn't list its recordings: what's new isn't known (Check for New).
-    case checkForNew
-    case listenLive
-    case stopListening
-}
+/// What a recorder's card offers at the large detent: what its page offers (`RecorderActions`), only what can be done
+/// now, never a disabled button.
+typealias StatusRecorderAction = RecorderAction
 
 /// A Mac in the Macs card.
 struct StatusMacRow: Equatable, Identifiable, Sendable {
@@ -213,6 +205,26 @@ struct StatusInputs: Equatable {
     var pairedMacs: [Mac] = []
 }
 
+extension StatusInputs.Recorder {
+    /// The facts the recorder's page reads its actions from (`RecorderActions`), from the card's.
+    var actionFacts: RecorderFacts {
+        var facts = RecorderFacts(id: id, name: name, shortName: shortName, symbol: "", isDirect: isDirect, state: state, isLinked: isLinked)
+        facts.isRecording = isRecording
+        facts.isListeningLive = isListeningLive
+        facts.managedBy = managedBy
+        facts.handoff = handoff
+        facts.newCount = newCount
+        facts.importing = importing.map {
+            RecorderFacts.Importing(position: $0.position, total: $0.total, fraction: $0.fraction, suspended: $0.suspended, running: importRunning)
+        }
+        facts.hasRecordControl = hasRecordControl
+        facts.hasLiveListening = hasLiveListening
+        facts.canConnect = canConnect
+        facts.notListed = notListed
+        return facts
+    }
+}
+
 enum StatusSheetModel {
     // MARK: Sections
 
@@ -234,25 +246,11 @@ enum StatusSheetModel {
 
     // MARK: A recorder's card
 
-    /// The recorder's actions, in order: Connect, Record or Pause, Import N New, Listen Live or Stop
-    /// Listening. A recorder another device manages, or one without Bluetooth, has none here.
+    /// The recorder's actions, the ones its page offers (`RecorderActions`), in order: Connect, Record or Pause,
+    /// Import N New, Check for New, Listen Live or Stop Listening. A recorder another device manages, one without
+    /// Bluetooth, or one on its way between devices has none here.
     static func actions(for recorder: StatusInputs.Recorder) -> [StatusRecorderAction] {
-        guard recorder.isDirect, recorder.managedBy == nil else { return [] }
-        var actions: [StatusRecorderAction] = []
-        if !recorder.isLinked, recorder.canConnect { actions.append(.connect) }
-        if recorder.hasRecordControl, recorder.isLinked, !recorder.importRunning {
-            actions.append(recorder.isRecording ? .pause : .record)
-        }
-        if recorder.newCount > 0, recorder.importing == nil { actions.append(.importNew(recorder.newCount)) }
-        if recorder.notListed, recorder.isLinked, recorder.importing == nil { actions.append(.checkForNew) }
-        if recorder.hasLiveListening {
-            if recorder.isListeningLive {
-                actions.append(.stopListening)
-            } else if recorder.isRecording, recorder.isLinked, !recorder.importRunning {
-                actions.append(.listenLive)
-            }
-        }
-        return actions
+        RecorderActions.available(recorder.actionFacts)
     }
 
     /// "About 2,170 hours left": the recorder's room, on its card at the large detent.
