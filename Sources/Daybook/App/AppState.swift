@@ -366,7 +366,6 @@ final class AppState {
         get { phones.microphoneAccess }
         set { phones.microphoneAccess = newValue }
     }
-    @ObservationIgnored var wakeObserver: NSObjectProtocol?
     /// What this state follows in the models it holds (`ObservationWatch`), for as long as it lives.
     @ObservationIgnored var watches: [ObservationWatch] = []
     private var recordingWasAutomatic = false

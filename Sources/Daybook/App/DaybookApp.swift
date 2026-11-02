@@ -92,6 +92,7 @@ struct DaybookApp: App {
                     await state.initialize()
                 }
                 .debugLaunchActions(state: state)
+                .systemEntryPoints(state: state)
         }
         .defaultSize(width: 1280, height: 820)
         .commands { DaybookCommands(state: state) }

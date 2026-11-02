@@ -61,7 +61,7 @@ enum LibraryOpening {
     /// the person answers, or it couldn't open (the window says so). It never gives up on a slow first launch.
     static func opens(_ state: AppState) async -> Bool {
         await ObservationWatch.until {
-            state.isReady || state.libraryMoveOffer?.holdsLibrary == true || state.problem != nil
+            state.isReady || state.libraryMoveOffer?.holdsLibrary == true || state.libraryProblem != nil
         }
         return state.isReady
     }
