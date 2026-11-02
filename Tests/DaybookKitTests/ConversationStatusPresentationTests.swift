@@ -298,6 +298,41 @@ final class ConversationStatusPresentationTests: XCTestCase {
         XCTAssertEqual(page(.requested(.device(request)), recorded(transcribed: true), cloud)?.actions, [.placement(.useCloud), .cancelRequest(request.id)])
     }
 
+    func testBehaviorACloudSummaryOnAMacsQueueOffersStopWithItsBar() {
+        let sonnet = CloudModel(provider: .anthropic, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", tier: .balanced,
+                                inputPrice: 2, outputPrice: 10, priceIsEstimated: false, contextTokens: 200_000, rank: 1)
+        var cloud = SummaryPlacementPlanner(options: SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: sonnet),
+                                            preferences: CloudSummaryPreferences(), at: now)
+        XCTAssertTrue(cloud.perform(.useCloud, at: now))
+        let transcribed = recorded(transcribed: true)
+        var inputs = mac
+        inputs.placement = .queue(cloud, running: true)
+        // Before the cloud reports a figure: a spinner, and Stop.
+        let starting = ProcessingStatus.processing(.init(stage: .summarizing, fraction: 0))
+        XCTAssertEqual(page(starting, transcribed, inputs),
+                       Presentation(kind: .line, symbol: nil, title: "Summarizing with Claude Sonnet 5.5", isWorking: true, actions: [.stopSummary]))
+        // Then its figure and bar, still with Stop; the line animates only when its words change.
+        let working = ProcessingStatus.processing(.init(stage: .summarizing, fraction: 0.35))
+        let line = page(working, transcribed, inputs)
+        XCTAssertEqual(line, Presentation(kind: .line, symbol: "cloud", title: "Summarizing with Claude Sonnet 5.5 · 35%", progress: 0.35,
+                                          actions: [.stopSummary]))
+        XCTAssertEqual(line?.phrase, "Summarizing with Claude Sonnet 5.5")
+        XCTAssertEqual(Presentation.Action.stopSummary.title, "Stop")
+
+        // Not the job running now: no Stop for work the queue hasn't started.
+        inputs.placement = .queue(cloud, running: false)
+        XCTAssertNil(inputs.placement.run)
+        XCTAssertEqual(page(.requested(.queued(position: 0, after: nil)), transcribed, inputs)?.actions, [])
+
+        // Started on the Mac itself: the queue's own line says it, with Stop.
+        let here = SummaryPlacementPlanner(options: SummaryOptions(thisDeviceCanSummarize: true, reachableMacs: [], cloud: nil),
+                                           preferences: CloudSummaryPreferences(), at: now, immediately: true)
+        inputs.placement = .queue(here, running: true)
+        XCTAssertNil(inputs.placement.run)
+        XCTAssertEqual(page(working, transcribed, inputs)?.title, "Summarizing · 35%")
+        XCTAssertEqual(page(working, transcribed, inputs)?.actions, [.stopSummary])
+    }
+
     func testBehaviorAMacsLiveProgressOverTheLinkComesBeforeTheSyncedClaim() {
         var inputs = phone
         inputs.link = .init(phase: .identifyingSpeakers, fraction: 0.62, device: "Studio Mac")

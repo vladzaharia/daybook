@@ -308,6 +308,14 @@ extension ConversationStatusPresentation {
         public init(planner: SummaryPlacementPlanner? = nil, run: SummaryPlace? = nil, cloudOffered: Bool = false) {
             self.planner = planner; self.run = run; self.cloudOffered = cloudOffered
         }
+
+        /// A Mac's: its planner, and the cloud at work while the conversation's job is the one running, so the line
+        /// offers Stop. A summary started on the Mac itself is its queue's own line ("Summarizing · 40%", with Stop).
+        public static func queue(_ planner: SummaryPlacementPlanner?, running: Bool) -> Placement {
+            var placement = Placement(planner: planner)
+            if running, case .started(let place)? = planner?.phase, case .cloud = place { placement.run = place }
+            return placement
+        }
     }
 
     /// Everything besides the status and the conversation.
@@ -466,9 +474,15 @@ extension ConversationStatusPresentation {
     static func placement(_ status: ProcessingStatus, inputs: Inputs, now: Date) -> ConversationStatusPresentation? {
         let words = inputs.words, placement = inputs.placement
         if let run = placement.run {
-            return ConversationStatusPresentation(kind: .line, symbol: nil,
-                                                  title: "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: words.here))",
-                                                  isWorking: true, actions: [.stopSummary])
+            let title = "Summarizing \(SummaryPlacementPlanner.where(run, thisDevice: words.here))"
+            // Its figure once it reports one, with the bar, as every working line has; a spinner until then.
+            if case .processing(let progress) = status, progress.stage == .summarizing, isHere(progress, words: words),
+               let fraction = progress.fraction, fraction > 0 {
+                return ConversationStatusPresentation(kind: .line, symbol: symbol(for: run, words: words),
+                                                      title: "\(title) · \(ProcessingWords.percentText(fraction))",
+                                                      progress: fraction, actions: [.stopSummary])
+            }
+            return ConversationStatusPresentation(kind: .line, symbol: nil, title: title, isWorking: true, actions: [.stopSummary])
         }
         if let planner = placement.planner, let title = planner.line(at: now, thisDevice: words.here) {
             var line = ConversationStatusPresentation(kind: .line, symbol: "clock", title: title, countdownUntil: planner.deadline,
@@ -598,6 +612,15 @@ extension ConversationStatusPresentation {
     /// Another device's glyph: an iPhone's, else a Mac's.
     static func symbol(forDevice name: String?) -> String {
         name?.localizedCaseInsensitiveContains("iPhone") == true ? "iphone" : "desktopcomputer"
+    }
+
+    /// Where a summary runs, as the colophon draws it: the cloud's glyph, this device's, or a Mac's.
+    static func symbol(for place: SummaryPlace, words: DeviceWords) -> String {
+        switch place {
+        case .cloud: return "cloud"
+        case .thisDevice: return words.symbol
+        case .mac(_, let name): return symbol(forDevice: name)
+        }
     }
 }
 
