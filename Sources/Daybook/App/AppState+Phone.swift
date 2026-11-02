@@ -156,7 +156,8 @@ extension AppState {
         case .libraryKeyRequest(let request):
             Task { await grantLibraryKey(request, to: phone) }
         case .libraryKeyGrant(let grant):
-            Task { await sync.accept(grant) }
+            // Kept only when it answers a request this Mac sent that iPhone (`requestLibraryKey(from:)`).
+            Task { await sync.accept(grant, from: phone) }
         }
     }
 
@@ -172,9 +173,11 @@ extension AppState {
         if sent { post(["Sent this library’s key to \(peer.name)."]) }
     }
 
-    /// Asks a connected iPhone for the encrypted library's key this Mac is waiting for.
+    /// Asks a connected iPhone for the encrypted library's key this Mac is waiting for. Only that iPhone's answer is kept.
     func requestLibraryKey(from phone: UUID) async {
         guard let request = await sync.libraryKeyRequest() else { return }
+        // Noted before sending, so an answer that comes back at once already finds it.
+        sync.noteKeyRequested(from: phone)
         try? await phoneLink.send(.libraryKeyRequest(request), to: phone)
     }
 

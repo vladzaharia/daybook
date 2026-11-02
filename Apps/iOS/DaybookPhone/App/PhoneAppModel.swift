@@ -316,15 +316,18 @@ final class PhoneAppModel: RecordingCommandHandling {
                 if sent { notice = "Sent this library’s key to \(mac.name)." }
             }
         case .libraryKeyGrant(let grant):
-            Task { await controller.accept(grant) }
+            // Kept only when it answers a request this iPhone sent that Mac (`requestLibraryKey(from:)`).
+            Task { await controller.accept(grant, from: macID) }
         default:
             break
         }
     }
 
-    /// Asks a connected Mac for the encrypted library's key this iPhone is waiting for.
+    /// Asks a connected Mac for the encrypted library's key this iPhone is waiting for. Only that Mac's answer is kept.
     func requestLibraryKey(from macID: UUID) async {
-        guard let request = await sync.controller?.libraryKeyRequest() else { return }
+        guard let controller = sync.controller, let request = await controller.libraryKeyRequest() else { return }
+        // Noted before sending, so an answer that comes back at once already finds it.
+        controller.noteKeyRequested(from: macID)
         try? await link.send(.libraryKeyRequest(request), to: macID)
     }
 
@@ -477,6 +480,9 @@ final class PhoneAppModel: RecordingCommandHandling {
         case .active:
             if recorderOnly != nil, !recorder.isActive { Task { await recordAlongWithRecorder() } }
             labelCaptionSpeakers()
+            // A courier that's off only because the account couldn't be checked (woken in the background soon after the
+            // iPhone started) tries again now.
+            sync.controller?.resumeCourier()
             Task {
                 await sync.synchronize(.foreground)
                 await link.setActivity(.foreground)

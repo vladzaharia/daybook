@@ -367,6 +367,11 @@ final class DaybookDelegate: NSObject, NSApplicationDelegate {
         state?.sync.fetchCourier()
     }
 
+    /// Coming to the front: a courier that's off only because the account couldn't be checked tries again now.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        state?.sync.resumeCourier()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         PerfProbe.start()
