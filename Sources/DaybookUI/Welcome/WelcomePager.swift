@@ -42,7 +42,7 @@ public struct WelcomePager<Page: Hashable, Content: View>: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             #endif
             WelcomePageDots(count: pages.count, index: index, reachable: reached) { selection = pages[$0] }
-                .padding(.bottom, DaybookSpacing.s5)
+                .padding(.bottom, WelcomePageDots.bottomPadding)
         }
         .onAppear {
             reached = max(reached, index)
@@ -68,6 +68,24 @@ public struct WelcomePageDots: View {
     private let reachable: Int
     private let go: (Int) -> Void
 
+    /// Under the dots, so the dot itself sits as high on both: the iPhone's taller tap target takes most of the room.
+    static var bottomPadding: CGFloat {
+        #if os(iOS)
+        DaybookSpacing.s2
+        #else
+        DaybookSpacing.s5
+        #endif
+    }
+
+    /// Between the dots: on the iPhone their tap targets meet, so the dots stay close.
+    private static var spacing: CGFloat {
+        #if os(iOS)
+        0
+        #else
+        DaybookSpacing.s1
+        #endif
+    }
+
     public init(count: Int, index: Int, reachable: Int, go: @escaping (Int) -> Void) {
         self.count = count
         self.index = index
@@ -76,13 +94,17 @@ public struct WelcomePageDots: View {
     }
 
     public var body: some View {
-        HStack(spacing: DaybookSpacing.s1) {
+        HStack(spacing: Self.spacing) {
             ForEach(0..<count, id: \.self) { dot in
                 Button { go(dot) } label: {
                     Capsule()
                         .fill(dot == index ? AnyShapeStyle(DaybookPalette.accent) : AnyShapeStyle(Color.secondary.opacity(0.3)))
                         .frame(width: dot == index ? 18 : 7, height: 7)
                         .padding(2)
+                        #if os(iOS)
+                        // A finger's 44 pt around the same small dot.
+                        .frame(minWidth: 24, minHeight: 44)
+                        #endif
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
