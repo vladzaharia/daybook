@@ -309,120 +309,125 @@ public actor LibrarySyncEngine {
         // read yet makes the read incomplete: a parent it may list is waited for.
         let compactionPending = try readCompaction(warnings: &warnings)
         if scope == .metadataOnly { return try synchronizeMetadataOnly(libraryMetadata, limits: limits, warnings: warnings, compactionPending: compactionPending) }
-        var budget = SyncPassBudget(limits)
-        var pendingDownloads = compactionPending
-        var pendingUploads = 0
-        var published = 0
-        var unreadJournalFiles = compactionPending
-        var metadataIncomplete = false
-        var failedPublications = Set<UUID>()
-        var events: [String: SyncEventHeader] = [:]
-        var metadata: [String: SyncMetadataRecord] = [:]
-        let listedEvents = try journalEntries(.event), listedMetadata = try journalEntries(.metadata)
+        var pass = PassState(budget: SyncPassBudget(limits), warnings: warnings, pendingDownloads: compactionPending,
+                             unreadJournalFiles: compactionPending)
+        try readJournal(into: &pass)
+        try publishLocalChanges(meetings, deletedMeetingIDs: deletedMeetingIDs, libraryMetadata: libraryMetadata, into: &pass)
+        try applyJournal(meetings, protecting: protecting, into: &pass)
+        return try finishPass(&pass)
+    }
+
+    // MARK: A pass's phases
+
+    /// Reads the journal: every event's header and every settings version the sync folder (and the courier's inbox) lists,
+    /// first-time reads within the pass's budget, then what holds conversations back (a parent missing or unreadable).
+    private func readJournal(into pass: inout PassState) throws {
+        pass.listedEvents = try journalEntries(.event)
+        pass.listedMetadata = try journalEntries(.metadata)
         func readEvent(_ entry: JournalEntry) throws {
             try Task.checkCancellation()
             // An entry's ID is its name when plaintext; a sealed one's is known once it has been opened.
             let name = entry.isSealed ? sealedNames[entry.path] : entry.name
             if let name, prunedIDs.contains(name) { setAsidePruned(entry); return }
-            if let name, let cached = eventCache[name], !sealedWithKeyGone(entry) { events[name] = cached; return }
+            if let name, let cached = eventCache[name], !sealedWithKeyGone(entry) { pass.events[name] = cached; return }
             let unreadableKey = entry.isSealed ? entry.path : entry.name
-            if let reason = unreadableJournal[unreadableKey] { warnings.append(reason); unreadJournalFiles += 1; return }
-            guard budget.admitJournalRead() else { return }
+            if let reason = unreadableJournal[unreadableKey] { pass.warnings.append(reason); pass.unreadJournalFiles += 1; return }
+            guard pass.budget.admitJournalRead() else { return }
             do {
                 let (hash, bytes) = try readEntry(entry, kind: .event)
                 if prunedIDs.contains(hash) { setAsidePruned(entry); return }
                 // Where to read its snapshot again: preferably sealed under the current key, which outlives the rest.
                 if entry.isSealed, journalLocations[hash] == nil || sealedKeys[entry.path] == sealing?.current.id { journalLocations[hash] = entry.url }
                 // The same entry, sealed and from before (or under two keys), is one entry.
-                if let cached = eventCache[hash] { events[hash] = cached; return }
+                if let cached = eventCache[hash] { pass.events[hash] = cached; return }
                 try requireSupportedVersion(bytes)
                 let event = try decoder.decode(SyncEventRecord.self, from: bytes)
                 guard event.schemaVersion == 1, event.parents.allSatisfy(SyncFiles.isHash),
                       event.deleted != (event.snapshot != nil), event.snapshot?.id == event.meetingID || event.deleted else { throw LibrarySyncError.invalidEvent(entry.url.lastPathComponent) }
                 if let snapshot = event.snapshot { try validate(snapshot: snapshot, assets: event.assets) }
                 let header = SyncEventHeader(event)
-                events[hash] = header; eventCache[hash] = header
-            } catch is SyncPendingDownload { pendingDownloads += 1; unreadJournalFiles += 1 }
+                pass.events[hash] = header; eventCache[hash] = header
+            } catch is SyncPendingDownload { pass.pendingDownloads += 1; pass.unreadJournalFiles += 1 }
             catch is SyncReplacedFile { setAside(entry) }
             catch let held as SyncHeldAsideFile { noteHeldAside(entry, held) }
             catch let error as CancellationError { throw error }
             catch where Self.isPermanent(error) {
-                warnings.append(markUnreadable(unreadableKey, error)); unreadJournalFiles += 1
+                pass.warnings.append(markUnreadable(unreadableKey, error)); pass.unreadJournalFiles += 1
                 // A sealed entry opened but unreadable (a newer format) is unreadable by its ID too, which parents name.
                 if entry.isSealed, let id = sealedNames[entry.path] { unreadableJournal[id] = unreadableJournal[unreadableKey] }
             }
-            catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.unreadHistory, error)); pendingDownloads += 1; unreadJournalFiles += 1 }
+            catch { pass.warnings.append(SyncWarningWords.compose(SyncWarningWords.unreadHistory, error)); pass.pendingDownloads += 1; pass.unreadJournalFiles += 1 }
         }
         // An encrypted library whose plaintext from before is retired (or that never held any) takes a plaintext entry only
         // when something it vouches for names it (`admitPlaintext`); anything else in `Events/` or `Metadata/` is left alone.
-        let eventEntries: [JournalEntry]
         if sealing?.plaintextNeedsVouching == true {
-            let sealedEvents = listedEvents.filter(\.isSealed)
+            let sealedEvents = pass.listedEvents.filter(\.isSealed)
             for entry in sealedEvents { try readEvent(entry) }
             let ownHeads = Set(state.heads.values.joined()).union((state.pending?.heads ?? [:]).values.joined())
-            let vouchedEvents = try admitPlaintext(listedEvents.filter { !$0.isSealed }, kind: .event,
-                                                   vouched: ownHeads.union(events.keys).union(events.values.flatMap(\.parents)),
-                                                   read: { for entry in $0 { try readEvent(entry) } }, parents: { events[$0]?.parents })
-            eventEntries = sealedEvents + vouchedEvents
+            let vouched = ownHeads.union(pass.events.keys).union(pass.events.values.flatMap(\.parents))
+            let vouchedEvents = try admitPlaintext(pass.listedEvents.filter { !$0.isSealed }, kind: .event, vouched: vouched) { batch in
+                for entry in batch { try readEvent(entry) }
+                return batch.flatMap { pass.events[$0.name]?.parents ?? [] }
+            }
+            pass.eventEntries = sealedEvents + vouchedEvents
         } else {
-            for entry in listedEvents { try readEvent(entry) }
-            eventEntries = listedEvents
+            for entry in pass.listedEvents { try readEvent(entry) }
+            pass.eventEntries = pass.listedEvents
         }
-        let (metadataRead, metadataEntries) = try readSettings(listedMetadata, budget: &budget, warnings: &warnings)
-        metadata = metadataRead.records
-        metadataIncomplete = metadataRead.incomplete
+        let (metadataRead, metadataEntries) = try readSettings(pass.listedMetadata, budget: &pass.budget, warnings: &pass.warnings)
+        pass.metadataEntries = metadataEntries
+        pass.metadata = metadataRead.records
+        pass.metadataIncomplete = metadataRead.incomplete
         // Held-aside files no longer in the sync folder are forgotten.
-        let listed = Set((listedEvents + listedMetadata).map(\.path)).union(compactionPaths)
+        let listed = Set((pass.listedEvents + pass.listedMetadata).map(\.path)).union(compactionPaths)
         if let heldAside = state.heldAside {
             let kept = heldAside.filter { listed.contains($0.key) }
             state.heldAside = kept.isEmpty ? nil : kept
         }
-        pendingDownloads += metadataRead.downloading; unreadJournalFiles += metadataRead.downloading
-        journalDeviceIDs = Set(events.values.map(\.deviceID)).union(metadata.values.map(\.deviceID))
+        pass.pendingDownloads += metadataRead.downloading; pass.unreadJournalFiles += metadataRead.downloading
+        journalDeviceIDs = Set(pass.events.values.map(\.deviceID)).union(pass.metadata.values.map(\.deviceID))
         // A parent belongs to the same conversation. Malformed cross-conversation edges
         // cannot provide ancestry or hide a legitimate head.
-        for (id, event) in events where event.parents.contains(where: { events[$0].map { $0.meetingID != event.meetingID } ?? false }) {
-            events.removeValue(forKey: id); eventCache.removeValue(forKey: id)
-            warnings.append(markUnreadable(id, LibrarySyncError.invalidEvent(id))); unreadJournalFiles += 1
+        for (id, event) in pass.events where event.parents.contains(where: { pass.events[$0].map { $0.meetingID != event.meetingID } ?? false }) {
+            pass.events.removeValue(forKey: id); eventCache.removeValue(forKey: id)
+            pass.warnings.append(markUnreadable(id, LibrarySyncError.invalidEvent(id))); pass.unreadJournalFiles += 1
         }
         // A parent that couldn't be read holds back its descendants until an update can read it; that isn't a
         // download to wait for. Only parents not listed or not downloaded yet are; a pruned one is gone for good. An
         // encrypted library keeps only the deletion of a deleted conversation (LibrarySyncSealer.swift), so its parents
         // aren't waited for there.
-        let deletedConversations = sealing == nil ? [] : Set(events.values.filter(\.deleted).map(\.meetingID))
-        let unknownParents = Set(events.values.filter { !deletedConversations.contains($0.meetingID) }.flatMap(\.parents))
-            .subtracting(events.keys).filter { unreadableJournal[$0] == nil && !prunedIDs.contains($0) }
+        let deletedConversations = sealing == nil ? [] : Set(pass.events.values.filter(\.deleted).map(\.meetingID))
+        let unknownParents = Set(pass.events.values.filter { !deletedConversations.contains($0.meetingID) }.flatMap(\.parents))
+            .subtracting(pass.events.keys).filter { unreadableJournal[$0] == nil && !prunedIDs.contains($0) }
         if !unknownParents.isEmpty {
-            pendingDownloads += unknownParents.count
-            warnings.append("Some changes are waiting for the next sync.")
+            pass.pendingDownloads += unknownParents.count
+            pass.warnings.append("Some changes are waiting for the next sync.")
         }
+        pass.journalIncomplete = pass.unreadJournalFiles > 0 || pass.budget.deferred > 0
+    }
 
+    /// Publishes what changed here, against the last applied heads, not newly observed remote heads: that's what tells a
+    /// genuine offline concurrent edit from a sequential edit after a pull. Then deletions made here, and the library's
+    /// settings. Every publication of a pass shares one sequence number, and the checkpoint is saved once after them: a
+    /// pass interrupted between writing an entry and saving (a crash, a cancelled background pass) writes the same bytes
+    /// again next time for anything unchanged, so the entry it left is the one it publishes.
+    private func publishLocalChanges(_ meetings: [Meeting], deletedMeetingIDs: Set<UUID>, libraryMetadata: Data?,
+                                     into pass: inout PassState) throws {
         // Assets any readable event references. An on-demand replica can publish a track whose audio it
         // never downloaded (or evicted) by reference to one of these.
-        let journalAssets = Set(events.values.flatMap { $0.assets.map(\.sha256) })
-        var deletedHere = deletedMeetingIDs
+        let journalAssets = Set(pass.events.values.flatMap { $0.assets.map(\.sha256) })
+        pass.deletedHere = deletedMeetingIDs
         let trash = localRoot.appendingPathComponent("Trash", isDirectory: true)
         if let children = try? fm.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil) {
-            deletedHere.formUnion(children.compactMap { UUID(uuidString: $0.lastPathComponent) })
+            pass.deletedHere.formUnion(children.compactMap { UUID(uuidString: $0.lastPathComponent) })
         }
-        var deletes = deletedHere.union(state.deletedIDs)
-        // Every publication of a pass shares one sequence number, and the checkpoint is saved once after them. A
-        // pass interrupted between writing an entry and saving (a crash, a cancelled background pass) writes the
-        // same bytes again next time for anything unchanged, so the entry it left is the one it publishes.
+        pass.deletes = pass.deletedHere.union(state.deletedIDs)
         let passSequence = state.sequence + 1
-        let journalIncomplete = unreadJournalFiles > 0 || budget.deferred > 0
-        let inJournal = Set(events.values.map(\.meetingID)), deletedInJournal = Set(events.values.filter(\.deleted).map(\.meetingID))
-        /// Conversations changed here whose applied heads are gone from the journal, merged below against their stored base.
-        var rebases: [UUID: Rebase] = [:]
-        /// Conversations the library holds just as they were last applied here: one whose heads haven't moved either needs no
-        /// merge, so its snapshots are never read.
-        var unchangedHere = Set<UUID>()
+        let journalIncomplete = pass.journalIncomplete
+        let inJournal = Set(pass.events.values.map(\.meetingID)), deletedInJournal = Set(pass.events.values.filter(\.deleted).map(\.meetingID))
         let publishedAt = publicationClock()
-        var nextPublication: Date?
         let retiredKeyLeftovers = heldAsideEntries.keys.contains(where: heldAsideLately)
         do {
-            // Publish changes against the last applied heads, not newly observed remote heads. This is what
-            // distinguishes a genuine offline concurrent edit from a sequential edit after a pull.
             for supplied in meetings.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
                 try Task.checkCancellation()
                 let key = supplied.id.uuidString
@@ -430,7 +435,7 @@ public actor LibrarySyncEngine {
                 // What this device last applied of it is gone from the journal (pruned by compaction while it was away, or
                 // sealed with a key retired while it was away, which this device no longer holds): an edit published
                 // against it would name parents nobody can read.
-                let gone = (state.heads[key] ?? []).filter { events[$0] == nil && unreadableJournal[$0] == nil }
+                let gone = (state.heads[key] ?? []).filter { pass.events[$0] == nil && unreadableJournal[$0] == nil }
                 // Gone without a commit saying so, while the journal holds files sealed with a retired key nobody here can
                 // open, found in the last month (`heldAsideLately`): its own entries may be among them, which nobody else
                 // may ever read. Its copy is published again, changed or not: merged with what's there now, or as new when
@@ -438,7 +443,7 @@ public actor LibrarySyncEngine {
                 var force = false
                 if !gone.isEmpty, !journalIncomplete, !deletedInJournal.contains(supplied.id), !gone.allSatisfy(prunedIDs.contains),
                    retiredKeyLeftovers {
-                    if inJournal.contains(supplied.id) { rebases[supplied.id] = Rebase(base: nil); continue }
+                    if inJournal.contains(supplied.id) { pass.rebases[supplied.id] = Rebase(base: nil); continue }
                     force = true
                 }
                 // Cheap equality first: most meetings are unchanged on most passes.
@@ -449,7 +454,7 @@ public actor LibrarySyncEngine {
                 if baseIsCurrent, supplied == base(key) {
                     // Kept as the library's copy, which shares its storage (and makes the next comparison quick).
                     state.bases[key] = supplied
-                    if !force { unchangedHere.insert(supplied.id); continue }
+                    if !force { pass.unchangedHere.insert(supplied.id); continue }
                 } else if !force, pendingBase == supplied { continue }
                 let encoded = try SyncEncoding.data(supplied), fingerprint = SyncDigest.sha256(data: encoded)
                 guard force || (fingerprint != state.submittedHashes[key] && (!baseIsCurrent || fingerprint != base(key).flatMap({ try? hash($0) }))
@@ -458,16 +463,16 @@ public actor LibrarySyncEngine {
                 // publication carries the burst, rather than a full snapshot every time the person pauses typing. What
                 // others changed in it meanwhile waits too, as for any edit not yet published.
                 if !force, gone.isEmpty, let due = publicationHeld(supplied.id, bytes: encoded.count, now: publishedAt) {
-                    pendingUploads += 1; failedPublications.insert(supplied.id)
-                    nextPublication = min(nextPublication ?? due, due)
+                    pass.pendingUploads += 1; pass.failedPublications.insert(supplied.id)
+                    pass.nextPublication = min(pass.nextPublication ?? due, due)
                     continue
                 }
                 if !gone.isEmpty, !force, !deletedInJournal.contains(supplied.id) {
                     // Only a whole read can tell gone from still downloading, unless a commit says they were pruned.
-                    if journalIncomplete, !gone.allSatisfy(prunedIDs.contains) { pendingUploads += 1; failedPublications.insert(supplied.id); continue }
+                    if journalIncomplete, !gone.allSatisfy(prunedIDs.contains) { pass.pendingUploads += 1; pass.failedPublications.insert(supplied.id); continue }
                     if inJournal.contains(supplied.id) {
                         // Merged against what this device applied (when that's history others built on), and published next pass.
-                        rebases[supplied.id] = Rebase(base: gone.allSatisfy(prunedIDs.contains) ? base(key) : nil)
+                        pass.rebases[supplied.id] = Rebase(base: gone.allSatisfy(prunedIDs.contains) ? base(key) : nil)
                         continue
                     }
                     // Nothing of it is left in the journal: it's published as new.
@@ -475,107 +480,106 @@ public actor LibrarySyncEngine {
                 }
                 do {
                     let prepared = try prepareUpload(supplied, journalAssets: journalAssets)
-                    pendingUploads += prepared.pendingUploads
+                    pass.pendingUploads += prepared.pendingUploads
                     let event = SyncEventRecord(meetingID: supplied.id, deviceID: deviceID, sequence: passSequence,
                         parents: force ? [] : (state.heads[key] ?? []).sorted(), snapshot: prepared.meeting, deleted: false, assets: prepared.assets)
                     let id = try writeRecord(event, directory: "Events")
-                    events[id] = SyncEventHeader(event); eventCache[id] = events[id]; snapshotCache[id] = prepared.meeting
+                    pass.events[id] = SyncEventHeader(event); eventCache[id] = pass.events[id]; snapshotCache[id] = prepared.meeting
                     state.submittedHashes[key] = fingerprint
                     state.heads[key] = [id]
                     lastPublished[supplied.id] = publishedAt
-                    published += 1
-                } catch is SyncPendingDownload { pendingDownloads += 1; pendingUploads += 1; failedPublications.insert(supplied.id) }
+                    pass.published += 1
+                } catch is SyncPendingDownload { pass.pendingDownloads += 1; pass.pendingUploads += 1; pass.failedPublications.insert(supplied.id) }
                 catch let error as CancellationError { throw error }
-                catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.unsavedChange, error)); pendingUploads += 1; failedPublications.insert(supplied.id) }
+                catch { pass.warnings.append(SyncWarningWords.compose(SyncWarningWords.unsavedChange, error)); pass.pendingUploads += 1; pass.failedPublications.insert(supplied.id) }
             }
             // A deletion this replica already knows about has an event in the journal. When part of the journal
             // is unread (still downloading, or deferred by limits), don't mistake that for a missing tombstone.
-            for id in deletes.sorted(by: { $0.uuidString < $1.uuidString })
-            where !events.values.contains(where: { $0.meetingID == id && $0.deleted }) && !(journalIncomplete && state.deletedIDs.contains(id)) {
+            for id in pass.deletes.sorted(by: { $0.uuidString < $1.uuidString })
+            where !pass.events.values.contains(where: { $0.meetingID == id && $0.deleted }) && !(journalIncomplete && state.deletedIDs.contains(id)) {
                 let event = SyncEventRecord(meetingID: id, deviceID: deviceID, sequence: passSequence,
                     parents: (state.heads[id.uuidString] ?? []).sorted(), snapshot: nil, deleted: true, assets: [])
                 let eventID = try writeRecord(event, directory: "Events")
-                events[eventID] = SyncEventHeader(event); eventCache[eventID] = events[eventID]; state.heads[id.uuidString] = [eventID]
-                published += 1
+                pass.events[eventID] = SyncEventHeader(event); eventCache[eventID] = pass.events[eventID]; state.heads[id.uuidString] = [eventID]
+                pass.published += 1
             }
-            deletes.formUnion(events.values.filter(\.deleted).map(\.meetingID))
+            pass.deletes.formUnion(pass.events.values.filter(\.deleted).map(\.meetingID))
 
             if let libraryMetadata {
                 let fingerprint = SyncDigest.sha256(data: libraryMetadata)
                 if fingerprint != state.metadataSubmittedHash {
                     let record = SyncMetadataRecord(deviceID: deviceID, sequence: passSequence, parents: state.metadataHeads.sorted(), data: libraryMetadata)
                     let id = try writeRecord(record, directory: "Metadata")
-                    metadata[id] = record; metadataCache[id] = record; state.metadataSubmittedHash = fingerprint; state.metadataHeads = [id]
-                    published += 1
+                    pass.metadata[id] = record; metadataCache[id] = record; state.metadataSubmittedHash = fingerprint; state.metadataHeads = [id]
+                    pass.published += 1
                 }
             }
             // Deletions made here are recorded as synced with their tombstones, so a restore can tell at once.
-            let newlyDeleted = deletedHere.subtracting(state.deletedIDs)
-            state.deletedIDs.formUnion(deletedHere)
-            if published > 0 { state.sequence = passSequence }
-            if published > 0 || !newlyDeleted.isEmpty { try saveCheckpoint() }
+            let newlyDeleted = pass.deletedHere.subtracting(state.deletedIDs)
+            state.deletedIDs.formUnion(pass.deletedHere)
+            if pass.published > 0 { state.sequence = passSequence }
+            if pass.published > 0 || !newlyDeleted.isEmpty { try saveCheckpoint() }
         } catch {
             // Keep what was published before the pass stopped, so the next one builds on it.
-            if published > 0 { state.sequence = passSequence; try? saveCheckpoint() }
+            if pass.published > 0 { state.sequence = passSequence; try? saveCheckpoint() }
             throw error
         }
+    }
 
-        var output = Dictionary(meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var changed = Set<UUID>()
-        var notLocalAudio: [UUID: Set<UUID>] = [:]
-        var baseChanges: [String: Meeting] = [:]
-        var removedBases = Set<String>()
-        var proposedHeads = state.heads
+    /// Applies the journal to the library, conversation by conversation: deletions (keeping what a deleted conversation
+    /// gained here as a new one), and the merge of each conversation's heads, its audio made local on an eager replica.
+    /// Nothing is saved here: what changed is returned for the caller to save before `acknowledge`.
+    private func applyJournal(_ meetings: [Meeting], protecting: Set<UUID>, into pass: inout PassState) throws {
+        pass.output = Dictionary(meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        pass.proposedHeads = state.heads
+        let journalIncomplete = pass.journalIncomplete
+        let events = pass.events
         // A pruned ancestor is gone for good: an event whose missing ancestors are all pruned is complete.
-        let completeAncestors = try completeAncestorIDs(events: events, budget: &budget, present: prunedIDs)
+        let completeAncestors = try completeAncestorIDs(events: events, budget: &pass.budget, present: prunedIDs)
         // Events whose only missing ancestors can't be read (a newer format): nothing will arrive to complete them.
         let unreadable = Set(unreadableJournal.keys)
         let settledAncestors = unreadable.isEmpty ? completeAncestors
-            : try completeAncestorIDs(events: events, budget: &budget, present: unreadable.union(prunedIDs))
+            : try completeAncestorIDs(events: events, budget: &pass.budget, present: unreadable.union(prunedIDs))
         var memo = MergeMemo()
-        /// What each conversation's merge uses, for the sealer of an encrypted library.
-        var liveAssets: [UUID: [SyncAsset]] = [:]
-        /// Deleted elsewhere but kept here this pass (protected, or waiting to read what the deletion saw).
-        var held = Set<UUID>()
         var examinedDeletions = Set<UUID>()
-        let grouped = Dictionary(grouping: events.keys, by: { events[$0]!.meetingID })
-        for (meetingID, ids) in grouped.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+        pass.grouped = Dictionary(grouping: events.keys, by: { events[$0]!.meetingID })
+        for (meetingID, ids) in pass.grouped.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             try Task.checkCancellation()
-            guard !budget.timeExceeded else { budget.deferred += 1; continue }
-            if deletes.contains(meetingID) {
+            guard !pass.budget.timeExceeded else { pass.budget.deferred += 1; continue }
+            if pass.deletes.contains(meetingID) {
                 examinedDeletions.insert(meetingID)
                 // Deleted on another device while this one still has it. A conversation being recorded or
                 // processed here waits; then anything it holds that the deletion never saw (recordings, photos,
                 // bookmarks, notes) is kept as a new conversation instead of disappearing with it.
-                if let local = output[meetingID], !deletedHere.contains(meetingID) {
-                    if protecting.contains(meetingID) { held.insert(meetingID); continue }
+                if let local = pass.output[meetingID], !pass.deletedHere.contains(meetingID) {
+                    if protecting.contains(meetingID) { pass.held.insert(meetingID); continue }
                     do {
                         if let fork = try keepContentAddedAfterDeletion(local, deletions: ids.filter { events[$0]?.deleted == true },
-                                                                       events: events, memo: &memo, supplied: output,
+                                                                       events: events, memo: &memo, supplied: pass.output,
                                                                        parentsMayBeRetired: !journalIncomplete && sealing?.manifest.legacyRetired != nil) {
-                            output[fork.id] = fork; changed.insert(fork.id)
+                            pass.output[fork.id] = fork; pass.changed.insert(fork.id)
                             if audioPolicy == .onDemand {
                                 let missing = Set(fork.tracks.filter { availability(of: $0, in: fork.id) == .notLocal }.map(\.id))
-                                if !missing.isEmpty { notLocalAudio[fork.id] = missing }
+                                if !missing.isEmpty { pass.notLocalAudio[fork.id] = missing }
                             }
-                            warnings.append("“\(local.title)” was deleted on another device after it changed here, so it’s kept as a new conversation.")
+                            pass.warnings.append("“\(local.title)” was deleted on another device after it changed here, so it’s kept as a new conversation.")
                         }
-                    } catch is SyncPendingDownload { pendingDownloads += 1; held.insert(meetingID); continue }
+                    } catch is SyncPendingDownload { pass.pendingDownloads += 1; pass.held.insert(meetingID); continue }
                     catch let error as CancellationError { throw error }
-                    catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.unappliedConversation, error)); held.insert(meetingID); continue }
-                } else if output[meetingID] == nil {
+                    catch { pass.warnings.append(SyncWarningWords.compose(SyncWarningWords.unappliedConversation, error)); pass.held.insert(meetingID); continue }
+                } else if pass.output[meetingID] == nil {
                     trashOrphanFolder(meetingID)
                 }
-                output.removeValue(forKey: meetingID)
+                pass.output.removeValue(forKey: meetingID)
                 if ids.contains(where: { events[$0]?.deleted == false }), hasBase(meetingID.uuidString) {
                     // The immutable journal remains a recovery archive for edit/delete races.
-                    removedBases.insert(meetingID.uuidString)
+                    pass.removedBases.insert(meetingID.uuidString)
                 }
-                proposedHeads[meetingID.uuidString] = heads(ids: ids, parents: { events[$0]?.parents ?? [] })
+                pass.proposedHeads[meetingID.uuidString] = heads(ids: ids, parents: { events[$0]?.parents ?? [] })
                 continue
             }
             // Failed uploads must never let an older remote snapshot replace unsent local edits.
-            guard !failedPublications.contains(meetingID) else { continue }
+            guard !pass.failedPublications.contains(meetingID) else { continue }
             let allHeads = heads(ids: ids, parents: { events[$0]?.parents ?? [] })
             // A head waiting for a download holds the conversation. One that descends from an entry this version
             // can't read is set aside: the conversation applies as far as this version can read it.
@@ -590,81 +594,86 @@ public actor LibrarySyncEngine {
             memo.warnings = []
             do {
                 // Applied here as it is, its one head unmoved: no merge to make, and no snapshot to read.
-                let unmoved = headIDs.count == 1 && state.heads[meetingID.uuidString] == headIDs && unchangedHere.contains(meetingID)
-                    && rebases[meetingID] == nil
-                guard var merged = unmoved ? output[meetingID] : try mergedSnapshot(of: headIDs, events: events, memo: &memo) else { continue }
-                warnings += memo.warnings
+                let unmoved = headIDs.count == 1 && state.heads[meetingID.uuidString] == headIDs && pass.unchangedHere.contains(meetingID)
+                    && pass.rebases[meetingID] == nil
+                guard var merged = unmoved ? pass.output[meetingID] : try mergedSnapshot(of: headIDs, events: events, memo: &memo) else { continue }
+                pass.warnings += memo.warnings
                 let assets = mergedAssets(for: merged, eventIDs: ids, events: events)
                 try validate(snapshot: merged, assets: assets)
-                liveAssets[meetingID] = assets
+                pass.liveAssets[meetingID] = assets
                 switch audioPolicy {
                 case .eager:
-                    try hydrate(assets, meetingID: meetingID, warnings: &warnings, budget: &budget)
+                    try hydrate(assets, meetingID: meetingID, warnings: &pass.warnings, budget: &pass.budget)
                 case .onDemand:
                     // Audio is never required to apply or acknowledge. Tracks stay valid; their audio is
                     // fetched on demand, so nothing here reads, downloads, or judges a blob.
                     try requireNotTrashed(meetingID)
                     let missing = Set(merged.tracks.filter { availability(of: $0, in: meetingID) == .notLocal }.map(\.id))
-                    if !missing.isEmpty { notLocalAudio[meetingID] = missing }
+                    if !missing.isEmpty { pass.notLocalAudio[meetingID] = missing }
                 }
                 // What's applied here is the journal's; a rebased conversation is that with this device's changes merged
                 // in, which the next pass publishes as an ordinary edit.
                 let applied = merged
-                if let rebase = rebases[meetingID], let local = output[meetingID] {
+                if let rebase = pass.rebases[meetingID], let local = pass.output[meetingID] {
                     let rebased = MeetingMerge.merge(base: rebase.base, local: local, remote: merged)
-                    warnings += rebased.warnings
+                    pass.warnings += rebased.warnings
                     merged = rebased.meeting
                 }
-                if output[meetingID] != merged { changed.insert(meetingID) }
-                output[meetingID] = merged
-                if base(meetingID.uuidString) != applied { baseChanges[meetingID.uuidString] = applied }
-                proposedHeads[meetingID.uuidString] = headIDs
-            } catch is SyncPendingDownload { pendingDownloads += 1 }
-            catch is SyncDeferredWork { budget.deferred += 1 }
+                if pass.output[meetingID] != merged { pass.changed.insert(meetingID) }
+                pass.output[meetingID] = merged
+                if base(meetingID.uuidString) != applied { pass.baseChanges[meetingID.uuidString] = applied }
+                pass.proposedHeads[meetingID.uuidString] = headIDs
+            } catch is SyncPendingDownload { pass.pendingDownloads += 1 }
+            catch is SyncDeferredWork { pass.budget.deferred += 1 }
             catch let error as CancellationError { throw error }
-            catch { warnings.append(SyncWarningWords.compose(SyncWarningWords.undownloadedHistory, error)); pendingDownloads += 1 }
+            catch { pass.warnings.append(SyncWarningWords.compose(SyncWarningWords.undownloadedHistory, error)); pass.pendingDownloads += 1 }
         }
-        state.deletedIDs.formUnion(deletes)
+        state.deletedIDs.formUnion(pass.deletes)
         // A deleted conversation still here whose journal wasn't examined this pass (deferred by limits, or its
         // entries still unread) waits for a pass that can tell whether it holds anything the deletion never saw.
-        for id in deletes where output[id] != nil && !deletedHere.contains(id) && !examinedDeletions.contains(id)
-            && (grouped[id] != nil || journalIncomplete) { held.insert(id) }
-        deletes.subtract(held)
-        heldDeletions = held
-        for id in deletes { output.removeValue(forKey: id); changed.remove(id); notLocalAudio.removeValue(forKey: id) }
+        for id in pass.deletes where pass.output[id] != nil && !pass.deletedHere.contains(id) && !examinedDeletions.contains(id)
+            && (pass.grouped[id] != nil || journalIncomplete) { pass.held.insert(id) }
+        pass.deletes.subtract(pass.held)
+        heldDeletions = pass.held
+        for id in pass.deletes { pass.output.removeValue(forKey: id); pass.changed.remove(id); pass.notLocalAudio.removeValue(forKey: id) }
         var sourceMeetings: [String: Set<UUID>] = [:]
-        for meeting in output.values {
+        for meeting in pass.output.values {
             for track in meeting.tracks where !track.sha256.isEmpty { sourceMeetings[track.sha256, default: []].insert(meeting.id) }
         }
         if sourceMeetings.values.contains(where: { $0.count > 1 }) {
-            warnings.append("The same recording is in more than one conversation. They stay separate.")
+            pass.warnings.append("The same recording is in more than one conversation. They stay separate.")
         }
-        let settings = metadataVersions(metadata, incomplete: metadataIncomplete, warnings: &warnings, pendingDownloads: &pendingDownloads)
+    }
+
+    /// Ends the pass: records what it would apply (the pending checkpoint), seals and retires in an encrypted library,
+    /// compacts on the Mac that does, counts what iCloud still has to move, refreshes presence, and returns the result.
+    private func finishPass(_ pass: inout PassState) throws -> SyncResult {
+        let settings = metadataVersions(pass.metadata, incomplete: pass.metadataIncomplete, warnings: &pass.warnings, pendingDownloads: &pass.pendingDownloads)
         let metadataHeads = settings.heads, versions = settings.versions
         let checkpointID = UUID()
         try Task.checkCancellation()
-        state.pending = SyncPendingApply(id: checkpointID, heads: proposedHeads, metadataHeads: settings.applied ? metadataHeads : state.metadataHeads,
-            changedBases: baseChanges, removedBases: removedBases.sorted())
+        state.pending = SyncPendingApply(id: checkpointID, heads: pass.proposedHeads, metadataHeads: settings.applied ? metadataHeads : state.metadataHeads,
+            changedBases: pass.baseChanges, removedBases: pass.removedBases.sorted())
         try saveCheckpoint()
-        heldPublicationDue = nextPublication
-        retainCaches(heads: Set(proposedHeads.values.joined()).union(state.heads.values.joined()),
-                     metadataHeads: Set(metadataHeads).union(state.metadataHeads))
+        heldPublicationDue = pass.nextPublication
+        retainCaches(metadataHeads: Set(metadataHeads).union(state.metadataHeads))
+        let journalIncomplete = pass.journalIncomplete
         // An encrypted library: seal what's live from before (or under an older key), and retire what's no longer
         // needed once it's safe. Nothing here changes what this pass returns.
         if sealing != nil, !Task.isCancelled {
-            let liveConversations = Set(grouped.keys).subtracting(deletes)
-            let complete = pendingDownloads == 0 && budget.deferred == 0 && !journalIncomplete && !metadataIncomplete
-                && liveConversations.isSubset(of: liveAssets.keys)
-            let namedAssets = Set(events.values.flatMap { $0.assets.map(\.sha256) })
+            let liveConversations = Set(pass.grouped.keys).subtracting(pass.deletes)
+            let complete = pass.pendingDownloads == 0 && pass.budget.deferred == 0 && !journalIncomplete && !pass.metadataIncomplete
+                && liveConversations.isSubset(of: pass.liveAssets.keys)
+            let namedAssets = Set(pass.events.values.flatMap { $0.assets.map(\.sha256) })
             // A key retired long enough ago that every device has moved on leaves iCloud Keychain.
-            if pendingDownloads == 0, budget.deferred == 0, !journalIncomplete {
-                removeRetiredKeys(entries: eventEntries + metadataEntries, knownShas: namedAssets, now: sealerClock())
+            if pass.pendingDownloads == 0, pass.budget.deferred == 0, !journalIncomplete {
+                removeRetiredKeys(entries: pass.eventEntries + pass.metadataEntries, knownShas: namedAssets, now: sealerClock())
             }
-            sealerProgress = runSealer(SealerInput(events: events, metadata: metadata,
-                                                   eventEntries: eventEntries.filter { !setAsideFromSealer($0) },
-                                                   metadataEntries: metadataEntries.filter { !setAsideFromSealer($0) },
+            sealerProgress = runSealer(SealerInput(events: pass.events, metadata: pass.metadata,
+                                                   eventEntries: pass.eventEntries.filter { !setAsideFromSealer($0) },
+                                                   metadataEntries: pass.metadataEntries.filter { !setAsideFromSealer($0) },
                                                    compactionEntries: compactionRecords.values.map(\.entry).filter { !replacedEntries.contains($0.path) },
-                                                   deleted: deletes, liveAssets: liveAssets, complete: complete), budget: &budget, now: sealerClock())
+                                                   deleted: pass.deletes, liveAssets: pass.liveAssets, complete: complete), budget: &pass.budget, now: sealerClock())
             // A library that started over: what's left here of the one it replaced goes (a rival's once it's safe), and
             // then its keys.
             deleteReplacedObjects(journalAssets: namedAssets)
@@ -672,28 +681,28 @@ public actor LibrarySyncEngine {
         }
         // History no device needs any more goes (on the Mac that compacts, after a pass that read everything).
         if !Task.isCancelled {
-            let complete = pendingDownloads == 0 && budget.deferred == 0 && !journalIncomplete && !metadataIncomplete && held.isEmpty
-            runCompaction(CompactionInput(events: events, metadata: metadata, metadataHeads: metadataHeads,
-                                          entries: (eventEntries + metadataEntries).filter { !replacedEntries.contains($0.path) },
-                                          deleted: deletes, complete: complete), now: compactionClock())
+            let complete = pass.pendingDownloads == 0 && pass.budget.deferred == 0 && !journalIncomplete && !pass.metadataIncomplete && pass.held.isEmpty
+            runCompaction(CompactionInput(events: pass.events, metadata: pass.metadata, metadataHeads: metadataHeads,
+                                          entries: (pass.eventEntries + pass.metadataEntries).filter { !replacedEntries.contains($0.path) },
+                                          deleted: pass.deletes, complete: complete), now: compactionClock())
         }
         // A coordinated local write is not necessarily uploaded to iCloud yet; one iCloud refused for lack of storage won't be.
         let uploads = try countPendingCloudUploads()
         // Objects iCloud has, which the library holds verified, needn't stay on disk twice.
         evictUploadedContainerCopies()
-        pendingUploads += uploads.pending
+        pass.pendingUploads += uploads.pending
         try saveAudioIndexIfNeeded()
         // Courier deliveries the sync folder now holds, downloaded and identical, aren't needed any more.
         pruneCourierInbox()
-        let listing = Set((listedEvents + listedMetadata).map(\.path)).union(compactionPaths).subtracting(replacedEntries).union(ownJournalWrites)
-        settledJournalListing = pendingDownloads == 0 && budget.deferred == 0 ? listing : nil
+        let listing = Set((pass.listedEvents + pass.listedMetadata).map(\.path)).union(compactionPaths).subtracting(replacedEntries).union(ownJournalWrites)
+        settledJournalListing = pass.pendingDownloads == 0 && pass.budget.deferred == 0 ? listing : nil
         // Presence is advisory: failing to refresh it never fails the pass.
         if !Task.isCancelled { try? writePresence(now: Date(), force: false) }
         let written = takeCourierWrites()
-        return SyncResult(checkpointID: checkpointID, meetings: output.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date > $1.date },
-            deletedMeetingIDs: deletes, metadataVersions: versions, warnings: Array(Set(warnings)).sorted(),
-            pendingDownloads: pendingDownloads, pendingUploads: pendingUploads, publishedEvents: published,
-            changedMeetingIDs: changed, notLocalAudio: notLocalAudio, deferredItems: budget.deferred, writtenFiles: written,
+        return SyncResult(checkpointID: checkpointID, meetings: pass.output.values.sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date > $1.date },
+            deletedMeetingIDs: pass.deletes, metadataVersions: versions, warnings: Array(Set(pass.warnings)).sorted(),
+            pendingDownloads: pass.pendingDownloads, pendingUploads: pass.pendingUploads, publishedEvents: pass.published,
+            changedMeetingIDs: pass.changed, notLocalAudio: pass.notLocalAudio, deferredItems: pass.budget.deferred, writtenFiles: written,
             storageFull: uploads.storageFull, nextPublication: heldPublicationDue)
     }
 
@@ -730,12 +739,13 @@ public actor LibrarySyncEngine {
         var read = try readMetadata(sealed, budget: &budget, warnings: &warnings)
         let own = Set(state.metadataHeads).union(state.pending?.metadataHeads ?? [])
         let vouched = own.union(read.records.keys).union(read.records.values.flatMap(\.parents))
-        let plaintext = try admitPlaintext(listed.filter { !$0.isSealed }, kind: .metadata, vouched: vouched, read: { batch in
+        let plaintext = try admitPlaintext(listed.filter { !$0.isSealed }, kind: .metadata, vouched: vouched) { batch in
             let more = try readMetadata(batch, budget: &budget, warnings: &warnings)
             read.records.merge(more.records) { first, _ in first }
             read.incomplete = read.incomplete || more.incomplete
             read.downloading += more.downloading
-        }, parents: { read.records[$0]?.parents })
+            return batch.flatMap { read.records[$0.name]?.parents ?? [] }
+        }
         return (read, sealed + plaintext)
     }
 
@@ -1385,7 +1395,7 @@ public actor LibrarySyncEngine {
     }
     /// After a pass: snapshots the pass used stay (heads, bases of merges), others are read again if needed, and
     /// only the library settings that are heads keep their data.
-    private func retainCaches(heads: Set<String>, metadataHeads: Set<String>) {
+    private func retainCaches(metadataHeads: Set<String>) {
         // Only snapshots this pass used: a head's is read again (and checked against its name) when a merge needs it, so
         // the engine never holds a decoded copy of the library beside the library's own.
         let keep = snapshotsUsed
@@ -1897,6 +1907,57 @@ struct SyncPresenceSighting: Codable, Equatable {
 /// ancestor, and conflicts are kept in History).
 struct Rebase {
     var base: Meeting?
+}
+/// What one pass knows and has done so far, handed from phase to phase (`synchronize`: `readJournal`,
+/// `publishLocalChanges`, `applyJournal`, `finishPass`).
+struct PassState {
+    var budget: SyncPassBudget
+    var warnings: [String]
+    var pendingDownloads: Int
+    var pendingUploads = 0
+    var published = 0
+    /// Journal files this pass couldn't read yet (downloading, settling, or unreadable), compaction records included.
+    var unreadJournalFiles: Int
+    /// Part of the journal wasn't read this pass (unread files, or reads deferred by limits), as the read left it.
+    var journalIncomplete = false
+    var metadataIncomplete = false
+    /// Every event and settings version read, by ID.
+    var events: [String: SyncEventHeader] = [:]
+    var metadata: [String: SyncMetadataRecord] = [:]
+    /// What the sync folder (and the courier's inbox) lists, and of that, the entries the pass took as the library's.
+    var listedEvents: [JournalEntry] = [], listedMetadata: [JournalEntry] = []
+    var eventEntries: [JournalEntry] = [], metadataEntries: [JournalEntry] = []
+    /// Conversations deleted here (supplied, or in the Trash), and every deleted conversation.
+    var deletedHere = Set<UUID>()
+    var deletes = Set<UUID>()
+    /// Conversations whose publication failed or waits: what others changed in them waits too.
+    var failedPublications = Set<UUID>()
+    /// Conversations changed here whose applied heads are gone from the journal, merged against their stored base.
+    var rebases: [UUID: Rebase] = [:]
+    /// Conversations the library holds just as they were last applied here: one whose heads haven't moved either needs
+    /// no merge, so its snapshots are never read.
+    var unchangedHere = Set<UUID>()
+    /// When the earliest publication held back may go (`publicationInterval`).
+    var nextPublication: Date?
+    /// The library as the pass returns it, and what changed in it.
+    var output: [UUID: Meeting] = [:]
+    var changed = Set<UUID>()
+    var notLocalAudio: [UUID: Set<UUID>] = [:]
+    /// What acknowledging the pass records: bases changed and removed, and every conversation's heads.
+    var baseChanges: [String: Meeting] = [:]
+    var removedBases = Set<String>()
+    var proposedHeads: [String: [String]] = [:]
+    /// What each conversation's merge uses, for the sealer of an encrypted library.
+    var liveAssets: [UUID: [SyncAsset]] = [:]
+    /// Deleted elsewhere but kept here this pass (protected, or waiting to read what the deletion saw).
+    var held = Set<UUID>()
+    /// Event IDs by conversation.
+    var grouped: [UUID: [String]] = [:]
+
+    init(budget: SyncPassBudget, warnings: [String], pendingDownloads: Int, unreadJournalFiles: Int) {
+        self.budget = budget; self.warnings = warnings; self.pendingDownloads = pendingDownloads
+        self.unreadJournalFiles = unreadJournalFiles
+    }
 }
 /// One pass's merges: results by head set, resolved snapshots, and ancestor sets.
 private struct MergeMemo {

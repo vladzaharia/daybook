@@ -394,8 +394,9 @@ extension LibrarySyncEngine {
     /// - it's sealed under a key held here too (the sealer's name for it needs the key), so it adds nothing.
     ///
     /// Anything else is left alone: not read, applied, sealed, waited for, or deleted (its author may yet seal it again).
-    func admitPlaintext(_ plaintext: [JournalEntry], kind: SealedKind, vouched: Set<String>, read: ([JournalEntry]) throws -> Void,
-                        parents: (String) -> [String]?) rethrows -> [JournalEntry] {
+    /// `read` reads a batch and returns the parents the entries it read name.
+    func admitPlaintext(_ plaintext: [JournalEntry], kind: SealedKind, vouched: Set<String>,
+                        read: ([JournalEntry]) throws -> [String]) rethrows -> [JournalEntry] {
         var trusted = vouched, waiting = plaintext, admitted: [JournalEntry] = []
         let counterparts = Set(plaintext.filter { hasSealedCounterpart($0.name, kind: kind) }.map(\.name))
         func known(_ id: String) -> Bool {
@@ -410,9 +411,8 @@ extension LibrarySyncEngine {
             guard !now.isEmpty else { break }
             let taken = Set(now.map(\.path))
             waiting.removeAll { taken.contains($0.path) }
-            try read(now)
+            trusted.formUnion(try read(now))
             admitted += now
-            for entry in now { trusted.formUnion(parents(entry.name) ?? []) }
         }
         return admitted
     }
