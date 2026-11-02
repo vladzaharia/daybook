@@ -163,6 +163,26 @@ final class InterruptedCaptureTests: XCTestCase {
         try FileManager.default.copyItem(at: from, to: to)
     }
 
+    /// A recovered recording goes on as one that stopped normally does: it's queued to transcribe (here, without
+    /// models, it waits for them), and the notice names it with a way to it.
+    func testBehaviorARecoveredRecordingIsQueuedAndTheNoticeShowsIt() async throws {
+        let root = try temporaryDirectory()
+        let staging = root.appendingPathComponent("Staging/\(manifest.id.uuidString)")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try await stageInterrupted(in: staging)
+        let state = await openLibrary(root, makeTestDefaults())
+        let recovered = try XCTUnwrap(state.meetings.first { $0.id == manifest.id })
+        XCTAssertEqual(recovered.title, AppState.recordingTitle(nil, at: manifest.startedAt))
+        XCTAssertEqual(state.awaitingModels, [manifest.id], "Queued, and waiting for this Mac's models")
+        XCTAssertEqual(state.noticeLines, ["Recovered “\(recovered.title)”."])
+        XCTAssertEqual(state.shownNoticeAction?.title, "Show")
+        state.place = .section(.work)
+        state.selectedID = nil
+        state.performNoticeAction()
+        XCTAssertEqual(state.selectedID, manifest.id)
+        XCTAssertEqual(state.place, .section(.all))
+    }
+
     /// The app imported the recording but died before removing the staged files: opening the library
     /// again imports nothing twice.
     func testRecoveringAgainAfterACrashBeforeCleanupAddsNoSecondCopy() async throws {

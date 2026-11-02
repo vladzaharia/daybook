@@ -99,11 +99,12 @@ final class AppState {
 
     /// The reason is said; the person has seen it.
     func dismissUnexpectedStop(_ id: UUID) { unexpectedStops[id] = nil }
-    var processingID: UUID?
     var readingPhotoID: UUID?
     var pendingPhotoReadings = Set<UUID>()
     /// Photos that couldn't be read wait before they're tried again (AppState+Photos.swift).
     var photoBackoff = PhotoReadingBackoff()
+    /// The reading running now, and the wait before failed photos are tried again (AppState+Photos.swift).
+    @ObservationIgnored var photoReading: Task<Void, Never>?
     @ObservationIgnored var photoRetry: Task<Void, Never>?
     /// Listening to recordings transcribed before Daybook listened for music and TV, when idle
     /// (AppState+BackgroundAudio.swift): the pass, whether it has started, and the recordings tried.
@@ -111,21 +112,42 @@ final class AppState {
     var isListeningToEarlierRecordings = false
     var listenedRecordings = Set<UUID>()
     var backgroundListeningDelay: Duration = .seconds(20)
+    /// This Mac's processing queue and model downloads (ProcessingQueue.swift). The views, menus, and tests read it
+    /// through the names below, as they always have.
+    let queue: ProcessingQueue
+    /// The conversation being processed now.
+    var processingID: UUID? {
+        get { queue.runningID }
+        set { queue.runningID = newValue }
+    }
     /// The running job's progress, throttled (`ActivityProgress`). The window isn't redrawn by it: the
     /// views that draw it observe `processingActivity`, and redraw when its percent, message, or step changes.
-    let processingActivity = ActivityProgress(IntelligenceProgress(0, "Ready"))
+    var processingActivity: ActivityProgress { queue.activity }
     var processingProgress: IntelligenceProgress {
-        get { processingActivity.value }
-        set { processingActivity.set(newValue) }
+        get { queue.activity.value }
+        set { queue.activity.set(newValue) }
     }
-    var processingQueue: [ProcessingJob] = []
+    /// Waiting, in order.
+    var processingQueue: [ProcessingJob] {
+        get { queue.jobs }
+        set { queue.jobs = newValue }
+    }
     /// The job running now (`processingID`'s), with the request it carries out, if any.
-    var runningJob: ProcessingJob?
-    var queuedIDs: [UUID] { processingQueue.map(\.meetingID) }
+    var runningJob: ProcessingJob? {
+        get { queue.running }
+        set { queue.running = newValue }
+    }
+    var queuedIDs: [UUID] { queue.queuedIDs }
     /// Conversations the person paused; they resume only when asked.
-    var pausedIDs: Set<UUID> = []
+    var pausedIDs: Set<UUID> {
+        get { queue.paused }
+        set { queue.paused = newValue }
+    }
     /// Conversations that start transcribing as soon as the selected models finish downloading.
-    var awaitingModels: Set<UUID> = []
+    var awaitingModels: Set<UUID> {
+        get { queue.awaitingModels }
+        set { queue.awaitingModels = newValue }
+    }
     var processingPreferences: ProcessingPreferences {
         didSet {
             if let data = try? JSONEncoder().encode(processingPreferences.normalized) { preferences.set(data, forKey: "processingPreferences") }
@@ -157,13 +179,19 @@ final class AppState {
             presenceChanged()
         }
     }
-    var downloadingID: String?
-    /// The current download's progress, throttled like `processingActivity`.
-    let downloadActivity = ActivityProgress(IntelligenceProgress(0, ""))
-    var downloadProgress: IntelligenceProgress {
-        get { downloadActivity.value }
-        set { downloadActivity.set(newValue) }
+    /// The model downloading now (`ProcessingQueue`).
+    var downloadingID: String? {
+        get { queue.downloadingID }
+        set { queue.downloadingID = newValue }
     }
+    /// The current download's progress, throttled like `processingActivity`.
+    var downloadActivity: ActivityProgress { queue.downloadActivity }
+    var downloadProgress: IntelligenceProgress {
+        get { queue.downloadActivity.value }
+        set { queue.downloadActivity.set(newValue) }
+    }
+    /// Models still to download after the current one.
+    var pendingDownloads: [String] { queue.pendingDownloads }
     var glossary: [GlossaryTerm] { library.glossary }
     var recordingID: UUID?
     var isStartingRecording = false
@@ -246,8 +274,11 @@ final class AppState {
     @ObservationIgnored var voicingTask: Task<Void, Never>?
     /// Runs given voices (or tried) this session.
     var voicedRuns = Set<UUID>()
-    @ObservationIgnored var processingTask: Task<Void, Never>?
-    @ObservationIgnored private(set) var currentRequest: Task<Void, Error>?
+    var processingTask: Task<Void, Never>? {
+        get { queue.task }
+        set { queue.task = newValue }
+    }
+    var currentRequest: Task<Void, Error>? { queue.currentRequest }
     /// How requests from other devices are claimed and kept (tests shorten these).
     var requestTiming = RequestTiming()
     /// The memory a summary model must fit in (tests set it, so they don't depend on the machine's).
@@ -263,35 +294,80 @@ final class AppState {
     }
     @ObservationIgnored private var cloudSummarizerOverride: (any CloudSummarizing)?
     /// Conversations whose running job stopped because another device took its request over.
-    var claimsLost: Set<UUID> = []
-    @ObservationIgnored var claimHeartbeat: Task<Void, Never>?
-    @ObservationIgnored var lastClaimRenewal = Date.distantPast
-    @ObservationIgnored var lastRenewedStage: ProcessingRequest.Stage?
+    var claimsLost: Set<UUID> {
+        get { queue.claimsLost }
+        set { queue.claimsLost = newValue }
+    }
+    var claimHeartbeat: Task<Void, Never>? {
+        get { queue.claimHeartbeat }
+        set { queue.claimHeartbeat = newValue }
+    }
+    var lastClaimRenewal: Date {
+        get { queue.lastClaimRenewal }
+        set { queue.lastClaimRenewal = newValue }
+    }
+    var lastRenewedStage: ProcessingRequest.Stage? {
+        get { queue.lastRenewedStage }
+        set { queue.lastRenewedStage = newValue }
+    }
+    /// Daybook on iPhone from this Mac's side, as state (PhoneCoordinator.swift). `AppState+Phone.swift`,
+    /// `AppState+SharedNotes.swift`, and the tests read it through the names below, as they always have.
+    let phones = PhoneCoordinator()
     /// Conversations an iPhone recording moved out of, on their way to the Trash: not processed.
-    var movedPhoneRecordings: Set<UUID> = []
-    /// Conversations of an iPhone's own queued only to check where its recording belongs (`phoneTranscriptArrived`):
-    /// phones aren't told, since this Mac doesn't summarize them (the iPhone does, or its countdown goes on).
-    var checkingPhoneTranscripts: Set<UUID> = []
+    var movedPhoneRecordings: Set<UUID> {
+        get { phones.movedRecordings }
+        set { phones.movedRecordings = newValue }
+    }
+    /// Conversations of an iPhone's own queued only to check where its recording belongs.
+    var checkingPhoneTranscripts: Set<UUID> {
+        get { phones.checkingTranscripts }
+        set { phones.checkingTranscripts = newValue }
+    }
     /// The last live progress sent to phones, and when; sends go out one after another, in order.
-    @ObservationIgnored var lastPhoneProgress: (message: LinkProcessingProgress, at: Date)?
-    @ObservationIgnored var phoneProgressSend: Task<Void, Never>?
+    var lastPhoneProgress: (message: LinkProcessingProgress, at: Date)? {
+        get { phones.lastProgress }
+        set { phones.lastProgress = newValue }
+    }
+    var phoneProgressSend: Task<Void, Never>? {
+        get { phones.progressSend }
+        set { phones.progressSend = newValue }
+    }
     /// Recordings this Mac is making because a phone asked, by conversation.
-    var phoneLeads: [UUID: CompanionLead] = [:]
-    /// The device whose word is stopping this Mac's recording now (a phone that stopped, or asked this
-    /// Mac to stop), by session ID: it isn't asked to stop in turn.
-    var stopCause: String?
+    var phoneLeads: [UUID: CompanionLead] {
+        get { phones.leads }
+        set { phones.leads = newValue }
+    }
+    /// The device whose word is stopping this Mac's recording now, by session ID: it isn't asked to stop in turn.
+    var stopCause: String? {
+        get { phones.stopCause }
+        set { phones.stopCause = newValue }
+    }
     /// A recorder whose own button is starting this Mac's recording, by session ID.
-    var pendingRecorderLead: String?
+    var pendingRecorderLead: String? {
+        get { phones.pendingRecorderLead }
+        set { phones.pendingRecorderLead = newValue }
+    }
     /// Notes and bookmarks of this Mac's recording, kept in step with the phones recording it too.
-    let sharedNotes = SharedNotesTracker()
-    @ObservationIgnored var sharedNotesWatch: ObservationWatch?
-    @ObservationIgnored var sharedNotesSend: Task<Void, Never>?
+    var sharedNotes: SharedNotesTracker { phones.sharedNotes }
+    var sharedNotesWatch: ObservationWatch? {
+        get { phones.sharedNotesWatch }
+        set { phones.sharedNotesWatch = newValue }
+    }
+    var sharedNotesSend: Task<Void, Never>? {
+        get { phones.sharedNotesSend }
+        set { phones.sharedNotesSend = newValue }
+    }
     /// Starts and stops this Mac's capture when a phone asks. Tests replace it: no microphone.
-    @ObservationIgnored var phoneCapture = PhoneCapture()
+    var phoneCapture: PhoneCapture {
+        get { phones.capture }
+        set { phones.capture = newValue }
+    }
     /// Whether this Mac may use the microphone without asking. Tests replace it.
-    @ObservationIgnored var microphoneAccess: () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .audio) }
+    var microphoneAccess: () -> AVAuthorizationStatus {
+        get { phones.microphoneAccess }
+        set { phones.microphoneAccess = newValue }
+    }
     @ObservationIgnored var wakeObserver: NSObjectProtocol?
-    @ObservationIgnored private var downloadTask: Task<Void, Never>?
     /// What this state follows in the models it holds (`ObservationWatch`), for as long as it lives.
     @ObservationIgnored var watches: [ObservationWatch] = []
     private var recordingWasAutomatic = false
@@ -311,6 +387,7 @@ final class AppState {
         // Where the library is, before anything here writes preferences or sync resolves its identity (docs/sandbox.md).
         let launch = Self.launchCheck(library: libraryURL, defaults: defaults)
         recorder = RecordingController(environment: capture)
+        queue = ProcessingQueue(owedURL: libraryURL.appendingPathComponent("local-queue.json"))
         let storedPreferences = defaults.data(forKey: "processingPreferences").flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
         var processingPreferences = storedPreferences ?? .init()
         let selections = Self.loadModelSelections(defaults: defaults, speakerModel: storedPreferences?.speakerModelID)
@@ -586,6 +663,8 @@ final class AppState {
         guard libraryMoveOffer?.holdsLibrary != true else { return }
         do {
             try await library.load()
+            // What this Mac owed when it last quit, restarted, or crashed, before anything is queued now.
+            queue.loadOwedWork()
             recordReplicaIdentity()
             if let launchNotice { post([launchNotice]); self.launchNotice = nil }
             // Installs from before the model system move into the store first, without downloading.
@@ -605,8 +684,10 @@ final class AppState {
             if automaticRecording { monitor.startMonitoring() }
             await startPhoneLinkIfPaired()
             closeRecoveredLinks()
-            // Requests this Mac held when it last quit or crashed run again (or are given back).
+            // Requests this Mac held when it last quit or crashed run again (or are given back), and so does its own
+            // work.
             pickUpRequests()
+            resumeOwedWork()
             Task { await library.relabelStrandedWords() }
             listenToEarlierRecordingsWhenIdle()
         } catch { report("Couldn’t Open Your Library", "Quit Daybook and open it again.", error) }
@@ -769,147 +850,6 @@ final class AppState {
         return ImportSidecar(url: nil, scoped: false)
     }
 
-    func enqueue(_ id: UUID, mode: ProcessingRequest.Mode = .newAudio, upgrade: ProcessingRequest.Upgrade? = nil) {
-        guard id != recordingID, !queuedIDs.contains(id), let meeting = meetings.first(where: { $0.id == id }) else { return }
-        let job = makeJob(meetingID: id, mode: mode, upgrade: upgrade)
-        let hasNew = meeting.hasUntranscribedTranscribableAudio
-        let missing = job.requiredModelIDs(hasUntranscribedAudio: hasNew).subtracting(installedModels)
-        guard missing.isEmpty else {
-            awaitingModels.insert(id)
-            update(id) { $0.errorMessage = nil }
-            // Missing models leave another device's request unclaimed, for a Mac that has them.
-            releaseRequests(in: id)
-            reportToPhones(id, phase: .waitingForModels)
-            return
-        }
-        awaitingModels.remove(id)
-        pausedIDs.remove(id)
-        // A request for the same work is carried out by this job, so it's claimed and finished with it.
-        processingQueue.append(carryingOpenRequest(job, in: meeting))
-        reportToPhones(id, phase: .queued)
-        runQueue()
-    }
-
-    func runQueue() {
-        // Giving speakers voices gives way to real work: it stops, and starts the queue when it has.
-        if voicingID != nil, !processingQueue.isEmpty { voicingTask?.cancel(); return }
-        guard processingTask == nil, readingPhotoID == nil, downloadingID == nil, !library.isApplyingSync, !processingQueue.isEmpty else { return }
-        processingTask = Task { [weak self] in
-            guard let self else { return }
-            while !self.processingQueue.isEmpty && !Task.isCancelled {
-                let job = self.processingQueue.removeFirst(), id = job.meetingID
-                // Never run a request another device holds, or one that finished elsewhere meanwhile.
-                guard self.mayRun(job) else { continue }
-                // Each job starts from nothing: no figure, and no step until the engine names one.
-                self.processingProgress = IntelligenceProgress(0, "Starting")
-                self.processingID = id
-                self.runningJob = job
-                self.claimsLost.remove(id)
-                self.startClaimHeartbeat()
-                self.reportToPhones(id)
-                // Each job runs in its own task so pausing one conversation lets the queue continue.
-                let work = Task { try await self.process(job) }
-                self.currentRequest = work
-                do {
-                    try await work.value
-                    self.finishRequests(of: self.runningJob ?? job, failure: nil)
-                    self.reportToPhones(id, phase: .finished)
-                }
-                catch is CancellationError {
-                    if self.claimsLost.remove(id) == nil {
-                        self.pausedIDs.insert(id)
-                        self.releaseRequests(in: id)
-                        self.reportToPhones(id, phase: .paused)
-                    }
-                    self.update(id) { $0.status = $0.summary == nil ? .imported : .ready; $0.errorMessage = nil }
-                }
-                catch {
-                    self.update(id) { $0.status = .failed; $0.errorMessage = error.localizedDescription }
-                    self.finishRequests(of: self.runningJob ?? job, failure: error)
-                    self.reportToPhones(id, phase: .failed, detail: error.localizedDescription)
-                }
-                self.stopClaimHeartbeat()
-                self.checkingPhoneTranscripts.remove(id)
-                self.currentRequest = nil
-                self.runningJob = nil
-                self.processingID = nil
-                // Requests that waited for this conversation, or arrived meanwhile (not after Cancel).
-                if !Task.isCancelled { self.pickUpRequests(start: false) }
-            }
-            self.processingTask = nil
-            self.processingProgress = IntelligenceProgress(0, "Ready")
-            self.collectOldModelRevisions()
-            self.startPendingDownload()
-            self.readNextPhotosWhenIdle()
-            self.giveVoicesWhenIdle()
-            self.listenToEarlierRecordingsWhenIdle()
-        }
-    }
-
-    /// Stops everything. Requests this Mac held go back, so another Mac can take them, and stay
-    /// paused here until the person resumes them.
-    func cancelProcessing() {
-        for job in processingQueue where job.requestID != nil {
-            pausedIDs.insert(job.meetingID)
-            releaseRequests(in: job.meetingID)
-        }
-        // The running job's request goes back now, not when its work notices the cancellation, so
-        // a save right after (quitting) has it.
-        if let running = runningJob, let requestID = running.requestID, !claimsLost.contains(running.meetingID) {
-            library.releaseProcessingRequest(requestID, in: running.meetingID)
-        }
-        processingTask?.cancel(); currentRequest?.cancel(); processingQueue.removeAll()
-    }
-
-    /// Stops work on one conversation and keeps it paused; other conversations keep processing.
-    /// A request it carried out goes back, for another Mac or until it's resumed.
-    func pauseProcessing(_ id: UUID) {
-        if processingID == id { currentRequest?.cancel() }
-        else if processingQueue.contains(where: { $0.meetingID == id }) {
-            processingQueue.removeAll { $0.meetingID == id }
-            pausedIDs.insert(id)
-            releaseRequests(in: id)
-            reportToPhones(id, phase: .paused)
-        }
-    }
-
-    /// Removes a waiting conversation from the queue without marking it paused. A waiting request
-    /// goes back and is paused here, so it isn't simply claimed again at the next sync.
-    func cancelQueued(_ id: UUID) {
-        let removed = processingQueue.filter { $0.meetingID == id }
-        processingQueue.removeAll { $0.meetingID == id }
-        if removed.contains(where: { $0.requestID != nil && $0.requestID != runningJob?.requestID }) {
-            pausedIDs.insert(id)
-            releaseRequests(in: id)
-        }
-    }
-
-    /// The next step for a conversation: transcribe audio that has none yet, otherwise summarize again.
-    func defaultProcessingMode(for meeting: Meeting) -> ProcessingRequest.Mode {
-        meeting.hasUntranscribedTranscribableAudio ? .newAudio : .summaryOnly
-    }
-
-    /// This Mac's queue, as `ProcessingStatus` reads it: the running job's step is the one the engine reports
-    /// (`ProcessingProgress.stage`), or summarizing from when the conversation is marked so.
-    var processingQueueState: ProcessingStatus.LocalQueue { queueState(readingProgress: true) }
-
-    /// The one status the list, the conversation page, and device pages show (shared with the iPhone). Only the
-    /// conversation being processed reads the job's progress, so a progress report redraws its row and page, not every row.
-    func processingStatus(for meeting: Meeting) -> ProcessingStatus {
-        ProcessingStatus(meeting, queue: queueState(readingProgress: meeting.id == processingID))
-    }
-
-    /// The queue, with the running job's progress and step when `readingProgress` (only the running conversation's
-    /// status uses them).
-    private func queueState(readingProgress: Bool) -> ProcessingStatus.LocalQueue {
-        let progress = readingProgress ? processingProgress : IntelligenceProgress(0, "")
-        let stage = progress.stage
-        return ProcessingStatus.LocalQueue(running: processingID, fraction: progress.fraction,
-                                           identifyingSpeakers: stage == .identifyingSpeakers,
-                                           queued: queuedIDs, paused: pausedIDs, awaitingModels: awaitingModels, canProcess: canProcess,
-                                           stage: stage)
-    }
-
     /// The template a job summarizes with: the one its request asked for, else the conversation's own.
     func template(for job: ProcessingJob, meeting: Meeting) -> SummaryTemplate? {
         guard let id = job.templateID else { return resolvedTemplate(for: meeting) }
@@ -925,7 +865,7 @@ final class AppState {
     /// Runs one job. The engine turns recordings into transcripts, speakers, and a summary; this
     /// Mac decides what to process, places new recordings first, applies each result as it
     /// arrives (so a pause keeps finished recordings), and moves recordings between conversations.
-    private func process(_ request: ProcessingJob) async throws {
+    func process(_ request: ProcessingJob) async throws {
         let id = request.meetingID
         guard library.isLoaded, meetings.contains(where: { $0.id == id }) else { return }
         await flush()
@@ -1086,57 +1026,6 @@ final class AppState {
     }
 
     func setOffset(_ id: UUID, trackID: UUID, seconds: Double?) { library.setOffset(id, trackID: trackID, seconds: seconds) }
-
-    func download(_ modelID: String) {
-        if readingPhotoID != nil {
-            if !pendingDownloads.contains(modelID) { pendingDownloads.append(modelID) }
-            return
-        }
-        guard downloadingID == nil, processingID == nil else { return }
-        downloadingID = modelID; downloadProgress = IntelligenceProgress(0, "Preparing download…")
-        downloadTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let activity = self.downloadActivity
-                try await self.runtime.download(modelID: modelID) { progress in activity.report(progress) }
-                await self.refreshInstalledModels()
-                self.collectOldModelRevisions()
-            } catch is CancellationError { self.notice = "Download canceled." }
-            catch { self.report("Couldn’t Download the Model", "Check your internet connection and try again.", error) }
-            self.downloadingID = nil; self.downloadTask = nil
-            if !Task.isCancelled, let next = self.pendingDownloads.first {
-                self.pendingDownloads.removeFirst(); self.download(next)
-            } else {
-                self.pendingDownloads.removeAll()
-                if self.canProcess { for id in self.awaitingModels.sorted(by: { $0.uuidString < $1.uuidString }) { self.enqueue(id) } }
-                self.runQueue()
-                self.readNextPhotosWhenIdle()
-                self.listenToEarlierRecordingsWhenIdle()
-            }
-        }
-    }
-
-    func cancelDownload() { pendingDownloads.removeAll(); downloadTask?.cancel() }
-
-    /// Downloads every listed model that isn't installed, one after another.
-    func downloadModels(_ ids: [String]) {
-        let missing = ids.filter { !installedModels.contains($0) && $0 != downloadingID && !pendingDownloads.contains($0) }
-        pendingDownloads += missing
-        startPendingDownload()
-    }
-    /// The models the current choices need that aren't on this Mac yet.
-    var missingSelectedModels: [String] {
-        routedRequiredModelIDs.reduce(into: [String]()) { if !installedModels.contains($1) && !$0.contains($1) { $0.append($1) } }
-    }
-    func startPendingDownload() {
-        guard downloadingID == nil, processingID == nil, readingPhotoID == nil, let next = pendingDownloads.first else { return }
-        pendingDownloads.removeFirst(); download(next)
-    }
-    /// Models still to download after the current one.
-    private(set) var pendingDownloads: [String] = []
-    /// Takes one waiting model off the download queue (the model manager's Cancel).
-    func removePendingDownload(_ id: String) { pendingDownloads.removeAll { ModelReference($0).id == ModelReference(id).id } }
-    func removeModel(_ id: String) { removeModels([id]) }
 
     /// Removes downloads one after another. A role that used a removed model moves to its preset's
     /// next installed choice, or keeps it and waits for a download; queued jobs keep what they froze.
@@ -1311,14 +1200,18 @@ final class AppState {
 }
 
 extension AppState {
+    /// A new recording's title: the call's name, or "Conversation", and when it started ("Conversation at 10:15 AM").
+    nonisolated static func recordingTitle(_ name: String?, at date: Date) -> String {
+        "\(name.flatMap { $0.isEmpty ? nil : $0 } ?? "Conversation") at \(date.formatted(date: .omitted, time: .shortened))"
+    }
+
     /// Records into `existing` when given (a notes-only conversation), otherwise into a new conversation.
     func startRecording(title: String? = nil, automatic: Bool = false, into existing: UUID? = nil) async {
         guard isReady, recordingID == nil, !isStartingRecording, !isStoppingRecording else { return }
         guard !automatic || automaticRecording else { return }
         isStartingRecording = true
         defer { isStartingRecording = false }
-        let defaultTitle = (title?.isEmpty == false ? title! : "Conversation") + " at \(Date().formatted(date: .omitted, time: .shortened))"
-        let id = existing.flatMap { id in canRecordInto(id) ? id : nil } ?? newMeeting(title: defaultTitle)
+        let id = existing.flatMap { id in canRecordInto(id) ? id : nil } ?? newMeeting(title: Self.recordingTitle(title, at: Date()))
         selectedID = id
         prepareSourceCapture(id)
         let directory = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
@@ -1362,7 +1255,7 @@ extension AppState {
         recordingWillFinish(id, at: result.endedAt)
         recordingID = nil; recordingStartedAt = nil; recordingWasAutomatic = false
         sync.publishActivity(recording: nil)
-        phoneLeads[id] = nil
+        phones.recordingEnded(id)
         do {
             try await ingestCapture(result, meetingID: id)
             sourcesAfterCapture(id, startedAt: result.startedAt, captureID: result.id)
@@ -1432,11 +1325,15 @@ extension AppState {
             do {
                 guard let result = try CaptureRecovery.recover(in: folder), !result.tracks.isEmpty else { continue }
                 if !meetings.contains(where: { $0.id == id }) {
-                    library.add(Meeting(id: id, title: "Recovered recording", date: result.startedAt))
+                    library.add(Meeting(id: id, title: Self.recordingTitle(nil, at: result.startedAt), date: result.startedAt))
                 }
                 try await ingestCapture(result, meetingID: id)
                 sources.recovered.append((id, result.startedAt, result.endedAt))
-                notice = "Recovered an interrupted recording."
+                // Transcribed as a recording that stopped normally is, and said by name, with a way to it.
+                enqueue(id)
+                let title = meetings.first { $0.id == id }?.title ?? ""
+                post(title.isEmpty ? "Recovered a recording." : "Recovered “\(title)”.",
+                     action: LibraryNoticeAction(title: "Show") { [weak self] in self?.showConversation(id) })
             } catch { report("Couldn’t Recover a Recording", "An interrupted recording couldn’t be recovered. Its files are kept.", error) }
         }
     }

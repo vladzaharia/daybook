@@ -45,6 +45,26 @@ struct AppProblem: Equatable, Identifiable {
     }
 }
 
+/// A full disk, in the words a person needs: how much to free.
+enum DiskSpace {
+    /// Whether `error`, or an error under it, is the disk running out of space.
+    static func isOutOfSpace(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        for _ in 0..<8 {
+            guard let error = current else { return false }
+            if error.domain == NSPOSIXErrorDomain && error.code == Int(ENOSPC) { return true }
+            if error.domain == NSCocoaErrorDomain && error.code == NSFileWriteOutOfSpaceError { return true }
+            current = error.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
+    }
+
+    /// "This Mac is out of space. Free up 1.6 GB and try again."
+    static func freeUpSentence(_ bytes: Int64) -> String {
+        "This Mac is out of space. Free up \(bytes > 0 ? ByteSize.format(bytes) : "some space") and try again."
+    }
+}
+
 extension AppState {
     /// Shows a problem in the main window's alert. `fallback` is the plain sentence used when the
     /// error itself isn't one of Daybook's own.

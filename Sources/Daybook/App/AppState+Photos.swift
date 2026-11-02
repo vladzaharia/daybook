@@ -218,13 +218,17 @@ extension AppState {
             speakerMatchThreshold: 0, speakerMatchMargin: 0, photoModel: photoModel)
         let engine = InferenceProcessingEngine(inference: sources.inference ?? runtime, configuration: configuration)
         readingPhotoID = id
-        Task {
+        photoReading = Task {
             defer {
                 readingPhotoID = nil
-                runQueue()
-                startPendingDownload()
-                readNextPhotosWhenIdle()
-                listenToEarlierRecordingsWhenIdle()
+                photoReading = nil
+                // Stopped as Daybook quits (`cancelProcessing`): nothing else starts.
+                if !Task.isCancelled {
+                    runQueue()
+                    startPendingDownload()
+                    readNextPhotosWhenIdle()
+                    listenToEarlierRecordingsWhenIdle()
+                }
             }
             // The models run one at a time: while another reading or a download holds them, try again shortly.
             for attempt in 0..<6 {

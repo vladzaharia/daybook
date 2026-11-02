@@ -255,7 +255,10 @@ extension AppState {
                 notice = "\(holder.name) is transcribing “\(meetings.first { $0.id == running.meetingID }?.title ?? "a conversation")”."
             }
         }
-        processingQueue.removeAll(where: lost)
+        // Another device has them now: they aren't owed here any more.
+        let dropped = queue.jobs.filter(lost)
+        queue.jobs.removeAll(where: lost)
+        for job in dropped { queue.settle(job.meetingID) }
     }
 
     // MARK: Presence

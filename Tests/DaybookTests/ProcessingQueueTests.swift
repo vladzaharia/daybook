@@ -1,0 +1,145 @@
+import DaybookCore
+import DaybookTestSupport
+import Foundation
+import XCTest
+@testable import Daybook
+
+/// This Mac's processing queue across a quit, a restart, or a crash (`ProcessingQueue`, owed work): what it was doing
+/// or had waiting is queued again at the next launch, while what the person paused, what failed, and what's done stay
+/// as they are. A fake inference engine, synthetic audio, temporary libraries.
+@MainActor
+final class ProcessingQueueTests: XCTestCase {
+    private func rig() async throws -> MultiSourceRig {
+        let rig = try await MultiSourceRig.make(in: self, models: true)
+        addTeardownBlock { await rig.tearDown() }
+        return rig
+    }
+
+    /// The same library opened again, as the next launch opens it: without models, so nothing runs and what's queued
+    /// waits for them.
+    private func relaunch(_ rig: MultiSourceRig) async -> AppState {
+        await rig.state.flush()
+        ProcessingQueue.drainWrites()
+        let next = AppState(libraryURL: rig.root, defaults: rig.defaults)
+        await next.initialize()
+        addTeardownBlock { await next.flush() }
+        return next
+    }
+
+    func testBehaviorWorkAQuitInterruptedIsQueuedAgainAtTheNextLaunch() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let start = Date()
+        let first = try await rig.macConversation("Design review", at: start, seconds: 0.5, audio: rig.audio("one.wav", frequency: 300))
+        let second = try await rig.macConversation("Standup", at: start, seconds: 0.5, audio: rig.audio("two.wav", frequency: 500))
+        let firstAudio = rig.root.appendingPathComponent("one.wav")
+        try rig.inference.block(firstAudio)
+        state.enqueue(first)
+        state.enqueue(second)
+        try await waitUntil("the first to be transcribing") { rig.inference.isWaiting(on: firstAudio) }
+        XCTAssertEqual(state.queuedIDs, [second])
+
+        // Quitting stops the running job and empties the queue, and keeps both owed.
+        state.cancelProcessing()
+        try await waitUntil("the job to stop") { state.processingID == nil && state.processingTask == nil }
+        XCTAssertTrue(state.queue.isOwed(first) && state.queue.isOwed(second))
+
+        let next = await relaunch(rig)
+        XCTAssertEqual(next.awaitingModels, [first, second], "Both are queued again, waiting for this Mac's models")
+        guard case .requested(.models) = next.processingStatus(for: try XCTUnwrap(next.meetings.first { $0.id == first })) else {
+            return XCTFail("Waiting for models, not 'Not transcribed yet'")
+        }
+        try rig.inference.unblock(firstAudio)
+    }
+
+    func testBehaviorWorkThePersonPausedOrThatFailedIsntQueuedAgain() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let start = Date()
+        let pausedAudio = try rig.audio("paused.wav", frequency: 300)
+        let failingAudio = try rig.audio("failing.wav", frequency: 500)
+        let paused = try await rig.macConversation("Paused", at: start, seconds: 0.5, audio: pausedAudio)
+        let failing = try await rig.macConversation("Failing", at: start, seconds: 0.5, audio: failingAudio)
+        try rig.inference.fail(failingAudio, with: AppError.libraryUnavailable)
+        state.enqueue(failing)
+        try await rig.processed(failing)
+        XCTAssertEqual(rig.meeting(failing)?.status, .failed)
+        XCTAssertFalse(state.queue.isOwed(failing), "A failure is settled: Try Again is the person's")
+
+        try rig.inference.block(pausedAudio)
+        state.enqueue(paused)
+        try await waitUntil("it to be transcribing") { rig.inference.isWaiting(on: pausedAudio) }
+        state.pauseProcessing(paused)
+        try await waitUntil("it to pause") { state.pausedIDs.contains(paused) && state.processingID == nil }
+        XCTAssertFalse(state.queue.isOwed(paused), "Paused by the person: it resumes only when asked")
+        state.cancelProcessing()
+
+        let next = await relaunch(rig)
+        XCTAssertTrue(next.awaitingModels.isEmpty && next.queuedIDs.isEmpty, "Nothing is queued again")
+        try rig.inference.unblock(pausedAudio)
+    }
+
+    func testBehaviorARecordingWaitingForModelsStillWaitsAfterARelaunch() async throws {
+        let rig = try await rig()
+        let id = try await rig.macConversation("Interview", at: Date(), seconds: 0.5, audio: rig.audio("talk.wav", frequency: 410))
+        rig.state.installedModels = []
+        rig.state.enqueue(id)
+        XCTAssertEqual(rig.state.awaitingModels, [id])
+        let next = await relaunch(rig)
+        XCTAssertEqual(next.awaitingModels, [id], "A download after the relaunch starts it")
+    }
+
+    func testBehaviorFinishedWorkIsntOwedAndAConversationQueuedAgainAsItFinishesStaysOwed() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let audio = try rig.audio("done.wav", frequency: 350)
+        try rig.inference.script(audio, [(0, "We agreed on Friday.")])
+        let id = try await rig.macConversation("Planning", at: Date(), seconds: 0.5, audio: audio)
+        state.enqueue(id)
+        try await rig.processed(id)
+        XCTAssertEqual(rig.meeting(id)?.status, .ready)
+        XCTAssertFalse(state.queue.isOwed(id))
+
+        // A job that queues its conversation again as it finishes (its notes changed meanwhile) leaves it owed.
+        let queue = ProcessingQueue(owedURL: nil)
+        let job = state.makeJob(meetingID: id, mode: .summaryOnly)
+        queue.owe(id, mode: .summaryOnly, upgrade: nil)
+        queue.start(job)
+        queue.add(job)
+        queue.finishRunning()
+        queue.settle(id)
+        XCTAssertTrue(queue.isOwed(id))
+        _ = queue.next()
+        queue.settle(id)
+        XCTAssertFalse(queue.isOwed(id))
+    }
+
+    func testBehaviorAQueuedConversationSaysWhatItWaitsForAndWhy() async throws {
+        let rig = try await rig()
+        let state = rig.state
+        let start = Date()
+        let runningAudio = try rig.audio("running.wav", frequency: 300)
+        let running = try await rig.macConversation("Roadmap review", at: start, seconds: 0.5, audio: runningAudio)
+        let next = try await rig.macConversation("Standup", at: start, seconds: 0.5, audio: rig.audio("next.wav", frequency: 500))
+        let later = try await rig.macConversation("Retro", at: start, seconds: 0.5, audio: rig.audio("later.wav", frequency: 700))
+        try rig.inference.block(runningAudio)
+        state.enqueue(running)
+        state.enqueue(next)
+        state.enqueue(later, mode: .summaryOnly)
+        try await waitUntil("the first to be transcribing") { rig.inference.isWaiting(on: runningAudio) }
+        XCTAssertEqual(state.waitingWords(for: next)?.line, "Waiting to transcribe after “Roadmap review”")
+        XCTAssertEqual(state.waitingWords(for: next)?.short, "Waiting to transcribe")
+        XCTAssertEqual(state.waitingWords(for: later)?.line, "Waiting to summarize · 2 ahead", "Worded by the job's mode")
+        XCTAssertEqual(state.queuedMode(later), .summaryOnly)
+        XCTAssertNil(state.waitingWords(for: running), "Running, not waiting")
+        XCTAssertFalse(state.queueWaitsForDownload)
+        try rig.inference.unblock(runningAudio)
+        try await rig.processed(running, next, later)
+
+        // Held back by a model download rather than by another conversation.
+        let held = ProcessingQueue(owedURL: nil)
+        held.add(state.makeJob(meetingID: next, mode: .newAudio))
+        held.downloadingID = "whisper/base"
+        XCTAssertEqual(held.waiting(next, title: { _ in nil })?.behind, .download)
+    }
+}
