@@ -94,6 +94,48 @@ final class TranscriptScreensTests: XCTestCase {
         XCTAssertTrue(CorrectPassageSheet.hasChanges(draft: "The sync fix", original: "The sink fix"))
     }
 
+    func testBehaviorReviewChoosesAPassageForTheCorrectionItShows() async throws {
+        let library = try await library()
+        let id = library.newMeeting(title: "Weekly")
+        let passages = (0..<6).map { TranscriptSegment(trackID: track, start: Double($0 * 5), end: Double($0 * 5 + 4), text: "Passage \($0)") }
+        let issues = ["The sync fix", "Ship on Friday", "Dana owns it"].enumerated().map { n, text in
+            CorrectionTransferIssue(originalSegment: TranscriptSegment(trackID: track, start: Double(n * 10), end: Double(n * 10 + 4), text: text),
+                                    candidateSegmentIDs: [passages[n * 2].id, passages[n * 2 + 1].id], reason: "Transcribed again")
+        }
+        library.update(id) { $0.unifiedTranscript = passages; $0.correctionTransferIssues = issues }
+        func pending() -> [CorrectionTransferIssue] { library.meeting(id)?.correctionTransferIssues ?? [] }
+        func shown(_ place: ReviewCorrectionsPlace) -> CorrectionTransferIssue {
+            pending()[ReviewCorrectionsPlace.position(place.index, count: pending().count)]
+        }
+
+        var place = ReviewCorrectionsPlace.showing(0, of: pending(), in: library.meeting(id))
+        XCTAssertEqual(shown(place).id, issues[0].id)
+        XCTAssertEqual(place.target(for: shown(place)), passages[0].id, "opened, the likeliest passage is chosen")
+
+        place = place.skipping(pending(), in: library.meeting(id))
+        XCTAssertEqual(shown(place).id, issues[1].id)
+        XCTAssertEqual(place.target(for: shown(place)), passages[2].id, "Skip chooses for the correction it shows")
+        XCTAssertNil(place.target(for: issues[0]), "a choice belongs to the correction it was made for")
+
+        // Apply on the second: the third moves into its place, with a passage chosen from its own.
+        library.resolveCorrectionTransfer(issues[1].id, targetSegmentID: place.target(for: shown(place)), in: id)
+        XCTAssertEqual(library.meeting(id)?.unifiedTranscript[2].text, "Ship on Friday")
+        place = .showing(place.index, of: pending(), in: library.meeting(id))
+        let next = shown(place)
+        XCTAssertEqual(next.id, issues[2].id)
+        let target = try XCTUnwrap(place.target(for: next), "Apply stays ready")
+        XCTAssertTrue(ReviewCorrectionsSheet.candidates(next, in: library.meeting(id)).contains { $0.id == target })
+        XCTAssertEqual(target, passages[4].id, "never the passage chosen for the first correction")
+
+        // Keep on the last: the one left shows, first again.
+        library.resolveCorrectionTransfer(next.id, targetSegmentID: nil, in: id)
+        place = .showing(place.index, of: pending(), in: library.meeting(id))
+        XCTAssertEqual(shown(place).id, issues[0].id)
+        XCTAssertEqual(place.target(for: shown(place)), passages[0].id)
+        XCTAssertEqual(library.meeting(id)?.unifiedTranscript.map(\.text),
+                       ["Passage 0", "Passage 1", "Ship on Friday", "Passage 3", "Passage 4", "Passage 5"])
+    }
+
     func testBehaviorAPageSheetClosesThroughOneComparableAction() {
         var closed = 0
         let first = ClosePageSheetAction { closed += 1 }

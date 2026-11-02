@@ -15,8 +15,7 @@ public struct ReviewCorrectionsSheet: View {
     private let library: LibraryController
     private let meetingID: UUID
     private let close = SheetDismiss()
-    @State private var index = 0
-    @State private var target: UUID?
+    @State private var place = ReviewCorrectionsPlace()
     @Environment(\.daybookDensity) private var density
 
     public init(library: LibraryController, meetingID: UUID) {
@@ -31,9 +30,8 @@ public struct ReviewCorrectionsSheet: View {
         NavigationStack {
             Group {
                 if let meeting, !issues.isEmpty {
-                    let position = min(index, issues.count - 1)
-                    let issue = issues[position]
-                    review(issue, position: position, in: meeting)
+                    let position = ReviewCorrectionsPlace.position(place.index, count: issues.count)
+                    review(issues[position], position: position, in: meeting)
                 } else {
                     ContentUnavailableView("All Corrections Reviewed", systemImage: "checkmark.circle")
                 }
@@ -51,7 +49,7 @@ public struct ReviewCorrectionsSheet: View {
                 }
             }
         }
-        .onAppear { target = issues.first.flatMap { Self.candidates($0, in: meeting).first?.id } }
+        .onAppear { place = .showing(place.index, of: issues, in: meeting) }
         #if os(macOS)
         .frame(width: 560, height: 460)
         #endif
@@ -69,7 +67,7 @@ public struct ReviewCorrectionsSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(DaybookPalette.quietFill, in: DaybookRadius.shape(DaybookRadius.box))
             Text("Apply it to:").font(DaybookFont.status.font(density)).foregroundStyle(DaybookPalette.Ink.secondary)
-            List(Self.candidates(issue, in: meeting), selection: $target) { segment in
+            List(Self.candidates(issue, in: meeting), selection: target(for: issue)) { segment in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: DaybookSpacing.s2) {
                         Text(TimeLabel.short(segment.start)).font(DaybookFont.time.font(density)).foregroundStyle(DaybookPalette.Ink.meta)
@@ -109,14 +107,19 @@ public struct ReviewCorrectionsSheet: View {
 
     @ViewBuilder private var skipButton: some View {
         if issues.count > 1 {
-            Button("Skip") { index = (index + 1) % max(1, issues.count); target = nil }
+            Button("Skip") { place = place.skipping(issues, in: meeting) }
         }
     }
 
     private func applyButton(_ issue: CorrectionTransferIssue) -> some View {
-        Button("Apply") { resolve(issue, target) }
+        Button("Apply") { resolve(issue, place.target(for: issue)) }
             .keyboardShortcut(.defaultAction)
-            .disabled(target == nil)
+            .disabled(place.target(for: issue) == nil)
+    }
+
+    /// The passage chosen for the correction on show; choosing one chooses it for that correction.
+    private func target(for issue: CorrectionTransferIssue) -> Binding<UUID?> {
+        Binding(get: { place.target(for: issue) }, set: { place.choose($0, for: issue) })
     }
 
     /// The passages the correction most likely belongs to, else the whole transcript.
@@ -128,11 +131,50 @@ public struct ReviewCorrectionsSheet: View {
 
     private func resolve(_ issue: CorrectionTransferIssue, _ segment: UUID?) {
         library.resolveCorrectionTransfer(issue.id, targetSegmentID: segment, in: meetingID)
-        target = nil
-        if issues.isEmpty { close() } else {
-            index = min(index, max(0, issues.count - 1))
-            target = issues.first.flatMap { Self.candidates($0, in: meeting).first?.id }
-        }
+        if issues.isEmpty { close() } else { place = .showing(place.index, of: issues, in: meeting) }
+    }
+}
+
+/// Which earlier correction Review shows, and the passage chosen for it. Opening it, Skip, Apply, and Keep each show the
+/// correction at `index` (the last once fewer are left) with the likeliest of its own passages chosen. A choice belongs
+/// to the correction it was made for, so Apply never writes one correction onto a passage chosen for another.
+struct ReviewCorrectionsPlace: Equatable {
+    private(set) var index: Int
+    private var issueID: UUID?
+    private var chosen: UUID?
+
+    init() { self.init(index: 0, issueID: nil, chosen: nil) }
+
+    private init(index: Int, issueID: UUID?, chosen: UUID?) {
+        self.index = index
+        self.issueID = issueID
+        self.chosen = chosen
+    }
+
+    /// Where `index` lands among `count` corrections: the last once fewer are left.
+    static func position(_ index: Int, count: Int) -> Int { min(max(0, index), max(0, count - 1)) }
+
+    /// The correction at `index`, with the likeliest of its passages chosen.
+    static func showing(_ index: Int, of issues: [CorrectionTransferIssue], in meeting: Meeting?) -> Self {
+        guard !issues.isEmpty else { return Self() }
+        let position = Self.position(index, count: issues.count)
+        let issue = issues[position]
+        return Self(index: position, issueID: issue.id, chosen: ReviewCorrectionsSheet.candidates(issue, in: meeting).first?.id)
+    }
+
+    /// Skip: the next correction, the first again after the last.
+    func skipping(_ issues: [CorrectionTransferIssue], in meeting: Meeting?) -> Self {
+        guard !issues.isEmpty else { return Self() }
+        return Self.showing((Self.position(index, count: issues.count) + 1) % issues.count, of: issues, in: meeting)
+    }
+
+    /// The passage chosen for `issue`; none when the choice was made for another.
+    func target(for issue: CorrectionTransferIssue) -> UUID? { issueID == issue.id ? chosen : nil }
+
+    /// The person chose `target` for `issue`.
+    mutating func choose(_ target: UUID?, for issue: CorrectionTransferIssue) {
+        issueID = issue.id
+        chosen = target
     }
 }
 
