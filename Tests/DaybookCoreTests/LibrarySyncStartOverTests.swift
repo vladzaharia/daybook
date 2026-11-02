@@ -255,15 +255,18 @@ final class LibrarySyncStartOverTests: XCTestCase {
         let library = try XCTUnwrap(synced)
         // An encrypted library that didn't start over from this one can't be merged with it. Sync doesn't stop: this one,
         // which holds history from before encryption, wins, and the other is a rival whose devices publish into it.
-        let otherKey = LibraryKey.generate(libraryID: UUID(), createdBy: "Other")
+        let otherKey = LibraryKey.generate(libraryID: UUID(), createdBy: "Other"), startedFrom = UUID()
         var other = SyncManifest(libraryID: otherKey.libraryID)
         other.schemaVersion = SyncManifest.sealedSchemaVersion
         other.sealing = .init(current: otherKey.idHex, sealedSince: Date(), migrator: "Other", keys: [.init(id: otherKey.idHex, created: otherKey.createdAt)],
-                              replaces: [UUID()])
+                              replaces: [startedFrom])
         try other.encoded().write(to: remote.appendingPathComponent("daybook-sync 2.json"))
         _ = try await mac.synchronize(meetings: [])
         let resolved = try SyncManifest.decode(Data(contentsOf: remote.appendingPathComponent("daybook-sync.json")))
         XCTAssertEqual(resolved.libraryID, library)
-        XCTAssertEqual(resolved.sealing?.rivals, [otherKey.libraryID])
+        // What the rival started over from is replaced through it: this library didn't start over.
+        XCTAssertEqual(Set(resolved.sealing?.rivals ?? []), [otherKey.libraryID, startedFrom])
+        XCTAssertEqual(Set(resolved.sealing?.replaces ?? []), [otherKey.libraryID, startedFrom])
+        XCTAssertEqual(resolved.sealing?.startedOver, false)
     }
 }

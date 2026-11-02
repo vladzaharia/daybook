@@ -1120,7 +1120,14 @@ public actor LibrarySyncEngine {
             resolved.schemaVersion = SyncManifest.sealedSchemaVersion
             var sealing = sealings.dropFirst().reduce(sealings[0]) { $0.merged(with: $1) }
             if !replaced.isEmpty { sealing.replaces = SyncManifest.Sealing.union(sealing.replaces, Array(replaced)) }
-            if asRivals, !rivals.isEmpty { sealing.rivals = SyncManifest.Sealing.union(sealing.rivals, Array(rivals)) }
+            if asRivals, !rivals.isEmpty {
+                // What a losing rival started over from is replaced through that rival. Only the winner's own starts make
+                // it a library that started over (`Sealing.startedOver`), which would cost one encrypted after it began
+                // as plaintext its history's standing and its place among rivals (`rivalOrder`).
+                let ownStarts = Set(sealings.flatMap { $0.replaces ?? [] }).subtracting(sealings.flatMap { $0.rivals ?? [] })
+                let throughRivals = rivals.union(startedOver.subtracting(ownStarts))
+                sealing.rivals = SyncManifest.Sealing.union(sealing.rivals, Array(throughRivals))
+            }
             resolved.sealing = sealing
         }
         // The journal of every library that isn't replaced is part of the winner's: if any was compacted, the winner is,

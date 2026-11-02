@@ -251,6 +251,46 @@ final class LibrarySyncNewContainerTests: XCTestCase {
         XCTAssertEqual(settled.publishedEvents, 0); XCTAssertEqual(settled.warnings, [])
     }
 
+    /// A library encrypted after it began as plaintext that wins over a rival which had started over doesn't take that
+    /// start over as its own: what the rival started over from is replaced through the rival, the winner keeps its
+    /// standing as the library with history, and a new library started before it was encrypted still doesn't win.
+    func testBehaviorWinningOverARivalThatStartedOverIsntStartingOver() throws {
+        let sealedSince = Date(timeIntervalSince1970: 1_800_000_000)
+        func marker(_ id: UUID, created: Date?, replaces: [UUID]? = nil) -> SyncManifest {
+            var manifest = SyncManifest(libraryID: id)
+            manifest.schemaVersion = SyncManifest.sealedSchemaVersion
+            let key = (created ?? sealedSince).timeIntervalSince1970.description
+            manifest.sealing = .init(current: key, sealedSince: created ?? sealedSince, migrator: "Mac", keys: [.init(id: key, created: created ?? sealedSince)])
+            manifest.sealing?.replaces = replaces
+            manifest.created = created
+            return manifest
+        }
+        let lost = UUID(uuidString: "00000000-0000-0000-0000-00000000000A")!
+        let history = marker(UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000000")!, created: nil)
+        let startedOver = marker(UUID(uuidString: "00000000-0000-0000-0000-00000000000B")!, created: sealedSince.addingTimeInterval(-600),
+                                 replaces: [lost])
+        let resolved = try LibrarySyncEngine.resolved(from: [history, startedOver])
+        XCTAssertEqual(resolved.libraryID, history.libraryID, "the library with history wins")
+        let sealing = try XCTUnwrap(resolved.sealing)
+        XCTAssertEqual(Set(sealing.replaces ?? []), [startedOver.libraryID, lost], "nobody carries a checkpoint over from either")
+        XCTAssertEqual(Set(sealing.rivals ?? []), [startedOver.libraryID, lost], "both replaced through the rival")
+        XCTAssertFalse(sealing.startedOver, "it never started over, so its plaintext history keeps its standing")
+        XCTAssertEqual(LibrarySyncEngine.rivalOrder([resolved]).0, 0)
+
+        // A new library started an hour before this one was encrypted still gives way to it.
+        let earlier = marker(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, created: sealedSince.addingTimeInterval(-3_600))
+        XCTAssertEqual(try LibrarySyncEngine.resolved(from: [resolved, earlier]).libraryID, history.libraryID)
+        XCTAssertEqual(try LibrarySyncEngine.resolved(from: [earlier, resolved]).libraryID, history.libraryID)
+
+        // A library that did start over keeps that as its own when it wins over a rival.
+        let mine = marker(UUID(uuidString: "00000000-0000-0000-0000-00000000000C")!, created: sealedSince.addingTimeInterval(-7_200), replaces: [lost])
+        let plain = marker(UUID(uuidString: "00000000-0000-0000-0000-00000000000D")!, created: sealedSince)
+        let won = try LibrarySyncEngine.resolved(from: [mine, plain])
+        XCTAssertEqual(won.libraryID, mine.libraryID)
+        XCTAssertTrue(try XCTUnwrap(won.sealing).startedOver)
+        XCTAssertEqual(won.sealing?.rivals, [plain.libraryID])
+    }
+
     /// A library encrypted after it began as plaintext holds history from before: it wins over a new one, whichever
     /// started first by the clocks.
     func testBehaviorALibraryEncryptedLaterWinsOverANewOne() async throws {
