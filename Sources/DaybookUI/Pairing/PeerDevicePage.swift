@@ -144,18 +144,22 @@ public struct PeerPageActions {
     public var problemAction: (title: String, perform: () -> Void)?
     /// Whether it can start recording here (`PairingWords.canStartRecording`).
     public var canStartRecording: Binding<Bool>?
+    /// False while a setting for every device here keeps any from starting a recording (the iPhone's Recording with
+    /// Your Mac): the toggle is dimmed.
+    public var canStartRecordingEnabled: Bool
     /// After the person confirms.
     public var unpair: () -> Void
 
     public init(openConversation: (() -> Void)? = nil, stop: (() -> Void)? = nil, stopPending: Bool = false,
                 pairAgain: (() -> Void)? = nil, problemAction: (title: String, perform: () -> Void)? = nil,
-                canStartRecording: Binding<Bool>? = nil, unpair: @escaping () -> Void) {
+                canStartRecording: Binding<Bool>? = nil, canStartRecordingEnabled: Bool = true, unpair: @escaping () -> Void) {
         self.openConversation = openConversation
         self.stop = stop
         self.stopPending = stopPending
         self.pairAgain = pairAgain
         self.problemAction = problemAction
         self.canStartRecording = canStartRecording
+        self.canStartRecordingEnabled = canStartRecordingEnabled
         self.unpair = unpair
     }
 }
@@ -216,6 +220,7 @@ public struct PeerDevicePage<Footer: View>: View {
             if let canStart = actions.canStartRecording {
                 Section {
                     Toggle(label(PairingWords.canStartRecording), isOn: canStart)
+                        .disabled(!actions.canStartRecordingEnabled)
                 }
             }
             if !page.facts.isEmpty {

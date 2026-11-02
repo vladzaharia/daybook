@@ -143,6 +143,8 @@ struct MacDetailScreen: View {
             canStartRecording: mac.isDamaged ? nil : Binding(
                 get: { model.settings.macMayStartRecording(mac.id, pairedAt: mac.pairedAt) },
                 set: { model.settings.setMacMayStartRecording($0, for: mac.id, pairedAt: mac.pairedAt) }),
+            // Recording with Your Mac off keeps every Mac from starting one.
+            canStartRecordingEnabled: model.settings.acceptsMacRecordRequests,
             unpair: {
                 Task {
                     do {
