@@ -122,7 +122,8 @@ public struct CloudKeyRow: View {
 }
 
 /// Adds, replaces, or removes a provider's key. A key is checked with the provider before it's kept; a refused one
-/// is a ProblemLine. Leaving the editor forgets the check, so a refusal never stays under an empty field.
+/// is a ProblemLine. Leaving the editor, even while a key is being checked, keeps nothing it didn't keep already and
+/// forgets a refusal, so none stays under an empty field.
 public struct CloudKeyEditor: View {
     private let cloud: CloudSetup
     private let provider: CloudProvider
@@ -169,7 +170,7 @@ public struct CloudKeyEditor: View {
             }
         }
         .cloudKeyRemoval($removing, cloud: cloud) { done() }
-        // Closed however it closes (Cancel, a swipe, Back): the check's outcome goes with it.
+        // Closed however it closes (Cancel, a swipe, Back): a check under way or refused goes with it.
         .onDisappear { Self.leave(cloud, provider) }
     }
 
@@ -197,10 +198,11 @@ public struct CloudKeyEditor: View {
         }
     }
 
-    /// Leaving the editor: a check's outcome (a refusal) isn't kept for a key that isn't there.
+    /// Leaving the editor: a check under way is dropped, and a refusal isn't kept for a key that isn't there. A key
+    /// just kept stays "This key works" on its row.
     @MainActor
     public static func leave(_ cloud: CloudSetup, _ provider: CloudProvider) {
-        cloud.clearCheck(for: provider)
+        cloud.leaveCheck(for: provider)
     }
 }
 

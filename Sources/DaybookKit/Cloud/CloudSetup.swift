@@ -42,6 +42,8 @@ public final class CloudSetup {
     @ObservationIgnored private let defaults: UserDefaults
     /// Off for the Settings demos, which must never reach a provider: refreshing only reads what's kept.
     @ObservationIgnored public var fetches = true
+    /// Each provider's check under way, until it finishes or is dropped (`leaveCheck`).
+    @ObservationIgnored private var checksUnderWay: [CloudProvider: UUID] = [:]
 
     public init(keys: any CloudKeyStore = KeychainCloudKeyStore.system, client: CloudClient = CloudClient(), defaults: UserDefaults = .standard,
                 catalog: CloudCatalog = .builtIn) {
@@ -85,7 +87,7 @@ public final class CloudSetup {
 
     /// Checks `text` as a key with the provider's model list and keeps it only when the provider accepts it. A key
     /// whose prefix names the other provider is refused before anything is sent, so it never reaches a company it
-    /// doesn't belong to.
+    /// doesn't belong to. A check dropped while it's under way (`leaveCheck`) keeps nothing and says nothing.
     @discardableResult
     public func addKey(_ text: String, for provider: CloudProvider) async -> Bool {
         guard let key = CloudAPIKey(text) else {
@@ -96,14 +98,20 @@ public final class CloudSetup {
             checks[provider] = .failed(message: "This is an \(CloudError.providerName(issuer)) key.", details: "")
             return false
         }
+        let check = UUID()
+        checksUnderWay[provider] = check
         checks[provider] = .checking
+        defer { if checksUnderWay[provider] == check { checksUnderWay[provider] = nil } }
         do {
             if fetches { _ = try await directory.check(key, for: provider) }
+            guard checksUnderWay[provider] == check else { return false }
             try store.store(key, for: provider)
         } catch let error as CloudError {
+            guard checksUnderWay[provider] == check else { return false }
             checks[provider] = .failed(message: error.message, details: error.details)
             return false
         } catch {
+            guard checksUnderWay[provider] == check else { return false }
             checks[provider] = .failed(message: "The keychain couldn’t keep the key.", details: error.localizedDescription)
             return false
         }
@@ -125,9 +133,16 @@ public final class CloudSetup {
         offers = await directory.currentOffers()
     }
 
-    /// Forgets a check's outcome (the key field was edited, or the sheet closed).
+    /// Forgets a refusal: the key field was edited, so it no longer holds the key refused. A key just kept still works.
     public func clearCheck(for provider: CloudProvider) {
-        if checks[provider] != .checking { checks[provider] = nil }
+        if case .failed? = checks[provider] { checks[provider] = nil }
+    }
+
+    /// The key editor closed, however it closed: a check under way is dropped, keeping nothing, and a refusal is
+    /// forgotten, so neither turns up under an empty field. A key just kept stays "This key works" on its row.
+    public func leaveCheck(for provider: CloudProvider) {
+        checksUnderWay[provider] = nil
+        if checks[provider] != .works { checks[provider] = nil }
     }
 
     public func offers(in tier: CloudTier) -> [CloudOffer] { offers.filter { $0.model.tier == tier } }

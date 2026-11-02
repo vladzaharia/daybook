@@ -50,7 +50,11 @@ final class SettingsSecretsTests: XCTestCase {
 
         let checking = CloudSetup.demo(providers: [], defaults: defaults, checks: [.openai: .checking])
         CloudKeyEditor.leave(checking, .openai)
-        XCTAssertEqual(checking.checks[.openai], .checking, "a check under way finishes")
+        XCTAssertNil(checking.checks[.openai], "a check under way is dropped (CloudDirectoryTests: nothing is kept or said after)")
+
+        let works = CloudSetup.demo(providers: [.anthropic], defaults: defaults, checks: [.anthropic: .works])
+        CloudKeyEditor.leave(works, .anthropic)
+        XCTAssertEqual(works.checks[.anthropic], .works, "a key just kept still says “This key works” on its row")
     }
 
     func testBehaviorCloudSettingsSayTheSameOnBothApps() {

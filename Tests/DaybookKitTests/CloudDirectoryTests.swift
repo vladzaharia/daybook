@@ -18,19 +18,22 @@ final class CloudDirectoryTests: XCTestCase {
 
     /// Anthropic's and OpenAI's model lists by key, and OpenRouter's (no key) with Sonnet 5.5 at `sonnetInput`.
     private func serve(_ server: FakeCloudServer, sonnetInput: String = "0.0000025", anthropicStatus: Int = 200) {
-        server.handle { request in
-            if request.header("x-api-key") != nil {
-                guard anthropicStatus == 200 else {
-                    return .json(["type": "error", "error": ["type": "authentication_error", "message": "invalid x-api-key"]], status: anthropicStatus)
-                }
-                return .json(["data": [["id": "claude-sonnet-5-5"], ["id": "claude-haiku-5-5"], ["id": "claude-opus-5-5"]], "has_more": false])
+        server.handle { request in Self.answer(request, sonnetInput: sonnetInput, anthropicStatus: anthropicStatus) }
+    }
+
+    private static func answer(_ request: FakeCloudServer.Request, sonnetInput: String = "0.0000025",
+                               anthropicStatus: Int = 200) -> FakeCloudServer.Response {
+        if request.header("x-api-key") != nil {
+            guard anthropicStatus == 200 else {
+                return .json(["type": "error", "error": ["type": "authentication_error", "message": "invalid x-api-key"]], status: anthropicStatus)
             }
-            if request.header("Authorization") != nil {
-                return .json(["data": [["id": "gpt-6.1-sol"], ["id": "gpt-6.1-terra"], ["id": "dall-e-3"]]])
-            }
-            return .json(["data": [["id": "anthropic/claude-sonnet-5.5", "name": "Anthropic: Claude Sonnet 5.5",
-                                    "pricing": ["prompt": sonnetInput, "completion": "0.00001"]]]])
+            return .json(["data": [["id": "claude-sonnet-5-5"], ["id": "claude-haiku-5-5"], ["id": "claude-opus-5-5"]], "has_more": false])
         }
+        if request.header("Authorization") != nil {
+            return .json(["data": [["id": "gpt-6.1-sol"], ["id": "gpt-6.1-terra"], ["id": "dall-e-3"]]])
+        }
+        return .json(["data": [["id": "anthropic/claude-sonnet-5.5", "name": "Anthropic: Claude Sonnet 5.5",
+                                "pricing": ["prompt": sonnetInput, "completion": "0.00001"]]]])
     }
 
     private func directory(_ server: FakeCloudServer, keys: MemoryCloudKeyStore, defaults: UserDefaults, clock: Clock = Clock()) -> CloudDirectory {
@@ -179,6 +182,56 @@ final class CloudDirectoryTests: XCTestCase {
         XCTAssertTrue(kept)
         XCTAssertEqual(server.requests.first?.header("Authorization"), "Bearer sk-TESTtestTESTtestTESTtest-x9Qa")
         XCTAssertNil(server.requests.first?.header("x-api-key"))
+    }
+
+    @MainActor
+    func testBehaviorLeavingTheEditorDuringACheckKeepsNothingAndSaysNothing() async throws {
+        let server = FakeCloudServer()
+        let keys = MemoryCloudKeyStore()
+        var client = CloudClient(session: server.session, endpoints: CloudEndpoints(base: server.base))
+        client.wait = { _ in }
+        let setup = CloudSetup(keys: keys, client: client, defaults: makeTestDefaults())
+
+        // The provider answers only once the editor has gone: first refusing the key, then accepting it.
+        for status in [401, 200] {
+            let answered = DispatchSemaphore(value: 0)
+            server.handle { request in
+                if request.header("x-api-key") != nil { answered.wait() }
+                return Self.answer(request, anthropicStatus: status)
+            }
+            let asked = server.requests.count
+            let adding = Task { await setup.addKey(anthropicKey.secret, for: .anthropic) }
+            try await waitUntil("the key is being checked", state: { "\(setup.checks)" }) {
+                setup.checks[.anthropic] == .checking && server.requests.count > asked
+            }
+            setup.leaveCheck(for: .anthropic)
+            XCTAssertNil(setup.checks[.anthropic], "reopened, the field is empty and nothing is said under it")
+            answered.signal()
+            let kept = await adding.value
+            XCTAssertFalse(kept, "HTTP \(status)")
+            XCTAssertNil(setup.checks[.anthropic], "HTTP \(status): no refusal turns up afterwards")
+            XCTAssertNil(try keys.key(for: .anthropic), "HTTP \(status): a key the person left isn't kept")
+            XCTAssertFalse(setup.isSetUp)
+        }
+
+        // A key that was kept stays "This key works" as the editor empties its field and closes; a refusal goes when
+        // the field is edited, or the editor closes.
+        serve(server)
+        var kept = await setup.addKey(anthropicKey.secret, for: .anthropic)
+        XCTAssertTrue(kept)
+        setup.clearCheck(for: .anthropic)
+        setup.leaveCheck(for: .anthropic)
+        XCTAssertEqual(setup.checks[.anthropic], .works, "the Mac's key row says so")
+        serve(server, anthropicStatus: 401)
+        kept = await setup.addKey(anthropicKey.secret, for: .anthropic)
+        XCTAssertFalse(kept)
+        setup.clearCheck(for: .anthropic)
+        XCTAssertNil(setup.checks[.anthropic], "the field no longer holds the key refused")
+        kept = await setup.addKey(anthropicKey.secret, for: .anthropic)
+        XCTAssertFalse(kept)
+        setup.leaveCheck(for: .anthropic)
+        XCTAssertNil(setup.checks[.anthropic])
+        XCTAssertEqual(try keys.key(for: .anthropic), anthropicKey, "the key kept before stays")
     }
 
     @MainActor
