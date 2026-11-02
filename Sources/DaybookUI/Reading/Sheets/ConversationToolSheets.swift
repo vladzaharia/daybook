@@ -51,39 +51,41 @@ public struct ReviewCorrectionsSheet: View {
         }
         .onAppear { place = .showing(place.index, of: issues, in: meeting) }
         #if os(macOS)
-        .frame(width: 560, height: 460)
+        // A set size: what's inside reads it to choose whether to scroll, so a sheet that followed what's inside would
+        // never settle.
+        .frame(width: 560, height: 540)
         #endif
     }
 
+    /// The correction read whole, then the passages it could go to. They take the room the correction leaves; when it
+    /// leaves too little (a long correction, large text), the sheet scrolls, with the passages in a box half its height.
     private func review(_ issue: CorrectionTransferIssue, position: Int, in meeting: Meeting) -> some View {
+        ViewThatFits(in: .vertical) {
+            reviewContent(issue, position: position, in: meeting, scrolls: false)
+            ScrollView {
+                reviewContent(issue, position: position, in: meeting, scrolls: true)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private func reviewContent(_ issue: CorrectionTransferIssue, position: Int, in meeting: Meeting, scrolls: Bool) -> some View {
         VStack(alignment: .leading, spacing: DaybookSpacing.s3) {
             SheetTitle("Review Earlier Corrections", detail: issues.count > 1 ? "\(position + 1) of \(issues.count)" : nil)
             Text("You corrected this before the audio was transcribed again:")
                 .font(DaybookFont.status.font(density)).foregroundStyle(DaybookPalette.Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Text("“\(issue.originalSegment.text)”")
                 .font(DaybookFont.body.font(density))
                 .foregroundStyle(DaybookPalette.Ink.body)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(DaybookPalette.quietFill, in: DaybookRadius.shape(DaybookRadius.box))
             Text("Apply it to:").font(DaybookFont.status.font(density)).foregroundStyle(DaybookPalette.Ink.secondary)
-            List(Self.candidates(issue, in: meeting), selection: target(for: issue)) { segment in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: DaybookSpacing.s2) {
-                        Text(TimeLabel.short(segment.start)).font(DaybookFont.time.font(density)).foregroundStyle(DaybookPalette.Ink.meta)
-                        if let name = meeting.speakerName(segment.speakerID) {
-                            Text(name).font(DaybookFont.speaker.font(density))
-                                .foregroundStyle(DaybookPalette.speakerInk(meeting.speakerIndex(segment.speakerID)))
-                        }
-                    }
-                    Text(segment.text).lineLimit(3).foregroundStyle(DaybookPalette.Ink.body)
-                }
-                .tag(segment.id)
-            }
-            #if os(iOS)
-            .environment(\.editMode, .constant(.active))
-            #endif
-            .frame(minHeight: 160)
+                .fixedSize(horizontal: false, vertical: true)
+            passages(issue, in: meeting)
+                .modifier(PassageListHeight(scrolls: scrolls))
             ViewThatFits(in: .horizontal) {
                 HStack {
                     keepButton(issue)
@@ -99,6 +101,25 @@ public struct ReviewCorrectionsSheet: View {
             }
         }
         .padding(density == .touch ? 20 : DaybookSpacing.s5)
+    }
+
+    private func passages(_ issue: CorrectionTransferIssue, in meeting: Meeting) -> some View {
+        List(Self.candidates(issue, in: meeting), selection: target(for: issue)) { segment in
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: DaybookSpacing.s2) {
+                    Text(TimeLabel.short(segment.start)).font(DaybookFont.time.font(density)).foregroundStyle(DaybookPalette.Ink.meta)
+                    if let name = meeting.speakerName(segment.speakerID) {
+                        Text(name).font(DaybookFont.speaker.font(density))
+                            .foregroundStyle(DaybookPalette.speakerInk(meeting.speakerIndex(segment.speakerID)))
+                    }
+                }
+                Text(segment.text).lineLimit(3).foregroundStyle(DaybookPalette.Ink.body)
+            }
+            .tag(segment.id)
+        }
+        #if os(iOS)
+        .environment(\.editMode, .constant(.active))
+        #endif
     }
 
     private func keepButton(_ issue: CorrectionTransferIssue) -> some View {
@@ -132,6 +153,20 @@ public struct ReviewCorrectionsSheet: View {
     private func resolve(_ issue: CorrectionTransferIssue, _ segment: UUID?) {
         library.resolveCorrectionTransfer(issue.id, targetSegmentID: segment, in: meetingID)
         if issues.isEmpty { close() } else { place = .showing(place.index, of: issues, in: meeting) }
+    }
+}
+
+/// The passages Review offers: the room the correction leaves, at least 160 pt; while the sheet scrolls, half what
+/// shows of it, so the sheet itself can still be scrolled beside them.
+private struct PassageListHeight: ViewModifier {
+    let scrolls: Bool
+
+    func body(content: Content) -> some View {
+        if scrolls {
+            content.containerRelativeFrame(.vertical) { length, _ in max(160, length / 2) }
+        } else {
+            content.frame(minHeight: 160, idealHeight: 160, maxHeight: .infinity)
+        }
     }
 }
 

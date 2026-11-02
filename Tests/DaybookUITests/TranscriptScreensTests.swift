@@ -149,6 +149,24 @@ final class TranscriptScreensTests: XCTestCase {
                        ["Passage 0", "Passage 1", "Ship on Friday", "Passage 3", "Passage 4", "Passage 5"])
     }
 
+    #if os(macOS)
+    /// Review reads its own height to choose whether to scroll, so on the Mac its sheet keeps one size: one that followed
+    /// a long correction never settled. A correction too long for it scrolls inside.
+    func testBehaviorReviewKeepsOneSizeOnTheMacHoweverLongTheCorrection() async throws {
+        let library = try await library()
+        let id = library.newMeeting(title: "Weekly")
+        let passages = (0..<4).map { TranscriptSegment(trackID: track, start: Double($0 * 5), end: Double($0 * 5 + 4), text: "Passage \($0)") }
+        let long = String(repeating: "We spent the whole next week chasing a duplicate that only showed up on two Macs. ", count: 20)
+        for text in ["Ship on Friday", long] {
+            let issue = CorrectionTransferIssue(originalSegment: TranscriptSegment(trackID: track, start: 0, end: 4, text: text),
+                                                candidateSegmentIDs: [passages[1].id], reason: "Transcribed again")
+            library.update(id) { $0.unifiedTranscript = passages; $0.correctionTransferIssues = [issue] }
+            let sheet = NSHostingView(rootView: ReviewCorrectionsSheet(library: library, meetingID: id))
+            XCTAssertEqual(sheet.fittingSize, CGSize(width: 560, height: 540), "\(text.count) characters")
+        }
+    }
+    #endif
+
     func testBehaviorAPageSheetClosesThroughOneComparableAction() {
         var closed = 0
         let first = ClosePageSheetAction { closed += 1 }
