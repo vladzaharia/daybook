@@ -9,7 +9,7 @@ public struct TemplateEditor<Route: Hashable>: View {
     private let templateID: SummaryTemplate.ID
     private let route: (SummaryTemplate.ID) -> Route
     private let push: (Route) -> Void
-    @State private var draft: SummaryTemplate?
+    @State private var draft: TemplateDraft?
     @State private var deleting: SummaryTemplate?
     @Environment(\.dismiss) private var dismiss
 
@@ -26,15 +26,19 @@ public struct TemplateEditor<Route: Hashable>: View {
     public var body: some View {
         Group {
             if let draft, templates.template(templateID) != nil {
-                TemplateForm(draft: Binding(get: { self.draft ?? draft }, set: { self.draft = $0 }),
-                             focusesName: draft.name.isEmpty && draft.instructions.isEmpty && !draft.isBuiltIn,
-                             restore: { template in self.draft = templates.restore(template) },
-                             duplicate: { template in
-                                 templates.save(template)
-                                 push(route(templates.duplicate(template).id))
+                let template = draft.template
+                TemplateForm(draft: Binding(get: { self.draft?.template ?? template }, set: { self.draft?.template = $0 }),
+                             focusesName: template.name.isEmpty && template.instructions.isEmpty && !template.isBuiltIn,
+                             restore: { shown in
+                                 templates.restore(shown)
+                                 self.draft = templates.draft(templateID)
+                             },
+                             duplicate: { shown in
+                                 if var saving = self.draft, templates.save(&saving) { self.draft = saving }
+                                 push(route(templates.duplicate(shown).id))
                              },
                              delete: { deleting = $0 })
-                    .navigationTitle(draft.displayName)
+                    .navigationTitle(template.displayName)
             } else if draft == nil, templates.template(templateID) != nil {
                 Color.clear
             } else {
@@ -45,7 +49,7 @@ public struct TemplateEditor<Route: Hashable>: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .onAppear { if draft == nil { draft = templates.draft(templateID) } }
-        .savingAsYouType(draft, to: templates)
+        .savingAsYouType($draft, to: templates)
         .confirmingTemplateDeletion($deleting) { template in
             draft = nil
             templates.delete(template)

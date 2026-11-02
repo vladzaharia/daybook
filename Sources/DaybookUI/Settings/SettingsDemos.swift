@@ -32,8 +32,8 @@ enum TemplatesDemo {
         library.saveTemplate(SummaryTemplate(name: "Quarterly customer advisory council debrief and follow-ups", kind: .interview,
                                              instructions: "Group feedback by theme. Quote customers where they're specific."))
         library.saveTemplate(SummaryTemplate(name: "", kind: .general, instructions: ""))
-        // Not the first, which the Mac's window opens on and would save back as it was.
-        if var edited = library.templates.filter(\.isBuiltIn).dropFirst().first {
+        // The one the Mac's window opens on, which takes this edit in as the other device's would.
+        if var edited = library.templates.first(where: \.isBuiltIn) {
             edited.instructions += " Keep it under a page."
             library.saveTemplate(edited)
         }

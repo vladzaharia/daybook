@@ -17,7 +17,7 @@ public struct TemplatesScreen<Route: Hashable>: View {
     #if os(macOS)
     @State private var selectedID: SummaryTemplate.ID?
     /// The selected template as it's being edited, so its row shows a new name or Edited as it's typed.
-    @State private var draft: SummaryTemplate?
+    @State private var draft: TemplateDraft?
     /// A template just made (New Template, Duplicate), whose name takes the focus.
     @State private var naming: SummaryTemplate.ID?
     #endif
@@ -116,10 +116,10 @@ public struct TemplatesScreen<Route: Hashable>: View {
         .frame(minWidth: 640, minHeight: 440)
         .onAppear { if selectedID == nil { selectedID = templates.sections.builtIn.first?.id } }
         .onChange(of: selectedID, initial: true) { old, new in
-            if let draft, draft.id == old { templates.save(draft) }
+            if var leaving = draft, leaving.id == old { templates.save(&leaving) }
             draft = new.flatMap(templates.draft)
         }
-        .savingAsYouType(draft, to: templates)
+        .savingAsYouType($draft, to: templates)
     }
 
     private func row(_ template: SummaryTemplate) -> some View {
@@ -129,12 +129,13 @@ public struct TemplatesScreen<Route: Hashable>: View {
     /// A row's template, or the draft while it's the one being edited.
     private func shown(_ template: SummaryTemplate) -> SummaryTemplate {
         guard let draft, draft.id == template.id else { return template }
-        return draft
+        return draft.template
     }
 
     @ViewBuilder private var detail: some View {
         if let draft, templates.template(draft.id) != nil {
-            TemplateForm(draft: Binding(get: { self.draft ?? draft }, set: { self.draft = $0 }),
+            TemplateForm(draft: Binding(get: { self.draft?.template ?? draft.template },
+                                        set: { edited in if self.draft?.id == edited.id { self.draft?.template = edited } }),
                          focusesName: naming == draft.id, restore: { restore($0) })
                 .id(draft.id)
         } else {
@@ -151,13 +152,13 @@ public struct TemplatesScreen<Route: Hashable>: View {
 
     private var moreMenu: some View {
         Menu {
-            Button(TemplateWords.duplicate) { if let draft { duplicate(draft) } }
+            Button(TemplateWords.duplicate) { if let draft { duplicate(draft.template) } }
                 .disabled(draft == nil)
             Divider()
-            Button(TemplateWords.restoreOriginal) { if let draft { restore(draft) } }
-                .disabled(draft?.isEdited != true)
-            Button(TemplateWords.deleteTemplate) { deleting = draft }
-                .disabled(draft?.isBuiltIn != false)
+            Button(TemplateWords.restoreOriginal) { if let draft { restore(draft.template) } }
+                .disabled(draft?.template.isEdited != true)
+            Button(TemplateWords.deleteTemplate) { deleting = draft?.template }
+                .disabled(draft?.template.isBuiltIn != false)
         } label: {
             Label(TemplateWords.more, systemImage: "ellipsis")
         }
@@ -166,13 +167,13 @@ public struct TemplatesScreen<Route: Hashable>: View {
     }
 
     private func duplicate(_ template: SummaryTemplate) {
-        if let draft { templates.save(draft) }
+        if var saving = draft, templates.save(&saving) { draft = saving }
         select(templates.duplicate(template).id, naming: true)
     }
 
     private func restore(_ template: SummaryTemplate) {
-        let original = templates.restore(template)
-        if draft?.id == template.id { draft = original }
+        templates.restore(template)
+        if draft?.id == template.id { draft = templates.draft(template.id) }
     }
 
     private func delete(_ template: SummaryTemplate) {

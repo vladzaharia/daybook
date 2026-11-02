@@ -28,31 +28,86 @@ final class LibrarySettingsScreensTests: XCTestCase {
         let created = templates.newTemplate()
         XCTAssertEqual(templates.template(created.id)?.name, "Untitled Template", "saved at once, so it saves as you type")
         XCTAssertEqual(templates.sections.yours.map(\.id), [created.id])
-        let draft = try XCTUnwrap(templates.draft(created.id))
-        XCTAssertEqual(draft.name, "", "the prompt says Untitled Template; typing names it")
-        XCTAssertFalse(templates.save(draft), "an untouched new template writes nothing")
+        var draft = try XCTUnwrap(templates.draft(created.id))
+        XCTAssertEqual(draft.template.name, "", "the prompt says Untitled Template; typing names it")
+        XCTAssertFalse(templates.save(&draft), "an untouched new template writes nothing")
     }
 
     func testBehaviorSavingAsYouTypeWritesOnlyWhatChanged() async throws {
         let library = try await makeLibrary()
         let templates = TemplateLibrary(library: library)
         var draft = try XCTUnwrap(templates.draft(templates.newTemplate().id))
-        draft.name = "Board update"
-        XCTAssertTrue(templates.save(draft))
+        draft.template.name = "Board update"
+        XCTAssertTrue(templates.save(&draft))
         XCTAssertEqual(templates.template(draft.id)?.name, "Board update")
-        XCTAssertFalse(templates.save(draft), "the same draft again is no new save, so nothing syncs for it")
-        draft.name = "   "
-        XCTAssertTrue(templates.save(draft))
+        XCTAssertFalse(templates.save(&draft), "the same draft again is no new save, so nothing syncs for it")
+        draft.template.name = "   "
+        XCTAssertTrue(templates.save(&draft))
         XCTAssertEqual(templates.template(draft.id)?.name, "Untitled Template", "a blank name is saved as Untitled Template")
+    }
+
+    func testBehaviorAnUntouchedDraftDoesntRevertAnEditFromAnotherDevice() async throws {
+        let library = try await makeLibrary()
+        let templates = TemplateLibrary(library: library)
+        let builtIn = try XCTUnwrap(templates.sections.builtIn.first)
+        var draft = try XCTUnwrap(templates.draft(builtIn.id), "the Mac's window opens on the first built-in")
+        // Another device's edit arrives through sync while the editor is open.
+        var remote = builtIn
+        remote.instructions += " Keep it under a page."
+        library.saveTemplate(remote)
+        let synced = try XCTUnwrap(templates.template(builtIn.id))
+
+        // Choosing another template, closing the window, or leaving the iPhone's editor saves the draft.
+        XCTAssertFalse(templates.save(&draft), "nothing the person changed, so nothing is written")
+        XCTAssertEqual(templates.template(builtIn.id), synced, "the other device's edit stays, and nothing newer syncs over it")
+
+        // The editor takes the edit in, so it shows what the library has.
+        XCTAssertTrue(draft.catchUp(to: synced))
+        XCTAssertEqual(draft.template.instructions, remote.instructions)
+        XCTAssertEqual(draft.base, synced)
+        XCTAssertFalse(templates.save(&draft))
+        XCTAssertFalse(draft.catchUp(to: synced), "once is enough")
+    }
+
+    func testBehaviorSavingWritesOnlyTheFieldsThePersonChanged() async throws {
+        let library = try await makeLibrary()
+        let templates = TemplateLibrary(library: library)
+        let created = templates.newTemplate()
+        var draft = try XCTUnwrap(templates.draft(created.id))
+        draft.template.name = "Board update"
+        // Meanwhile another device wrote the instructions.
+        var remote = try XCTUnwrap(templates.template(created.id))
+        remote.instructions = "Lead with the numbers."
+        library.saveTemplate(remote)
+
+        XCTAssertTrue(templates.save(&draft))
+        let saved = try XCTUnwrap(templates.template(created.id))
+        XCTAssertEqual(saved.name, "Board update", "what the person typed")
+        XCTAssertEqual(saved.instructions, "Lead with the numbers.", "and the other device's edit, kept")
+        XCTAssertEqual(draft.base, saved, "the draft caught up with what was saved")
+        XCTAssertEqual(draft.template.instructions, "Lead with the numbers.", "so the editor shows it")
+
+        // An edit synced to a field the person is typing in leaves their words in the editor.
+        draft.template.name = "Board update, Q3"
+        var renamed = saved
+        renamed.name = "Board"
+        renamed.kind = .interview
+        library.saveTemplate(renamed)
+        XCTAssertTrue(draft.catchUp(to: try XCTUnwrap(templates.template(created.id))))
+        XCTAssertEqual(draft.template.name, "Board update, Q3")
+        XCTAssertEqual(draft.template.kind, .interview, "what they haven't touched follows the library")
+        XCTAssertTrue(templates.save(&draft))
+        XCTAssertEqual(templates.template(created.id)?.name, "Board update, Q3")
+        XCTAssertEqual(templates.template(created.id)?.kind, .interview)
     }
 
     func testBehaviorADraftOfADeletedTemplateIsntBroughtBack() async throws {
         let library = try await makeLibrary()
         let templates = TemplateLibrary(library: library)
-        var draft = templates.newTemplate()
-        templates.delete(draft)
-        draft.instructions = "Typed after another device deleted it"
-        XCTAssertFalse(templates.save(draft))
+        var draft = try XCTUnwrap(templates.draft(templates.newTemplate().id))
+        templates.delete(draft.template)
+        draft.template.instructions = "Typed after another device deleted it"
+        XCTAssertFalse(templates.save(&draft))
         XCTAssertNil(templates.template(draft.id))
         XCTAssertTrue(templates.sections.yours.isEmpty)
     }
@@ -60,11 +115,11 @@ final class LibrarySettingsScreensTests: XCTestCase {
     func testBehaviorEditedBuiltInsRestoreAndCopiesKeepTheShownName() async throws {
         let library = try await makeLibrary()
         let templates = TemplateLibrary(library: library)
-        var builtIn = try XCTUnwrap(templates.sections.builtIn.first)
-        builtIn.instructions += " Keep it under a page."
-        templates.save(builtIn)
+        var builtIn = try XCTUnwrap(templates.draft(try XCTUnwrap(templates.sections.builtIn.first).id))
+        builtIn.template.instructions += " Keep it under a page."
+        templates.save(&builtIn)
         XCTAssertTrue(try XCTUnwrap(templates.template(builtIn.id)).isEdited)
-        let original = try XCTUnwrap(templates.restore(builtIn))
+        let original = try XCTUnwrap(templates.restore(builtIn.template))
         XCTAssertFalse(original.isEdited)
         XCTAssertEqual(original, SummaryTemplate.builtIns.first)
 
