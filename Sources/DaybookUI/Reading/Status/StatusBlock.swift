@@ -66,11 +66,11 @@ public struct StatusBlock: View {
                         HStack(alignment: .firstTextBaseline, spacing: DaybookSpacing.s3) {
                             lineWords.fixedSize()
                             Spacer(minLength: 0)
-                            actions(prominent: false).fixedSize()
+                            actions(prominent: false, wraps: false).fixedSize()
                         }
                         VStack(alignment: .leading, spacing: 6) {
                             lineWords
-                            actions(prominent: false)
+                            actions(prominent: false, wraps: true)
                         }
                     }
                 }
@@ -124,12 +124,12 @@ public struct StatusBlock: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityElement(children: .combine)
-                if stacked && !presentation.actions.isEmpty { actions(prominent: true) }
+                if stacked && !presentation.actions.isEmpty { actions(prominent: true, wraps: true) }
             }
             .layoutPriority(1)
             if !stacked && !presentation.actions.isEmpty {
                 Spacer(minLength: DaybookSpacing.s3)
-                actions(prominent: true).fixedSize()
+                actions(prominent: true, wraps: false).fixedSize()
             }
         }
         .padding(DaybookSpacing.s3)
@@ -148,14 +148,24 @@ public struct StatusBlock: View {
     // MARK: Actions
 
     /// In the order given. Under touch each is its own 44 pt target, 24 pt apart, so a tap never lands on its neighbour.
-    private func actions(prominent: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: StatusBlockLayout.actionSpacing(density)) {
-            ForEach(Array(presentation.actions.enumerated()), id: \.offset) { _, action in
-                button(action, prominent: prominent && action.isPrimary)
+    /// Under the words they wrap to another line rather than run out of the column.
+    @ViewBuilder private func actions(prominent: Bool, wraps: Bool) -> some View {
+        let spacing = StatusBlockLayout.actionSpacing(density)
+        Group {
+            if wraps {
+                FlowLayout(spacing: spacing, lineSpacing: DaybookSpacing.s2) { buttons(prominent: prominent) }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: spacing) { buttons(prominent: prominent) }
             }
         }
         .daybookFont(.status)
         .fontWeight(.medium)
+    }
+
+    private func buttons(prominent: Bool) -> some View {
+        ForEach(Array(presentation.actions.enumerated()), id: \.offset) { _, action in
+            button(action, prominent: prominent && action.isPrimary)
+        }
     }
 
     @ViewBuilder private func button(_ action: ConversationStatusPresentation.Action, prominent: Bool) -> some View {
