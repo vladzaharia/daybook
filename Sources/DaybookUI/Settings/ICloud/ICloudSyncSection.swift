@@ -232,13 +232,17 @@ public struct ICloudSyncSection<DevicesRow: View, Extras: View>: View {
         if shown.folder != nil { devicesRow }
     }
 
-    /// A pass's problem with its one fix: Manage Storage… when iCloud is full, Start a New Library in iCloud when the
-    /// library there was removed.
+    /// A pass's problem with its one fix: Manage Storage… when iCloud is full (or, where nothing here opens iCloud's
+    /// storage, where to free some), Start a New Library in iCloud when the library there was removed.
     @ViewBuilder private func problemLine(_ problem: SyncProblem) -> some View {
         switch problem {
-        case .storageFull where actions.manageStorage != nil:
-            ProblemLine(text: problem.text, details: problem.details) {
-                Button("Manage Storage…") { actions.manageStorage?() }
+        case .storageFull:
+            if let manageStorage = actions.manageStorage {
+                ProblemLine(text: problem.text, details: problem.details) {
+                    Button("Manage Storage…") { manageStorage() }
+                }
+            } else {
+                ProblemLine(text: ICloudSyncShown.problemText(problem, managesStorage: false), details: problem.details)
             }
         case .libraryRemoved where shown.offersNewLibrary(canStart: actions.startNewLibrary != nil):
             ProblemLine(text: problem.text, details: problem.details) {

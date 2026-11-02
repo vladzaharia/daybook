@@ -400,6 +400,9 @@ final class SyncServicesTests: XCTestCase {
         XCTAssertTrue(phone.sync.isStorageFull)
         XCTAssertEqual(phone.sync.statusLine, "iCloud storage is full", "as the Mac says it")
         XCTAssertEqual(phone.sync.shown().problem, .storageFull)
+        XCTAssertEqual(ICloudSyncShown.problemText(.storageFull, managesStorage: false),
+                       "iCloud storage is full. Free up space in Settings › Apple Account › iCloud.",
+                       "nothing on the iPhone opens iCloud's storage, so its problem line says where")
         XCTAssertTrue(phone.sync.needsAttention)
         XCTAssertFalse(phone.sync.isUpToDate)
     }

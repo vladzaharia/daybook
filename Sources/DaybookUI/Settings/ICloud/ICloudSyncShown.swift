@@ -187,6 +187,22 @@ public struct ICloudSyncShown: Equatable {
         return "Copying \(record.remainingFiles) more \(record.remainingFiles == 1 ? "file" : "files") from the previous sync folder"
     }
 
+    /// A problem's sentence, with its fix in words where no button gives it: iCloud storage is full, and nothing here
+    /// opens iCloud's storage (the iPhone), so it says where to free some.
+    public static func problemText(_ problem: SyncProblem, managesStorage: Bool) -> String {
+        guard problem == .storageFull, !managesStorage else { return problem.text }
+        return "\(problem.text) \(freeUpStorage)"
+    }
+
+    /// Where iCloud storage is freed up, in this device's settings.
+    public static var freeUpStorage: String {
+        #if os(macOS)
+        "Free up space in System Settings › Apple Account › iCloud."
+        #else
+        "Free up space in Settings › Apple Account › iCloud."
+        #endif
+    }
+
     /// The fix the status row's action can't give on its own: where iCloud Drive is turned on, or where to sign in.
     public var footer: String? {
         switch iCloud {

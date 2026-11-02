@@ -120,6 +120,12 @@ final class ICloudSyncShownTests: XCTestCase {
         XCTAssertEqual(ICloudSyncShown(iCloud: .iCloudDriveOff).footer, "Turn it on in System Settings › Apple Account › iCloud.")
         XCTAssertNil(ICloudSyncShown(iCloud: .signedOut).footer, "Open System Settings… goes there")
         XCTAssertNil(connected().footer)
+        XCTAssertNil(connected { $0.problem = .storageFull }.footer, "the problem line has the fix")
+        XCTAssertEqual(ICloudSyncShown.problemText(.storageFull, managesStorage: true), "iCloud storage is full.", "Manage Storage… is its fix")
+        XCTAssertEqual(ICloudSyncShown.problemText(.storageFull, managesStorage: false),
+                       "iCloud storage is full. Free up space in System Settings › Apple Account › iCloud.",
+                       "where nothing opens iCloud's storage, the fix in words")
+        XCTAssertEqual(ICloudSyncShown.problemText(.accountChanged, managesStorage: false), SyncProblem.accountChanged.text)
         XCTAssertTrue(connected().isConnected)
         XCTAssertFalse(ICloudSyncShown(iCloud: .waitingForKey).isConnected)
         XCTAssertFalse(ICloudSyncShown(iCloud: .turnedOff).isConnected)
