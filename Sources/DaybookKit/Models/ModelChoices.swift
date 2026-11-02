@@ -160,6 +160,20 @@ public struct ModelRoleChoice: Identifiable, Equatable, Sendable {
     public func canDownload(space: ModelSpace = .unknown) -> Bool {
         selectedModel != nil && status?.canDownload == true && space.fits(downloadBytes)
     }
+
+    /// Which model is chosen and how it stands: what a role's row watches for its checkmark.
+    public struct Standing: Equatable, Sendable {
+        public let selection: String?
+        public let status: ModelStatus?
+    }
+
+    public var standing: Standing { Standing(selection: selection, status: status) }
+
+    /// The chosen model's download just finished. Choosing a model that's already here while another is still on its
+    /// way isn't one.
+    public static func finishedDownloading(from old: Standing, to new: Standing) -> Bool {
+        old.selection == new.selection && ModelStatus.finishedDownloading(from: old.status, to: new.status)
+    }
 }
 
 /// A row's line: its words, in the warning ink when it needs the person.

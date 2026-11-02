@@ -24,6 +24,7 @@ public struct ModelRoleRow: View {
     private let label: String?
     private let choice: ModelRoleChoice
     private let space: ModelSpace
+    private let pickerTitle: String
     private let actions: ModelRowActions
     @Environment(\.daybookDensity) private var density
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -32,11 +33,16 @@ public struct ModelRoleRow: View {
     @State private var justDownloaded = false
     @State private var downloads = 0
 
-    /// - Parameter label: What the row is ("Model", "Voice profiles"); nil where the section already says it.
-    public init(label: String?, choice: ModelRoleChoice, space: ModelSpace = .unknown, actions: ModelRowActions) {
+    /// - Parameters:
+    ///   - label: What the row is ("Model", "Voice profiles"); nil where the section already says it.
+    ///   - pickerTitle: What VoiceOver calls its pop-up or menu: the role's ("Transcription model"), unless the row is
+    ///     another choice for the role ("Other languages model").
+    public init(label: String?, choice: ModelRoleChoice, space: ModelSpace = .unknown, pickerTitle: String? = nil,
+                actions: ModelRowActions) {
         self.label = label
         self.choice = choice
         self.space = space
+        self.pickerTitle = pickerTitle ?? "\(choice.title) model"
         self.actions = actions
     }
 
@@ -51,8 +57,8 @@ public struct ModelRoleRow: View {
                 }
             }
         }
-        .onChange(of: choice.status) { old, new in
-            guard ModelStatus.finishedDownloading(from: old, to: new) else { return }
+        .onChange(of: choice.standing) { old, new in
+            guard ModelRoleChoice.finishedDownloading(from: old, to: new) else { return }
             withAnimation(DaybookMotion.resolved(DaybookMotion.land, reduceMotion: reduceMotion)) { justDownloaded = true }
             downloads += 1
         }
@@ -93,7 +99,7 @@ public struct ModelRoleRow: View {
 
     private var picker: some View {
         ModelPicker(options: choice.options, selection: choice.selection, name: choice.selectionName,
-                    title: "\(choice.title) model", select: actions.select)
+                    title: pickerTitle, select: actions.select)
     }
 
     private var lineFont: Font { density == .touch ? .footnote : .subheadline }

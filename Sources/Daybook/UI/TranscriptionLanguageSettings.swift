@@ -24,7 +24,7 @@ struct TranscriptionLanguageSettings: View {
                 let snapshot = manager.snapshot
                 ModelRoleRow(label: "Other languages",
                              choice: snapshot.choice(for: .transcription, selection: other, among: otherChoices),
-                             space: snapshot.space,
+                             space: snapshot.space, pickerTitle: "Other languages model",
                              actions: ModelRowActions(select: { otherLanguages.wrappedValue = $0 },
                                                       download: { manager.download($0) }, cancel: { manager.cancel($0) }))
             }

@@ -42,6 +42,21 @@ final class ModelChoicesTests: XCTestCase {
         XCTAssertFalse(ModelStatus.finishedDownloading(from: nil, to: .downloaded))
     }
 
+    /// A role's row shows its checkmark (and the iPhone plays its haptic) only when the chosen model's own download
+    /// finished: choosing a model that's already here, away from one still downloading or waiting, isn't one.
+    func testBehaviorChoosingADownloadedModelMidDownloadEarnsNoCheckmark() throws {
+        let downloading = try choice("parakeet/ultra", status: .downloading(0.4)).standing
+        XCTAssertTrue(ModelRoleChoice.finishedDownloading(from: downloading, to: try choice("parakeet/ultra", status: .inUse).standing))
+        XCTAssertTrue(ModelRoleChoice.finishedDownloading(from: try choice("parakeet/ultra", status: .waiting).standing,
+                                                          to: try choice("parakeet/ultra", status: .downloaded).standing))
+        let other = try XCTUnwrap(catalog.models(for: .transcription).first { $0.key != "parakeet/ultra" && !$0.isSystemModel })
+        XCTAssertFalse(ModelRoleChoice.finishedDownloading(from: downloading, to: try choice(other.key, status: .inUse).standing),
+                       "the Mac: another model chosen, already here")
+        XCTAssertFalse(ModelRoleChoice.finishedDownloading(from: try choice("parakeet/ultra", status: .waitingForWiFi).standing,
+                                                           to: try choice(other.key, status: .downloaded).standing),
+                       "the iPhone: another model chosen while the first waits for Wi‑Fi")
+    }
+
     func testBehaviorARolesLineSpeaksOnlyWhenTheModelIsntReady() throws {
         let parakeet = try model("parakeet/ultra")
         XCTAssertEqual(try choice("parakeet/ultra", status: .notDownloaded).line(), ModelLine("Not downloaded · \(ByteSize.format(parakeet.approximateBytes))"))
