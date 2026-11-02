@@ -333,7 +333,8 @@ private struct CloudTierRadio: View {
 #endif
 
 /// Recommended or one of the tier's models; a chosen model's cost under it (the tier's row already says what its
-/// recommendation costs).
+/// recommendation costs). Where the row is narrow (the iPhone), the choice beside the label is "Recommended" or the
+/// model's name, as the tier's row above says which model Recommended is.
 public struct CloudModelPicker: View {
     private let cloud: CloudSetup
     @Environment(\.daybookDensity) private var density
@@ -343,6 +344,11 @@ public struct CloudModelPicker: View {
     /// "Recommended (Claude Sonnet 5.5)".
     public static func recommendedTitle(_ offer: CloudOffer?) -> String {
         offer.map { "Recommended (\($0.model.name))" } ?? "Recommended"
+    }
+
+    /// The choice beside the label on the iPhone: "Recommended", or the chosen model's name ("Claude Opus 5.5").
+    public static func currentTitle(_ cloud: CloudSetup) -> String {
+        cloud.chosenModel.flatMap { id in cloud.offers.first { $0.id == id }?.model.name } ?? "Recommended"
     }
 
     /// A chosen model's cost: "About $0.32 an hour", with "estimated price" where its price is a guess.
@@ -359,22 +365,41 @@ public struct CloudModelPicker: View {
             label
         }
         #else
-        // The list's own picker row: the choice beside the label, shortened if it must be, never under it.
-        picker
+        // The choice beside the label, never under it: a short one, as the list's picker row doesn't shorten a long
+        // one but puts it under the label. The label wraps its cost before it gives up room.
+        HStack(spacing: DaybookSpacing.s3) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Model").foregroundStyle(DaybookPalette.Ink.title)
+                if let cost = Self.chosenCost(cloud) {
+                    Text(cost).font(.subheadline).foregroundStyle(DaybookPalette.Ink.secondary)
+                }
+            }
+            .layoutPriority(1)
+            Spacer(minLength: 0)
+            Picker(selection: selection) {
+                choices
+            } label: {
+                label
+            } currentValueLabel: {
+                Text(Self.currentTitle(cloud)).lineLimit(1)
+            }
+            .labelsHidden()
+        }
         #endif
     }
 
-    private var picker: some View {
-        let recommended = cloud.offers.recommended(cloud.preferences.tier)
-        return Picker(selection: Binding(get: { cloud.chosenModel }, set: { cloud.chosenModel = $0 })) {
-            Text(Self.recommendedTitle(recommended)).tag(String?.none)
-            Divider()
-            ForEach(cloud.offers(in: cloud.preferences.tier)) { offer in
-                Text(offer.model.name).tag(Optional(offer.id))
-            }
-        } label: {
-            label
+    private var selection: Binding<CloudModel.ID?> { Binding(get: { cloud.chosenModel }, set: { cloud.chosenModel = $0 }) }
+
+    @ViewBuilder private var choices: some View {
+        Text(Self.recommendedTitle(cloud.offers.recommended(cloud.preferences.tier))).tag(String?.none)
+        Divider()
+        ForEach(cloud.offers(in: cloud.preferences.tier)) { offer in
+            Text(offer.model.name).tag(Optional(offer.id))
         }
+    }
+
+    private var picker: some View {
+        Picker(selection: selection) { choices } label: { label }
     }
 
     @ViewBuilder private var label: some View {

@@ -67,9 +67,11 @@ final class SettingsSecretsTests: XCTestCase {
         XCTAssertEqual(CloudModelPicker.recommendedTitle(recommended), "Recommended (\(recommended?.model.name ?? ""))")
         XCTAssertEqual(CloudModelPicker.recommendedTitle(nil), "Recommended")
         XCTAssertNil(CloudModelPicker.chosenCost(cloud), "Recommended's cost is on the tier's row")
+        XCTAssertEqual(CloudModelPicker.currentTitle(cloud), "Recommended", "the iPhone's row: the tier's row above names the model")
         if let other = cloud.offers(in: cloud.preferences.tier).first(where: { $0.id != recommended?.id }) ?? cloud.offers.first {
             cloud.chosenModel = other.id
             XCTAssertNotNil(CloudModelPicker.chosenCost(cloud), "a chosen model's cost is under Model")
+            XCTAssertEqual(CloudModelPicker.currentTitle(cloud), other.model.name)
         }
         XCTAssertEqual(CloudSettingsForm.footer, "Sends the transcript and notes, never audio.")
         XCTAssertEqual(CloudSettingsForm.removalTitle(.anthropic), "Remove the Anthropic key?")
