@@ -146,6 +146,41 @@ final class LiveCaptionStoreTests: XCTestCase {
         XCTAssertTrue(session.segments.isEmpty, "nothing joins once the recording's captions are done")
     }
 
+    /// A recording's last save has no later one to try it again: a write that fails as it stops is kept, read as it
+    /// would have left the captions, built on by what comes after (filing), and written once it can be.
+    func testBehaviorALastSaveThatFailsIsKeptAndWrittenOnceItCanBe() async throws {
+        let store = LiveCaptionStore(libraryRoot: root, retryDelays: [0.05, 0.1, 0.2, 0.4, 0.8, 1.6])
+        let session = LiveCaptionSession(store: store, saveInterval: .milliseconds(50))
+        let captioner = ScriptedCaptioner(lines: [])
+        let id = UUID(), track = UUID()
+        XCTAssertTrue(session.begin(meetingID: id, captioners: [(.microphone, captioner)]))
+        await session.start(locale: Locale(identifier: "en_US"))
+        try await waitUntil("listening") { session.states[.microphone] == .listening }
+        captioner.apply(text: "Budget agreed", start: 0.4, end: 1.5, isFinal: true)
+        captioner.apply(text: "Next we", start: 1.6, end: 1.9, isFinal: false)
+        try await waitUntil("saved while listening") { store.captions(for: id)?.segments.count == 2 }
+
+        // The folder can't be written as the recording stops (full, or locked away).
+        let folder = store.directory.path
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder) }
+        func onDisk() throws -> LiveCaptions { try JSONDecoder().decode(LiveCaptions.self, from: Data(contentsOf: store.url(for: id))) }
+        await session.finish()
+        XCTAssertEqual(try onDisk().segments.last?.isTentative, true, "the file is still the last snapshot")
+        XCTAssertEqual(store.captions(for: id)?.segments.map(\.isTentative), [false, false], "read as the last save left them")
+        XCTAssertEqual(store.conversations(), [id])
+        // Filed meanwhile, as the iPhone does: on top of the last save, not the file.
+        _ = try? await store.update(id) { $0.trackID = track; return true }
+        XCTAssertEqual(store.captions(for: id)?.trackID, track)
+        XCTAssertEqual(store.captions(for: id)?.segments.last?.isTentative, false)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder)
+        try await waitUntil("written once it can be") { (try? onDisk())?.trackID == track }
+        let saved = try onDisk()
+        XCTAssertEqual(saved.segments.map(\.text), ["Budget agreed", "Next we"])
+        XCTAssertEqual(saved.segments.map(\.isTentative), [false, false])
+    }
+
     func testBehaviorWithoutACaptionerThereIsNothingToCaption() async {
         let session = LiveCaptionSession(store: LiveCaptionStore(libraryRoot: root))
         XCTAssertFalse(session.begin(meetingID: UUID(), captioners: []))

@@ -10,12 +10,19 @@ import Synchronization
 /// Writes run on one serial queue, off the caller's actor: a recording's saves never hold up the main
 /// thread, they land in the order they were made, and a snapshot older than one already written is left
 /// out, so a save that was still on its way can't put back what a later one replaced. A write that fails
-/// is logged; captions are a convenience, and nothing about the recording depends on them.
+/// is logged and kept: the captions read as it would have left them, a later edit (`update`) builds on it, and
+/// it's tried again after a while (`retryDelays`), since a recording's last save has no later one to try it
+/// again. Captions are a convenience, and nothing about the recording depends on them.
 public final class LiveCaptionStore: Sendable {
     public let directory: URL
+    /// How long after a write that failed it's tried again, each time, until one lands or a later write of the
+    /// same captions does.
+    public let retryDelays: [TimeInterval]
     private let queue = DispatchQueue(label: "local.daybook.live-captions", qos: .utility)
     /// What this store last wrote for each conversation.
     private let written = Mutex<[UUID: Written]>([:])
+    /// Captions whose write failed, by conversation, until one lands.
+    private let unsaved = Mutex<[UUID: Unsaved]>([:])
     private static let log = Logger(subsystem: "local.daybook", category: "LiveCaptions")
 
     private struct Written {
@@ -24,16 +31,25 @@ public final class LiveCaptionStore: Sendable {
         var trackID: UUID?
     }
 
-    public init(libraryRoot: URL) {
+    private struct Unsaved {
+        var captions: LiveCaptions
+        /// Tries made since, and whether one is waiting.
+        var retries = 0
+        var waiting = false
+    }
+
+    public init(libraryRoot: URL, retryDelays: [TimeInterval] = [2, 10, 30, 120]) {
         directory = libraryRoot.appendingPathComponent("LiveCaptions", isDirectory: true)
+        self.retryDelays = retryDelays
     }
 
     public func url(for meetingID: UUID) -> URL { directory.appendingPathComponent("\(meetingID.uuidString).json") }
 
     // MARK: Reading
 
-    /// A conversation's saved captions: one small file, read now.
+    /// A conversation's saved captions: one small file, read now, or what a write that failed would have left there.
     public func captions(for meetingID: UUID) -> LiveCaptions? {
+        if let owed = unsaved.withLock({ $0[meetingID]?.captions }) { return owed }
         guard let data = try? Data(contentsOf: url(for: meetingID)) else { return nil }
         return try? JSONDecoder().decode(LiveCaptions.self, from: data)
     }
@@ -41,7 +57,9 @@ public final class LiveCaptionStore: Sendable {
     /// The conversations that have captions saved.
     public func conversations() -> [UUID] {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        return files.compactMap { $0.pathExtension == "json" ? UUID(uuidString: $0.deletingPathExtension().lastPathComponent) : nil }
+        let saved = files.compactMap { $0.pathExtension == "json" ? UUID(uuidString: $0.deletingPathExtension().lastPathComponent) : nil }
+        let owed = unsaved.withLock { Array($0.keys) }.filter { !saved.contains($0) }
+        return saved + owed
     }
 
     /// Every conversation's saved captions, by conversation, read now: a few small files, since a
@@ -132,7 +150,7 @@ public final class LiveCaptionStore: Sendable {
         let id = captions.meetingID
         let last = written.withLock { $0[id] }
         if !replacing, let last, captions.updatedAt < last.updatedAt { return }
-        if captions.trackID == nil { captions.trackID = last?.trackID }
+        if captions.trackID == nil { captions.trackID = last?.trackID ?? unsaved.withLock { $0[id]?.captions.trackID } }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
@@ -147,15 +165,47 @@ public final class LiveCaptionStore: Sendable {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
             Self.log.error("Couldn’t save live captions for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            keepUnsaved(captions, replacing: replacing)
             throw error
         }
         let stamp = max(captions.updatedAt, last?.updatedAt ?? .distantPast)
         written.withLock { $0[id] = Written(updatedAt: stamp, trackID: captions.trackID) }
+        unsaved.withLock { table in
+            if let owed = table[id], replacing || owed.captions.updatedAt <= captions.updatedAt { table[id] = nil }
+        }
+    }
+
+    /// Keeps captions whose write failed (the newest of them, or an edit), and tries them again after the next of
+    /// `retryDelays`.
+    private func keepUnsaved(_ captions: LiveCaptions, replacing: Bool) {
+        let id = captions.meetingID
+        let delay = unsaved.withLock { table -> TimeInterval? in
+            var entry = table[id] ?? Unsaved(captions: captions)
+            if replacing || entry.captions.updatedAt <= captions.updatedAt { entry.captions = captions }
+            var delay: TimeInterval?
+            if !entry.waiting, entry.retries < retryDelays.count {
+                delay = retryDelays[entry.retries]
+                entry.waiting = true
+            }
+            table[id] = entry
+            return delay
+        }
+        guard let delay else { return }
+        queue.asyncAfter(deadline: .now() + delay) { [self] in
+            let owed = unsaved.withLock { table -> LiveCaptions? in
+                table[id]?.waiting = false
+                table[id]?.retries += 1
+                return table[id]?.captions
+            }
+            // The newest the captions were meant to be: written over whatever is there.
+            if let owed { try? write(owed, replacing: true) }
+        }
     }
 
     private func delete(_ meetingID: UUID) {
         try? FileManager.default.removeItem(at: url(for: meetingID))
         written.withLock { $0[meetingID] = nil }
+        unsaved.withLock { $0[meetingID] = nil }
     }
 }
 

@@ -151,7 +151,8 @@ public final class LiveCaptionSession {
         statesChanged?()
     }
 
-    /// Writes what's heard now. A failed write is logged by the store and tried again at the next save.
+    /// Writes what's heard now. A failed write is kept by the store, which tries it again on its own (the last save
+    /// has no next one), and the next save tries again too.
     public func save() async {
         guard let meetingID, !segments.isEmpty else { return }
         let captions = LiveCaptions(meetingID: meetingID, localeIdentifier: localeIdentifier, segments: segments,
