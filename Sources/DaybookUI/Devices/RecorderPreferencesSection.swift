@@ -35,24 +35,33 @@ public struct RecorderPreferencesSection: View {
     public var body: some View {
         if let services, session.kind.id != DaybookPhoneIntegration.id {
             let options = Self.options(session, on: services.place, handsBack: services.handsBack != nil)
-            Group {
-                switch style {
-                case .page: page(options, services: services)
-                case .form: form(options, services: services)
-                }
+            // Several rows (each its own row in an iPhone list): the prompts hang on the buttons that ask for them.
+            switch style {
+            case .page: page(options, services: services)
+            case .form: form(options, services: services)
             }
+        }
+    }
+
+    /// Rename…, with its prompt for the new name.
+    private func renameButton(services: RecorderServices) -> some View {
+        Button("Rename…") { startRenaming() }
             .alert("Rename \(session.device.name)", isPresented: $renaming) {
                 TextField("Name", text: $name)
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") { services.devices.rename(session.id, to: name) }
             }
+    }
+
+    /// Remove from This Mac… (or iPhone), which says what it does before it does it.
+    private func confirmsRemoval<Content: View>(_ content: Content, services: RecorderServices) -> some View {
+        content
             .confirmationDialog("Remove \(session.device.name)?", isPresented: $confirmingRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) { services.remove(session) }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(RecorderStatusWords.removeConsequence(on: services.place))
             }
-        }
     }
 
     // MARK: On the page
@@ -88,7 +97,7 @@ public struct RecorderPreferencesSection: View {
                     .foregroundStyle(DaybookPalette.Ink.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Button("Rename…") { startRenaming() }
+                renameButton(services: services)
                     .buttonStyle(.daybookLink)
                     .daybookFont(.body)
             }
@@ -97,13 +106,13 @@ public struct RecorderPreferencesSection: View {
         .padding(.horizontal, DaybookSpacing.s3)
         .background(DaybookPalette.quietFill, in: DaybookRadius.shape(DaybookRadius.box))
         // A destructive action as a text link: the error ink, never the link's teal.
-        Button(role: .destructive) { confirmingRemove = true } label: {
+        confirmsRemoval(Button(role: .destructive) { confirmingRemove = true } label: {
             Text(RecorderStatusWords.removeTitle(on: services.place))
                 .daybookFont(.body)
                 .foregroundStyle(DaybookPalette.Ink.error)
                 .daybookHitTarget()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain), services: services)
         .padding(.top, DaybookSpacing.s3)
     }
 
@@ -118,12 +127,13 @@ public struct RecorderPreferencesSection: View {
         LabeledContent("Name") {
             HStack(spacing: DaybookSpacing.s2) {
                 Text(session.device.name).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                Button("Rename…") { startRenaming() }
+                renameButton(services: services)
             }
         }
         HStack {
             Spacer()
-            Button(RecorderStatusWords.removeTitle(on: services.place), role: .destructive) { confirmingRemove = true }
+            confirmsRemoval(Button(RecorderStatusWords.removeTitle(on: services.place), role: .destructive) { confirmingRemove = true },
+                            services: services)
         }
     }
 
