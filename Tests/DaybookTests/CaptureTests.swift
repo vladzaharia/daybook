@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import DaybookTestSupport
 import XCTest
 @testable import Daybook
@@ -107,6 +108,154 @@ final class MeetingDetectionTests: XCTestCase {
         XCTAssertNil(machine.update([], at: epoch.addingTimeInterval(80)))
         XCTAssertEqual(machine.update([], at: epoch.addingTimeInterval(95)), .ended)
     }
+}
+
+/// The monitor driven by scripted looks and times: nothing reads the real window list or audio server.
+@MainActor
+final class MeetingMonitorTests: XCTestCase {
+    private let epoch = Date(timeIntervalSince1970: 1_000)
+    private let zoom = MeetingCandidate(bundleID: "us.zoom.xos", appName: "Zoom", windowTitle: "Zoom Meeting", hasInputActivity: true,
+                                        hasOutputActivity: true, hasMeetingWindow: true, isBrowser: false)
+
+    private func makeMonitor(endsRecording: Bool = true) -> (MeetingMonitor, ended: () -> Int) {
+        let monitor = MeetingMonitor(read: { _ in .failed })
+        var ends = 0
+        monitor.onMeetingEnded = { ends += 1; return endsRecording }
+        return (monitor, { ends })
+    }
+
+    private func started(_ monitor: MeetingMonitor) {
+        monitor.apply(.seen([zoom], windowsReadable: true), at: epoch)
+        monitor.apply(.seen([zoom], windowsReadable: true), at: epoch.addingTimeInterval(6))
+        XCTAssertTrue(monitor.isMeetingActive)
+    }
+
+    func testOneFailedLookKeepsTheCallRecording() {
+        let (monitor, ended) = makeMonitor()
+        started(monitor)
+        monitor.apply(.failed, at: epoch.addingTimeInterval(8))
+        XCTAssertTrue(monitor.isMeetingActive, "one look that couldn't be made is unknown, not the end of the call")
+        XCTAssertEqual(monitor.statusText, "Recording a Zoom call.", "and it passes unremarked")
+        monitor.apply(.seen([zoom], windowsReadable: true), at: epoch.addingTimeInterval(10))
+        // Seen again, the call carries on: an absence starting later gets the whole grace again.
+        monitor.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(12))
+        monitor.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(56))
+        XCTAssertTrue(monitor.isMeetingActive)
+        XCTAssertEqual(ended(), 0, "never ended and started again as a second conversation")
+        XCTAssertEqual(monitor.activeCandidate?.bundleID, zoom.bundleID)
+    }
+
+    func testLooksThatKeepFailingEndTheCallOnlyAfterTheEndGrace() {
+        let (monitor, ended) = makeMonitor()
+        started(monitor)
+        for second in stride(from: 8.0, through: 52, by: 2) {
+            monitor.apply(.failed, at: epoch.addingTimeInterval(second))
+        }
+        XCTAssertTrue(monitor.isMeetingActive)
+        XCTAssertEqual(monitor.statusText, MeetingMonitor.cantCheck, "several failed looks in a row are said")
+        monitor.apply(.failed, at: epoch.addingTimeInterval(53))
+        XCTAssertFalse(monitor.isMeetingActive)
+        XCTAssertEqual(ended(), 1)
+        XCTAssertEqual(monitor.statusText, MeetingMonitor.endedAndStopped)
+    }
+
+    func testWithoutWindowTitlesACallContinuesOnItsAppsAudioAndNothingNewStarts() {
+        let (monitor, ended) = makeMonitor()
+        started(monitor)
+        let audioOnly = MeetingCandidate(bundleID: zoom.bundleID, appName: "Zoom", windowTitle: "Zoom", hasInputActivity: true,
+                                         hasOutputActivity: true, hasMeetingWindow: false, isBrowser: false)
+        monitor.apply(.seen([audioOnly], windowsReadable: false), at: epoch.addingTimeInterval(8))
+        monitor.apply(.seen([audioOnly], windowsReadable: false), at: epoch.addingTimeInterval(80))
+        XCTAssertTrue(monitor.isMeetingActive, "a revoked permission doesn't end a call whose app still plays")
+        monitor.apply(.seen([], windowsReadable: false), at: epoch.addingTimeInterval(82))
+        monitor.apply(.seen([], windowsReadable: false), at: epoch.addingTimeInterval(127))
+        XCTAssertEqual(ended(), 1, "its audio ending does")
+
+        let (fresh, _) = makeMonitor()
+        fresh.apply(.seen([audioOnly], windowsReadable: false), at: epoch)
+        fresh.apply(.seen([audioOnly], windowsReadable: false), at: epoch.addingTimeInterval(30))
+        XCTAssertFalse(fresh.isMeetingActive)
+        XCTAssertEqual(fresh.statusText, MeetingMonitor.needsPermission)
+    }
+
+    func testTheEndedLineSaysWhetherARecordingStopped() {
+        let (automatic, _) = makeMonitor(endsRecording: true)
+        started(automatic)
+        automatic.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(8))
+        automatic.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(53))
+        XCTAssertEqual(automatic.statusText, "The call ended, so recording stopped.")
+        automatic.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(55))
+        XCTAssertEqual(automatic.statusText, "The call ended, so recording stopped.", "kept until another call shows up")
+        automatic.apply(.seen([zoom], windowsReadable: true), at: epoch.addingTimeInterval(57))
+        XCTAssertEqual(automatic.statusText, "Checking whether the Zoom call has started…")
+
+        let (manual, _) = makeMonitor(endsRecording: false)
+        started(manual)
+        manual.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(8))
+        manual.apply(.seen([], windowsReadable: true), at: epoch.addingTimeInterval(53))
+        XCTAssertEqual(manual.statusText, "The call ended.", "a recording someone started themselves goes on")
+    }
+
+    func testTheMonitorLooksOffTheMainThreadAndStopsLookingWhenStopped() async throws {
+        let looks = LookLog()
+        let monitor = MeetingMonitor(interval: .milliseconds(5)) { _ in
+            looks.record(onMain: Thread.isMainThread)
+            return .seen([], windowsReadable: true)
+        }
+        monitor.startMonitoring()
+        XCTAssertEqual(monitor.statusText, MeetingMonitor.listening)
+        try await waitUntil("a few looks") { looks.count >= 3 }
+        monitor.stopMonitoring()
+        let stoppedAt = looks.count
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertLessThanOrEqual(looks.count, stoppedAt + 1, "at most the look already under way")
+        XCTAssertFalse(looks.anyOnMain, "never on the main thread")
+        XCTAssertEqual(monitor.statusText, MeetingMonitor.off)
+    }
+
+    func testCandidatesComeFromOneProcessListAndTheTitledWindows() {
+        let rules = MeetingAppRule.defaults
+        let processes = [
+            AudioProcessInfo(objectID: 1, pid: 10, bundleID: "us.zoom.xos", isRunningOutput: true, isRunningInput: true),
+            AudioProcessInfo(objectID: 2, pid: 11, bundleID: "com.apple.WebKit.GPU", isRunningOutput: true, isRunningInput: true),
+            AudioProcessInfo(objectID: 3, pid: 12, bundleID: "com.google.Chrome.helper", isRunningOutput: true),
+            AudioProcessInfo(objectID: 4, pid: 13, bundleID: "com.spotify.client", isRunningOutput: true)
+        ]
+        let windows = [
+            MeetingActivityReader.Window(bundleID: "us.zoom.xos", title: "ZOOM MEETING"),
+            MeetingActivityReader.Window(bundleID: "com.apple.Safari", title: "Meet - Weekly sync"),
+            MeetingActivityReader.Window(bundleID: "com.google.Chrome", title: "Inbox"),
+            MeetingActivityReader.Window(bundleID: "com.spotify.client", title: "Zoom Meeting playlist")
+        ]
+        let found = MeetingActivityReader.candidates(rules: rules, processes: processes, windows: windows)
+        let byApp = Dictionary(uniqueKeysWithValues: found.map { ($0.bundleID, $0) })
+        XCTAssertEqual(Set(byApp.keys), ["us.zoom.xos", "com.apple.Safari", "com.google.Chrome"], "never an app outside the rules")
+        XCTAssertEqual(byApp["us.zoom.xos"]?.canStart, true, "titles match in any case")
+        XCTAssertEqual(byApp["us.zoom.xos"]?.windowTitle, "ZOOM MEETING")
+        let safari = byApp["com.apple.Safari"]
+        XCTAssertEqual(safari?.hasInputActivity, true, "Safari's call audio is in WebKit's process, as the tap records it")
+        XCTAssertEqual(safari?.canStart, true)
+        let chrome = byApp["com.google.Chrome"]
+        XCTAssertEqual(chrome?.hasMeetingWindow, false)
+        XCTAssertEqual(chrome?.canStart, false, "a browser only playing audio beside an unrelated window isn't a call")
+    }
+
+    func testAProcessListThatCantBeReadIsUnknownNotEmpty() {
+        XCTAssertNil(try? CoreAudioProperty.readArray(AudioObjectID(kAudioObjectUnknown), kAudioHardwarePropertyProcessObjectList) as [AudioObjectID],
+                     "an object the audio server can't answer for throws")
+        XCTAssertEqual(CoreAudioProperty.array(AudioObjectID(kAudioObjectUnknown), kAudioHardwarePropertyProcessObjectList) as [AudioObjectID], [],
+                       "while the forgiving read stays empty")
+    }
+}
+
+/// What a scripted look saw of its own thread, from whichever thread it ran on.
+private final class LookLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var looks = 0
+    private var onMain = false
+    var count: Int { lock.withLock { looks } }
+    var anyOnMain: Bool { lock.withLock { onMain } }
+    func record(onMain main: Bool) { lock.withLock { looks += 1; onMain = onMain || main } }
 }
 
 final class PCMTrackWriterTests: XCTestCase {

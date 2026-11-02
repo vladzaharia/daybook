@@ -193,14 +193,22 @@ enum CoreAudioProperty {
     }
 
     static func array<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> [T] {
+        (try? readArray(object, selector)) ?? []
+    }
+
+    /// The same, saying when the audio server couldn't answer rather than reading that as an empty list.
+    static func readArray<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) throws -> [T] {
         var property = address(selector)
         var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(object, &property, 0, nil, &size) == noErr, size > 0 else { return [] }
-        let count = Int(size) / MemoryLayout<T>.stride
+        var status = AudioObjectGetPropertyDataSize(object, &property, 0, nil, &size)
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        guard size > 0 else { return [] }
         let pointer = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<T>.alignment)
         defer { pointer.deallocate() }
-        guard AudioObjectGetPropertyData(object, &property, 0, nil, &size, pointer) == noErr else { return [] }
+        status = AudioObjectGetPropertyData(object, &property, 0, nil, &size, pointer)
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        let count = Int(size) / MemoryLayout<T>.stride
         let typed = pointer.bindMemory(to: T.self, capacity: count)
-        return Array(UnsafeBufferPointer(start: typed, count: Int(size) / MemoryLayout<T>.stride))
+        return Array(UnsafeBufferPointer(start: typed, count: count))
     }
 }

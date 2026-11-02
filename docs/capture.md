@@ -508,11 +508,22 @@ Code: `Sources/Daybook/Captions/` (the Mac's controller, echo rule, and settings
 
 Its mutable `rules: [MeetingAppRule]` property is the configurable allowlist. The defaults cover
 Zoom, Teams, Slack huddles, and meeting pages in Chrome, Safari, Firefox, Edge, and Arc. Rules
-match bundle IDs, including helper prefixes, and meeting-specific window-title fragments. They're
+match bundle IDs and meeting-specific window-title fragments. An app's audio is the processes its
+call would be tapped from (`CallAppTarget.owns`: helpers by prefix, case-insensitively, and Safari's
+WebKit audio process), so detection and the tap agree on which app is in a call. They're
 heuristics, not integrations with private vendor call APIs.
 
-**Starting.** The monitor polls every two seconds. A start needs two things, continuously for six
-seconds: a matching meeting window, and Core Audio activity from that allowed app.
+**Looking.** Every two seconds the monitor looks at the Mac off the main actor
+(`MeetingActivityReader.read`, through `detachedWork`), and only the answer comes back to the
+main actor's state machine, so a Mac with hundreds of windows never stalls Daybook's window. One
+look reads the audio server's process list once (`AudioProcessCatalog`, the list the tap uses, with
+`isRunningInput` and `isRunningOutput`) and, when Screen & System Audio Recording lets titles be
+read, the window list once: titled windows in the normal layer, on every Space, each app's bundle
+ID looked up once however many windows it has. The loop is a task that `stopMonitoring()` cancels;
+a look that finishes after that is dropped.
+
+**Starting.** A start needs two things, continuously for six seconds: a matching meeting window,
+and Core Audio activity from that allowed app.
 
 - Native apps can start with input or output activity. Playback activity lets a muted native
   meeting start.
@@ -537,8 +548,18 @@ candidate becomes the process-tap target.
 - `suppressCurrentMeeting()` should be called after a manual stop or a failed automatic start. It
   prevents an automatic restart until the original app's call evidence has been gone for
   45 seconds.
-- A revoked permission or a failed Core Audio query ends the monitor's active meeting
-  immediately, so the caller can stop an automatic recording.
+- A look that can't be made (the audio server didn't answer) is unknown, never the end of a call:
+  ending and then seeing the same call again would split it into two conversations. Unknown counts
+  as missing evidence, so a call ends only once nothing has confirmed it for the full 45 seconds,
+  and one confirming look starts the grace over. A pending start waits, and a suppressed call stays
+  suppressed. After three failed looks in a row the status line says "Can’t check for calls right
+  now."
+- Without Screen & System Audio Recording no title can be read: nothing new starts and the line
+  says the permission is needed, but a call already being recorded continues on its app's audio
+  and ends when that does.
+- `onMeetingEnded` returns whether it stopped a recording (only an automatic one is). The line then
+  says "The call ended, so recording stopped." or, for a recording someone started themselves,
+  "The call ended.", until another call shows up.
 
 ## Known limits
 
@@ -593,6 +614,12 @@ decaying tail, with added noise. They cover:
 **`Tests/DaybookTests/CaptureTests.swift`** covers:
 
 - the detection state machine;
+- the monitor with scripted looks: one failed look keeps a call, failed looks end it only after
+  the grace, a call continues on its audio without window titles and nothing new starts, the ended
+  line by whether a recording stopped, and looks made off the main thread that stop with
+  `stopMonitoring()`;
+- candidates from one process list and the titled windows (titles in any case, Safari's WebKit
+  audio, a browser only playing audio), and a process list that can't be read as unknown;
 - PCM writing, offsets, and gap padding with resync;
 - format changes converted without frame loss;
 - 900 ppm drift in both directions over two minutes, with no stop and no inserted silence;

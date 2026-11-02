@@ -7,23 +7,30 @@ import CoreMedia
 import Foundation
 
 /// A process known to the audio server.
-struct AudioProcessInfo: Equatable {
+struct AudioProcessInfo: Equatable, Sendable {
     var objectID: AudioObjectID
     var pid: pid_t
     var bundleID: String
     var isRunningOutput: Bool
+    /// It has an input device open and running (a microphone in use).
+    var isRunningInput = false
 }
 
-/// Reads the audio server's process list. Needs no permission and shows no prompt.
+/// Reads the audio server's process list. Needs no permission and shows no prompt, and any thread may call it.
 enum AudioProcessCatalog {
-    static func all() -> [AudioProcessInfo] {
-        let objects: [AudioObjectID] = CoreAudioProperty.array(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyProcessObjectList)
+    static func all() -> [AudioProcessInfo] { (try? read()) ?? [] }
+
+    /// The same, throwing when the audio server couldn't list its processes (a process it can't describe is left out).
+    static func read() throws -> [AudioProcessInfo] {
+        let objects: [AudioObjectID] = try CoreAudioProperty.readArray(AudioObjectID(kAudioObjectSystemObject),
+                                                                      kAudioHardwarePropertyProcessObjectList)
         return objects.compactMap { object in
             guard let pid: pid_t = CoreAudioProperty.scalar(object, kAudioProcessPropertyPID) else { return nil }
             let bundle = CoreAudioProperty.string(object, kAudioProcessPropertyBundleID)
                 ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
             let output: UInt32 = CoreAudioProperty.scalar(object, kAudioProcessPropertyIsRunningOutput) ?? 0
-            return AudioProcessInfo(objectID: object, pid: pid, bundleID: bundle, isRunningOutput: output != 0)
+            let input: UInt32 = CoreAudioProperty.scalar(object, kAudioProcessPropertyIsRunningInput) ?? 0
+            return AudioProcessInfo(objectID: object, pid: pid, bundleID: bundle, isRunningOutput: output != 0, isRunningInput: input != 0)
         }
     }
 

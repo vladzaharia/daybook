@@ -450,8 +450,9 @@ final class AppState {
             Task { await self.startRecording(title: candidate.windowTitle, automatic: true) }
         }
         monitor.onMeetingEnded = { [weak self] in
-            guard let self, self.recordingWasAutomatic else { return }
+            guard let self, self.recordingWasAutomatic else { return false }
             Task { await self.stopRecording(manual: false) }
+            return true
         }
         recorder.onUnexpectedStop = { [weak self] result, reason in
             guard let self else { return }

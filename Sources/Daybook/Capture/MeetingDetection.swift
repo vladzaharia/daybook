@@ -1,11 +1,11 @@
 import AppKit
-import CoreAudio
 import CoreGraphics
+import DaybookCore
 import Foundation
 import Observation
 
 /// A conservative rule: audio activity alone never establishes that a call has begun.
-struct MeetingAppRule: Codable, Equatable, Identifiable {
+struct MeetingAppRule: Codable, Equatable, Identifiable, Sendable {
     var id: String { bundleID }
     var bundleID: String
     var displayName: String
@@ -25,7 +25,7 @@ struct MeetingAppRule: Codable, Equatable, Identifiable {
     private static let browserTitles = ["google meet", "meet.google.com", "meet -", "zoom meeting", "teams.microsoft.com", "microsoft teams meeting"]
 }
 
-struct MeetingCandidate: Equatable {
+struct MeetingCandidate: Equatable, Sendable {
     var bundleID: String
     var appName: String
     var windowTitle: String
@@ -71,6 +71,19 @@ struct MeetingDetectionStateMachine {
         absentSince = nil
     }
 
+    /// A look at the Mac that couldn't be made: nothing is known. A pending start waits for the next look, and a
+    /// suppressed call stays suppressed. A call being recorded isn't ended by it: unknown counts as missing evidence, so
+    /// it ends only once nothing has confirmed the call for the full end debounce, as when its app goes quiet.
+    mutating func unknown(at now: Date) -> Event? {
+        guard suppressedBundleID == nil, activeBundleID != nil else { return nil }
+        let since = absentSince ?? now
+        absentSince = since
+        guard now.timeIntervalSince(since) >= endDelay else { return nil }
+        activeBundleID = nil
+        absentSince = nil
+        return .ended
+    }
+
     mutating func update(_ candidates: [MeetingCandidate], at now: Date) -> Event? {
         if let suppressedBundleID {
             if candidates.contains(where: { $0.bundleID == suppressedBundleID && $0.canContinue }) {
@@ -114,93 +127,134 @@ struct MeetingDetectionStateMachine {
     }
 }
 
+/// What one look at the Mac found (`MeetingActivityReader.read`), made off the main actor.
+enum MeetingReading: Equatable, Sendable {
+    /// The allowed apps' call evidence. Without Screen & System Audio Recording no window title can be read: nothing new
+    /// starts then, and a call already being recorded continues for as long as its app's audio does.
+    case seen([MeetingCandidate], windowsReadable: Bool)
+    /// The audio server couldn't be asked, so nothing is known.
+    case failed
+}
+
+/// Watches for calls while "Record calls automatically" is on. Every two seconds it looks at the Mac off the main actor
+/// (`MeetingActivityReader`), and only the state machine's answer comes back here, so a Mac with hundreds of windows
+/// never stalls the window it's drawing.
 @MainActor
 @Observable
 final class MeetingMonitor {
     private(set) var isMonitoring = false
     private(set) var isMeetingActive = false
     private(set) var activeCandidate: MeetingCandidate?
-    private(set) var statusText = "Off"
-    private static let listening = "Listening for calls"
+    private(set) var statusText = MeetingMonitor.off
     var rules = MeetingAppRule.defaults
     @ObservationIgnored var onMeetingStarted: ((MeetingCandidate) -> Void)?
-    @ObservationIgnored var onMeetingEnded: (() -> Void)?
+    /// The call ended. Returns whether that stopped a recording (one it started), which the status line then says.
+    @ObservationIgnored var onMeetingEnded: (() -> Bool)?
     @ObservationIgnored private var machine = MeetingDetectionStateMachine()
-    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var sampling: Task<Void, Never>?
+    /// Looks in a row that couldn't be made.
+    @ObservationIgnored private var failures = 0
+    /// What the line says about the call that just ended, until another shows up.
+    @ObservationIgnored private var endedLine: String?
+    @ObservationIgnored private let interval: Duration
+    @ObservationIgnored private let read: @Sendable ([MeetingAppRule]) -> MeetingReading
+
+    static let off = "Off"
+    static let listening = "Listening for calls"
+    static let paused = "Paused until this call ends."
+    static let needsPermission = "Needs Screen & System Audio Recording permission."
+    static let cantCheck = "Can’t check for calls right now."
+    static let endedAndStopped = "The call ended, so recording stopped."
+    static let ended = "The call ended."
+    /// Failed looks in a row before the line says so; fewer pass unremarked.
+    static let failuresBeforeSaying = 3
+
+    /// `read` looks at the Mac; tests pass a script, so nothing reads the real window list or audio server.
+    init(interval: Duration = .seconds(2),
+         read: @escaping @Sendable ([MeetingAppRule]) -> MeetingReading = { MeetingActivityReader.read(rules: $0) }) {
+        self.interval = interval
+        self.read = read
+    }
 
     func startMonitoring() {
         guard !isMonitoring else { return }
         isMonitoring = true
         statusText = Self.listening
-        sample()
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.sample() }
+        let read = self.read, interval = self.interval
+        sampling = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let rules = self?.rules else { return }
+                let reading = await detachedWork(priority: .utility) { read(rules) }
+                // Stopped while it looked: what it saw is no longer wanted.
+                guard !Task.isCancelled else { return }
+                self?.apply(reading, at: Date())
+                try? await Task.sleep(for: interval)
+            }
         }
     }
 
     func stopMonitoring() {
-        timer?.invalidate()
-        timer = nil
+        sampling?.cancel()
+        sampling = nil
         machine.reset()
+        failures = 0
+        endedLine = nil
         isMonitoring = false
         isMeetingActive = false
         activeCandidate = nil
-        statusText = "Off"
+        statusText = Self.off
     }
 
     func suppressCurrentMeeting() {
         machine.suppressCurrentMeeting()
         isMeetingActive = false
-        statusText = "Paused until this call ends."
+        statusText = Self.paused
     }
 
-    private func sample() {
-        guard isMonitoring else { return }
-        guard CGPreflightScreenCaptureAccess() else {
-            endOnDetectionFailure()
-            statusText = "Needs Screen & System Audio Recording permission."
-            return
-        }
-        do {
-            let candidates = try MeetingActivityReader.candidates(rules: rules)
-            let event = machine.update(candidates, at: Date())
+    /// One look's answer, on the main actor. Internal so tests drive the monitor with scripted looks and times.
+    func apply(_ reading: MeetingReading, at now: Date) {
+        let event: MeetingDetectionStateMachine.Event?
+        switch reading {
+        case .failed:
+            // A failed look is unknown, never the end of a call (which would split it in two).
+            failures += 1
+            event = machine.unknown(at: now)
+        case .seen(let candidates, let windowsReadable):
+            failures = 0
+            event = machine.update(candidates, at: now)
             if let active = machine.activeBundleID {
                 activeCandidate = candidates.first(where: { $0.bundleID == active }) ?? activeCandidate
             } else if machine.suppressedBundleID == nil {
                 activeCandidate = candidates.first(where: \.canStart)
             }
-            if machine.suppressedBundleID != nil {
-                statusText = "Paused until this call ends."
-            } else if let activeCandidate {
-                statusText = isMeetingActive ? "Recording a \(activeCandidate.callName)." : "Checking whether the \(activeCandidate.callName) has started…"
-            } else {
-                statusText = Self.listening
-            }
-            switch event {
-            case .started(let candidate):
-                activeCandidate = candidate
-                isMeetingActive = true
-                statusText = "Recording a \(candidate.callName)."
-                onMeetingStarted?(candidate)
-            case .ended:
-                isMeetingActive = false
-                activeCandidate = nil
-                statusText = "The call ended, so recording stopped."
-                onMeetingEnded?()
-            case nil: break
-            }
-        } catch {
-            endOnDetectionFailure()
-            statusText = "Can’t check for calls right now."
+            if activeCandidate != nil || machine.suppressedBundleID != nil { endedLine = nil }
+            statusText = line(windowsReadable: windowsReadable)
+        }
+        switch event {
+        case .started(let candidate):
+            activeCandidate = candidate
+            isMeetingActive = true
+            endedLine = nil
+            statusText = "Recording a \(candidate.callName)."
+            onMeetingStarted?(candidate)
+        case .ended:
+            isMeetingActive = false
+            activeCandidate = nil
+            let line = onMeetingEnded?() == true ? Self.endedAndStopped : Self.ended
+            endedLine = line
+            statusText = line
+        case nil:
+            if failures >= Self.failuresBeforeSaying { statusText = Self.cantCheck }
         }
     }
 
-    private func endOnDetectionFailure() {
-        let wasActive = isMeetingActive
-        machine.reset()
-        isMeetingActive = false
-        activeCandidate = nil
-        if wasActive { onMeetingEnded?() }
+    private func line(windowsReadable: Bool) -> String {
+        if machine.suppressedBundleID != nil { return Self.paused }
+        if let activeCandidate {
+            return isMeetingActive ? "Recording a \(activeCandidate.callName)." : "Checking whether the \(activeCandidate.callName) has started…"
+        }
+        if !windowsReadable { return Self.needsPermission }
+        return endedLine ?? Self.listening
     }
 }
 
@@ -214,8 +268,11 @@ enum CallAppResolver {
     }
 
     static func activeCallApp(rules: [MeetingAppRule]) -> CallAppTarget? {
-        guard let activity = try? MeetingActivityReader.audioActivity() else { return nil }
-        return choose(rules: rules, activity: activity.map { Activity(bundleID: $0.bundleID, input: $0.input, output: $0.output) })
+        guard let processes = try? AudioProcessCatalog.read() else { return nil }
+        let own = getpid()
+        return choose(rules: rules, activity: processes.filter { $0.pid != own }.map {
+            Activity(bundleID: $0.bundleID, input: $0.isRunningInput, output: $0.isRunningOutput)
+        })
     }
 
     /// A native app using the microphone wins, then a native app playing audio, then a browser
@@ -223,7 +280,7 @@ enum CallAppResolver {
     static func choose(rules: [MeetingAppRule], activity: [Activity]) -> CallAppTarget? {
         var ranked: [(rank: Int, order: Int, rule: MeetingAppRule)] = []
         for (order, rule) in rules.enumerated() {
-            let target = CallAppTarget(bundleID: rule.bundleID, displayName: rule.displayName, isBrowser: rule.isBrowser)
+            let target = CallAppTarget(rule)
             let processes = activity.filter { target.owns(bundleID: $0.bundleID) }
             let input = processes.contains(where: \.input), output = processes.contains(where: \.output)
             let rank: Int?
@@ -232,7 +289,13 @@ enum CallAppResolver {
             if let rank { ranked.append((rank, order, rule)) }
         }
         guard let best = ranked.min(by: { ($0.rank, $0.order) < ($1.rank, $1.order) }) else { return nil }
-        return CallAppTarget(bundleID: best.rule.bundleID, displayName: best.rule.displayName, isBrowser: best.rule.isBrowser)
+        return CallAppTarget(best.rule)
+    }
+}
+
+extension CallAppTarget {
+    init(_ rule: MeetingAppRule) {
+        self.init(bundleID: rule.bundleID, displayName: rule.displayName, isBrowser: rule.isBrowser)
     }
 }
 
@@ -244,74 +307,63 @@ private extension MeetingCandidate {
     }
 }
 
-private enum MeetingActivityReader {
-    struct AudioActivity {
+/// Looks at the Mac for calls. Any thread may call it; the monitor runs it off the main actor.
+enum MeetingActivityReader {
+    /// A titled window in the normal layer, with its app's bundle ID.
+    struct Window: Equatable, Sendable {
         var bundleID: String
-        var input: Bool
-        var output: Bool
+        var title: String
     }
 
-    static func candidates(rules: [MeetingAppRule]) throws -> [MeetingCandidate] {
-        let activity = try audioActivity()
-        let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        return rules.compactMap { rule in
-            let processes = activity.filter { belongs($0.bundleID, to: rule.bundleID) }
-            let matchingTitle = windows.compactMap { window -> String? in
-                guard (window[kCGWindowLayer as String] as? Int ?? 0) == 0,
-                      let pid = window[kCGWindowOwnerPID as String] as? Int32,
-                      let app = NSRunningApplication(processIdentifier: pid),
-                      let bundle = app.bundleIdentifier, belongs(bundle, to: rule.bundleID),
-                      let title = window[kCGWindowName as String] as? String,
-                      rule.meetingTitleFragments.contains(where: { title.localizedCaseInsensitiveContains($0) })
-                else { return nil }
-                return title
-            }.first
-            let input = processes.contains(where: \.input)
-            let output = processes.contains(where: \.output)
-            guard input || output || matchingTitle != nil else { return nil }
-            return MeetingCandidate(bundleID: rule.bundleID, appName: rule.displayName,
-                windowTitle: matchingTitle ?? rule.displayName, hasInputActivity: input,
-                hasOutputActivity: output, hasMeetingWindow: matchingTitle != nil, isBrowser: rule.isBrowser)
+    /// One look: the audio server's processes once and, when Screen & System Audio Recording lets titles be read, the
+    /// window list once.
+    static func read(rules: [MeetingAppRule]) -> MeetingReading {
+        guard let processes = try? AudioProcessCatalog.read() else { return .failed }
+        let own = getpid()
+        let windowsReadable = CGPreflightScreenCaptureAccess()
+        return .seen(candidates(rules: rules, processes: processes.filter { $0.pid != own },
+                                windows: windowsReadable ? titledWindows() : []),
+                     windowsReadable: windowsReadable)
+    }
+
+    /// Every titled window in the normal layer, including those on other Spaces or minimized (a full-screen call has a
+    /// Space of its own). Each app is looked up once, however many windows it has.
+    static func titledWindows() -> [Window] {
+        let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        var bundles: [pid_t: String?] = [:]
+        var windows: [Window] = []
+        for window in list {
+            guard (window[kCGWindowLayer as String] as? Int ?? 0) == 0,
+                  let title = window[kCGWindowName as String] as? String, !title.isEmpty,
+                  let pid = window[kCGWindowOwnerPID as String] as? pid_t else { continue }
+            let bundle: String?
+            if let known = bundles[pid] {
+                bundle = known
+            } else {
+                bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+                bundles[pid] = bundle
+            }
+            if let bundle { windows.append(Window(bundleID: bundle, title: title)) }
         }
+        return windows
     }
 
-    private static func belongs(_ processBundle: String, to bundle: String) -> Bool {
-        processBundle == bundle || processBundle.hasPrefix(bundle + ".")
-    }
-
-    private static func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-    }
-
-    static func audioActivity() throws -> [AudioActivity] {
-        var property = address(kAudioHardwarePropertyProcessObjectList)
-        var size: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &property, 0, nil, &size)
-        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
-        var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard !objects.isEmpty else { return [] }
-        status = objects.withUnsafeMutableBytes { bytes in
-            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &property, 0, nil, &size, bytes.baseAddress!)
+    /// Which allowed apps show call evidence: a meeting window, the microphone in use, or audio playing. An app's
+    /// processes are the ones its call is recorded from (`CallAppTarget.owns`: its helpers, and a browser's audio process).
+    static func candidates(rules: [MeetingAppRule], processes: [AudioProcessInfo], windows: [Window]) -> [MeetingCandidate] {
+        rules.compactMap { rule in
+            let target = CallAppTarget(rule)
+            let owned = processes.filter { target.owns(bundleID: $0.bundleID) }
+            let title = windows.first { window in
+                target.owns(bundleID: window.bundleID)
+                    && rule.meetingTitleFragments.contains(where: { window.title.localizedCaseInsensitiveContains($0) })
+            }?.title
+            let input = owned.contains(where: \.isRunningInput)
+            let output = owned.contains(where: \.isRunningOutput)
+            guard input || output || title != nil else { return nil }
+            return MeetingCandidate(bundleID: rule.bundleID, appName: rule.displayName, windowTitle: title ?? rule.displayName,
+                                    hasInputActivity: input, hasOutputActivity: output, hasMeetingWindow: title != nil,
+                                    isBrowser: rule.isBrowser)
         }
-        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
-        return objects.compactMap { object in
-            guard let pid: pid_t = scalar(object, selector: kAudioProcessPropertyPID), pid != ProcessInfo.processInfo.processIdentifier else { return nil }
-            var bundleProperty = address(kAudioProcessPropertyBundleID)
-            var bundle: Unmanaged<CFString>?
-            var bundleSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-            guard AudioObjectGetPropertyData(object, &bundleProperty, 0, nil, &bundleSize, &bundle) == noErr else { return nil }
-            let id = (bundle?.takeRetainedValue() as String?) ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
-            let input: UInt32 = scalar(object, selector: kAudioProcessPropertyIsRunningInput) ?? 0
-            let output: UInt32 = scalar(object, selector: kAudioProcessPropertyIsRunningOutput) ?? 0
-            return AudioActivity(bundleID: id, input: input != 0, output: output != 0)
-        }
-    }
-
-    private static func scalar<T: FixedWidthInteger>(_ object: AudioObjectID, selector: AudioObjectPropertySelector) -> T? {
-        var property = address(selector)
-        var value: T = 0
-        var size = UInt32(MemoryLayout<T>.size)
-        guard AudioObjectGetPropertyData(object, &property, 0, nil, &size, &value) == noErr else { return nil }
-        return value
     }
 }
