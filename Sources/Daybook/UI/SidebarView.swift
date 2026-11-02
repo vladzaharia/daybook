@@ -1,27 +1,32 @@
 import DaybookCore
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Places, the person's folders, and the recorder once it's set up. Nothing else.
+/// Places, the person's folders, the Trash once something is in it, and the recorder once it's set up. Nothing else.
+/// Conversations dropped on a place are filed there (and on the Trash, asked about first); Edit › Undo takes a
+/// filing back.
 struct SidebarView: View {
     let state: AppState
     @State private var folderToDelete: LibraryFolder?
     @State private var hoveringFolders = false
+    @State private var hasTrash = false
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         List(selection: Binding(get: { state.place }, set: { if let place = $0 { select(place) } })) {
             ForEach(LibrarySection.allCases) { section in
                 Label(section.rawValue, systemImage: section.systemImage)
                     .tag(LibraryPlace.section(section))
-                    .dropDestination(for: String.self) { ids, _ in drop(ids, on: .section(section)) }
+                    .dropDestination(for: ConversationTransfer.self) { items, _ in drop(items, on: .section(section)) }
             }
             if !state.folders.isEmpty {
                 Section {
                     ForEach(state.folders) { folder in
                         FolderRow(state: state, folder: folder)
                             .tag(LibraryPlace.folder(folder.id))
-                            .dropDestination(for: String.self) { ids, _ in drop(ids, on: .folder(folder.id)) }
+                            .dropDestination(for: ConversationTransfer.self) { items, _ in drop(items, on: .folder(folder.id)) }
                             .contextMenu {
                                 Button("New Folder") { state.requestNewFolder() }
                                 Button("Rename") { state.renamingFolderID = folder.id }
@@ -51,12 +56,22 @@ struct SidebarView: View {
                     .onHover { hoveringFolders = $0 }
                 }
             }
+            // After the folders, once something is in it (and while it's open).
+            if hasTrash || state.place.isTrash {
+                Section {
+                    Label(LibraryWords.trash, systemImage: "trash")
+                        .tag(LibraryPlace.trash)
+                        .dropDestination(for: ConversationTransfer.self) { items, _ in drop(items, on: .trash) }
+                }
+            }
             DevicesSidebarSection(state: state)
         }
         .listStyle(.sidebar)
         .labelStyle(.sidebar)
         .contextMenu { Button("New Folder") { state.requestNewFolder() } }
         .dropDestination(for: URL.self) { urls, _ in importAudio(urls) }
+        // Moving to the Trash and restoring change the library's conversations, so its revision.
+        .task(id: state.libraryRevision) { hasTrash = await state.library.hasTrashedMeetings() }
         .onChange(of: state.newFolderRequest) { _, request in
             guard let request else { return }
             createFolder(moving: request.moving)
@@ -64,7 +79,10 @@ struct SidebarView: View {
         }
         .alert("Delete the folder “\(folderToDelete?.name ?? "")”?", isPresented: Binding(get: { folderToDelete != nil }, set: { if !$0 { folderToDelete = nil } })) {
             Button("Delete Folder", role: .destructive) {
-                if let folder = folderToDelete { state.removeFolder(folder.id) }
+                if let folder = folderToDelete {
+                    state.library.removeFolder(folder.id, undoManager: undoManager)
+                    if state.place == .folder(folder.id) { state.place = .section(.all) }
+                }
                 folderToDelete = nil
             }
             Button("Cancel", role: .cancel) { folderToDelete = nil }
@@ -77,7 +95,8 @@ struct SidebarView: View {
         guard place != state.place else { return }
         state.place = place
         state.multiSelection = []
-        if !place.isDevice, let selected = state.selectedID, !state.visibleMeetings.contains(where: { $0.id == selected }) {
+        // The Trash selects what it lists itself, once it has read them.
+        if !place.isDevice, !place.isTrash, let selected = state.selectedID, !state.visibleMeetings.contains(where: { $0.id == selected }) {
             state.selectedID = state.visibleMeetings.first?.id
         }
     }
@@ -86,19 +105,18 @@ struct SidebarView: View {
         let names = Set(state.folders.map(\.name))
         var name = "New Folder", number = 2
         while names.contains(name) { name = "New Folder \(number)"; number += 1 }
-        let folder = LibraryFolder(name: name)
-        state.saveFolder(folder)
-        state.moveToFolder(ids, folder.id)
-        state.renamingFolderID = folder.id
+        state.renamingFolderID = state.library.createFolder(named: name, moving: ids, undoManager: undoManager)
     }
 
-    private func drop(_ ids: [String], on place: LibraryPlace) -> Bool {
-        let meetings = ids.compactMap(UUID.init(uuidString:)).filter { id in state.meetings.contains { $0.id == id } }
+    /// Files dropped conversations in a place, one step for Edit › Undo; the Trash asks first.
+    private func drop(_ items: [ConversationTransfer], on place: LibraryPlace) -> Bool {
+        let meetings = items.map(\.id).filter { id in state.meetings.contains { $0.id == id } }
         guard !meetings.isEmpty else { return false }
         switch place {
-        case .section(.work): state.setPlacement(meetings, .work)
-        case .section(.personal): state.setPlacement(meetings, .personal)
-        case .folder(let id): state.moveToFolder(meetings, id)
+        case .section(.work): state.library.setPlacement(meetings, .work, undoManager: undoManager)
+        case .section(.personal): state.library.setPlacement(meetings, .personal, undoManager: undoManager)
+        case .folder(let id): state.library.moveToFolder(meetings, id, undoManager: undoManager)
+        case .trash: state.trashRequestIDs = meetings
         default: return false
         }
         return true
@@ -117,6 +135,7 @@ private struct FolderRow: View {
     let folder: LibraryFolder
     @State private var draft = ""
     @FocusState private var focused: Bool
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         Label {
@@ -125,7 +144,7 @@ private struct FolderRow: View {
                     .focused($focused)
                     .onSubmit(commit)
                     .onExitCommand { state.renamingFolderID = nil }
-                    .onAppear { draft = folder.name; DispatchQueue.main.async { focused = true } }
+                    .task { draft = folder.name; focused = true }
                     .onChange(of: focused) { _, active in if !active { commit() } }
             } else {
                 Text(folder.name)
@@ -137,9 +156,7 @@ private struct FolderRow: View {
 
     private func commit() {
         guard state.renamingFolderID == folder.id else { return }
-        let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !name.isEmpty && name != folder.name { state.saveFolder(LibraryFolder(id: folder.id, name: name)) }
+        state.library.renameFolder(folder.id, to: draft, undoManager: undoManager)
         state.renamingFolderID = nil
     }
 }
-

@@ -59,11 +59,8 @@ struct LibraryView: View {
                     .inspectorColumnWidth(min: 260, ideal: 280, max: 340)
                 }
         }
-        .searchable(text: $state.search, tokens: $state.searchTokens, placement: .toolbar, prompt: "Titles, Notes, Transcripts") { token in
-            switch token {
-            case .tag(let tag): Label(tag, systemImage: "number")
-            case .speaker(let name): Label(name, systemImage: "person")
-            }
+        .searchable(text: $state.search, tokens: $state.searchTokens, placement: .toolbar, prompt: LibraryWords.searchPrompt) { token in
+            Label(token.text, systemImage: token.symbol)
         }
         .searchSuggestions { suggestions }
         .searchFocused($searchFocused)
@@ -109,6 +106,8 @@ struct LibraryView: View {
             LibraryProblemPage(state: state, problem: problem)
         } else if state.place.isDevice && !state.isSearching {
             DevicePage(state: state)
+        } else if state.place.isTrash && !state.isSearching {
+            TrashDetail(state: state)
         } else if state.multiSelection.count > 1 {
             BatchSelectionView(state: state, ids: Array(state.multiSelection))
         } else if let meeting = state.selectedMeeting {
@@ -131,31 +130,24 @@ struct LibraryView: View {
     }
 
     private var trashTitle: String {
-        let ids = state.trashRequestIDs
-        if ids.count > 1 { return "Move \(ids.count) conversations to the Trash?" }
-        let title = ids.first.flatMap { id in state.meetings.first { $0.id == id }?.title } ?? "this conversation"
-        return "Move “\(title)” to the Trash?"
+        LibraryWords.trashTitle(state.meetings.filter { state.trashRequestIDs.contains($0.id) })
     }
 
+    /// The tags and people that start with what's typed, the iPhone's too (`LibrarySearchSuggestions`); only once
+    /// something is typed, so the field's menu doesn't open by itself.
     @ViewBuilder private var suggestions: some View {
-        let text = state.search.trimmingCharacters(in: .whitespaces)
-        if text.hasPrefix("#") {
-            let query = text.dropFirst().lowercased()
-            ForEach(state.allTags.filter { query.isEmpty || $0.lowercased().hasPrefix(query) }, id: \.self) { tag in
-                Label(tag, systemImage: "number").searchCompletion(SearchToken.tag(tag))
-            }
-        } else if !text.isEmpty {
-            let names = Set(state.meetings.flatMap(\.speakers).map(\.name).filter { !$0.hasPrefix("Speaker ") && $0.lowercased().hasPrefix(text.lowercased()) })
-            ForEach(names.sorted(), id: \.self) { name in
-                Label(name, systemImage: "person").searchCompletion(SearchToken.speaker(name))
+        if !state.search.trimmingCharacters(in: .whitespaces).isEmpty {
+            ForEach(LibrarySearchSuggestions.tokens(for: state.search, tags: state.allTags, meetings: state.meetings, chosen: state.searchTokens)) { token in
+                Label(token.text, systemImage: token.symbol).searchCompletion(token)
             }
         }
     }
 
     /// The page always shows something in the list: when the selection leaves the place
-    /// (moved to another folder, or the place changed), the first visible conversation is selected.
+    /// (moved to another folder, or the place changed), the first visible conversation is selected. The Trash
+    /// selects what it lists itself.
     private func reconcileSelection() {
-        guard state.isReady, !state.isSearching, !state.place.isDevice else { return }
+        guard state.isReady, !state.isSearching, !state.place.isDevice, !state.place.isTrash else { return }
         let visible = state.visibleMeetings
         if let selected = state.selectedID, visible.contains(where: { $0.id == selected }) { return }
         state.multiSelection = []
@@ -164,8 +156,8 @@ struct LibraryView: View {
 
     /// Typing "#tag " turns the tag into a token.
     private func promoteHashTag(_ text: String) {
-        guard text.hasPrefix("#"), text.hasSuffix(" "), let tag = state.allTags.first(where: { "#\($0) " == text }) else { return }
-        state.searchTokens.append(.tag(tag))
+        guard let token = LibrarySearchSuggestions.promotedTag(in: text, tags: state.allTags) else { return }
+        state.searchTokens.append(token)
         state.search = ""
     }
 
@@ -308,17 +300,9 @@ private struct BatchSelectionView: View {
                 .foregroundStyle(Ink.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)
-            HStack {
-                Menu("Move to Folder") { FolderMenuItems(state: state, meetingIDs: ids) }.fixedSize()
-                Button(meetings.allSatisfy { $0.effectivePlacement == .personal } ? "Move to Work" : "Move to Personal") {
-                    state.setPlacement(ids, meetings.allSatisfy { $0.effectivePlacement == .personal } ? .work : .personal)
-                }
-            }
-            .padding(.top, Space.s2)
-            // Red is reserved for recording; destructive text takes the error ink.
-            Button("Move to Trash…", role: .destructive) { state.trashRequestIDs = ids }
-                .buttonStyle(.plain)
-                .foregroundStyle(Ink.error)
+            // What the selection's menu offers (`ConversationActions.batch`), as buttons.
+            BatchActionButtons(state: state, ids: ids)
+                .padding(.top, Space.s2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DaybookStyle.paper)

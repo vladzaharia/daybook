@@ -65,7 +65,7 @@ final class MacFirstMultipointTests: XCTestCase {
         XCTAssertEqual(waiting, .awaitingRecordings([AwaitedRecording(deviceName: PhoneLinkRig.phoneName, deviceKind: DaybookPhoneIntegration.id,
                                                                       since: try XCTUnwrap(meeting.companions?.first?.macEndedAt))]))
         // Wherever processing status shows: the list row, the page line, Floating Notes.
-        XCTAssertEqual(RowStatus(state: state, meeting: meeting).text, "Waiting for iPhone audio")
+        XCTAssertEqual(MacRowStatus.make(state, meeting)?.text, "Waiting for iPhone audio")
         XCTAssertEqual(FloatingStatusInputs.work(for: meeting, state: state), .awaiting("Waiting for iPhone audio"))
         if case .awaitingRecordings(let recordings) = waiting {
             XCTAssertEqual(ProcessingStatus.awaitingDetail(recordings), "Waiting for audio from \(PhoneLinkRig.phoneName)")
@@ -149,7 +149,7 @@ final class MacFirstMultipointTests: XCTestCase {
             return XCTFail("Waiting for the phone's audio, got \(state.processingStatus(for: meeting))")
         }
         XCTAssertEqual(ProcessingStatus.awaitingDetail(awaited), "Waiting for audio from \(PhoneLinkRig.phoneName)")
-        XCTAssertEqual(RowStatus(state: state, meeting: meeting).text, "Waiting for iPhone audio")
+        XCTAssertEqual(MacRowStatus.make(state, meeting)?.text, "Waiting for iPhone audio")
 
         // The phone files its recording into the conversation, and another of its own that nothing waits for.
         await state.synchronizeLibrary()

@@ -75,6 +75,38 @@ final class LibraryPlaceTests: XCTestCase {
         XCTAssertEqual(state.meetings.count, 1)
     }
 
+    func testBehaviorTheTrashIsAPlaceOfItsOwnThatListsWhatsInItsFolder() async throws {
+        let (state, root, defaults) = try await makeState()
+        defer { cleanUp(root, defaults) }
+        let kept = state.newMeeting(title: "Kept")
+        let gone = state.newMeeting(title: "Old standup")
+        _ = try await state.library.moveToTrash(gone)
+        state.place = .trash
+        XCTAssertEqual(state.visibleMeetings, [], "the library's conversations aren't in the Trash")
+        let trashed = await state.library.trashedMeetings()
+        XCTAssertEqual(trashed.map(\.id), [gone])
+        XCTAssertNotNil(state.meetings.first { $0.id == kept })
+    }
+
+    func testBehaviorARowSaysWhatThisMacIsDoingWithItInTheWordsTheIPhoneUses() async throws {
+        let (state, root, defaults) = try await makeState()
+        defer { cleanUp(root, defaults) }
+        let id = state.newMeeting(title: "1:1 with Priya")
+        let meeting = try XCTUnwrap(state.meetings.first { $0.id == id })
+        XCTAssertNil(MacRowStatus.make(state, meeting), "a conversation that's only notes is ready")
+
+        state.pausedIDs.insert(id)
+        let paused = try XCTUnwrap(MacRowStatus.make(state, meeting))
+        XCTAssertEqual(paused.kind, .paused, "the pause glyph, as on the iPhone")
+        XCTAssertEqual(paused.text, "Paused")
+        state.pausedIDs.remove(id)
+
+        state.recordingID = id
+        XCTAssertEqual(MacRowStatus.make(state, meeting)?.kind, .recording)
+        XCTAssertEqual(MacRowStatus.make(state, meeting)?.text, "Recording now")
+        state.recordingID = nil
+    }
+
     private func makeState() async throws -> (AppState, URL, UserDefaults) {
         let root = makeTemporaryFolder("DaybookPlaceTests")
         let defaults = makeTestDefaults()

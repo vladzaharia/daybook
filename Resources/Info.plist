@@ -22,4 +22,9 @@
 <key>NSLocalNetworkUsageDescription</key><string>Daybook finds your iPhone on this network to record together.</string>
 <key>NSBonjourServices</key><array><string>_daybook-link._tcp</string></array>
 <key>DaybookICloudContainerIdentifier</key><string>$(DAYBOOK_ICLOUD_CONTAINER)</string>
+<key>UTExportedTypeDeclarations</key><array><dict>
+<key>UTTypeIdentifier</key><string>local.daybook.conversation</string>
+<key>UTTypeDescription</key><string>Daybook Conversation</string>
+<key>UTTypeConformsTo</key><array><string>public.data</string></array>
+</dict></array>
 </dict></plist>

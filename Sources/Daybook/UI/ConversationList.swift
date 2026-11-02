@@ -1,3 +1,4 @@
+import AppKit
 import DaybookCaptions
 import DaybookCore
 import DaybookKit
@@ -5,10 +6,12 @@ import DaybookUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The list column: conversations in the selected place, or search results.
+/// The list column: conversations in the selected place, the Trash, or search results.
 struct ConversationList: View {
     @Bindable var state: AppState
     @State private var isDropTargeted = false
+    @State private var tagging: ConversationIDs?
+    @Environment(\.undoManager) private var undoManager
 
     private var selection: Binding<Set<UUID>> {
         Binding(get: {
@@ -21,21 +24,32 @@ struct ConversationList: View {
 
     var body: some View {
         Group {
-            if state.isSearching { results } else { browsing }
+            if state.isSearching { SearchResults(state: state) }
+            else if state.place.isTrash { MacTrashList(state: state) }
+            else { browsing }
         }
         .navigationTitle(title)
         // The subtitle follows a download's percent without redrawing the list.
         .modifier(ListSubtitle(placements: state.placements) { subtitle(at: $0) })
-        .safeAreaInset(edge: .top, spacing: 0) { LibraryNotice(state: state) }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                SyncAttention(state: state)
+                LibraryNotice(state: state)
+            }
+        }
         .overlay { if isDropTargeted { DropOutline(label: "Import Audio") } }
         .dropDestination(for: URL.self) { urls, _ in importAudio(urls) } isTargeted: { isDropTargeted = $0 }
-        .onDeleteCommand { state.trashRequestIDs = Array(selection.wrappedValue) }
+        .onDeleteCommand { if !state.place.isTrash { state.trashRequestIDs = Array(selection.wrappedValue) } }
+        .sheet(item: $tagging) { request in
+            ConversationTagsChooser(library: state.library, ids: request.ids) { tagging = nil }
+        }
     }
 
     // MARK: Browsing
 
     private var browsing: some View {
         let meetings = state.visibleMeetings
+        let selected = selection.wrappedValue
         return List(selection: selection) {
             ForEach(DateGroup.groups(for: meetings)) { group in
                 Section(group.title) {
@@ -43,13 +57,13 @@ struct ConversationList: View {
                         // Each row draws in a view of its own, and only the row being processed reads the job's progress
                         // (`processingStatus(for:)`): a progress report, or a summary's countdown, redraws that row alone.
                         ActivityReader {
-                            ConversationRow(meeting: meeting, status: RowStatus(state: state, meeting: meeting),
-                                            timeLabel: RowDate.format(meeting.date, group: group.title),
-                                            selected: selection.wrappedValue.contains(meeting.id))
+                            ConversationRowView(meeting: meeting, status: MacRowStatus.make(state, meeting),
+                                                timeLabel: RowDate.format(meeting.date, group: group.title),
+                                                isSelected: selected.contains(meeting.id))
                         }
-                            .tag(meeting.id)
-                            .draggable(meeting.id.uuidString)
-                            .listRowSeparator(.hidden)
+                        .tag(meeting.id)
+                        .modifier(RowDrag(state: state, meeting: meeting))
+                        .listRowSeparator(.hidden)
                     }
                 }
                 .listSectionSeparator(.hidden)
@@ -57,85 +71,20 @@ struct ConversationList: View {
         }
         .listStyle(.inset)
         .softTopScrollEdge()
+        .modifier(SelectionDrag(state: state, selection: Array(selected)))
+        // ⌘C copies the selection: inside Daybook the conversations, elsewhere their Markdown or their words.
+        .copyable(state.meetings.filter { selection.wrappedValue.contains($0.id) }.map(ConversationTransfer.init))
         .motion(state.isReady ? Motion.state : .linear(duration: 0), value: meetings.map(\.id))
         .contextMenu(forSelectionType: UUID.self) { ids in
-            RowMenu(state: state, ids: Array(ids))
+            RowMenu(state: state, ids: Array(ids), undoManager: undoManager) { tagging = ConversationIDs(ids: $0) }
         } primaryAction: { ids in
             if let id = ids.first { state.selectedID = id; state.focusTitle(id) }
         }
-        .overlay { if meetings.isEmpty && state.isReady { emptyPlace } }
-    }
-
-    /// The column's title already names the place, so an empty one just says so (and, for a folder,
-    /// how to fill it). An empty library says it once, on the page beside the column.
-    @ViewBuilder private var emptyPlace: some View {
-        switch state.place {
-        case .section(let section):
-            if section == .all && state.meetings.isEmpty { Color.clear }
-            else { ContentUnavailableView("No Conversations", systemImage: section.systemImage) }
-        case .folder:
-            ContentUnavailableView("No Conversations", systemImage: "folder",
-                                   description: Text("Drag conversations here, or choose Move to Folder."))
-        case .device:
-            Color.clear
-        }
-    }
-
-    // MARK: Search
-
-    private var results: some View {
-        let hits = state.searchHits
-        // Saved live captions of conversations nothing else matched, labelled as such, as on the iPhone.
-        let captionHits = state.captionSearchHits
-        let byID = Dictionary(state.meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return List(selection: Binding(get: { state.selectedID }, set: { id in open(id, in: hits, captions: captionHits) })) {
-            Picker("Search in", selection: $state.searchScope) {
-                Text("All").tag(SearchScope.all)
-                Text("Work").tag(SearchScope.work)
-                Text("Personal").tag(SearchScope.personal)
-                if case .folder(let id) = state.place, let folder = state.folders.first(where: { $0.id == id }) {
-                    Text(folder.name).tag(SearchScope.folder(id))
-                }
+        .overlay {
+            if meetings.isEmpty && state.isReady,
+               let words = LibraryWords.emptyPlace(state.place, libraryIsEmpty: state.meetings.isEmpty, platform: .mac) {
+                LibraryEmptyPlaceView(words)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, Space.s3)
-            .selectionDisabled()
-            .listRowSeparator(.hidden)
-            // The control's edges line up with the result rows' highlight.
-            .listRowInsets(EdgeInsets())
-            .padding(.horizontal, -6.5)
-            ForEach(hits) { hit in
-                if let meeting = byID[hit.meetingID] {
-                    SearchResultRow(meeting: meeting, hit: hit).tag(hit.meetingID).listRowSeparator(.hidden)
-                }
-            }
-            ForEach(captionHits, id: \.meeting.id) { hit in
-                CaptionSearchRow(meeting: hit.meeting, segment: hit.segment, query: state.search)
-                    .tag(hit.meeting.id).listRowSeparator(.hidden)
-            }
-        }
-        .listStyle(.inset)
-        .softTopScrollEdge()
-        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.search) } }
-    }
-
-    private func open(_ id: UUID?, in hits: [SearchHit], captions: [(meeting: Meeting, segment: LiveCaptionSegment)]) {
-        state.multiSelection = []
-        state.selectedID = id
-        if let caption = captions.first(where: { $0.meeting.id == id }) {
-            state.pageMode = .transcript
-            state.pageScrollTarget = caption.segment.id
-            return
-        }
-        guard let hit = hits.first(where: { $0.meetingID == id }) else { return }
-        if hit.field == .transcript, let segment = hit.segmentID {
-            state.pageMode = .transcript
-            state.pageScrollTarget = segment
-        } else {
-            state.pageMode = .summary
         }
     }
 
@@ -146,6 +95,7 @@ struct ConversationList: View {
         case .section(let section): return section.rawValue
         case .folder(let id): return state.folders.first { $0.id == id }?.name ?? "Folder"
         case .device(let id): return state.devices.session(id)?.device.name ?? "Device"
+        case .trash: return LibraryWords.trash
         }
     }
 
@@ -153,7 +103,7 @@ struct ConversationList: View {
     /// summary counts down, or runs in the cloud, it says that: "Summarizing in 12 s".
     private func subtitle(at now: Date) -> String {
         if state.isSearching {
-            let count = state.searchHits.count + state.captionSearchHits.count
+            let count = state.searchHits.count
             return count == 1 ? "1 result" : "\(count) results"
         }
         if state.isStoppingRecording { return "Saving recording…" }
@@ -175,6 +125,27 @@ struct ConversationList: View {
     }
 }
 
+/// Conversations an action is about, for a sheet.
+struct ConversationIDs: Identifiable {
+    let ids: [UUID]
+    var id: [UUID] { ids }
+}
+
+/// What a row says on this Mac (`ConversationStatusPresentation.row`): its own recording, where its summary runs,
+/// this Mac's queue, and what the library says; and the mint waveform while it plays.
+@MainActor
+enum MacRowStatus {
+    static func make(_ state: AppState, _ meeting: Meeting, now: Date = Date()) -> ConversationRowStatus? {
+        let inputs = ConversationStatusPresentation.Inputs(
+            words: .mac(id: state.library.thisDevice.id), local: .mac(),
+            isRecording: state.recordingID == meeting.id,
+            placement: .init(planner: state.placements[meeting.id]),
+            queuedMode: state.processingQueue.first { $0.meetingID == meeting.id }?.mode,
+            isPlaying: state.playback.meetingID == meeting.id && state.playback.isPlaying)
+        return ConversationStatusPresentation.row(state.processingStatus(for: meeting), meeting: meeting, inputs: inputs, now: now)
+    }
+}
+
 /// The list's subtitle, redrawn by a download's progress and a summary's countdown on their own (what `text` reads
 /// redraws only it): a countdown's seconds once a second.
 private struct ListSubtitle: ViewModifier {
@@ -189,276 +160,335 @@ private struct ListSubtitle: ViewModifier {
     }
 }
 
-// MARK: - Rows
+// MARK: - Dragging
 
-/// What a row says about a conversation that isn't ready; nil when everything is fine.
-struct RowStatus {
-    enum Kind { case recording, processing, waiting, waitingForModels, paused, failed, notTranscribed }
-    let kind: Kind?
-    let text: String?
-    /// How far processing has got, for the row's progress line.
-    var fraction: Double = 0
-    /// A summary's countdown runs out then: the row counts down to it ("Summarizing in 12 s").
-    var countdown: Date?
-    /// The text without its percent: the line fades when what it says changes, not at every percent.
-    var phrase: String? {
-        if countdown != nil { return "Summarizing in" }
-        return kind == .processing ? text?.components(separatedBy: " · ").first : text
-    }
+/// A row travels as its conversation (`ConversationTransfer`): onto a place in the sidebar, or out of Daybook as
+/// its Markdown. From macOS 26 the list's selection travels whole (`SelectionDrag`).
+private struct RowDrag: ViewModifier {
+    let state: AppState
+    let meeting: Meeting
 
-    /// Recording is this Mac's own state; a summary being placed says where it runs; everything else reads
-    /// from `ProcessingStatus`, which the conversation page and the iPhone share.
-    @MainActor init(state: AppState, meeting: Meeting) {
-        if state.recordingID == meeting.id { kind = .recording; text = "Recording now"; return }
-        if let planner = state.placements[meeting.id], let line = planner.shortLine(at: Date()) {
-            countdown = planner.deadline
-            if case .started(.cloud) = planner.phase { kind = .processing; fraction = state.processingProgress.fraction } else { kind = .waiting }
-            text = line
-            return
-        }
-        switch state.processingStatus(for: meeting) {
-        case .processing(let progress):
-            kind = .processing
-            fraction = progress.fraction ?? 0
-            let verb = progress.stage == .summarizing ? "Summarizing" : "Transcribing"
-            if let device = progress.device { text = "\(verb) on \(device.name)" }
-            else { text = progress.stage == .summarizing ? "Summarizing…" : "Transcribing · \(Int(fraction * 100))%" }
-        case .requested(.queued): kind = .waiting; text = state.requestOrigin(for: meeting) ?? "Waiting"
-        case .requested(.models): kind = .waitingForModels; text = "Waiting for models"
-        case .requested(.paused): kind = .paused; text = "Paused"
-        case .requested(.device(let request)): kind = .waiting; text = "Requested from \(request.requestedBy.name)"
-        case .failed: kind = .failed; text = "Couldn’t finish"
-        case .recorded: kind = .notTranscribed; text = "Not transcribed yet"
-        case .awaitingRecordings(let recordings): kind = .waiting; text = ProcessingStatus.awaitingLine(recordings)
-        case .transcribed, .done: kind = nil; text = nil
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content.draggable(containerItemID: meeting.id)
+        } else {
+            content.draggable(ConversationTransfer(meeting))
         }
     }
 }
 
-struct ConversationRow: View {
-    let meeting: Meeting
-    let status: RowStatus
-    let timeLabel: String
-    var selected = false
-    @State private var hovering = false
-    @State private var justFinished = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// From macOS 26: dragging a selected row takes every selected conversation along.
+private struct SelectionDrag: ViewModifier {
+    let state: AppState
+    let selection: [UUID]
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content
+                .dragContainer(for: ConversationTransfer.self) { ids in
+                    ids.compactMap { id in state.meetings.first { $0.id == id }.map(ConversationTransfer.init) }
+                }
+                .dragContainerSelection(selection)
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: - Search
+
+/// Search results: the library's matches, then matches in saved live captions the text search didn't find.
+private struct SearchResults: View {
+    @Bindable var state: AppState
+    @State private var captionHits: [LibraryCaptionSearch.Hit] = []
+
+    private struct CaptionQuery: Equatable {
+        var text: String
+        var tokens: [SearchToken]
+        var scope: SearchScope
+        var revision: Int
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title)
-                    .font(TypeStyle.rowTitle)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                glyph
-                    .font(.system(size: 11, weight: .semibold))
-                    .transition(.opacity)
-            }
-            // Apple Notes' list: the date reads first, the preview recedes but stays legible.
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(timeLabel).foregroundStyle(.primary)
-                if let until = status.countdown {
-                    // A summary's countdown, a second at a time.
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(SummaryPlacementPlanner.rowLine(until: until, at: context.date))
-                            .foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
-                    }
-                } else {
-                    Text(status.text ?? preview)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .contentTransition(.opacity)
+        let hits = state.searchHits
+        let byID = Dictionary(state.meetings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        List(selection: Binding(get: { state.selectedID }, set: { id in open(id, in: hits) })) {
+            Picker("Search in", selection: $state.searchScope) {
+                Text("All").tag(SearchScope.all)
+                Text("Work").tag(SearchScope.work)
+                Text("Personal").tag(SearchScope.personal)
+                if case .folder(let id) = state.place, let folder = state.folders.first(where: { $0.id == id }) {
+                    Text(folder.name).tag(SearchScope.folder(id))
                 }
             }
-            .font(TypeStyle.rowDetail)
-            .animation(.easeOut(duration: 0.2), value: status.phrase)
-        }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 4)
-        .background(Color.primary.opacity(hovering && !selected ? 0.05 : 0), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .padding(.horizontal, -4)
-        .onHover { hovering = $0 }
-        .animation(hovering ? Motion.hover : .easeOut(duration: 0.2), value: hovering)
-        .onChange(of: status.kind) { old, new in
-            // A checkmark holds for a moment when work finishes, so the row says it's done.
-            guard old == .processing, new == nil else { return }
-            justFinished = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                withAnimation(.easeOut(duration: 0.3)) { justFinished = false }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, Space.s3)
+            .selectionDisabled()
+            .listRowSeparator(.hidden)
+            // The control's edges line up with the result rows' highlight.
+            .listRowInsets(EdgeInsets())
+            .padding(.horizontal, -6.5)
+            ForEach(hits) { hit in
+                if let meeting = byID[hit.meetingID] {
+                    SearchResultRowView(meeting: meeting, hit: hit).tag(hit.meetingID).listRowSeparator(.hidden)
+                }
+            }
+            ForEach(captionHits) { hit in
+                CaptionHitRowView(meeting: hit.meeting, segment: hit.segment, query: state.search)
+                    .tag(hit.meeting.id)
+                    .listRowSeparator(.hidden)
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel([meeting.title, timeLabel, meeting.duration.map(DurationLabel.format), status.text].compactMap { $0 }.joined(separator: ", "))
+        .listStyle(.inset)
+        .softTopScrollEdge()
+        .overlay { if hits.isEmpty && captionHits.isEmpty { ContentUnavailableView.search(text: state.search) } }
+        .task(id: CaptionQuery(text: state.search, tokens: state.searchTokens, scope: state.searchScope, revision: state.libraryRevision)) {
+            // The conversations the search could list (its scope and tokens), less those the text search found.
+            let scoped = Set(LibrarySearch.hits(in: state.meetings, text: "", tokens: state.searchTokens, scope: state.searchScope).map(\.meetingID))
+            let found = await LibraryCaptionSearch.hits(in: state.meetings.filter { scoped.contains($0.id) }, query: state.search,
+                                                        excluding: Set(hits.map(\.meetingID)), libraryRoot: state.library.rootURL)
+            guard !Task.isCancelled else { return }
+            captionHits = found
+        }
     }
 
-    private var preview: String { RowPreview.text(for: meeting) }
-
-    @ViewBuilder private var glyph: some View {
-        switch status.kind {
-        case .recording?:
-            Image(systemName: "record.circle.fill").symbolRenderingMode(.hierarchical).foregroundStyle(Ink.record)
-                .symbolEffect(.breathe, options: reduceMotion ? .nonRepeating : .repeating)
-                .neonGlow(Ink.record, radius: 3)
-        case .processing?:
-            // One moving neon line says "working" in the densest grey surface, without words.
-            ProgressView(value: status.fraction).progressViewStyle(.brand(width: 44, height: 2))
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-        case .waiting?: Image(systemName: "clock").foregroundStyle(.secondary)
-        case .waitingForModels?: Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
-        case .paused?: Image(systemName: "pause.circle").foregroundStyle(.secondary)
-        case .failed?: Image(systemName: "exclamationmark.triangle.fill").symbolRenderingMode(.monochrome).foregroundStyle(Ink.warning)
-        case .notTranscribed?: Circle().fill(DaybookStyle.accent).frame(width: 7, height: 7)
-        case nil:
-            if justFinished {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(DaybookStyle.accent)
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.6)))
-            }
+    /// Opens a result at what it found: a transcript passage, the notes, or the page.
+    private func open(_ id: UUID?, in hits: [SearchHit]) {
+        state.multiSelection = []
+        state.selectedID = id
+        if let caption = captionHits.first(where: { $0.meeting.id == id }) {
+            // Saved captions read on the transcript's page.
+            state.pageMode = .transcript
+            state.pageScrollTarget = caption.segment.id
+            return
+        }
+        guard let hit = hits.first(where: { $0.meetingID == id }) else { return }
+        if hit.field == .transcript, let segment = hit.segmentID {
+            state.pageMode = .transcript
+            state.pageScrollTarget = segment
+        } else {
+            state.pageMode = .summary
+            if hit.field == .notes { state.pageScrollTarget = PageAnchor.notes }
         }
     }
 }
 
-private struct SearchResultRow: View {
-    let meeting: Meeting
-    let hit: SearchHit
+// MARK: - The Trash
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title).font(TypeStyle.rowTitle).lineLimit(1)
-                Spacer(minLength: 6)
-                Text(meeting.date.formatted(.dateTime.day().month(.abbreviated))).font(TypeStyle.rowDetail).foregroundStyle(.secondary)
-            }
-            if hit.field != .title || hit.match == nil {
-                Text(snippet).font(TypeStyle.rowDetail).foregroundStyle(.secondary).lineLimit(2)
-            }
-            Label {
-                Text(location)
-            } icon: {
-                Image(systemName: locationSymbol).font(.system(size: 10))
-            }
-            .labelStyle(CompactLabelStyle())
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 6)
-    }
-
-    private var locationSymbol: String {
-        switch hit.field {
-        case .title: return "textformat"
-        case .summary: return "text.alignleft"
-        case .notes: return "note.text"
-        case .transcript: return "quote.bubble"
-        }
-    }
-
-    private var snippet: AttributedString { Self.marked(hit.snippet, match: hit.match, weight: .semibold, size: 12) }
-
-    /// A title match is marked in the title itself, as a snippet's is in the snippet.
-    private var title: AttributedString {
-        let text = meeting.title.isEmpty ? "Untitled Conversation" : meeting.title
-        guard hit.field == .title, let match = hit.match, text == hit.snippet else { return AttributedString(text) }
-        return Self.marked(text, match: match, weight: .bold, size: 13)
-    }
-
-    static func marked(_ string: String, match: Range<String.Index>?, weight: Font.Weight, size: CGFloat) -> AttributedString {
-        var text = AttributedString(string)
-        if let match, let lower = AttributedString.Index(match.lowerBound, within: text),
-           let upper = AttributedString.Index(match.upperBound, within: text) {
-            text[lower..<upper].font = .system(size: size, weight: weight)
-            text[lower..<upper].foregroundColor = Ink.link
-        }
-        return text
-    }
-
-    private var location: String {
-        switch hit.field {
-        case .title: return hit.match == nil ? "Conversation" : "Title"
-        case .summary: return "Summary"
-        case .notes: return "Your notes"
-        case .transcript:
-            if hit.matchCount > 1 { return "Transcript · \(hit.matchCount) matches" }
-            return (["Transcript", hit.speaker, hit.time.map(TimeLabel.short)].compactMap { $0 }).joined(separator: " · ")
-        }
-    }
-}
-
-/// A match in a conversation's saved live captions, labelled so it never passes for the transcript (as
-/// on the iPhone).
-private struct CaptionSearchRow: View {
-    let meeting: Meeting
-    let segment: LiveCaptionSegment
-    let query: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title).font(TypeStyle.rowTitle).lineLimit(1)
-                Spacer(minLength: 6)
-                Text(meeting.date.formatted(.dateTime.day().month(.abbreviated))).font(TypeStyle.rowDetail).foregroundStyle(.secondary)
-            }
-            Text(snippet).font(TypeStyle.rowDetail).foregroundStyle(.secondary).lineLimit(2)
-            Label {
-                Text(SavedCaptions.searchLocation(segment))
-            } icon: {
-                Image(systemName: "captions.bubble").font(.system(size: 10))
-            }
-            .labelStyle(CompactLabelStyle())
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 6)
-    }
-
-    private var snippet: AttributedString {
-        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let range = segment.text.range(of: text, options: [.caseInsensitive, .diacriticInsensitive]) else {
-            return AttributedString(segment.text)
-        }
-        let (excerpt, match) = LibrarySearch.excerpt(segment.text, around: range)
-        return SearchResultRow.marked(excerpt, match: match, weight: .semibold, size: 12)
-    }
-}
-
-/// Actions for one or more selected rows. Items that don't apply are hidden.
-private struct RowMenu: View {
+/// The Trash: what was moved there, newest first, each with Restore; the page beside it shows the one selected,
+/// read only (`TrashDetail`).
+private struct MacTrashList: View {
     @Bindable var state: AppState
-    let ids: [UUID]
-    private var meetings: [Meeting] { state.meetings.filter { ids.contains($0.id) } }
+    @State private var trashed: [Meeting] = []
+    @State private var loaded = false
 
     var body: some View {
-        if let meeting = meetings.first, meetings.count == 1 {
-            Button("Rename") { state.selectedID = meeting.id; state.focusTitle(meeting.id) }
-            Menu("Move to Folder") { FolderMenuItems(state: state, meetingIDs: ids) }
-            placementButton
-            Divider()
-            ReprocessMenu(state: state, meeting: meeting)
-            Divider()
-            // In the More menu's order: share, then file actions.
-            if meeting.summary != nil { Button("Copy Summary") { state.copySummary(meeting.id) } }
-            Menu("Export") {
-                Button("Markdown…") { state.export(meeting.id) }
-                Button("Full Data (JSON)…") { state.export(meeting.id, json: true) }
+        List(selection: $state.selectedID) {
+            ForEach(trashed) { meeting in
+                TrashRowView(meeting: meeting) { MacTrash.restore([meeting.id], state: state) }
+                    .tag(meeting.id)
+                    .listRowSeparator(.hidden)
             }
-            Button("Show in Finder") { state.showInFinder(meeting.id) }
-            Divider()
-            Button("Move to Trash…", role: .destructive) { state.trashRequestIDs = ids }
-                .disabled(state.recordingID == meeting.id || state.processingID == meeting.id)
+        }
+        .listStyle(.inset)
+        .softTopScrollEdge()
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            Button { MacTrash.restore(Array(ids), state: state) } label: {
+                Label(TrashWords.restore, systemImage: TrashWords.restoreSymbol)
+            }
+        }
+        .overlay {
+            if loaded && trashed.isEmpty, let words = LibraryWords.emptyPlace(.trash, libraryIsEmpty: state.meetings.isEmpty, platform: .mac) {
+                LibraryEmptyPlaceView(words)
+            }
+        }
+        // Moving to the Trash and restoring change the library's conversations, so its revision.
+        .task(id: state.libraryRevision) {
+            trashed = await state.library.trashedMeetings()
+            loaded = true
+            if !trashed.contains(where: { $0.id == state.selectedID }) { state.selectedID = trashed.first?.id }
+        }
+    }
+}
+
+/// The page beside the Trash: the selected conversation, read only, with Restore.
+struct TrashDetail: View {
+    let state: AppState
+    @State private var meeting: Meeting?
+
+    var body: some View {
+        ZStack {
+            if let meeting {
+                TrashedConversationPage(meeting: meeting) { MacTrash.restore([meeting.id], state: state) }
+            } else {
+                DaybookStyle.paper
+            }
+        }
+        .task(id: [state.selectedID, state.libraryRevision] as [AnyHashable?]) {
+            guard let id = state.selectedID else { meeting = nil; return }
+            meeting = await state.library.trashedMeeting(id)
+        }
+    }
+}
+
+@MainActor
+enum MacTrash {
+    /// Puts conversations back from the Trash, each saying so with Show, which opens it.
+    static func restore(_ ids: [UUID], state: AppState) {
+        Task {
+            for id in ids {
+                do {
+                    let meeting = try await state.library.restoreFromTrash(id)
+                    state.post(LibraryWords.restored(meeting), action: LibraryNoticeAction(title: "Show") {
+                        state.place = .section(.all)
+                        state.multiSelection = []
+                        state.selectedID = meeting.id
+                    })
+                } catch {
+                    state.report("Couldn’t Restore", "Try again.", error)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Actions
+
+/// Actions for one or more selected rows, from `ConversationActions`, in its one order: Share first, then what it
+/// lists; what doesn't apply now is dimmed. Filing can be undone.
+private struct RowMenu: View {
+    let state: AppState
+    let ids: [UUID]
+    let undoManager: UndoManager?
+    let tag: ([UUID]) -> Void
+
+    var body: some View {
+        let meetings = state.meetings.filter { ids.contains($0.id) }
+        if let only = meetings.first, meetings.count == 1 {
+            ShareLink(item: ConversationTransfer(only), preview: SharePreview(ConversationRowView.title(only))) {
+                Label("Share…", systemImage: "square.and.arrow.up")
+            }
+            ConversationActionMenuItems(ConversationActions.actions(for: only, context: MacActions.context(state, only)), platform: .mac,
+                                        perform: { MacActions.perform($0, on: [only.id], state: state, undoManager: undoManager, tag: tag) },
+                                        custom: { MacActions.custom($0, ids: [only.id], state: state, undoManager: undoManager) })
         } else if !meetings.isEmpty {
-            Menu("Move to Folder") { FolderMenuItems(state: state, meetingIDs: ids) }
-            placementButton
-            Divider()
-            Button("Summarize Again") { for meeting in meetings where !meeting.unifiedTranscript.isEmpty { state.enqueue(meeting.id, mode: .summaryOnly) } }
-            Divider()
-            Button("Move \(meetings.count) to Trash…", role: .destructive) { state.trashRequestIDs = ids }
+            ConversationActionMenuItems(ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac)), platform: .mac,
+                                        perform: { MacActions.perform($0, on: ids, state: state, undoManager: undoManager, tag: tag) },
+                                        custom: { MacActions.custom($0, ids: ids, state: state, undoManager: undoManager) })
+        }
+    }
+}
+
+/// Several conversations selected, on the page: what can be done to all of them, from `ConversationActions.batch`
+/// (Summarize Again, Move to Folder, Tags…, Work or Personal, the Trash), as buttons.
+struct BatchActionButtons: View {
+    let state: AppState
+    let ids: [UUID]
+    @State private var tagging: ConversationIDs?
+    @Environment(\.undoManager) private var undoManager
+
+    var body: some View {
+        let groups = ConversationActions.batch(ids, in: state.meetings, context: .init(platform: .mac))
+        let actions = groups.flatMap(\.actions)
+        VStack(spacing: Space.s3) {
+            HStack {
+                ForEach(actions.filter { $0.role != .destructive }) { action in
+                    if let custom = MacActions.custom(action, ids: ids, state: state, undoManager: undoManager) {
+                        custom.fixedSize()
+                    } else {
+                        Button(action.title) { perform(action.id) }.disabled(!action.isAvailable)
+                    }
+                }
+            }
+            // Red is reserved for recording; destructive text takes the error ink.
+            ForEach(actions.filter { $0.role == .destructive }) { action in
+                Button(action.title, role: .destructive) { perform(action.id) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Ink.error)
+                    .disabled(!action.isAvailable)
+            }
+        }
+        .sheet(item: $tagging) { request in
+            ConversationTagsChooser(library: state.library, ids: request.ids) { tagging = nil }
         }
     }
 
-    private var placementButton: some View {
-        let personal = meetings.allSatisfy { $0.effectivePlacement == .personal }
-        return Button(personal ? "Move to Work" : "Move to Personal") { state.setPlacement(ids, personal ? .work : .personal) }
+    private func perform(_ id: ConversationAction.ID) {
+        MacActions.perform(id, on: ids, state: state, undoManager: undoManager) { tagging = ConversationIDs(ids: $0) }
+    }
+}
+
+/// What the Mac does for each of `ConversationActions`.
+@MainActor
+enum MacActions {
+    /// What the Mac knows about a conversation for its actions: recording here, or being processed here.
+    static func context(_ state: AppState, _ meeting: Meeting) -> ConversationActions.Context {
+        let recording = state.recordingID == meeting.id && (state.isRecording || state.isStartingRecording || state.isStoppingRecording)
+        return ConversationActions.Context(platform: .mac, isRecording: recording, isProcessingHere: state.processingID == meeting.id,
+                                           status: state.processingStatus(for: meeting))
+    }
+
+    static func perform(_ id: ConversationAction.ID, on ids: [UUID], state: AppState, undoManager: UndoManager?, tag: ([UUID]) -> Void) {
+        let meetings = state.meetings.filter { ids.contains($0.id) }
+        guard let first = meetings.first else { return }
+        switch id {
+        case .copySummary: state.copySummary(first.id)
+        case .exportMarkdown: state.export(first.id)
+        case .exportJSON: state.export(first.id, json: true)
+        case .showFloatingNotes: state.showNotes(for: first.id)
+        case .addPhotos: state.chooseAddPhoto(to: first.id)
+        case .addRecordingFromFile: state.chooseImport(attachTo: first.id)
+        case .process(let mode):
+            for meeting in meetings where mode != .summaryOnly || !meeting.unifiedTranscript.isEmpty { state.enqueue(meeting.id, mode: mode) }
+        case .versionHistory:
+            state.selectedID = first.id
+            state.activeSheet = .versionHistory
+        case .rename:
+            state.selectedID = first.id
+            state.focusTitle(first.id)
+        case .tags: tag(meetings.map(\.id))
+        case .moveTo(let placement): state.library.setPlacement(meetings.map(\.id), placement, undoManager: undoManager)
+        case .moveToFolder: break // A menu of the folders (`custom`).
+        case .showInFinder: state.showInFinder(first.id)
+        case .moveToTrash: state.trashRequestIDs = meetings.map(\.id)
+        case .export, .shareAudio, .addRecording, .reprocess, .takePhoto:
+            break // Menus, or the iPhone's.
+        case .play, .adjustTiming, .showOriginalTranscript, .moveToNewConversation, .removeRecording:
+            break // A recording's, in the inspector.
+        }
+    }
+
+    /// The actions the Mac draws its own way: Move to Folder lists the folders, and Add Recording each recorder too.
+    static func custom(_ action: ConversationAction, ids: [UUID], state: AppState, undoManager: UndoManager?) -> AnyView? {
+        switch action.id {
+        case .moveToFolder:
+            return AnyView(Menu {
+                Button("None") { state.library.moveToFolder(ids, nil, undoManager: undoManager) }
+                if !state.folders.isEmpty { Divider() }
+                ForEach(state.folders) { folder in
+                    Button(folder.name) { state.library.moveToFolder(ids, folder.id, undoManager: undoManager) }
+                }
+                Divider()
+                Button("New Folder") { state.requestNewFolder(moving: ids) }
+            } label: {
+                Label(action.title, systemImage: action.symbol)
+            }
+            .disabled(!action.isAvailable))
+        case .addRecording:
+            guard let id = ids.first else { return nil }
+            return AnyView(Menu {
+                Button("From a File…") { state.chooseImport(attachTo: id) }
+                AddRecordingFromDeviceItems(state: state)
+            } label: {
+                Label(action.title, systemImage: action.symbol)
+            }
+            .disabled(!action.isAvailable))
+        default:
+            return nil
+        }
     }
 }
 
@@ -466,12 +496,35 @@ private struct RowMenu: View {
 
 // `DateGroup`, `RowDate`, and `RowPreview` live in DaybookKit, shared with the iPhone.
 
-// MARK: - Notices and drop targets
+// MARK: - Sync, notices, and drop targets
+
+/// One quiet line while sync needs the person, in the sentence Settings › Library says it with, and Open Sync
+/// Settings….
+private struct SyncAttention: View {
+    let state: AppState
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        if let text = LibraryWords.syncAttention(state.sync.status, hasSynced: state.sync.lastSync != nil) {
+            LibrarySyncLine(text) {
+                LaunchOptions.defaults.set(SettingsPane.library.rawValue, forKey: "settingsPane")
+                openSettings()
+                NSApp.activate()
+            }
+            .padding(10)
+            .quietBox()
+            .padding(.horizontal, 10).padding(.top, 6)
+            .daybookTransition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+}
 
 /// One library-wide notice at the top of the list column, a line for each thing it says, newest last. The line its
 /// one action came with ends with it as a text link (Undo, Show, Show in Finder: `AppState.post(_:action:)`).
 private struct LibraryNotice: View {
     let state: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         if state.notice != nil {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -480,18 +533,20 @@ private struct LibraryNotice: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(state.noticeLines.enumerated()), id: \.offset) { _, line in
                         LibraryNoticeLine(text: line, action: state.noticeAction(on: line)) {
-                            withAnimation(.easeOut(duration: 0.2)) { state.performNoticeAction() }
+                            withAnimation(Motion.resolved(Motion.fade, reduceMotion: reduceMotion)) { state.performNoticeAction() }
                         }
                     }
                 }
-                Button { withAnimation(.easeOut(duration: 0.2)) { state.notice = nil } } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .accessibilityLabel("Dismiss")
+                Button { withAnimation(Motion.resolved(Motion.fade, reduceMotion: reduceMotion)) { state.notice = nil } } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .accessibilityLabel("Dismiss")
             }
             .padding(10)
             .quietBox()
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .transition(.opacity.combined(with: .move(edge: .top)))
+            .daybookTransition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 }
@@ -547,13 +602,6 @@ struct DropOutline: View {
         .onAppear { shown = true }
         .motion(.easeOut(duration: 0.15), value: shown)
         .allowsHitTesting(false)
-    }
-}
-
-/// Icon and title close together, for small metadata lines.
-struct CompactLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 4) { configuration.icon; configuration.title }
     }
 }
 

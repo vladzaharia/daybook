@@ -45,10 +45,10 @@ final class WindowInvalidationTests: XCTestCase {
         // that isn't being processed.
         let window = ObservationCount {
             _ = state.visibleMeetings; _ = state.selectedID; _ = state.place; _ = state.processingQueue
-            _ = state.meetings.first { $0.id == other }.map { RowStatus(state: state, meeting: $0) }
+            _ = state.meetings.first { $0.id == other }.map { MacRowStatus.make(state, $0) }
         }
         let followed = ObservationCount { _ = state.processingProgress }
-        let row = ObservationCount { _ = state.meetings.first { $0.id == id }.map { RowStatus(state: state, meeting: $0) } }
+        let row = ObservationCount { _ = state.meetings.first { $0.id == id }.map { MacRowStatus.make(state, $0) } }
         defer { window.cancel(); followed.cancel(); row.cancel() }
         state.processingProgress = IntelligenceProgress(0.101, "Transcribing")
         state.processingProgress = IntelligenceProgress(0.102, "Transcribing")
@@ -88,7 +88,7 @@ final class WindowInvalidationTests: XCTestCase {
         let id = state.newMeeting(title: "Roadmap review")
         state.update(id) { $0.status = .transcribing }
         state.processingID = id
-        func row() throws -> RowStatus { RowStatus(state: state, meeting: try XCTUnwrap(state.meetings.first { $0.id == id })) }
+        func row() throws -> ConversationRowStatus { try XCTUnwrap(MacRowStatus.make(state, try XCTUnwrap(state.meetings.first { $0.id == id }))) }
         state.processingProgress = IntelligenceProgress(0.37, "Transcribed 340 of 923 seconds")
         let before = try row()
         state.processingProgress = IntelligenceProgress(0.38, "Transcribed 350 of 923 seconds")
@@ -97,7 +97,7 @@ final class WindowInvalidationTests: XCTestCase {
         XCTAssertEqual(before.phrase, "Transcribing")
         XCTAssertEqual(after.phrase, before.phrase, "The line's animation follows its words, so a new percent doesn't fade it")
         state.update(id) { $0.status = .summarizing }
-        XCTAssertEqual(try row().phrase, "Summarizing…")
+        XCTAssertEqual(try row().phrase, "Summarizing")
         state.processingID = nil
         await state.flush()
     }

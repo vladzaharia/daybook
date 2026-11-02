@@ -328,7 +328,7 @@ private final class DockMenuItem: NSMenuItem {
 
 #if DEBUG
 /// Debug-only launch arguments that open a specific surface, so every screen can be captured
-/// without clicking: `--place work|personal|all|device|device:<name>|folder:<name>`, `--select <title>`,
+/// without clicking: `--place work|personal|all|trash|device|device:<name>|folder:<name>`, `--select <title>`,
 /// `--page transcript`, `--inspector`, `--open-settings <pane>`, `--open-window <id>`,
 /// `--show-notes`, `--show-setup`, `--simulate-recording <title> [--demo-captions]`, `--library-demo`,
 /// `--notice <text> --notice-action <title>`.
@@ -345,6 +345,7 @@ private struct DebugLaunchActions: ViewModifier {
                 switch place {
                 case "work": state.place = .section(.work)
                 case "personal": state.place = .section(.personal)
+                case "trash": state.place = .trash
                 case "device": state.place = state.devices.sessions.first.map { .device($0.id) } ?? .section(.all)
                 default:
                     if place.hasPrefix("device:"), let device = state.devices.sessions.first(where: { $0.device.name == place.dropFirst(7) }) { state.place = .device(device.id) }

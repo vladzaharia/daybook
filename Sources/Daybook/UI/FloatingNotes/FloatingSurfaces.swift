@@ -4,6 +4,7 @@ import DaybookCore
 import DaybookDesign
 import DaybookDevices
 import DaybookKit
+import DaybookUI
 import SwiftUI
 
 // The panel's three surfaces, in the iPhone's recording-surface and status-sheet language
@@ -437,7 +438,7 @@ private struct RecentConversations: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(recent)) { meeting in
-                        RecentRow(meeting: meeting, status: RowStatus(state: state, meeting: meeting)) {
+                        RecentRow(meeting: meeting, status: MacRowStatus.make(state, meeting)) {
                             PanelContext.openInDaybook(state: state, id: meeting.id)
                         }
                     }
@@ -450,44 +451,26 @@ private struct RecentConversations: View {
     }
 }
 
+/// One of Recent: the library list's row (DaybookUI's `ConversationRowView`, at the panel's density), as a button
+/// that opens it in Daybook.
 private struct RecentRow: View {
     let meeting: Meeting
-    let status: RowStatus
+    let status: ConversationRowStatus?
     let open: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(meeting.title.isEmpty ? "Untitled Conversation" : meeting.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(DaybookPalette.Ink.title)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    glyph.font(.system(size: 10.5, weight: .semibold))
-                }
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(timeLabel).foregroundStyle(DaybookPalette.Ink.body).monospacedDigit()
-                    // As in the library list and on the iPhone: the glyph carries the warning, the words stay quiet.
-                    Text(status.text ?? RowPreview.text(for: meeting))
-                        .foregroundStyle(DaybookPalette.Ink.secondary)
-                        .lineLimit(1)
-                }
-                .font(.system(size: 12))
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(hovering ? 0.05 : 0), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .contentShape(Rectangle())
+            ConversationRowView(meeting: meeting, status: status, timeLabel: timeLabel)
+                .padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(hovering ? 0.05 : 0), in: DaybookRadius.shape(DaybookRadius.row))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .animation(DaybookMotion.hover, value: hovering)
+        .daybookMotion(DaybookMotion.hover, value: hovering)
         .help("Open in Daybook")
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel([meeting.title, timeLabel, status.text].compactMap { $0 }.joined(separator: ", "))
         .accessibilityHint("Opens it in Daybook")
     }
 
@@ -496,30 +479,6 @@ private struct RecentRow: View {
     private var timeLabel: String {
         let group = DateGroup.title(for: meeting.date, now: Date(), calendar: .current)
         return group == "Yesterday" ? "Yesterday" : RowDate.format(meeting.date, group: group)
-    }
-
-    @ViewBuilder private var glyph: some View {
-        switch status.kind {
-        case .recording?:
-            Circle().fill(DaybookPalette.Ink.record).frame(width: 7, height: 7)
-        case .processing?:
-            WorkProgressLine(fraction: status.fraction).frame(width: 36)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-        case .waiting?: Image(systemName: "clock").foregroundStyle(DaybookPalette.Ink.meta)
-        case .waitingForModels?: Image(systemName: "arrow.down.circle").foregroundStyle(DaybookPalette.Ink.meta)
-        case .paused?: Image(systemName: "pause.circle").foregroundStyle(DaybookPalette.Ink.meta)
-        case .failed?: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(DaybookPalette.Ink.warning)
-        case .notTranscribed?: Circle().fill(DaybookPalette.accent).frame(width: 7, height: 7)
-        case nil:
-            let count = meeting.presentHighlights.count
-            if count > 0 {
-                HStack(spacing: 2) {
-                    Image(systemName: "bookmark.fill").imageScale(.small)
-                    Text("\(count)").monospacedDigit()
-                }
-                .foregroundStyle(DaybookPalette.bookmark)
-            }
-        }
     }
 }
 
