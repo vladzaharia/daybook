@@ -889,6 +889,18 @@ final class LinkServicesTests: XCTestCase {
         XCTAssertTrue(link.candidates.isEmpty)
     }
 
+    func testBehaviorAFailedCodeKeepsItsReasonUntilThePersonTypesAgain() {
+        var attempt = PairingAttempt(code: "482913")
+        let reason = PhoneLink.message(for: LinkPairingError.codeRejected)
+        attempt.failed(reason)
+        XCTAssertEqual(attempt.code, "", "the boxes empty for the next code")
+        // The screen hears the boxes empty, after the reason is set: it stays.
+        attempt.codeChanged(to: attempt.code)
+        XCTAssertEqual(attempt.problem, reason)
+        attempt.codeChanged(to: "4")
+        XCTAssertNil(attempt.problem, "typing puts it away")
+    }
+
     func testAChoiceBelongsToOnePairingAndSurvivesARelaunch() throws {
         let suite = makeTestSuite("LinkServicesTests")
         let settings = PhoneSettings(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))

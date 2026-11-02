@@ -209,9 +209,8 @@ struct PairingSheet: View {
     @Environment(\.surfaceStyle) private var surface
     @Environment(\.openURL) private var openURL
     @State private var selection: String?
-    @State private var code = ""
+    @State private var attempt = PairingAttempt()
     @State private var pairing = false
-    @State private var error: String?
     @State private var paired: String?
     /// Looked for `PairingWords.noMacFoundAfter` without finding a Mac to offer.
     @State private var lookedAWhile = false
@@ -262,7 +261,7 @@ struct PairingSheet: View {
                 if model.options.openSettings == "pairing" {
                     selection = model.link.candidates.first?.id
                     try? await Task.sleep(for: .milliseconds(100))   // after choosing clears the code
-                    code = "4829"; codeFocused = false
+                    attempt.code = "4829"; codeFocused = false
                 }
             }
             .task {
@@ -278,8 +277,7 @@ struct PairingSheet: View {
             }
             .onChange(of: selection) { _, chosen in
                 // A code belongs to one Mac; choosing another starts over, ready to type.
-                code = ""
-                error = nil
+                attempt = PairingAttempt()
                 codeFocused = chosen != nil
             }
         }
@@ -288,12 +286,13 @@ struct PairingSheet: View {
     private static let column = "column"
 
     private func pairingView(pages: ((AnyView, AnyView) -> AnyView)?) -> some View {
-        PairingView(role: .entersCode, paired: paired, problem: error, showsCode: selectedMac != nil || error != nil, pages: pages) {
+        PairingView(role: .entersCode, paired: paired, problem: attempt.problem, showsCode: selectedMac != nil || attempt.problem != nil,
+                    pages: pages) {
             macList
         } code: {
             if let mac = selectedMac { codeEntry(for: mac) }
-            if let error {
-                Label(error, systemImage: "exclamationmark.triangle")
+            if let problem = attempt.problem {
+                Label(problem, systemImage: "exclamationmark.triangle")
                     .font(.subheadline)
                     .foregroundStyle(PhoneStyle.Ink.warning)
                     .fixedSize(horizontal: false, vertical: true)
@@ -313,7 +312,7 @@ struct PairingSheet: View {
     private var selectedMac: PhoneLink.PairingCandidate? {
         selection.flatMap { id in model.link.candidates.first { $0.id == id && !$0.usesAnotherLibrary } }
     }
-    private var canPair: Bool { code.filter(\.isNumber).count == LinkProtocol.pairingCodeDigits && selectedMac != nil && !pairing }
+    private var canPair: Bool { attempt.code.filter(\.isNumber).count == LinkProtocol.pairingCodeDigits && selectedMac != nil && !pairing }
 
     /// Pair Again… on a Mac's page chooses that Mac once it's found.
     private func choosePreselected(_ candidates: [PhoneLink.PairingCandidate]) {
@@ -391,8 +390,8 @@ struct PairingSheet: View {
     private func codeEntry(for mac: PhoneLink.PairingCandidate) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             PairingHeading(text: PairingWords.code(on: mac.name))
-            PairingCodeEntry(code: $code, label: PairingWords.code(on: mac.name), focus: $codeFocused)
-                .onChange(of: code) { _, _ in error = nil }
+            PairingCodeEntry(code: $attempt.code, label: PairingWords.code(on: mac.name), focus: $codeFocused)
+                .onChange(of: attempt.code) { _, typed in attempt.codeChanged(to: typed) }
             if pairing {
                 HStack(spacing: 8) { ProgressView(); Text(PairingWords.pairing).foregroundStyle(PhoneStyle.Ink.secondary) }
             }
@@ -404,14 +403,32 @@ struct PairingSheet: View {
         pairing = true
         defer { pairing = false }
         do {
-            let device = try await model.link.pair(with: mac.endpoint, code: code.filter(\.isNumber))
+            let device = try await model.link.pair(with: mac.endpoint, code: attempt.code.filter(\.isNumber))
             paired = device.name
-            code = ""
+            attempt.code = ""
             codeFocused = false
         } catch {
-            self.error = PhoneLink.message(for: error)
-            code = ""
+            attempt.failed(PhoneLink.message(for: error))
         }
+    }
+}
+
+/// The code being typed on the pairing screen, and why the last one didn't pair. A code that fails empties the
+/// boxes for the next and keeps its reason on screen until the person types again.
+struct PairingAttempt: Equatable {
+    var code = ""
+    /// Why the last code didn't pair ("That code didn’t match. Your Mac now shows a new code.").
+    var problem: String?
+
+    /// The code didn't pair: the boxes empty, and the reason stays.
+    mutating func failed(_ reason: String) {
+        problem = reason
+        code = ""
+    }
+
+    /// The boxes changed: typing puts the last reason away, and emptying them (as a failed code does) keeps it.
+    mutating func codeChanged(to typed: String) {
+        if !typed.isEmpty { problem = nil }
     }
 }
 

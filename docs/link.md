@@ -129,7 +129,7 @@ Pairing looks and reads the same on both devices: DaybookUI's `PairingView(role:
   Mac to offer it adds "No Mac found. Open Daybook › Settings › Devices on your Mac, on this Wi‑Fi."
 - **Paired.** The glyph becomes the Mac and iPhone together (`replace.magic`, a cross-fade under Reduce Motion), the
   title says "Paired with Studio Mac" beside a checkmark that draws on (`DoneMark`), and the iPhone gives a success
-  tap; a failed code gives an error tap.
+  tap; a failed code gives an error tap, empties the boxes, and its reason stays until the person types again.
 - **Layout.** One column in the hand and in the Mac's 560 pt sheet; over the open iPhone Duo two pages through the
   app's `CreaseSplit`: the title and the Macs on the left, the code on the right.
 - **Unpair.** "Unpair…" on both, confirmed with "Unpair Studio Mac?" and one consequence: "Recording together stops
