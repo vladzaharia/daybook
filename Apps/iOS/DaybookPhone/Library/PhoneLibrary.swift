@@ -26,8 +26,16 @@ final class PhoneLibrary {
     /// Recordings brought in on this iPhone (imports, recorder transfers), besides its microphone's,
     /// which its device identity names (`ownsTrack`). Kept beside the library, never synced.
     @ObservationIgnored private var broughtIn: Set<UUID>
-    /// The last write of `broughtIn` failed: it's written again with the next one, and at the next load.
+    /// The last write of `broughtIn` failed: the next load and the next import write it again.
     @ObservationIgnored private(set) var broughtInUnsaved = false
+    /// Counts what's added to `broughtIn`, so a write knows whether it saved the newest.
+    @ObservationIgnored private var broughtInChanges = 0
+    /// The write under way: the next waits for it, so writes land in order and the newest last.
+    @ObservationIgnored private var broughtInWrite: Task<Void, Never>?
+    /// Writes the record durably; replaced in tests.
+    @ObservationIgnored var writeBroughtIn: @Sendable (Data, URL) async throws -> Void = { data, url in
+        try await Task.detached(priority: .utility) { try DurableFiles.write(data, to: url) }.value
+    }
 
     init(rootURL: URL = LibraryLocation.defaultRoot, sync: LibrarySyncController? = nil,
          installation: String = PhoneDevice.installationID()) {
@@ -312,24 +320,39 @@ final class PhoneLibrary {
     }
 
     private func noteBroughtIn(_ track: RecordingTrack?) async {
-        guard let track, broughtIn.insert(track.id).inserted || broughtInUnsaved else { return }
+        guard let track else { return }
+        await noteBroughtIn(track.id)
+    }
+
+    /// Records a recording brought in here, and writes the record.
+    func noteBroughtIn(_ id: UUID) async {
+        // Already recorded, unless its write failed: then this write is the retry.
+        guard broughtIn.insert(id).inserted || broughtInUnsaved else { return }
+        broughtInChanges += 1
         await saveBroughtIn()
     }
 
     /// Writes the record of what was brought in here, durably, before the conversation that holds it is: it decides
     /// whether this iPhone transcribes an import itself, after a relaunch too. A write that fails (a full disk) is
     /// logged and tried again with the next import and the next load, so the record catches up rather than being lost.
+    /// Writes go one at a time, each with the record as it is when its turn comes, so an older one never lands last.
     private func saveBroughtIn() async {
-        let url = rootURL.appendingPathComponent(Self.broughtInFile), ids = broughtIn.map(\.uuidString).sorted()
-        do {
-            try await Task.detached(priority: .utility) {
-                try DurableFiles.write(try JSONEncoder().encode(ids), to: url)
-            }.value
-            broughtInUnsaved = false
-        } catch {
-            broughtInUnsaved = true
-            Self.log.error("Couldn’t save the recordings brought in on this iPhone: \(error.localizedDescription, privacy: .public)")
+        let previous = broughtInWrite
+        let write = Task { @MainActor in
+            await previous?.value
+            let url = rootURL.appendingPathComponent(Self.broughtInFile), ids = broughtIn.map(\.uuidString).sorted()
+            let changes = broughtInChanges
+            do {
+                try await writeBroughtIn(try JSONEncoder().encode(ids), url)
+                // Something added meanwhile has its own write coming, which says whether the record is saved.
+                if changes == broughtInChanges { broughtInUnsaved = false }
+            } catch {
+                broughtInUnsaved = true
+                Self.log.error("Couldn’t save the recordings brought in on this iPhone: \(error.localizedDescription, privacy: .public)")
+            }
         }
+        broughtInWrite = write
+        await write.value
     }
 
     private static let log = Logger(subsystem: "local.daybook", category: "PhoneLibrary")

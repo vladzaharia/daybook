@@ -663,6 +663,68 @@ final class PhoneLibraryTests: XCTestCase {
         XCTAssertTrue(PhoneLibrary(rootURL: libraryRoot, installation: "INSTALL-1").ownsTrack(track), "saved at the next load")
     }
 
+    /// Holds the first write of the brought-in record until released; the rest go straight through. Keeps what each
+    /// write wrote, in the order they landed.
+    final class HeldRecordWrites: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: CheckedContinuation<Void, Never>?
+        private var released = false
+        private var started = 0
+        private var written: [Set<String>] = []
+        var writes: Int { lock.withLock { started } }
+        var landed: [Set<String>] { lock.withLock { written } }
+
+        func write(_ data: Data, to url: URL) async throws {
+            if lock.withLock({ started += 1; return started == 1 }) {
+                await withCheckedContinuation { continuation in
+                    let go = lock.withLock { () -> Bool in
+                        if !released { held = continuation }
+                        return released
+                    }
+                    if go { continuation.resume() }
+                }
+            }
+            try data.write(to: url, options: .atomic)
+            let ids = Set(try JSONDecoder().decode([String].self, from: data))
+            lock.withLock { written.append(ids) }
+        }
+
+        func release() {
+            let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                released = true
+                defer { held = nil }
+                return held
+            }
+            continuation?.resume()
+        }
+    }
+
+    /// Writes of the record go one at a time, each with the record as it is when its turn comes: a write that started
+    /// before another recording was brought in never lands last and drops it.
+    func testBehaviorTheBroughtInRecordIsWrittenInOrder() async throws {
+        let root = try temporaryDirectory()
+        let libraryRoot = root.appendingPathComponent("Library")
+        let library = PhoneLibrary(rootURL: libraryRoot, installation: "INSTALL-1")
+        try await library.reload()
+        let writes = HeldRecordWrites()
+        library.writeBroughtIn = { data, url in try await writes.write(data, to: url) }
+        let first = UUID(), second = UUID()
+
+        let one = Task { await library.noteBroughtIn(first) }
+        try await waitUntil("the first write is under way") { writes.writes == 1 }
+        let two = Task { await library.noteBroughtIn(second) }
+        // Time for a write that didn't wait its turn to land before the first.
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(writes.writes, 1, "the second write waits for the first")
+        writes.release()
+        await one.value
+        await two.value
+
+        XCTAssertEqual(writes.landed, [[first.uuidString], [first.uuidString, second.uuidString]])
+        let data = try Data(contentsOf: libraryRoot.appendingPathComponent(PhoneLibrary.broughtInFile))
+        XCTAssertEqual(Set(try JSONDecoder().decode([String].self, from: data)), [first.uuidString, second.uuidString])
+    }
+
     private func audioFile(at url: URL, step: Float = 0.17) throws {
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_000))
