@@ -55,31 +55,35 @@ export DEVELOPER_DIR="$developer_dir"
 [[ -n "${GITHUB_ENV:-}" ]] && echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
 
 summary() { if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then printf '%s\n' "$*" >> "$GITHUB_STEP_SUMMARY"; fi; }
+# Each tool's output is read in full, then cut: a reader that stops early (head -1) can leave the tool writing to a
+# closed pipe, and pipefail then fails the step.
+first_line() { printf '%s\n' "${1%%$'\n'*}"; }
 
 version="$(xcodebuild -version)"
 echo "$version"
-first="$(printf '%s\n' "$version" | head -1)"
+first="$(first_line "$version")"
 [[ "$first" == "Xcode $expect" || "$first" == "Xcode $expect."* ]] || fail "expected Xcode $expect at $xcode, found $first"
-build="$(printf '%s\n' "$version" | sed -n 's/^Build version //p')"
+build="$(sed -n 's/^Build version //p' <<< "$version")"
 if [[ -n "$expect_build" && "$build" != "$expect_build" ]]; then
     fail "$first at $xcode is build $build, not $expect_build. The runner image changed: check its Xcode, then set the DAYBOOK_RELEASE_XCODE_BUILD repository variable (docs/release.md, Runner and Xcode)."
 fi
 if [[ -n "${GITHUB_ENV:-}" ]]; then echo "DAYBOOK_XCODE_BUILD=$build" >> "$GITHUB_ENV"; fi
-swift --version 2>&1 | head -1
+swift_version="$(swift --version 2>&1)"
+first_line "$swift_version"
 summary "### Toolchain"
 summary "- $first ($build) at \`$xcode\`${expect_build:+, the release build}"
 
 if (( ${#sdks[@]} )); then
     installed="$(xcodebuild -showsdks)"
     for sdk in "${sdks[@]}"; do
-        printf '%s\n' "$installed" | grep -q -- "-sdk $sdk\$" || fail "SDK $sdk isn't in $xcode"
+        grep -q -- "-sdk $sdk\$" <<< "$installed" || fail "SDK $sdk isn't in $xcode"
         echo "SDK $sdk: present"
     done
 fi
 
 if (( metal )); then
     if ! xcrun metal --version >/dev/null 2>&1; then
-        echo "Downloading the Metal toolchain for $(printf '%s\n' "$version" | head -1)"
+        echo "Downloading the Metal toolchain for $first"
         for attempt in 1 2 3; do
             xcodebuild -downloadComponent MetalToolchain && break
             (( attempt < 3 )) || fail "couldn't download the Metal toolchain"
@@ -87,8 +91,10 @@ if (( metal )); then
         done
         xcrun --kill-cache || true
     fi
-    metal="$(xcrun metal --version 2>&1 | head -1)"
-    component="$(xcodebuild -showComponent MetalToolchain 2>/dev/null | sed -n 's/^Build Version: //p' | head -1 || true)"
-    echo "Metal toolchain ${component:-?}: $metal"
-    summary "- Metal toolchain ${component:-(build unknown)}: $metal"
+    metal_version="$(xcrun metal --version 2>&1)"
+    metal_version="$(first_line "$metal_version")"
+    components="$(xcodebuild -showComponent MetalToolchain 2>/dev/null || true)"
+    component="$(first_line "$(sed -n 's/^Build Version: //p' <<< "$components")")"
+    echo "Metal toolchain ${component:-?}: $metal_version"
+    summary "- Metal toolchain ${component:-(build unknown)}: $metal_version"
 fi

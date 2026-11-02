@@ -82,7 +82,7 @@ case "$command" in
                 assets="$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name')"
                 while IFS= read -r asset; do
                     [[ -n "$asset" ]] || continue
-                    if ! printf '%s' "$keep" | grep -qxF -- "$asset"; then
+                    if ! grep -qxF -- "$asset" <<< "$keep"; then
                         gh release delete-asset "$tag" "$asset" --repo "$repo" --yes
                         note "deleted $asset, which this run doesn't produce"
                     fi

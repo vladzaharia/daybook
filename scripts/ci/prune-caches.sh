@@ -37,7 +37,8 @@ for key in ${keys[@]+"${keys[@]}"}; do
     family="${key%-*}-"
     listing="$(gh api "repos/$repo/actions/caches?ref=$ref&key=$family&per_page=100" \
         --jq '.actions_caches[] | "\(.id)\t\(.key)"')"
-    if ! printf '%s\n' "$listing" | cut -f2 | grep -qxF -- "$key"; then
+    # Matched from a here-string: `cut | grep -q` could stop cut mid-write, and pipefail would call a saved key unsaved.
+    if ! cut -f2 <<< "$listing" | grep -xF -- "$key" >/dev/null; then
         echo "$key isn't saved on $ref; leaving the $family* caches alone"
         continue
     fi

@@ -176,7 +176,7 @@ if (( apply )); then
     existing="$(gh api "repos/$repo/environments/$environment/deployment-branch-policies" --jq '.branch_policies[] | "\(.type):\(.name)"')"
 fi
 for policy in "branch:main" "tag:v*"; do
-    if printf '%s\n' "$existing" | grep -qxF "$policy"; then
+    if grep -qxF "$policy" <<< "$existing"; then
         echo "   (policy $policy already exists)"
         continue
     fi
@@ -213,7 +213,9 @@ if (( protect_tags )); then
     ruleset='{"name":"Release tags","target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},"rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}],"bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}'
     printf "   \$ echo '%s' | gh api -X POST repos/%s/rulesets --input -\n" "$ruleset" "$repo"
     if (( apply )); then
-        if gh api "repos/$repo/rulesets" --jq '.[].name' | grep -qxF "Release tags"; then
+        # Read in full, then matched: piped into grep -q, gh could be cut off mid-write and pipefail would say no ruleset.
+        rulesets="$(gh api "repos/$repo/rulesets" --jq '.[].name')"
+        if grep -qxF "Release tags" <<< "$rulesets"; then
             echo "   (ruleset 'Release tags' already exists)"
         else
             printf '%s' "$ruleset" | gh api -X POST "repos/$repo/rulesets" --input - --silent

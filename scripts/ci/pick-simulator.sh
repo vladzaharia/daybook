@@ -27,16 +27,16 @@ done
 devices="$(xcrun simctl list -j devices available)"
 # Every available iOS device as "rank<TAB>name<TAB>udid<TAB>runtime", newest runtime first; the rank is
 # major * 1000 + minor, and the sort is stable, so simctl's order holds within a runtime.
-listing="$(printf '%s' "$devices" | jq -r '
+listing="$(jq -r '
     .devices | to_entries[]
     | select(.key | test("SimRuntime\\.iOS-"))
     | (.key | capture("iOS-(?<major>[0-9]+)-(?<minor>[0-9]+)")) as $v
     | .value[] | select(.isAvailable != false)
     | "\(($v.major | tonumber) * 1000 + ($v.minor | tonumber))\t\(.name)\t\(.udid)\tiOS \($v.major).\($v.minor)"' \
-    | sort -s -t $'\t' -k1,1nr)"
+    <<< "$devices" | sort -s -t $'\t' -k1,1nr)"
 
 choose() {
-    printf '%s\n' "$listing" | awk -F'\t' -v name="$1" '$2 == name { print $3 "\t" $2 "\t" $4; exit }'
+    awk -F'\t' -v name="$1" '$2 == name { print $3 "\t" $2 "\t" $4; exit }' <<< "$listing"
 }
 
 pick=""
@@ -46,7 +46,7 @@ for name in "${prefs[@]}"; do
     echo "pick-simulator.sh: no $name simulator here" >&2
 done
 if [[ -z "$pick" ]]; then
-    pick="$(printf '%s\n' "$listing" | awk -F'\t' '$2 ~ /^iPhone/ { print $3 "\t" $2 "\t" $4; exit }')"
+    pick="$(awk -F'\t' '$2 ~ /^iPhone/ { print $3 "\t" $2 "\t" $4; exit }' <<< "$listing")"
 fi
 [[ -n "$pick" ]] || { echo "pick-simulator.sh: no iPhone simulator is available" >&2; exit 1; }
 

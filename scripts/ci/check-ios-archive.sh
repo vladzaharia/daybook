@@ -124,7 +124,7 @@ done < <(find "$app/PlugIns" "$app/Extensions" -maxdepth 1 -name '*.appex' 2>/de
 if codesign --verify --strict "$app" >/dev/null 2>&1; then
     entitlements="$(codesign -d --entitlements - --xml "$app" 2>/dev/null || true)"
     for needle in group.local.daybook "$container"; do
-        if printf '%s' "$entitlements" | grep -q "<string>$needle</string>"; then
+        if grep -q "<string>$needle</string>" <<< "$entitlements"; then
             ok "entitlement: $needle"
         else
             problem "the signed app lacks the $needle entitlement"
