@@ -23,8 +23,8 @@ extension AppState {
     static func linkIdentity(sync: LibrarySyncController, defaults: UserDefaults) -> LinkIdentity {
         let id: UUID
         if let replica = UUID(uuidString: sync.deviceID) { id = replica }
-        else if let stored = defaults.string(forKey: "linkDeviceID").flatMap(UUID.init(uuidString:)) { id = stored }
-        else { id = UUID(); defaults.set(id.uuidString, forKey: "linkDeviceID") }
+        else if let stored = defaults.string(forKey: ReplicaIdentity.Key.linkDeviceID).flatMap(UUID.init(uuidString:)) { id = stored }
+        else { id = UUID(); defaults.set(id.uuidString, forKey: ReplicaIdentity.Key.linkDeviceID) }
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         return LinkIdentity(deviceID: id, name: ProcessingRequest.Device.currentName, deviceClass: .mac, appVersion: version,
                             canProcess: false, features: [LinkCapabilities.recordControlFeature, LinkCapabilities.processingProgressFeature,
@@ -477,7 +477,7 @@ extension AppState {
         let placed = meeting.tracks.contains { $0.deviceKind != DaybookPhoneIntegration.id && meeting.timelinePlacement(of: $0.id) != nil }
         guard placed else { return false }
         for track in arriving {
-            guard let current = meetings.first(where: { $0.id == id }), let url = await audioURL(for: track, meetingID: id) else { continue }
+            guard let current = meetings.first(where: { $0.id == id }), let url = await availableAudioURL(for: track, in: id) else { continue }
             var before = current
             before.tracks.removeAll { $0.id == track.id }
             sources.carried[track.sha256] = .init(transcript: nil, speakers: [], highlights: [], placement: nil,
@@ -504,7 +504,7 @@ extension AppState {
     func phoneTranscriptArrived(_ id: UUID, job: ProcessingJob) async -> Bool {
         guard let meeting = meetings.first(where: { $0.id == id }), let track = phoneTranscriptToCheck(meeting),
               job.requestID != nil || !hasRequestThisMacCouldTake(meeting),
-              await audioURL(for: track, meetingID: id) != nil else { return false }
+              await availableAudioURL(for: track, in: id) != nil else { return false }
         sources.markChecked(phoneRecording: track.id)
         // A conversation a Mac recorded with this phone (its link is here) waits for that Mac's recording.
         let recordedWithAMac = meeting.companions?.contains { $0.deviceKind == DaybookPhoneIntegration.id && $0.deviceID == track.deviceSerial } == true
@@ -566,7 +566,7 @@ extension AppState {
             let others = meetings.filter { $0.id != meeting.id }
             guard SourceMatcher.linked(Self.fullRecording(identity), start: start.date, in: others, policy: sources.policy) != nil else { return false }
         }
-        guard let url = await audioURL(for: track, meetingID: meeting.id) else { return false }
+        guard let url = await availableAudioURL(for: track, in: meeting.id) else { return false }
         guard let plan = await planArrival(url: url, duration: track.duration ?? 0, device: identity, start: start, excluding: [meeting.id]) else { return false }
         if let target = plan.attachTo, canMoveSource(into: target), let title = meetings.first(where: { $0.id == target })?.title {
             let stays = meeting.hasPersonMadeContent

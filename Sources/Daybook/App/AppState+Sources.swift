@@ -121,7 +121,7 @@ extension AppState {
         guard let meeting = meetings.first(where: { $0.id == meetingID }),
               let reference = meeting.alignmentReference(excluding: excluding),
               let placement = meeting.timelinePlacement(of: reference.id),
-              let referenceURL = await audioURL(for: reference, meetingID: meetingID) else { return .unavailable }
+              let referenceURL = await availableAudioURL(for: reference, in: meetingID) else { return .unavailable }
         let expected = SourcePlacement.expectedOffset(clockOffset: clockOffset, reference: placement)
         let radius = reliableClock && expected != nil ? sources.policy.clockSearchRadius
             : max(sources.policy.fileSearchRadius, duration ?? 0, reference.duration ?? 0)
@@ -396,7 +396,7 @@ extension AppState {
             guard let pending = meetings.first(where: { $0.id == id })?.tracks.first(where: { $0.id == track.id })?.alignment,
                   soundMayHelp(pending) else { continue }
             var placed: SourceAlignment?, compared = false
-            if let url = await audioURL(for: track, meetingID: id) {
+            if let url = await availableAudioURL(for: track, in: id) {
                 switch await compareSound(of: url, duration: track.duration, in: id, clockOffset: pending.clockOffset,
                                           reliableClock: pending.clockOffset != nil, excluding: unplaced.union([track.id])) {
                 case .unavailable, .failed: break
@@ -435,7 +435,7 @@ extension AppState {
            candidate.transcripts.contains(where: { !$0.segments.isEmpty }), canMoveSource(into: target),
            let result = transcriptCheck(suggestion, in: meeting, against: candidate) {
             if let placement = result {
-                if await moveSource(from: id, suggestion: suggestion, into: target, placement: placement) {
+                if await moveSource(from: id, suggestion: suggestion, into: target, placement: placement, askedFor: false) {
                     update(id) { $0.status = $0.summary == nil ? .imported : .ready }
                     return true
                 }
@@ -446,7 +446,7 @@ extension AppState {
                   let candidate = meetings.first(where: { $0.id == id }),
                   let result = transcriptCheck(suggestion, in: other, against: candidate) else { continue }
             if let placement = result {
-                if await moveSource(from: other.id, suggestion: suggestion, into: id, placement: placement) {
+                if await moveSource(from: other.id, suggestion: suggestion, into: id, placement: placement, askedFor: false) {
                     // It joins this run: fuse again now rather than processing the conversation twice.
                     cancelQueued(id)
                     await realign(id)
@@ -485,7 +485,7 @@ extension AppState {
               suggestion.candidateMeetingIDs.contains(target), processingID != meetingID, processingID != target,
               recordingID != meetingID, canMoveSource(into: target) else { return false }
         cancelQueued(meetingID)
-        return await moveSource(from: meetingID, suggestion: suggestion, into: target, placement: nil)
+        return await moveSource(from: meetingID, suggestion: suggestion, into: target, placement: nil, askedFor: true)
     }
 
     /// The person keeps the recording in its own conversation.
@@ -498,11 +498,14 @@ extension AppState {
 
     /// Copies a recording into `target` (its original stays where it was), with its transcript so it
     /// isn't transcribed again. The conversation it came from goes to the Trash, where it can be
-    /// restored, unless the person has worked in it.
-    private func moveSource(from sourceID: UUID, suggestion: SourceSuggestion, into target: UUID, placement: SourceAlignment?) async -> Bool {
+    /// restored, unless the person has worked in it. A problem is said in the window's alert only when the person
+    /// `askedFor` the move; one the transcripts settled on their own is written to the log.
+    private func moveSource(from sourceID: UUID, suggestion: SourceSuggestion, into target: UUID, placement: SourceAlignment?,
+                            askedFor: Bool) async -> Bool {
         guard let source = meetings.first(where: { $0.id == sourceID }),
-              let track = source.tracks.first(where: { $0.id == suggestion.trackID }),
-              let url = await audioURL(for: track, meetingID: sourceID),
+              let track = source.tracks.first(where: { $0.id == suggestion.trackID }) else { return false }
+        let audio = askedFor ? await audioURL(for: track, meetingID: sourceID) : await availableAudioURL(for: track, in: sourceID)
+        guard let url = audio,
               let targetTitle = meetings.first(where: { $0.id == target })?.title else { return false }
         let transcript = source.transcripts.filter { $0.trackID == track.id }.max { $0.createdAt < $1.createdAt }
         let speakerIDs = Set(transcript?.segments.compactMap(\.speakerID) ?? [])
@@ -512,7 +515,11 @@ extension AppState {
                                               startedAt: suggestion.clockOffsets?[target] == nil ? nil : trackStart(track))
         defer { sources.carried[track.sha256] = nil }
         do { _ = try await importAudio([url], source: track.source, attachTo: target, device: track.device) }
-        catch { report("Couldn’t Add the Recording", "Try again.", error); return false }
+        catch {
+            if askedFor { report("Couldn’t Add the Recording", "Try again.", error) }
+            else { Self.log.notice("A recording couldn't join its conversation: \(error.localizedDescription, privacy: .public)") }
+            return false
+        }
         dismissSourceSuggestion(suggestion.id, in: sourceID)
         trashWhenIdle(sourceID, addedTo: targetTitle)
         return true

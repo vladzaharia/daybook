@@ -7,6 +7,7 @@ import DaybookKit
 import DaybookLink
 import Foundation
 import Observation
+import os
 import UniformTypeIdentifiers
 
 /// The Mac app's state. The library itself (conversations, edits, saving, sync, requests) is
@@ -63,18 +64,14 @@ final class AppState {
     /// Incremented to move keyboard focus to the library search field.
     var searchFocusRequest = 0
     /// View › Make Text Bigger scales only the reading surface.
-    var readingScale: Double { didSet { preferences.set(readingScale, forKey: "readingScale") } }
+    var readingScale: Double { didSet { preferences.set(readingScale, forKey: Preference.readingScale) } }
     /// App-owned so menu commands can drive it. Only what shows the playhead reads its position, which
     /// moves ten times a second; the Controls menu reads only whether it's playing.
     let playback = AudioPlaybackController()
     /// What couldn't be done, for the window's alert (`report(_:_:_:)`, AppProblem.swift).
     var problem: AppProblem?
-    /// The alert's sentence: a reported problem's, else a library save that failed. Setting it shows
-    /// a plain message in place of either.
-    var errorMessage: String? {
-        get { problem?.message ?? library.errorMessage }
-        set { problem = nil; library.errorMessage = newValue; library.errorDetails = nil }
-    }
+    /// The alert's sentence: a reported problem's, else a library save that failed.
+    var errorMessage: String? { problem?.message ?? library.errorMessage }
     var notice: String? {
         get { library.notice }
         set {
@@ -83,6 +80,8 @@ final class AppState {
         }
     }
     var isReady = false
+    /// The library couldn't open: said on the page with Try Again (`LibraryProblemPage`), until it opens.
+    var libraryProblem: AppProblem?
     /// A library in the wrong place for this build (docs/sandbox.md): the library doesn't open until the person decides.
     var libraryMoveOffer: LibraryMoveOffer?
     var isMovingLibrary = false
@@ -150,7 +149,7 @@ final class AppState {
     }
     var processingPreferences: ProcessingPreferences {
         didSet {
-            if let data = try? JSONEncoder().encode(processingPreferences.normalized) { preferences.set(data, forKey: "processingPreferences") }
+            if let data = try? JSONEncoder().encode(processingPreferences.normalized) { preferences.set(data, forKey: Preference.processingPreferences) }
             // The speaker model is the selection's diarization choice; keep the two in step.
             if modelSelections[.diarization] != processingPreferences.speakerModelID { modelSelections[.diarization] = processingPreferences.speakerModelID }
             presenceChanged()
@@ -172,7 +171,7 @@ final class AppState {
     /// The model chosen for each role, by family and variant (docs/models.md).
     var modelSelections: ModelSelections {
         didSet {
-            if let data = try? JSONEncoder().encode(modelSelections) { preferences.set(data, forKey: "modelSelections") }
+            if let data = try? JSONEncoder().encode(modelSelections) { preferences.set(data, forKey: Preference.modelSelections) }
             if let speaker = modelSelections[.diarization], processingPreferences.speakerModelID != speaker {
                 processingPreferences.speakerModelID = speaker
             }
@@ -208,7 +207,7 @@ final class AppState {
     }
     var automaticRecording: Bool {
         didSet {
-            preferences.set(automaticRecording, forKey: "automaticRecording")
+            preferences.set(automaticRecording, forKey: Preference.automaticRecording)
             if automaticRecording { monitor.startMonitoring() }
             else {
                 monitor.stopMonitoring()
@@ -216,9 +215,9 @@ final class AppState {
             }
         }
     }
-    var includeComputerAudio: Bool { didSet { preferences.set(includeComputerAudio, forKey: "includeComputerAudio") } }
-    var processSyncedAudio: Bool { didSet { preferences.set(processSyncedAudio, forKey: "processSyncedAudio"); presenceChanged() } }
-    var detectSpeakers: Bool { didSet { preferences.set(detectSpeakers, forKey: "detectSpeakers"); presenceChanged() } }
+    var includeComputerAudio: Bool { didSet { preferences.set(includeComputerAudio, forKey: Preference.includeComputerAudio) } }
+    var processSyncedAudio: Bool { didSet { preferences.set(processSyncedAudio, forKey: Preference.processSyncedAudio); presenceChanged() } }
+    var detectSpeakers: Bool { didSet { preferences.set(detectSpeakers, forKey: Preference.detectSpeakers); presenceChanged() } }
     let sync: LibrarySyncController
     /// Daybook's local link to paired iPhones: pairing, record control, live progress.
     let phoneLink: PhoneLink
@@ -374,7 +373,6 @@ final class AppState {
     /// This Mac's recording started on its own (a detected meeting).
     var recordingWasStartedAutomatically: Bool { recordingWasAutomatic }
     @ObservationIgnored private var captureDirectory: URL?
-    @ObservationIgnored private var notesPanel: NotesPanelController?
     /// Changes whenever the library's conversations do: the key for what's derived from them.
     var libraryRevision: Int { library.revision }
     /// Bumped when a search that ran off the main actor has its results, so the views showing them read them again.
@@ -388,7 +386,7 @@ final class AppState {
         let launch = Self.launchCheck(library: libraryURL, defaults: defaults)
         recorder = RecordingController(environment: capture)
         queue = ProcessingQueue(owedURL: libraryURL.appendingPathComponent("local-queue.json"))
-        let storedPreferences = defaults.data(forKey: "processingPreferences").flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
+        let storedPreferences = defaults.data(forKey: Preference.processingPreferences).flatMap { try? JSONDecoder().decode(ProcessingPreferences.self, from: $0) }
         var processingPreferences = storedPreferences ?? .init()
         let selections = Self.loadModelSelections(defaults: defaults, speakerModel: storedPreferences?.speakerModelID)
         processingPreferences.speakerModelID = selections[.diarization] ?? processingPreferences.speakerModelID
@@ -426,18 +424,18 @@ final class AppState {
         }
         #endif
         self.phoneLink = phoneLink
-        var environment = DeviceEnvironment(defaults: defaults, stagingDirectory: libraryURL.appendingPathComponent("DeviceImports", isDirectory: true))
+        let environment = DeviceEnvironment(defaults: defaults, stagingDirectory: libraryURL.appendingPathComponent("DeviceImports", isDirectory: true))
         environment.phone.makeLinkConnection = { device in UUID(uuidString: device.id).map { PhoneLinkConnection(phoneID: $0, link: phoneLink) } }
         environment.phone.syncIsOn = { sync.folder != nil }
         environment.phone.pairedPhoneIDs = { Set(phoneLink.paired.map(\.deviceID.uuidString)) }
         devices = DeviceHub(environment: environment)
         recorderHandoff = RecorderHandoff(library: library, devices: devices, deviceClass: .mac, defaults: defaults)
         sources = MultiSourceCoordinator(defaults: defaults)
-        automaticRecording = defaults.bool(forKey: "automaticRecording")
-        includeComputerAudio = defaults.object(forKey: "includeComputerAudio") as? Bool ?? true
-        processSyncedAudio = defaults.object(forKey: "processSyncedAudio") as? Bool ?? true
-        detectSpeakers = defaults.object(forKey: "detectSpeakers") as? Bool ?? true
-        readingScale = defaults.object(forKey: "readingScale") as? Double ?? 1
+        automaticRecording = defaults.bool(forKey: Preference.automaticRecording)
+        includeComputerAudio = defaults.object(forKey: Preference.includeComputerAudio) as? Bool ?? true
+        processSyncedAudio = defaults.object(forKey: Preference.processSyncedAudio) as? Bool ?? true
+        detectSpeakers = defaults.object(forKey: Preference.detectSpeakers) as? Bool ?? true
+        readingScale = defaults.object(forKey: Preference.readingScale) as? Double ?? 1
         runtime = LocalIntelligenceRuntime(modelsDirectory: libraryURL.appendingPathComponent("Models"), fetcher: ModelDemo.fetcher)
         let captionSettings = LiveCaptionSettings(defaults: defaults)
         self.captionSettings = captionSettings
@@ -469,6 +467,28 @@ final class AppState {
         wireSummaryPlacements()
         libraryMoveOffer = launch.offer
         launchNotice = launch.notice
+    }
+
+    /// The preferences this Mac's state keeps, by name, in the app's preferences or a `--library` run's own suite.
+    enum Preference {
+        static let readingScale = "readingScale"
+        static let processingPreferences = "processingPreferences"
+        static let modelSelections = "modelSelections"
+        /// Roles that arrived after the model system, each added to a stored selection once.
+        static let smallTasksAdded = "modelSelections.smallTasksAdded"
+        static let imageDescriptionAdded = "modelSelections.imageDescriptionAdded"
+        static let liveModelsAdded = "modelSelections.liveAdded"
+        /// The catalog IDs stored before the model system ("whisper-base"), read once to migrate.
+        static let legacyTranscriptionModel = "transcriptionModel"
+        static let legacySummaryModel = "summaryModel"
+        static let automaticRecording = "automaticRecording"
+        static let includeComputerAudio = "includeComputerAudio"
+        static let processSyncedAudio = "processSyncedAudio"
+        static let detectSpeakers = "detectSpeakers"
+        static let showsFloatingNotesWhileRecording = "showsFloatingNotesWhileRecording"
+        static let isInspectorPresented = "isInspectorPresented"
+        static let showsMenuBarExtra = "showsMenuBarExtra"
+        static let onboardingCompleted = "onboardingCompleted"
     }
 
     /// What the launch check found: a move to offer, or something to say once the library opens.
@@ -525,7 +545,7 @@ final class AppState {
             isMovingLibrary = true
             Task {
                 do {
-                    _ = try await Task.detached(priority: .userInitiated) { try LegacyLibraryReturn.move(plan) }.value
+                    _ = try await detachedWork(priority: .userInitiated) { try LegacyLibraryReturn.move(plan) }
                     LegacyLibraryReturn.finish(plan, defaults: preferences)
                     AppRelaunch.relaunch()
                 } catch {
@@ -539,7 +559,7 @@ final class AppState {
             let scoped = source.startAccessingSecurityScopedResource()
             Task {
                 do {
-                    try await Task.detached(priority: .userInitiated) { try SandboxMigration.copyLibrary(from: source, to: plan.library) }.value
+                    try await detachedWork(priority: .userInitiated) { try SandboxMigration.copyLibrary(from: source, to: plan.library) }
                     movedLibrary = MovedLibrary(source: source, scoped: scoped, legacy: plan.legacy)
                 } catch {
                     if scoped { source.stopAccessingSecurityScopedResource() }
@@ -597,37 +617,37 @@ final class AppState {
     /// migrated from the catalog IDs Daybook stored before ("whisper-base", "qwen-7b",
     /// "speaker-community-1"). The old keys are left in place for an older build.
     static func loadModelSelections(defaults: UserDefaults, speakerModel: String?) -> ModelSelections {
-        if let data = defaults.data(forKey: "modelSelections"), var stored = try? JSONDecoder().decode(ModelSelections.self, from: data) {
+        if let data = defaults.data(forKey: Preference.modelSelections), var stored = try? JSONDecoder().decode(ModelSelections.self, from: data) {
             // Small tasks arrived after the model system: once, a selection without that role takes the initial one.
-            if !defaults.bool(forKey: "modelSelections.smallTasksAdded") {
-                defaults.set(true, forKey: "modelSelections.smallTasksAdded")
+            if !defaults.bool(forKey: Preference.smallTasksAdded) {
+                defaults.set(true, forKey: Preference.smallTasksAdded)
                 if stored[.smallTasks] == nil, let initial = ModelRecommendations.initialSelections()[.smallTasks] {
                     stored[.smallTasks] = initial
-                    if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: "modelSelections") }
+                    if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: Preference.modelSelections) }
                 }
             }
             // Photos came later still: the same, once, for the photo role (Apple Vision).
-            if !defaults.bool(forKey: "modelSelections.imageDescriptionAdded") {
-                defaults.set(true, forKey: "modelSelections.imageDescriptionAdded")
+            if !defaults.bool(forKey: Preference.imageDescriptionAdded) {
+                defaults.set(true, forKey: Preference.imageDescriptionAdded)
                 if stored[.imageDescription] == nil, let initial = ModelRecommendations.initialSelections()[.imageDescription] {
                     stored[.imageDescription] = initial
-                    if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: "modelSelections") }
+                    if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: Preference.modelSelections) }
                 }
             }
             // Live transcription's roles, once, so Settings › Models shows the live models captions would use.
-            if !defaults.bool(forKey: "modelSelections.liveAdded") {
-                defaults.set(true, forKey: "modelSelections.liveAdded")
+            if !defaults.bool(forKey: Preference.liveModelsAdded) {
+                defaults.set(true, forKey: Preference.liveModelsAdded)
                 stored = LiveModelChoices.addingDefaults(to: stored, platform: .macOS)
-                if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: "modelSelections") }
+                if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: Preference.modelSelections) }
             }
             return stored
         }
         let migrated = ModelSelections.migrating(
-            legacy: [.transcription: defaults.string(forKey: "transcriptionModel"), .summarization: defaults.string(forKey: "summaryModel"),
+            legacy: [.transcription: defaults.string(forKey: Preference.legacyTranscriptionModel), .summarization: defaults.string(forKey: Preference.legacySummaryModel),
                      .diarization: speakerModel],
             catalog: .builtIn, defaults: LiveModelChoices.addingDefaults(to: ModelRecommendations.initialSelections(), platform: .macOS))
-        defaults.set(true, forKey: "modelSelections.liveAdded")
-        if let data = try? JSONEncoder().encode(migrated) { defaults.set(data, forKey: "modelSelections") }
+        defaults.set(true, forKey: Preference.liveModelsAdded)
+        if let data = try? JSONEncoder().encode(migrated) { defaults.set(data, forKey: Preference.modelSelections) }
         return migrated
     }
     /// Conversations in the selected place, newest first. Kept until the place or the library changes.
@@ -690,7 +710,12 @@ final class AppState {
             resumeOwedWork()
             Task { await library.relabelStrandedWords() }
             listenToEarlierRecordingsWhenIdle()
-        } catch { report("Couldn’t Open Your Library", "Quit Daybook and open it again.", error) }
+        } catch {
+            // On the page, where it can be looked at and tried again: what stops a folder opening is still there after a
+            // relaunch.
+            libraryProblem = AppProblem(title: "Couldn’t Open Your Library",
+                                        fallback: "Its folder couldn’t be opened. Check it in Finder, then try again.", error: error)
+        }
     }
 
     /// Keeps this Mac's sync and link identity with the library (`ReplicaIdentity`), for when the library moves.
@@ -1002,6 +1027,14 @@ final class AppState {
         noticeAction = (message, action)
     }
 
+    /// Takes `line` out of the library notice (what it said was undone), with its button.
+    func withdraw(_ line: String) {
+        let rest = noticeLines.filter { $0 != line }
+        guard rest.count != noticeLines.count else { return }
+        notice = rest.isEmpty ? nil : rest.joined(separator: "\n")
+        if noticeAction?.message == line { noticeAction = nil }
+    }
+
     /// The library notice's lines, oldest first.
     var noticeLines: [String] { (notice ?? "").components(separatedBy: "\n").filter { !$0.isEmpty } }
 
@@ -1124,9 +1157,9 @@ final class AppState {
         library.addBookmark(in: id, trackID: trackID, at: seconds)
     }
 
+    /// Floating Notes on a conversation (there's one panel for the app).
     func showNotes(for id: UUID) {
-        if notesPanel == nil { notesPanel = NotesPanelController() }
-        notesPanel?.show(state: self, meetingID: id)
+        FloatingNotesWindow.shared.show(state: self, focus: id)
     }
 
     func export(_ id: UUID, json: Bool = false) {
@@ -1139,15 +1172,15 @@ final class AppState {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
             do {
-                try await Task.detached(priority: .userInitiated) {
+                try await detachedWork(priority: .userInitiated) {
                     if json {
                         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                         try encoder.encode(meeting).write(to: url, options: .atomic)
                     } else {
                         try MeetingExport.write(meeting, markdownURL: url) { directory.appendingPathComponent($0.relativePath) }
                     }
-                }.value
-                notice = "Exported \(url.lastPathComponent)"
+                }
+                postExported(url)
             } catch { report("Couldn’t Export", "Try again, or choose another folder.", error) }
         }
     }
@@ -1164,38 +1197,142 @@ final class AppState {
         let name = MeetingExport.fileName(for: meeting)
         Task {
             do {
-                let written = try await Task.detached(priority: .userInitiated) {
+                let written = try await detachedWork(priority: .userInitiated) {
                     let scoped = folder.startAccessingSecurityScopedResource()
                     defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
                     return try MeetingExport.write(meeting, to: folder, name: name) { directory.appendingPathComponent($0.relativePath) }
-                }.value
-                notice = "Exported \(written.markdown.lastPathComponent)"
+                }
+                postExported(written.markdown)
             } catch { report("Couldn’t Export the Conversation", "It couldn’t be exported. Try again, or choose another folder.", error) }
         }
     }
 
+    /// "Exported Standup.md", with Show in Finder.
+    private func postExported(_ file: URL) {
+        post("Exported \(file.lastPathComponent)", action: LibraryNoticeAction(title: "Show in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([file])
+        })
+    }
+
+    /// A recording's audio for something the person did (play it, show it in Finder): a problem is said in the window's
+    /// alert. Work that runs on its own uses `availableAudioURL(for:in:)`, which never interrupts.
     func audioURL(for track: RecordingTrack, meetingID: UUID) async -> URL? {
         guard library.isLoaded else { return nil }
-        do { return try await library.audioURL(for: track, in: meetingID) }
+        do { return try await audioURL(for: track, in: meetingID) }
         catch { report("Couldn’t Open the Audio", "Try again.", error); return nil }
     }
+
+    /// A recording's audio, or why it can't be had (the library isn't open, iCloud hasn't brought it yet).
+    func audioURL(for track: RecordingTrack, in meetingID: UUID) async throws -> URL {
+        guard library.isLoaded else { throw AppError.libraryUnavailable }
+        return try await library.audioURL(for: track, in: meetingID)
+    }
+
+    /// A recording's audio for work the person didn't start (placing a recording that arrived, comparing sound): nil
+    /// when it can't be had, which is written to the log rather than shown, so no alert appears over what the person is
+    /// doing.
+    func availableAudioURL(for track: RecordingTrack, in meetingID: UUID) async -> URL? {
+        do { return try await audioURL(for: track, in: meetingID) }
+        catch {
+            Self.log.notice("Audio for a recording isn't available: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    nonisolated static let log = Logger(subsystem: "local.daybook", category: "AppState")
 
     /// Imports, sync, and the Trash take turns with the library (`LibraryController`'s lock).
     private func acquireImportLock() async { await library.acquireLock() }
     private func releaseImportLock() { library.releaseLock() }
 
-    func trashMeeting(_ id: UUID) {
-        guard id != recordingID, id != processingID, !isStartingRecording, !isStoppingRecording else { return }
-        processingQueue.removeAll { $0.meetingID == id }
-        Task {
-            do {
-                guard library.isLoaded, try await library.moveToTrash(id, allowed: {
-                    id != recordingID && id != processingID && !isStartingRecording && !isStoppingRecording
-                }) else { return }
-                if selectedID == id { selectedID = meetings.first?.id }
-                notice = "Moved to the Trash."
-            } catch { report("Couldn’t Move to Trash", "Try again.", error) }
+    /// Recorded or processed now, or with a recording starting or stopping: it can't go to the Trash.
+    func isBusy(_ id: UUID) -> Bool {
+        id == recordingID || id == processingID || isStartingRecording || isStoppingRecording
+    }
+
+    func trashMeeting(_ id: UUID, undoManager: UndoManager? = nil) { trashMeetings([id], undoManager: undoManager) }
+
+    /// Moves conversations to the library's Trash (docs/architecture.md, "Storage and recovery"). Edit › Undo ("Undo
+    /// Move to Trash", with `undoManager`) and the notice's Undo put them back. When the selected one goes, the row after
+    /// them in the list is selected (the one before, at the end), so the person keeps their place. One that's busy
+    /// (`isBusy`) stays.
+    func trashMeetings(_ ids: [UUID], undoManager: UndoManager?) {
+        let ids = ids.filter { !isBusy($0) }
+        guard !ids.isEmpty else { return }
+        let neighbour = Self.neighbour(of: Set(ids), in: listedMeetingIDs)
+        let titles = ids.map { id in meetings.first { $0.id == id }?.title ?? "" }
+        for id in ids {
+            queue.removeJobs(for: id)
+            queue.settle(id)
         }
+        Task {
+            var trashed: [UUID] = []
+            do {
+                for id in ids {
+                    guard library.isLoaded, try await library.moveToTrash(id, allowed: { [self] in !isBusy(id) }) else { continue }
+                    trashed.append(id)
+                }
+            } catch { report("Couldn’t Move to Trash", "Try again.", error) }
+            guard !trashed.isEmpty else { return }
+            if let selectedID, trashed.contains(selectedID) { self.selectedID = neighbour }
+            multiSelection.subtract(trashed)
+            let title = trashed.count == 1 ? titles[ids.firstIndex(of: trashed[0]) ?? 0].trimmingCharacters(in: .whitespaces) : ""
+            let message = trashed.count > 1 ? "Moved \(trashed.count) conversations to the Trash."
+                : title.isEmpty ? "Moved a conversation to the Trash." : "Moved “\(title)” to the Trash."
+            let record = TrashRecord(ids: trashed, message: message)
+            if let undoManager {
+                Self.registerUndo(on: undoManager, name: "Move to Trash", target: record) { [weak self, record] in
+                    self?.restore(record, undoManager: undoManager)
+                }
+            }
+            post(message, action: LibraryNoticeAction(title: "Undo") { [weak self, record] in
+                undoManager?.removeAllActions(withTarget: record)
+                self?.restore(record, undoManager: nil)
+            })
+        }
+    }
+
+    /// Puts trashed conversations back and selects the first. With `undoManager` (Edit › Undo), Redo moves them to the
+    /// Trash again. A deletion that has synced comes back under a new ID (`LibraryController.restoreFromTrash`).
+    private func restore(_ record: TrashRecord, undoManager: UndoManager?) {
+        if let undoManager {
+            Self.registerUndo(on: undoManager, name: "Move to Trash", target: record) { [weak self, record] in
+                self?.trashMeetings(record.ids, undoManager: undoManager)
+            }
+        }
+        withdraw(record.message)
+        let ids = record.ids
+        Task {
+            var restored: [UUID] = []
+            for id in ids {
+                do { restored.append(try await library.restoreFromTrash(id).id) }
+                catch { report("Couldn’t Put It Back", "Try again.", error) }
+            }
+            record.ids = restored
+            guard let first = restored.first else { return }
+            if !visibleMeetings.contains(where: { $0.id == first }) { place = .section(.all) }
+            selectedID = first
+        }
+    }
+
+    /// Registers an undo, in a group of its own when nothing has opened one (an undo manager that doesn't group by
+    /// event, as tests use).
+    private static func registerUndo(on undoManager: UndoManager, name: String, target: TrashRecord, _ handler: @escaping @MainActor () -> Void) {
+        let opens = !undoManager.groupsByEvent && undoManager.groupingLevel == 0 && !undoManager.isUndoing && !undoManager.isRedoing
+        if opens { undoManager.beginUndoGrouping() }
+        undoManager.registerUndo(withTarget: target) { _ in MainActor.assumeIsolated { handler() } }
+        undoManager.setActionName(name)
+        if opens { undoManager.endUndoGrouping() }
+    }
+
+    /// The conversations the list shows now, in its order: the search's results while searching.
+    var listedMeetingIDs: [UUID] { isSearching ? searchHits.map(\.meetingID) : visibleMeetings.map(\.id) }
+
+    /// The row to select when `removed` leave `order`: the first after them, else the last before them.
+    nonisolated static func neighbour(of removed: Set<UUID>, in order: [UUID]) -> UUID? {
+        guard let last = order.lastIndex(where: removed.contains) else { return nil }
+        if let next = order[(last + 1)...].first(where: { !removed.contains($0) }) { return next }
+        return order[..<last].last { !removed.contains($0) }
     }
 }
 
@@ -1211,7 +1348,9 @@ extension AppState {
         guard !automatic || automaticRecording else { return }
         isStartingRecording = true
         defer { isStartingRecording = false }
-        let id = existing.flatMap { id in canRecordInto(id) ? id : nil } ?? newMeeting(title: Self.recordingTitle(title, at: Date()))
+        let previousSelection = selectedID
+        let into = existing.flatMap { id in canRecordInto(id) ? id : nil }
+        let id = into ?? newMeeting(title: Self.recordingTitle(title, at: Date()))
         selectedID = id
         prepareSourceCapture(id)
         let directory = storageURL.appendingPathComponent("Staging").appendingPathComponent(id.uuidString)
@@ -1229,16 +1368,34 @@ extension AppState {
             update(id) { $0.status = .recording; $0.date = recordingStartedAt ?? Date() }
             recordingDidStart(id)
             sync.publishActivity(recording: id, since: recordingStartedAt)
-            if preferences.object(forKey: "showsFloatingNotesWhileRecording") as? Bool ?? true { showNotes(for: id) }
+            if preferences.object(forKey: Preference.showsFloatingNotesWhileRecording) as? Bool ?? true { showNotes(for: id) }
         } catch {
             finishCaptions()
             if let partial = recorder.lastResult, !partial.tracks.isEmpty {
                 recordingID = id
                 await finishCapture(partial)
-            } else { update(id) { $0.status = .failed; $0.errorMessage = error.localizedDescription } }
+            } else {
+                // Nothing was recorded. A conversation made for it goes again, so no empty one claims a recording was
+                // saved; one recorded into (notes, or a phone's) stays as it was. Why is the alert's to say.
+                sources.captures[id] = nil
+                if into == nil { await discardUnrecorded(id, selecting: previousSelection) }
+            }
             if automatic { monitor.suppressCurrentMeeting() }
-            report("Couldn’t Start Recording", "Try again.", error)
+            var problem = AppProblem(title: "Couldn’t Start Recording", fallback: "Try again.", error: error)
+            problem.privacyPane = PrivacySettings.pane(for: error)
+            self.problem = problem
         }
+    }
+
+    /// A conversation `startRecording` made for a recording that never started: it goes to the Trash (the library's one
+    /// way out, so a copy that already synced goes too), and the selection goes back to where it was. Notes, photos, or
+    /// bookmarks added while it tried to start (a permission prompt can take a while) keep it.
+    private func discardUnrecorded(_ id: UUID, selecting previous: UUID?) async {
+        guard let meeting = meetings.first(where: { $0.id == id }), meeting.tracks.isEmpty, meeting.highlights.isEmpty,
+              meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, meeting.visiblePhotos.isEmpty else { return }
+        if selectedID == id { selectedID = previous.flatMap { previous in meetings.contains { $0.id == previous } ? previous : nil } }
+        do { _ = try await library.moveToTrash(id) }
+        catch { Self.log.notice("An empty conversation couldn't be removed: \(error.localizedDescription, privacy: .public)") }
     }
 
     func stopRecording(manual: Bool = true) async {
@@ -1369,6 +1526,15 @@ struct ImportSidecar {
 
 /// The library's errors, shared with the devices that import into it.
 typealias AppError = DaybookError
+
+/// Conversations moved to the Trash together, for Undo and Redo: their IDs change when a synced deletion comes back.
+@MainActor
+final class TrashRecord {
+    var ids: [UUID]
+    /// The notice's line for it.
+    let message: String
+    init(ids: [UUID], message: String) { self.ids = ids; self.message = message }
+}
 
 /// A text button the library notice offers with what it says (`AppState.post(_:action:)`): Undo, Show, Show in Finder.
 struct LibraryNoticeAction {

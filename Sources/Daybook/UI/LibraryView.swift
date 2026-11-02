@@ -21,6 +21,8 @@ struct LibraryView: View {
     @State private var windowWidth: CGFloat = 1280
     @State private var problemDetails: AppProblem?
     @FocusState private var searchFocused: Bool
+    /// The window's: Edit › Undo takes a Move to Trash back.
+    @Environment(\.undoManager) private var undoManager
 
     /// The conversation whose controls the toolbar shows; on the device page, an imported recording's conversation.
     private var toolbarMeeting: Meeting? {
@@ -80,7 +82,7 @@ struct LibraryView: View {
         .sheet(item: $state.libraryMoveOffer) { offer in LibraryMoveSheet(state: state, offer: offer) }
         .alert(trashTitle, isPresented: Binding(get: { !state.trashRequestIDs.isEmpty }, set: { if !$0 { state.trashRequestIDs = [] } })) {
             Button("Move to Trash", role: .destructive) {
-                for id in state.trashRequestIDs { state.trashMeeting(id) }
+                state.trashMeetings(state.trashRequestIDs, undoManager: undoManager)
                 state.multiSelection = []
                 state.trashRequestIDs = []
             }
@@ -92,6 +94,9 @@ struct LibraryView: View {
         .alert(state.shownProblem?.title ?? "", isPresented: Binding(get: { state.shownProblem != nil }, set: { if !$0 { state.dismissProblem() } }),
                presenting: state.shownProblem) { problem in
             Button("OK") { state.dismissProblem() }
+            if let pane = problem.privacyPane {
+                Button("Open System Settings") { PrivacySettings.open(pane); state.dismissProblem() }
+            }
             if problem.details != nil {
                 Button("Details…") { problemDetails = problem; state.dismissProblem() }
             }
@@ -100,7 +105,9 @@ struct LibraryView: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if state.place.isDevice && !state.isSearching {
+        if let problem = state.libraryProblem {
+            LibraryProblemPage(state: state, problem: problem)
+        } else if state.place.isDevice && !state.isSearching {
             DevicePage(state: state)
         } else if state.multiSelection.count > 1 {
             BatchSelectionView(state: state, ids: Array(state.multiSelection))

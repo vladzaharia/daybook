@@ -1,4 +1,6 @@
+import AppKit
 import DaybookCore
+import DaybookDesign
 import DaybookKit
 import SwiftUI
 
@@ -9,6 +11,9 @@ struct AppProblem: Equatable, Identifiable {
     var title: String
     var message: String
     var details: String?
+    /// The Privacy & Security pane that fixes it (the microphone, screen and system audio recording): the alert offers
+    /// Open System Settings.
+    var privacyPane: PrivacySettings.Pane?
     var id: String { [title, message, details ?? ""].joined(separator: "\u{1F}") }
 
     init(title: String, message: String, details: String? = nil) {
@@ -83,6 +88,50 @@ extension AppState {
         problem = nil
         library.errorMessage = nil
         library.errorDetails = nil
+    }
+}
+
+/// The library couldn't open (`AppState.libraryProblem`): said on the page, with the system's words behind Details…,
+/// Show in Finder for the library folder, and Try Again, rather than in an alert over an empty window. Relaunching
+/// rarely helps: what stops a folder opening (its permissions, a damaged or missing folder) is still there.
+struct LibraryProblemPage: View {
+    let state: AppState
+    let problem: AppProblem
+    @State private var retrying = false
+
+    var body: some View {
+        AttentionBox(kind: .problem, title: problem.title, message: problem.message) {
+            if let details = problem.details {
+                DetailsButton(details: details).buttonStyle(.daybookLink)
+            }
+            Button("Show in Finder") { state.showLibraryInFinder() }
+                .buttonStyle(.daybookLink)
+            Button("Try Again") {
+                retrying = true
+                Task { await state.retryOpeningLibrary(); retrying = false }
+            }
+            .buttonStyle(.daybookProminent)
+            .disabled(retrying)
+        }
+        .frame(maxWidth: DaybookStyle.measure)
+        .padding(.horizontal, Space.s6)
+        .padding(.top, Space.s7)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(DaybookStyle.paper)
+    }
+}
+
+extension AppState {
+    /// Opening the library again from its problem, as launching does.
+    func retryOpeningLibrary() async {
+        libraryProblem = nil
+        await initialize()
+    }
+
+    /// The library folder in Finder, or the folder it should be in when it's missing.
+    func showLibraryInFinder() {
+        let exists = FileManager.default.fileExists(atPath: storageURL.path)
+        NSWorkspace.shared.activateFileViewerSelecting([exists ? storageURL : storageURL.deletingLastPathComponent()])
     }
 }
 

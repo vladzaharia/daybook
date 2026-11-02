@@ -37,12 +37,12 @@ enum LibraryDemo {
         resizeWindow()
         runWindowActions()
         // `--info` is the iPhone's word for the inspector.
-        if CommandLine.arguments.contains("--info") { LaunchOptions.defaults.set(true, forKey: "isInspectorPresented") }
+        if CommandLine.arguments.contains("--info") { LaunchOptions.defaults.set(true, forKey: AppState.Preference.isInspectorPresented) }
         guard isRequested else { return }
         // Each capture starts from the same chrome: the inspector only with `--inspector` (or `--info`), and
         // `--inspector-all` opens every section of it.
         LaunchOptions.defaults.set(CommandLine.arguments.contains("--inspector") || CommandLine.arguments.contains("--info"),
-                                   forKey: "isInspectorPresented")
+                                   forKey: AppState.Preference.isInspectorPresented)
         if CommandLine.arguments.contains("--inspector-all") {
             for key in ["inspector.details", "inspector.people", "inspector.audio", "inspector.processing"] { LaunchOptions.defaults.set(true, forKey: key) }
         }
@@ -100,7 +100,7 @@ enum LibraryDemo {
                 guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(WindowID.library) == true }) else { return }
                 switch step {
                 case "activate":
-                    NSApp.activate(ignoringOtherApps: true)
+                    NSApp.activate()
                     window.makeKeyAndOrderFront(nil)
                 case "fullscreen": window.toggleFullScreen(nil)
                 case "toolbar": window.toggleToolbarShown(nil)
@@ -131,7 +131,7 @@ enum LibraryDemo {
         if FloatingNotesDemo.scenario == nil, let running = id(transcribing) {
             state.update(running) { $0.status = .transcribing }
             state.processingID = running
-            state.processingProgress = IntelligenceProgress(0.4, "Transcribing")
+            state.processingProgress = IntelligenceProgress(0.4, "Transcribing", stage: .transcribing)
         }
         if let waiting = id(queued) { state.processingQueue = [state.makeJob(meetingID: waiting, mode: .newAudio)] }
         if let held = id(paused) { state.pausedIDs = [held] }

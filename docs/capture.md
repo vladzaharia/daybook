@@ -319,7 +319,9 @@ Keep a visible recording indicator whenever the state is `.starting`, `.recordin
 
 Set `onUnexpectedStop` to import partial audio after a microphone failure, a disk backlog, or
 sleep. A failed start can still leave a partial result in `lastResult`; don't delete that staging
-folder. The hook gets the partial result and one sentence saying why it stopped (the recorder's
+folder. With nothing recorded, `AppState` takes back a conversation it made for the recording (to the
+Trash, the library's only way out) and leaves one it recorded into as it was; the alert says why, with
+Open System Settings when a permission is the reason. The hook gets the partial result and one sentence saying why it stopped (the recorder's
 own when the cause is one of Daybook's, else `unexpectedStopSentence`). `lastError` keeps that
 sentence even when the recording's details then can't be saved, as on a full disk, where the
 track and `capture-result.json` fail together. `AppState` keeps the sentence for the conversation

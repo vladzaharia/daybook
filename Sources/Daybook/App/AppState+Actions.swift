@@ -10,9 +10,63 @@ extension AppState {
     /// Creates a folder and moves any requested conversations into it.
     func createFolder(named name: String, moving ids: [UUID]) { library.createFolder(named: name, moving: ids) }
 
-    func moveToFolder(_ ids: [UUID], _ folder: UUID?) { library.moveToFolder(ids, folder) }
+    /// Files conversations in a folder, or in none. With `undoManager`, Edit › Undo takes it back ("Undo Move to Folder").
+    func moveToFolder(_ ids: [UUID], _ folder: UUID?, undoManager: UndoManager? = nil) {
+        guard let undoManager else { library.moveToFolder(ids, folder); return }
+        for id in ids { library.update(id, actionName: "Move to Folder", undoManager: undoManager) { $0.folderID = folder } }
+    }
 
-    func setPlacement(_ ids: [UUID], _ placement: LibraryPlacement?) { library.setPlacement(ids, placement) }
+    /// Shows conversations in Work or Personal, or where their kind puts them (nil). With `undoManager`, Edit › Undo
+    /// takes it back, named as the menu item was ("Undo Move to Personal").
+    func setPlacement(_ ids: [UUID], _ placement: LibraryPlacement?, undoManager: UndoManager? = nil) {
+        guard let undoManager else { library.setPlacement(ids, placement); return }
+        for id in ids { library.update(id, actionName: Self.placementActionName(placement), undoManager: undoManager) { $0.placement = placement } }
+    }
+
+    /// The Undo menu's name for a change of placement.
+    nonisolated static func placementActionName(_ placement: LibraryPlacement?) -> String {
+        switch placement {
+        case .work?: return "Move to Work"
+        case .personal?: return "Move to Personal"
+        case nil: return "Show Automatically"
+        }
+    }
+
+    /// Where Floating Notes opens from a menu (Window › Floating Notes, the menu bar extra, the Dock), one rule for all:
+    /// on the recording, else the conversation the library window shows, else its home.
+    var floatingNotesFocus: UUID? {
+        if let recordingID { return recordingID }
+        guard multiSelection.count < 2 else { return nil }
+        return place.isDevice ? deviceConversationID : selectedID
+    }
+
+    /// Add Bookmark (⌘D) can mark a moment: while this Mac records, the recording's, wherever the person is; otherwise
+    /// the player's, in conversation `id` when it's loaded there.
+    func canAddBookmark(in id: UUID?) -> Bool {
+        if recordingID != nil { return true }
+        guard let id else { return false }
+        return playback.meetingID == id && playback.trackID != nil && playback.duration > 0
+    }
+
+    /// Add Bookmark (⌘D), at the moment `canAddBookmark` names.
+    func addBookmark(in id: UUID?) {
+        if let recordingID { addHighlight(recordingID); return }
+        guard let id, canAddBookmark(in: id), let trackID = playback.trackID else { return }
+        addPlaybackHighlight(id, trackID: trackID, seconds: playback.position)
+    }
+
+    /// Controls › Play or Pause for a conversation: its recording in the player goes on or stops, or, with another one
+    /// (or none) loaded, it plays from the start. Playback waits while this Mac records, so the call audio doesn't
+    /// capture it.
+    func togglePlayback(of id: UUID) {
+        guard !isRecording else { return }
+        if playback.meetingID == id, playback.duration > 0 { playback.toggle(); return }
+        guard let meeting = meetings.first(where: { $0.id == id }), let target = PlaybackTarget.timeline(0).resolve(in: meeting) else { return }
+        Task {
+            guard let url = await audioURL(for: target.track, meetingID: id), !isRecording else { return }
+            playback.play(url: url, at: target.seconds, trackID: target.track.id, meetingID: id)
+        }
+    }
 
     func showInFinder(_ id: UUID) {
         let folder = storageURL.appendingPathComponent("Meetings", isDirectory: true).appendingPathComponent(id.uuidString, isDirectory: true)
@@ -79,5 +133,14 @@ enum PrivacySettings {
     }
     static func open(_ pane: Pane) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane.rawValue)") { NSWorkspace.shared.open(url) }
+    }
+
+    /// The pane where a recording that couldn't start is allowed to, when a permission is why.
+    static func pane(for error: Error) -> Pane? {
+        switch error as? RecordingError {
+        case .microphoneDenied?: return .microphone
+        case .noDisplay?: return .screenCapture
+        default: return nil
+        }
     }
 }

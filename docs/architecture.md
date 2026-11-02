@@ -108,7 +108,7 @@ Tracks, transcription runs, and correction history are append-only during normal
 
 Audio filenames inside the library use generated identifiers. Relative paths cannot escape their meeting directory, including through symlinks to existing ancestors or nonexistent leaf files. Original audio is never moved out of its import location or overwritten. Highlight sidecars use content-addressed filenames, so a later sidecar cannot overwrite the earlier bytes.
 
-Moving a meeting to local Trash moves its entire directory. Its original ID acts as a persistent tombstone that rejects queued stale saves. Local-only restoration moves it back; once a deletion has synced, recovery requires a new meeting UUID. This is application trash, not permanent erasure or the macOS Trash service.
+Moving a meeting to local Trash moves its entire directory. Its original ID acts as a persistent tombstone that rejects queued stale saves. Local-only restoration moves it back; once a deletion has synced, recovery requires a new meeting UUID. This is application trash, not permanent erasure or the macOS Trash service. On the Mac, Edit › Undo and the notice's Undo restore it (`AppState.trashMeetings`), following a new UUID through Redo.
 
 Files use user-only permissions; the local library isn't encrypted by Daybook. Optional iCloud Drive synchronization exchanges the complete meeting library through immutable records and content-addressed originals, sealed end to end once the library is encrypted in iCloud ([encryption](icloud-sync.md#encryption)). Local inference stays independent of sync; see [sync architecture](icloud-sync.md).
 

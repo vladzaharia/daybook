@@ -117,6 +117,205 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(QuitDecision.decide(quitting: true, hasState: true, recording: false, poweringOff: true), .alreadyQuitting)
     }
 
+    // MARK: The Trash, with Undo
+
+    /// Three conversations, newest first in the list: "Monday" (newest), "Tuesday", "Wednesday".
+    private func threeConversations(_ state: AppState) async -> [UUID] {
+        let now = Date()
+        let ids = ["Wednesday", "Tuesday", "Monday"].enumerated().map { index, title in
+            state.newMeeting(title: title, date: now.addingTimeInterval(Double(-index) * 3600))
+        }
+        await state.flush()
+        return ids
+    }
+
+    private func undoManager() -> UndoManager {
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        return undo
+    }
+
+    func testBehaviorMoveToTrashSelectsTheNextRowAndEditUndoPutsItBack() async throws {
+        let (state, _, _) = try await makeState()
+        let ids = await threeConversations(state)
+        XCTAssertEqual(state.listedMeetingIDs, ids)
+        let undo = undoManager()
+        state.selectedID = ids[1]
+        state.trashMeetings([ids[1]], undoManager: undo)
+        try await waitUntil("it to go to the Trash") { !state.meetings.contains { $0.id == ids[1] } }
+        XCTAssertEqual(state.selectedID, ids[2], "The row after it, not the top of the list")
+        XCTAssertEqual(state.noticeLines, ["Moved “Tuesday” to the Trash."])
+        XCTAssertEqual(state.shownNoticeAction?.title, "Undo")
+        XCTAssertEqual(undo.undoActionName, "Move to Trash")
+
+        undo.undo()
+        try await waitUntil("it to come back") { state.meetings.contains { $0.id == ids[1] } }
+        XCTAssertEqual(state.selectedID, ids[1], "Back, and selected")
+        XCTAssertNil(state.notice, "The notice's line goes with what it said")
+        XCTAssertTrue(undo.canRedo)
+        XCTAssertEqual(undo.redoActionName, "Move to Trash")
+        undo.redo()
+        try await waitUntil("it to go again") { !state.meetings.contains { $0.id == ids[1] } }
+        XCTAssertTrue(undo.canUndo, "Undoable again")
+        await state.flush()
+    }
+
+    func testBehaviorTheNoticesUndoPutsTrashedConversationsBackAndLeavesNothingToUndo() async throws {
+        let (state, _, _) = try await makeState()
+        let ids = await threeConversations(state)
+        let undo = undoManager()
+        state.selectedID = ids[2]
+        state.trashMeetings([ids[1], ids[2]], undoManager: undo)
+        try await waitUntil("both to go") { state.meetings.count == 1 }
+        XCTAssertEqual(state.selectedID, ids[0], "The last rows went: the one before them")
+        XCTAssertEqual(state.noticeLines, ["Moved 2 conversations to the Trash."])
+        state.performNoticeAction()
+        try await waitUntil("both to come back") { state.meetings.count == 3 }
+        XCTAssertFalse(undo.canUndo, "Undone from the notice: Edit › Undo has nothing left to take back")
+        XCTAssertNil(state.notice)
+        await state.flush()
+    }
+
+    func testBehaviorTheRowSelectedAfterATrashIsItsNeighbour() {
+        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
+        XCTAssertEqual(AppState.neighbour(of: [b], in: [a, b, c, d]), c)
+        XCTAssertEqual(AppState.neighbour(of: [b, c], in: [a, b, c, d]), d)
+        XCTAssertEqual(AppState.neighbour(of: [d], in: [a, b, c, d]), c, "At the end, the one before")
+        XCTAssertEqual(AppState.neighbour(of: [a, c], in: [a, b, c, d]), d, "After the last of them")
+        XCTAssertNil(AppState.neighbour(of: [a, b], in: [a, b]))
+        XCTAssertNil(AppState.neighbour(of: [UUID()], in: [a, b]), "Not in the list")
+    }
+
+    func testBehaviorFilingIsUndoneByTheMenuItemsName() async throws {
+        let (state, _, _) = try await makeState()
+        let id = state.newMeeting(title: "Retro")
+        let folder = UUID()
+        state.saveFolder(LibraryFolder(id: folder, name: "Clients"))
+        let undo = undoManager()
+        undo.beginUndoGrouping()
+        state.moveToFolder([id], folder, undoManager: undo)
+        undo.endUndoGrouping()
+        XCTAssertEqual(undo.undoActionName, "Move to Folder")
+        undo.beginUndoGrouping()
+        state.setPlacement([id], .personal, undoManager: undo)
+        undo.endUndoGrouping()
+        XCTAssertEqual(undo.undoActionName, "Move to Personal")
+        undo.undo()
+        XCTAssertNil(state.meetings.first { $0.id == id }?.placement)
+        undo.undo()
+        XCTAssertNil(state.meetings.first { $0.id == id }?.folderID)
+        XCTAssertEqual(AppState.placementActionName(.work), "Move to Work")
+        await state.flush()
+    }
+
+    // MARK: Starting, and what goes wrong
+
+    func testBehaviorARecordingThatCantStartLeavesNoEmptyConversationAndOffersSettings() async throws {
+        let microphone = FakeCaptureSource(method: "microphone")
+        let capture = CaptureEnvironment(microphoneAuthorization: { false }, makeMicrophone: { microphone }, systemAudio: FakeSystemAudio(),
+                                         currentRoute: { AudioOutputRoute(kind: .speakers, deviceName: "Speakers", transport: nil) },
+                                         observeRoutes: { _ in nil }, hostTime: { 100 })
+        let state = AppState(libraryURL: makeTemporaryFolder("DaybookStart"), defaults: makeTestDefaults(), capture: capture)
+        await state.initialize()
+        state.includeComputerAudio = false
+        let earlier = state.newMeeting(title: "Earlier")
+        await state.startRecording()
+        try await waitUntil("the empty conversation to go") { state.meetings.map(\.id) == [earlier] }
+        XCTAssertEqual(state.selectedID, earlier, "The selection goes back")
+        XCTAssertEqual(state.shownProblem?.title, "Couldn’t Start Recording")
+        XCTAssertEqual(state.shownProblem?.privacyPane, .microphone, "The alert offers Open System Settings")
+        XCTAssertNil(state.recordingID)
+
+        // Recording into a note: the note stays as it was, and isn't marked as a failure.
+        state.dismissProblem()
+        let note = state.newNote()
+        state.editNotes(note, text: "Agenda")
+        let before = try XCTUnwrap(state.meetings.first { $0.id == note }).status
+        await state.startRecording(into: note)
+        let kept = try XCTUnwrap(state.meetings.first { $0.id == note })
+        XCTAssertEqual(kept.status, before)
+        XCTAssertNotEqual(kept.status, .failed)
+        XCTAssertNil(kept.errorMessage)
+        XCTAssertEqual(kept.notes, "Agenda")
+        XCTAssertNotNil(state.shownProblem)
+        await state.flush()
+    }
+
+    func testBehaviorAudioWorkThePersonDidntStartNeverRaisesAnAlert() async throws {
+        let (state, _, _) = try await makeState()
+        let id = state.newMeeting(title: "Synced")
+        let missing = RecordingTrack(relativePath: "../../outside.wav", fileName: "outside.wav")
+        let background = await state.availableAudioURL(for: missing, in: id)
+        XCTAssertNil(background)
+        XCTAssertNil(state.shownProblem, "Placing or comparing a recording that arrived says nothing over the window")
+        let asked = await state.audioURL(for: missing, meetingID: id)
+        XCTAssertNil(asked)
+        XCTAssertEqual(state.shownProblem?.title, "Couldn’t Open the Audio", "Playing it is the person's: that's said")
+        await state.flush()
+    }
+
+    func testBehaviorALibraryThatCantOpenSaysSoOnThePageAndOpensWhenTriedAgain() async throws {
+        let folder = makeTemporaryFolder("DaybookUnopenable")
+        let root = folder.appendingPathComponent("Library")
+        try Data("not a folder".utf8).write(to: root)
+        let state = AppState(libraryURL: root, defaults: makeTestDefaults())
+        await state.initialize()
+        XCTAssertFalse(state.isReady)
+        XCTAssertEqual(state.libraryProblem?.title, "Couldn’t Open Your Library")
+        XCTAssertEqual(state.libraryProblem?.message, "Its folder couldn’t be opened. Check it in Finder, then try again.")
+        XCTAssertNotNil(state.libraryProblem?.details, "The system's words are behind Details…")
+        XCTAssertNil(state.shownProblem, "No alert over an empty window")
+
+        try FileManager.default.removeItem(at: root)
+        await state.retryOpeningLibrary()
+        XCTAssertTrue(state.isReady)
+        XCTAssertNil(state.libraryProblem)
+        await state.flush()
+    }
+
+    // MARK: Menus
+
+    func testBehaviorFloatingNotesOpensOnTheRecordingElseWhatTheWindowShows() async throws {
+        let (state, _, _) = try await makeState()
+        let shown = state.newMeeting(title: "Shown")
+        XCTAssertEqual(state.floatingNotesFocus, shown)
+        state.multiSelection = [shown, state.newMeeting(title: "Other", selecting: false)]
+        XCTAssertNil(state.floatingNotesFocus, "Several selected: its home")
+        state.multiSelection = []
+        let recording = state.newMeeting(title: "Recording", selecting: false)
+        state.recordingID = recording
+        XCTAssertEqual(state.floatingNotesFocus, recording)
+        state.recordingID = nil
+        await state.flush()
+    }
+
+    func testBehaviorAddBookmarkMarksTheRecordingOrThePlayersMoment() async throws {
+        let (state, root, _) = try await makeState()
+        let url = try audio(root, name: "review.wav", frequency: 330)
+        try await state.importFiles([url], source: .imported, attachTo: nil)
+        let id = try XCTUnwrap(state.meetings.first?.id)
+        let track = try XCTUnwrap(state.meetings.first?.tracks.first)
+        XCTAssertFalse(state.canAddBookmark(in: id), "Nothing recording, nothing loaded")
+
+        let found = await state.audioURL(for: track, meetingID: id)
+        let playable = try XCTUnwrap(found)
+        state.playback.play(url: playable, at: 0.2, trackID: track.id, meetingID: id)
+        state.playback.mute()
+        state.playback.pause()
+        XCTAssertTrue(state.canAddBookmark(in: id))
+        XCTAssertFalse(state.canAddBookmark(in: UUID()), "Another conversation on screen")
+        state.addBookmark(in: id)
+        let mark = try XCTUnwrap(state.meetings.first?.highlights.first)
+        XCTAssertEqual(mark.trackID, track.id)
+        XCTAssertEqual(mark.time, state.playback.position, accuracy: 0.05)
+        state.playback.unload()
+
+        state.recordingID = state.newMeeting(title: "Live", selecting: false)
+        XCTAssertTrue(state.canAddBookmark(in: nil), "While recording, wherever the person is")
+        state.recordingID = nil
+        await state.flush()
+    }
+
     private func makeState() async throws -> (AppState, URL, UserDefaults) {
         let root = makeTemporaryFolder("DaybookAppTests")
         let defaults = makeTestDefaults()
