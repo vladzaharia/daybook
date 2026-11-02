@@ -58,8 +58,10 @@ public struct LibraryStorageReport: Equatable, Sendable {
 
     /// Walks the library folder and adds up what's in it, reading sizes only. Audio is any file of an audio type,
     /// wherever it is (a conversation, the Trash, a recording being filed); `downloaded` names the ones downloaded for
-    /// playback, and nil leaves downloads untold. Reads the disk, so call it off the main actor.
-    public static func measure(libraryRoot: URL, downloaded: Set<String>? = nil, models: Int64 = 0,
+    /// playback, and nil leaves downloads untold. Folders in `excluding` are left out, with all they hold: what's
+    /// counted on its own, like the Mac's models, which it keeps in the library folder (`models`). Reads the disk, so
+    /// call it off the main actor.
+    public static func measure(libraryRoot: URL, downloaded: Set<String>? = nil, models: Int64 = 0, excluding: [URL] = [],
                                fileManager: FileManager = .default) -> LibraryStorageReport {
         let root = libraryRoot.standardizedFileURL.resolvingSymlinksInPath()
         let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
@@ -67,7 +69,13 @@ public struct LibraryStorageReport: Equatable, Sendable {
         guard let walker = fileManager.enumerator(at: root, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true })
         else { return report }
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        // The walk's paths are under `root`, symbolic links resolved, so the folders left out are compared the same way.
+        let excluded = Set(excluding.map { $0.standardizedFileURL.resolvingSymlinksInPath().path })
         for case let url as URL in walker {
+            if !excluded.isEmpty, excluded.contains(url.standardizedFileURL.path) {
+                walker.skipDescendants()
+                continue
+            }
             guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true, values.isSymbolicLink != true
             else { continue }
             // Its length, as Finder and the sync engine's audio index count it.

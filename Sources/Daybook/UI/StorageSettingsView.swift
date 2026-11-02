@@ -42,12 +42,13 @@ struct StorageSettingsRow: View {
     }
 
     /// The library folder and this Mac's downloaded models, measured off the main actor. The Mac keeps every recording,
-    /// so none of its audio counts as downloaded.
+    /// so none of its audio counts as downloaded. Its models are in the library folder, and count once, as models.
     static func measure(_ state: AppState) async -> LibraryStorageReport {
         let root = state.storageURL
+        let modelsFolder = await state.runtime.modelsDirectory
         let models = await state.runtime.diskUsage().total
         return await Task.detached(priority: .utility) {
-            LibraryStorageReport.measure(libraryRoot: root, downloaded: nil, models: models)
+            LibraryStorageReport.measure(libraryRoot: root, downloaded: nil, models: models, excluding: [modelsFolder])
         }.value
     }
 }

@@ -37,6 +37,27 @@ final class LibraryStorageReportTests: XCTestCase {
         XCTAssertNil(StorageWords.audioBreakdown(report, here: "this iPhone"))
     }
 
+    func testBehaviorModelsKeptInTheLibraryFolderCountOnce() throws {
+        // The Mac keeps its models in the library folder ("Models"), and measures them on their own.
+        let root = makeTemporaryFolder("StorageReport")
+        let meeting = UUID()
+        try write(40_000, to: "Meetings/\(meeting.uuidString)/Audio/microphone.m4a", in: root)
+        try write(2_000, to: "Meetings/\(meeting.uuidString)/meeting.json", in: root)
+        try write(900_000, to: "Models/whisper/model.safetensors", in: root)
+        try write(100, to: "Models/UserModels.json", in: root)
+        try write(8_000, to: "Models/whisper/sample.wav", in: root)
+
+        let report = LibraryStorageReport.measure(libraryRoot: root, models: 908_100,
+                                                  excluding: [root.appendingPathComponent("Models", isDirectory: true)])
+        XCTAssertEqual(report.audio, 40_000, "a model's own audio isn't a recording")
+        XCTAssertEqual(report.conversations, 2_000, "the models aren't the conversations")
+        XCTAssertEqual(report.models, 908_100)
+        XCTAssertEqual(report.total, 950_100, "the models count once")
+
+        let counted = LibraryStorageReport.measure(libraryRoot: root)
+        XCTAssertEqual(counted.audio + counted.conversations, 950_100, "without leaving them out, they'd count again")
+    }
+
     func testBehaviorDownloadsAreToldApartWhereSyncTracksThem() throws {
         let root = makeTemporaryFolder("StorageReport")
         let meeting = UUID()
