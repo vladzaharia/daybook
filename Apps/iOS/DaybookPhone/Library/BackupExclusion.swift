@@ -1,5 +1,6 @@
 import DaybookKit
 import Foundation
+import os
 
 /// What iPhone backups (iCloud and computer) hold of Daybook. Copies it can rebuild never go in: the
 /// courier's inbox and outbox (iCloud Drive carries the same files), audio downloaded for playback (it
@@ -76,6 +77,11 @@ enum BackupExclusion {
         var values = URLResourceValues()
         values.isExcludedFromBackup = excluded
         var url = url
-        try? url.setResourceValues(values)
+        do { try url.setResourceValues(values) } catch {
+            // The rules are applied again at launch, on every change, and after each sync pass.
+            log.error("Couldn’t \(excluded ? "exclude" : "include") \(url.lastPathComponent) in backups: \(error.localizedDescription)")
+        }
     }
+
+    private static let log = Logger(subsystem: "local.daybook.phone", category: "Backups")
 }

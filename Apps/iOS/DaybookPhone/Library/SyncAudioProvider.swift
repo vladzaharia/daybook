@@ -11,13 +11,20 @@ import os
 ///
 /// Injected at the app root as `\.audioProvider`. Without sync (no iCloud) it serves the files
 /// already on this iPhone and says plainly when a recording isn't here.
+///
+/// It also says how much audio is on this iPhone (`usage`, Settings › Storage and the status sheet): measured from
+/// the library's files, so it's right with sync off, when every recording lives only here. It's measured again at
+/// launch, when a recording is filed or imported or a conversation goes, after a download, and after eviction.
 @MainActor
 @Observable
 final class SyncAudioProvider: AudioProviding {
     /// Downloads in flight, by track, for "Downloading… 40%".
     private(set) var downloads: [UUID: Double] = [:]
-    /// Tracked local audio and the budget, after the last check.
+    /// The audio on this iPhone and the budget, after the last check.
     private(set) var usage = CacheUsage()
+    /// What the library takes on this iPhone, after the last check (Settings › Storage adds the models). Nil until
+    /// it's first measured.
+    private(set) var report: LibraryStorageReport?
 
     @ObservationIgnored private let library: PhoneLibrary
     @ObservationIgnored private let sync: PhoneSync
@@ -29,13 +36,19 @@ final class SyncAudioProvider: AudioProviding {
     @ObservationIgnored var keepWindow: TimeInterval = 30 * 60
     @ObservationIgnored var playingWindow: TimeInterval = 60
     @ObservationIgnored let options: AudioFetchOptions
+    /// Measures again when the library's recordings change: one filed or imported, a conversation moved to the Trash.
+    @ObservationIgnored private var recordingsWatch: ObservationWatch?
+    @ObservationIgnored private var measuring: Task<Void, Never>?
+
+    private static let log = Logger(subsystem: "local.daybook.phone", category: "Audio")
 
     struct CacheUsage: Equatable, Sendable {
-        /// Audio Daybook keeps on this iPhone: downloads plus recordings made here.
+        /// Audio Daybook keeps on this iPhone: recordings made or brought in here, and downloads.
         var bytes: UInt64 = 0
         /// Of that, downloads that can go back to iCloud.
         var downloadedBytes: UInt64 = 0
         var budget: UInt64 = 0
+        /// The audio files sync tracks for eviction (none without sync).
         var items = 0
     }
 
@@ -44,6 +57,11 @@ final class SyncAudioProvider: AudioProviding {
         self.sync = sync
         self.budget = budget
         self.options = options
+        let controller = library.controller
+        recordingsWatch = ObservationWatch.distinctValues(of: { Set(controller.meetings.flatMap { $0.tracks.map(\.id) }) }, initial: false,
+                                                          delay: .seconds(1)) { [weak self] _ in
+            self?.measureSoon()
+        }
     }
 
     private var engine: LibrarySyncEngine? { sync.engine }
@@ -91,19 +109,12 @@ final class SyncAudioProvider: AudioProviding {
         return FileManager.default.fileExists(atPath: url.path) ? .local : .offline
     }
 
-    /// Playback started or continued: the least recently played goes first when space is needed.
-    func notePlayed(_ track: RecordingTrack, in meetingID: UUID) {
-        recent[track.id] = Date()
-        guard let engine else { return }
-        Task { await engine.noteAudioPlayed(trackID: track.id, in: meetingID) }
-    }
-
     // MARK: The cache
 
-    /// Settings › Storage › Downloaded Audio.
+    /// Settings › Storage › Keep Up To; at launch with the saved choice, which also measures what's here.
     func setBudget(_ bytes: UInt64) async {
         budget = bytes
-        guard let engine else { return }
+        guard let engine else { return await refreshUsage() }
         await engine.setAudioCachePolicy(AudioCachePolicy(budgetBytes: bytes))
         _ = await evict()
     }
@@ -113,8 +124,10 @@ final class SyncAudioProvider: AudioProviding {
     func evict() async -> AudioEvictionReport? {
         guard let engine else { return nil }
         var report: AudioEvictionReport?
-        do { report = try await engine.evictAudio(protecting: protectedTracks(within: keepWindow)) }
-        catch { Self.couldntEvict(error) }
+        do { report = try await engine.evictAudio(protecting: protectedTracks(within: keepWindow)) } catch {
+            // Nothing is lost: what wasn't removed stays, and the next eviction tries again.
+            Self.log.error("Couldn’t bring audio within the budget: \(error.localizedDescription)")
+        }
         await refreshUsage()
         return report
     }
@@ -126,28 +139,43 @@ final class SyncAudioProvider: AudioProviding {
         guard let engine else { return 0 }
         await engine.setAudioCachePolicy(AudioCachePolicy(budgetBytes: 0, evictsUploadedOriginals: false))
         var report: AudioEvictionReport?
-        do { report = try await engine.evictAudio(protecting: protectedTracks(within: playingWindow)) }
-        catch { Self.couldntEvict(error) }
+        do { report = try await engine.evictAudio(protecting: protectedTracks(within: playingWindow)) } catch {
+            Self.log.error("Couldn’t clear downloaded audio: \(error.localizedDescription)")
+        }
         await engine.setAudioCachePolicy(AudioCachePolicy(budgetBytes: budget))
         await refreshUsage()
         return report?.bytesFreed ?? 0
     }
 
-    /// Eviction that didn't work leaves the audio where it is (the meter shows what's still here): logged, and tried
-    /// again at the next eviction.
-    private static func couldntEvict(_ error: Error) {
-        log.error("Couldn’t free downloaded audio: \(String(describing: error), privacy: .public)")
+    /// Measures the audio on this iPhone from the library's files, telling downloads apart while sync tracks them.
+    /// Reads the disk off the main actor.
+    func refreshUsage() async {
+        let root = library.rootURL
+        var downloaded: Set<String>?
+        var items = 0
+        if let engine {
+            let cached = await engine.cachedAudio()
+            BackupExclusion.excludeDownloads(cached, libraryRoot: root)
+            downloaded = LibraryStorageReport.downloadedKeys(cached)
+            items = cached.count
+        }
+        let measured = await Task.detached(priority: .utility) {
+            LibraryStorageReport.measure(libraryRoot: root, downloaded: downloaded)
+        }.value
+        report = measured
+        let next = CacheUsage(bytes: UInt64(max(0, measured.audio)), downloadedBytes: UInt64(max(0, measured.downloadedAudio ?? 0)),
+                              budget: budget, items: items)
+        if next != usage { usage = next }
     }
 
-    private static let log = Logger(subsystem: "local.daybook", category: "audio")
-
-    func refreshUsage() async {
-        guard let engine else { usage = CacheUsage(budget: budget); return }
-        let cached = await engine.cachedAudio()
-        BackupExclusion.excludeDownloads(cached, libraryRoot: library.rootURL)
-        usage = CacheUsage(bytes: cached.reduce(0) { $0 + $1.bytes },
-                           downloadedBytes: cached.filter { $0.origin == .fetched }.reduce(0) { $0 + $1.bytes },
-                           budget: budget, items: cached.count)
+    /// Measures again shortly, once for a burst of changes.
+    private func measureSoon() {
+        measuring?.cancel()
+        measuring = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            await self?.refreshUsage()
+        }
     }
 
     private func protectedTracks(within window: TimeInterval, now: Date = Date()) -> Set<UUID> {

@@ -1,185 +1,89 @@
 import DaybookKit
+import DaybookUI
 import SwiftUI
 import UIKit
 
-/// Settings' iCloud row: what sync is doing, in a line, opening Settings › iCloud.
+/// Settings' iCloud row: where sync stands, in a line, opening Settings › iCloud.
 struct ICloudRow: View {
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
-        let sync = model.sync
-        let needsYou = SyncSymbol.needsAttention(sync)
-        SettingsRow(title: "iCloud", detail: sync.statusLine, systemImage: SyncSymbol.name(sync),
-                    tone: needsYou ? .attention : .neutral, detailNeedsAttention: needsYou)
+        let shown = model.sync.shown()
+        SettingsRow(title: "iCloud", detail: shown.line, systemImage: shown.symbol,
+                    tone: shown.needsAttention ? .attention : .neutral, detailNeedsAttention: shown.needsAttention)
     }
 }
 
-/// The sync status's symbol, and whether it needs the person (orange).
-@MainActor
-enum SyncSymbol {
-    static func name(_ sync: PhoneSync) -> String {
-        if case .unavailable = sync.connection { return "icloud.slash" }
-        if needsAttention(sync) { return "exclamationmark.icloud" }
-        return "icloud"
-    }
-
-    /// iCloud can't be used, a pass failed, iCloud storage is full, or the library's key is missing.
-    static func needsAttention(_ sync: PhoneSync) -> Bool {
-        if case .unavailable = sync.connection { return true }
-        return sync.isConnected && (sync.lastError != nil || sync.isStorageFull || sync.encryption == .waitingForKey)
-    }
-}
-
-/// Settings › iCloud: what sync is doing right now, in one honest line; the older app still installed beside this one;
-/// Sync Now, and Start a New Library in iCloud when the library there was removed; the library's devices; and encryption.
+/// Settings › iCloud: DaybookUI's `ICloudSyncSection`, which the Mac's Settings › Library shows too, filled from this
+/// iPhone's sync and the Macs on the link. Its sheets are page sheets; the library's devices push.
 struct ICloudScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @Environment(\.openURL) private var openURL
-    @State private var showingDetails = false
-    /// Start a New Library in iCloud couldn't be done.
-    @State private var problem: ReadingAlert?
+    @State private var sheet: ICloudSyncSheet?
 
     var body: some View {
+        @Bindable var settings = model.settings
         let sync = model.sync
-        let needsYou = SyncSymbol.needsAttention(sync)
+        let shown = sync.shown(keyPeers: model.link.connectedMacs.map { ICloudSyncShown.KeyPeer(id: $0.id, name: $0.name) })
         Form {
-            Section {
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    HStack(spacing: SettingsMetrics.gap) {
-                        SettingsTile(systemImage: SyncSymbol.name(sync), tone: needsYou ? .attention : .neutral)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(sync.statusLine)
-                                .foregroundStyle(needsYou ? PhoneStyle.Ink.warning : PhoneStyle.Ink.title)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if let detail = sync.detailLine(now: context.date) {
-                                Text(detail).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 1)
-                    .accessibilityElement(children: .combine)
+            ICloudSyncSection(shown: shown, actions: actions, controller: sync.controller, sheet: $sheet,
+                              cellular: $settings.encryptsOverCellular) {
+                NavigationLink(value: SettingsRoute.libraryDevices) {
+                    LibraryDevicesRowLabel(summary: shown.devicesSummary())
                 }
-                if sync.isConnected {
-                    // As a problem line: the warning glyph, and the sentence in the label colour.
-                    if let line = sync.otherInstallationLine {
-                        Label {
-                            Text(line).foregroundStyle(PhoneStyle.Ink.title).fixedSize(horizontal: false, vertical: true)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(PhoneStyle.Ink.warning)
-                        }
-                    }
-                    if sync.lastError != nil {
-                        Button { showingDetails = true } label: { SettingsActionLabel(title: "Details", systemImage: "info.circle") }
-                    }
-                    if sync.offersNewLibrary {
-                        Button { startNewLibrary() } label: { SettingsActionLabel(title: LibraryWords.startNewLibrary, systemImage: "plus.circle") }
-                            .disabled(sync.isSyncing)
-                    }
-                    if let problem { ProblemText(problem: problem) }
-                    // A pass already running takes this as another to run after it.
-                    Button {
-                        Task { await model.sync.synchronize(.manual) }
-                    } label: {
-                        SettingsActionLabel(title: "Sync Now", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                } else if case .unavailable = sync.connection {
-                    if model.cloud.settingsCanFix, let url = URL(string: UIApplication.openSettingsURLString) {
-                        Button { openURL(url) } label: { SettingsActionLabel(title: "Open Settings", systemImage: "gear") }
-                    }
-                    Button {
-                        Task { await model.refreshCloud() }
-                    } label: {
-                        SettingsActionLabel(title: "Check Again", systemImage: "arrow.clockwise")
-                    }
-                }
-            }
-            if sync.isConnected {
-                Section {
-                    NavigationLink(value: SettingsRoute.libraryDevices) {
-                        LabeledContent("Devices in This Library", value: devicesSummary)
-                    }
-                }
-                // A library removed from iCloud has nothing to encrypt: the new one starts encrypted.
-                if sync.encryption != .unavailable, !sync.offersNewLibrary {
-                    Section { EncryptionRows() }
-                }
+            } extras: {
+                EmptyView()
             }
             SettingsScrollEndMarker()
         }
         .settingsScrollEnd()
         .navigationTitle("iCloud")
         .navigationBarTitleDisplayMode(.inline)
-        .pageSheet(isPresented: $showingDetails) { DetailsSheet(title: "Details", text: model.sync.lastError ?? "") }
-    }
-
-    private func startNewLibrary() {
-        problem = nil
-        Task {
-            do { try await model.sync.controller?.startNewLibrary() } catch {
-                problem = ReadingAlert(title: "Couldn’t Start a New Library", error: error, fallback: "A new library couldn’t be started in iCloud. Try again.")
-            }
+        .pageSheet(item: $sheet) { shownSheet in
+            ICloudSyncSheetContent(shownSheet, controller: sync.controller, present: { sheet = $0 })
         }
+        .onChange(of: settings.encryptsOverCellular) { _, allowed in
+            // Allowed now: the recordings waiting for Wi‑Fi start downloading.
+            if allowed { Task { await model.sync.synchronize(.manual) } }
+        }
+        .task { await model.sync.refreshDevices() }
     }
 
-    private var devicesSummary: String {
-        let others = model.sync.devices.inUse().filter { !$0.isCurrentDevice }
-        return others.isEmpty ? "Only this iPhone" : others.count == 1 ? "1 other" : "\(others.count) others"
+    private var actions: ICloudSyncActions {
+        let model = model, openURL = openURL
+        let settings = URL(string: UIApplication.openSettingsURLString)
+        return ICloudSyncActions(
+            // A pass already running takes this as another to run after it.
+            syncNow: { Task { await model.sync.synchronize(.manual) } },
+            tryAgain: { Task { await model.refreshCloud() } },
+            useCurrentAccount: { Task { await model.sync.useCurrentAccount() } },
+            requestKey: { mac in Task { await model.requestLibraryKey(from: mac) } },
+            // Settings can fix it (signing in, or iCloud Drive); a build without iCloud can't.
+            openSettings: model.cloud.settingsCanFix ? settings.map { url in { openURL(url) } } : nil)
     }
 }
 
-/// Every device that syncs this library, with when it was last seen.
+/// Every device that syncs this library, with when it was last seen (DaybookUI's `LibraryDevicesSection`, which the
+/// Mac shows in a sheet).
 struct LibraryDevicesScreen: View {
     @Environment(PhoneAppModel.self) private var model
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-            List {
-                Section {
-                    // Each device once: an earlier identity of a reinstalled one, and one not seen for months, aren't listed.
-                    ForEach(model.sync.devices.inUse(at: context.date)) { device in
-                        SettingsRow(title: name(device), detail: Self.detail(device, now: context.date), systemImage: symbol(device))
-                    }
-                }
-            }
-            .refreshable { await model.sync.refreshDevices() }
+        List {
+            LibraryDevicesSection(devices: model.sync.devices)
+            SettingsScrollEndMarker()
         }
+        .refreshable { await model.sync.refreshDevices() }
         .settingsScrollEnd()
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.sync.refreshDevices() }
     }
-
-    private func symbol(_ device: KnownSyncDevice) -> String {
-        switch device.deviceClass {
-        case .mac?: return "desktopcomputer"
-        case .phone?: return "iphone"
-        default: return "questionmark.app.dashed"
-        }
-    }
-
-    private func name(_ device: KnownSyncDevice) -> String {
-        // A device known only from the journal hasn't written a presence record: an earlier Daybook, or
-        // one that hasn't finished its first sync. It can't be told which, or what kind of device it is.
-        device.displayName ?? (device.deviceClass == nil ? "A device that hasn’t checked in" : "Unnamed device")
-    }
-
-    /// "This iPhone · Synced just now", "Recording now · Transcribes and summarizes · Last seen 2 h ago";
-    /// nil when there's nothing to say.
-    static func detail(_ device: KnownSyncDevice, now: Date) -> String? {
-        var parts: [String] = device.isCurrentDevice ? ["This iPhone"] : []
-        if device.deviceClass == .mac, device.isRecording(at: now) { parts.append("Recording now") }
-        if device.canProcess == true { parts.append("Transcribes and summarizes") }
-        if let seen = device.lastSeen {
-            parts.append(device.isCurrentDevice ? "Synced \(MacPresence.age(now.timeIntervalSince(seen)))" : "Last seen \(MacPresence.age(now.timeIntervalSince(seen)))")
-        } else if device.isCurrentDevice {
-            parts.append("Not synced yet")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
 }
 
-/// Settings › Storage: the audio kept on this iPhone against its budget, Clear Downloaded Audio
-/// (only while there's some to clear), and backups.
+/// Settings › Storage: DaybookUI's `LibraryStorageSection` (the figures the Mac's Storage shows: this iPhone's audio,
+/// its conversations, and downloaded models), then this iPhone's own: how much downloaded audio it keeps while it
+/// syncs, Clear Downloaded Audio (only while there's some), and backups.
 struct StorageScreen: View {
     @Environment(PhoneAppModel.self) private var model
     @State private var clearing = false
@@ -187,46 +91,35 @@ struct StorageScreen: View {
     var body: some View {
         @Bindable var settings = model.settings
         let usage = model.audio.usage
+        let syncs = model.sync.isConnected
         Form {
-            Section {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(bytes(usage.bytes)).font(.title2.weight(.semibold).monospacedDigit()).foregroundStyle(PhoneStyle.Ink.title)
-                        Text("of \(bytes(settings.audioCacheBudget))").foregroundStyle(PhoneStyle.Ink.secondary)
-                    }
-                    // A meter, not an action or work in progress: neutral ink.
-                    ProgressView(value: min(1, Double(usage.bytes) / Double(max(1, settings.audioCacheBudget))))
-                        .tint(PhoneStyle.Ink.secondary)
-                    if let breakdown = Self.breakdown(bytes: usage.bytes, downloaded: usage.downloadedBytes) {
-                        Text(breakdown).font(.footnote).foregroundStyle(PhoneStyle.Ink.secondary)
-                    }
-                }
-                .padding(.vertical, 4)
-                .accessibilityElement(children: .combine)
-                Picker("Keep Up To", selection: $settings.audioCacheBudget) {
-                    ForEach(PhoneSettings.budgetChoices, id: \.self) { Text(bytes($0)).tag($0) }
-                }
-            } header: {
-                Text("Audio on This iPhone")
-            }
-            // Downloads go back to iCloud, so they can be cleared only while it's there to get them again.
-            if (usage.downloadedBytes > 0 && model.sync.isConnected) || clearing {
+            LibraryStorageSection(report: model.audio.report?.with(models: model.models.bytesOnDisk))
+            // Downloads go back to iCloud and come down again when played: a budget applies only while sync runs.
+            if syncs {
                 Section {
-                    Button(role: .destructive) {
-                        clearing = true
-                        Task {
-                            _ = await model.audio.clearDownloaded()
-                            clearing = false
-                        }
-                    } label: {
-                        HStack {
-                            Text("Clear Downloaded Audio")
-                            if clearing { Spacer(); ProgressView() }
-                        }
+                    StorageBudgetMeter(bytes: Int64(clamping: usage.bytes), budget: Int64(clamping: settings.audioCacheBudget))
+                    Picker("Keep Up To", selection: $settings.audioCacheBudget) {
+                        ForEach(PhoneSettings.budgetChoices, id: \.self) { Text(Self.bytes($0)).tag($0) }
                     }
-                    .disabled(clearing)
+                    if usage.downloadedBytes > 0 || clearing {
+                        Button(role: .destructive) {
+                            clearing = true
+                            Task {
+                                _ = await model.audio.clearDownloaded()
+                                clearing = false
+                            }
+                        } label: {
+                            HStack {
+                                Text("Clear Downloaded Audio")
+                                if clearing { Spacer(); ProgressView() }
+                            }
+                        }
+                        .disabled(clearing)
+                    }
+                } header: {
+                    Text("Audio")
                 } footer: {
-                    Text("Only downloaded audio is removed.")
+                    if usage.downloadedBytes > 0 { Text("Only downloaded audio is removed.") }
                 }
             }
             Section {
@@ -234,6 +127,7 @@ struct StorageScreen: View {
                 Toggle("Include in iPhone Backups", isOn: model.libraryIsEncrypted
                        ? $settings.includesEncryptedLibraryInBackups : $settings.includesLibraryInBackups)
             }
+            SettingsScrollEndMarker()
         }
         .settingsScrollEnd()
         .navigationTitle("Storage")
@@ -244,19 +138,13 @@ struct StorageScreen: View {
         .onChange(of: settings.includesEncryptedLibraryInBackups) { model.applyBackupExclusion() }
     }
 
-    private func bytes(_ value: UInt64) -> String { Self.bytes(value) }
+    /// A size, as Settings says it everywhere ("632 MB").
+    static func bytes(_ value: UInt64) -> String { ByteSize.format(Int64(clamping: value)) }
 
-    static func bytes(_ value: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file) }
-
-    /// What the audio is, under its total: both kinds with their sizes, one kind without repeating the
-    /// total, or nil when there's none.
+    /// What the audio is, under its figure (`StorageWords.audioBreakdown`): both kinds with their sizes, one kind
+    /// without repeating the figure, or nil when there's none.
     static func breakdown(bytes total: UInt64, downloaded: UInt64) -> String? {
-        let downloaded = min(total, downloaded), here = total - downloaded
-        switch (downloaded > 0, here > 0) {
-        case (true, true): return "\(bytes(downloaded)) downloaded · \(bytes(here)) recorded on this iPhone"
-        case (true, false): return "Downloaded for playback"
-        case (false, true): return "Recorded on this iPhone"
-        case (false, false): return nil
-        }
+        StorageWords.audioBreakdown(LibraryStorageReport(audio: Int64(clamping: total), downloadedAudio: Int64(clamping: downloaded)),
+                                    here: "this iPhone")
     }
 }

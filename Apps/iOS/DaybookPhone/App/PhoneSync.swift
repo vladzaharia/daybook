@@ -1,6 +1,7 @@
 import BackgroundTasks
 import DaybookDevices
 import DaybookKit
+import DaybookUI
 import Foundation
 import Observation
 import UIKit
@@ -18,8 +19,8 @@ import UIKit
 ///   second later in the foreground.
 ///
 /// A pull applies through `LibraryController.synchronize`, so the library (and every view of it)
-/// updates live. The status line says what is true now: "Up to date", "Syncing 3 changes",
-/// "iCloud isn't available because …".
+/// updates live. The status line says what is true now, in the words the Mac's iCloud Sync uses
+/// (`ICloudSyncShown`): "Up to date", "Syncing 3 changes", "Signed out", "Sync paused".
 @MainActor
 @Observable
 final class PhoneSync {
@@ -33,6 +34,7 @@ final class PhoneSync {
         case checking
         /// Connected to the library's folder in the iCloud container (or, in tests and debug runs, a folder standing in for it).
         case connected(URL)
+        /// Why sync can't run, in a sentence (`CloudAvailability`'s, or the paused account's); `iCloud` says which state.
         case unavailable(String)
     }
 
@@ -109,11 +111,11 @@ final class PhoneSync {
     // MARK: Connecting
 
     /// Connects to the library in Daybook's iCloud container, or says why it can't. Safe to call again
-    /// (after an account change, or from Settings).
-    func connect() async {
+    /// (after an account change, or from Settings). `availability` checks the account and the container
+    /// (`CloudAvailability.check`; tests give their own).
+    func connect(availability: @MainActor () async -> CloudAvailability = { await CloudAvailability.check() }) async {
         guard let controller else { return }
-        let availability = await CloudAvailability.check()
-        switch availability {
+        switch await availability() {
         case .checking:
             connection = .checking
         case .unavailable(let reason):
@@ -128,15 +130,36 @@ final class PhoneSync {
                 controller.restore()
                 await controller.waitForContainer()
             }
-            if let folder = controller.folder {
-                connection = .connected(folder)
-            } else if case .containerUnavailable(let reason) = controller.iCloud {
-                connection = .unavailable(reason)
-            } else {
-                connection = .unavailable("iCloud isn’t available for Daybook right now. Try again in a moment.")
-            }
+            connection = Self.connection(controller)
         }
         watchAccount()
+    }
+
+    /// Where the controller's container lookup left sync. A different iCloud account from the one this library synced
+    /// with waits for the person (`useCurrentAccount`), as on the Mac; every other way it couldn't connect is said so.
+    static func connection(_ controller: LibrarySyncController) -> Connection {
+        if let folder = controller.folder { return .connected(folder) }
+        switch controller.iCloud {
+        case .accountChanged: return .unavailable(SyncProblem.accountChanged.text)
+        case .signedOut: return .unavailable(CloudAvailability.signedOutMessage)
+        case .iCloudDriveOff: return .unavailable(CloudAvailability.iCloudDriveOffMessage)
+        case .unavailableInThisBuild: return .unavailable(CloudAvailability.unsetMessage)
+        case .containerUnavailable(let reason): return .unavailable(reason)
+        default: return .unavailable("iCloud isn’t available for Daybook right now. Try again in a moment.")
+        }
+    }
+
+    /// Sync with This Account: after the iCloud account changed, this library syncs with the one signed in now, and its
+    /// conversations are added to it (`LibrarySyncController.useCurrentICloudAccount`). Then a pass.
+    func useCurrentAccount(availability: @MainActor () async -> CloudAvailability = { await CloudAvailability.check() }) async {
+        guard let controller else { return }
+        connection = .checking
+        devices = []
+        devicesListed = false
+        controller.useCurrentICloudAccount()
+        await controller.waitForContainer()
+        await connect(availability: availability)
+        await synchronize(.manual)
     }
 
     /// Connects to a folder standing in for the container: tests, and `--sync-folder` in debug runs.
@@ -314,53 +337,70 @@ final class PhoneSync {
 
     // MARK: Status
 
-    /// One line, true right now. A state the Mac's iCloud row also shows is said in the same words (`SyncStatus.shortText`).
-    var statusLine: String {
+    /// Where iCloud stands for this library, in the terms both apps' Settings use (`ICloudSyncState`).
+    var iCloud: ICloudSyncState {
         switch connection {
-        case .checking: return SyncStatus.connecting.shortText
-        case .unavailable(let reason): return reason
+        case .checking:
+            return .checking
         case .connected:
-            if encryption == .waitingForKey { return SyncStatus.waitingForKey.shortText }
-            if isSyncing { return changesInFlight > 0 ? "Syncing \(Self.changes(changesInFlight))" : SyncStatus.syncing.shortText }
-            // The reason is the system's words; Settings shows it behind Details.
-            if let lastError { return SyncStatus.failure(details: lastError).shortText }
-            // Said before what waits to upload, which can't go until there's room.
-            if isStorageFull { return SyncStatus.storageFull.shortText }
-            if pendingUploads > 0 { return SyncStatus.exchanged(uploads: pendingUploads, downloads: 0).shortText }
-            if let line = courierLine() { return line }
-            if hasMoreWork { return "Syncing… more to come" }
-            if localChanges > 0 { return "\(Self.changes(localChanges).capitalizedFirst) waiting to sync" }
-            if pendingDownloads > 0 { return SyncStatus.exchanged(uploads: 0, downloads: pendingDownloads).shortText }
-            guard let lastSynced else { return SyncStatus.preparing.shortText }
-            return SyncStatus.upToDate(at: lastSynced).shortText
+            return controller?.iCloud == .waitingForKey ? .waitingForKey : .connected
+        case .unavailable(let reason):
+            if let state = controller?.iCloud {
+                switch state {
+                case .accountChanged, .signedOut, .iCloudDriveOff, .containerUnavailable, .turnedOff: return state
+                default: break
+                }
+            }
+            switch reason {
+            case CloudAvailability.unsetMessage: return .unavailableInThisBuild
+            case CloudAvailability.signedOutMessage: return .signedOut
+            case CloudAvailability.iCloudDriveOffMessage: return .iCloudDriveOff
+            case SyncProblem.accountChanged.text: return .accountChanged
+            default: return controller == nil ? .unavailableInThisBuild : .containerUnavailable(reason)
+            }
         }
     }
 
-    /// "Last synced 2 min ago", or nil.
-    func detailLine(now: Date = Date()) -> String? {
-        guard isConnected, let lastSynced else { return nil }
-        return "Last synced \(MacPresence.age(now.timeIntervalSince(lastSynced)))"
+    /// iCloud has no room for what this iPhone sends: a pass found iCloud refusing it, or the courier is refused while
+    /// its sends wait (they share the quota). Read live, so it goes as soon as either finds room.
+    var isStorageFull: Bool { isConnected && (controller?.status == .storageFull || courier.storageFull) }
+
+    /// What Settings › iCloud shows, in the words the Mac's iCloud Sync uses. `keyPeers`: the Macs that can send the
+    /// library's key while this iPhone waits for it.
+    func shown(keyPeers: [ICloudSyncShown.KeyPeer] = [], now: Date = Date()) -> ICloudSyncShown {
+        var shown = ICloudSyncShown(iCloud: iCloud)
+        guard isConnected, let controller else { return shown }
+        shown.folder = controller.folder
+        shown.isSyncing = isSyncing
+        shown.changesInFlight = changesInFlight
+        shown.localChanges = localChanges
+        shown.pendingUploads = pendingUploads
+        shown.pendingDownloads = pendingDownloads
+        shown.hasMoreWork = hasMoreWork
+        shown.courierWaiting = courier.isStuck(now: now) && !courier.storageFull ? courier.waitingToSend : nil
+        shown.lastSync = lastSynced
+        // A pass that failed says so until one finishes; iCloud being full, until it has room.
+        shown.problem = controller.status.problem ?? lastError.map { .failure(details: $0) } ?? (isStorageFull ? .storageFull : nil)
+        shown.warnings = controller.warnings
+        shown.otherInstallation = controller.warning == .otherInstallation
+        shown.encryption = LibraryEncryptionShown(encryption)
+        shown.mayStartOverEncryption = mayStartOver
+        shown.keyPeers = keyPeers.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        shown.devices = devices
+        return shown
     }
+
+    /// One line, true right now, in the words the Mac's iCloud Sync uses (`ICloudSyncShown.line`): Settings' iCloud row
+    /// and the status sheet.
+    var statusLine: String { shown().line }
+
+    /// Something needs the person: iCloud can't be used, the account changed, a pass failed, iCloud is full, the
+    /// library's key is missing, or the older app syncs beside this one.
+    var needsAttention: Bool { shown().needsAttention }
 
     var isUpToDate: Bool {
         isConnected && !isSyncing && lastError == nil && encryption != .waitingForKey && localChanges == 0 && pendingUploads == 0 && !hasMoreWork && lastSynced != nil
             && !isStorageFull && courierLine() == nil
-    }
-
-    /// iCloud has no room for what this iPhone sends (`LibrarySyncController.isStorageFull`): the last pass found iCloud
-    /// refusing uploads for it, or the courier is refused while its sends wait (they share the quota). Read live, so it
-    /// goes as soon as either finds room.
-    var isStorageFull: Bool { isConnected && controller?.isStorageFull == true }
-
-    /// The library in iCloud was removed (`SyncStatus.libraryRemoved`): Settings › iCloud offers Start a New Library in
-    /// iCloud, as the Mac does.
-    var offersNewLibrary: Bool { isConnected && controller?.status == .libraryRemoved }
-
-    /// The older Daybook app is still installed beside this one and syncs as this iPhone
-    /// (`LibrarySyncController.warning`): said in Settings › iCloud, with what to do. Nil otherwise.
-    var otherInstallationLine: String? {
-        guard isConnected, controller?.warning == .otherInstallation else { return nil }
-        return "Daybook is also installed as an older app on this iPhone. Delete the older app."
     }
 
     /// A send to the Mac by courier that has waited a while (`CourierStatus.stuckAfter`); nil otherwise.
@@ -370,8 +410,6 @@ final class PhoneSync {
         let count = courier.waitingToSend
         return "Waiting to send \(count) \(count == 1 ? "item" : "items") to your Mac"
     }
-
-    private static func changes(_ count: Int) -> String { count == 1 ? "1 change" : "\(count) changes" }
 
     // MARK: Local changes
 
@@ -421,8 +459,4 @@ final class PhoneSync {
         let count = isConnected ? localChangeCount() : 0
         if count != localChanges { localChanges = count }
     }
-}
-
-private extension String {
-    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
