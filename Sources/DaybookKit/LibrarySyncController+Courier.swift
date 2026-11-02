@@ -34,9 +34,10 @@ final class SyncCourierBridge {
         // and an older one never covers a newer, nor one from a courier started before this one.
         let numbering = StatusNumbering()
         self.numbering = numbering
-        let onStatus: @Sendable (CourierStatus) -> Void = { status in
+        let onStatus: @Sendable (CourierStatus) -> Void = { [weak self] status in
             let number = numbering.issue()
-            Task { @MainActor in weakSelf?.apply(status, number: number, from: numbering) }
+            guard let self else { return }
+            Task { @MainActor in self.apply(status, number: number, from: numbering) }
         }
         started = Task {
             let availability = await courier.start(role: role, receiver: receiver, onStatus: onStatus)

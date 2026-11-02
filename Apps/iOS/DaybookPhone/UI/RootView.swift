@@ -41,8 +41,9 @@ struct RootView: View {
         .daybookMotion(DaybookMotion.page, value: showsRecorder)
         .onChange(of: model.isRecordingActive, initial: true) { _, active in
             if active {
-                // Playback stops for a recording, so the microphone doesn't record it.
-                reading.player.pause()
+                // Playback stops for a recording, so the microphone doesn't record it (the player follows the recorder
+                // too, once the library has appeared).
+                reading.player.suspendForRecording()
                 afterStop = nil
                 recording = model.recorder.captureID.map { AfterStop(conversationID: $0, title: model.recorder.title,
                                                                       startedAt: model.recorder.startedAt, before: model.lastFiling) }
