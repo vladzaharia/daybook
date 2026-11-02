@@ -8,6 +8,11 @@ import XCTest
 /// only, out of clipboard history, and goes after a while; a refusal never stays under a field it no longer describes.
 @MainActor
 final class SettingsSecretsTests: XCTestCase {
+    /// A preferences suite named by a path in the temporary directory, so it leaves nothing in ~/Library/Preferences.
+    private static func scratchSuite() -> String {
+        FileManager.default.temporaryDirectory.appendingPathComponent("DaybookUITests-\(UUID().uuidString)").path
+    }
+
     func testBehaviorTheRecoveryKeyCopiesForThisDeviceOnlyAndExpires() {
         let key = RecoveryKey.generate()
         var copied: [(String, Duration?)] = []
@@ -52,9 +57,9 @@ final class SettingsSecretsTests: XCTestCase {
     }
 
     func testBehaviorLeavingTheKeyEditorForgetsARefusal() {
-        let suite = "DaybookUITests-\(UUID().uuidString)"
+        let suite = Self.scratchSuite()
         let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { try? FileManager.default.removeItem(atPath: suite + ".plist") }
         let cloud = CloudSetup.demo(providers: [], defaults: defaults,
                                     checks: [.anthropic: .failed(message: "Anthropic didn’t accept this key.", details: "HTTP 401")])
         XCTAssertNotNil(cloud.checks[.anthropic])
@@ -71,9 +76,9 @@ final class SettingsSecretsTests: XCTestCase {
     }
 
     func testBehaviorCloudSettingsSayTheSameOnBothApps() {
-        let suite = "DaybookUITests-\(UUID().uuidString)"
+        let suite = Self.scratchSuite()
         let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { try? FileManager.default.removeItem(atPath: suite + ".plist") }
         let cloud = CloudSetup.demo(providers: [.anthropic], defaults: defaults)
         let recommended = cloud.offers.recommended(cloud.preferences.tier)
         XCTAssertNotNil(recommended)
