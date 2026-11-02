@@ -123,15 +123,16 @@ final class SyncAudioProvider: AudioProviding {
 
     // MARK: The cache
 
-    /// Settings › Storage › Keep Up To; at launch with the saved choice, which also measures what's here.
+    /// Settings › Storage › Keep Up To; at launch with the saved choice, which also measures what's here (soon after,
+    /// so launch doesn't wait for the library to be walked).
     func setBudget(_ bytes: UInt64) async {
         budget = bytes
-        guard let engine else { return await refreshUsage() }
+        guard let engine else { return measureSoon() }
         await engine.setAudioCachePolicy(AudioCachePolicy(budgetBytes: bytes))
         _ = await evict()
     }
 
-    /// Brings local audio within the budget, sparing what's playing or was just asked for.
+    /// Brings local audio within the budget, sparing what's playing or was just asked for, and measures again soon after.
     @discardableResult
     func evict() async -> AudioEvictionReport? {
         guard let engine else { return nil }
@@ -140,7 +141,7 @@ final class SyncAudioProvider: AudioProviding {
             // Nothing is lost: what wasn't removed stays, and the next eviction tries again.
             Self.log.error("Couldn’t bring audio within the budget: \(error.localizedDescription)")
         }
-        await refreshUsage()
+        measureSoon()
         return report
     }
 

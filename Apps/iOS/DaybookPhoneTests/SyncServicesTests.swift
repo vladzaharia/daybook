@@ -334,6 +334,17 @@ final class SyncServicesTests: XCTestCase {
         XCTAssertEqual(reader.audio.usage.downloadedBytes, 0, "the earlier measure counted downloads that are gone")
         XCTAssertEqual(reader.audio.usage.bytes, 0)
         XCTAssertEqual(reader.audio.report?.downloadedAudio, 0)
+
+        // Setting the budget brings the audio within it, and doesn't wait for a measure either.
+        let budget = PassGate()
+        reader.audio.measure = { root, downloaded in
+            budget.hold()
+            return LibraryStorageReport.measure(libraryRoot: root, downloaded: downloaded)
+        }
+        await reader.audio.setBudget(1_000_000_000)
+        XCTAssertFalse(budget.entered, "setting the budget didn't wait for a measure")
+        budget.release()
+        try await waitUntil("what's here is measured again") { budget.entered }
     }
 
     func testAFiledRecordingGoesToTheCourierAndAStuckSendIsShown() async throws {
@@ -413,7 +424,16 @@ final class SyncServicesTests: XCTestCase {
         let sync = PhoneSync(library: library.controller)
         XCTAssertFalse(sync.isConnected, "iCloud isn't on")
         let audio = SyncAudioProvider(library: library, sync: sync, budget: 1_000_000_000)
+        // Launch sets the budget, which measures what's here without launch waiting for it.
+        let launch = PassGate()
+        audio.measure = { root, downloaded in
+            launch.hold()
+            return LibraryStorageReport.measure(libraryRoot: root, downloaded: downloaded)
+        }
         await audio.setBudget(1_000_000_000)
+        XCTAssertFalse(launch.entered, "launch didn't wait for the library to be measured")
+        launch.release()
+        try await waitUntil("what's here is measured") { audio.report != nil }
         XCTAssertEqual(audio.usage.bytes, 0)
         XCTAssertEqual(StatusSheetModel.audioOnThisIPhone(bytes: audio.usage.bytes), "No audio on this iPhone")
 
