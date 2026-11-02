@@ -149,7 +149,7 @@ final class LibraryPlaceTests: XCTestCase {
         let (state, root, defaults) = try await makeState()
         defer { cleanUp(root, defaults) }
         // This Mac transcribed it, then an iPhone's recording joined it: an earlier transcript and newer captions, which
-        // this Mac's summary page shows until a newer transcript replaces them. Its transcript page never shows them.
+        // the transcript's page shows after that transcript until a newer one replaces them, as on the iPhone.
         let joined = state.newMeeting(title: "Roadmap review")
         state.update(joined) { meeting in
             meeting.transcripts = [TrackTranscript(trackID: UUID(), segments: [], modelID: "m", createdAt: Date().addingTimeInterval(-3_600))]
@@ -167,8 +167,8 @@ final class LibraryPlaceTests: XCTestCase {
         state.pageMode = .transcript
         MacSearch.open(joined, hits: [], captionHits: captionHits, state: state)
         XCTAssertEqual(state.selectedID, joined)
-        XCTAssertEqual(state.pageMode, .summary, "saved captions show on the summary page, never the transcript")
-        XCTAssertEqual(state.pageScrollTarget, PageAnchor.captions)
+        XCTAssertEqual(state.pageMode, .transcript, "saved captions read on the transcript's page")
+        XCTAssertEqual(state.pageScrollTarget, captions.segments.first?.id, "at the caption found")
 
         let passage = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "beta", tokens: [], scope: .all).first)
         MacSearch.open(joined, hits: [passage], captionHits: [], state: state)
@@ -179,7 +179,8 @@ final class LibraryPlaceTests: XCTestCase {
         let note = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "pricing", tokens: [], scope: .all).first)
         MacSearch.open(joined, hits: [note], captionHits: [], state: state)
         XCTAssertEqual(state.pageMode, .summary)
-        XCTAssertEqual(state.pageScrollTarget, PageAnchor.notes)
+        XCTAssertNil(state.pageScrollTarget)
+        XCTAssertEqual(SummaryJump.window.take(for: joined), SummaryJump.notes, "the summary page moves to your notes")
 
         let title = try XCTUnwrap(LibrarySearch.hits(in: state.meetings, text: "roadmap", tokens: [], scope: .all).first)
         MacSearch.open(joined, hits: [title], captionHits: [], state: state)

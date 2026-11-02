@@ -245,24 +245,25 @@ private struct SearchResults: View {
 /// Where a search result opens its conversation's page on this Mac.
 @MainActor
 enum MacSearch {
-    /// Opens a result at what it found: a transcript passage on the transcript; a note at Your notes, and saved live
-    /// captions at theirs, on the summary page, where this Mac shows them until a newer transcript replaces them; the
-    /// page's top for a title or a summary.
+    /// Opens a result at what it found: a transcript passage, or a saved live caption, on the transcript's page, where
+    /// both read until a newer transcript replaces the captions (`SavedCaptions`, as on the iPhone); a note at Your
+    /// notes on the summary page (`SummaryJump`); the page's top for a title or a summary.
     static func open(_ id: UUID?, hits: [SearchHit], captionHits: [LibraryCaptionSearch.Hit], state: AppState) {
         state.multiSelection = []
         state.selectedID = id
-        if captionHits.contains(where: { $0.meeting.id == id }) {
-            state.pageMode = .summary
-            state.pageScrollTarget = PageAnchor.captions
+        if let caption = captionHits.first(where: { $0.meeting.id == id }) {
+            state.pageMode = .transcript
+            state.pageScrollTarget = caption.segment.id
             return
         }
-        guard let hit = hits.first(where: { $0.meetingID == id }) else { return }
+        guard let id, let hit = hits.first(where: { $0.meetingID == id }) else { return }
         if hit.field == .transcript, let segment = hit.segmentID {
             state.pageMode = .transcript
             state.pageScrollTarget = segment
         } else {
             state.pageMode = .summary
-            state.pageScrollTarget = hit.field == .notes ? PageAnchor.notes : nil
+            state.pageScrollTarget = nil
+            if hit.field == .notes { SummaryJump.window.show(SummaryJump.notes, in: id) }
         }
     }
 }

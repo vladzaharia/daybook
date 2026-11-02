@@ -178,10 +178,9 @@ public enum LibraryCaptionSearch {
         }.value
     }
 
-    /// The first caption with `query`, when the captions still show for the conversation.
+    /// The first caption with `query`, when the captions still show for the conversation, by the one rule the
+    /// transcript's page reads (`SavedCaptions.shown`).
     static func firstMatch(_ query: String, in captions: LiveCaptions, of meeting: Meeting) -> LiveCaptionSegment? {
-        guard captions.meetingID == meeting.id,
-              !meeting.transcripts.contains(where: { $0.createdAt >= captions.createdAt }) else { return nil }
-        return captions.segments.first { $0.text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+        SavedCaptions.shown(captions, for: meeting)?.firstMatch(query)
     }
 }

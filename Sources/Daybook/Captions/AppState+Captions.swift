@@ -58,16 +58,6 @@ extension AppState {
         !meeting.unifiedTranscript.isEmpty || savedCaptions(for: meeting) != nil
     }
 
-    /// Saved captions that match the search, in conversations it found nothing else in and its scope and
-    /// tokens keep, as on the iPhone.
-    var captionSearchHits: [(meeting: Meeting, segment: LiveCaptionSegment)] {
-        guard isSearching, !captions.saved.isEmpty, !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        let found = Set(searchHits.map(\.meetingID))
-        let candidates = meetings.filter { captions.saved[$0.id] != nil && !found.contains($0.id) && recordingID != $0.id }
-        let scoped = Set(LibrarySearch.hits(in: candidates, text: "", tokens: searchTokens, scope: searchScope).map(\.meetingID))
-        return SavedCaptions.hits(in: candidates.filter { scoped.contains($0.id) }, query: search, captions: captions.saved)
-    }
-
     /// Re-reads the live models captions use (`MacLiveModels`).
     func refreshLiveModels() {
         let settings = captionSettings

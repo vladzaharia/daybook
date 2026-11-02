@@ -98,13 +98,13 @@ public struct ConversationTagsChooser: View {
         }
     }
 
+    /// What's typed, taken as Info takes it (`TagInput`): "client, beta" is two tags.
     private func addNew() {
-        // Tags split on commas on both apps, so a comma in a new tag would make two.
-        let tag = newTag.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: " ")
+        let typed = newTag
         newTag = ""
-        guard !tag.isEmpty else { return }
-        for meeting in meetings where !(meeting.tags ?? []).contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
-            library.setTags(meeting.id, text: ((meeting.tags ?? []) + [tag]).joined(separator: ","), undoManager: undoManager)
+        for meeting in meetings {
+            let tags = meeting.tags ?? [], next = meeting.tags(adding: typed)
+            if next != tags { library.setTags(meeting.id, text: next.joined(separator: ","), undoManager: undoManager) }
         }
     }
 }

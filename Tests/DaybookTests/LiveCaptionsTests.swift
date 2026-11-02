@@ -377,9 +377,13 @@ final class LiveCaptionsTests: XCTestCase {
         XCTAssertTrue(state.hasTranscriptPage(meeting))
         state.search = "venue"
         XCTAssertTrue(state.searchHits.isEmpty, "nothing else in the conversation says it")
-        XCTAssertEqual(state.captionSearchHits.map(\.meeting.id), [id], "search finds them")
+        let found = await LibraryCaptionSearch.hits(in: state.meetings, query: state.search, excluding: Set(state.searchHits.map(\.meetingID)),
+                                                    libraryRoot: state.library.rootURL)
+        XCTAssertEqual(found.map(\.meeting.id), [id], "search finds them")
         state.search = "agreed on the date"
-        XCTAssertTrue(state.captionSearchHits.isEmpty, "a conversation the search found is listed once")
+        let again = await LibraryCaptionSearch.hits(in: state.meetings, query: "venue", excluding: Set(state.searchHits.map(\.meetingID)),
+                                                    libraryRoot: state.library.rootURL)
+        XCTAssertTrue(again.isEmpty, "a conversation the search found is listed once")
         state.search = ""
         state.recordingID = id
         XCTAssertNil(state.savedCaptions(for: meeting), "while this Mac records it, the page shows them live")
