@@ -28,8 +28,8 @@ struct ConversationEntity: AppEntity, IndexedEntity {
     }
 }
 
-/// Finds conversations by ID, by words in their titles, and the latest ones as suggestions. Personal
-/// conversations are found by name too, as the library finds them, but never suggested.
+/// Finds conversations by ID (any conversation, so a shortcut made with one keeps working), by words in their
+/// titles, and the latest ones as suggestions, the last two never Personal, as on the Mac.
 struct ConversationQuery: EntityStringQuery {
     @MainActor
     func entities(for identifiers: [UUID]) async throws -> [ConversationEntity] {
@@ -42,7 +42,7 @@ struct ConversationQuery: EntityStringQuery {
         let words = string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { return try await suggestedEntities() }
         return try await Self.library()
-            .filter { $0.title.localizedStandardContains(words) }
+            .filter { ConversationIndex.isShown($0) && $0.title.localizedStandardContains(words) }
             .sorted { $0.date > $1.date }
             .prefix(Self.limit)
             .map { ConversationEntity(ConversationIndex.Entry($0)) }
@@ -160,9 +160,13 @@ final class ConversationIndex {
         self.namingDelay = namingDelay
     }
 
+    /// Whether Daybook may name the conversation outside the app (Spotlight, Siri's suggestions, Shortcuts'
+    /// search): anything not Personal, the Mac's rule (`ConversationEntity.isShown` there).
+    static func isShown(_ meeting: Meeting) -> Bool { meeting.effectivePlacement != .personal }
+
     /// The conversations Spotlight lists, newest first: none that's Personal.
     static func entries(_ meetings: [Meeting]) -> [Entry] {
-        meetings.filter { $0.effectivePlacement != .personal }.sorted { $0.date > $1.date }.map(Entry.init)
+        meetings.filter(isShown).sorted { $0.date > $1.date }.map(Entry.init)
     }
 
     /// Lists what's new or changed and removes what went (Trash, Personal), after any update before it.

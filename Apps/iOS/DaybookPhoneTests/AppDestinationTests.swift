@@ -172,6 +172,26 @@ final class AppDestinationTests: XCTestCase {
         try await waitUntil("listed", state: { "\(seen.events)" }) { seen.events == ["remove all", "index Design review"] }
     }
 
+    func testBehaviorShortcutsFindAPersonalConversationOnlyByItsID() async throws {
+        let model = try makeModel()
+        try await model.library.reload()
+        let controller = model.library.controller
+        let work = controller.newMeeting(title: "Pricing review")
+        let personal = controller.newMeeting(title: "Pricing therapy")
+        controller.update(personal) { $0.placement = .personal }
+        let previous = AppDestinations.model
+        AppDestinations.model = model
+        defer { AppDestinations.model = previous }
+
+        let query = ConversationQuery()
+        let found = try await query.entities(matching: "Pricing")
+        XCTAssertEqual(found.map(\.id), [work], "never found by name, as on the Mac")
+        let suggested = try await query.suggestedEntities()
+        XCTAssertEqual(suggested.map(\.id), [work], "never suggested")
+        let shortcut = try await query.entities(for: [personal])
+        XCTAssertEqual(shortcut.map(\.id), [personal], "a shortcut made with one still opens it")
+    }
+
     func testBehaviorAConversationIsAnEntityByItsTitleAndDate() {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let entity = ConversationEntity(ConversationIndex.Entry(id: UUID(), title: "Design review", date: date))
