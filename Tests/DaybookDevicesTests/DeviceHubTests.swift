@@ -128,6 +128,75 @@ final class DeviceHubTests: XCTestCase {
         hub.shutDown()
     }
 
+    /// A device of a kind this build doesn't know (a newer build's, such as a Plaud) reads fine but has nothing to run
+    /// it: it isn't shown, and it's written back as it was when another device is renamed or added, so a build that
+    /// knows the kind gets it back.
+    func testBehaviorADeviceOfAKindThisBuildDoesntKnowSurvivesSaves() throws {
+        let other = OtherRecorderIntegration().kind
+        let zoom = ConfiguredDevice(id: "zoom", kind: other, name: "Zoom H1n", addedAt: Date(timeIntervalSince1970: 1_780_000_000))
+        let encodedZoom = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(zoom)) as? [String: Any])
+        let plaud: [String: Any] = ["id": "plaud", "kindID": "plaud.note", "name": "Plaud Note", "pairing": ["serial": "PN-1"]]
+        let original = try JSONSerialization.data(withJSONObject: [encodedZoom, plaud])
+        defaults.set(original, forKey: DeviceHub.storageKey)
+
+        let hub = DeviceHub(environment: environment())
+        XCTAssertEqual(hub.devices.map(\.id), ["zoom"])
+        XCTAssertEqual(defaults.data(forKey: StoredDevices.backupKey(DeviceHub.storageKey)), original, "what was stored, kept")
+        hub.rename("zoom", to: "Zoom H1n Field")
+        let session = try XCTUnwrap(hub.beginSetup(other))
+        try session.files?.watch(root)
+        hub.commitSetup()
+        hub.shutDown()
+
+        let written = try XCTUnwrap(defaults.data(forKey: DeviceHub.storageKey))
+        let entries = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [[String: Any]])
+        XCTAssertEqual(entries.map { $0["id"] as? String }, ["zoom", session.id, "plaud"])
+        let kept = try XCTUnwrap(entries.last)
+        XCTAssertEqual(kept as NSDictionary, plaud as NSDictionary, "written back as it was, its own fields too")
+        XCTAssertEqual(entries.first?["name"] as? String, "Zoom H1n Field")
+
+        // A build that knows the kind.
+        let saved = DeviceCatalog.integrations
+        DeviceCatalog.integrations = saved + [PlaudIntegration()]
+        defer { DeviceCatalog.integrations = saved }
+        let later = DeviceHub(environment: environment())
+        XCTAssertEqual(later.devices.map(\.id), ["zoom", session.id, "plaud"])
+        XCTAssertEqual(later.session("plaud")?.device.name, "Plaud Note")
+        later.shutDown()
+    }
+
+    /// The copy of a list that couldn't all be read is made once: later launches find the same entry, written back
+    /// with every save, and add no copy and replace none.
+    func testBehaviorTheCopyOfAListThatCantAllBeReadIsMadeOnce() throws {
+        let other = OtherRecorderIntegration().kind
+        let zoom = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(ConfiguredDevice(id: "zoom", kind: other))))
+        let original = try JSONSerialization.data(withJSONObject: [zoom, ["id": "newer", "kindID": "plaud.note"]])
+        defaults.set(original, forKey: DeviceHub.storageKey)
+        func copies() -> [String] {
+            defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(DeviceHub.storageKey + ".unreadable") }.sorted()
+        }
+
+        let first = DeviceHub(environment: environment())
+        first.rename("zoom", to: "Zoom H1n")
+        first.shutDown()
+        XCTAssertEqual(copies(), [StoredDevices.backupKey(DeviceHub.storageKey)])
+        for _ in 0..<3 { DeviceHub(environment: environment()).shutDown() }
+        XCTAssertEqual(copies(), [StoredDevices.backupKey(DeviceHub.storageKey)], "one copy, however many launches")
+        XCTAssertEqual(defaults.data(forKey: StoredDevices.backupKey(DeviceHub.storageKey)), original, "the first one found")
+    }
+
+    /// A kind a later build knows, for the test above.
+    private struct PlaudIntegration: DeviceIntegration {
+        var kind: DeviceKind {
+            DeviceKind(id: "plaud.note", name: "Plaud Note", shortName: "Plaud", vendor: "Plaud", systemImage: "mic",
+                       summary: "A recorder for tests.", methods: OtherRecorderIntegration().kind.methods, audioSource: .imported,
+                       allowsMultiple: true)
+        }
+        func makeConnection(_ method: ConnectionMethodKind, for device: ConfiguredDevice, environment: DeviceEnvironment) -> (any DeviceConnection)? {
+            nil
+        }
+    }
+
     func testOneSoundcorePerMacButManyOtherRecorders() throws {
         let hub = DeviceHub(environment: environment())
         let soundcore = SoundcoreWorkIntegration().kind

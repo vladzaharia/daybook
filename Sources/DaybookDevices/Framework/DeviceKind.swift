@@ -196,10 +196,10 @@ public struct ConfiguredDevice: Codable, Identifiable, Hashable {
     public func isEnabled(_ method: ConnectionMethodKind) -> Bool { !disabledMethods.contains(method) }
 }
 
-/// The configured devices as stored, read one at a time: a device this build can't read (a newer build's, or
-/// damaged) doesn't take the others with it. It's kept as it was, written back with the others, so a later build
-/// still has it, and a copy of the whole stored list is kept once under `backupKey` before anything is written
-/// over it.
+/// The configured devices as stored, read one at a time: a device this build can't read (damaged, or a newer
+/// build's: a field it can't decode, or a kind it doesn't know) doesn't take the others with it. It's kept as it
+/// was, written back with the others, so a later build still has it, and the first time one is found the whole
+/// stored list is copied to `backupKey` before anything is written over it.
 public struct StoredDevices {
     public var devices: [ConfiguredDevice] = []
     /// What couldn't be read, as stored.
@@ -213,7 +213,9 @@ public struct StoredDevices {
         self.isDamaged = isDamaged
     }
 
-    public init(_ data: Data) {
+    /// Reads `data`. A device whose kind isn't in `knownKinds` (the hub's: `DeviceCatalog`'s) reads fine but has
+    /// nothing to run it here, so it's kept as it was, among `unreadable`.
+    public init(_ data: Data, knownKinds: Set<String>) {
         guard let entries = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
             isDamaged = true
             return
@@ -221,7 +223,7 @@ public struct StoredDevices {
         let decoder = JSONDecoder()
         for entry in entries {
             guard let entryData = try? JSONSerialization.data(withJSONObject: entry, options: [.fragmentsAllowed]) else { continue }
-            if let device = try? decoder.decode(ConfiguredDevice.self, from: entryData) {
+            if let device = try? decoder.decode(ConfiguredDevice.self, from: entryData), knownKinds.contains(device.kindID) {
                 devices.append(device)
             } else {
                 unreadable.append(entryData)
@@ -236,10 +238,8 @@ public struct StoredDevices {
         return try JSONSerialization.data(withJSONObject: known + kept)
     }
 
-    /// Where a copy of a stored list that couldn't be read whole goes, by the day it was found: "devices.configured.unreadable.2026-11-01".
-    public static func backupKey(_ storageKey: String, at date: Date = Date()) -> String {
-        "\(storageKey).unreadable.\(date.formatted(.iso8601.year().month().day()))"
-    }
+    /// Where the one copy of a stored list that couldn't be read whole goes: "devices.configured.unreadable".
+    public static func backupKey(_ storageKey: String) -> String { "\(storageKey).unreadable" }
 }
 
 /// What a connection needs from the app, injected so tests and demos never touch real hardware.

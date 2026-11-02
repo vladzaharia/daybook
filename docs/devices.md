@@ -53,9 +53,10 @@ DeviceHub (@MainActor @Observable)       │  configured devices, persisted as [
   configuration (the remembered recorder, the folder bookmark) under
   `device.<id>.<method>.` in preferences. Only the ID and kind are required to read one back: a field
   an older build didn't store takes its default, and a method a newer build added is left out of the
-  turned-off ones. A stored device that still can't be read (`StoredDevices`) doesn't cost the others:
-  it's written back as it was beside them, and the list as stored is copied once to
-  `devices.configured.unreadable.<date>` first.
+  turned-off ones. A stored device that still can't be read (`StoredDevices`), or one of a kind this
+  build doesn't know (a newer build's), doesn't cost the others: it isn't shown, it's written back as it
+  was beside them on every save, and a build that can read it gets it back. The first time one is found,
+  the list as stored is copied to `devices.configured.unreadable`; later launches add no copy.
 - **Connection** (`DeviceConnection`): the common interface for one method of one device.
   - State: `ConnectionState` (`notSetUp`, `notConnected`, `searching`, `connecting`,
     `reconnecting`, `connected`, `unavailable`), `problem`, `lastConnectedAt`, `summary`.

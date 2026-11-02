@@ -53,17 +53,20 @@ public final class DeviceHub {
         #endif
         DeviceHubMigration.migrateIfNeeded(environment.defaults)
         if let data = environment.defaults.data(forKey: Self.storageKey) {
-            stored = StoredDevices(data)
+            // A kind this build doesn't know (a newer build's) is kept as it was, as an entry it can't read is.
+            stored = StoredDevices(data, knownKinds: Set(DeviceCatalog.kinds.map(\.id)))
             if stored.isDamaged || !stored.unreadable.isEmpty { Self.keepUnreadable(data, in: environment.defaults) }
         }
         sessions = stored.devices.compactMap(makeSession)
     }
 
-    /// Keeps a copy of a stored device list that couldn't all be read, once a day at most, before anything is
-    /// written over it: what a newer build stored isn't lost to an older one.
+    /// Keeps a copy of a stored device list that couldn't all be read, before anything is written over it: what a
+    /// newer build stored isn't lost to an older one. One copy, the first found: the entries this build can't read
+    /// are written back with every save, so later launches find them again and add nothing.
     private static func keepUnreadable(_ data: Data, in defaults: UserDefaults) {
         let key = StoredDevices.backupKey(storageKey)
-        if defaults.data(forKey: key) == nil { defaults.set(data, forKey: key) }
+        guard defaults.data(forKey: key) == nil else { return }
+        defaults.set(data, forKey: key)
         log.error("Some configured devices couldn't be read; a copy is kept under \(key, privacy: .public)")
     }
 
