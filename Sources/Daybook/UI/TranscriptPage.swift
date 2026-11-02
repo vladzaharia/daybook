@@ -74,8 +74,7 @@ extension TranscriptHost {
 }
 
 /// A block of the summary page to bring into view, asked for from elsewhere: Show in Your Notes on the transcript. The
-/// summary page moves to it once, as the iPhone's does for `ReadingSession.showOnSummary`: it watches `token` and
-/// takes the block with `take(for:)` as it appears and when a request arrives.
+/// summary page moves to it once (`summaryJumps(in:)`), as the iPhone's does for `ReadingSession.showOnSummary`.
 @MainActor @Observable
 final class SummaryJump {
     /// The library window's: one window, one conversation page.
@@ -97,6 +96,32 @@ final class SummaryJump {
     func take(for meetingID: UUID) -> String? {
         defer { pending = nil }
         return pending?.meetingID == meetingID ? pending?.target : nil
+    }
+}
+
+extension View {
+    /// Around a conversation's summary page, its scroll view inside: moves to the block `SummaryJump` asks for, by the
+    /// `.id` it carries, once the page has laid out. The page has just opened, so it opens there.
+    func summaryJumps(in meetingID: UUID) -> some View {
+        modifier(SummaryJumps(meetingID: meetingID))
+    }
+}
+
+private struct SummaryJumps: ViewModifier {
+    let meetingID: UUID
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content
+                .onAppear { jump(proxy) }
+                .onChange(of: SummaryJump.window.token) { jump(proxy) }
+        }
+    }
+
+    private func jump(_ proxy: ScrollViewProxy) {
+        guard let target = SummaryJump.window.take(for: meetingID) else { return }
+        // The blocks are there on the next turn of the main queue, once the page has laid out.
+        Task { @MainActor in proxy.scrollTo(target, anchor: .top) }
     }
 }
 
